@@ -14,6 +14,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
   ChevronDown,
+  FolderOpen,
   FolderPlus,
   Pin as PinMark,
   Plus,
@@ -27,6 +28,7 @@ import {
   type ChatWorktree,
   type OpenChat,
   type PlaneId,
+  type Refused,
   type Sidebar as SidebarModel,
   type StartOptions,
 } from "./bindings";
@@ -209,14 +211,19 @@ export function PlaneView({
    *
    * `atRisk` is `undefined` until the core has answered and is drawn as "still reading" — an
    * empty list and an unanswered question are the two states this must never merge, because
-   * one of them says "nothing would be lost". `refusal` is the sentence the core gave the last
-   * time Delete was pressed, and its presence is the only thing that makes forcing reachable.
+   * one of them says "nothing would be lost". `refusal` is what the core gave the last time
+   * Delete was pressed, and its presence is the only thing that makes forcing reachable.
+   *
+   * **`refusal` is the whole `Refused` and not its sentence** (charter-app#182). It carries the
+   * at-risk list the core read *inside* the delete, and that list — never `atRisk`, which is
+   * the older reading taken when this dialog opened — is what the force button is drawn from
+   * once there is one.
    */
   const [removing, setRemoving] = useState<{
     workspace: string;
     atRisk?: AtRisk[];
     unreadable?: string;
-    refusal?: string;
+    refusal?: Refused;
     busy: boolean;
   }>();
   /** The same, for the pins: a pin is written by the core, so the window asks what the core
@@ -1011,13 +1018,22 @@ export function PlaneView({
    * it (`wscmd::remove`, which runs `wscmd::work_at_risk` before `remove_dir_all`). `force` is
    * never passed on the operator's behalf: it arrives here only from the second button, which
    * does not exist until a refusal does and which names what it will discard.
+   *
+   * **And what it names comes back with the refusal** (charter-app#182). `workspace_remove`
+   * answers with the at-risk list the core refused on, so the button and the sentence above it
+   * are two readings of one moment rather than one reading and a memory.
    */
   const deleteWorkspace = useCallback(
     async (workspace: string, force: boolean) => {
       setRemoving((now) => (now?.workspace === workspace ? { ...now, busy: true } : now));
       const answer = await commands
         .workspaceRemove(plane, workspace, force)
-        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+        // A command that never reached the core said nothing about what is at risk, and an
+        // empty list is the truthful shape for that: there is no refusal here to force past.
+        .catch((err: unknown) => ({
+          status: "error" as const,
+          error: { said: String(err), at_risk: [] } satisfies Refused,
+        }));
       if (answer.status === "error") {
         // Verbatim: the sentence names the repair — push or commit first — and the force
         // button is drawn beside it rather than instead of it.
@@ -1937,13 +1953,22 @@ export function Doer({
  * `pane.close` ends a chat, so its mark is the same `X` a tab's close carries and it gets the
  * same danger hover (`App.css`, `.ends-a-chat`) — an icon may not make ending a chat look
  * lighter than it is.
+ *
+ * **The project strip draws two of these side by side, so they may not be the same glyph**
+ * (charter-app#178). `FolderPlus` is the folder-with-a-plus every file manager puts on *New
+ * folder*, and `project.create` is the row that writes a directory that was not there; opening
+ * one that already exists is `FolderOpen`, which is that same universal pair's other half.
+ * `project.open` wore `FolderPlus` only because it was the strip's one control when #171 drew
+ * it — two icon-only buttons an inch apart carrying one glyph is a strip an operator has to
+ * aim at by memory.
  */
 export const MARKS: Record<string, typeof Plus> = {
   "chat.new": Plus,
   "pane.split.right": SquareSplitHorizontal,
   "pane.split.down": SquareSplitVertical,
   "pane.close": X,
-  "project.open": FolderPlus,
+  "project.create": FolderPlus,
+  "project.open": FolderOpen,
 };
 
 /**

@@ -29,7 +29,11 @@ describe("the bar's buttons carry a mark beside their words", () => {
     ["pane.split.right", "Split right", "lucide-square-split-horizontal"],
     ["pane.split.down", "Split down", "lucide-square-split-vertical"],
     ["pane.close", "End this pane's chat", "lucide-x"],
-    ["project.open", "Open a project…", "lucide-folder-plus"],
+    // The project strip's two, and they are deliberately not the same glyph: `FolderPlus` is
+    // what every file manager puts on *New folder*, `FolderOpen` on *Open* (charter-app#178).
+    // Two icon-only buttons an inch apart carrying one icon is a strip aimed at by memory.
+    ["project.create", "New project…", "lucide-folder-plus"],
+    ["project.open", "Open a project…", "lucide-folder-open"],
   ])("%s is named %s and draws its mark", (id, title, mark) => {
     render(<Doer offer={offer(id, title)} onPress={() => {}} />);
 
@@ -54,8 +58,28 @@ describe("the bar's buttons carry a mark beside their words", () => {
     // A row added to the bar without a mark is not an error — it draws its words — but a
     // mark for a row nothing draws is dead weight that looks like coverage.
     expect(Object.keys(MARKS).sort()).toEqual(
-      ["chat.new", "pane.close", "pane.split.down", "pane.split.right", "project.open"].sort(),
+      [
+        "chat.new",
+        "pane.close",
+        "pane.split.down",
+        "pane.split.right",
+        "project.create",
+        "project.open",
+      ].sort(),
     );
+  });
+
+  /**
+   * **Icon-only is only legible while the icons differ** (charter-app#178). The project
+   * strip's controls carry no words at all — `aria-label` is their whole name — so two of
+   * them drawing one glyph would leave a pointer with nothing to tell them apart, and the
+   * operator pressing *New project…* when they meant *Open a project…* is a folder-picker
+   * they did not ask for at best. Held here because it is a property of the set, which
+   * neither row's own test can see.
+   */
+  it("never gives two rows the same mark", () => {
+    const marks = Object.values(MARKS);
+    expect(new Set(marks).size).toBe(marks.length);
   });
 });
 

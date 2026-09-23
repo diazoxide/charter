@@ -142,6 +142,21 @@ export const commands = {
 	 *  project inside `~/code` would otherwise be scaffolded into whatever plane happens to be
 	 *  above it. The walk is still asked, through `plane::find_root`, but only to REFUSE: a
 	 *  directory inside a plane is a place for a workspace's clone, not for a second plane.
+	 * 
+	 *  **And that is not a second walk** (charter-app#178). The operator's ruling was worded as
+	 *  *walk as the CLI does, and refuse rather than write when the walk lands somewhere other
+	 *  than the directory picked*, and a reviewer asked the fair question about the paragraph
+	 *  above: if this asks `find_root` where the CLI asks `place`, the two can drift, and the day
+	 *  they do, the refusal starts naming a plane `charter init` would not have chosen. They
+	 *  cannot. `find_root` and `place` are **one** walk in this core — `plane::walk`, which is a
+	 *  single function on purpose and says so at length, because two copies of it are two answers
+	 *  about one directory (M2.9, then M2.16). The two differ in what they do with a `None` and
+	 *  in reading `$CHARTER_ROOT`, and neither difference can reach the `Some` this refusal is
+	 *  made of. `$CHARTER_ROOT` is the one thing deliberately not honoured here, and that is the
+	 *  difference this command wants: a variable inherited from whatever shell opened the app is
+	 *  not an answer about a folder somebody just pointed at.
+	 *  `the_refusal_names_the_plane_the_cli_would_have_scaffolded_into` holds the identity, so a
+	 *  change that made the two walks disagree lands in this file.
 	 */
 	createProject: (path: string, planeIsThisRepo: boolean) => typedError<Opened, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo })),
 	/**
@@ -275,7 +290,7 @@ export const commands = {
 	 *  the operator saying to discard work the core found — it is never passed on their behalf, and
 	 *  the window asks for it only after showing them the refusal the core gave.
 	 */
-	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], string>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
+	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], Refused>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
 	/**
 	 *  What one persona's definition says about it: its role, when to delegate to it, its tools,
 	 *  the vault it names and what it extends.
@@ -1153,6 +1168,24 @@ export type Recents = {
 	 *  The app is a working app either way. It just opens every project by picking it.
 	 */
 	forgetful: string | null,
+};
+
+/**
+ *  Why a delete made nothing — **and the reading it was refused on** (charter-app#182).
+ * 
+ *  Two fields and they are one answer. `said` is the core's sentence, verbatim, because it
+ *  names the repair. `at_risk` is `work_at_risk`'s list as the core read it *inside* the
+ *  delete, so the surface offering to discard that work names the same things the sentence
+ *  above it names. Empty for every refusal that is not the guard's — a name that is not a
+ *  workspace, a `workspaces/<ws>` that links out of the plane, a `remove_dir_all` that failed
+ *  — and that is the honest shape: `--force` does not get past any of those, so a window that
+ *  drew a force button beside one would be offering a way through that does not exist.
+ */
+export type Refused = {
+	/**  The core's own words, unchanged and all of them. */
+	said: string,
+	/**  What the core refused on, in the order it said them. */
+	at_risk: AtRisk[],
 };
 
 /**  One clone's git state, and what the forge cache last recorded for its branch. */

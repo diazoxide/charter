@@ -38,26 +38,40 @@ afterEach(() => {
 
 const PLANE = "/home/dev/plane";
 
+/** One thing the guard found, as `wscmd::AtRisk` crosses the wire. */
+type Risk = { what: string; said: string };
+
+/** `wscmd::remove`'s refusal, built from a list exactly as the core builds it. */
+const refusalOver = (risky: readonly Risk[]) =>
+  `Refusing to remove 'alpha' — this would discard work: ${risky
+    .map((risk) => risk.said)
+    .join("; ")}. Push/commit first, or pass --force.`;
+
 /** The refusal the core gives when a clone in the workspace has uncommitted work. */
-const REFUSED =
-  "Refusing to remove 'alpha' — this would discard work: svc: uncommitted changes. " +
-  "Push/commit first, or pass --force.";
+const REFUSED = refusalOver([{ what: "svc", said: "svc: uncommitted changes" }]);
 
 /**
  * The core, with a plane of two workspaces and a workspace verb that answers as charter does.
  *
  * `remove` refuses unless it is forced, exactly as `wscmd::remove` refuses: the point of these
  * tests is what the WINDOW does with that refusal, so the mock has to give one.
+ *
+ * **It refuses with a `Refused`, which is the sentence AND the list it refused on**
+ * (charter-app#182). `refusesOver` is what the guard finds at the moment of the delete, and it
+ * defaults to the preview's list because usually nothing moved — the test that matters is the
+ * one where it did.
  */
 function core(
   over: {
-    atRisk?: { what: string; said: string }[];
+    atRisk?: Risk[];
     refuses?: boolean;
+    refusesOver?: Risk[];
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const atRisk = over.atRisk ?? [{ what: "svc", said: "svc: uncommitted changes" }];
   const refuses = over.refuses ?? true;
+  const refusesOver = over.refusesOver ?? atRisk;
   const gone: string[] = [];
   mockIPC((cmd, args) => {
     const got = (args ?? {}) as Record<string, unknown>;
@@ -85,7 +99,8 @@ function core(
       };
     if (cmd === "workspace_at_risk") return atRisk;
     if (cmd === "workspace_remove") {
-      if (refuses && got.force !== true) throw REFUSED;
+      if (refuses && got.force !== true)
+        throw { said: refusalOver(refusesOver), at_risk: refusesOver };
       gone.push(String(got.workspace));
       return [`✓ Removed workspace '${String(got.workspace)}' and its clones.`];
     }
@@ -223,6 +238,80 @@ describe("deleting a workspace", () => {
 
     expect(calls("workspace_remove").map((one) => one.args.force)).toEqual([false, true]);
     await vi.waitFor(() => expect(strip()).toEqual(["beta"]));
+  });
+
+  /**
+   * **charter-app#182: the force button's words and the refusal's words are one reading.**
+   *
+   * The workspace moves while the dialog is up — `lib` goes dirty after the preview and before
+   * the press — so the core refuses over two clones where the preview saw one. Before this, the
+   * button was drawn from the preview: it offered to discard *the work in svc* directly beneath
+   * a sentence saying the delete would discard svc **and** lib. Two descriptions of one act
+   * that do not agree, at the moment somebody is deciding whether to throw work away.
+   *
+   * Nothing was ever wrongly deleted, and this test does not claim otherwise: the core's own
+   * read decides and always did. What is asserted is that the surface asking for consent
+   * describes the state the refusal was made against.
+   */
+  it("names what the core refused on, not what the preview saw, when they differ", async () => {
+    const dirtied = [
+      { what: "svc", said: "svc: uncommitted changes" },
+      { what: "lib", said: "lib: 2 unpushed commit(s)" },
+    ];
+    const { calls } = core({
+      atRisk: [{ what: "svc", said: "svc: uncommitted changes" }],
+      refusesOver: dirtied,
+    });
+    render(<App />);
+    await settled();
+    const dialog = await askToDelete("alpha");
+    // The preview, which is the older reading and is drawn as one.
+    await screen.findByText("svc: uncommitted changes");
+    expect(within(dialog).queryByText("lib: 2 unpushed commit(s)")).toBeNull();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
+
+    // The refusal, verbatim, and the list under "What charter would discard" is now ITS list.
+    const refusal = await within(dialog).findByRole("alert");
+    expect(refusal).toHaveTextContent(refusalOver(dirtied));
+    expect(
+      within(within(dialog).getByTestId("at-risk"))
+        .getAllByRole("listitem")
+        .map((row) => row.textContent),
+    ).toEqual(["svc: uncommitted changes", "lib: 2 unpushed commit(s)"]);
+    // And the button names the same two, in the same order, from the same list.
+    within(dialog).getByRole("button", {
+      name: "Delete it anyway, discarding the work in 2: svc, lib",
+    });
+    // The preview's own line about the earlier reading is gone with it: a dialog cannot say
+    // "charter found no uncommitted work" above a refusal listing two dirty clones.
+    expect(calls("workspace_at_risk")).toHaveLength(1);
+  });
+
+  /**
+   * **A refusal `--force` cannot get past is not offered a force button.**
+   *
+   * The guard refuses only when it found something, so a refusal carrying nothing is one of
+   * the core's other exits — a name that is not a workspace, a `workspaces/<ws>` that links out
+   * of the plane, a `remove_dir_all` that failed. `--force` reaches none of them, and a button
+   * saying "Delete it anyway" beside one would be a promise the next press cannot keep. This
+   * shape only became tellable when the refusal started carrying its list (#182).
+   */
+  it("offers no way to force past a refusal that forcing cannot reach", async () => {
+    core({ refusesOver: [] });
+    render(<App />);
+    await settled();
+    const dialog = await askToDelete("alpha");
+    await screen.findByText("svc: uncommitted changes");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
+    await within(dialog).findByRole("alert");
+
+    expect(
+      within(dialog)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Delete workspace", "Cancel"]);
   });
 
   it("deletes nothing when the dialog is cancelled", async () => {

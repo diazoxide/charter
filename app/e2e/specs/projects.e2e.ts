@@ -1,7 +1,7 @@
-import { realpathSync, renameSync } from "node:fs";
+import { existsSync, realpathSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
-import { anEmptyRecord, copyFixturePlane } from "../harness.js";
+import { THE_RUNS_TREE, anEmptyRecord, copyFixturePlane } from "../harness.js";
 import { answerTheAsk, pressAndStart } from "../opening.js";
 
 /**
@@ -47,6 +47,18 @@ const second = (() => {
   renameSync(copied, renamed);
   return realpathSync(renamed);
 })();
+
+/**
+ * Where the strip's *New project…* button is asked to write one — a directory that is not
+ * there yet, which is the case that dialog is for.
+ *
+ * **Inside `THE_RUNS_TREE` and nowhere else.** That tree is `$CHARTER_PLANE_FENCE` for every
+ * charter process this run starts, and the app under test is built with the fence compiled in
+ * (charter-app#129). A plane scaffolded outside it does not quietly pollute somebody's real
+ * control plane; the app dies naming it, in the job that did it — which is the arrangement
+ * #132 bought after a run wrote 49 chats into the operator's own plane.
+ */
+const made = join(THE_RUNS_TREE, "made-by-the-window");
 
 /** What the app answered a command with, insisting it answered at all. */
 async function ask<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -257,5 +269,53 @@ describe("a window holding more than one project", function () {
     // And what it writes down follows, so the next launch does not put back a project the
     // operator closed.
     await remembers([first]);
+  });
+
+  /**
+   * The other button on the strip: one that makes a project instead of finding one
+   * (charter-app#178).
+   *
+   * **Last, and it leaves the strip as it found it**, because every spec above it is about the
+   * two projects it set up and this one adds a third to the same window.
+   *
+   * **It writes for real**, which is the only reason this is a scenario test at all:
+   * `NewProject.test.tsx` already proves the dialog, the command it sends and the gate it ends
+   * at, all against a mocked core. What no mocked core can show is that the button an operator
+   * presses reaches `scaffold::init` and that a directory appears with a plane in it. So the
+   * folder is a path that does not exist yet, under `THE_RUNS_TREE` — the one tree this run
+   * may write in, and the fence every charter process it starts is held to (charter-app#129,
+   * #132). A plane made anywhere else would kill the app, in this job, naming it.
+   */
+  it("makes a project from the strip's other button, and opens it through the same gate", async () => {
+    await $(`${PROJECTS} button[aria-label="New project…"]`).click();
+
+    const dialog = await $('[role="dialog"]');
+    await dialog.waitForDisplayed({ timeout: 20_000 });
+    await expect(dialog).toHaveText("New project", { containing: true });
+    // Typed rather than picked: Browse… opens the system's own folder dialog, which is not a
+    // thing a driver inside the webview can answer. The first box in the dialog is the folder
+    // — React owns the id, so the element is taken by position, as `workspace-lifecycle.e2e.ts`
+    // takes the workspace name out of its sibling dialog.
+    await $('[role="dialog"] input').setValue(made);
+    await $("button=Create project").click();
+
+    // **A plane charter made a second ago is still one this machine has approved nothing
+    // about** (ADR 0035). There is no shortcut past the ask, and this is the assertion that
+    // says so from the outside.
+    const question = await $('[role="dialog"]');
+    await question.waitForDisplayed({ timeout: 30_000 });
+    await expect(question).toHaveText("Open this project?", { containing: true });
+    await $("button=Open project").click();
+
+    // The operator's second ruling on #178: it opens in THIS window, selected. Pressing create
+    // was the asking; a second dialog would be a third confirmation of something asked twice.
+    await stripBecomes([
+      { path: first, front: false },
+      { path: realpathSync(made), front: true },
+    ]);
+    expect(existsSync(join(made, "charter.toml"))).toBe(true);
+
+    await $(`${PROJECTS} button[aria-label="Close project ${basename(made)}"]`).click();
+    await stripBecomes([{ path: first, front: true }]);
   });
 });

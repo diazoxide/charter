@@ -1580,7 +1580,9 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
     let say: &mut dyn FnMut(charter_core::repocmd::Say) = &mut sink;
     let code = match verb {
         WorkspaceCommand::Remove { name, force } => {
-            let code = wscmd::remove::remove(&root, name, *force, say);
+            // The list it refused on is the window's (charter-app#182): a terminal has already
+            // been given every sentence in it, by the refusal itself.
+            let code = wscmd::remove::remove(&root, name, *force, say).code;
             // The active workspace followed the removal: a pointer naming a workspace that is
             // gone resolves to it on every later command, and `workspaces/<gone>` is then
             // created again by the first write. Python resets it the same way and for the
