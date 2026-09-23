@@ -960,6 +960,8 @@ fn git_path_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitS
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
+            // `<` and `<=` differ only at the one instant that equals the deadline, which no
+            // test can land on: `.cargo/mutants.toml` excludes that mutant as equivalent.
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }

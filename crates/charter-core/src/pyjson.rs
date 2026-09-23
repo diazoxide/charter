@@ -233,6 +233,8 @@ pub(crate) fn number(n: &serde_json::Number) -> String {
 /// that reads back exactly), so only the notation is decided here.
 pub(crate) fn float_repr(value: f64) -> String {
     if value.is_infinite() {
+        // `>` or `>=` cannot differ here: the value is an infinity, never zero
+        // (`.cargo/mutants.toml` excludes that mutant as equivalent).
         return if value > 0.0 { "Infinity" } else { "-Infinity" }.to_owned();
     }
     if value.is_nan() {
@@ -265,6 +267,8 @@ pub(crate) fn float_repr(value: f64) -> String {
         } else {
             format!("{lead}.{rest}")
         };
+        // Never `exp == 0` in this branch — that is inside `-4..16` — so `<` and `<=` are one
+        // test (`.cargo/mutants.toml` excludes that mutant as equivalent).
         let esign = if exp < 0 { '-' } else { '+' };
         format!("{mant}e{esign}{:02}", exp.abs())
     };
@@ -509,6 +513,26 @@ mod styled_tests {
             (None, ",".to_owned(), ": ".to_owned())
         );
         assert_eq!(json_style(""), (None, ",".to_owned(), ":".to_owned()));
+    }
+
+    /// Verified against CPython: `json.dumps({"b": [1, "x", [2, 3]], "a": None},
+    /// sort_keys=True)`.
+    #[test]
+    fn a_sorted_dump_separates_every_array_item_and_only_between_items() {
+        let doc = serde_json::json!({"b": [1, "x", [2, 3]], "a": null});
+        assert_eq!(dumps_sorted(&doc), r#"{"a": null, "b": [1, "x", [2, 3]]}"#);
+    }
+
+    /// Verified against CPython: `json.dumps(d, indent=2, ensure_ascii=False) + "\n"`, which
+    /// is how `charter/inventory.py` writes `inventory/repos.json`.
+    #[test]
+    fn a_unicode_dump_keeps_every_character_from_space_up_and_escapes_only_controls() {
+        let doc =
+            serde_json::json!({"d": "\u{e9}\u{7f}\u{1} \u{2603}\u{1d11e}", "l": ["\u{fc}", 1]});
+        assert_eq!(
+            dumps_indent2_unicode(&doc),
+            "{\n  \"d\": \"\u{e9}\u{7f}\\u0001 \u{2603}\u{1d11e}\",\n  \"l\": [\n    \"\u{fc}\",\n    1\n  ]\n}\n"
+        );
     }
 
     /// Verified against CPython: `re.search(r'\n([ \t]+)"', text)` in
