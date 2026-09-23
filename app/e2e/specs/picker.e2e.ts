@@ -6,11 +6,11 @@ import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
  * Picking a harness profile and a persona, against the real app in a copy of the `daily`
  * fixture plane, with a real `charter.local.toml` beside it.
  *
- * Nothing here is stubbed. The app reads the plane, probes the profile's own command to see
- * whether charter's guard would run in it, asks the operator to approve a command it has
- * never run, and only then starts anything. The profile's program is a wrapper that answers
- * the probe as a wired Claude Code would and then runs the fake harness — which is also the
- * shape ADR 0022 names, a program that is not called `claude`.
+ * Nothing here is stubbed. The app reads the plane, asks the operator to approve a command it
+ * has never run, and only then starts anything, armed with the plugin the app ships. The
+ * profile's program is a wrapper that writes down what it was started with and then runs the
+ * fake harness — which is also the shape ADR 0022 names, a program that is not called
+ * `claude`.
  *
  * Every test here is independent of the order the specs run in. They share one app process,
  * and an approval is recorded per profile, so the approval test picks a profile of its own.

@@ -164,6 +164,12 @@ export type Does =
    *  It puts nothing in force by itself — an extension contributes only once it is approved,
    *  and the approval is the dialog's. */
   | { verb: "showExtensions" }
+  /** Puts the app's own `charter` on a terminal's `PATH` — VS Code's "Install 'code' command
+   *  in PATH". Only ever on this row: nothing links a command anywhere behind the operator's
+   *  back (spec decision 21, `charter_core::clipath`). A refusal comes back as the core's
+   *  sentence: somebody else's `charter` already there, a cancelled password prompt, or a
+   *  platform where the installer already did it. */
+  | { verb: "installCli" }
   /** Brings a project this window already holds to the front. Nothing is opened, nothing is
    *  closed, and the project that was in front keeps every chat it had running. */
   | { verb: "selectProject"; plane: string }
@@ -327,6 +333,7 @@ export type Doing = {
    *  answered, and the open it ends in is the gated one. */
   createProject: () => void;
   showExtensions: () => void;
+  installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
   quit: () => void;
@@ -872,6 +879,15 @@ export function catalogue(now: Now): Offer[] {
   // the operator has to work out from somewhere else on the page.
   offers.push(...projects.close);
 
+  // About the machine and not a project, so it is here with nothing open too — and low on
+  // the list, because it is a row an operator runs once and a query should find the rows
+  // about what is in front before it. The words are VS Code's for the same thing, which is
+  // what an operator will type.
+  offers.push({
+    ...can("charter.installCli", "Install `charter` command in PATH", { verb: "installCli" }),
+    note: "Links the charter this app ships into /usr/local/bin, so a terminal finds it. macOS asks for your password when that directory is not yours.",
+  });
+
   offers.push(can("charter.quit", "Quit charter", { verb: "quit" }));
 
   return offers;
@@ -944,6 +960,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "showExtensions":
       doing.showExtensions();
       return DID;
+    case "installCli":
+      return doing.installCli();
     case "selectProject":
       doing.selectProject(does.plane);
       return DID;

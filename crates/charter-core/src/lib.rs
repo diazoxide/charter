@@ -4,6 +4,7 @@ pub mod active;
 pub mod adopt;
 pub mod alerts;
 pub mod cistate;
+pub mod clipath;
 pub mod contain;
 pub mod credguard;
 pub mod curate;

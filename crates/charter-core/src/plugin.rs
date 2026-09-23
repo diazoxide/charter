@@ -21,8 +21,16 @@
 //!   every event and two `handoff` skills. `--settings '{"enabledPlugins":{"charter@charter":
 //!   false}}'` on the same command line turns the installed one off for that session — none of
 //!   its hooks fired and its skills were not offered — while the project file still enables it
-//!   for every other session. That is the operator's ruling ("App chats disable it"), and
-//!   [`SUPERSEDED`] is what it names.
+//!   for every other session. It wins over `.claude/settings.local.json` too. That is the
+//!   operator's ruling ("App chats disable it"), and [`SUPERSEDED`] is what it names.
+//! - **A project file can turn the bundled plugin off**: `{"enabledPlugins":
+//!   {"charter-app@inline": false}}` in the chat's `.claude/settings.json` loaded none of its
+//!   hooks and none of its skills. That is a file a chat can write, and the plugin carries the
+//!   Bash guard, so the session settings pin it on — `"charter-app@inline": true` beside the
+//!   `--plugin-dir` — and, measured, that wins over the project's `false`: every hook fired.
+//! - Through the real `charter` and this very plugin: every hook in [`HOOKS`] ran and exited 0,
+//!   and a Bash call reading `.charter/vaults/db.json` in a plane was refused by the guard
+//!   before it ran — the model got the refusal and never the file.
 //!
 //! # Why the hook command names `$CHARTER_HOOK_BINARY` and not a path
 //!
@@ -42,6 +50,10 @@
 /// Not `charter`, so a skill of this plugin never collides with one of the Python charter's in
 /// a session that somehow has both.
 pub const NAME: &str = "charter-app";
+
+/// The id Claude Code gives a plugin loaded with `--plugin-dir`, and the one `enabledPlugins`
+/// names it by.
+pub const LOADED_AS: &str = "charter-app@inline";
 
 /// The plugin a chat the app starts turns off for itself — the Python charter's, installed
 /// from its marketplace. Only for that session: `--settings` is the whole of how.
@@ -150,11 +162,15 @@ pub fn command_at(binary: &std::path::Path, word: &str) -> String {
     )
 }
 
+/// One matcher's hooks within an event.
+pub type Group<'a> = (Option<&'static str>, Vec<&'a Hook>);
+
+/// One event's groups.
+pub type Event<'a> = (&'static str, Vec<Group<'a>>);
+
 /// `hooks` grouped the way both harnesses read them: event, then one group per matcher.
-pub fn grouped<'a>(
-    hooks: impl Iterator<Item = &'a Hook>,
-) -> Vec<(&'static str, Vec<(Option<&'static str>, Vec<&'a Hook>)>)> {
-    let mut events: Vec<(&'static str, Vec<(Option<&'static str>, Vec<&'a Hook>)>)> = Vec::new();
+pub fn grouped<'a>(hooks: impl Iterator<Item = &'a Hook>) -> Vec<Event<'a>> {
+    let mut events: Vec<Event<'a>> = Vec::new();
     for hook in hooks {
         let at = match events.iter().position(|(event, _)| *event == hook.event) {
             Some(at) => at,

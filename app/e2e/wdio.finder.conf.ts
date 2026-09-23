@@ -26,7 +26,7 @@ export const THEIR_STATUS_LINE = "/bin/echo their own status line";
  * **charter-app#134, and the reason it reached the operator.** macOS hands a double-clicked
  * `.app` `PATH=/usr/bin:/bin:/usr/sbin:/sbin` — `launchd` starts a GUI process and no login
  * shell is involved. The operator's `claude` was in `~/.local/bin`, where its own installer
- * puts it, so charter's wiring probe could not spawn it, answered `State::Unknown`, and the
+ * puts it, so charter could not find it, its wiring check answered `State::Unknown`, and the
  * app refused every chat with *"an unknown is not a pass — nothing was started"*.
  *
  * **Nothing in this suite had ever launched the app that way.** Every other config inherits

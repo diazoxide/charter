@@ -155,8 +155,9 @@ fn not_probed(root: &Path, p: &Profile, ignored: &IgnoreCheck) -> Option<(String
 /// **Never on a hook path** (ruling 11): only a `charter doctor` a person types asks. The
 /// questions run side by side.
 ///
-/// The probe is this binary's own ([`wiring::detect`]), so what a probed row SAYS is this
-/// charter's sentence about what it asked, not Python's.
+/// The answer is this binary's own ([`wiring::detect`]): the app arms every chat it starts
+/// with its own plugin, so what is left to say about a profile is whether its harness can be
+/// found. Nothing is run to find out.
 pub(super) fn profile_rows(d: &Doctor) -> Vec<Row> {
     if d.preflight {
         return Vec::new();

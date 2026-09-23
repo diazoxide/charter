@@ -490,7 +490,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_finder_launched_chat_searches_where_charter_searched_and_then_charters_own_directory() {
+    fn a_finder_launched_chat_searches_charters_own_directory_and_then_where_charter_searched() {
         let home = PathBuf::from("/home/op");
         let charter = PathBuf::from("/Applications/charter.app/Contents/MacOS/charter");
         let path =
@@ -498,14 +498,14 @@ mod tests {
         assert_eq!(
             path,
             [
+                "/Applications/charter.app/Contents/MacOS",
                 FINDER,
                 "/home/op/.local/bin:/home/op/bin:/home/op/.opencode/bin:/home/op/.bun/bin",
                 "/home/op/.volta/bin:/home/op/.npm-global/bin",
                 "/opt/homebrew/bin:/usr/local/bin",
-                "/Applications/charter.app/Contents/MacOS",
             ]
             .join(":"),
-            "the inherited four, the list that found the harness, then the app's charter"
+            "the app's charter, then the inherited four, then the list that found the harness"
         );
     }
 

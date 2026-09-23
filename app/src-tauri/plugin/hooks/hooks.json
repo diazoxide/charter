@@ -1,0 +1,83 @@
+{
+  "description": "Generated from charter_core::plugin::HOOKS. Do not edit: `cargo test -p charter-app -- --ignored` rewrites it.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook sessionstart",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook userpromptsubmit",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook pretooluse",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook notification",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook subagentstop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook sessionend",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

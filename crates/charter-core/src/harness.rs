@@ -338,9 +338,16 @@ fn claude_code_settings(binary: &std::path::Path, may_fill_the_footer: bool) -> 
     // The operator's ruling of 2026-09-23: a chat the app starts turns the Python charter's
     // plugin off for itself, so the project files that enable it for the operator's own
     // terminal sessions do not give an app chat two sets of hooks and two `handoff` skills.
+    //
+    // And the bundled plugin pinned on: a project file can turn a `--plugin-dir` plugin off by
+    // its id, a chat can write that file, and the plugin carries the Bash guard. Measured on
+    // 2.1.280: this `true` wins over a project's `false`.
     settings.insert(
         "enabledPlugins".to_owned(),
-        serde_json::json!({ crate::plugin::SUPERSEDED: false }),
+        serde_json::json!({
+            crate::plugin::SUPERSEDED: false,
+            crate::plugin::LOADED_AS: true,
+        }),
     );
     // **Only where nothing else fills it.** The key is one value and the flag is the last
     // writer, so arming it where the operator has their own would stop theirs running
@@ -655,16 +662,18 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_code_chat_turns_the_python_charters_plugin_off_for_itself() {
+    fn a_claude_code_chat_turns_the_python_charters_plugin_off_and_its_own_on() {
         // The operator's ruling: app chats disable it. A session `enabledPlugins` wins over a
-        // project file that enables it (measured on 2.1.280), and only for this session.
+        // project file that enables it (measured on 2.1.280), and only for this session. And
+        // the bundled plugin is pinned on, because a project file a chat can write could
+        // otherwise turn the guard off by the plugin's id — measured, and this wins over it.
         let empty = tempfile::tempdir().expect("a directory");
         let (args, _) = claude("/bin/charter", empty.path());
         let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
 
         assert_eq!(
             settings["enabledPlugins"],
-            serde_json::json!({"charter@charter": false})
+            serde_json::json!({"charter@charter": false, "charter-app@inline": true})
         );
     }
 

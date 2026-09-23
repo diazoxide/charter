@@ -559,6 +559,11 @@ export const commands = {
 	 */
 	aboutCharter: () => __TAURI_INVOKE<About>("about_charter"),
 	/**
+	 *  Links the app's `charter` into `/usr/local/bin`, asking macOS for an administrator's
+	 *  password when that directory is not this user's to write. Answers the sentence to say.
+	 */
+	installCliOnPath: () => typedError<string, string>(__TAURI_INVOKE("install_cli_on_path")),
+	/**
 	 *  Keeps the window's layout, replacing what the file held.
 	 * 
 	 *  `text` is the document as JSON text; the core parses it and writes it back out itself, so
@@ -1524,13 +1529,9 @@ export type StartOptions = {
 	declares_none: boolean,
 };
 
-/**
- *  A chat that started: its session, and the one line to say if charter wired its profile
- *  on the way.
- */
+/**  A chat that started: its session. */
 export type Started = {
 	session: number,
-	wired: string | null,
 };
 
 /**  What the operating system has already spent of the window's own title bar. */

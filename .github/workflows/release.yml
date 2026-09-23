@@ -542,6 +542,23 @@ jobs:
             echo; echo "ldd of the app:"; ldd target/release/charter-app || true
           fi
 
+      # The plugin every Claude Code chat loads (`charter_core::plugin`). A bundle without it
+      # starts every chat unarmed — no state, no guard, no skills — so its absence fails the
+      # build rather than reaching anyone.
+      - name: The bundle carries charter's own plugin
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            plugin=target/release/bundle/macos/charter.app/Contents/Resources/plugin
+            ls -R "$plugin"
+            test -f "$plugin/.claude-plugin/plugin.json"
+            test -f "$plugin/hooks/hooks.json"
+          else
+            dpkg -c dist/*.deb | grep -E 'plugin/' || true
+            dpkg -c dist/*.deb | grep -q 'plugin/.claude-plugin/plugin.json'
+            dpkg -c dist/*.deb | grep -q 'plugin/hooks/hooks.json'
+          fi
+
       - name: Upload
         uses: actions/upload-artifact@v7
         with:

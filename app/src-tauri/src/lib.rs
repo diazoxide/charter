@@ -4,6 +4,7 @@
 mod about;
 mod alerts;
 mod chats;
+mod clipath;
 mod doctor;
 mod extensions;
 mod handoff;
@@ -1166,6 +1167,7 @@ fn commands() -> Builder<tauri::Wry> {
             usage::chat_usage,
             pin::plane_pin,
             about::about_charter,
+            clipath::install_cli_on_path,
             windowprefs::write_layout,
             windowprefs::adopt_layout,
         ])
