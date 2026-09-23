@@ -1218,6 +1218,10 @@ fn is_repo_top_level(root: &Path) -> bool {
     let Ok(top) = git::run(root, &["rev-parse", "--show-toplevel"], git::READ) else {
         return false;
     };
+    // `||` rather than `&&` is not observable, and `.cargo/mutants.toml` excludes that mutant:
+    // either way a run that falls through compares `top.line()` with the resolved root, and
+    // an empty line (`canonicalize("")` fails, leaving `""`) or a failed git's empty stdout
+    // never equals a real directory. The guard is Python's `returncode != 0 or not top`.
     if !top.ok() || top.line().is_empty() {
         return false;
     }
@@ -2247,5 +2251,348 @@ mod tests {
             line_about_work(&outcome),
             expected.iter().collect::<Vec<_>>()
         );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The front door (`commands._ensure_front_door`).
+    // ---------------------------------------------------------------------------------------
+
+    /// The persona file is `commands._FRONT_DOOR.format(name=..., role=...)` byte for byte.
+    /// The fixture is that call's output from the Python charter, for `front-door.2`, whose
+    /// role `str.title()` makes `Front Door.2`.
+    #[test]
+    fn the_front_door_is_the_pythons_template_byte_for_byte_and_is_declared() {
+        let (_dir, root) = empty_plane();
+
+        let outcome = init(
+            &at(&root, false),
+            &InitArgs {
+                front_door: Some("front-door.2".to_owned()),
+                ..plain()
+            },
+        );
+
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        let dir = root.join("personas/front-door.2");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("persona.md")).expect("persona.md"),
+            include_str!("testdata/front-door-as-python-renders-it.md")
+        );
+        assert!(dir.join("memory/.gitkeep").is_file());
+        assert!(dir.join("refs/.gitkeep").is_file());
+        let toml = std::fs::read_to_string(root.join("charter.toml")).expect("charter.toml");
+        assert!(toml.contains("default = \"front-door.2\""), "{toml}");
+    }
+
+    fn scaffolded_a_front_door(outcome: &Outcome) -> bool {
+        outcome.said.iter().any(|s| {
+            matches!(s, Say::Info(l) if l == "  + personas/steward/ (front door, declared in charter.toml)")
+        })
+    }
+
+    /// `personas.glob("*.md")` counts only markdown: a README of another kind is not a
+    /// roster, so the front door is still made.
+    #[test]
+    fn a_personas_directory_holding_only_a_non_markdown_file_still_gets_a_front_door() {
+        let (_dir, root) = empty_plane();
+        std::fs::create_dir(root.join("personas")).expect("personas/");
+        std::fs::write(root.join("personas/README.txt"), "notes\n").expect("a note");
+
+        let outcome = init(&at(&root, false), &plain());
+
+        assert!(scaffolded_a_front_door(&outcome), "{:?}", outcome.said);
+        assert!(root.join("personas/steward/persona.md").is_file());
+    }
+
+    /// `personas.glob("*/persona.md")`: a persona of its own is a roster, and none is added.
+    #[test]
+    fn a_plane_with_a_persona_of_its_own_gets_no_front_door() {
+        let (_dir, root) = empty_plane();
+        std::fs::create_dir_all(root.join("personas/alice")).expect("alice/");
+        std::fs::write(
+            root.join("personas/alice/persona.md"),
+            "---\nname: alice\n---\n",
+        )
+        .expect("alice");
+
+        let outcome = init(&at(&root, false), &plain());
+
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        assert!(!scaffolded_a_front_door(&outcome), "{:?}", outcome.said);
+        assert!(!root.join("personas/steward").exists());
+    }
+
+    /// `_instance.default_persona_of(...)`: a declared default is a question somebody already
+    /// answered.
+    #[test]
+    fn a_plane_that_declares_a_default_persona_gets_no_front_door() {
+        let (_dir, root) = empty_plane();
+        std::fs::write(
+            root.join("charter.toml"),
+            "schema = 1\n\n[persona]\ndefault = \"alice\"\n",
+        )
+        .expect("charter.toml");
+
+        let outcome = init(&at(&root, true), &plain());
+
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        assert!(!root.join("personas/steward").exists());
+    }
+
+    /// Stricter than Python, as `front_door` documents: a `charter.toml` that is not TOML
+    /// makes Python's `instance.load` raise and `init` end in a traceback. Here it is said,
+    /// no front door is scaffolded over it, and the run fails.
+    #[test]
+    fn a_manifest_that_is_not_toml_gets_no_front_door_and_fails_the_run() {
+        let (_dir, root) = empty_plane();
+        std::fs::write(root.join("charter.toml"), "this is = not [toml\n").expect("toml");
+
+        let outcome = init(&at(&root, true), &plain());
+
+        assert!(
+            errs(&outcome)
+                .iter()
+                .any(|e| e.ends_with(" — no front door was scaffolded.")),
+            "{:?}",
+            outcome.said
+        );
+        assert_eq!(outcome.code, 1);
+        assert!(!root.join("personas/steward").exists());
+    }
+
+    /// Every path the front door would write is gated, not only its directory: a
+    /// `memory` link out of the plane stops the whole scaffold, and nothing lands out there.
+    #[test]
+    fn a_front_door_whose_memory_links_out_of_the_plane_is_not_scaffolded_through_it() {
+        let (dir, root) = empty_plane();
+        let outside = dir.path().join("elsewhere");
+        std::fs::create_dir(&outside).expect("somewhere else");
+        std::fs::create_dir_all(root.join("personas/steward")).expect("steward/");
+        std::os::unix::fs::symlink(&outside, root.join("personas/steward/memory"))
+            .expect("a link out");
+
+        let outcome = init(&at(&root, false), &plain());
+
+        assert_eq!(outcome.code, 1, "{:?}", outcome.said);
+        assert!(
+            errs(&outcome)
+                .iter()
+                .any(|e| e.starts_with("personas/steward/memory/.gitkeep resolves to")),
+            "{:?}",
+            outcome.said
+        );
+        assert!(!root.join("personas/steward/persona.md").exists());
+        assert_eq!(
+            std::fs::read_dir(&outside).expect("the directory").count(),
+            0
+        );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Inside a git repository: ADR 0035's refusal, and `_first_clone_step`'s offer.
+    // ---------------------------------------------------------------------------------------
+
+    fn git(dir: &Path, args: &[&str]) {
+        let r = crate::worktree::git::run(dir, args, crate::worktree::git::READ).expect("git");
+        assert!(r.ok(), "git {args:?} failed: {}", r.err);
+    }
+
+    /// A directory named `plane` that is the top of a git repo whose `origin` is `widget` —
+    /// `_in_a_git_repository` in the differential run, which names the same repo.
+    fn a_repo(origin: &str) -> (tempfile::TempDir, PathBuf) {
+        let (dir, root) = empty_plane();
+        git(&root, &["init", "-q", "-b", "main", "."]);
+        git(&root, &["remote", "add", "origin", origin]);
+        (dir, root)
+    }
+
+    /// ADR 0035 / spec decision 27, the declared divergence: `init` at the top of a repo
+    /// writes nothing and says how to ask. The lines are `NOT_COLONISED` in
+    /// `tests/differential/run.py`, which holds the CLI to them byte for byte.
+    #[test]
+    fn init_at_the_top_of_a_repository_writes_nothing_and_says_how_to_ask() {
+        let (_dir, root) = a_repo("git@github.com:acme/widget.git");
+
+        let outcome = init(&at(&root, false), &plain());
+
+        assert_eq!(
+            outcome.said,
+            vec![
+                Say::Err(
+                    "this is the git repo 'widget', and `charter init` does not make a \
+                     repository into a control plane unless you ask it to. Nothing was \
+                     written."
+                        .to_owned()
+                ),
+                Say::Info(
+                    "A plane is a directory of its own, and this repo is the first clone in \
+                     it:\n      mkdir ../widget-plane && cd ../widget-plane\n      charter \
+                     init --forge github --owner acme --adopt ../plane\n  That clones this \
+                     repo into the plane's first workspace. Nothing here is written by any of \
+                     it — this repo is read, and only read."
+                        .to_owned()
+                ),
+                Say::Info(
+                    "To make THIS repo the plane instead — charter's own plane is one, which \
+                     is why the option is here — ask for it by name:\n      charter init \
+                     --plane-is-this-repo --forge github --owner acme\n  That writes \
+                     charter.toml, .claude/settings.json, opencode.json, personas/, \
+                     inventory/, workspaces/ into this repo, and charter's own rules into its \
+                     tracked .gitignore."
+                        .to_owned()
+                ),
+                Say::Info(
+                    "Why the default changed: docs/adr/0035-a-plane-is-untrusted-until-the-\
+                     operator-opens-it.md, and charter-app spec decision 27. `charter init` \
+                     anywhere that is not the top of a git repo is unchanged."
+                        .to_owned()
+                ),
+            ]
+        );
+        assert_eq!(outcome.code, 1);
+        let left: Vec<_> = std::fs::read_dir(&root)
+            .expect("the repo")
+            .map(|e| e.expect("an entry").file_name())
+            .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from(".git")]);
+    }
+
+    /// The flags the refusal prints back are the ones typed, as a shell reads them: the
+    /// front-door flag only when it is not the default.
+    #[test]
+    fn the_refusal_prints_back_only_the_flags_that_were_typed() {
+        assert_eq!(typed_flags(&plain()), " --forge github --owner acme");
+        assert_eq!(
+            typed_flags(&InitArgs {
+                owner: String::new(),
+                host: Some("git.example.com".to_owned()),
+                front_door: None,
+                ..plain()
+            }),
+            " --forge github --host git.example.com --no-front-door"
+        );
+        assert_eq!(
+            typed_flags(&InitArgs {
+                front_door: Some("door".to_owned()),
+                ..plain()
+            }),
+            " --forge github --owner acme --front-door door"
+        );
+    }
+
+    /// `--plane-is-this-repo` is the old default asked for by name: the plane is made in the
+    /// repo, and `_first_clone_step` offers the first clone in `_offer_first_clone`'s words.
+    #[test]
+    fn plane_is_this_repo_scaffolds_the_repo_and_offers_its_first_clone() {
+        let (_dir, root) = a_repo("git@github.com:acme/widget.git");
+
+        let outcome = init(
+            &at(&root, false),
+            &InitArgs {
+                plane_is_this_repo: true,
+                ..plain()
+            },
+        );
+
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        assert_eq!(
+            outcome.said.last(),
+            Some(&Say::Info(
+                "You are standing in the git repo 'widget'. Work happens in a workspace, not \
+                 in the plane root — clone it into the first one:\n      charter init \
+                 --clone-this-repo\n  Nothing is cloned unless you run that. It lands in \
+                 workspaces/default/widget/, and declining leaves this plane complete."
+                    .to_owned()
+            ))
+        );
+        assert!(root.join("charter.toml").is_file());
+    }
+
+    /// A repository that already holds a `charter.toml` is a plane: `init` heals it rather
+    /// than refusing, and the offer names the workspace the plane declares
+    /// (`config.DEFAULT_WORKSPACE`, re-derived by `config.use(root)`).
+    #[test]
+    fn a_repository_that_is_already_a_plane_is_healed_and_offered_its_declared_workspace() {
+        let (_dir, root) = a_repo("git@github.com:acme/widget.git");
+        std::fs::write(
+            root.join("charter.toml"),
+            "schema = 1\n\n[workspace]\ndefault = \"lab\"\n",
+        )
+        .expect("charter.toml");
+
+        let outcome = init(&at(&root, true), &plain());
+
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        assert!(
+            matches!(outcome.said.last(), Some(Say::Info(l))
+                if l.contains("It lands in workspaces/lab/widget/,")),
+            "{:?}",
+            outcome.said
+        );
+    }
+
+    /// `_first_clone_step(accepted=True)` where there is no repo: `cmd_init`'s own words, and
+    /// exit 1 — the plane was still made.
+    #[test]
+    fn clone_this_repo_where_there_is_no_repo_says_so_and_exits_1() {
+        let (_dir, root) = empty_plane();
+
+        let outcome = init(
+            &at(&root, false),
+            &InitArgs {
+                clone_this_repo: true,
+                ..plain()
+            },
+        );
+
+        assert_eq!(
+            outcome.said.last(),
+            Some(&Say::Err(format!(
+                "--clone-this-repo: there is no repo here to clone. {} is not the top level \
+                 of a git working tree, and the flag clones the repo you are standing in. The \
+                 control plane itself was still created.",
+                root.display()
+            )))
+        );
+        assert_eq!(outcome.code, 1);
+        assert!(root.join("charter.toml").is_file());
+    }
+
+    /// `--adopt` (charter-app#175, no Python counterpart) naming the plane's own directory is
+    /// `--clone-this-repo` spelled another way, and is refused with the pointer to it.
+    #[test]
+    fn adopt_naming_the_planes_own_directory_points_at_clone_this_repo() {
+        let (_dir, root) = a_repo("git@github.com:acme/widget.git");
+
+        let outcome = init(
+            &at(&root, false),
+            &InitArgs {
+                plane_is_this_repo: true,
+                adopt: Some(root.clone()),
+                ..plain()
+            },
+        );
+
+        assert_eq!(
+            outcome.said.last(),
+            Some(&Say::Err(
+                "--adopt: that is this plane's own directory. To clone the repo the plane is \
+                 being made IN, ask for `--clone-this-repo`; `--adopt` is for a repository \
+                 somewhere else, with the plane beside it (ADR 0035)."
+                    .to_owned()
+            ))
+        );
+        assert_eq!(outcome.code, 1);
+    }
+
+    /// `commands._first_clone_name`: the tail of `origin` when it is a workspace-shaped name,
+    /// else the directory's own name.
+    #[test]
+    fn the_first_clone_is_named_after_origin_unless_origin_ends_in_no_name() {
+        let (_dir, root) = a_repo("git@github.com:acme/widget.git");
+        assert_eq!(first_clone_name(&root), "widget");
+
+        let (_dir, root) = a_repo("https://example.com/acme/Not A Name.git");
+        assert_eq!(first_clone_name(&root), "plane");
     }
 }
