@@ -181,6 +181,27 @@ outside closes it**, because there is no answer to lose. `side="left"` is where 
 the default arrangement and no more than that — a region MOVES (ADR 0038), and Radix flips to the
 other side when there is no room, which is what makes naming a side safe at all.
 
+**And then the persona card grew out of it (2026-09-23)**, and is now a **non-modal
+`@radix-ui/react-dialog` portalled into the centre region** — a sheet over the terminals. The
+popover's reasons were about six short rows; the card now holds a searchable archive of
+everything a persona remembers and an extension's statistics view, and a popover anchored in a
+260 px column is a thin surface for paragraphs and charts. Each reason above is kept rather than
+overruled:
+
+- **Still not modal.** `modal={false}`: no overlay, no focus trap, nothing outside it marked
+  `aria-hidden`, so the needs-you queue stays reachable — the reason a dialog was refused above
+  was that a *modal* one hides the queue, and this one does not. `Panels.test.tsx` holds it with a
+  test that goes red when `modal={false}` is removed.
+- **Still not the window's sheet.** It is portalled into `.region-centre` (`Views.centreOf`), not
+  the body, so it covers the one region that is not asking for anything and none of the side
+  regions. `AlertsDrawer` is still the only surface over the whole window.
+- **What it gave up is the anchor.** The persona's name is the sheet's `Dialog.Title` instead.
+  Every other row's card is still the popover, because six short rows are what a popover is for.
+
+A panel's heading can carry the same sheet for an extension's view — the persona statistics
+button — on the same terms. `docs/design-system.md`'s rules hold inside it: the chart it draws is
+two theme tokens and no timing.
+
 Two decisions those four share, taken once so they do not have to be taken again per dialog:
 
 - **A click outside answers nothing.** `onInteractOutside` is prevented on all four, which is

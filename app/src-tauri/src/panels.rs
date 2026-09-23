@@ -88,6 +88,24 @@ pub(crate) enum PanelBlock {
         text: String,
         tone: String,
     },
+    /// Magnitudes charter draws — only ever in an answer from an extension's program
+    /// (`panel::answered`), never declared. See `charter_core::panel`'s header for why.
+    Chart {
+        title: String,
+        /// `bars` or `columns` (`panel::Shape`).
+        shape: String,
+        unit: Option<String>,
+        points: Vec<PanelPoint>,
+    },
+}
+
+/// One magnitude in a chart.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct PanelPoint {
+    pub label: String,
+    /// A whole count. `u32` so it is a `number` in TypeScript and not a `bigint`.
+    pub value: u32,
+    pub note: Option<String>,
 }
 
 /// A panel, as the window receives it: a key, a title, an ordering and a body.
@@ -107,6 +125,10 @@ pub(crate) struct PanelView {
     pub blocks: Vec<PanelBlock>,
     /// The extension that contributed it, or `null` for charter's own.
     pub from: Option<String>,
+    /// What it is about (`panel::Subject`), when it is about a subject charter publishes. The
+    /// window offers the views about the same subject on this panel's heading — which is
+    /// charter's choice of where, made once, rather than an extension's.
+    pub about: Option<String>,
 }
 
 impl From<&panel::Panel> for PanelView {
@@ -121,6 +143,7 @@ impl From<&panel::Panel> for PanelView {
                 panel::By::Charter => None,
                 panel::By::Extension(id) => Some(id.clone()),
             },
+            about: it.about.map(|about| about.as_str().to_owned()),
         }
     }
 }
@@ -139,6 +162,20 @@ impl From<&panel::Block> for PanelBlock {
             panel::Block::Note { text, tone } => Self::Note {
                 text: text.clone(),
                 tone: tone.as_str().to_owned(),
+            },
+            panel::Block::Chart(chart) => Self::Chart {
+                title: chart.title.clone(),
+                shape: chart.shape.as_str().to_owned(),
+                unit: chart.unit.clone(),
+                points: chart
+                    .points
+                    .iter()
+                    .map(|point| PanelPoint {
+                        label: point.label.clone(),
+                        value: point.value,
+                        note: point.note.clone(),
+                    })
+                    .collect(),
             },
         }
     }
@@ -214,12 +251,11 @@ pub(crate) struct Panels {
     /// the problem, and splitting it would cost something real: focusing a workspace has 100 ms
     /// and this command is the one that has to answer inside it.
     ///
-    /// **A contributed panel needs no round trip of its own, and that is a fact about stage 1.**
-    /// With no executor there is nothing to ask: an extension's panel is declared, so its rows
-    /// came off the disk at survey time, and charter's own are produced from the plane read
-    /// this command already does. The day an executor lands, a panel that wants live rows asks
-    /// its extension — and that is a second call, made when the panel is drawn, and it is stage
-    /// 2's to design.
+    /// **A contributed panel needs no round trip of its own.** An extension's panel is
+    /// declared, so its rows came off the disk at survey time, and charter's own are produced
+    /// from the plane read this command already does. What an extension answers LIVE is a
+    /// *view* (`crate::views`), asked when the operator opens it and never on this path: a
+    /// program started on every workspace focus would spend the 100 ms on a fork.
     contributed: Vec<PanelView>,
 }
 
@@ -379,15 +415,15 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
 /// and both are the same thing: charter is code that is already in the process.
 ///
 /// 1. **Their rows carry `runs`** — a persona row runs `persona.show:<name>`, which is a
-///    catalogue row the palette and a context menu already run (charter-app#174). A declared row
-///    may not (`panel::NO_VERB`): there is no executor, and a row that ran a charter verb on an
-///    extension's say-so would be one with nothing behind it.
+///    catalogue row the palette and a context menu already run (charter-app#174). A declared or
+///    answered row may not (`panel::NO_VERB`): a row that ran a charter verb on an extension's
+///    say-so would be charter acting with nothing in front of it.
 /// 2. **Their cards may name a consumer that reads the plane** — `Detail::Persona` costs a
 ///    `persona_details` call. A declared card is `Detail::Text`, which reads nothing.
 ///
 /// Neither is a privilege of being charter, and neither is permanent. The grant that lifts the
-/// first is *this extension may offer this catalogue row*, consented per extension per row, and
-/// it is stage 2.
+/// first is *this extension may offer this catalogue row*, consented per extension per row —
+/// and nobody has asked for it yet, which under ADR 0041 is the reason it does not exist.
 fn charters_own(
     root: &Path,
     todos: &[charter_core::workspaces::Entry],
@@ -443,6 +479,7 @@ fn charters_own(
         mark: panel::Mark::Todo,
         blocks,
         from: panel::By::Charter,
+        about: None,
     });
 
     panels.push(panel::Panel {
@@ -482,6 +519,10 @@ fn charters_own(
         order: 20,
         mark: panel::Mark::Persona,
         from: panel::By::Charter,
+        // **What makes the statistics button appear on this heading**, and the only thing:
+        // an approved extension's view about personas is offered where charter's panel about
+        // personas is. charter chose the place; the extension chose nothing but its subject.
+        about: Some(panel::Subject::Personas),
     });
 
     panel::Panel::sort(&mut panels);
@@ -907,7 +948,7 @@ mod tests {
             .iter()
             .find_map(|block| match block {
                 PanelBlock::Note { text, tone } => Some((text.clone(), tone.clone())),
-                PanelBlock::List { .. } => None,
+                PanelBlock::List { .. } | PanelBlock::Chart { .. } => None,
             })
             .expect("the refusal is drawn");
         assert_eq!(told.1, "trouble");
@@ -921,7 +962,7 @@ mod tests {
             .iter()
             .find_map(|block| match block {
                 PanelBlock::List { rows, .. } => Some(rows.as_slice()),
-                PanelBlock::Note { .. } => None,
+                PanelBlock::Note { .. } | PanelBlock::Chart { .. } => None,
             })
             .expect("a list block")
     }

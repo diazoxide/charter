@@ -514,6 +514,24 @@ export const commands = {
 	 */
 	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
 	/**
+	 *  Every view an approved extension offers this window.
+	 * 
+	 *  An extension that is new, changed or unreadable offers nothing — the registry's one job, as
+	 *  for themes and panels. **What this returns is a list of buttons, not a list of permissions**:
+	 *  [`open_view`] asks the gate again when one is pressed.
+	 */
+	extensionViews: () => typedError<ExtensionView[], string>(__TAURI_INVOKE("extension_views")),
+	/**
+	 *  Ask `extension`'s program what `view` shows for this plane, now.
+	 * 
+	 *  `focus` is the persona whose card it was opened from, when it was — a name charter's own
+	 *  panel put on screen, checked here as a persona name before it is handed to anybody.
+	 * 
+	 *  **Every refusal comes back as the core's sentence**, which names the extension and says what
+	 *  to do. The window draws it where the answer would have been.
+	 */
+	openView: (plane: PlaneId, extension: string, view: string, focus: string | null) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, extension, view, focus })),
+	/**
 	 *  Every row `charter doctor` would print for this plane, run inside the app.
 	 * 
 	 *  On a blocking thread: every git question a row asks has a five-second deadline
@@ -805,6 +823,22 @@ export type ExtensionTheme = {
 	text: string,
 };
 
+/**  One view an approved extension offers, as the window draws its button. */
+export type ExtensionView = {
+	/**
+	 *  The extension's id, which is what the view is asked through and what the surface says
+	 *  it came from (ADR 0041 item 5 — what is in force is shown after approval, not only at
+	 *  it).
+	 */
+	extension: string,
+	/**  The view's id within it. */
+	id: string,
+	/**  What the button and the surface are called. */
+	title: string,
+	/**  What it is about (`panel::Subject`) — which decides where the window offers it. */
+	about: string,
+};
+
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
@@ -972,7 +1006,14 @@ export type Opened = {
 };
 
 /**  One part of a panel's body. */
-export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } | { kind: "note"; text: string; tone: string };
+export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } | { kind: "note"; text: string; tone: string } | 
+/**
+ *  Magnitudes charter draws — only ever in an answer from an extension's program
+ *  (`panel::answered`), never declared. See `charter_core::panel`'s header for why.
+ */
+{ kind: "chart"; title: string; 
+/**  `bars` or `columns` (`panel::Shape`). */
+shape: string; unit: string | null; points: PanelPoint[] };
 
 /**
  *  What opens when a row is opened, as the window receives it.
@@ -1001,6 +1042,14 @@ export type PanelEmpty = {
 	 *  reason.
 	 */
 	offer: string | null,
+};
+
+/**  One magnitude in a chart. */
+export type PanelPoint = {
+	label: string,
+	/**  A whole count. `u32` so it is a `number` in TypeScript and not a `bigint`. */
+	value: number,
+	note: string | null,
 };
 
 /**  One row of a panel's list. */
@@ -1056,6 +1105,12 @@ export type PanelView = {
 	blocks: PanelBlock[],
 	/**  The extension that contributed it, or `null` for charter's own. */
 	from: string | null,
+	/**
+	 *  What it is about (`panel::Subject`), when it is about a subject charter publishes. The
+	 *  window offers the views about the same subject on this panel's heading — which is
+	 *  charter's choice of where, made once, rather than an extension's.
+	 */
+	about: string | null,
 };
 
 /**  Everything the panels can draw without running git. */
@@ -1105,12 +1160,11 @@ export type Panels = {
 	 *  the problem, and splitting it would cost something real: focusing a workspace has 100 ms
 	 *  and this command is the one that has to answer inside it.
 	 * 
-	 *  **A contributed panel needs no round trip of its own, and that is a fact about stage 1.**
-	 *  With no executor there is nothing to ask: an extension's panel is declared, so its rows
-	 *  came off the disk at survey time, and charter's own are produced from the plane read
-	 *  this command already does. The day an executor lands, a panel that wants live rows asks
-	 *  its extension — and that is a second call, made when the panel is drawn, and it is stage
-	 *  2's to design.
+	 *  **A contributed panel needs no round trip of its own.** An extension's panel is
+	 *  declared, so its rows came off the disk at survey time, and charter's own are produced
+	 *  from the plane read this command already does. What an extension answers LIVE is a
+	 *  *view* (`crate::views`), asked when the operator opens it and never on this path: a
+	 *  program started on every workspace focus would spend the 100 ms on a fork.
 	 */
 	contributed: PanelView[],
 };
@@ -1532,6 +1586,18 @@ export type UsageTurn = {
 	context: Percent | null,
 	/**  What that turn wrote to the cache, as charter spells tokens. */
 	written: string | null,
+};
+
+/**  What a view answered. */
+export type ViewAnswer = {
+	/**  The blocks, in the panel vocabulary, parsed and re-emitted by the core. */
+	blocks: PanelBlock[],
+	/**
+	 *  How long it took, gate and round trip together, in milliseconds. Drawn quietly under
+	 *  the answer, because a producer that has become slow is worth noticing before it becomes
+	 *  one that times out.
+	 */
+	took_ms: number,
 };
 
 /**

@@ -428,7 +428,8 @@ describe("the right-hand region", () => {
     });
 
     // **Not modal**: the queue this region exists for is still reachable while a card is up.
-    // A Radix dialog would have marked it `aria-hidden` and this would find nothing.
+    // The card is a Radix dialog drawn as a sheet over the centre, and a MODAL one would have
+    // marked the queue `aria-hidden`; this is the half of #173's argument the sheet kept.
     expect(await $('[data-testid="panels"] [aria-label="Needs you"]').isExisting()).toBe(true);
 
     await browser.keys("Escape");

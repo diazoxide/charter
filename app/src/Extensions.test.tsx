@@ -219,13 +219,13 @@ describe("the consent surface", () => {
           ...newRow,
           declares: [
             "a theme, “Midnight”",
-            "a program, bin/x — this charter has no extension runtime and does not start it",
+            "a program, bin/x — charter starts it only when you open one of this extension's views",
           ],
           ask: {
             ...ASK,
             declares: [
               "a theme, “Midnight”",
-              "a program, bin/x — this charter has no extension runtime and does not start it",
+              "a program, bin/x — charter starts it only when you open one of this extension's views",
             ],
           },
         },
@@ -235,7 +235,7 @@ describe("the consent surface", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Review" }));
 
     expect(await screen.findByText(/Midnight/)).toBeInTheDocument();
-    expect(screen.getByText(/does not start it/)).toBeInTheDocument();
+    expect(screen.getByText(/starts it only when you open/)).toBeInTheDocument();
   });
 
   it("carries back the fingerprint that was shown, and not one fetched again", async () => {

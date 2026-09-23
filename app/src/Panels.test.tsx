@@ -9,7 +9,14 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Panels } from "./Panels";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
-import type { PanelRow, PanelView, Panels as PanelsModel, PersonaDetails } from "./bindings";
+import type {
+  ExtensionView,
+  PanelRow,
+  PanelView,
+  Panels as PanelsModel,
+  PersonaDetails,
+  ViewAnswer,
+} from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
 afterEach(() => {
@@ -57,6 +64,7 @@ function todosPanel(rows: PanelRow[], refused?: string): PanelView {
     order: 10,
     mark: "todo",
     from: null,
+    about: null,
     blocks: [
       ...(refused === undefined ? [] : [{ kind: "note" as const, text: refused, tone: "trouble" }]),
       {
@@ -75,6 +83,7 @@ function personasPanel(names: string[], fallback: string | null): PanelView {
     order: 20,
     mark: "persona",
     from: null,
+    about: "personas",
     blocks: [
       {
         kind: "list",
@@ -101,6 +110,7 @@ function contributedPanel(over: Partial<PanelView> = {}): PanelView {
     order: 15,
     mark: "note",
     from: "acme",
+    about: null,
     blocks: [
       {
         kind: "list",
@@ -165,6 +175,7 @@ function draw(
     offers?: Catalogued;
     onPress?: (offer: Offer) => void;
     contributed?: PanelView[];
+    views?: ExtensionView[];
   } = {},
 ) {
   function Window() {
@@ -181,6 +192,7 @@ function draw(
         offers={on.offers ?? new Map()}
         onPress={on.onPress ?? (() => {})}
         contributed={on.contributed ?? []}
+        views={on.views ?? []}
         shownRow={shownRow}
         onShowRow={setShownRow}
       />
@@ -543,9 +555,10 @@ describe("a persona's card", () => {
   });
 
   it("is not modal, so the queue this region exists for stays reachable", async () => {
-    // Radix marks everything outside an open DIALOG `aria-hidden` — including the needs-you
-    // queue two sections up, which ADR 0038 says this region must never compete with. A
-    // popover takes the menu's decisions instead (ADR 0039).
+    // A MODAL Radix dialog marks everything outside itself `aria-hidden` — including the
+    // needs-you queue two sections up, which ADR 0038 says this region must never compete
+    // with. The card is a sheet now and not #173's popover, and this is the half of #173's
+    // argument the sheet had to keep: `getByRole` does not find what is `aria-hidden`.
     core(() => definition());
     draw({ queue: [7] });
 
@@ -553,6 +566,17 @@ describe("a persona's card", () => {
 
     expect(screen.getByLabelText("Needs you")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /ide\.7/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("Needs you").closest("[aria-hidden='true']")).toBeNull();
+  });
+
+  it("is a sheet with the persona's name as its title and a way to close it", async () => {
+    core(() => definition());
+    draw();
+
+    const card = await open("devops");
+
+    expect(within(card).getByRole("heading", { name: "devops" })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /Close/ })).toBeInTheDocument();
   });
 
   it("closes on Escape and puts the keyboard back on the row", async () => {
@@ -687,5 +711,175 @@ describe("a persona row's menu", () => {
     rightClick("panel-ext-acme-reviews", "Land the panel");
 
     await expect(vi.waitFor(() => screen.getByRole("menu"), { timeout: 200 })).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Persona statistics: an extension's view, asked through the executor (ADR 0041 stage 2)
+// ---------------------------------------------------------------------------------------
+
+/** The view an approved persona statistics extension offers. */
+const STATISTICS: ExtensionView = {
+  extension: "persona-statistics",
+  id: "statistics",
+  title: "Statistics",
+  about: "personas",
+};
+
+/** What its program answers: a sentence and a chart. */
+const ANSWERED: ViewAnswer = {
+  blocks: [
+    { kind: "note", text: "4 memories across 2 personas", tone: "plain" },
+    {
+      kind: "chart",
+      title: "Memories per persona",
+      shape: "bars",
+      unit: "memories",
+      points: [
+        { label: "steward", value: 3, note: "default · 75%" },
+        { label: "devops", value: 1, note: "25%" },
+      ],
+    },
+  ],
+  took_ms: 6,
+};
+
+/** The core, answering the card's two asks and the view, and recording what the view was
+ *  asked with. */
+function coreWithAView(answer: () => ViewAnswer | Error = () => ANSWERED): {
+  opened: Record<string, unknown>[];
+} {
+  const opened: Record<string, unknown>[] = [];
+  mockIPC((cmd, args) => {
+    const given = (args ?? {}) as Record<string, unknown>;
+    if (cmd === "persona_memories") return [];
+    if (cmd === "persona_details") return definition({ name: String(given.persona) });
+    if (cmd === "open_view") {
+      opened.push(given);
+      const said = answer();
+      if (said instanceof Error) throw said;
+      return said;
+    }
+    return undefined;
+  });
+  return { opened };
+}
+
+describe("persona statistics", () => {
+  it("are a button on the personas heading when an extension offers a view about personas", () => {
+    coreWithAView();
+    draw({ views: [STATISTICS] });
+
+    const panel = screen.getByTestId("panel-personas");
+    expect(within(panel).getByRole("button", { name: "Statistics" })).toBeInTheDocument();
+    // The todos panel is about nothing charter publishes, so it is offered nothing.
+    expect(
+      within(screen.getByTestId("panel-todos")).queryByRole("button", { name: "Statistics" }),
+    ).toBeNull();
+  });
+
+  it("are no button at all when no extension offers them", () => {
+    // The statistics are a plugin's, and so is their absence: a personas panel with no
+    // extension installed has no button that could only ever say "not installed".
+    draw();
+
+    expect(
+      within(screen.getByTestId("panel-personas")).queryByRole("button", { name: "Statistics" }),
+    ).toBeNull();
+  });
+
+  it("are asked for when the button is pressed, about the whole plane, and drawn as a chart", async () => {
+    const { opened } = coreWithAView();
+    draw({ views: [STATISTICS] });
+
+    await userEvent.click(
+      within(screen.getByTestId("panel-personas")).getByRole("button", { name: "Statistics" }),
+    );
+    const sheet = await waitFor(() =>
+      screen.getByTestId("view-sheet-persona-statistics-statistics"),
+    );
+    const chart = await within(sheet).findByTestId("chart");
+
+    expect(opened).toEqual([
+      { plane: PLANE, extension: "persona-statistics", view: "statistics", focus: null },
+    ]);
+    expect(within(chart).getByRole("list", { name: "Memories per persona" })).toBeInTheDocument();
+    expect(within(chart).getAllByRole("listitem")[0]).toHaveTextContent("steward3 · default · 75%");
+    // Whose program answered, after approval and not only at it (ADR 0041 item 5).
+    expect(sheet).toHaveTextContent("persona-statistics");
+  });
+
+  it("scale each bar to the largest, and hide the bar itself from a screen reader", async () => {
+    coreWithAView();
+    draw({ views: [STATISTICS] });
+
+    await userEvent.click(
+      within(screen.getByTestId("panel-personas")).getByRole("button", { name: "Statistics" }),
+    );
+    const chart = await screen.findByTestId("chart");
+    const bars = chart.querySelectorAll<HTMLElement>(".chart-bar");
+
+    expect([...bars].map((bar) => bar.style.inlineSize)).toEqual(["100%", "33%"]);
+    expect(bars[0].closest("[aria-hidden='true']")).not.toBeNull();
+  });
+
+  it("draw the executor's refusal in its own words rather than an empty chart", async () => {
+    coreWithAView(
+      () =>
+        new Error(
+          "'persona-statistics' has changed since you approved it — charter will ask again",
+        ),
+    );
+    draw({ views: [STATISTICS] });
+
+    await userEvent.click(
+      within(screen.getByTestId("panel-personas")).getByRole("button", { name: "Statistics" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("has changed since you approved it");
+    expect(screen.queryByTestId("chart")).toBeNull();
+  });
+
+  it("are asked about one persona from inside that persona's card", async () => {
+    const { opened } = coreWithAView();
+    draw({ views: [STATISTICS] });
+
+    const card = await open("devops");
+    await within(card).findByTestId("chart");
+
+    expect(opened).toEqual([
+      { plane: PLANE, extension: "persona-statistics", view: "statistics", focus: "devops" },
+    ]);
+  });
+
+  it("say where they would come from inside a card when no extension offers them", async () => {
+    core(() => definition());
+    draw();
+
+    const card = await open("devops");
+
+    expect(within(card).getByTestId("stats-devops-empty")).toHaveTextContent("No statistics here");
+  });
+
+  it("leave the queue reachable while the statistics sheet is open", async () => {
+    coreWithAView();
+    draw({ views: [STATISTICS], queue: [7] });
+
+    await userEvent.click(
+      within(screen.getByTestId("panel-personas")).getByRole("button", { name: "Statistics" }),
+    );
+    await screen.findByTestId("chart");
+
+    expect(screen.getByRole("button", { name: /ide\.7/ })).toBeInTheDocument();
+  });
+
+  it("are never offered on a contributed panel, which cannot claim a subject", () => {
+    draw({ views: [STATISTICS], contributed: [contributedPanel()] });
+
+    expect(
+      within(screen.getByTestId("panel-ext-acme-reviews")).queryByRole("button", {
+        name: "Statistics",
+      }),
+    ).toBeNull();
   });
 });

@@ -85,7 +85,7 @@ import { ChatState } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { EmptyState } from "./EmptyState";
-import type { PanelView } from "./bindings";
+import type { ExtensionView, PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
 import type { Ending } from "./QuitWarning";
@@ -129,6 +129,7 @@ export function PlaneView({
   onReport,
   alerts,
   contributed = [],
+  views = [],
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -151,6 +152,9 @@ export function PlaneView({
    *  the alerts are: an extension is installed per machine and never travels in a plane
    *  (charter ADR 0041), so one survey serves every project this window holds. */
   contributed?: readonly PanelView[];
+  /** The views approved extensions offer (charter ADR 0041 stage 2), the window's for the
+   *  same reason: one survey per window, not one per project. */
+  views?: readonly ExtensionView[];
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
@@ -1774,6 +1778,7 @@ export function PlaneView({
               offers={found}
               onPress={press}
               contributed={contributed}
+              views={views}
               shownRow={shownRow}
               onShowRow={setShownRow}
             />

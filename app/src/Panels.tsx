@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
+  ChartColumn,
   Circle,
   CircleDashed,
   FileText,
@@ -8,12 +10,16 @@ import {
   LoaderCircle,
   TriangleAlert,
   UserRound,
+  X,
 } from "lucide-react";
 import { NeedsYou } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
+import { Chart, OpenedView, centreOf } from "./Views";
+import { EmptyState } from "./EmptyState";
 import {
   commands,
+  type ExtensionView,
   type PanelRow,
   type PanelView,
   type PersonaDetails,
@@ -65,6 +71,7 @@ export function Panels({
   offers,
   onPress,
   contributed,
+  views = [],
   shownRow,
   onShowRow,
 }: {
@@ -87,6 +94,10 @@ export function Panels({
    *  than once per workspace focus — a survey re-hashes every installed extension's directory,
    *  and that is not a cost the 100 ms of a workspace switch can carry. */
   contributed: readonly PanelView[];
+  /** The views approved extensions offer (`extension_views`), asked once per window for the
+   *  same reason. A view is offered on the heading of the panel about the same subject, and
+   *  inside that panel's cards — both charter's choice of where, never the extension's. */
+  views?: readonly ExtensionView[];
   /**
    * The row whose card is open, as `<panel key>/<row key>`.
    *
@@ -113,8 +124,14 @@ export function Panels({
    */
   const all = [...(panels?.contributed ?? []), ...contributed].sort((a, b) => a.order - b.order);
 
+  // Where a sheet is drawn: the centre region of the arrangement this aside is in, found once
+  // the aside is in the document. A callback ref rather than an effect, because the answer is a
+  // fact about where this element landed and that is exactly when a callback ref runs.
+  const [centre, setCentre] = useState<HTMLElement | null>(null);
+
   return (
     <aside
+      ref={(el) => setCentre(centreOf(el))}
       className="panels"
       aria-label={workspace === undefined ? "Attention" : `Attention · ${workspace}`}
       data-testid="panels"
@@ -146,6 +163,8 @@ export function Panels({
                 onPress={onPress}
                 shownRow={shownRow}
                 onShowRow={onShowRow}
+                views={views.filter((view) => panel.about !== null && view.about === panel.about)}
+                centre={centre}
               />
             ))
           )}
@@ -216,6 +235,8 @@ function Contributed({
   onPress,
   shownRow,
   onShowRow,
+  views,
+  centre,
 }: {
   plane: PlaneId;
   panel: PanelView;
@@ -223,6 +244,9 @@ function Contributed({
   onPress: (offer: Offer) => void;
   shownRow: string | undefined;
   onShowRow: (row: string | undefined) => void;
+  /** The views about this panel's subject, already filtered. */
+  views: readonly ExtensionView[];
+  centre: HTMLElement | null;
 }) {
   const Mark = MARKS[panel.mark] ?? Circle;
   const open = shownRow?.startsWith(`${panel.key}/`)
@@ -231,17 +255,30 @@ function Contributed({
 
   return (
     <section data-testid={`panel-${named(panel)}`} data-panel-from={panel.from ?? "charter"}>
-      <h2>
-        <Mark className="node-icon" />
-        {panel.title}
-        {/* **What is in force, after approval and not only at it** — charter ADR 0041 item 5.
-            An operator has to be able to tell a panel his own charter draws from one a
-            stranger's extension contributed, without opening a dialog to find out. */}
-        {panel.from !== null && <span className="panel-from">{` · ${panel.from}`}</span>}
-      </h2>
+      <div className="panel-head">
+        <h2>
+          <Mark className="node-icon" />
+          {panel.title}
+          {/* **What is in force, after approval and not only at it** — charter ADR 0041 item
+              5. An operator has to be able to tell a panel his own charter draws from one a
+              stranger's extension contributed, without opening a dialog to find out. */}
+          {panel.from !== null && <span className="panel-from">{` · ${panel.from}`}</span>}
+        </h2>
+        {views.map((view) => (
+          <ViewButton
+            key={`${view.extension}/${view.id}`}
+            plane={plane}
+            view={view}
+            about={panel.title}
+            centre={centre}
+          />
+        ))}
+      </div>
 
       {panel.blocks.map((block, at) =>
-        block.kind === "note" ? (
+        block.kind === "chart" ? (
+          <Chart key={at} chart={block} />
+        ) : block.kind === "note" ? (
           <p
             /* By position, which is the one place in this file that is right: a block has no
                identity of its own in the vocabulary, and a panel's block list is fixed for as
@@ -269,7 +306,11 @@ function Contributed({
               const offer = offers.get(id);
               if (offer) onPress(offer);
             }}
-            detailOf={(row) => detailOf(plane, row)}
+            detailOf={(row) => detailOf(plane, row, views)}
+            /* The persona card is a sheet over the centre region; every other card is still
+               #173's popover. `PersonaCard` below has the argument. */
+            sheet={(row) => row.detail?.kind === "persona"}
+            sheetIn={centre}
             wrap={(row, item) =>
               row.detail?.kind === "persona" ? (
                 /* Right-click is the third reader of the catalogue (`Menus.tsx`), and on a
@@ -312,40 +353,109 @@ function named(panel: PanelView): string {
 }
 
 /** What a row's card holds, dispatched on the closed set the vocabulary publishes. */
-function detailOf(plane: PlaneId, row: PanelRow): ReactNode {
+function detailOf(plane: PlaneId, row: PanelRow, views: readonly ExtensionView[]): ReactNode {
   if (row.detail === null) return null;
   if (row.detail.kind === "text") return <p className="row-detail">{row.detail.text}</p>;
-  return <PersonaCard plane={plane} persona={row.detail.persona} />;
+  return <PersonaCard plane={plane} persona={row.detail.persona} views={views} />;
 }
 
 /**
- * What a persona is, and — since the operator asked for it — everything it remembers.
+ * One view's button on a panel's heading, and the sheet it opens.
  *
- * ## Why a popover, and what that decision no longer covers
+ * **The operator's "button that will open statistics of personas"**, and it is on the heading
+ * because an approved extension offers a view about the subject this panel is about — not
+ * because anything here knows what statistics are. With no such extension there is no button,
+ * which is what a *100% pluggable* personas panel means: the statistics are a plugin's, and
+ * so is their absence.
  *
- * charter-app#173 chose a popover for this card and the reasoning still holds for the half it
- * was made about: six short rows that answer *what is this one for*, anchored to the name they
- * belong to, dismissible because nothing is lost. A dialog would mark the needs-you queue
- * `aria-hidden` — the one surface ADR 0038 says this region must never compete with — and a
- * sheet is already taken by `AlertsDrawer`.
+ * Uncontrolled, because nothing outside the heading opens it: unlike a persona's card, no
+ * catalogue row runs "show the statistics", so there is no window state for it to share.
+ */
+function ViewButton({
+  plane,
+  view,
+  about,
+  centre,
+}: {
+  plane: PlaneId;
+  view: ExtensionView;
+  about: string;
+  centre: HTMLElement | null;
+}) {
+  return (
+    <Dialog.Root modal={false}>
+      <Dialog.Trigger asChild>
+        {/* #190: WebKit leaves a button out of the tab sequence without `tabIndex`. */}
+        <button type="button" className="panel-view" tabIndex={0}>
+          <ChartColumn className="node-icon" aria-hidden="true" />
+          {view.title}
+        </button>
+      </Dialog.Trigger>
+      <Dialog.Portal container={centre ?? undefined}>
+        <Dialog.Content
+          className="sheet"
+          data-testid={`view-sheet-${view.extension}-${view.id}`}
+          aria-describedby={undefined}
+        >
+          <header className="sheet-head">
+            <Dialog.Title>{`${about} · ${view.title}`}</Dialog.Title>
+            <Dialog.Close className="drawer-close" tabIndex={0}>
+              <X aria-hidden="true" /> Close
+            </Dialog.Close>
+          </header>
+          <div className="sheet-body">
+            <OpenedView plane={plane} view={view} focus={null} />
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/**
+ * What a persona is, what it remembers, and — when an extension offers one — its statistics.
  *
- * **It was not made about a searchable archive, and this card now holds one.** The operator's
- * request is that a persona's memories be readable from the window, searched and paged. A
- * popover anchored in a 260 px column is a thin surface for that, and the honest position is
- * that #173's argument covers the card and does not yet cover the list inside it. **It is left
- * as a popover deliberately**: changing the surface contradicts a written decision, and that is
- * the operator's to make rather than this change's to assume.
+ * ## Why a sheet over the centre, and what it kept from the popover
  *
- * ## Two asks, and neither is cached
+ * charter-app#173 chose a popover for this card, for six short rows that answer *what is this
+ * one for*: anchored to the name, dismissible because nothing is lost, and — the argument that
+ * mattered — **not modal**, because a dialog marks the needs-you queue `aria-hidden` and ADR
+ * 0038 says this region must never compete with it. A sheet over the whole window was ruled out
+ * too, because that is `AlertsDrawer`'s.
+ *
+ * The card then grew a searchable archive (#206) and now a statistics view, and a popover
+ * anchored in a 260 px column is a thin surface for either: a memory's body is paragraphs, and
+ * a chart needs width to say anything. So the card is a **non-modal Radix `Dialog` drawn over
+ * the centre region** — the terminals — and every one of #173's reasons is kept:
+ *
+ * - **Not modal.** No overlay, no focus trap, nothing marked `aria-hidden`: the queue stays on
+ *   screen, in the tab order and in reach of the pointer. A jsdom test holds that.
+ * - **Not the whole window.** It is portalled into the centre region, so it covers the one
+ *   region that is not asking for anything and leaves every side region where it was.
+ * - **Dismissible as the popover was.** Escape, a click outside, or its Close button; focus
+ *   goes back to the row that opened it, because the row is its `Dialog.Trigger`.
+ * - **One piece of window state.** It is still `shownRow`, so `persona.show:<name>` from the
+ *   palette or a context menu opens this same sheet (charter-app#174).
+ *
+ * What it gave up: being anchored to the row. The name is the sheet's title instead.
+ *
+ * ## Three asks, and none is cached
  *
  * A definition and a memory store are both files an operator edits — often while charter is
  * running, because `charter persona create` and `charter persona remember` are how they arrive.
- * Caching the first answer would show a role that was corrected an hour ago. The definition is
- * a small file plus one per step up an `extends:` chain; the memories are one read each, on a
- * blocking thread in the core, and the count beside the row on the panel cost a `read_dir` and
- * no opens at all.
+ * The definition and the memories are read when the card opens; the statistics are asked of
+ * the extension that offers them, when the card opens, through the executor's gate
+ * (`OpenedView`). Nothing is kept for the next opening.
  */
-function PersonaCard({ plane, persona }: { plane: PlaneId; persona: string }) {
+function PersonaCard({
+  plane,
+  persona,
+  views,
+}: {
+  plane: PlaneId;
+  persona: string;
+  views: readonly ExtensionView[];
+}) {
   const [shown, setShown] = useState<PersonaDetails>();
   const [refused, setRefused] = useState<string>();
   const [memories, setMemories] = useState<PanelRow[]>();
@@ -380,8 +490,34 @@ function PersonaCard({ plane, persona }: { plane: PlaneId; persona: string }) {
   }, [persona, plane]);
 
   return (
-    <div className="persona-card-body">
-      <PersonaFacts persona={persona} shown={shown} refused={refused} />
+    <div className="sheet-body persona-card-body">
+      <div className="persona-about">
+        <PersonaFacts shown={shown} refused={refused} />
+
+        <section className="persona-stats">
+          <h4>Statistics</h4>
+          {views.length === 0 ? (
+            /* **Said, not left blank.** No approved extension offers a view about personas, and
+               the operator is owed where one would come from — the statistics are a plugin's,
+               and so is their absence. */
+            <EmptyState
+              size="panel"
+              headline="No statistics here"
+              body="An approved extension with a view about personas draws them here. Extensions is where one is installed."
+              testid={`stats-${persona}-empty`}
+            />
+          ) : (
+            views.map((view) => (
+              <OpenedView
+                key={`${view.extension}/${view.id}`}
+                plane={plane}
+                view={view}
+                focus={persona}
+              />
+            ))
+          )}
+        </section>
+      </div>
 
       <section className="persona-memories">
         <h4>Memory</h4>
@@ -397,8 +533,8 @@ function PersonaCard({ plane, persona }: { plane: PlaneId; persona: string }) {
         ) : (
           /* **The same primitive, one surface in.** A memory is a row, so the search, the
              bound, the load-more and the card-on-a-row are the ones the panel itself has — and
-             nothing here had to be told what a memory is. That is the test of whether
-             `PanelList` is a primitive or a panel with a general-sounding name. */
+             nothing here had to be told what a memory is. In a sheet it has room, so a page is
+             twenty rather than twelve. */
           <PanelList
             rows={memories}
             empty={{
@@ -410,6 +546,7 @@ function PersonaCard({ plane, persona }: { plane: PlaneId; persona: string }) {
             testid={`memories-${persona}`}
             open={openMemory}
             onOpen={setOpenMemory}
+            page={20}
           />
         )}
       </section>
@@ -417,13 +554,12 @@ function PersonaCard({ plane, persona }: { plane: PlaneId; persona: string }) {
   );
 }
 
-/** What the card says about the definition, which is what `charter persona show` says. */
+/** What the card says about the definition, which is what `charter persona show` says. The
+ *  name is the sheet's title, so it is not said twice. */
 function PersonaFacts({
-  persona,
   shown,
   refused,
 }: {
-  persona: string;
   shown: PersonaDetails | undefined;
   refused: string | undefined;
 }) {
@@ -446,10 +582,7 @@ function PersonaFacts({
   }
   return (
     <>
-      <h3>
-        {persona}
-        {shown.role !== null && shown.role !== "" && <span className="role"> — {shown.role}</span>}
-      </h3>
+      {shown.role !== null && shown.role !== "" && <p className="role">{shown.role}</p>}
       <dl>
         <dt>Delegate to it for</dt>
         <dd>

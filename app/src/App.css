@@ -3266,3 +3266,297 @@ button.bare:focus-visible {
 .empty-state-action {
   margin-top: 0.4rem;
 }
+
+/* =====================================================================================
+   THE PERSONAS PLUGIN, END TO END — the sheet and the chart (charter ADR 0041 stage 2)
+   =====================================================================================
+   A persona's card as a sheet over the centre region, a view's answer inside it, and the
+   chart block an extension's program answers with (`Views.tsx`).
+
+   **Its own section, at the end**, for the reason the panel contract's section above gives:
+   a section with one owner is the difference between a merge conflict and a merge.
+
+   No colour is written here and nothing moves. Every value is a semantic token out of
+   `app/src/theme/`; there is no transition, no animation and no timing, because an answer
+   arrives once per opening and a chart that grew into place each time would be motion that
+   says nothing its numbers do not (charter-app#209). */
+
+/* The sheet is portalled INTO the centre region, so the region is what it is positioned
+   against. Nothing else in the centre is positioned by it: the panes size by `height`. */
+.region-centre {
+  position: relative;
+}
+
+/* **Over the terminals, and nowhere else.** Absolute inside the centre region, so the side
+   regions — the needs-you queue among them — are not covered, and the sheet moves with the
+   centre when the operator rearranges the window. Above the panes, below every menu and
+   popover (which Radix portals to the body, after this in the document). */
+.sheet {
+  position: absolute;
+  inset: 0.5rem;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.75rem 1rem 1rem;
+  overflow: hidden;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px var(--overlay-shadow);
+  font-size: 0.85rem;
+}
+
+/* Where there is no centre region to be drawn into — a region rendered alone — the sheet is in
+   the body, and is the same box against the window. */
+body > .sheet {
+  position: fixed;
+  inset: 2rem;
+}
+
+.sheet:focus {
+  outline: none;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sheet-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The body scrolls, the head stays. */
+.sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 0.6rem;
+}
+
+/* **Two columns when the centre is wide enough, one when it is not** — what the persona is and
+   its statistics on one side, the archive on the other, so reading a memory does not scroll
+   the statistics away. `auto-fit` over a minimum rather than a breakpoint, because the width
+   is the centre region's, which the operator drags, and not the window's. */
+.sheet-body.persona-card-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.persona-card-body .role {
+  margin: 0 0 0.5rem;
+  color: var(--text-muted);
+}
+
+.persona-stats,
+.sheet .persona-memories {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* In a sheet the archive is a column of its own, so it starts at the top of the sheet rather
+   than under a rule. */
+.sheet .persona-memories {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.persona-stats h4,
+.opened-view h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+/* The archive has the room here that it did not have in a popover: a longer list before it
+   scrolls, and the page of twenty `PanelList` is given. */
+.sheet .panel-rows {
+  max-height: 60vh;
+}
+
+.sheet .pending,
+.sheet .note,
+.sheet .none {
+  margin: 0.2rem 0;
+  color: var(--text-muted);
+}
+
+.sheet .trouble {
+  border-radius: 3px;
+  margin: 0.2rem 0;
+}
+
+.opened-view + .opened-view {
+  margin-top: 1rem;
+}
+
+/* How long the producer took, under its answer. Quiet: it is for noticing a view that has
+   become slow before it becomes one that times out. */
+.view-took {
+  margin: 0.4rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A panel's heading with a view's button beside it — the persona statistics button. The
+   heading keeps its own look; the row is what carries the margin it used to. */
+.panels .panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.panels .panel-head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.panel-view {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: var(--control-base);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: default;
+}
+
+.panel-view:hover {
+  background: var(--control-hover);
+}
+
+.panel-view:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* ---- The chart ---------------------------------------------------------------------- */
+
+.chart {
+  margin: 0.6rem 0 0.9rem;
+}
+
+.chart figcaption {
+  margin-bottom: 0.35rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chart .chart-unit {
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
+.chart-points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chart-label,
+.chart-value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-note {
+  color: var(--text-muted);
+}
+
+.chart-track {
+  display: block;
+  position: relative;
+  background: var(--surface-sunken);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.chart-bar {
+  display: block;
+  background: var(--accent-base);
+}
+
+/* Bars: label, track, value on one line each, the labels in a column of their own so every
+   track starts at the same place and lengths can be compared at a glance. */
+.chart-bars .chart-point {
+  display: grid;
+  grid-template-columns: minmax(4rem, 9rem) minmax(4rem, 1fr) minmax(3rem, auto);
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.1rem 0;
+}
+
+.chart-bars .chart-track {
+  height: 0.65rem;
+}
+
+.chart-bars .chart-bar {
+  height: 100%;
+}
+
+.chart-bars .chart-value {
+  color: var(--text-secondary);
+}
+
+/* Columns: one per step in order, the value over it and the label under it, all bottoms on
+   one line. */
+.chart-columns .chart-points {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  height: 9rem;
+}
+
+/* The label under the track and the value over it: `column-reverse` draws the DOM's
+   label-track-value order bottom to top, so a screen reader still hears the label first. */
+.chart-columns .chart-point {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column-reverse;
+  align-items: stretch;
+  gap: 0.2rem;
+  min-width: 0;
+  text-align: center;
+  font-size: 0.7rem;
+}
+
+.chart-columns .chart-track {
+  flex: 1 1 auto;
+}
+
+.chart-columns .chart-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+.chart-columns .chart-label {
+  color: var(--text-muted);
+}

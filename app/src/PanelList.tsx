@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import * as Popover from "@radix-ui/react-popover";
 import clsx from "clsx";
 import {
@@ -11,6 +12,7 @@ import {
   Star,
   TriangleAlert,
   UserRound,
+  X,
 } from "lucide-react";
 import type { PanelEmpty, PanelRow } from "./bindings";
 import { EmptyState } from "./EmptyState";
@@ -101,6 +103,8 @@ export function PanelList({
   detailOf,
   onRun,
   wrap,
+  sheet,
+  sheetIn,
   page = PAGE,
   testid,
 }: {
@@ -119,6 +123,14 @@ export function PanelList({
   onRun?: (id: string) => void;
   /** A context menu around each row, where the panel can name what the row is about. */
   wrap?: RowMenu;
+  /**
+   * Whether a row's card is a **sheet over the centre region** rather than a popover beside the
+   * row. The persona card is (`Panels.tsx` has the argument); every other card is still the
+   * popover #173 chose, because six short rows are what a popover is for.
+   */
+  sheet?: (row: PanelRow) => boolean;
+  /** The element a sheet is drawn into — the centre region (`Views.centreOf`). */
+  sheetIn?: HTMLElement | null;
   page?: number;
   testid?: string;
 }) {
@@ -190,6 +202,8 @@ export function PanelList({
               detail={detailOf?.(row) ?? defaultDetail(row)}
               onRun={onRun}
               wrap={wrap}
+              asSheet={sheet?.(row) ?? false}
+              sheetIn={sheetIn}
             />
           ))}
         </ul>
@@ -235,6 +249,8 @@ function Row({
   detail,
   onRun,
   wrap,
+  asSheet,
+  sheetIn,
 }: {
   row: PanelRow;
   open: boolean;
@@ -242,6 +258,8 @@ function Row({
   detail: ReactNode;
   onRun?: (id: string) => void;
   wrap?: RowMenu;
+  asSheet: boolean;
+  sheetIn?: HTMLElement | null;
 }) {
   const Mark = MARKS[row.mark] ?? Circle;
   const shortened = shorten(row.text);
@@ -256,21 +274,50 @@ function Row({
     </>
   );
 
+  // **The catalogue row runs on the way open and never on the way shut.** A persona row's
+  // `persona.show:<name>` is the same verb the palette and a context menu run (charter-app#174),
+  // so the three are one state rather than three that look alike — and running it again on
+  // dismissal would re-open what was just closed.
+  const opened = (opening: boolean) => {
+    onOpen(opening);
+    if (opening && row.runs !== null) onRun?.(row.runs);
+  };
+
   const inner =
     detail === null && row.runs === null ? (
       <span className="row">{body}</span>
+    ) : asSheet ? (
+      /* **A sheet: Radix `Dialog`, NOT modal, drawn over the centre region.** Not modal is the
+         whole of #173's argument kept: a modal dialog marks everything outside it
+         `aria-hidden`, and the needs-you queue in this region is the one surface ADR 0038 says
+         must never be competed with. So there is no overlay, no focus trap and no hidden
+         siblings — the queue stays on screen and in reach, to the pointer and to a screen
+         reader — and a click outside or Escape closes it, as the popover did. */
+      <Dialog.Root modal={false} open={open} onOpenChange={opened}>
+        <Dialog.Trigger asChild>
+          <button type="button" className="row" tabIndex={0}>
+            {body}
+          </button>
+        </Dialog.Trigger>
+        <Dialog.Portal container={sheetIn ?? undefined}>
+          <Dialog.Content
+            className="sheet"
+            data-testid={`row-detail-${row.key}`}
+            aria-describedby={undefined}
+          >
+            <header className="sheet-head">
+              <Dialog.Title>{row.text}</Dialog.Title>
+              {/* #190: WebKit leaves a button out of the tab sequence without this. */}
+              <Dialog.Close className="drawer-close" tabIndex={0}>
+                <X aria-hidden="true" /> Close
+              </Dialog.Close>
+            </header>
+            {detail}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     ) : (
-      <Popover.Root
-        open={open}
-        onOpenChange={(opening) => {
-          onOpen(opening);
-          // **The catalogue row runs on the way open and never on the way shut.** A persona
-          // row's `persona.show:<name>` is the same verb the palette and a context menu run
-          // (charter-app#174), so the three are one state rather than three that look alike —
-          // and running it again on dismissal would re-open what was just closed.
-          if (opening && row.runs !== null) onRun?.(row.runs);
-        }}
-      >
+      <Popover.Root open={open} onOpenChange={opened}>
         <Popover.Trigger asChild>
           <button type="button" className="row" tabIndex={0}>
             {body}

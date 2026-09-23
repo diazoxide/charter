@@ -17,6 +17,7 @@ mod sessions;
 mod slowstart;
 mod updates;
 mod usage;
+mod views;
 mod workspaces;
 mod worktrees;
 
@@ -1156,6 +1157,8 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::forget_extension,
             extensions::extension_themes,
             extensions::extension_panels,
+            views::extension_views,
+            views::open_view,
             doctor::plane_doctor,
             usage::chat_usage,
             pin::plane_pin,
@@ -1263,6 +1266,9 @@ pub fn run() {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
+            // The extension executor (charter ADR 0041 stage 2). Managed for the table of
+            // programs it is running, which `Exit` below empties.
+            app.manage(views::Views::default());
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
@@ -1332,6 +1338,10 @@ pub fn run() {
         // system, and one that ignores a hangup outlives the app that started it.
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                // An extension's program still answering is killed with its whole process
+                // group, so that nothing an extension was asked to run outlives the window
+                // that asked (`charter_core::executor`).
+                app.state::<views::Views>().stop_all();
                 // Every plane, not "the" plane: each one writes its own record into itself
                 // and ends its own sessions. A failure is not worth refusing to exit over —
                 // the next launch of that plane reads no record and starts empty.
