@@ -503,10 +503,16 @@ fn a_program_that_escapes_its_group_outlives_the_question_and_cannot_hold_charte
     // ends on time, and the escaped helper writing to stderr for ever does not hold the
     // blocking thread or the extension's slot. Perl, because `setsid(1)` is not on macOS and
     // perl is on every machine this runs on.
+    //
+    // **It ignores SIGPIPE, or the test measures a race instead of the limit.** Once charter
+    // stops draining stderr and closes its end, the helper's next write raises SIGPIPE, which
+    // kills it — on Linux sometimes before `alive` is asked. That death is the pipe's, not
+    // charter's, and it made this test fail on CI as "the escaped helper was killed". A
+    // helper that shrugs off the closed pipe is the one this limit is about.
     let rig = Rig::new();
     let escaped = rig.marker("escaped");
     rig.approved(&format!(
-        "#!/bin/sh\nperl -e 'setpgrp(0,0); open(F,\">{}\"); print F $$; close F; \
+        "#!/bin/sh\nperl -e '$SIG{{PIPE}}=\"IGNORE\"; setpgrp(0,0); open(F,\">{}\"); print F $$; close F; \
          $|=1; while(1){{print STDERR \"x\"; select(undef,undef,undef,0.001)}}' &\n\
          read line\nprintf '%s\\n' '{ANSWER}'\n",
         escaped.display()
