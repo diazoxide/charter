@@ -25,6 +25,7 @@ import { AlertsDrawer } from "./AlertsDrawer";
 import { ApprovePlane } from "./ApprovePlane";
 import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
+import { useContributedPanels } from "./Panels";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
 import { fitting, LEAST, useRoom } from "./fits";
@@ -143,6 +144,20 @@ function App() {
     }),
     [alertCount, rereadAlerts],
   );
+
+  /**
+   * The panels approved extensions contribute to every project's side region.
+   *
+   * **Here and not in each `PlaneView`, for the reason the alerts are here**: this is about the
+   * MACHINE and not about a project. An extension is installed per machine (charter ADR 0041 —
+   * *an extension never travels in a plane*), so a window holding eight projects would
+   * otherwise take the same survey eight times — and a survey re-hashes every installed
+   * extension's whole directory, which is 0041's named cost of fingerprinting code.
+   *
+   * Asked once, after the first frame. Nothing waits on it: a window with no extensions gets an
+   * empty list and charter's own two panels, which is every window until one is installed.
+   */
+  const contributedPanels = useContributedPanels();
 
   /** The projects, as the strip and the palette name them. */
   const projects = useMemo<Project[]>(
@@ -832,6 +847,7 @@ function App() {
           window={windowDoes}
           onReport={onReport}
           alerts={alerts}
+          contributed={contributedPanels}
         />
       ))}
 

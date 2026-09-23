@@ -1380,6 +1380,78 @@ fn nothing_is_in_force_until_it_is_approved() {
 }
 
 #[test]
+fn a_panel_is_the_second_word_in_the_vocabulary_and_travels_on_the_theme_s_terms() {
+    // **The seam, end to end.** A panel is declarative data in the manifest — so it is inside
+    // the bytes the fingerprint is taken over, there is no second file for a later read to
+    // disagree with, and it is in force on exactly the terms a theme is: nothing until the
+    // operator has been shown it and said yes.
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"acme","name":"Acme",
+            "contributes":{"panels":[{"id":"reviews","title":"Reviews","order":30,
+              "rows":[{"key":"a","text":"Land the contract"}]}]}}"#,
+    );
+    install(&made.config(), &made.at()).expect("installed");
+
+    let seen = survey(&made.config());
+    assert!(
+        seen.installed[0].panels_in_force().is_empty(),
+        "an unapproved extension contributed a panel"
+    );
+
+    let found = read_at(&made.at()).expect("an extension");
+    assert_eq!(
+        prompt(&found, Standing::New).declares,
+        ["a panel, “Reviews” — 1 row charter draws in the window's side region"],
+        "the operator was not shown the panel he is being asked about"
+    );
+
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    let seen = survey(&made.config());
+    let [panel] = seen.installed[0].panels_in_force() else {
+        panic!("one panel in force")
+    };
+    assert_eq!(panel.key(), "ext/acme/reviews");
+    assert_eq!(panel.order, 30);
+}
+
+#[test]
+fn an_extension_that_declares_only_a_panel_is_still_a_contribution() {
+    // A theme was the whole vocabulary until now, and `declares no contributions` was the
+    // refusal for a manifest with none. A panel-only extension must not fall into it — this is
+    // the check that the new word was added to that condition and not only to the parser.
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"acme","name":"Acme",
+            "contributes":{"panels":[{"id":"p","title":"P"}]}}"#,
+    );
+
+    read_at(&made.at()).expect("a panel is a contribution charter can consent to");
+}
+
+#[test]
+fn a_panel_charter_will_not_read_refuses_the_whole_extension_rather_than_going_quiet() {
+    // `read_at`'s rule: every refusal is a state that would otherwise read as "nothing
+    // declared", which reads as "safe". An extension whose panel charter dropped would be
+    // approved for a contribution the operator saw and would then not have.
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"acme","name":"Acme",
+            "contributes":{"themes":[{"name":"T","file":"dark.json"}],
+              "panels":[{"id":"p","title":"P",
+                "rows":[{"key":"a","text":"t","runs":"workspace.delete:alpha"}]}]}}"#,
+    );
+    made.file(
+        "dark.json",
+        r#"{"name":"T","appearance":"dark","tokens":{}}"#,
+    );
+
+    let why = read_at(&made.at()).expect_err("a row that runs a charter verb is refused");
+
+    assert!(why.contains("may not run one"), "{why}");
+}
+
+#[test]
 fn an_extension_that_changed_contributes_nothing_until_it_is_asked_about_again() {
     let made = Made::new();
     let found = install(&made.config(), &made.ordinary()).expect("installed");

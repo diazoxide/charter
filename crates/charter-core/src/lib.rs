@@ -38,6 +38,7 @@ pub mod manifest;
 pub mod mdsection;
 pub mod memstore;
 pub mod news;
+pub mod panel;
 pub mod personacmd;
 pub mod personas;
 pub mod pieces;

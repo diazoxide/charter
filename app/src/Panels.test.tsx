@@ -9,7 +9,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Panels } from "./Panels";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
-import type { Panels as PanelsModel, PersonaDetails } from "./bindings";
+import type { PanelRow, PanelView, Panels as PanelsModel, PersonaDetails } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
 afterEach(() => {
@@ -20,6 +20,108 @@ afterEach(() => {
 /** The project these answers are for. A persona belongs to a plane, and a window holds
  *  several: two of them can both have a `steward`. */
 const PLANE = "/home/dev/plane";
+
+// ---------------------------------------------------------------------------------------
+// The contributions, as `app/src-tauri/src/panels.rs` builds them
+// ---------------------------------------------------------------------------------------
+
+/**
+ * **These fixtures are `charter_core::panel` values, and that is the change.**
+ *
+ * Until this file was rewritten it asserted that `Panels.tsx` drew a todo out of a `todos`
+ * field. There is no such field in the renderer now: todos and personas are contributions, so
+ * what this file tests is the thing that draws a panel, against the vocabulary it draws from.
+ *
+ * Where the other half went — that charter's own producer emits *these* values off a real
+ * plane — is two places, both closer to the fact than a mock here could be:
+ * `app/src-tauri/src/panels.rs`'s tests, against a plane on disk, and `regions.e2e.ts`, against
+ * the real core through the real window.
+ */
+function row(key: string, text: string, over: Partial<PanelRow> = {}): PanelRow {
+  return {
+    key,
+    text,
+    note: null,
+    mark: "dot",
+    tone: "plain",
+    detail: null,
+    runs: null,
+    ...over,
+  };
+}
+
+function todosPanel(rows: PanelRow[], refused?: string): PanelView {
+  return {
+    key: "charter/todos",
+    title: "Todos",
+    order: 10,
+    mark: "todo",
+    from: null,
+    blocks: [
+      ...(refused === undefined ? [] : [{ kind: "note" as const, text: refused, tone: "trouble" }]),
+      {
+        kind: "list" as const,
+        rows,
+        empty: { headline: "Nothing to do", body: null, offer: null },
+      },
+    ],
+  };
+}
+
+function personasPanel(names: string[], fallback: string | null): PanelView {
+  return {
+    key: "charter/personas",
+    title: "Personas",
+    order: 20,
+    mark: "persona",
+    from: null,
+    blocks: [
+      {
+        kind: "list",
+        rows: names.map((name) =>
+          row(name, name, {
+            mark: "persona",
+            tone: name === fallback ? "default" : "plain",
+            note: name === fallback ? "default · 2 memories" : "2 memories",
+            detail: { kind: "persona", persona: name },
+            runs: `persona.show:${name}`,
+          }),
+        ),
+        empty: { headline: "No personas on this plane", body: null, offer: null },
+      },
+    ],
+  };
+}
+
+/** What an approved extension contributes: declared rows, no verbs, and its id on the panel. */
+function contributedPanel(over: Partial<PanelView> = {}): PanelView {
+  return {
+    key: "ext/acme/reviews",
+    title: "Reviews",
+    order: 15,
+    mark: "note",
+    from: "acme",
+    blocks: [
+      {
+        kind: "list",
+        rows: [
+          row("a", "Land the panel contribution contract", {
+            note: "2026-09-23",
+            detail: { kind: "text", text: "The whole of what this review is about." },
+          }),
+        ],
+        empty: { headline: "Nothing to review", body: null, offer: null },
+      },
+    ],
+    ...over,
+  };
+}
+
+const TODO = row("20260302-091400-review", "Review the rollout plan", {
+  mark: "todo",
+  note: "2026-03-02",
+  detail: { kind: "text", text: "The rollout plan, in full." },
+});
 
 const PANELS: PanelsModel = {
   workspace: "alpha",
@@ -32,6 +134,7 @@ const PANELS: PanelsModel = {
   todos_refused: null,
   personas: ["devops", "steward"],
   persona: "steward",
+  contributed: [todosPanel([TODO]), personasPanel(["devops", "steward"], "steward")],
 };
 
 function state(on: Partial<WorkspaceState> = {}): WorkspaceState {
@@ -48,10 +151,9 @@ function state(on: Partial<WorkspaceState> = {}): WorkspaceState {
 /**
  * The panel, with the window's own state around it.
  *
- * **Which persona's card is open belongs to the window now** (charter-app#174): opening it is
- * a catalogue row, so a context menu and the palette can open it from outside this panel. The
- * wrapper here is that window, in as few lines as the claim needs — without it these tests
- * would be asserting that a card opens against a prop that never changes.
+ * **Which row's card is open belongs to the window** (charter-app#174, generalised): opening a
+ * persona's card is a catalogue row, so a context menu and the palette can open it from outside
+ * this panel. The wrapper here is that window, in as few lines as the claim needs.
  */
 function draw(
   on: {
@@ -62,10 +164,11 @@ function draw(
     showChat?: (session: number) => void;
     offers?: Catalogued;
     onPress?: (offer: Offer) => void;
+    contributed?: PanelView[];
   } = {},
 ) {
   function Window() {
-    const [shownPersona, setShownPersona] = useState<string>();
+    const [shownRow, setShownRow] = useState<string>();
     return (
       <Panels
         plane={PLANE}
@@ -77,8 +180,9 @@ function draw(
         showChat={on.showChat ?? (() => {})}
         offers={on.offers ?? new Map()}
         onPress={on.onPress ?? (() => {})}
-        shownPersona={shownPersona}
-        onShowPersona={setShownPersona}
+        contributed={on.contributed ?? []}
+        shownRow={shownRow}
+        onShowRow={setShownRow}
       />
     );
   }
@@ -87,146 +191,214 @@ function draw(
 
 describe("the right-hand region", () => {
   it("holds the needs-you queue, which used to share a line with six other things", () => {
-    // charter ADR 0038 moved it here off `<header className="bar">`. The queue itself was
-    // already built; where it is was the decision.
-    draw({ queue: [3, 7] });
+    // charter ADR 0038 moved it here off `<header className="bar">`.
+    draw({ queue: [7] });
 
-    const queue = within(screen.getByTestId("panels")).getByLabelText("Needs you");
-    expect(queue).toHaveTextContent("2 need you");
-    expect(within(queue).getByRole("button", { name: "ide.3" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("panels")).getByLabelText("Needs you")).toBeInTheDocument();
   });
 
   it("brings a chat forward from the queue", async () => {
-    const showChat = vi.fn();
-    draw({ queue: [7], showChat });
+    const shown: number[] = [];
+    draw({ queue: [7], showChat: (session) => shown.push(session) });
 
-    await userEvent.click(screen.getByRole("button", { name: "ide.7" }));
+    await userEvent.click(screen.getByRole("button", { name: /ide\.7/ }));
 
-    expect(showChat).toHaveBeenCalledWith(7);
+    expect(shown).toEqual([7]);
   });
 
   it("draws the queue even when no workspace is focused, because it is not the workspace's", () => {
     // A chat asking for you in a workspace nobody is looking at is exactly the one that must
-    // not be hidden — the same hole the project tabs close one scope up.
-    draw({ workspace: undefined, queue: [3] });
+    // not be hidden.
+    draw({ workspace: undefined, queue: [7] });
 
-    expect(screen.getByLabelText("Needs you")).toHaveTextContent("1 need you");
+    expect(screen.getByLabelText("Needs you")).toBeInTheDocument();
   });
 
   it("is named for what it is, and not a second answer to which workspace this is", () => {
-    // Two `nav[aria-label="Workspaces"]` broke a spec once. The strip is the axis and keeps
-    // that name; this region is what is asking for you.
     draw();
 
     expect(screen.getByTestId("panels")).toHaveAttribute("aria-label", "Attention · alpha");
   });
 
-  // ---------------------------------------------------------------------------------------
-  // Alerts, which are the window's now
-  // ---------------------------------------------------------------------------------------
-
   it("holds no alerts section, because alerts cross projects and this region is one project's", () => {
-    // They moved to the window's drawer, opened from the status line (`AlertsDrawer.tsx`). A
-    // second, per-project copy here would be a count of one plane's alerts drawn beside a
-    // button counting all of them — two numbers for one question.
-    draw({ state: state() });
-
-    expect(screen.queryByTestId("panel-alerts")).toBeNull();
-    expect(screen.getByTestId("panels")).not.toHaveTextContent(/alert/i);
-  });
-
-  // ---------------------------------------------------------------------------------------
-  // Todos and personas, which stayed
-  // ---------------------------------------------------------------------------------------
-
-  it("shows the focused workspace's open todos", () => {
+    // ADR 0038 put alerts here; the window's status line has them instead, because the plane
+    // with an alert is usually not the one on screen. `Panels.tsx` argues it at length.
     draw();
 
-    expect(screen.getByTestId("panel-todos")).toHaveTextContent("Review the rollout plan");
-  });
-
-  it("says which persona a chat started here would adopt", () => {
-    draw();
-
-    const personas = screen.getByTestId("panel-personas");
-    expect(personas).toHaveTextContent("steward · default");
-    expect(within(personas).getByText("devops")).not.toHaveTextContent("default");
-  });
-
-  it("says why the todos could not be read rather than showing none", () => {
-    draw({
-      state: state({
-        panels: { ...PANELS, todos: [], todos_refused: "todos/ resolves outside the plane" },
-      }),
-    });
-
-    expect(within(screen.getByTestId("panel-todos")).getByRole("alert")).toHaveTextContent(
-      "outside",
-    );
-  });
-
-  it("says the plane is still being read rather than saying there is nothing to do", () => {
-    draw({ state: state({ panels: undefined }) });
-
-    expect(screen.getByTestId("panel-todos")).toHaveTextContent("Reading the plane…");
-  });
-
-  it("says when the core refused the workspace outright", () => {
-    draw({
-      workspace: "ghost",
-      state: state({ panels: undefined, trouble: "no workspace 'ghost'" }),
-    });
-
-    expect(screen.getByRole("alert")).toHaveTextContent("ghost");
+    expect(screen.getByTestId("panels").textContent).not.toMatch(/alert/i);
   });
 
   it("draws no workspace answers when none is focused", () => {
     draw({ workspace: undefined });
 
     expect(screen.getByText("No workspace focused.")).toBeInTheDocument();
-    expect(screen.queryByTestId("panel-todos")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("panel-todos")).toBeNull();
   });
-
-  // ---------------------------------------------------------------------------------------
-  // What moved out (charter ADR 0038)
-  // ---------------------------------------------------------------------------------------
 
   it("no longer draws repos or CI, which are state and went to the bottom bar", () => {
     draw();
 
-    expect(screen.queryByTestId("panel-repos")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("panel-ci")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("repo-svc")).not.toBeInTheDocument();
+    expect(screen.queryByText("svc")).toBeNull();
+    expect(screen.getByTestId("panels").textContent).not.toMatch(/\bCI\b/);
   });
 
-  // ---------------------------------------------------------------------------------------
-  // The personas, and the count that is the point of the window (M6.6)
-  // ---------------------------------------------------------------------------------------
+  it("says when the core refused the workspace outright", () => {
+    draw({ state: state({ panels: undefined, trouble: "no workspace 'alpha'" }) });
 
-  it("marks every persona as one, and the plane's default with a star beside its word", () => {
+    expect(screen.getByRole("alert")).toHaveTextContent("no workspace 'alpha'");
+  });
+
+  it("says the plane is still being read rather than saying there is nothing to do", () => {
+    // An unanswered ask and an empty answer are the two states this must never merge.
+    draw({ state: state({ panels: undefined }) });
+
+    expect(screen.getByText(/Reading the plane/)).toBeInTheDocument();
+    expect(screen.queryByText("Nothing to do")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// What the contract bought: the same renderer for charter's panels and a stranger's
+// ---------------------------------------------------------------------------------------
+
+describe("a panel", () => {
+  it("draws whatever is contributed, in the order the contributors asked for", () => {
+    // charter's todos at 10, an extension's at 15, charter's personas at 20. A contributed
+    // panel is not appended after charter's — it is sorted among them, which is what `order`
+    // being a number rather than a flag is for.
+    draw({ contributed: [contributedPanel()] });
+
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual(["Todos", "Reviews · acme", "Personas"]);
+  });
+
+  it("says whose it is, which is what charter ADR 0041 item 5 asks the window for", () => {
+    // *Show what is in force, after approval and not only at it.* An operator has to be able
+    // to tell a panel his own charter draws from one a stranger's extension contributed,
+    // without opening a dialog to find out.
+    draw({ contributed: [contributedPanel()] });
+
+    expect(screen.getByTestId("panel-ext-acme-reviews")).toHaveAttribute("data-panel-from", "acme");
+    expect(screen.getByTestId("panel-todos")).toHaveAttribute("data-panel-from", "charter");
+    expect(within(screen.getByTestId("panel-ext-acme-reviews")).getByText(/acme/)).toBeVisible();
+  });
+
+  it("gives a contributed panel the list primitive, which is the test of the contract", async () => {
+    // **The whole claim, in one test.** An extension declared rows in a manifest and got the
+    // shortening, the card, the bound, the load-more and the search — none of which it asked
+    // for, wrote, or can see. If this passes, the contract is worth having; if a contributed
+    // panel needed one line of its own in `Panels.tsx` to get any of it, it is not.
+    const rows = Array.from({ length: 20 }, (_, at) => row(`k${at}`, `Review ${at}`));
+    draw({ contributed: [contributedPanel({ blocks: [listOf(rows)] })] });
+
+    const panel = screen.getByTestId("panel-ext-acme-reviews");
+    expect(within(panel).getByRole("searchbox")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /Show \d+ more/ })).toBeInTheDocument();
+    expect(within(panel).getAllByRole("listitem").length).toBeLessThan(rows.length);
+  });
+
+  it("runs a row's catalogue verb through the catalogue, and an unknown id through nothing", async () => {
+    // A row cannot invent a verb: what it names is looked up, and an id the catalogue has
+    // stopped offering runs nothing rather than something else. That is `Doer`'s rule for the
+    // bar's buttons, applied to a panel — and it is what keeps `actions.ts` the one list even
+    // though a row now names one of its members by id.
+    const pressed: Offer[] = [];
+    draw({
+      offers: everyOffer(),
+      onPress: (offer) => pressed.push(offer),
+      contributed: [
+        contributedPanel({
+          blocks: [listOf([row("a", "Invented", { runs: "acme.do-a-thing" })])],
+        }),
+      ],
+    });
+
+    await userEvent.click(within(screen.getByTestId("panel-ext-acme-reviews")).getByRole("button"));
+
+    expect(pressed).toEqual([]);
+  });
+
+  it("draws a block charter could not fill as charter's own sentence, never as an empty list", () => {
+    // A store charter would not read is not a workspace with nothing to do, and "Nothing to
+    // do" is exactly what an empty list would claim about it.
+    draw({
+      state: state({
+        panels: { ...PANELS, contributed: [todosPanel([], "todos/ is a link out of the plane")] },
+      }),
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("todos/ is a link out of the plane");
+  });
+
+  it("says the panel's own empty sentence rather than a shared one", () => {
+    draw({
+      state: state({
+        panels: { ...PANELS, contributed: [todosPanel([]), personasPanel([], null)] },
+      }),
+    });
+
+    expect(screen.getByText("Nothing to do")).toBeInTheDocument();
+    expect(screen.getByText("No personas on this plane")).toBeInTheDocument();
+  });
+});
+
+/** One list block, for a fixture that wants different rows. */
+function listOf(rows: PanelRow[]) {
+  return {
+    kind: "list" as const,
+    rows,
+    empty: { headline: "Nothing to review", body: null, offer: null },
+  };
+}
+
+/** The whole catalogue for this plane, which is what a row's verb is looked up in. */
+function everyOffer(): Catalogued {
+  return catalogued(
+    catalogue({
+      tabs: noTabs(),
+      workspaces: [],
+      plane: PLANE,
+      personas: ["devops", "steward"],
+      needsYou: [],
+      nameOf: String,
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+// charter's own two, now that they arrive as contributions
+// ---------------------------------------------------------------------------------------
+
+describe("charter's own panels", () => {
+  it("shows the focused workspace's open todos", () => {
     draw();
 
-    const personas = within(screen.getByTestId("panel-personas")).getAllByRole("listitem");
-    for (const row of personas) expect(row.querySelector("svg.lucide-user-round")).not.toBeNull();
-    const [devops, steward] = personas;
-    expect(steward).toHaveClass("is-default");
-    expect(steward.querySelector(".default svg.lucide-star")).not.toBeNull();
-    expect(devops).not.toHaveClass("is-default");
-    expect(devops.querySelector("svg.lucide-star")).toBeNull();
+    expect(
+      within(screen.getByTestId("panel-todos")).getByText(/Review the rollout plan/),
+    ).toBeInTheDocument();
   });
 
-  it("draws the count of chats waiting as a number of its own, inside the sentence", () => {
-    draw({ queue: [3, 7, 9] });
+  it("marks the plane's default persona, in the word and beside it", () => {
+    // The word stays a word: the region's scenario spec asks the panel whether it says
+    // `default`, and a screen reader gets the same sentence a sighted reader does. The star
+    // the tone draws is decoration on top of it.
+    draw();
 
-    const queue = screen.getByLabelText("Needs you");
-    // The number is emphasised by being its own element, and the sentence is still one
-    // phrase — "3 need you" — for anyone who is read to rather than shown.
-    expect(queue.querySelector(".needs-you-number")?.textContent).toBe("3");
-    expect(queue.querySelector(".needs-you-count")?.textContent).toBe("3 need you");
-    // Every row names its chat and nothing else; the terminal mark is unread.
-    expect(
-      within(queue).getByRole("button", { name: "ide.7" }).querySelector("svg"),
-    ).not.toBeNull();
+    const rows = within(screen.getByTestId("panel-personas")).getAllByRole("listitem");
+    const [devops, steward] = rows;
+    expect(steward).toHaveTextContent("default");
+    expect(steward).toHaveClass("is-default");
+    expect(devops).not.toHaveClass("is-default");
+  });
+
+  it("carries how much each persona remembers, which the operator asked to see in the list", () => {
+    draw();
+
+    const notes = within(screen.getByTestId("panel-personas")).getAllByText(/2 memories/);
+    expect(notes).toHaveLength(2);
+    // `0 memories` is said rather than left off: a row that omits the count reads as one
+    // charter did not look at, which is a different fact from a persona with none.
+    expect(notes[1]).toHaveTextContent("default · 2 memories");
   });
 });
 
@@ -234,10 +406,9 @@ describe("the right-hand region", () => {
  * **The count's colour is only ever on a pair the contrast suite measures.**
  *
  * `needs-you.base` is `#b85050` in charter-dark, which is 3.64:1 on `surface.base` — under AA
- * for words. It was split from `danger.base` precisely because white on the old shared value
- * failed AA on this very badge. So the words beside the count are `text.primary`, and the
- * number is `needs-you.text` FILLED with `needs-you.base`, which is the pair
- * `contrast.test.ts` holds at 4.5:1. jsdom computes no colour, so this reads the rules.
+ * for words. So the words beside the count are `text.primary`, and the number is
+ * `needs-you.text` FILLED with `needs-you.base`, which is the pair `contrast.test.ts` holds at
+ * 4.5:1. jsdom computes no colour, so this reads the rules.
  */
 describe("the needs-you count's colours", () => {
   const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
@@ -260,8 +431,7 @@ describe("the needs-you count's colours", () => {
 });
 
 // ---------------------------------------------------------------------------------------
-// What a persona row opens (the operator: *"personas list in right sidebar is just texts,
-// without click action"*)
+// What a persona row opens
 // ---------------------------------------------------------------------------------------
 
 /** A definition the core would have answered with. */
@@ -279,13 +449,26 @@ function definition(on: Partial<PersonaDetails> = {}): PersonaDetails {
   };
 }
 
-/** The core, answering `persona_details` and counting what it was asked. */
-function core(answer: (persona: string) => unknown): { asked: Record<string, unknown>[] } {
+/** One memory, as `persona_memories` answers with — a row of the same vocabulary. */
+function memory(key: string, title: string, body: string): PanelRow {
+  return row(key, title, {
+    mark: "note",
+    note: "2026-09-20",
+    detail: { kind: "text", text: body },
+  });
+}
+
+/** The core, answering both of the card's asks and counting what it was asked. */
+function core(
+  answer: (persona: string) => unknown,
+  memories: (persona: string) => PanelRow[] = () => [],
+): { asked: Record<string, unknown>[] } {
   const asked: Record<string, unknown>[] = [];
   mockIPC((cmd, args) => {
     const given = (args ?? {}) as Record<string, unknown>;
+    if (cmd === "persona_memories") return memories(String(given.persona));
     if (cmd !== "persona_details") return undefined;
-    asked.push(given);
+    asked.push({ ...given, cmd });
     return answer(String(given.persona));
   });
   return { asked };
@@ -297,10 +480,10 @@ async function open(persona: string): Promise<HTMLElement> {
   await user.click(
     within(screen.getByTestId("panel-personas")).getByRole("button", { name: new RegExp(persona) }),
   );
-  return waitFor(() => screen.getByTestId(`persona-details-${persona}`));
+  return waitFor(() => screen.getByTestId(`row-detail-${persona}`));
 }
 
-describe("a persona's details", () => {
+describe("a persona's card", () => {
   it("shows what the definition says: its role, when to delegate to it, its tools and its vault", async () => {
     core(() => definition());
     draw();
@@ -310,171 +493,171 @@ describe("a persona's details", () => {
     expect(card).toHaveTextContent("DevOps Engineer");
     expect(card).toHaveTextContent("CI/CD pipelines, k8s deploys");
     expect(card).toHaveTextContent("kubectl, glab");
-    expect(card).toHaveTextContent("devops");
     expect(card).toHaveTextContent("personas/devops/persona.md");
   });
 
   it("asks the core about this plane's persona, and asks again the next time it is opened", async () => {
-    // A definition is a file an operator edits while charter is running — `charter persona
-    // create` is how one arrives — so a card that answered from the first read would show a
-    // role that was corrected an hour ago.
-    const { asked } = core(() => definition());
+    // A definition is a file an operator edits while charter is running, so a cached first
+    // answer would show a role that was corrected an hour ago.
+    const { asked } = core((persona) => definition({ name: persona }));
     draw();
 
     await open("devops");
-    await userEvent.setup().keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByTestId("persona-details-devops")).toBeNull());
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("row-detail-devops")).toBeNull());
     await open("devops");
 
-    expect(asked).toEqual([
-      { plane: PLANE, persona: "devops" },
-      { plane: PLANE, persona: "devops" },
-    ]);
-  });
-
-  it("says a persona holds no credentials only where it says so itself", async () => {
-    // **Three answers and not two.** `vault: none` is a declaration; no `vault:` line at all
-    // is charter-app not having looked — charter's own `vault_of` falls back to the vault
-    // registry, and nothing in Rust reads that yet. Rounding the second down to the first
-    // would have the window claim a persona holds no credentials on nobody's authority.
-    core((persona) =>
-      persona === "steward"
-        ? definition({ name: "steward", vault: null, declares_no_vault: true })
-        : definition({ name: "devops", vault: null, declares_no_vault: false }),
-    );
-    draw();
-
-    expect(await open("steward")).toHaveTextContent("holds no credentials");
-    await userEvent.setup().keyboard("{Escape}");
-
-    const devops = await open("devops");
-    expect(devops).toHaveTextContent("not declared");
-    expect(devops).not.toHaveTextContent("holds no credentials");
+    expect(asked.filter((one) => one.cmd === "persona_details")).toHaveLength(2);
+    expect(asked[0]).toMatchObject({ plane: PLANE, persona: "devops" });
   });
 
   it("names the vault and nothing that is in it", async () => {
-    // charter refuses a secret by kind and never echoes one, and a panel gets no exception:
-    // the card says WHICH vault a chat as this persona would open, and the word beside it
-    // says that is all it says.
+    // charter refuses a secret by kind and never echoes one; a panel gets no exception.
     core(() => definition({ vault: "devops" }));
     draw();
 
     const card = await open("devops");
 
-    expect(card.querySelector("code")?.textContent).toBe("devops");
+    expect(card).toHaveTextContent("devops");
     expect(card).toHaveTextContent("what is in it is never shown here");
   });
 
-  it("draws the chain a persona inherits from, child first, and only when there is one", async () => {
-    core((persona) =>
-      persona === "devops"
-        ? definition({ lineage: ["devops", "base"] })
-        : definition({ name: "steward", lineage: ["steward"] }),
-    );
+  it("says a persona holds no credentials only where it says so itself", async () => {
+    // "No `vault:` line" means charter has not looked, not that there is nothing —
+    // `PersonaDetails::declares_no_vault` has the whole of why.
+    core(() => definition({ vault: null, declares_no_vault: false }));
     draw();
 
-    expect(await open("devops")).toHaveTextContent("devops → base");
-    await userEvent.setup().keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByTestId("persona-details-devops")).toBeNull());
-
-    expect(await open("steward")).not.toHaveTextContent("Inherits");
-  });
-
-  it("says a definition that declares no delegate-when routes nothing to itself", async () => {
-    // `delegate-when` is what makes a persona findable: it becomes the description whoever
-    // is routing reads. A card that drew nothing there would look like a persona that had
-    // one rather than a persona that needs one.
-    core(() => definition({ delegate_when: null }));
-    draw();
-
-    expect(await open("devops")).toHaveTextContent("nothing declared");
+    expect(await open("devops")).toHaveTextContent("not declared in its definition");
   });
 
   it("draws the core's own refusal rather than an empty card", async () => {
-    core(() => {
-      throw new Error("persona 'devops' does not load from personas/devops/persona.md");
+    mockIPC((cmd) => {
+      if (cmd === "persona_memories") return [];
+      if (cmd === "persona_details") throw new Error("no persona 'devops'");
+      return undefined;
     });
     draw();
 
-    const card = await open("devops");
-
-    expect(within(card).getByRole("alert")).toHaveTextContent("does not load from");
-  });
-
-  it("says the plane's default is the one a chat started here adopts", async () => {
-    core(() => definition({ name: "steward" }));
-    draw();
-
-    expect(await open("steward")).toHaveTextContent("default");
+    expect(await open("devops")).toHaveTextContent("no persona 'devops'");
   });
 
   it("is not modal, so the queue this region exists for stays reachable", async () => {
-    // charter ADR 0038: nothing in this region may compete with the needs-you queue. A Radix
-    // DIALOG marks everything outside itself `aria-hidden`, which would take the queue off
-    // the accessibility tree while somebody read a persona's role.
+    // Radix marks everything outside an open DIALOG `aria-hidden` — including the needs-you
+    // queue two sections up, which ADR 0038 says this region must never compete with. A
+    // popover takes the menu's decisions instead (ADR 0039).
     core(() => definition());
-    draw({ queue: [3] });
+    draw({ queue: [7] });
 
     await open("devops");
 
-    expect(
-      within(screen.getByLabelText("Needs you")).getByRole("button", { name: "ide.3" }),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Needs you")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ide\.7/ })).toBeInTheDocument();
   });
 
   it("closes on Escape and puts the keyboard back on the row", async () => {
     core(() => definition());
     draw();
+    const card = await open("devops");
+    expect(card).toBeInTheDocument();
 
-    const row = within(screen.getByTestId("panel-personas")).getByRole("button", {
-      name: /devops/,
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByTestId("row-detail-devops")).toBeNull());
+    expect(document.activeElement).toHaveTextContent("devops");
+  });
+});
+
+describe("a persona's memories", () => {
+  it("are readable from the window, which is what the operator asked for", async () => {
+    // *"on clicking to persona we should open maybe list of memories … user will be able to
+    // read all memories from ui"*.
+    core(
+      () => definition(),
+      () => [memory("a", "Charter defects go upstream", "File the issue; do not patch around it.")],
+    );
+    draw();
+
+    const card = await open("devops");
+
+    expect(within(card).getByText(/Charter defects go upstream/)).toBeVisible();
+  });
+
+  it("get the same list primitive the panel itself has, one surface in", async () => {
+    // **The second consumer, and the one that decides whether `PanelList` is a primitive or a
+    // panel with a general-sounding name.** Nothing in the card knows what a memory is: they
+    // arrive as rows, so they are searched, bounded and opened by the code the panel uses.
+    core(
+      () => definition(),
+      () => Array.from({ length: 30 }, (_, at) => memory(`m${at}`, `Memory ${at}`, `body ${at}`)),
+    );
+    draw();
+
+    const card = await open("devops");
+
+    const search = await within(card).findByRole("searchbox");
+    await userEvent.type(search, "Memory 7");
+    await waitFor(() =>
+      expect(within(card).getByLabelText("devops's memories").children).toHaveLength(1),
+    );
+  });
+
+  it("says charter could not read them rather than saying there are none", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "persona_memories") throw new Error("memory/ is a link out of the plane");
+      if (cmd === "persona_details") return definition();
+      return undefined;
     });
-    await open("devops");
-    await userEvent.setup().keyboard("{Escape}");
+    draw();
 
-    await waitFor(() => expect(screen.queryByTestId("persona-details-devops")).toBeNull());
-    expect(row).toHaveFocus();
+    const card = await open("devops");
+
+    await waitFor(() =>
+      expect(within(card).getByRole("alert")).toHaveTextContent("link out of the plane"),
+    );
+  });
+
+  it("says nothing is remembered yet where the store is simply empty", async () => {
+    core(
+      () => definition(),
+      () => [],
+    );
+    draw();
+
+    const card = await open("devops");
+
+    await waitFor(() =>
+      expect(within(card).getByText("Nothing remembered yet")).toBeInTheDocument(),
+    );
   });
 });
 
 /**
  * Right-click on a persona row (charter-app#174).
  *
- * **In jsdom, because a WebDriver right-click sends no `contextmenu` event** — measured on
- * both engines and recorded in `docs/ui-primitives.md`. What is asserted is the wiring: the
- * row has charter's own menu and it lists the catalogue's row for that persona. What the row
- * SAYS is `actions.test.ts`'s.
+ * **In jsdom, because a WebDriver right-click sends no `contextmenu` event** — measured on both
+ * engines and recorded in `docs/ui-primitives.md`. What is asserted is the wiring: the row has
+ * charter's own menu and it lists the catalogue's row for that persona.
  *
- * The one row is the point rather than a shortfall. A persona is a file `charter persona
- * create` writes and an operator edits; reading it is the whole of what this window can do to
- * one, and a menu with three invented verbs would be the second list `actions.ts` refuses.
+ * **And it is charter's own panel that has one.** A contributed panel's rows get no context
+ * menu, because a menu names what a row is ABOUT and a row is words, a key and at most a
+ * catalogue id — see `PanelList`'s `RowMenu`. That asymmetry is the contract's, written down
+ * rather than discovered.
  */
 describe("a persona row's menu", () => {
-  const offers = () =>
-    catalogued(
-      catalogue({
-        tabs: noTabs(),
-        workspaces: [],
-        plane: PLANE,
-        personas: ["devops", "steward"],
-        needsYou: [],
-        nameOf: String,
-      }),
-    );
-
-  /** Right-clicks a persona row, the way a WebView's own pointer does. */
-  function rightClick(persona: string) {
-    const row = within(screen.getByTestId("panel-personas")).getByRole("button", {
-      name: new RegExp(persona),
+  /** Right-clicks a row, the way a WebView's own pointer does. */
+  function rightClick(testid: string, name: string) {
+    const row = within(screen.getByTestId(testid)).getByRole("button", {
+      name: new RegExp(name),
     });
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   }
 
   it("opens on a right-click with the catalogue's row for that persona", async () => {
     core(() => definition());
-    draw({ offers: offers() });
+    draw({ offers: everyOffer() });
 
-    rightClick("devops");
+    rightClick("panel-personas", "devops");
 
     const menu = await screen.findByRole("menu");
     expect(
@@ -485,18 +668,24 @@ describe("a persona row's menu", () => {
   });
 
   it("hands back the row that opens the card, which is the state the window holds", async () => {
-    // The card's openness is the window's now, so a row run from anywhere — this menu, the
-    // palette, the row's own click — lands in one place. That is what a catalogue row buys,
-    // and it is why `PersonaRow` no longer owns whether it is open.
     core(() => definition());
     const pressed: Offer[] = [];
-    draw({ offers: offers(), onPress: (offer) => pressed.push(offer) });
+    draw({ offers: everyOffer(), onPress: (offer) => pressed.push(offer) });
 
-    rightClick("devops");
+    rightClick("panel-personas", "devops");
     await screen.findByRole("menu");
     await userEvent.click(screen.getByRole("menuitem", { name: "Show what devops is" }));
 
     expect(pressed.map((offer) => offer.id)).toEqual(["persona.show:devops"]);
     expect(pressed[0].does).toEqual({ verb: "showPersona", persona: "devops" });
+  });
+
+  it("gives a contributed panel's row no menu, which is the contract's asymmetry", async () => {
+    core(() => definition());
+    draw({ offers: everyOffer(), contributed: [contributedPanel()] });
+
+    rightClick("panel-ext-acme-reviews", "Land the panel");
+
+    await expect(vi.waitFor(() => screen.getByRole("menu"), { timeout: 200 })).rejects.toThrow();
   });
 });

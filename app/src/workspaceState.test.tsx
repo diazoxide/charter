@@ -22,6 +22,7 @@ const PANELS: PanelsModel = {
   todos_refused: null,
   personas: ["steward"],
   persona: "steward",
+  contributed: [],
 };
 
 function piece(name: string, on: Record<string, unknown> = {}) {

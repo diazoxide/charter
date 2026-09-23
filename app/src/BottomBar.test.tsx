@@ -18,6 +18,7 @@ const PANELS: PanelsModel = {
   todos_refused: null,
   personas: ["steward"],
   persona: "steward",
+  contributed: [],
 };
 
 function repo(name: string, on: Partial<RepoState> = {}): RepoState {
