@@ -149,16 +149,22 @@ pub fn from_isoformat(s: &str) -> Option<chrono::NaiveDate> {
     }
 }
 
-/// Whether an errno is `ELOOP` — a symlink loop, whose fix is the link and not a mode.
+/// The errno a symlink loop reports.
 #[cfg(unix)]
-pub fn is_loop(code: Option<i32>) -> bool {
-    code == Some(rustix::io::Errno::LOOP.raw_os_error())
-}
+const ELOOP: Option<i32> = Some(rustix::io::Errno::LOOP.raw_os_error());
 
-/// Whether an errno is `ELOOP`. No platform this runs on without `rustix` reports one.
+/// No platform this runs on without `rustix` reports one.
 #[cfg(not(unix))]
-pub fn is_loop(_code: Option<i32>) -> bool {
-    false
+const ELOOP: Option<i32> = None;
+
+/// Whether an errno is `ELOOP` — a symlink loop, whose fix is the link and not a mode.
+///
+/// One function over a per-platform constant, not one function per platform: a
+/// `#[cfg(not(unix))]` twin is a mutant no unix test run can build, and the mutant's name
+/// differs from this one's only by its line number, so no `exclude_re` could name it and
+/// not this.
+pub fn is_loop(code: Option<i32>) -> bool {
+    code.is_some() && code == ELOOP
 }
 
 /// A directory's entries sorted, or what stopped the listing.
@@ -495,6 +501,9 @@ mod tests {
             "0000-01-01",
             "14x",
             "-3d",
+            // `_REL_RE` is `^(\d+)([dwm])$`: a sign is not a digit, though Rust's `i64`
+            // parse would take one.
+            "+5d",
         ] {
             assert_eq!(
                 parse_since(bad, today),
@@ -505,6 +514,44 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_short_week_form_and_every_near_miss_read_as_python_reads_them() {
+        // `date.fromisoformat`, asked of Python 3.12 and 3.14 (no 3.11 was on hand; both agree):
+        // `2026W01` is the Monday of week 1, and each string beside it — one character off
+        // one of the week forms — is a ValueError, never a date some other arm made of it.
+        assert_eq!(from_isoformat("2026W01"), Some(day("2025-12-29")));
+        assert_eq!(from_isoformat("2026W011"), Some(day("2025-12-29")));
+        assert_eq!(from_isoformat("2026W537"), Some(day("2027-01-03")));
+        for refused in [
+            "20260W01",   // a `W` one place late is not `YYYY-Www`
+            "2026-X01",   // nor is a `-` with no `W` after it
+            "2026-X01-1", // nor `YYYY-Www-D` with no `W`
+            "2026-W0101", // nor `YYYY-Www-D` with no second `-`
+            "2026W538",   // a weekday past Sunday
+            "2026W00",    // week 0
+            "2026-+1-01", // a sign is not a digit, though Rust's `u32` parse would take one
+            "+026-01-01",
+        ] {
+            assert_eq!(from_isoformat(refused), None, "{refused:?}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlink_loop_is_the_one_errno_is_loop_names() {
+        // `ELOOP`, as the filesystem itself reports it for a link that points at itself —
+        // not a constant this test restates — and nothing else: not another errno, and not
+        // "no errno at all", which is what an entry answered for carries.
+        let dir = tempfile::tempdir().unwrap();
+        let looped = dir.path().join("loop");
+        std::os::unix::fs::symlink(&looped, &looped).unwrap();
+        let code = std::fs::metadata(&looped).unwrap_err().raw_os_error();
+
+        assert!(is_loop(code), "{code:?}");
+        assert!(!is_loop(Some(rustix::io::Errno::NOENT.raw_os_error())));
+        assert!(!is_loop(None));
     }
 
     #[test]
