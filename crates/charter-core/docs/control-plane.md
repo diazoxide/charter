@@ -28,8 +28,8 @@ or skip it entirely with `--no-front-door`; either way charter's own code knows 
 a plane may declare a default, never which one. If the plane already has personas, `init`
 scaffolds nothing — it creates only what is absent.
 
-The generated charter declares `routing: advise`, so once a second persona exists the front
-door sees the roster on work-shaped prompts. See `charter docs show personas`.
+The generated charter declares `routing: advise`. Showing the front door the persona roster
+on each prompt is not in this version yet. See `charter docs show personas`.
 
 ## Every key, in full
 
@@ -40,25 +40,16 @@ door sees the roster on work-shaped prompts. See `charter docs show personas`.
 schema = 1
 
 # Optional. The persona a session adopts when nothing else selects one — this plane's
-# front door. `charter persona default <name>` writes it. Overridden per developer by
-# `charter persona use`, `$CHARTER_PERSONA` and `--persona`; a name that no longer exists
+# front door. `charter persona default <name>` writes it. The persona a chat is started
+# with in the app's picker ($CHARTER_PERSONA) wins over it; a name that no longer exists
 # resolves to no persona at all, and `charter doctor` says so.
 [persona]
 default = "steward"
 
-# Optional. Only needed to move worktrees off their default location.
+# Optional, and not followed by this version: see "Where worktrees live" below.
 [plane]
-worktrees = "../plane.worktrees" # Where worktrees live. A relative path resolves against
-                                  # this file's directory; $CHARTER_WORKTREES overrides it.
-                                  # Default: per-workspace, under
-                                  # workspaces/<ws>/.worktrees/ — see "Where worktrees
-                                  # live" below.
-                                  # This file is committed and `git worktree add` creates
-                                  # directories here, so the value must land inside the
-                                  # plane or in a single sibling of it (the shape above).
-                                  # Anywhere further afield is ignored and `charter doctor`
-                                  # says so; $CHARTER_WORKTREES — your machine, your
-                                  # choice — is not restricted.
+worktrees = "../plane.worktrees" # Where worktrees would live instead of
+                                  # workspaces/<ws>/.worktrees/.
 
 # One [[forge]] block per code-hosting forge this control plane tracks. A single-forge
 # control plane (the common case) declares exactly one; see "Mixed-forge" below for more
@@ -89,15 +80,15 @@ share = "local"                  # "local" | "commit" | "push". Default: "local"
 [workspace]
 default = "default"              # Default: "default".
 
-# Which row bare `charter`'s profile selector starts on. Opt-in; absent, it starts on the
-# first row that can run. `default` is the only key read here. Harness profiles — a command and an environment
-# each — live in charter.local.toml, which is never committed, and a [harness.<name>]
-# table in this file is refused. See "[harness] — profiles, and the default" below.
+# Which profile the app's new-chat picker starts on. Opt-in; absent, it starts on the
+# first profile. `default` is the only key read here. Harness profiles — a command and an
+# environment each — live in charter.local.toml, which is never committed, and a
+# [harness.<name>] table in this file is refused. See "[harness] — profiles, and the
+# default" below.
 [harness]
-default = "claude"               # "claude" | "opencode" | "codex" — the word you would
-                                  # have typed after `charter`. No default: charter does
-                                  # not pick one for you. A name it does not know is
-                                  # REPORTED, not ignored — see "Bare `charter`" below.
+default = "claude"               # a profile's name: "claude", "codex", "opencode", or one
+                                  # charter.local.toml declares. A name this machine does
+                                  # not have is REPORTED by `charter doctor`, not ignored.
 
 # Which release channel this plane expects. Which build the app installs is chosen
 # per machine, with `charter update --channel`; see "[update].channel" below.
@@ -120,15 +111,11 @@ always writes the field as `owner`, since it works for either forge kind.
 A control plane is its own directory, and a workspace holds **clones** — one per repo the
 task touches, each of which can carry worktrees. That is the only arrangement.
 
-charter used to have a second one, `shape = "embedded"`: charter installed *inside* the
-single codebase it served, where a workspace held worktrees of the plane's own root rather
-than clones. It was removed — see [ADR 0007](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) — because every
-plane exercised exactly one of the two, so the other was carried on trust. An existing
-`shape` key is simply ignored.
+A `shape` key, which older planes may carry, is ignored.
 
-`charter init` therefore produces the same plane wherever it runs. Being at the top of a git
-repo no longer changes what you get; it changes whether init writes anything at all. It
-writes nothing, and says what the two ways on are:
+`charter init` produces the same plane wherever it runs. Being at the top of a git repo does
+not change what you get; it changes whether init writes anything at all. It writes nothing,
+and says what the two ways on are:
 
 ```
 $ charter init --forge github --owner acme
@@ -142,18 +129,16 @@ $ charter init --forge github --owner acme
 ```
 
 That is a refusal, not a prompt: charter never reads stdin (it runs inside hooks, where
-blocking would hang the turn), so naming the option *is* the acceptance — the same shape
-`charter report` uses for consent. Take the first way and you get
+blocking would hang the turn), so naming the option *is* the acceptance. Take the first way and you get
 `workspaces/default/myapp/`, cloned from the repo you were standing in and pointed at the
 same `origin` it has; take the second and this repo becomes the plane. Either way the
 control plane itself is identical, and until you choose, nothing is written to your repo at
 all.
 
-**This default is charter-app's**, and it is the opposite of the one the earlier Python
-charter had, which scaffolded a plane into the repo and *offered* to clone it into the first
-workspace. See [ADR 0035](https://github.com/diazoxide/charter-app/blob/main/docs/adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md) and
-charter-app spec decision 27 for why it was reversed. `charter init` anywhere that is not the
-top of a git repo is unchanged.
+Why a repository is not made into a plane unasked is
+[ADR 0035](https://github.com/diazoxide/charter-app/blob/main/docs/adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md)
+and charter-app spec decision 27. `charter init` anywhere that is not the top of a git repo
+makes the plane right there.
 
 ### The plane root is not a place to work
 
@@ -161,16 +146,13 @@ The directory holding `charter.toml` holds the control plane — personas, inven
 workspaces, config — and nothing you edit. Work happens in a workspace's clones.
 
 Nothing in the filesystem enforces that, which is why it is worth stating. The plane root
-is a real git repo, and `charter init` is documented as something you run inside your
-existing repo. charter no longer *lists* it as one of your repos, but not listing a tree is
-not the same as preventing work in it: two sessions that both sit in the plane root share
-one working tree and one HEAD, and will thrash each other's branches while charter reports
-two different workspaces.
+is often a real git repo, and not listing it as one of your repos is not the same as
+preventing work in it: two sessions that both sit in the plane root share one working tree
+and one HEAD, and will thrash each other's branches while charter reports two different
+workspaces.
 
-So the status line warns when the plane root is dirty or off its default branch, and
-`doctor` checks the same thing at session start. See
-[ADR 0008](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0008-the-plane-root-is-not-a-work-tree.md) for why those are warnings rather
-than refusals.
+So `charter doctor`'s `plane root` row warns when the plane root is dirty or off its default
+branch, and the Bash guard refuses a branch move in it.
 
 ### Where worktrees live
 
@@ -185,16 +167,10 @@ made that mistake — 214 test files discoverable from one root, 142 of them dup
 `.gitignore` hides that from git and from nothing else; pytest, jest, nx, tsc and every IDE
 indexer read the working tree directly.
 
-Set `[plane].worktrees` (or `$CHARTER_WORKTREES`) to put them somewhere else. Only the
-worktrees move — `workspaces/<ws>/memory/` and `refs/` stay inside the plane, because they
-are a few KB of text and `charter workspace live` exists precisely to un-ignore them so a
-team can commit them.
-
-Relocating an existing worktree means rewriting git's own `gitdir` pointer, and
-`git worktree move` is the command that does it correctly — changing this setting never moves
-one for you. The one move charter makes is `charter workspace rename`: the workspace's
-directory under the root is named after it, so the rename moves that directory too and
-relinks every worktree in it ([workspaces.md](workspaces.md)).
+Moving them somewhere else is not in this version yet. A plane whose `charter.toml` sets
+`[plane].worktrees`, or a process with `$CHARTER_WORKTREES` set, is refused by name when a
+worktree would be cut, rather than having its worktrees put somewhere it did not ask for:
+unset it to keep worktrees in the plane.
 
 ### What a workspace is
 
@@ -204,18 +180,13 @@ the repos that task touches. `default` is an ordinary workspace like any other.
 
 ```
 $ charter workspace create feature-x
-✓ Workspace 'feature-x' ready (LOCAL …) → workspaces/feature-x/
-✓ Working tree → ../app.worktrees/feature-x/app/feature-x
-  enter:  cd ../app.worktrees/feature-x/app/feature-x && claude
-  Being in that directory IS this workspace — no pointer needed.
+✓ Workspace 'feature-x' ready (LOCAL — private (nothing committed); `charter workspace live` to share) → workspaces/feature-x/
+• Select it with: charter workspace use feature-x  (or --workspace feature-x per command)
 ```
 
-Its branch is the workspace name unless you pass `--branch`.
-
-A solo user with one repo used to be able to `charter init` and carry on working in that
-repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is a
-plane in a directory of its own and `charter init --adopt <repo>` — the first way out of the
-refusal above — and then work in `workspaces/default/<repo>/`.
+A solo user with one repo makes a plane in a directory of its own with
+`charter init --adopt <repo>` — the first way out of the refusal above — and works in
+`workspaces/default/<repo>/`.
 
 **Selecting a workspace with no tree is refused**, because it would put you on the same
 files as every other workspace — the thing workspaces exist to prevent. `charter workspace
@@ -243,33 +214,12 @@ its own control plane. It is not: a worktree is a view of a repo, not a repo.
 
 So the plane's identity follows the **main working tree**. Standing anywhere inside a
 worktree, `charter` resolves the plane to the repo the worktree belongs to, and personas,
-the vault, workspaces and memory all stay attached to it. Without that they resolved into
-the worktree itself — a directory `git worktree remove` deletes, taking any memory written
-there with it — and the status line rendered `repos 0`, because a linked worktree's `.git`
-is a file rather than a directory.
+the vault directory, workspaces and memory all stay attached to it. Otherwise they would
+resolve into the worktree itself — a directory `git worktree remove` deletes, taking any
+memory written there with it.
 
 `$CHARTER_ROOT` is never redirected, so pointing it at a worktree is the escape hatch if
 you genuinely want a plane of its own there.
-
-#### What follows the plane, and what follows the tree
-
-Identity is not the only question a command asks, and the two answers differ:
-
-| | Follows the **plane** (the main tree) | Follows the **tree you are standing in** |
-|---|---|---|
-| what | who this plane is, and what only this machine knows | committed content on a branch |
-| examples | the persona roster, the vault, the MCP approval record, memory, workspaces, `.charter/` | generated files — `charter persona sync-agents` reads `personas/` and writes `.claude/agents/` |
-| why | a worktree is a view of a repo, so identity must not fork per worktree; a memory written into one is deleted with it | the artifact belongs to the commit, and the commit belongs to the branch |
-
-So `charter persona sync-agents` run inside a worktree regenerates **that worktree's**
-`.claude/agents/` from **that worktree's** `personas/`, and says so; the plane's own copy
-changes when the branch merges. Reads that answer *for the plane* — `charter persona lint`,
-and the news `check:` probes asking whether this plane has adopted something — keep
-answering for the plane.
-
-Before that split was drawn, `sync-agents` edited tracked files in the main clone from
-inside a worktree: a write into a tree the caller does not own, with no conflict and no
-message, while other workers held their own worktrees over the same clone.
 
 ### Nested planes
 
@@ -287,8 +237,8 @@ holds the vault wins. The hop is allowed only through an enclosing plane's own
 `$CHARTER_ROOT` still wins outright, and is the escape hatch when you genuinely mean the
 inner one.
 
-Charter is not quiet about the hop. The status line names both planes and the
-`$CHARTER_ROOT` export that pins you to the inner one, and **`charter save` refuses**
+Charter is not quiet about the hop. `charter doctor`'s `nested plane` row reports it, and
+**`charter save` refuses**
 outright rather than committing a tree you are not standing in — that being the one command
 whose whole job is to stage everything under the plane it resolved:
 
@@ -300,8 +250,7 @@ whose whole job is to stage everything under the plane it resolved:
 •   you really do mean this plane: CHARTER_ROOT=/…/workspaces/dev/charter charter save
 ```
 
-Only the unbounded stage refuses: memory, the dispatch tally, the workspace manifest and the
-version pin name plane-state files, and those keep reaching the plane from inside a clone.
+Only the unbounded stage refuses.
 
 ## A self-hosted example
 
@@ -362,40 +311,36 @@ Full detail, including exactly which collisions can and can't be qualified away:
 ## Memory posture: `[memory].share`
 
 Every persona and workspace can write **memory** — durable notes recorded with
-`charter persona remember` / `charter workspace remember`. Where those notes end up is
-controlled by one setting, `[memory].share`, with three modes:
+`charter persona remember` / `charter workspace remember`. How far those notes travel is
+one setting, `[memory].share`, with three values:
 
-| Mode | What happens |
+| Mode | What it asks for |
 | --- | --- |
 | `local` | The memory file is written to disk and nothing else. It never enters git, never leaves the machine. |
-| `commit` | The file is `git add`ed and committed **locally** (secret-scanned first) — it becomes part of your history, but is never pushed. |
-| `push` | Committed, then pushed to `origin` in the background, so it reaches the shared repo moments after it's written. |
+| `commit` | The file is committed **locally** — part of your history, never pushed. |
+| `push` | Committed, then pushed to `origin`. |
 
 **The default is `local`**, and that default is deliberate: a stranger who just ran
 `charter init` has not decided yet whether this control plane's notes should be shared
 with a team, and the failure mode of guessing wrong runs only one direction — publishing
-an agent's working notes to a remote nobody reviewed. Defaulting to `push` (or even
-`commit`, which still commits to *your* history) would mean the very first memory an
-agent records, before anyone has looked at what it's about to write, could already be on
-its way to a shared remote. `local` costs nothing but a manual `charter persona
-memory-sync` (or flipping `share` once a team actually wants to see this control plane's
-notes) later. Every reactive commit path (`charter persona remember`, `charter workspace
-remember`, the SessionStart dispatch tally) re-checks this value and falls back to
-`local` on anything it doesn't recognise — a typo in this file fails *safe*, not loud.
+an agent's working notes to a remote nobody reviewed.
+
+**This version writes every memory as `local`.** Committing memory is not in this version
+yet: a plane set to `commit` or `push` gets the file on disk, and the write says that nothing
+was committed, so you can commit and push `memory/` with git yourself. A value charter does
+not recognise reads as `local` — a typo in this file fails *safe*, not loud.
 
 ## `[workspace].default`
 
 The workspace name `charter` resolves to when nothing else has selected one — no
 `--workspace` flag, no `$CHARTER_WORKSPACE`, no prior `charter workspace use` in this
-session or terminal pane. Defaults to `"default"` (and `default` always exists — `charter
-clone` creates it on first use). See `docs/personas.md`'s sibling in spirit, workspaces,
-for the full precedence chain.
+session. Defaults to `"default"` (and `default` always exists — `charter clone` creates it
+on first use). [workspaces.md](workspaces.md) has the full precedence chain.
 
 **A workspace name, not a path.** This file is committed, so the value is whoever last
 edited it — and charter joins it onto `workspaces/`. It must therefore be a name `charter
 workspace create` would mint (letters, digits, `.`, `_`, `-`; not starting with a dot).
-Anything else degrades to `"default"`, the same way a `[frame]` key charter cannot make
-sense of degrades to its shipped value. The committed `workspaces/.default` file, written
+Anything else degrades to `"default"`. The committed `workspaces/.default` file, written
 by `charter workspace default`, is held to the identical rule.
 
 ## `[charter].version` — pinning charter
@@ -410,44 +355,36 @@ version = "0.1.0"
 
 The pin names a version of **this app**: the number `charter version` prints. `charter
 version` shows that number and the pin, and its exit status is the part a script reads — 0
-with no pin, 0 when the pin is met, 1 when it is not (drift). The status line draws a row for
-drift, and the window marks it.
+with no pin, 0 when the pin is met, 1 when it is not (drift). The window marks drift in its status bar.
 
 This charter does not install anything to meet a pin. It is a binary inside the app, and the
 app is what moves it (see [install.md](install.md)), so `charter version sync` and `charter
 version bump` are refused by name rather than run.
 
-A plane written by the earlier Python charter may carry a pin from that program's own
-release line, which ended at `0.62.1`. **That pin is not drift.** A pin that is a version, is
-not this app's own and is no newer than `0.62.1` is read as naming the Python charter's line:
-`charter version` says so and exits 0, the status line draws no row, and nothing asks you to
-move it — a teammate still on the Python charter may rely on it. To hold the plane to this app
-instead, set `version` to the number `charter version` prints, or remove the pin. A pin newer
-than `0.62.1` that is not this app's version, or one that is not a version at all, is drift.
+A plane may carry a pin from an older charter release line, `charter-cp`, which ended at
+`0.62.1`. **That pin is not drift.** A pin that is a version, is not this app's own and is no
+newer than `0.62.1` is read as naming that line: `charter version` says so and exits 0, and
+nothing asks you to move it. To hold the plane to this app instead, set `version` to the
+number `charter version` prints, or remove the pin. A pin newer than `0.62.1` that is not this
+app's version, or one that is not a version at all, is drift.
 
 While this app's own version is at or below `0.62.1` the two lines share numbers, so a pin
-written by hand for this app in that range reads as the Python line too. The reasons are
+written by hand for this app in that range reads as the older line too. The reasons are
 [ADR 0045](https://github.com/diazoxide/charter-app/blob/main/docs/adr/0045-charters-version-is-the-apps-version.md).
 
 ## `[harness]` — profiles, and the default
 
-**In this version a chat is opened from the app's window.** Where this section describes
-opening one from a terminal — `charter claude-work`, `--no-frame`, bare `charter`'s profile
-selector, `charter reopen` — it describes commands this version's CLI does not have yet.
-
 Two Claude Code accounts, work in one config folder and personal in another, or a Codex
-pinned to an older release: charter ran one program per harness, one way, and had no way to
-be told otherwise. A shell alias does not help — charter runs the harness with no shell, so
-the alias never resolves. A **harness profile** is the way: a kind, a command and an
-environment, declared in a file that stays on your machine. The decisions behind the shape
-of this, and the reason each one rests on, are
-[ADR 0022](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md).
+pinned to an older release. A shell alias does not help — the app runs the harness with no
+shell, so the alias never resolves. A **harness profile** is the way: a kind, a command and
+an environment, declared in a file that stays on your machine.
 
-**Every chat now starts through charter's own launcher.** Charter reads the profiles,
-refuses the broken ones by name, and keeps the file out of git; `charter claude-work`, bare
-`charter`, the `+`, a workspace tab and a reopen all run the profile they name and record
-it. A profile this file declares runs once you have seen its command and said so — see
-*A new or changed command asks once*, below.
+**Every chat starts on a profile.** Charter reads the profiles, refuses the broken ones by
+name, and keeps the file out of git; the app's new-chat picker, a chat reopened when the app
+starts again and a chat opened by a handoff all run the profile they name and record it. A
+profile this file declares runs once you have seen its command and said so — see *A new or
+changed command asks once*, below. Starting a chat on a profile from a terminal
+(`charter <profile>`) is not in this version yet.
 
 ### Profiles live in `charter.local.toml`, never in `charter.toml`
 
@@ -477,19 +414,16 @@ was. A `default` in the local file wins over the committed one.
 by name. An ignored file that could override `[[forge]]` — whose hosts steer the
 one-credential guard — would change plane policy with no trace in git.
 
-- `kind` — which harness program: `claude`, `opencode` or `codex`, the word you would type
-  after `charter`.
+- `kind` — which harness program: `claude`, `codex` or `opencode` (read and listed, but
+  starting an opencode chat is not in this version yet).
 - `command` — a list of arguments, never a shell string, because no shell runs it. A leading
   `~` in its first word is expanded, since no shell is there to do it.
 - `env` — optional: variables set on the harness, each value's leading `~` expanded.
-- The table's name is letters, digits, `_` and `-`, starting with a letter or digit. No dot:
-  a dot in a name broke tmux targets once (#695).
+- The table's name is letters, digits, `_` and `-`, starting with a letter or digit, and no
+  dot.
 
-**The file stays beside `charter.toml` when `$CHARTER_HOME` moves the state directory.**
-What charter keeps about your profiles does move with it: the record of each command you
-approved (`harness-profiles-launched.json`) and the wiring cache
-(`cache/harness-wiring.json`). A plane whose state directory moved keeps its profiles and
-asks about each declared one again on its first launch there.
+The record of each command you approved is `.charter/harness-profiles-launched.json`, in the
+plane.
 
 **Every harness is also a built-in profile named after itself** — `claude` runs `claude`,
 with no extra environment — so a plane that declares nothing sees no change. A declared
@@ -505,11 +439,11 @@ A broken profile is refused alone, by name, and every other profile still loads.
 
 | Refused | Why | Fix |
 |---|---|---|
-| a `kind` charter cannot launch | nothing could start it | `claude`, `opencode` or `codex` |
+| a `kind` charter does not know | nothing could start it | `claude`, `codex` or `opencode` |
 | a `command` that is not a non-empty list of text | no shell runs it, so `"claude --resume x"` names one program | `["claude", "--resume", "x"]` |
 | a `command` whose first word is charter itself | a profile names the harness a chat runs, and charter is not a harness | the harness's own command |
-| a name holding a dot or any other character, or named `default` | a dot breaks tmux targets; `default` is the one key under `[harness]` that is not a profile | rename the table |
-| a name `charter` already uses — `doctor`, `workspace`, `frame` | `charter doctor` would always be the command, never the profile | rename the table |
+| a name holding a dot or any other character, or named `default` | a name is letters, digits, `_` and `-`; `default` is the one key under `[harness]` that is not a profile | rename the table |
+| a name `charter` reserves for a command — `doctor`, `workspace` and the rest | a profile named like a command would shadow it | rename the table |
 | an `env` that is not a table of text | a variable holds text | `env = { NAME = "value" }` |
 | an `env` name starting with `CHARTER_` | charter sets those itself, and a profile's own setting would tell charter's hooks the wrong harness or plane | delete the variable |
 | an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD` | a variable set on the harness reaches the model's shell, as the next section measures | log in inside the harness |
@@ -519,28 +453,16 @@ A broken profile is refused alone, by name, and every other profile still loads.
 ### A new or changed command asks once
 
 A profile's command runs on a click, and charter starts it with no shell and no harness
-permission prompt in between. So the first time charter is asked to run one it shows you
-what that is, and asks:
+permission prompt in between. So the first time you pick one in the app's new-chat picker, the
+picker shows what it runs — its command and its environment — and starts nothing until you
+press **Approve and start**. The approval is written down — the profile's `kind`, `command`
+and `env`, exactly as the file spells them — and that profile then starts without a word
+until one of those three changes. A change asks again.
 
-```
-charter: profile 'claude-work' is new — it has not run on this machine before.
-  command  claude
-  env      CLAUDE_CONFIG_DIR=~/.claude-work
-run this? [y/N]
-```
-
-Anything but `y` or `yes` starts nothing and exits 130. A yes is written down — the profile's
-`kind`, `command` and `env`, exactly as the file spells them — and that profile then starts
-without a word until one of those three changes. A change asks again, with a `was` line
-showing what it ran last time:
-
-```
-charter: profile 'claude-work' has changed since it last ran.
-  command  /opt/claude-2.1/bin/claude
-  env      CLAUDE_CONFIG_DIR=~/.claude-work
-  was      CLAUDE_CONFIG_DIR=~/.claude-work claude
-run this? [y/N]
-```
+**The approval is of what you were shown.** Between the picker reading the profile and your
+press, `charter.local.toml` can change. The app checks the line it showed you against the file
+again, and if they differ nothing is approved, nothing starts, and it says what the profile
+runs now.
 
 **Built-ins never ask.** `claude`, `codex` and `opencode` come out of charter's own
 registry rather than out of a file, so there is nothing about them a question could catch —
@@ -551,24 +473,15 @@ asks with the rest.
 **Why ask at all**, when nothing else charter does stops to. Once `charter.local.toml` is
 ignored, an edit to it leaves no diff — no review, no `git status`, nothing on a branch for
 anybody to notice. Nothing stops a chat editing your plane's config, and a chat is an agent
-with a shell. And the command goes to tmux, so by the time a harness could ask about it,
-that harness *is* the command. Codex trusts its hooks by hash for the same reason.
+with a shell. Codex trusts its hooks by hash for the same reason.
 
 **Where it asks, and where it refuses instead.**
 
 | Opening a chat | What happens |
 |---|---|
-| `charter claude-work` at a terminal | asks before tmux: a no starts nothing, with no session and no window allocated |
-| `charter claude-work --no-frame` | asks on that same terminal, then becomes the harness |
-| `charter claude-work --no-frame > log` | refuses — there is nowhere to put the question, and it names the command to run where you can answer |
-| the `+`, a workspace tab, the palette's new chat | asks **in the chat's own pane**: the press itself has no terminal, and the pane has one on both ends. A no exits 130 and the window closes |
-| `charter reopen`, restoring a recorded plane | refuses that chat by name and leaves it in the record — a reopen has nobody to ask. Run it once yourself, then `charter reopen` again |
-| a chat handed off by another chat | refuses before anything is written: no chat directory, no window, no first message |
-
-**Saying yes answers this question and nothing else.** After a yes, every check runs again
-from the top before the harness starts — the file is still ignored, the command is still on
-`PATH`, the record now matches — and the pane runs all of them once more immediately before
-it becomes the harness. A yes is never a way past the check behind it.
+| the app's new-chat picker | shows the command and asks; nothing starts until you approve |
+| a chat reopened when the app starts again | refused by name and left in the record — a reopen has nobody to ask. Start it once from the picker, and it comes back next time |
+| a chat handed off by another chat | refused before anything is written: no chat, no first message |
 
 **The limit, said plainly.** The record lives in `.charter/harness-profiles-launched.json`,
 which is as writable by a chat as `charter.local.toml` is: both sit under paths no guard
@@ -577,9 +490,9 @@ you did not change yourself **unless whatever changed it also forged the record*
 the accident and the careless edit, and it is the difference between a command that ran
 unseen and one that was read out loud first. It is not a boundary.
 
-If charter cannot write that record, the launch is refused rather than started: running it
-anyway would mean asking you the identical question at the next open, which is not something
-you can fix by answering.
+If charter cannot write that record, the approval fails and nothing starts: starting anyway
+would mean asking you the identical question at the next open, which is not something you can
+fix by answering.
 
 ### No credentials in a profile
 
@@ -592,7 +505,6 @@ moves:
 
 - Claude Code: set `CLAUDE_CONFIG_DIR` and run `/login` inside Claude Code.
 - Codex: set `CODEX_HOME` and run `codex login`.
-- opencode: set `XDG_DATA_HOME` and run `opencode auth login`.
 
 The pattern can refuse an innocent name — `KEYBOARD_LAYOUT` holds `KEY` — and a wrapper
 script on `PATH` can still export a key. Charter declines to hold one; it cannot prevent one.
@@ -632,8 +544,8 @@ profile this machine has.
 Moving a profile to another config folder moves nothing of charter's: **its guard does not
 live in that folder.** The app arms every chat it starts on the command line, for that session
 alone, and installs nothing into any folder — a Claude Code chat gets the app's own plugin,
-`charter-app`, with `--plugin-dir`, and `--settings` turning the Python charter's
-`charter@charter` plugin off for that chat only; a Codex chat gets charter's hooks as
+`charter-app`, with `--plugin-dir`, and `--settings` turning a plugin named
+`charter@charter` off for that chat only; a Codex chat gets charter's hooks as
 `-c hooks.<Event>=…` flags, which Codex asks once to trust. So a new `claude-alt` needs no
 wiring step: once you have approved its command, it starts armed.
 
@@ -646,58 +558,32 @@ where it looked.
 What each kind is armed with, and what a chat on each can and cannot report, are in
 [harnesses.md](harnesses.md#per-profile--armed-at-launch).
 
-### `default` — bare `charter`
+### `default` — the picker's first choice
 
-**Opt-in, and it launches nothing.** Bare `charter` opens a chat at the **profile
-selector** and starts a harness only once you pick a row; this key chooses which row the
-cursor starts on, and marks it. Absent, the selector opens on the first row that can run.
+**Opt-in, and it launches nothing.** This key chooses which profile the app's new-chat picker
+starts on, and marks it `default`. Absent, the picker starts on the first profile.
 
 ```toml
 [harness]
 default = "claude"
 ```
 
-`charter` is `charter frame --select`. Not "like" it — charter rewrites the command into
-that one and runs it, so the workspace picker, `--no-frame`, `--probe`, `--workspace` and
-everything else the launcher does are the same behaviours, not a second set of them. Every
-subcommand keeps working untouched, `charter claude` included.
+The value is the name of a profile: a built-in — `claude`, `codex`, `opencode`, as
+`charter harness list` shows them — or a profile `charter.local.toml` declares. A `default`
+in the local file wins over the committed one, which is how a machine chooses its own without
+touching what everybody else pulls. A declared profile is a legal value, and starting it
+asks like any other (*A new or changed command asks once*).
 
-The value is the name of a profile: one of the words you would type after `charter` —
-`claude`, `opencode`, `codex`, the built-in profiles `charter harness list` shows, read out
-of charter's own registry rather than a list in this page — or the name of a profile
-`charter.local.toml` declares. A `default` in the local file wins over the committed one,
-which is how a machine chooses its own without touching what everybody else pulls.
+**Charter does not pick one for you.** Not "whatever is installed" (a machine with two of
+them has no answer, and the answer would change the day a colleague installed a third) and
+not "the one you ran last" (a machine-local memory deciding what a committed file does).
 
-**A declared profile is a legal value here**: it is the row the selector starts on, and
-Enter on it starts that profile, question and all — the first open shows its command and asks
-(*A new or changed command asks once*).
-
-**Charter does not pick one for you — it asks.** No default and the selector opens on the
-first row that can run. Charter still does not guess *which* harness you meant: not
-"whatever is installed" (a machine with two of them has no answer, and the answer would
-change the day a colleague installed a third) and not "the one you ran last" (a
-machine-local memory deciding what a committed command does). What changed is that the
-question is now asked on screen instead of answered by a key.
-
-**A name this machine does not have marks no row, and `doctor` says so.**
+**A name this machine does not have marks nothing, and `doctor` says so:**
 
 ```
 $ charter doctor
-! charter.toml: [harness] default = "clyde" names no profile this machine has — one of:
-  claude, codex, opencode.
+  !  charter.toml          [harness] default = "clyde" is not a harness charter can launch
 ```
-
-The launch itself no longer refuses over it: the selector lists what this machine actually
-has, so a typo shows up as a list with nothing marked rather than as a command that will
-not run. `doctor` is where it is named, because that is the reader that can say it without
-taking a launch away.
-
-**`charter | head` still prints usage.** Bare `charter` opens a frame only when stdout is
-a terminal. Piped or redirected, it prints the usage message and exits 2, which is what it
-did before this key existed — so a script that runs `charter 2>&1 | head` to find out
-whether charter is installed gets an answer instead of an agent session, and a pipe is no
-place to draw a selector either. `charter claude` into a pipe is unaffected: it runs the
-harness bare, as it always did.
 
 ## `[update].channel`
 
@@ -757,55 +643,20 @@ that is a *repair* number, and a workspace charter can still read is exactly wha
 repair additive. `schema` is the *refusal* number, and nothing heals it but a newer charter.
 The two are never compared against each other.
 
-**`.charter/` carries no such promise, on purpose.** Everything under `.charter/frame/` is
-charter's own scratch — per frame, per machine, gitignored, reaped when the frame dies, and
-written and read by one charter inside one process tree. It has no format version and never
-will: a version is only worth stamping where the writer and the reader can be different
-charters. The files themselves may change shape in any release.
+**`.charter/` carries no such promise, on purpose.** It is charter's own state — per
+machine and gitignored. It has no format version: the files in it may change shape in any
+release.
 
 ## The plane, rendered
 
-`charter statusline` — the whole plane read off disk in one block. **`charter init` does
-not wire it into Claude Code's footer** and has not since 0.57.0 (#895): you reach this
-render through the app's window, through `charter statusline --watch`
-in any spare terminal, through opencode's `/charter`, or by running `charter statusline`
-yourself. A `statusLine` key in `.claude/settings.json` still works exactly as it always
-did if you write one; charter neither adds it nor removes it.
+**In the app, the window draws the plane.** `charter statusline` is Claude Code's footer
+command: inside a chat the app started it prints an empty line — so the harness's own footer
+stays blank unless the chat was started with its footer on — and still records the turn's
+token usage. Run anywhere else, it draws the plane's identity row — the active workspace and
+how many workspaces there are — and says in its body which parts it does not draw yet: repos,
+personas and the session.
 
-It is grouped by **scope** — each zone answers exactly one question, and a count always
-sits next to the thing it counts:
-
-```
-⬢ umbrella-improvements · todo 3 · ws 9                           ← WHERE am I
-◫ repos 2/38                    │ ◈ personas 13 · vaults 6 · shared ✎130
-├─ easysender-ui-workspace  main  ✗ failed │ ◆ steward ✎2         ← WHAT I'm on × WHO I am
-└─ iam-service ⑂2           main  ✓ passed │ ○ devops ✎192 ⚡ 4m
-ctx 22% · cache 90% · ⚡ 1 · ⛊1 denied · ✎1 recorded  ⬢ charter 0.10.0   ← THIS session
-```
-
-- **Top — identity and navigation.** The active workspace, how many todos it still has
-  open (`charter ws todo`), and how many other workspaces exist. Nothing else: the repo
-  count describes the left column, the vault count describes the right one, and the
-  gauges describe the session, so each lives with what it describes. `todo N` belongs
-  here for the same reason — open todos are a property of *this* workspace. It is absent
-  when the count is zero, like everything else that would otherwise render every turn.
-- **Columns — the Role × Task axes.** Left is the *task* (repos cloned into this
-  workspace, their branch, CI and MRs); right is the *role* (the persona roster, each
-  chip carrying its memory counts, a `⚡` while it has sub-agents running — with a `?`
-  once one has outlived every reasonable expectation — and a vault mark only when its
-  vault cannot be used). Personas are global, repos are workspace-scoped — two
-  independent axes, two columns.
-- **Bottom — this session.** Context and prompt-cache health (`ctx NN%`, `cache NN%`),
-  plus counters for what has happened: in-flight sub-agents, guard denials, memories
-  recorded, dispatches. Absent entirely when there is nothing to report, so a denial
-  appearing there is *news*. The brand and version sit at its right edge.
-
-  `⚡` is the one glyph left on that strip and it means one thing — a dispatch is
-  running — the same thing it means on a persona chip. The gauges carry words for
-  exactly that reason: the bolt belongs to the fact that renders in two places.
-- **Alerts** (a pinned-version mismatch, workspaces needing `reinit`) get their own
-  full-width lines above the strip — actionable problems carrying the command that
-  fixes them, not telemetry.
-
-Two columns need 131 columns of width; below that everything stacks in the same order.
-Nothing here reads the network or shells out to git — it renders every turn.
+**`charter init` does not wire it into Claude Code's footer.** A `statusLine` key in
+`.claude/settings.json` works if you write one; charter neither adds it nor removes it, and a
+chat the app starts gets charter's footer only where the settings in force fill it with
+nothing ([harnesses.md](harnesses.md)).

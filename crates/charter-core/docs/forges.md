@@ -1,16 +1,17 @@
 # Forges: GitLab and GitHub
 
 A **forge** is a code-hosting platform `charter` talks to — GitLab or GitHub today. Every
-git operation `charter` performs (listing repos, cloning, pushing memory) goes through
-that forge's own official CLI, authenticated once, over HTTPS. See the README's
-"one credential" section and `docs/secrets.md` for why that matters to an autonomous
-agent specifically.
+git operation `charter` performs (listing repos, cloning, pushing the plane) goes through
+that forge's own official CLI, authenticated once, over HTTPS. [git-policy.md](git-policy.md)
+says why that matters to an autonomous agent specifically.
 
 ## GitLab
 
 - **What it needs:** [`glab`](https://gitlab.com/gitlab-org/cli) installed and
   authenticated (`glab auth login`, then `glab auth status` should say "Logged in").
-  `charter doctor` checks both.
+  `charter doctor` lists a row for the CLI and one for its auth, and in this version says
+  of both that they are not checked yet; `charter discover` asks `auth status` itself
+  before it lists anything.
 - **What "group" means:** the GitLab group (or subgroup) whose projects this forge block
   tracks. `include_subgroups` is always on, so a group tracks everything beneath it too.
 - **Default host:** `gitlab.com`. Declare `host = "gitlab.example.com"` in the
@@ -38,59 +39,18 @@ credential helper and *its own host's* SSH→HTTPS rewrite; a `github.com` clone
 `gh`'s. This is what lets a mixed-forge control plane's clones each authenticate
 correctly without you telling `charter` which is which per repo.
 
-## What charter asks a forge, and what it now tells one
+## What charter asks a forge
 
-The protocol has two disciplines and, since the cross-repo change surface, a third.
+Every call is a read, and there are two disciplines.
 
-**Permissive** — `open_change`, `ci_status`, and everything the status line renders from.
-Any failure answers `None`. Being wrong costs a blank column, retried at the next refresh,
-and this path must never crash a surface that draws every turn.
+**Permissive** — the open pull or merge request on a branch, and its last CI result: what
+`charter gl-refresh` writes for the panels to draw. Any failure answers nothing. Being
+wrong costs a blank column, retried at the next refresh, and this path must never break a
+surface that draws all the time.
 
-**Strict** — `list_repos`, `repo_tree_strict`, `request_for`. A failure raises
-`ForgeError`, because collapsing "the call failed" into "the result was empty" is how a
-rate-limited lookup wipes an inventory, or reads an open pull request as one that was never
-pushed.
-
-**Loud** — `create_change`, `update_change_body`, `merge_change`. A failure raises
-`ForgeWriteError` and never returns `None`, because a swallowed write failure means a pull
-request that was never opened, or a merge that never happened, reported as a success. This
-is the second place in charter that writes to a forge; `report` was the first, and ADR 0002
-is amended rather than left quietly false about that.
-
-### `checks_at(path, sha, number=None)` — and why it is not `ci_status`
-
-`ci_status` collapses six worlds into `None`: a CLI failure, a timeout, a non-zero exit,
-malformed JSON, an auth failure, and *no check ever ran*. That is correct where it renders
-and useless as a landing gate, so `checks_at` answers a **record with two fields**:
-
-- `total is None` — the only way to say *charter could not ask*, or could not ask
-  completely. `state` is `unknown`.
-- `total == 0` — charter asked, everywhere it knows to look, and there is nothing there.
-  `state` is `not_run`, and **that is not a pass**.
-
-The other three states are `passed`, `failed` and `running`, and precedence is fixed:
-`unknown` > `failed` > `running` > `not_run` > `passed`. `unknown` is first because it is the
-only value that means charter did not look.
-
-**`gh pr checks` and `mergeStateStatus` are forbidden inputs**, by name, in the spec and in
-the test. Both report a run that never happened identically to a clean pass (#561).
-
-The requirement is a **property, not an endpoint** — *see every check the forge would show a
-human at that head* — and each backend needs more than one read to satisfy it:
-
-- **GitHub:** check runs **and** the combined commit status at that sha, summed into one
-  total. The check-runs endpoint returns Check Runs only, so a repository reporting through
-  the Commit Statuses API (Jenkins, Buildkite, CircleCI) is `total_count: 0` there at a fully
-  green head.
-- **GitLab:** the merge request's own head pipeline, which needs `number`. A merged-results
-  pipeline runs against `refs/merge-requests/:iid/merge`, whose sha is not the branch head,
-  so a bare sha filter is empty on a green merge request. Without `number` charter cannot
-  rule that out, so an empty answer is `unknown` rather than `not_run`.
-
-Where a backend cannot enumerate completely the answer is **`unknown`, never `not_run`**.
-That word asserts nothing ran, and charter may only assert it having looked everywhere it
-knows to look. The asymmetry decides it: a false `not_run` costs a re-run, a false `passed`
-merges untested code.
+**Strict** — listing an owner's repos, and reading a repo's file tree for stack
+detection. A failure is an error, because collapsing "the call failed" into "the result
+was empty" is how a rate-limited lookup wipes an inventory.
 
 ## The mixed-forge collision rule
 

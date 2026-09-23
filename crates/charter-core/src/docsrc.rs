@@ -236,7 +236,10 @@ mod tests {
         let Say::Info(topics) = &said[1] else {
             panic!("the topics are the second line: {said:?}")
         };
-        assert!(topics.starts_with("Topics: browser, changes, "), "{topics}");
+        assert!(
+            topics.starts_with("Topics: control-plane, forges, "),
+            "{topics}"
+        );
         assert_eq!(said.len(), 2, "and nothing else: {said:?}");
     }
 
@@ -256,7 +259,11 @@ mod tests {
             2,
             "the block and the blank line `print(… + \"\\n\")` leaves: {said:?}"
         );
-        assert!(out[0].starts_with("  browser\n  changes\n"), "{}", out[0]);
+        assert!(
+            out[0].starts_with("  control-plane\n  forges\n"),
+            "{}",
+            out[0]
+        );
         assert!(out[1].is_empty(), "the trailing blank line: {:?}", out[1]);
         assert!(
             matches!(&said[0], Say::Info(text) if text.starts_with("charter documentation (")),
