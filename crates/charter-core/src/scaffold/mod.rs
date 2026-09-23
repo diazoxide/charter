@@ -1907,9 +1907,10 @@ mod tests {
         let (_dir, root) = empty_plane();
         std::fs::write(root.join("charter.toml"), "schema = 2\n").expect("charter.toml");
         let refusal = vec![Say::Err(format!(
-            "{} declares schema 2, but this charter understands 1. Upgrade charter: `uv tool \
-             install charter-cp --force --refresh`. Nothing was run. `charter doctor` reports \
-             it; `charter update` is the way out.",
+            // The app's own wording (ADR 0045): Python's pointed at `uv tool install
+            // charter-cp`, which this charter never ships on. `run.py` declares the divergence.
+            "{} declares schema 2, but this charter understands 1. Upgrade charter: update the \
+             app. Nothing was run. `charter doctor` reports it; `charter update` is the way out.",
             root.join("charter.toml").display()
         ))];
 
