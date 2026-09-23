@@ -5712,6 +5712,25 @@ def _eleven_changes_since_a_memory(root: Path) -> None:
     (root / ".charter" / "sessions" / f"{SESSION}.memnudge").write_text("11")
 
 
+
+def _a_piece_another_session_claimed(root: Path) -> None:
+    """A worktree piece of alpha's `svc`, claimed two hours ago by a session that is not this
+    one — the collision the briefing warns about."""
+    (root / "workspaces" / "alpha" / ".worktrees" / "svc" / "p1").mkdir(parents=True)
+    log = root / "workspaces" / "alpha" / "pieces" / "fixture-host.jsonl"
+    log.write_text(json.dumps({"event": "claimed", "repo": "svc", "piece": "p1",
+                               "session": "other-session",
+                               "ts": (NOW - timedelta(hours=2)).isoformat()}) + "\n")
+
+
+def _a_plane_that_commits_memory_with_one_unshared(root: Path) -> None:
+    """The plane root as a repository, `share = "commit"`, and one memory nobody committed."""
+    _a_plane_root_repo(root)
+    manifest = root / "charter.toml"
+    manifest.write_text(manifest.read_text().replace('share = "local"', 'share = "commit"'))
+    (root / "personas" / "steward" / "memory" / "unshared.md").write_text("# unshared\n")
+
+
 HOOK_SCENARIOS = [
     # ---- SessionStart: the briefing.
     # The fixture session is LOCKED to `alpha`, so there is no workspace gate: the persona the
@@ -5745,6 +5764,22 @@ HOOK_SCENARIOS = [
                name="sessionstart-follows-a-pinned-workspace",
                says="other workspace",
                env={"CHARTER_SESSION_ID": "unlocked-session", "CHARTER_WORKSPACE": "beta"}),
+    # A session standing in a piece is told what it holds and owes — and, when another session
+    # claimed it, warned. The heartbeat both sides then write is compared as a file.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart", "source": "startup",
+                                "cwd": "workspaces/alpha/.worktrees/svc/p1"},
+               name="sessionstart-announces-a-piece-another-session-claimed",
+               setup=_a_piece_another_session_claimed,
+               says="This piece was already claimed by `other-session`, last seen 2h ago"),
+    # On a plane whose memory travels, memory nobody committed is said.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart"},
+               name="sessionstart-says-memory-is-unshared-on-a-plane-that-commits-it",
+               setup=_a_plane_that_commits_memory_with_one_unshared, ignore=ROOT_REPO_IGNORES,
+               # steward has a memory now and no index yet, so the digest names the index it
+               # could not read — by its absolute path, which is each side's own copy.
+               stdout_mask=[(r"/(?:python|rust)/plane/", "each side's plane copy is its own "
+                             "directory; the resolved prefix around it is still compared")],
+               says="1 persona memory/ref file(s) are **uncommitted**"),
     # Outside a plane there is nothing to brief about.
     _hook_call("sessionstart", {"hook_event_name": "SessionStart"},
                name="sessionstart-outside-a-plane-says-nothing", plane="", allows=True),

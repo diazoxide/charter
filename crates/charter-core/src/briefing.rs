@@ -310,7 +310,14 @@ fn index_line(line: &str) -> String {
 
 /// Why the index at `path` cannot be read — `contain.file_refusal` for the read side.
 fn index_refusal(root: &Path, path: &Path) -> Option<String> {
-    let named = shown::readable(&path.to_string_lossy(), memstore::PATH_LIMIT);
+    // Named as charter names it: from a RESOLVED plane root (`config.ROOT` is `realpath`'d), so
+    // on macOS a plane under `/var` reads `/private/var`. The directory is resolved and the
+    // file is not, because the file is often exactly what is not there.
+    let spelled = match (path.parent().map(std::fs::canonicalize), path.file_name()) {
+        (Some(Ok(dir)), Some(name)) => dir.join(name),
+        _ => path.to_path_buf(),
+    };
+    let named = shown::readable(&spelled.to_string_lossy(), memstore::PATH_LIMIT);
     let unreadable = |why: &str| format!("'{named}' cannot be examined ({why})");
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
