@@ -1,15 +1,112 @@
 # Secrets and the vault directory
 
-**`charter vault` and `charter secret` are not in this version yet**, and neither is
-`charter persona secret`. There is no command here that stores, lists, injects or prints a
-secret, and `charter doctor`'s vaults row says it does not check them yet.
+A **vault** is a named store of secrets, and charter hands a secret to a command without the
+value ever passing through an agent's conversation. Every message an agent reads and every
+tool result it gets can end up in a transcript — saved, logged, reviewed, or fed back into a
+later prompt — so the transcript is not a safe place for a value, whatever holds it on disk.
 
-What this version does have is the part that keeps a credential **out of an agent's
-transcript**: the guards that refuse to print a vault file into the conversation, and the
-checks that refuse to let a credential be committed with a memory. Every message an agent
-reads and every tool result it gets can end up in a transcript — saved, logged, reviewed, or
-fed back into a later prompt — so the transcript is not a safe place for a value, whatever
-holds it on disk.
+## The commands
+
+```bash
+charter vault add devops --provider plain-file --persona devops   # register (local by default)
+charter secret set devops API_TOKEN --stdin                         # value on stdin, never argv
+charter secret list devops                                          # key names, never values
+charter secret exec devops --env TOKEN=API_TOKEN -- curl -H "Authorization: Bearer $TOKEN" …
+charter secret exec devops --file KUBECONFIG=PROD_KUBECONFIG -- kubectl get pods
+charter persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active persona's vault
+```
+
+- **`secret exec <vault> -- <command>`** resolves each value inside charter and hands it to
+  the command in its **environment** (`--env NAME=key`), in a temp file made **0600** whose
+  path is the variable (`--file VAR=key`), or in a 0600 dotenv file (`--dotenv VAR=NAME:key`,
+  repeats sharing a `VAR` merge into one file). The temp files are removed when the command
+  ends, when charter fails, and when charter is stopped by any terminating signal it can
+  catch; SIGKILL and a crash leave them in the temp directory. By default the command's output
+  is captured and every value this call resolved is replaced by `***` before it is printed.
+  That is a net against an accidental echo, not a boundary: a command that transforms a value
+  (`base64`, a JSON re-encode) prints it unrecognised. `--stream` runs a long-lived command
+  with its stdio attached and still removes its files; `--exec` replaces charter with the
+  command and cannot take `--file` or `--dotenv`. Neither captures, so neither redacts.
+- **`secret list <vault>`** prints the key names.
+- **`secret get <vault> <key>`** prints a size band and a keyed fingerprint —
+  `devops/API_TOKEN: present · 16–31 bytes · fp:9c41a0b7e5d2` — never the value. The
+  fingerprint is `HMAC-SHA256` under a 32-byte key kept 0600 at `.charter/fingerprint.key`, so
+  it compares values within this plane and cannot be checked against a guess without the key.
+  `--reveal` prints the value only to a terminal, and refuses any other stdout unless `--force`.
+- **`secret cp <vault> <key> <dest>`** writes the value to a new regular file at 0600 and prints
+  only the path. A symlink, a device, a FIFO, a directory, an existing file (without `--force`)
+  and charter's own stdin, stdout or stderr under any name are refused before the value is
+  read. After that it is an ordinary file: no guard knows charter put a credential there.
+- **`secret set`**, **`secret rm`** and **`secret audit`** (secrets older than `--days`, for a
+  plain-file vault) write and inspect; `set` refuses an empty value unless `--allow-empty`.
+- **`persona secret <verb> [--persona <name>]`** runs the same verb on the vault of the active
+  persona: its `vault:` field, else the vault tagged with it. `vault: none` says the persona
+  holds no credentials.
+- **`vault add | list | verify | remove`** manage the registry. `vault list` shows each vault's
+  provider, persona, scope and health, never a value; `vault verify` resolves every reference
+  for real and exits non-zero when one does not resolve.
+
+`exec`, `cp` and `get --reveal` each record one event in the session trace naming the vault,
+the keys and the command — never a value.
+
+### Providers
+
+- **`plain-file`** — a JSON object of key → value at 0600, `.charter/vaults/<vault>.json` by
+  default. It is **plaintext on disk**. Inside a plane that is a git repository, `vault add`
+  refuses a `--file` git would commit, and `secret set` checks again before it writes, because
+  the registry can be edited by hand or arrive in a commit. A file git already ignores, and
+  one outside the plane, is accepted. `vault add` also refuses a file another registered vault
+  already uses.
+- **`reference`** — the file holds URIs, not values, resolved at read time:
+  `op://<vault>/<item>/<field>` through `op read`, `vault://<path>#<FIELD>` through
+  `vault kv get`. A reference file is safe to commit. `browser://` references are recognised
+  and refused: the browser lane is not in this version yet.
+- **`1password`** — charter keeps the vault in one 1Password item (`charter-<vault>`, or
+  `--op-item`), each secret a concealed field of it, read and written through the `op` CLI; a
+  value reaches `op` on stdin, never in its arguments.
+
+A vault may declare the identity it is read through — `--env OP_SERVICE_ACCOUNT_TOKEN=<VAR>`
+or `--token-env <VAR>` — as NAMES only. If `<VAR>` is unset, charter refuses rather than read
+the vault as whoever the ambient token belongs to, and `secret exec` never hands one vault's
+identity variables to a command run for another.
+
+### Where the registry lives
+
+`.charter/vaults.json` is this machine's half and `vaults.json` at the plane root is the
+committed half; `vault add --share` writes the committed one. They are merged field by field,
+this machine's winning, and a 1Password `--account` pin always stays local. A registration
+holds names and paths, never a value.
+
+A vault name is letters, digits, `.`, `_` and `-`, starts with a letter or digit, and never
+holds `..`; a name that is not one is refused when it is registered and ignored when a
+registry is read. A 1Password vault, item or account that starts with `-` is refused, since
+`op` would read it as an option.
+
+### The limits, said plainly
+
+- **`--reveal` "to a terminal" means any terminal, including one the agent reads.** A
+  pseudo-terminal wrapper (`script`, `unbuffer`, a `pty` module) is a terminal to charter, and
+  whatever it relays reaches the conversation. The Bash guard refuses the flag behind `script`
+  and `unbuffer` when charter is named in the same command; it cannot see every way to make a
+  pty.
+- **Output masking is best effort.** It replaces the exact text of each value this call
+  resolved, and nothing else. A short value — a four-digit PIN, `true` — also matches ordinary
+  output and is masked there, while the same value transformed by the command, split across
+  writes that the command reorders, or printed in another encoding passes through.
+- **A `--dotenv` file is written for dotenv parsers**, the `dotenv` package's rules. It is not
+  shell syntax: do not `source` it, where a value's quoting would be read by the shell.
+- **A persona is a label, not an access boundary.** `persona secret` picks a vault by the
+  active persona's `vault:` field, but any chat can name any vault with `secret` directly, or
+  pass `--persona`. Personas decide which vault is the default, not who may read it.
+- **An identity token lives in the environment.** A vault read through
+  `OP_SERVICE_ACCOUNT_TOKEN` (or any `--env` binding) needs that variable set in the shell
+  charter runs in, which is the shell the agent's commands run in too; `secret exec` keeps it
+  away from the command it starts for another vault, but `echo`, `env` or `printenv` in that
+  shell prints it. Where such a token should live instead is an open design question.
+- **Errors never repeat a stored entry.** A reference that does not resolve is named by its
+  key, not by what the file holds under it, because that may be a value.
+
+`charter doctor`'s vaults row does not check vaults yet.
 
 ## Where a vault lives
 
@@ -37,7 +134,7 @@ tool call. [hooks.md](hooks.md) has the whole list and its limits.
 - **A reader pointed at a vault path.** `cat`, `less`, `more`, `head`, `tail`, `bat`, `nl`,
   `tac`, `xxd`, `od`, `strings`, `grep`, `rg`, `ag`, `awk` and `sed`, with a guarded path
   as an operand or an input redirection (`< <vault> tee`), behind any wrapper (`env`,
-  `sudo`, `{ …; }`, `if …; then …; fi`), after a relocation however it is spelled (`cd`,
+  `sudo`, `charter secret exec … --`, `{ …; }`, `if …; then …; fi`), after a relocation however it is spelled (`cd`,
   `pushd`, `env -C`, `sudo --chdir`), and on any line of a multi-line command. A wrapper that
   opens a file itself (`xargs -a <vault>`) is a read of that file.
 - **The harness's own file tools.** `Read` or `Grep` on a guarded path is refused on the same

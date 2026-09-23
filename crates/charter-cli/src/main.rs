@@ -37,6 +37,7 @@ mod guard;
 mod handoff;
 mod hooks;
 mod memory;
+mod secret;
 mod statusline;
 mod voice;
 
@@ -183,6 +184,14 @@ enum Command {
     /// Personas: their memory.
     #[command(subcommand)]
     Persona(memory::PersonaCommand),
+
+    /// Read/write secrets in a vault; values stay out of the model.
+    #[command(subcommand)]
+    Secret(secret::SecretCommand),
+
+    /// Manage secret vaults (provider + config + persona).
+    #[command(subcommand)]
+    Vault(secret::VaultCommand),
 
     /// Preflight: check the plane, its workspaces, personas and profiles before working.
     ///
@@ -1845,7 +1854,9 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Workspace(WorkspaceCommand::Reinit { .. })
         | Command::Workspace(WorkspaceCommand::Reconcile)
         | Command::Workspace(WorkspaceCommand::Autosave)
-        | Command::GitPolicy { .. } => {
+        | Command::GitPolicy { .. }
+        | Command::Secret(_)
+        | Command::Vault(_) => {
             unreachable!("answered before run")
         }
         Command::Root => {
@@ -2126,7 +2137,10 @@ fn main() -> ExitCode {
     // **`Cli::parse` exits 2 on a bad command line, and 2 is the one code a harness reads as
     // "block".** A hook that exited 2 by accident would make a session unable to end, so this
     // binary answers for its own argv before clap can, whatever the command turns out to be.
-    let cli = match Cli::try_parse() {
+    // `secret exec`'s `-- <command…>` is the child's, flags included, and is peeled off before
+    // the parser can read any of it as charter's — `cli._split_exec_command`.
+    let (argv, graft) = secret::split_exec(std::env::args_os().collect());
+    let cli = match Cli::try_parse_from(argv) {
         Ok(cli) => cli,
         Err(err) => {
             let _ = err.print();
@@ -2358,10 +2372,31 @@ fn main() -> ExitCode {
             },
         );
     }
-    match run(cli.command) {
+    // The secrets commands: each chooses its own exit status (2 for a refusal, the child's for
+    // `exec`), and `exec` takes the command the argv split set aside.
+    let command = match cli.command {
+        Command::Secret(c) => return with_here(|here| secret::secret(here, c, graft)),
+        Command::Vault(c) => return with_here(|here| secret::vault(here, c)),
+        Command::Persona(memory::PersonaCommand::Secret(c)) => {
+            return with_here(|here| secret::persona_secret(here, c, graft));
+        }
+        other => other,
+    };
+    match run(command) {
         Ok(code) => ExitCode::from(code),
         Err(message) => {
             eprintln!("charter: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run `f` on this invocation's [`Here`], or say why there is none.
+fn with_here(f: impl FnOnce(&Here) -> u8) -> ExitCode {
+    match Here::read() {
+        Ok(here) => ExitCode::from(f(&here)),
+        Err(why) => {
+            eprintln!("charter: {why}");
             ExitCode::FAILURE
         }
     }

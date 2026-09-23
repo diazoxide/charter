@@ -5,7 +5,7 @@ your work needs. Workspaces decide *which repos*; personas decide *who is workin
 they know*.
 
 In this version the CLI's `charter persona` has `list`, `use`, `current`, `default`,
-`remember`, `recall`, `sync-agents` and `stats`. Creating, showing, linting and removing
+`remember`, `recall`, `secret`, `sync-agents` and `stats`. Creating, showing, linting and removing
 personas from the CLI are not in this version yet: a persona is added by writing its
 directory, and a chat is started on one from the app's picker or switched with `charter
 persona use`.
@@ -55,7 +55,7 @@ The frontmatter is flat `key: value` lines. The keys this version acts on:
 | `extends` | Inherit another persona's frontmatter (see *Inheritance*). |
 | `uses` | Other personas whose `tools:` this one may also run without a prompt, unless `borrows:` narrows it. |
 | `borrows` | Which of those personas' tools are unioned in: a list of names, or `none`. |
-| `vault` | The vault this persona's credentials come from, or `none`. Shown by `persona list` and in the persona view, and named in its generated sub-agent ([secrets.md](secrets.md)). |
+| `vault` | The vault `charter persona secret` reads for this persona; `none` says it holds no credentials. Shown by `persona list` and named in its generated sub-agent ([secrets.md](secrets.md)). |
 | `activity` | `orchestrator`, `standby` or `advisory`: memory volume is not a usage signal for this persona, so `persona stats` does not call it dormant. |
 | `draft` | `true` while the charter is unfinished: `sync-agents` generates no sub-agent for it. |
 | `agent-tools`, `disallowed-tools`, `skills`, `dispatch-isolation`, `model`, `color`, `memory`, `agent-description`, `description` | Read by `sync-agents` into the generated sub-agent — see *Sub-agents* below. |

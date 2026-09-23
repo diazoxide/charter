@@ -1094,7 +1094,8 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
             )));
         }
         say(Say::Info(
-            "A secret never goes in a memory or ref file. Remove it, then retry.".into(),
+            "Secrets belong in the vault (`charter persona secret set`). Remove it, then retry."
+                .into(),
         ));
         return 1;
     }
