@@ -995,9 +995,9 @@ fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
         let name = charter_core::shown::readable(name, charter_core::shown::DISPLAY_LIMIT);
         eprintln!(
             "charter: `{name}` is not one of this binary's events (sessionstart, \
-             userpromptsubmit, notification, subagentstop, stop, sessionend){}. If a plugin \
-             meant this, the `charter` it wants is the Python one — check which is first on \
-             PATH.",
+             userpromptsubmit, notification, subagentstop, stop, sessionend){}. A plugin \
+             that declares it was written for a different charter — check which plugins this \
+             harness loads, and which `charter` is first on PATH.",
             if tool {
                 ", and it names a tool hook, so the tool call is refused rather than allowed \
                  by a program that checked nothing"
@@ -2122,7 +2122,8 @@ fn main() -> ExitCode {
         }
         // `charter version`, and it needs no plane: Python builds `config.ROOT` from
         // `find_root_or_cwd`, so the command answers outside one and simply has no pin to
-        // report. What it answers, and why it is not Python's three rows, is ADR 0030.
+        // report. What it answers, and why it is not Python's three rows, is ADR 0030 as
+        // amended by ADR 0045.
         Command::Version { what } => {
             use charter_core::adopt;
             return emit(&match what {
@@ -2235,9 +2236,8 @@ fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
     if fix {
         eprintln!(
             "charter: `doctor --fix` installs the Claude Code plugin for this plane, which this \
-             charter does not do yet — nothing was installed and nothing was checked. The \
-             Python charter's `charter doctor --fix` does it; `charter doctor` reports without \
-             it."
+             version of charter does not do — nothing was installed and nothing was checked. \
+             `charter doctor` reports without it."
         );
         return ExitCode::FAILURE;
     }

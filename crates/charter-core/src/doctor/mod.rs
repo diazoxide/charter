@@ -179,14 +179,13 @@ impl Config {
             Some(toml::Value::Integer(found)) if *found < 1 => Self::Read(table),
             Some(toml::Value::Integer(found)) => Self::Refused(format!(
                 "{} declares schema {found}, but this charter understands {SCHEMA}. Upgrade \
-                 charter: `uv tool install charter-cp --force --refresh`.",
+                 charter: update the app.",
                 path.display()
             )),
             Some(other) => Self::Refused(format!(
                 "{} declares schema {}, which is not a plane format version this charter can \
                  compare against {SCHEMA}. charter will not operate on a plane whose format it \
-                 cannot place. Fix the `schema` line, or upgrade charter: `uv tool install \
-                 charter-cp --force --refresh`.",
+                 cannot place. Fix the `schema` line, or upgrade charter: update the app.",
                 path.display(),
                 config::toml_repr(other)
             )),

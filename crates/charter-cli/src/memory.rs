@@ -139,8 +139,8 @@ fn reactive(plane: &Plane) {
     let share = plane.memory_share();
     if share != "local" {
         voice::warn(&format!(
-            "memory share is '{share}', and this charter does not commit memory — share it \
-             with the Python charter's `charter workspace save`."
+            "memory share is '{share}', and this version of charter does not commit memory \
+             yet — commit and push memory/ in the plane with git to share it."
         ));
     }
 }

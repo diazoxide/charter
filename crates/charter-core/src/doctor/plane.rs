@@ -74,10 +74,9 @@ pub(super) fn nested(d: &Doctor) -> Row {
             format!("standing inside {}'s workspaces/", short_path(&outer)),
             format!(
                 "This charter resolves the nearest charter.toml and does not hop outward \
-                 through an enclosing plane's workspaces/ the way the Python charter does, so \
-                 it acts on this inner plane — its own vaults, personas and workspace \
-                 pointers — where the Python charter, standing here, acts on {}.  → run from \
-                 {} or set CHARTER_ROOT to choose one on purpose",
+                 through an enclosing plane's workspaces/ to {}, so it acts on this inner \
+                 plane — its own vaults, personas and workspace pointers.  → run from {} or set \
+                 CHARTER_ROOT to choose one on purpose",
                 short_path(&outer),
                 short_path(&outer)
             ),

@@ -45,14 +45,13 @@ pub fn load(root: &Path) -> Read {
         None => Read::Config(table),
         Some(toml::Value::Integer(found)) if *found > SCHEMA => Read::Refused(format!(
             "{shown} declares schema {found}, but this charter understands {SCHEMA}. Upgrade \
-             charter: `uv tool install charter-cp --force --refresh`."
+             charter: update the app."
         )),
         Some(toml::Value::Integer(_)) => Read::Config(table),
         Some(other) => Read::Refused(format!(
             "{shown} declares schema {}, which is not a plane format version this charter can \
              compare against {SCHEMA}. charter will not operate on a plane whose format it \
-             cannot place. Fix the `schema` line, or upgrade charter: `uv tool install \
-             charter-cp --force --refresh`.",
+             cannot place. Fix the `schema` line, or upgrade charter: update the app.",
             py_value(other)
         )),
     }

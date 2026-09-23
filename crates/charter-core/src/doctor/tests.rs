@@ -298,8 +298,9 @@ fn a_plane_from_the_future_is_refused_by_both_rows() {
     let r = one(&root, "charter.toml");
     assert_eq!(r.status, Status::Fail);
     assert!(
-        r.detail
-            .ends_with("declares schema 2, but this charter understands 1. Upgrade charter: `uv tool install charter-cp --force --refresh`."),
+        r.detail.ends_with(
+            "declares schema 2, but this charter understands 1. Upgrade charter: update the app."
+        ),
         "{r:?}"
     );
     assert!(r.hint.contains("see the `schema` row"), "{r:?}");
