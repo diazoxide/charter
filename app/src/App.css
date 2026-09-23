@@ -1898,128 +1898,6 @@ button.bare:focus-visible {
   font-weight: 600;
 }
 
-/* **The personas, which the operator named as the last plain-text list in the window.** A row
-   is a person charter can run a chat as, so it carries the mark for one, and the plane's
-   default is marked twice — the words it always had, and a star. The words are what a screen
-   reader gets and what the scenario spec asks for; the star is on top of them. */
-.panels .personas .is-default {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-.panels .personas .default {
-  color: var(--text-muted);
-  font-weight: normal;
-}
-.panels .personas .is-default .persona > .node-icon,
-.panels .personas .default .node-icon {
-  color: var(--accent-base);
-}
-/* The star follows the word it decorates; flush against it, it read as one glyph. */
-.panels .personas .default .node-icon {
-  margin-inline-start: 0.25rem;
-}
-
-/* **A persona's row is the button that opens it**, and it is drawn as the row it already was
-   — the same weight, the same colours, the same star. What says it can be pressed is the
-   hover band and the pointer, because a row that suddenly looked like a control would have
-   made a read-only list of names into five buttons on the one region that must not compete
-   with the queue above it (ADR 0038). */
-.panels .personas .persona {
-  display: flex;
-  gap: 0.35rem;
-  align-items: baseline;
-  width: 100%;
-  text-align: left;
-  padding: 0.1rem 0.25rem;
-  margin-inline-start: -0.25rem;
-  border: none;
-  border-radius: 2px;
-  color: inherit;
-  background: none;
-  font: inherit;
-  cursor: default;
-}
-.panels .personas .persona:hover {
-  background: var(--surface-hover);
-}
-
-/* What a row opens: the persona's own definition, read as `charter persona show` reads it.
-   Radix ships no CSS at all, so every rule here is charter's — see `docs/ui-primitives.md`. */
-.persona-card {
-  max-width: 22rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  background: var(--surface-overlay);
-  box-shadow: 0 8px 24px var(--overlay-shadow);
-  color: var(--text-primary);
-  font-size: 0.8rem;
-  z-index: 40;
-}
-.persona-card h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.9rem;
-}
-.persona-card h3 .role {
-  color: var(--text-secondary);
-  font-weight: normal;
-}
-/* The card's own version of the star the row carries, said in words as well — the star alone
-   would be the one fact here that is colour and shape and nothing else. */
-.persona-card .is-default-note {
-  display: flex;
-  gap: 0.35rem;
-  align-items: baseline;
-  margin: 0 0 0.45rem;
-  color: var(--text-secondary);
-}
-.persona-card .is-default-note .node-icon {
-  color: var(--accent-base);
-}
-/* A definition list, because every row here IS a term and its value — and a screen reader
-   then says "Vault: devops" rather than reading the card as one run-on line. */
-.persona-card dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.15rem 0.6rem;
-  margin: 0;
-}
-.persona-card dt {
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.persona-card dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.persona-card code {
-  font-size: 0.95em;
-}
-.persona-card .none,
-.persona-card .note,
-.persona-card .pending {
-  color: var(--text-muted);
-}
-.persona-card .pending {
-  display: flex;
-  gap: 0.35rem;
-  align-items: center;
-  margin: 0;
-}
-.persona-card .trouble {
-  margin: 0;
-  color: var(--state-failed);
-}
-.persona-card-arrow {
-  fill: var(--surface-overlay);
-}
-
-/* A todo's mark is a ring and not a tick: nothing in this panel is done, by definition — it
-   lists what is open — and a tick beside an open todo would be the panel contradicting
-   itself. */
-.panels .todos .node-icon {
-  align-self: center;
-}
 .panels .none,
 .panels .pending,
 .panels .note,
@@ -2978,6 +2856,20 @@ button.bare:focus-visible {
    text to a region the operator drags; `PanelList.shorten` cuts the string before it reaches
    the DOM, which is the half a jsdom test can see. Both, because they do different work —
    `PanelList.tsx` has the argument. */
+/* **A list row is its own box; the button inside it is the flex row.**
+   Everything else about a row is written unscoped, deliberately: the same list is drawn inside
+   a popover that Radix portals to `document.body`, so a rule scoped to `.panels` would style a
+   panel's rows and not a persona's memories.
+
+   This one rule is the exception, and it has to be scoped to out-specify it: `.panels li`
+   above is `display: flex` at (0,1,1), written for the queue, and a bare `.panel-row` is
+   (0,1,0) — which loses however far down the file it is written. */
+.panels .panel-row {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+}
+
 .panel-row {
   display: block;
   padding: 0;
