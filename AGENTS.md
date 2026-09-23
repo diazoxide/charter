@@ -24,7 +24,7 @@ in `diazoxide/charter` as history (ADR 0044). A new decision is the next number 
   tests installs it or contacts `diazoxide/charter`: its answers are frozen into recorded
   fixtures (ADR 0044, ADR 0045, ADR 0046). No Python in the shipped path.
 - **A recorded answer changes only on purpose.** `tests/fixtures/recorded/behaviour.jsonl` is
-  what the Python charter answered for ~400 scenarios, replayed against every build by
+  what the Python charter answered for 404 scenarios, replayed against every build by
   `cargo test -p charter-cli --test recorded_behaviour` (add scenario names after `--` for
   fewer). When a change is meant to move one, re-record it with
   `CHARTER_RECORDED_BLESS=1 cargo test -p charter-cli --test recorded_behaviour -- <name>`, read

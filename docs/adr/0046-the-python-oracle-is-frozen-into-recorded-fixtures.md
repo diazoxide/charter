@@ -18,7 +18,9 @@ more.
 
 ## What was recorded, and how
 
-**Once, locally, on one head where both implementations agreed.** The recorder ran each
+**Once, on one head where both implementations agreed.** It ran on Linux, the CI platform
+(Ubuntu 24.04, git 2.43), where the unchanged differential passed all 431 scenarios on that
+head. The replay was then checked on Linux and on macOS. The recorder ran each
 differential scenario through the differential's own `check`, both implementations and every
 comparison, and wrote a row only for a scenario that passed. A scenario that failed stopped the
 recording. So wherever the differential compared the two, the recorded text is Python's answer.
@@ -78,6 +80,14 @@ The whole set runs in about ten seconds, so it is not sharded.
   `python_stderr_has`, a note that Python "no longer" prints something, and the forge trap. The
   forge trap checked a setup's `origin` before the command, and that setup is now a recorded
   file that cannot move.
+- **Two things that name the machine are made machine-neutral.** `doctor`'s `git` row prints
+  the machine's git version, which both sides once shared; it is masked now. And `git init` on
+  macOS writes `core.ignorecase` and `core.precomposeunicode` into a repository's config, so the
+  replay reads a repository's config without those two keys.
+- **The fuzzers' breadth.** The shell reader's 200,000 generated cases and the plane-root
+  guards' 50,000 are now 2,400 and 1,710 recorded cases. They were chosen to reach every branch
+  and reader feature the full runs reached. What that subset can and cannot prove is in
+  `fixtures/corpora/README.md`.
 - **Two masks used look-around**, which Rust's `regex` does not support. Each became a capture
   group and a replacement. The recorder checked that each rewrite gave the same text as the
   original on every stream it was applied to.
