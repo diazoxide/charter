@@ -66,6 +66,13 @@ def read_shard(out_dir: pathlib.Path, shard: str) -> dict:
             return verdict
 
     if not outcomes_path.exists():
+        if verdict["planned"] == 0:
+            # A diff run's shard whose round-robin slice came out empty: cargo-mutants writes
+            # an empty plan, says "No mutants found", and never starts an outcomes file. It
+            # was given nothing and did all of it.
+            verdict["status"] = "complete"
+            verdict["why"] = "this shard's slice of the run held no mutants"
+            return verdict
         if verdict["planned"] is not None:
             verdict["status"] = "broken"
             verdict["why"] = (
@@ -133,8 +140,8 @@ def read_shard(out_dir: pathlib.Path, shard: str) -> dict:
         verdict["status"] = "incomplete"
         verdict["why"] = (
             f"{verdict['tested']} of {verdict['planned']} mutants tested ({done:.0f}%) — the "
-            "shard was killed before it finished. Either the per-shard budget no longer fits "
-            "the crate (add shards) or this runner went away (read the log)"
+            "shard was killed before it finished. Either a mutant costs more than PER_SHARD was "
+            "sized for (lower it in mutants.yml) or this runner went away (read the log)"
         )
         return verdict
 
@@ -231,8 +238,9 @@ def cmd_gather(args: argparse.Namespace) -> int:
     known = read_known(pathlib.Path(args.known))
     fresh = sorted(set(by_key) - known)
     # Only meaningful when the whole crate ran: a mutant that was never tested is not a
-    # mutant that is now caught.
-    mended = sorted(known - set(by_key)) if whole_crate else []
+    # mutant that is now caught. A `--partial` run tested only a diff, so every shard can
+    # finish and the backlog still be mostly untested.
+    mended = sorted(known - set(by_key)) if whole_crate and not args.partial else []
 
     # The full current set, so re-seeding the baseline is a copy rather than an edit.
     pathlib.Path(args.write_current).write_text("\n".join(sorted(by_key)) + "\n")
@@ -341,6 +349,11 @@ def main() -> int:
         "--write-current",
         default="mutants-survivors.current.txt",
         help="where to write this run's full survivor set, for re-seeding --known",
+    )
+    gather.add_argument(
+        "--partial",
+        action="store_true",
+        help="the run tested a diff and not the whole crate, so nothing absent is 'now caught'",
     )
     gather.set_defaults(func=cmd_gather)
 

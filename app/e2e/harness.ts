@@ -158,10 +158,15 @@ export function writeAPluginHookingShell(fakeHarness: string): string {
     'mkdir -p "$CHARTER_ROOT/.charter/scenario"',
     `printf '%s' "$PATH" > "$CHARTER_ROOT/.charter/scenario/path-$CHARTER_CHAT"`,
   ].join(" && ");
+  // The hook's stdout is discarded, as Claude Code discards it from the terminal: a hook's
+  // stdout is its ANSWER to the harness — `sessionstart`'s is the session briefing, a few
+  // thousand characters of JSON on the daily plane — and never something the pane shows. The
+  // fake harness runs the hook in the pane itself, so printing it would scroll the sentinel a
+  // spec waits for off the screen. A `charter` that is not there still says so, below.
   const thePluginsHook = [
     `printf '{"session_id":"%s","hook_event_name":"SessionStart","source":"startup"}'`,
     '"$CLAUDE_CODE_SESSION_ID"',
-    "| CLAUDE_PID=$PPID charter hook sessionstart",
+    "| CLAUDE_PID=$PPID charter hook sessionstart >/dev/null",
     `|| echo "charter-app#136: this chat's PATH has no charter on it (exit $?)"`,
   ].join(" ");
   writeFileSync(

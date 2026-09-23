@@ -838,7 +838,8 @@ fn quote(word: &str) -> String {
 }
 
 /// How long [`ignore_check`] waits for its one `git status`. A constant rather than a knob:
-/// a knob nobody turns is a second place the answer could come from.
+/// a knob nobody turns is a second place the answer could come from. The one other deadline
+/// is a test's, through [`ignore_check_within`], and nothing but a test passes one.
 ///
 /// **Thirty seconds, not five.** An unknown here is a refusal — every declared profile stops
 /// being startable — so this deadline decides whether an operator can open a chat at all. Five
@@ -869,10 +870,19 @@ pub fn ignore_check(root: &Path) -> IgnoreCheck {
 /// [`ignore_check`] against a named `git`, which is how a test drives the answer git cannot
 /// give.
 pub fn ignore_check_with(root: &Path, git: &Path) -> IgnoreCheck {
+    ignore_check_within(root, git, GIT_TIMEOUT)
+}
+
+/// [`ignore_check_with`] waiting `timeout` for git instead of [`GIT_TIMEOUT`].
+///
+/// For the test of a git that never answers, and for nothing else. Waiting out the real
+/// thirty seconds made that one test half of `cargo test -p charter-core`'s wall clock —
+/// and the nightly mutation run pays the whole suite once per mutant, six thousand times.
+pub fn ignore_check_within(root: &Path, git: &Path, timeout: std::time::Duration) -> IgnoreCheck {
     if !root.join(LOCAL_FILE).exists() {
         return IgnoreCheck::default();
     }
-    match git_path_state(root, git) {
+    match git_path_state(root, git, timeout) {
         GitState::Tracked => IgnoreCheck {
             reason: "git tracks charter.local.toml, so the profiles in it would reach every \
                      clone of this plane — charter refuses them until it is untracked: git \
@@ -923,7 +933,7 @@ enum GitState {
 /// "not a git repository" is git's own sentence and a translated git says it in another
 /// language. `--untracked-files=all` overrides an operator's `status.showUntrackedFiles=no`,
 /// which would otherwise hide `??`.
-fn git_path_state(root: &Path, git: &Path) -> GitState {
+fn git_path_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitState {
     let mut child = match crate::forklock::spawn(
         std::process::Command::new(git)
             .args([
@@ -946,10 +956,12 @@ fn git_path_state(root: &Path, git: &Path) -> GitState {
         Err(e) => return GitState::Unknown(e.to_string()),
     };
     // A timeout is an unknown, not a pass, so the wait is bounded and the child is ended.
-    let deadline = std::time::Instant::now() + GIT_TIMEOUT;
+    let deadline = std::time::Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
+            // `<` and `<=` differ only at the one instant that equals the deadline, which no
+            // test can land on: `.cargo/mutants.toml` excludes that mutant as equivalent.
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
@@ -958,7 +970,7 @@ fn git_path_state(root: &Path, git: &Path) -> GitState {
                 let _ = child.wait();
                 return GitState::Unknown(format!(
                     "git did not answer within {} seconds",
-                    GIT_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 ));
             }
             Err(e) => return GitState::Unknown(e.to_string()),

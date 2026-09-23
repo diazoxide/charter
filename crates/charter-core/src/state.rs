@@ -129,8 +129,8 @@ impl Event {
             "subagentstop" => Self::SubagentStop,
             "stop" => Self::Stop,
             "sessionend" => Self::SessionEnd,
-            // Every other word, `pretooluse` above all, belongs to the guard the Python
-            // charter answers. Taking one here would answer less than the guard does.
+            // Every other word is a TOOL hook (`hookreg`), answered by the guards and never
+            // reported: a tool call carries no chat state the app draws.
             _ => return None,
         })
     }

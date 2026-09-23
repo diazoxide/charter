@@ -34,6 +34,7 @@ use clap::{Args, Parser, Subcommand};
 
 mod guard;
 mod handoff;
+mod hooks;
 mod memory;
 mod statusline;
 mod voice;
@@ -311,24 +312,50 @@ enum Command {
         persona: Option<String>,
     },
 
-    /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
+    /// Answer a harness hook. Run by a harness's hooks, never by a person.
     ///
-    /// It reads the harness's payload on stdin, says one thing on a socket the app owns, and
-    /// gets out of the way. It decides nothing, refuses nothing and prints nothing: the
-    /// guard that answers `pretooluse` is the Python charter's and is not this command.
+    /// It reads the harness's payload on stdin and answers the way that hook is answered.
+    ///
+    /// `sessionstart` briefs the session — the persona it was started as, that persona's
+    /// memory, the workspace gate, the workspace's todos, the plane's other workspaces — as
+    /// `additionalContext`, and freezes the persona tool gate's ceiling.
+    ///
+    /// `pretooluse` is the Bash guard and the persona tool gate, `pretooluse-read` the vault
+    /// guard on Read/Grep, `pretooluse-edit` the state-directory guard on Write/Edit, and
+    /// `pretooluse-dispatch` the ask before a code-writing persona is sent out beside a running
+    /// agent.
+    ///
+    /// `posttooluse`, `-skill`, `-dispatch` and `-message` keep the memory nudges, the secret
+    /// warning on a written memory, and the dispatch and skill logs. Every event word also tells
+    /// the app, over its socket, what the chat is doing.
+    ///
+    /// Exit 2 — "block" — only when a denial it decided could not be printed. `--list` prints
+    /// every word it answers, with the event and tool matcher each is wired to; `--json` makes
+    /// that the registry a plugin's `hooks.json` is generated from.
     Hook {
-        /// The harness's event, lowercased: `sessionstart`, `userpromptsubmit`,
-        /// `notification`, `subagentstop`, `stop`, `sessionend`.
-        name: String,
+        /// The hook word: `sessionstart`, `pretooluse`, `pretooluse-read`, … (`--list`).
+        #[arg(required_unless_present = "list")]
+        name: Option<String>,
+
+        /// Print every hook this binary answers, and exit.
+        #[arg(long)]
+        list: bool,
+
+        /// With `--list`: the registry as JSON — `{"schema": 1, "handlers": [...]}`.
+        #[arg(long, requires = "list")]
+        json: bool,
 
         /// The installed plugin's version. Taken and ignored.
         ///
-        /// The charter plugin's `hooks/hooks.json` puts it on every one of its twelve hook
-        /// commands (`charter hook sessionstart --plugin-version 0.62.1`). It means nothing
-        /// to this binary — the skew check it feeds is the Python charter's — but refusing
-        /// the flag would mean refusing every call the plugin actually makes.
+        /// The Python charter's plugin puts it on every one of its hook commands (`charter hook
+        /// sessionstart --plugin-version 0.62.1`); refusing the flag would mean refusing every
+        /// call such a plugin makes.
         #[arg(long)]
         plugin_version: Option<String>,
+
+        /// Pin the clock, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
     },
 }
 
@@ -794,6 +821,17 @@ enum WorkspaceCommand {
         #[command(flatten)]
         common: Common,
     },
+    /// Internal, answered and ignored: the Python plugin's SessionStart seed of a session's
+    /// workspace pointer from its terminal pane. A chat charter-app starts has no pane to seed
+    /// from — its workspace is the pointer keyed on the chat, which `charter ws use` writes.
+    #[command(name = "_reconcile", hide = true)]
+    Reconcile,
+    /// Internal, answered and ignored: the Python plugin's turn-end commit of a LIVE
+    /// workspace's memory. It commits nothing under the default `share = "local"`; under
+    /// `commit`/`push` charter-app leaves the commit to `charter save`, which commits the plane
+    /// as one decision instead of racing the operator's own git on every turn end.
+    #[command(name = "_autosave", hide = true)]
+    Autosave,
 }
 
 #[derive(Args)]
@@ -897,23 +935,18 @@ impl Here {
     }
 }
 
-/// The one word in the tool-hook namespace this binary ANSWERS — the Bash guard (M3.1).
-///
-/// `charter/hooks.py:_HANDLERS` has nine words in that namespace and the charter plugin's
-/// `hooks/hooks.json` wires all nine. This is one of them. The other eight still reach
-/// [`is_a_tool_hook`] and still block, and that is not an oversight — each is a different
-/// handler with its own refusals, and a binary that answered a word it had not ported would be
-/// the exact fail-open [`is_a_tool_hook`] exists to prevent.
+/// The Bash guard's word — answered by [`guard::pretooluse`], ahead of every other tool hook
+/// because its refusals are the ones M3.1 was built for.
 const GUARDED_TOOL_HOOK: &str = "pretooluse";
 
-/// Whether a word this binary does not own is a TOOL hook, where refusing means blocking.
+/// Whether a word this binary does NOT answer is a TOOL hook, where refusing means blocking.
 ///
 /// **The namespace, not a list of words, and not a blanket rule either.** Both of those were
 /// tried and both were wrong, each in the other's direction:
 ///
-/// - A list of the nine words in `charter/hooks.py:_HANDLERS` fails OPEN on everything not in
-///   it. `charter hook pretooluse-notebook` exited 1, which a harness logs and ignores, so the
-///   day charter adds a matcher the Rust binary on PATH would allow that tool class silently.
+/// - A list of the words in `charter/hooks.py:_HANDLERS` fails OPEN on everything not in it.
+///   `charter hook pretooluse-notebook` exited 1, which a harness logs and ignores, so the day
+///   charter adds a matcher the Rust binary on PATH would allow that tool class silently.
 /// - Blocking every unknown word instead fails the other way: `charter hook stopp`, a typo in
 ///   a settings file charter itself wrote, blocked the session from ENDING — which is the
 ///   exact hazard this whole file was written around.
@@ -921,13 +954,11 @@ const GUARDED_TOOL_HOOK: &str = "pretooluse";
 /// The word says which hook it is. In the `pretooluse`/`posttooluse` namespace there is a tool
 /// call to protect and blocking is the safe answer, for every matcher charter has and every
 /// one it adds. Outside it there is nothing to protect and blocking can only wedge a session.
-/// A review found both halves of this.
 ///
-/// **M3.1 narrowed what this covers and changed nothing about it.** [`GUARDED_TOOL_HOOK`] is
-/// answered before this is ever asked, so what is left here is eight words rather than nine —
-/// `pretooluse-read`, `pretooluse-edit`, `pretooluse-dispatch`, the five `posttooluse` ones,
-/// and every word charter has not invented yet. The rule is unchanged because its argument is:
-/// a program that has checked nothing may not say `allow`.
+/// **Every word charter has today is answered before this is asked** — the registry
+/// ([`charter_core::hookreg::HANDLERS`]) and its no-ops. What is left here is only the word
+/// nobody has invented yet, and the rule for it is unchanged because its argument is: a
+/// program that has checked nothing may not say `allow`.
 fn is_a_tool_hook(name: &str) -> bool {
     name.starts_with("pretooluse") || name.starts_with("posttooluse")
 }
@@ -972,32 +1003,31 @@ fn payload() -> String {
 /// **Never exit 2, except where the whole point is to.** A harness reads 2 as "block": on
 /// `Stop` it makes the harness carry on rather than end. Nothing charter draws is worth that,
 /// so every failure on a REPORTING hook is a silent 0 and the state the app draws is simply the
-/// last one it was told. The two exceptions are both about a tool call: a word in the tool-hook
-/// namespace this binary cannot answer ([`is_a_tool_hook`]), and a denial the guard decided and
-/// could not print ([`guard::pretooluse`]).
-fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
-    // **The switch (M3.1 stage 6).** Before the eight arms were ported this word fell through
-    // to `is_a_tool_hook` below and blocked, because a program that has checked nothing may not
-    // say `allow`. It is now checked, and it answers.
-    //
-    // FIRST, in front of `Event::parse`, because it is not one of the app's reporting events
-    // and never becomes one: a `PreToolUse` payload carries no chat state worth a `Report`, and
-    // a guard that also spoke on the app's socket would be two jobs on one exit status.
+/// last one it was told. The two exceptions are both about a tool call: a denial a guard
+/// decided and could not print ([`guard::deny`]), and a word in the tool-hook namespace this
+/// binary does not answer at all ([`is_a_tool_hook`]).
+fn hook(name: &str, now: Option<&str>) -> ExitCode {
+    // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
+    // events: a tool call carries no chat state worth a `Report`, and a guard that also spoke
+    // on the app's socket would be two jobs on one exit status.
     if name == GUARDED_TOOL_HOOK {
-        return guard::pretooluse(&payload());
+        return guard::pretooluse(&payload(), now);
+    }
+    if let Some(answered) = hooks::tool(name, now) {
+        return answered;
+    }
+    if charter_core::hookreg::NO_OPS.contains(&name) {
+        return ExitCode::SUCCESS;
     }
     let Some(event) = Event::parse(name) else {
         let tool = is_a_tool_hook(name);
         // The word comes out of a settings file a chat can write, and this sentence goes to
         // a terminal and into the harness's own log. Contained like every other value
-        // charter quotes back; there is no Python counterpart to match byte for byte here,
-        // because the Python charter dispatches its hooks without this refusal.
+        // charter quotes back.
         let name = charter_core::shown::readable(name, charter_core::shown::DISPLAY_LIMIT);
         eprintln!(
-            "charter: `{name}` is not one of this binary's events (sessionstart, \
-             userpromptsubmit, notification, subagentstop, stop, sessionend){}. A plugin \
-             that declares it was written for a different charter — check which plugins this \
-             harness loads, and which `charter` is first on PATH.",
+            "charter: `{name}` is not a hook this binary answers (`charter hook --list` names \
+             them){}.",
             if tool {
                 ", and it names a tool hook, so the tool call is refused rather than allowed \
                  by a program that checked nothing"
@@ -1013,34 +1043,19 @@ fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
             ExitCode::FAILURE
         };
     };
-    // `--plugin-version` is written by the charter plugin's `hooks.json` and never by the
-    // app, which invokes this binary by absolute path. So its presence says this process was
-    // started by the Python plugin, and this binary answers far less than the Python charter
-    // does for the same word — no persona charter, no memory, no tool-gate ceiling frozen
-    // (charter#432). It still answers, because blocking `sessionstart` would be worse than
-    // a session without its context; but it says so where a person will actually see it.
-    //
-    // `systemMessage` and not stderr: a zero-exit hook's stderr goes to a debug log nobody
-    // reads. `charter/hooks.py` learned that the same way.
-    //
-    // Once per session, not once per hook. The plugin wires `sessionstart`,
-    // `userpromptsubmit` and `stop`, so an ungated notice reaches the operator on every prompt
-    // and every turn end — `charter/hooks.py:_queue_plugin_notices` carries "the gate that
-    // keeps them to sessionstart" for exactly this reason.
-    if plugin_version.is_some() && event == Event::SessionStart {
-        println!(
-            "{}",
-            serde_json::json!({
-                "systemMessage": format!(
-                    "charter: the `charter` on PATH is the desktop app's binary, which \
-                     answers `hook {name}` with session state only — no persona charter, no \
-                     memory, and no tool-gate snapshot. The Python charter should be \
-                     answering this."
-                )
-            })
-        );
+    let socket = std::env::var_os(SOCKET_ENV);
+    // The payload is read once, and only when something reads it: `sessionstart` always does,
+    // `userpromptsubmit` for the heartbeat, and every event when the app is listening.
+    let wanted = socket.is_some() || matches!(event, Event::SessionStart | Event::UserPromptSubmit);
+    let text = if wanted { payload() } else { String::new() };
+    // The session's own work comes BEFORE the report: a briefing the harness never receives
+    // because the app's socket was slow would be the worse of the two to lose.
+    match event {
+        Event::SessionStart => hooks::sessionstart(&text, now),
+        Event::UserPromptSubmit => hooks::userpromptsubmit(&text, now),
+        _ => {}
     }
-    let Some(socket) = std::env::var_os(SOCKET_ENV) else {
+    let Some(socket) = socket else {
         // No app started this session — the operator's own harness in a terminal, with the
         // hooks pointed here. There is nothing to tell, and this is the ONE path on which
         // anything decides to refresh the forge cache (charter-app#89).
@@ -1049,7 +1064,7 @@ fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
         }
         return ExitCode::SUCCESS;
     };
-    if let Some(report) = Report::read(event, &payload(), &|name| std::env::var(name).ok())
+    if let Some(report) = Report::read(event, &text, &|name| std::env::var(name).ok())
         && let Err(why) = hookwire::send(std::path::Path::new(&socket), &report)
     {
         // The app may have quit while this session was still running, which is the ordinary
@@ -1827,6 +1842,8 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Workspace(WorkspaceCommand::Fork { .. })
         | Command::Workspace(WorkspaceCommand::Restore { .. })
         | Command::Workspace(WorkspaceCommand::Reinit { .. })
+        | Command::Workspace(WorkspaceCommand::Reconcile)
+        | Command::Workspace(WorkspaceCommand::Autosave)
         | Command::GitPolicy { .. } => {
             unreachable!("answered before run")
         }
@@ -2014,10 +2031,26 @@ fn main() -> ExitCode {
     // binary does not answer must BLOCK rather than be read as "allow".
     if let Command::Hook {
         name,
-        plugin_version,
+        list,
+        json,
+        plugin_version: _,
+        now,
     } = &cli.command
     {
-        return hook(name, plugin_version.as_deref());
+        if *list {
+            return hooks::list(*json);
+        }
+        return hook(name.as_deref().unwrap_or_default(), now.as_deref());
+    }
+    // The three internal words the Python charter's plugin wires beside its hooks. Answered —
+    // exit 0, nothing printed, nothing read — so a plugin that still names them can never fail
+    // a session start or a turn end on them; see `hookreg` for why each is not ported.
+    if matches!(
+        &cli.command,
+        Command::Workspace(WorkspaceCommand::Reconcile | WorkspaceCommand::Autosave)
+            | Command::Persona(memory::PersonaCommand::Gc { .. })
+    ) {
+        return ExitCode::SUCCESS;
     }
     // `init`, `reinit` and `doctor` each say several lines of their own and choose their own
     // exit status — and for `doctor` the status IS the verdict, where a blocker is not an
