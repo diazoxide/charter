@@ -17,6 +17,25 @@ export const commands = {
 	 */
 	firstFrame: () => __TAURI_INVOKE<string | null>("first_frame"),
 	/**
+	 *  Where charter's title bar may start.
+	 * 
+	 *  **Asked of the binary and never sniffed from a user agent.** The one fact that decides this
+	 *  is whether `titleBarStyle: "Overlay"` in `tauri.conf.json` was honoured, and that is a
+	 *  property of the target this binary was built for — which `cfg!` knows exactly and a
+	 *  `navigator.userAgent` string only guesses at. It is also why this is a command rather than
+	 *  a stylesheet constant: one frontend bundle is built per target by the same CI job that
+	 *  builds the binary, but nothing in the bundle is told which target it landed in.
+	 * 
+	 *  The window asks once, after the first frame, and the bar shifts right by
+	 *  [`MACOS_WINDOW_CONTROLS`] when the answer lands. That settle is deliberate: the alternative
+	 *  is awaiting an IPC round trip before `createRoot().render()`, which puts a command between
+	 *  the process starting and the first frame — the one thing `main.tsx` is written to avoid
+	 *  (ADR 0026's 2 s cold start). A title bar that finishes placing itself a millisecond after
+	 *  it is drawn is the same settle the project strip, the workspace strip and the status line
+	 *  all already have.
+	 */
+	titleBarRoom: () => __TAURI_INVOKE<TitleBarRoom>("title_bar_room"),
+	/**
 	 *  What this launch had to go on, and the plane it opened — or the fact that it opened none.
 	 * 
 	 *  **Never an error.** The working directory is a HINT: it is resolved once, at startup, to
@@ -502,9 +521,29 @@ export const commands = {
 } | null, string>(__TAURI_INVOKE("chat_usage", { plane, session })),
 	/**  The pin report for this plane. */
 	planePin: (plane: PlaneId) => typedError<PinReport, string>(__TAURI_INVOKE("plane_pin", { plane })),
+	/**
+	 *  The About dialog's content.
+	 * 
+	 *  A plain function of the compiled-in corpus: no plane, no disk, no state. That is why it
+	 *  takes nothing — a dialog that needed a project open could not be on the window's chrome,
+	 *  and the window holds no project for the first moments of every launch.
+	 */
+	aboutCharter: () => __TAURI_INVOKE<About>("about_charter"),
 };
 
 /* Types */
+/**  What charter says about itself. */
+export type About = {
+	/**  The release this charter brought (`news::shipped_version`). */
+	version: string,
+	/**
+	 *  What that version brought, in the corpus's own order — which is
+	 *  [`charter_core::news::all`]'s, so a `lead:` entry is first here exactly as it is in the
+	 *  Release body and in `charter news`. Never empty; see this module's docstring.
+	 */
+	notes: Note[],
+};
+
 /**  One alert, as the drawer draws it. */
 export type AlertRow = {
 	/**
@@ -834,6 +873,21 @@ export type Moved = {
 export type NewsItem = {
 	version: string,
 	headline: string,
+};
+
+/**
+ *  One entry of the version's news, as the About dialog reads it.
+ * 
+ *  Headline and body, and nothing else. `check:`/`adopt:` are about whether a PLANE has taken
+ *  an entry up — `charter news` answers that, with a plane to ask it of — and this dialog has
+ *  no plane in its hand. Reporting *unchecked* against every line would be the window adding a
+ *  column of the same word three times.
+ */
+export type Note = {
+	/**  The entry's one-line headline, as its author wrote it. */
+	headline: string,
+	/**  The prose under the frontmatter. Empty for an entry that is only a headline. */
+	body: string,
 };
 
 /**  What a check found, for the window and for the notification. */
@@ -1316,6 +1370,21 @@ export type StartOptions = {
 export type Started = {
 	session: number,
 	wired: string | null,
+};
+
+/**  What the operating system has already spent of the window's own title bar. */
+export type TitleBarRoom = {
+	/**
+	 *  Whether charter's bar is drawn UNDERNEATH the system's window controls.
+	 * 
+	 *  True only where `tauri.conf.json`'s `titleBarStyle: "Overlay"` is honoured, which is
+	 *  macOS alone — every other platform ignores the key and keeps drawing its own title bar
+	 *  above the webview, so charter's bar is a row inside the window rather than the title
+	 *  bar itself, and nothing is reserved.
+	 */
+	overlaid: boolean,
+	/**  How many CSS pixels at the leading edge the system's controls occupy, or zero. */
+	reserved: number,
 };
 
 /**  One turn of the trend. */

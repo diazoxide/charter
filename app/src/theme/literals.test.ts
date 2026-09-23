@@ -153,16 +153,22 @@ describe("the stylesheet and the vocabulary agree", () => {
   const ownProperties = new Set([...css.matchAll(/^\s+(--[a-z0-9-]+):/gm)].map((hit) => hit[1]));
 
   /**
-   * The one custom property the WINDOW sets rather than the stylesheet: how narrow a tab of
-   * this strip may be drawn (`src/fits.ts`).
+   * The custom properties the WINDOW sets rather than the stylesheet.
    *
-   * It is here rather than in `TOKENS` because it is not a colour and a theme has no business
-   * with it, and it is not in `App.css` because the arithmetic that decides what fits reads
-   * the same number — two copies of a number that must agree is how they come to differ.
-   * Listed by hand, so that adding a second one is a decision somebody makes in this file
-   * rather than a hole that opens quietly; the test below holds it to being really set.
+   * - `--least`: how narrow a tab of a strip may be drawn (`src/fits.ts`).
+   * - `--window-controls`: how much of the title bar the operating system's own window
+   *   controls have already spent (`src/TitleBar.tsx`, `title_bar_room`). macOS's traffic
+   *   lights float over charter's bar under `titleBarStyle: "Overlay"` and no other platform
+   *   has them there at all, so the number is `cfg!(target_os)`'s and cannot be written in a
+   *   stylesheet that is built once for every target.
+   *
+   * Both are here rather than in `TOKENS` because neither is a colour and a theme has no
+   * business with either, and neither is in `App.css` because the Rust that decides the number
+   * is the only honest source — two copies of a number that must agree is how they come to
+   * differ. Listed by hand, so that adding one is a decision somebody makes in this file
+   * rather than a hole that opens quietly; the test below holds each to being really set.
    */
-  const fromTheWindow = ["--least"];
+  const fromTheWindow = ["--least", "--window-controls"];
 
   it("every custom property the stylesheet reads is a token, its own, or the window's", () => {
     // A `var(--typo)` resolves to nothing and the rule silently disappears, which is the one

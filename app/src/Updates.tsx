@@ -55,10 +55,38 @@ export type Updates = {
 };
 
 /**
+ * Stops one listener, and never lets that failure escape as an unhandled rejection.
+ *
+ * **`listen`'s unlisten function is `async`** (`@tauri-apps/api/event`'s `_unlisten`), so
+ * calling it without awaiting hands back a promise nobody is holding — and it rejects whenever
+ * `__TAURI_EVENT_PLUGIN_INTERNALS__` is not there: a webview being torn down, and every jsdom
+ * test whose mocked IPC has no event plugin behind it. The `.catch` further down covers the
+ * async block around the awaits; a bare call is outside it.
+ *
+ * It surfaced the day the updater moved to the window (`TitleBar.tsx`): mounted inside a
+ * project it outlived the registration, mounted on the window it is torn down by any test that
+ * renders and unmounts quickly — so `gone` was true before `listen` resolved, and the cleanup
+ * fired into nothing. There is nothing to do about a listener that cannot be removed from a
+ * page that is going away, and an unhandled rejection out of a cleanup function is a real
+ * failure in a real window as well as a red suite.
+ */
+function stopListening(stop: () => void) {
+  try {
+    void Promise.resolve(stop()).catch(() => {});
+  } catch {
+    // A synchronous throw from the same cause, and the same answer.
+  }
+}
+
+/**
  * The updater's events, turned into one state.
  *
  * `asked` is what separates a failure worth drawing from one that is not (see the module doc):
  * it is set by every gesture that asks the updater for something and cleared by the answer.
+ *
+ * **Called once, on the WINDOW** (`App.tsx`), and drawn once, on the title bar. It used to be
+ * called in each `PlaneView`, which made a window holding eight projects hold eight clients
+ * for one app-wide fact.
  */
 export function useUpdates(): Updates {
   const [state, setState] = useState<UpdateState>({ kind: "quiet" });
@@ -73,7 +101,7 @@ export function useUpdates(): Updates {
         const stop = await listen<T>(event, (e) => {
           if (!gone) then(e.payload);
         });
-        if (gone) stop();
+        if (gone) stopListening(stop);
         else stops.push(stop);
       };
       await on<Offer | null>("update://checked", (offer) => {
@@ -109,7 +137,7 @@ export function useUpdates(): Updates {
       .catch(() => {});
     return () => {
       gone = true;
-      for (const stop of stops) stop();
+      for (const stop of stops) stopListening(stop);
     };
   }, []);
 

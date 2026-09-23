@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ENDS_IT } from "./actions";
+import { AboutCharter } from "./About";
 import { AlertsDrawer } from "./AlertsDrawer";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { NewProject } from "./NewProject";
@@ -584,6 +585,17 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       />,
     );
     await userEvent.click(screen.getByTestId("status-pin"));
+    await screen.findByRole("dialog");
+    expect(await reachableByKeyboard()).toEqual(['button "Close"']);
+    cleanup();
+
+    // **About charter**, which arrived with the title bar. It is here on the day it was
+    // written rather than after somebody noticed, which is the whole argument this file makes:
+    // the hole is not a mistake anybody made, it is what a modal in a WebView does by default.
+    // Its command is not mocked and it does not need to be — a dialog that could not read the
+    // corpus draws the refusal, and either way it has the one control this walk is about.
+    render(<AboutCharter />);
+    await userEvent.click(screen.getByTestId("title-about"));
     await screen.findByRole("dialog");
     expect(await reachableByKeyboard()).toEqual(['button "Close"']);
   });
