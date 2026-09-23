@@ -314,18 +314,20 @@ enum Command {
 
     /// Answer a harness hook. Run by a harness's hooks, never by a person.
     ///
-    /// It reads the harness's payload on stdin and answers the way that hook is answered:
+    /// It reads the harness's payload on stdin and answers the way that hook is answered.
     ///
-    /// - `sessionstart` briefs the session — the persona it was started as, that persona's
-    ///   memory, the workspace gate, the workspace's todos, the plane's other workspaces —
-    ///   as `additionalContext`, and freezes the persona tool gate's ceiling;
-    /// - `pretooluse` is the Bash guard and the persona tool gate, `pretooluse-read` the vault
-    ///   guard on Read/Grep, `pretooluse-edit` the state-directory guard on Write/Edit, and
-    ///   `pretooluse-dispatch` the ask before a code-writing persona is sent out beside a
-    ///   running agent;
-    /// - `posttooluse`, `-skill`, `-dispatch` and `-message` keep the memory nudges, the
-    ///   secret warning on a written memory, and the dispatch and skill logs;
-    /// - and every event word also tells the app, over its socket, what the chat is doing.
+    /// `sessionstart` briefs the session — the persona it was started as, that persona's
+    /// memory, the workspace gate, the workspace's todos, the plane's other workspaces — as
+    /// `additionalContext`, and freezes the persona tool gate's ceiling.
+    ///
+    /// `pretooluse` is the Bash guard and the persona tool gate, `pretooluse-read` the vault
+    /// guard on Read/Grep, `pretooluse-edit` the state-directory guard on Write/Edit, and
+    /// `pretooluse-dispatch` the ask before a code-writing persona is sent out beside a running
+    /// agent.
+    ///
+    /// `posttooluse`, `-skill`, `-dispatch` and `-message` keep the memory nudges, the secret
+    /// warning on a written memory, and the dispatch and skill logs. Every event word also tells
+    /// the app, over its socket, what the chat is doing.
     ///
     /// Exit 2 — "block" — only when a denial it decided could not be printed. `--list` prints
     /// every word it answers, with the event and tool matcher each is wired to; `--json` makes
