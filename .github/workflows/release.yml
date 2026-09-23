@@ -26,8 +26,20 @@ name: release
 #   minisign (TAURI_SIGNING_PRIVATE_KEY) — mandatory, free, and the thing the updater checks
 #     before it installs anything. No key, no publish: the `plan` job refuses first, and
 #     `release-manifest` refuses again over the actual bytes against the key the app ships.
-#   Developer ID (APPLE_CERTIFICATE…) — what macOS checks. Required for a publish; verified on
-#     the built bundle rather than assumed from the secret being set.
+#   Developer ID (APPLE_CERTIFICATE…) — what macOS checks. **Optional** (ADR 0042, amended
+#     2026-09-23), because it costs an Apple Developer account and the updater's trust does not
+#     come from it. When the three secrets are set the bundle is Developer ID signed; when they
+#     are not it is **ad-hoc** signed. Either way the signature is verified on the built bundle
+#     rather than assumed from a secret being set, and the check asserts the signing that was
+#     ASKED for — an ad-hoc bundle must not slip through a Developer ID check, or the reverse.
+#
+# **macOS signing is never skipped, only downgraded.** On Apple Silicon a Mach-O with no
+# signature at all does not execute, so "unsigned" is not one of the options. Leaving
+# APPLE_SIGNING_IDENTITY unset does not produce an unsigned app either — it produces a bundle
+# whose executables carry the linker's own ad-hoc signature while the BUNDLE has no seal, which
+# `codesign --verify` rejects and which is the worst of both. So this workflow always names an
+# identity: a Developer ID one when it has it, `-` (ad-hoc) when it does not.
+#
 # **Apple notarization is declined** (ADR 0042), so no APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
 # / APPLE_API_* is passed anywhere, and a first install from a browser meets Gatekeeper. The
 # job summary says what that looks like and what to do about it.
@@ -77,6 +89,7 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       signed: ${{ steps.plan.outputs.signed }}
       skip: ${{ steps.plan.outputs.skip }}
+      macos_signing: ${{ steps.plan.outputs.macos_signing }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -88,6 +101,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          # Passed as three booleans and counted in the shell below, rather than and-ed here,
+          # so a HALF-configured certificate is a case of its own instead of reading the same
+          # as no certificate at all. (Counting them in a `${{ }}` expression is possible but
+          # has to fit on one line: a folded YAML scalar keeps the newlines of its
+          # more-indented lines, and they end up inside the expression.)
+          HAS_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAS_CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+          HAS_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY != '' }}
         run: |
           set -euo pipefail
           # The one version every crate shares, and the one `tauri.conf.json` carries (a test
@@ -128,11 +149,25 @@ jobs:
             echo "::warning::no TAURI_SIGNING_PRIVATE_KEY yet, so this green main is not published to the dev channel. docs/updating.md is the setup."
             skip=true; publish=false
           fi
+          # Which macOS signing this run does, decided ONCE and carried to the build and to the
+          # check that verifies it. Developer ID needs all three secrets; with none of them the
+          # build is ad-hoc signed, which is a weaker Gatekeeper story and not a weaker updater
+          # (ADR 0042 §3). A partial group is neither, and is handled as an error below.
+          apple_parts=0
+          for present in "$HAS_CERT" "$HAS_CERT_PASSWORD" "$HAS_IDENTITY"; do
+            if [ "$present" = "true" ]; then apple_parts=$((apple_parts + 1)); fi
+          done
+          case "$apple_parts" in
+            3) macos_signing=developer-id ;;
+            0) macos_signing=ad-hoc ;;
+            *) macos_signing=partial ;;
+          esac
           {
             echo "channel=$channel"; echo "publish=$publish"; echo "version=$version"
             echo "sha=$SHA"; echo "tag=$tag"; echo "signed=$HAS_UPDATER_KEY"; echo "skip=$skip"
+            echo "macos_signing=$macos_signing"
           } >> "$GITHUB_OUTPUT"
-          echo "channel=$channel publish=$publish version=$version sha=$SHA updater-key=$HAS_UPDATER_KEY"
+          echo "channel=$channel publish=$publish version=$version sha=$SHA updater-key=$HAS_UPDATER_KEY macos-signing=$macos_signing"
 
       # Everything a publish needs that a human has to provide, checked BEFORE twenty minutes
       # of building, each failure naming the one thing to do. See docs/updating.md.
@@ -142,7 +177,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CHANNEL: ${{ steps.plan.outputs.channel }}
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
-          HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+          MACOS_SIGNING: ${{ steps.plan.outputs.macos_signing }}
+          HAS_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAS_CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+          HAS_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY != '' }}
         run: |
           set -euo pipefail
           fail=0
@@ -155,10 +193,24 @@ jobs:
             echo "::error::tauri.conf.json still carries the placeholder updater public key. An app built from it refuses every update. See docs/updating.md, step 2."
             fail=1
           fi
-          if [ "$HAS_APPLE_CERT" != "true" ]; then
-            echo "::error::APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY must all be set: a published macOS build is Developer ID signed (ADR 0042). See docs/updating.md, step 3."
-            fail=1
-          fi
+          # Developer ID is OPTIONAL (ADR 0042, amended 2026-09-23). What is NOT optional is
+          # knowing which signing this run does, so it is said once, here, before the build.
+          case "$MACOS_SIGNING" in
+            developer-id)
+              echo "::notice::macOS: Developer ID signed. Not notarized (ADR 0042), so a browser-downloaded first install still meets Gatekeeper once."
+              ;;
+            ad-hoc)
+              echo "::notice::macOS: ad-hoc signed — no Apple Developer account is configured, which is a supported way to publish (ADR 0042). The updater is unaffected: its trust is the minisign key, not Apple's. The cost is a rougher first install; see docs/updating.md, step 3."
+              ;;
+            *)
+              # Half a certificate is the one case that silently builds something nobody asked
+              # for: with APPLE_CERTIFICATE set but no password the bundler cannot import it,
+              # and with an identity set but no certificate it signs with whatever that name
+              # happens to match on the runner. Refuse and name what is missing.
+              echo "::error::the Developer ID secrets are half set — APPLE_CERTIFICATE=$HAS_CERT, APPLE_CERTIFICATE_PASSWORD=$HAS_CERT_PASSWORD, APPLE_SIGNING_IDENTITY=$HAS_IDENTITY. Set all three to sign with a Developer ID, or none to ad-hoc sign. See docs/updating.md, step 3."
+              fail=1
+              ;;
+          esac
           if [ "$CHANNEL" = "dev" ]; then
             # The dev channel's address is a prerelease named `dev`. It is created ONCE, by the
             # operator, because nothing in CI creates a tag.
@@ -279,7 +331,19 @@ jobs:
       # Only the variables that are SET reach the bundler. Tauri reads the Apple variables'
       # presence as "sign", so an empty APPLE_CERTIFICATE makes it try to import nothing and
       # fail; exporting only what exists keeps an on-demand build on a repository with no
-      # secrets working, while `plan` has already required all of them for a publish.
+      # secrets working.
+      #
+      # Then the one addition that makes an account-less publish possible: when no Developer ID
+      # is configured, APPLE_SIGNING_IDENTITY is set to `-`, which is codesign's spelling of
+      # ad-hoc. This is NOT the same as leaving it unset. The bundler's `keychain()` returns
+      # `None` for an absent identity and then signs nothing at all, which on Apple Silicon
+      # leaves each Mach-O carrying only the linker's own ad-hoc signature and the BUNDLE with
+      # no seal — `codesign --verify --deep --strict` rejects that, and so does the check
+      # further down. With `-` the bundler takes its `with_signing_identity` branch, imports no
+      # keychain (there is nothing to import) and runs `codesign --force -s -`, sealing the
+      # bundle. It must go through a named identity rather than a `codesign` call of our own,
+      # because signing has to happen BEFORE the bundler writes `charter.app.tar.gz` and
+      # minisigns it; anything signed afterwards would not be the bytes the updater verifies.
       #
       # Deliberately absent: APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID, APPLE_API_KEY,
       # APPLE_API_ISSUER, APPLE_API_KEY_PATH. Those are notarization, which ADR 0042 declines.
@@ -290,6 +354,7 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          MACOS_SIGNING: ${{ needs.plan.outputs.macos_signing }}
         run: |
           set -euo pipefail
           for name in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
@@ -305,6 +370,10 @@ jobs:
               echo "$name: not set"
             fi
           done
+          if [ "$RUNNER_OS" = "macOS" ] && [ "$MACOS_SIGNING" = "ad-hoc" ]; then
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "APPLE_SIGNING_IDENTITY: '-' (ad-hoc; no Developer ID configured)"
+          fi
 
       # No `--debug`, so this is the release profile. No `--features e2e`: that feature puts a
       # WebDriver server inside the app and belongs in no build anyone is given.
@@ -382,24 +451,55 @@ jobs:
           [ -s "$art.sig" ] || { echo "::error::$art has no .sig beside it — the bundler signed nothing"; exit 1; }
           echo "$art and $art.sig"
 
-      # The Developer ID decision, checked on the thing that was built. A certificate secret
-      # that is set but wrong — expired, the wrong identity, an Apple Development cert instead
-      # of Developer ID — produces a bundle that is signed with something else, or ad-hoc, and
-      # nothing downstream notices until an operator's Mac does.
-      - name: The macOS bundle is Developer ID signed, sidecar included
+      # The signing decision, checked on the thing that was built rather than assumed from the
+      # secrets. This has to assert the signing that was ASKED for, in both directions. A
+      # certificate secret that is set but wrong — expired, the wrong identity, an Apple
+      # *Development* cert instead of Developer ID — produces a bundle signed with something
+      # else, or ad-hoc, and nothing downstream notices until an operator's Mac does. Since
+      # ad-hoc became a legitimate outcome, the reverse matters too: a Developer ID run that
+      # quietly produced an ad-hoc bundle must not pass a check that only asked "is it signed".
+      #
+      # `codesign --verify --deep --strict` runs FIRST and in both modes, because it is the one
+      # thing an ad-hoc bundle can still fail: it is what separates "the bundler sealed this
+      # bundle ad-hoc" from "nobody signed the bundle and its executables merely carry the
+      # linker's ad-hoc signature". Those two print the same `Signature=adhoc`.
+      - name: The macOS bundle carries the signature this run asked for, sidecar included
         if: runner.os == 'macOS' && needs.plan.outputs.publish == 'true'
+        env:
+          MACOS_SIGNING: ${{ needs.plan.outputs.macos_signing }}
         run: |
           set -euo pipefail
           bundle=target/release/bundle/macos/charter.app
+          echo "this run asked for: $MACOS_SIGNING"
           codesign --verify --deep --strict --verbose=2 "$bundle"
           for path in "$bundle" "$bundle/Contents/MacOS/charter"; do
-            info=$(codesign -dv --verbose=2 "$path" 2>&1)
-            echo "$info" | grep -E '^(Authority|TeamIdentifier|Signature)=' || true
-            echo "$info" | grep -q '^Authority=Developer ID Application:' \
-              || { echo "::error::$path is not signed with a Developer ID Application certificate"; exit 1; }
+            info=$(codesign -dv --verbose=4 "$path" 2>&1)
+            echo "--- $path"
+            echo "$info" | grep -E '^(Authority|TeamIdentifier|Signature|CodeDirectory)=' || true
+            case "$MACOS_SIGNING" in
+              developer-id)
+                echo "$info" | grep -q '^Authority=Developer ID Application:' \
+                  || { echo "::error::$path is not signed with a Developer ID Application certificate, but this run had all three Apple secrets set"; exit 1; }
+                ;;
+              ad-hoc)
+                # Both halves, or the assertion is worth nothing: `Signature=adhoc` alone is
+                # also what an unsealed bundle's linker signature prints, and a bundle that
+                # somehow came out Developer ID signed here would mean the secrets are not
+                # where this workflow thinks they are.
+                echo "$info" | grep -q '^Signature=adhoc' \
+                  || { echo "::error::$path is not ad-hoc signed, and ad-hoc is what this run asked for"; exit 1; }
+                echo "$info" | grep -q '^TeamIdentifier=not set' \
+                  || { echo "::error::$path carries a team identifier, so it is not the ad-hoc signature this run asked for"; exit 1; }
+                ;;
+              *)
+                echo "::error::unknown macOS signing mode '$MACOS_SIGNING'"; exit 1 ;;
+            esac
           done
-          # Declined, and said so: a notarized build would print a stapled ticket here.
-          echo "notarization: not requested (ADR 0042) — expect 'Unnotarized Developer ID' from spctl:"
+          # Declined, and said so. A notarized build would print a stapled ticket here; a
+          # Developer ID one prints 'Unnotarized Developer ID'; an ad-hoc one prints
+          # 'rejected'. None of the three is an error, and none of them is the updater's
+          # business — this is Gatekeeper's verdict on a FIRST install, nothing more.
+          echo "notarization: not requested (ADR 0042). spctl's verdict on a first install:"
           spctl -a -vv -t exec "$bundle" 2>&1 || true
 
       # Honest evidence for "does this start on a machine with no developer tools". It cannot
@@ -437,6 +537,7 @@ jobs:
           SLUG: ${{ steps.names.outputs.slug }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
           SIGNED: ${{ needs.plan.outputs.signed }}
+          MACOS_SIGNING: ${{ needs.plan.outputs.macos_signing }}
         run: |
           set -euo pipefail
           {
@@ -450,7 +551,7 @@ jobs:
             echo
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$RUNNER_OS" = "macOS" ]; then
-            if [ "$PUBLISH" = "true" ]; then
+            if [ "$PUBLISH" = "true" ] && [ "$MACOS_SIGNING" = "developer-id" ]; then
               cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           ### A first install on macOS meets Gatekeeper, and this is expected
 
@@ -475,6 +576,38 @@ jobs:
           does not meet this dialog: the quarantine flag is set by the browser that downloaded
           a file, and charter's updater downloads into memory, verifies the minisign signature
           and unpacks the new bundle itself — nothing it writes is quarantined.
+          EOF
+            elif [ "$PUBLISH" = "true" ]; then
+              cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ### A first install on macOS needs one command, and this is expected
+
+          This build is **ad-hoc signed**: charter has no Apple Developer account behind it
+          (charter ADR 0042, amended 2026-09-23). The app is signed — on Apple Silicon nothing
+          unsigned runs at all — but it is signed by nobody in particular, so Gatekeeper has no
+          developer to check and refuses a *quarantined* copy. A browser marks everything it
+          downloads as quarantined. Before the first launch, run:
+
+          ```sh
+          xattr -dr com.apple.quarantine /Applications/charter.app
+          ```
+
+          That removes the flag Gatekeeper assesses, so there is nothing left to refuse. It is
+          the instruction that works whatever dialog your macOS version would otherwise show —
+          **System Settings → Privacy & Security → Open Anyway** may also work, but it has not
+          been measured for an ad-hoc build and the dialog an ad-hoc bundle raises is not
+          necessarily the one an un-notarized Developer ID bundle raises.
+
+          **This happens once, and it is not what the updater does.** charter's updater is not
+          trusted because Apple signed it; it is trusted because every update carries a
+          **minisign** signature made by the operator's key, which the app verifies before it
+          unpacks anything. Nothing about ad-hoc signing weakens that. The updater downloads
+          into memory, verifies the signature, unpacks the bundle itself and renames it into
+          place, so nothing it writes is quarantined and no dialog is involved.
+
+          Measured on macOS 26.2 (Apple Silicon) against the updater's own install path, from
+          inside an ad-hoc-signed app in `/Applications`: the replacement succeeded, **no App
+          Management permission was asked for and none was recorded**, a quarantine flag on the
+          old bundle did not survive onto the new one, and the replaced bundle launched again.
           EOF
             else
               {
