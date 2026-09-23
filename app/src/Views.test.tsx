@@ -42,7 +42,13 @@ const PERSONA: ViewAnswer = {
   kind: "answered",
   blocks: [
     { kind: "note", text: "The steward", tone: "default" },
-    { kind: "note", text: "Delegate to it for: routing", tone: "plain" },
+    {
+      kind: "facts",
+      facts: [
+        { label: "Delegate to it for", value: "routing" },
+        { label: "Vault", value: "none; this persona holds no credentials of its own" },
+      ],
+    },
     { kind: "note", text: "It remembers 2 things.", tone: "plain" },
     {
       kind: "list",
@@ -131,11 +137,27 @@ function draw(
 }
 
 describe("the persona view", () => {
+  it("draws its definition as a description list, each value under its label", async () => {
+    core(() => PERSONA);
+    draw(STEWARD);
+
+    const facts = await screen.findByTestId("facts");
+    expect(facts.tagName).toBe("DL");
+    const labels = within(facts)
+      .getAllByRole("term")
+      .map((it) => it.textContent);
+    const values = within(facts)
+      .getAllByRole("definition")
+      .map((it) => it.textContent);
+    expect(labels).toEqual(["Delegate to it for", "Vault"]);
+    expect(values).toEqual(["routing", "none; this persona holds no credentials of its own"]);
+  });
+
   it("is asked of the core as charter's own view, through the command every view is asked through", async () => {
     const { opened } = core(() => PERSONA);
     draw(STEWARD);
 
-    await screen.findByText("Delegate to it for: routing");
+    await screen.findByText("routing");
 
     expect(opened).toEqual([{ plane: PLANE, from: null, view: "persona", key: "steward" }]);
   });

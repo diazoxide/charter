@@ -415,8 +415,25 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(notes.contains(&"Delegate to it for: routing"), "{notes:?}");
         assert!(notes.contains(&"It remembers 1 thing."), "{notes:?}");
+        // The definition is label and value — the two columns the card drew — not sentences.
+        let facts: Vec<(&str, &str)> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PanelBlock::Facts { facts } => Some(facts),
+                _ => None,
+            })
+            .flatten()
+            .map(|fact| (fact.label.as_str(), fact.value.as_str()))
+            .collect();
+        assert!(
+            facts.contains(&("Delegate to it for", "routing")),
+            "{facts:?}"
+        );
+        assert!(
+            facts.iter().any(|(label, _)| *label == "Vault"),
+            "{facts:?}"
+        );
         let Some(PanelBlock::List { rows, .. }) = blocks.last() else {
             panic!("the memories are not a list: {blocks:?}");
         };

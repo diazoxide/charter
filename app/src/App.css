@@ -3407,6 +3407,31 @@ button.show-more:focus-visible {
   margin: 0.25rem 0;
 }
 
+/* A view's facts: label beside value, the two columns the persona card drew. The label column
+   is as wide as its longest label and never wraps; the value wraps anywhere, because a path or
+   a tool list has no spaces to break at. */
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.4rem 0;
+  max-width: 60rem;
+}
+
+.facts .fact {
+  display: contents;
+}
+
+.facts dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 /* A list in a view has the pane's height to use, not a side region's. */
 .view-body .panel-list {
   margin-top: 0.6rem;

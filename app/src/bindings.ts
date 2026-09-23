@@ -995,7 +995,9 @@ export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } |
  */
 { kind: "chart"; title: string; 
 /**  `bars` or `columns` (`panel::Shape`). */
-shape: string; unit: string | null; points: PanelPoint[] };
+shape: string; unit: string | null; points: PanelPoint[] } | 
+/**  Labelled facts, drawn as two columns (`panel::Block::Facts`). */
+{ kind: "facts"; facts: PanelFact[] };
 
 /**
  *  What opens when a row is opened, as the window receives it.
@@ -1005,15 +1007,12 @@ shape: string; unit: string | null; points: PanelPoint[] };
  *  app's wire types are what generate `app/src/bindings.ts`.
  */
 export type PanelDetail = 
-/**  The row's own words, in full. The only kind a contributed panel may use. */
-{ kind: "text"; text: string } | 
 /**
- *  What this plane says this persona is — `panel::Detail::Persona`. **charter's own panel no
- *  longer sets it**: a persona row runs `persona.show:<name>`, which opens the persona's view
- *  tab, and a card beside the row would be a second surface for the same thing. The word
- *  stays in the vocabulary until whoever owns `charter_core::panel` retires it.
+ *  The row's own words, in full — the only kind there is. A persona row runs
+ *  `persona.show:<name>`, which opens the persona's view tab, rather than a card that reads
+ *  the definition (`panel::Detail` retired that kind).
  */
-{ kind: "persona"; persona: string };
+{ kind: "text"; text: string };
 
 /**  What a list says when it has no rows. */
 export type PanelEmpty = {
@@ -1024,6 +1023,12 @@ export type PanelEmpty = {
 	 *  reason.
 	 */
 	offer: string | null,
+};
+
+/**  One labelled fact. */
+export type PanelFact = {
+	label: string,
+	value: string,
 };
 
 /**  One magnitude in a chart. */

@@ -19,7 +19,7 @@ import { viewKey, type ViewRef } from "./tabs";
  * A tab is a layout of panes and a pane holds a session or a view (`tabs.ts`). A view is named
  * by data — who draws it, which of theirs, what it is about — and **opening one asks the core
  * one question** (`open_view`), whose answer is the panel vocabulary and nothing else: notes,
- * lists and charts. charter's own persona view and an approved extension's statistics come
+ * facts, lists and charts. charter's own persona view and an approved extension's statistics come
  * down that one command and are drawn by the code below; this file cannot tell them apart
  * except by whose they are, which it says. That is the operator's *"100% pluggable"*, as a
  * property of the code rather than a promise: the personas are a plugin like any other, and
@@ -267,6 +267,8 @@ function AnsweredBlocks({ blocks, label }: { blocks: readonly PanelBlock[]; labe
           </p>
         ) : block.kind === "chart" ? (
           <Chart key={at} chart={block} />
+        ) : block.kind === "facts" ? (
+          <Facts key={at} facts={block} />
         ) : (
           <PanelList
             key={at}
@@ -281,6 +283,29 @@ function AnsweredBlocks({ blocks, label }: { blocks: readonly PanelBlock[]; labe
         ),
       )}
     </>
+  );
+}
+
+/** A facts block, as the wire carries it. */
+export type FactsBlock = Extract<PanelBlock, { kind: "facts" }>;
+
+/**
+ * **Labelled facts, as a description list** — `charter_core::panel::Block::Facts`: what a
+ * persona's definition says, label beside value, the two columns the persona card drew. A
+ * `<dl>` because that is what it is, so a screen reader announces each value with its label.
+ */
+export function Facts({ facts }: { facts: FactsBlock }) {
+  return (
+    <dl className="facts" data-testid="facts">
+      {facts.facts.map((fact, at) => (
+        /* By position: a block's facts arrive whole and are never spliced, and two facts may
+           share a label. */
+        <div key={at} className="fact">
+          <dt>{fact.label}</dt>
+          <dd>{fact.value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 

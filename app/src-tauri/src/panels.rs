@@ -34,13 +34,10 @@ use charter_core::workspaces::Plane;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub(crate) enum PanelDetail {
-    /// The row's own words, in full. The only kind a contributed panel may use.
+    /// The row's own words, in full — the only kind there is. A persona row runs
+    /// `persona.show:<name>`, which opens the persona's view tab, rather than a card that reads
+    /// the definition (`panel::Detail` retired that kind).
     Text { text: String },
-    /// What this plane says this persona is — `panel::Detail::Persona`. **charter's own panel no
-    /// longer sets it**: a persona row runs `persona.show:<name>`, which opens the persona's view
-    /// tab, and a card beside the row would be a second surface for the same thing. The word
-    /// stays in the vocabulary until whoever owns `charter_core::panel` retires it.
-    Persona { persona: String },
 }
 
 /// One row of a panel's list.
@@ -97,6 +94,17 @@ pub(crate) enum PanelBlock {
         unit: Option<String>,
         points: Vec<PanelPoint>,
     },
+    /// Labelled facts, drawn as two columns (`panel::Block::Facts`).
+    Facts {
+        facts: Vec<PanelFact>,
+    },
+}
+
+/// One labelled fact.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct PanelFact {
+    pub label: String,
+    pub value: String,
 }
 
 /// One magnitude in a chart.
@@ -177,6 +185,15 @@ impl From<&panel::Block> for PanelBlock {
                     })
                     .collect(),
             },
+            panel::Block::Facts(facts) => Self::Facts {
+                facts: facts
+                    .iter()
+                    .map(|fact| PanelFact {
+                        label: fact.label.clone(),
+                        value: fact.value.clone(),
+                    })
+                    .collect(),
+            },
         }
     }
 }
@@ -191,9 +208,6 @@ impl From<&panel::Row> for PanelRow {
             tone: it.tone.as_str().to_owned(),
             detail: it.detail.as_ref().map(|detail| match detail {
                 panel::Detail::Text(text) => PanelDetail::Text { text: text.clone() },
-                panel::Detail::Persona(name) => PanelDetail::Persona {
-                    persona: name.clone(),
-                },
             }),
             runs: it.runs.clone(),
         }
@@ -592,9 +606,10 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
 /// personas as a pure example of a plugin: nothing the window does for this view is something
 /// an extension's view cannot also have done for it, because the window cannot tell them apart.
 ///
-/// What it holds, in order: the role, what the definition says (one sentence per fact, the
-/// sentences the card used to draw), how many memories there are, and the memories themselves
-/// as a list — searched and paged by the list primitive, each row's card the whole memory.
+/// What it holds, in order: the role, what the definition says (a facts block — label and
+/// value, the two columns the card used to draw), how many memories there are, and the
+/// memories themselves as a list — searched and paged by the list primitive, each row's card the
+/// whole memory.
 ///
 /// `None` is a persona the plane does not have (any more): the window draws that as a view
 /// whose source has gone, not as a failure. A definition charter will not read is a trouble
@@ -628,32 +643,48 @@ pub(crate) fn persona_view(root: &Path, name: &str) -> Result<Option<Vec<panel::
                     tone: panel::Tone::Default,
                 });
             }
-            blocks.push(note(match shown.delegate_when {
-                Some(when) if !when.trim().is_empty() => format!("Delegate to it for: {when}"),
-                // `delegate-when` is what makes a persona findable — it becomes the description
-                // whoever is routing reads — so a definition without one is worth saying.
-                _ => "Delegate to it for: nothing declared, so nothing routes here by itself."
-                    .to_owned(),
-            }));
-            blocks.push(note(if shown.tools.is_empty() {
-                "Tools: none auto-approved.".to_owned()
-            } else {
-                format!("Tools: {}", shown.tools.join(", "))
-            }));
-            // **The vault's NAME, and never a thing inside it.** The three answers are three
-            // because "holds no credentials" and "nobody has said" are different facts — see
-            // `PersonaDetails::declares_no_vault`.
-            blocks.push(note(match (shown.vault, shown.declares_no_vault) {
-                (Some(vault), _) => {
-                    format!("Vault: {vault} — the name; what is in it is never shown here.")
-                }
-                (None, true) => "Vault: none. This persona holds no credentials of its own.".into(),
-                (None, false) => "Vault: not declared in its definition.".into(),
-            }));
+            let fact = |label: &str, value: String| panel::Fact {
+                label: label.to_owned(),
+                value,
+            };
+            let mut facts = vec![
+                fact(
+                    "Delegate to it for",
+                    match shown.delegate_when {
+                        Some(when) if !when.trim().is_empty() => when,
+                        // `delegate-when` is what makes a persona findable — it becomes the
+                        // description whoever is routing reads — so a definition without one is
+                        // worth saying.
+                        _ => "nothing declared, so nothing routes here by itself".to_owned(),
+                    },
+                ),
+                fact(
+                    "Tools",
+                    if shown.tools.is_empty() {
+                        "none auto-approved".to_owned()
+                    } else {
+                        shown.tools.join(", ")
+                    },
+                ),
+                // **The vault's NAME, and never a thing inside it.** The three answers are three
+                // because "holds no credentials" and "nobody has said" are different facts — see
+                // `PersonaDetails::declares_no_vault`.
+                fact(
+                    "Vault",
+                    match (shown.vault, shown.declares_no_vault) {
+                        (Some(vault), _) => {
+                            format!("{vault} — the name; what is in it is never shown here")
+                        }
+                        (None, true) => "none; this persona holds no credentials of its own".into(),
+                        (None, false) => "not declared in its definition".into(),
+                    },
+                ),
+            ];
             if shown.lineage.len() > 1 {
-                blocks.push(note(format!("Inherits: {}", shown.lineage.join(" → "))));
+                facts.push(fact("Inherits", shown.lineage.join(" → ")));
             }
-            blocks.push(note(format!("Defined in: {}", shown.file)));
+            facts.push(fact("Defined in", shown.file));
+            blocks.push(panel::Block::Facts(facts));
         }
     }
     match memory_rows(root, name) {
@@ -1032,7 +1063,9 @@ mod tests {
             .iter()
             .find_map(|block| match block {
                 PanelBlock::Note { text, tone } => Some((text.clone(), tone.clone())),
-                PanelBlock::List { .. } | PanelBlock::Chart { .. } => None,
+                PanelBlock::List { .. } | PanelBlock::Chart { .. } | PanelBlock::Facts { .. } => {
+                    None
+                }
             })
             .expect("the refusal is drawn");
         assert_eq!(told.1, "trouble");
@@ -1046,7 +1079,9 @@ mod tests {
             .iter()
             .find_map(|block| match block {
                 PanelBlock::List { rows, .. } => Some(rows.as_slice()),
-                PanelBlock::Note { .. } | PanelBlock::Chart { .. } => None,
+                PanelBlock::Note { .. } | PanelBlock::Chart { .. } | PanelBlock::Facts { .. } => {
+                    None
+                }
             })
             .expect("a list block")
     }

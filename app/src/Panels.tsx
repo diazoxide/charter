@@ -13,7 +13,7 @@ import {
 import { NeedsYou } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
-import { Chart } from "./Views";
+import { Chart, Facts } from "./Views";
 import { commands, type ExtensionView, type PanelView } from "./bindings";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
@@ -248,6 +248,8 @@ function Contributed({
       {panel.blocks.map((block, at) =>
         block.kind === "chart" ? (
           <Chart key={at} chart={block} />
+        ) : block.kind === "facts" ? (
+          <Facts key={at} facts={block} />
         ) : block.kind === "note" ? (
           <p
             /* By position, which is the one place in this file that is right: a block has no

@@ -193,17 +193,14 @@ impl Tone {
 /// what a todo should do when it is clicked was *"like persona description"*. So there is one
 /// popover and the vocabulary says what goes in it, rather than a second surface per panel.
 ///
-/// [`Self::Persona`] is charter's own — it costs a `persona_details` call against the plane —
-/// and a declared panel gets [`Self::Text`], which is its own longer words and no read of
-/// anything. That is the same asymmetry [`Row::runs`] draws, one notch smaller: charter's
-/// contribution may name a consumer that runs code, a stranger's may only carry data.
+/// One kind now: the row's own words. There was a second, `Persona`, which named a persona for
+/// the window to go and read; a persona row now opens the persona's own view tab
+/// ([`Block::Facts`] is how that view says what the definition says), so nothing named one and
+/// it was retired rather than left as a way for a card to read the plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detail {
-    /// The row's own words, in full. The only kind a declared panel may use.
+    /// The row's own words, in full.
     Text(String),
-    /// What this plane says this persona is — `charter_core::personas::details`, read when the
-    /// card is opened and never cached, because a definition is a file an operator edits.
-    Persona(String),
 }
 
 /// What a panel or a view is ABOUT, as a closed set of subjects charter publishes.
@@ -305,6 +302,15 @@ pub struct Chart {
     pub points: Vec<Point>,
 }
 
+/// One labelled fact: `Vault` and `devops`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fact {
+    /// What the fact is about. Short, and drawn quietly in the first column.
+    pub label: String,
+    /// What it says.
+    pub value: String,
+}
+
 /// One row of a list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -350,13 +356,15 @@ pub struct Empty {
 
 /// One part of a panel's body.
 ///
-/// Three kinds. The first two are what a panel has needed since the contract was written: a
+/// Four kinds. The first two are what a panel has needed since the contract was written: a
 /// list of things, and a sentence about why there is no list. **The third, [`Self::Chart`],
 /// arrived with the first producer that wanted one** — the persona statistics view, which is
 /// the executor's first consumer — and not before it, which is ADR 0041's rule about
-/// capabilities invented for hypothetical extensions, applied to a vocabulary. It is accepted
-/// in an answer ([`answered`]) and has no way into a manifest ([`declared`]); the module header
-/// says why.
+/// capabilities invented for hypothetical extensions, applied to a vocabulary. **The fourth,
+/// [`Self::Facts`], arrived the same way**: the persona view, drawn in a tab, had to say its
+/// definition as sentences because nothing could say it as a label and a value. Both are
+/// accepted in an answer ([`answered`]) and have no way into a manifest ([`declared`]), whose
+/// panel is one list; the module header says why for a chart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
     /// A bounded, searchable list of rows. The window draws at most a page of them, scrolls
@@ -367,6 +375,9 @@ pub enum Block {
     Note { text: String, tone: Tone },
     /// Magnitudes, drawn by charter. Only ever answered, never declared.
     Chart(Chart),
+    /// Labelled facts, drawn as two columns: what a definition says, key by key. Answered,
+    /// never declared — a declared panel is a list, and nothing has asked for more.
+    Facts(Vec<Fact>),
 }
 
 /// Who contributed a panel.
@@ -444,7 +455,7 @@ pub fn declares(panel: &Panel) -> String {
         .iter()
         .map(|block| match block {
             Block::List { rows, .. } => rows.len(),
-            Block::Note { .. } | Block::Chart(_) => 0,
+            Block::Note { .. } | Block::Chart(_) | Block::Facts(_) => 0,
         })
         .sum();
     format!(
@@ -642,7 +653,7 @@ fn row_of(raw: &serde_json::Value) -> Result<Row, String> {
         note: words(object.get("note"), MOST_TEXT, "note")?,
         mark: mark_of(object.get("mark"))?,
         tone: tone_of(object.get("tone"))?,
-        // A declared card is the row's own longer words and nothing else: `Detail::Persona`
+        // A declared card is the row's own longer words and nothing else: a card that
         // reads a file off the plane, which is a consumer charter chooses and not a value an
         // extension names.
         detail: words(object.get("detail"), MOST_DETAIL, "detail")?.map(Detail::Text),
@@ -769,12 +780,22 @@ pub const MOST_BLOCKS: usize = 16;
 /// it; a chart of a thousand bars is a list, and the list block is the one that searches.
 pub const MOST_POINTS: usize = 64;
 
+/// The most facts one facts block may hold. A persona's definition says six; a block of more
+/// than this is a list, and the list block is the one that searches.
+pub const MOST_FACTS: usize = 32;
+
+/// The most a fact's label may be. It is drawn in a column that does not wrap, so it is a word
+/// or two and not a sentence.
+pub const MOST_LABEL: usize = 64;
+
 /// The keys each kind of answered block may carry. Anything else is refused by name — property
 /// 1, as [`PANEL_KEYS`] is for a declared panel.
 const LIST_KEYS: [&str; 3] = ["kind", "rows", "empty"];
 const NOTE_KEYS: [&str; 3] = ["kind", "text", "tone"];
 const CHART_KEYS: [&str; 5] = ["kind", "title", "shape", "unit", "points"];
 const POINT_KEYS: [&str; 3] = ["label", "value", "note"];
+const FACTS_KEYS: [&str; 2] = ["kind", "facts"];
+const FACT_KEYS: [&str; 2] = ["label", "value"];
 
 /// The blocks an extension's program answered, or why charter will not draw them.
 ///
@@ -829,9 +850,17 @@ fn block_of(raw: &serde_json::Value) -> Result<Block, String> {
             only(object.keys().map(String::as_str), &CHART_KEYS, "a chart")?;
             Ok(Block::Chart(chart_of(object)?))
         }
+        "facts" => {
+            only(
+                object.keys().map(String::as_str),
+                &FACTS_KEYS,
+                "a facts block",
+            )?;
+            Ok(Block::Facts(facts_of(object.get("facts"))?))
+        }
         other => Err(format!(
-            "is a {other:?}, and charter draws a list, a note or a chart — a block says what it \
-             holds, and charter decides what that looks like"
+            "is a {other:?}, and charter draws a list, a note, a chart or facts — a block says \
+             what it holds, and charter decides what that looks like"
         )),
     }
 }
@@ -873,6 +902,35 @@ fn chart_of(object: &serde_json::Map<String, serde_json::Value>) -> Result<Chart
         shape,
         unit,
         points,
+    })
+}
+
+/// A facts block's pairs, bounded, each label and value held to [`words`]'s rules.
+fn facts_of(value: Option<&serde_json::Value>) -> Result<Vec<Fact>, String> {
+    let listed = value
+        .ok_or("has no facts")?
+        .as_array()
+        .ok_or("has 'facts' that are not an array")?;
+    if listed.len() > MOST_FACTS {
+        return Err(format!(
+            "has {} facts, and charter draws at most {MOST_FACTS} in one block",
+            listed.len()
+        ));
+    }
+    let mut facts = Vec::with_capacity(listed.len());
+    for (at, raw) in listed.iter().enumerate() {
+        let fact = fact_of(raw).map_err(|why| format!("has a fact at {at} that {why}"))?;
+        facts.push(fact);
+    }
+    Ok(facts)
+}
+
+fn fact_of(raw: &serde_json::Value) -> Result<Fact, String> {
+    let object = raw.as_object().ok_or("is not an object")?;
+    only(object.keys().map(String::as_str), &FACT_KEYS, "a fact")?;
+    Ok(Fact {
+        label: words(object.get("label"), MOST_LABEL, "label")?.ok_or("has no label")?,
+        value: words(object.get("value"), MOST_TEXT, "value")?.ok_or("has no value")?,
     })
 }
 

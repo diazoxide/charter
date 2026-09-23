@@ -214,11 +214,7 @@ export function PanelList({
 /** The card a row opens when the panel does not supply a richer one: the row's own words. */
 function defaultDetail(row: PanelRow): ReactNode {
   if (row.detail === null) return null;
-  if (row.detail.kind === "text") return <p className="row-detail">{row.detail.text}</p>;
-  // A `persona` detail is charter's own and is drawn by whoever knows how to ask for one.
-  // Reaching here means a panel declared it without supplying the card, which is a defect in
-  // that panel rather than something to invent a second renderer for.
-  return null;
+  return <p className="row-detail">{row.detail.text}</p>;
 }
 
 /**

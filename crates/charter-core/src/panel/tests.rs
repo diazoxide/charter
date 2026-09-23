@@ -16,7 +16,9 @@ fn declaring(json: &str) -> Result<Vec<Panel>, String> {
 fn rows(panel: &Panel) -> &[Row] {
     match &panel.blocks[0] {
         Block::List { rows, .. } => rows,
-        Block::Note { .. } | Block::Chart(_) => panic!("the panel's first block is not a list"),
+        Block::Note { .. } | Block::Chart(_) | Block::Facts(_) => {
+            panic!("the panel's first block is not a list")
+        }
     }
 }
 
@@ -125,8 +127,8 @@ fn a_mark_is_a_word_charter_published_and_never_a_file() {
 
 #[test]
 fn a_declared_card_is_text_and_never_a_read_of_the_plane() {
-    // `Detail::Persona` costs a `persona_details` call against the plane. A declared panel gets
-    // `Detail::Text`, which reads nothing — the same asymmetry `runs` draws, one notch smaller.
+    // A declared card is `Detail::Text`, which reads nothing: a name in it is words, never a
+    // persona the window goes and reads.
     let panels = declaring(
         r#"[{ "id": "p", "title": "P",
               "rows": [{ "key": "a", "text": "t", "detail": "steward" }] }]"#,
@@ -423,6 +425,70 @@ fn ordinary_words_with_spaces_and_accents_are_still_drawn() {
     let blocks = answering(r#"[{"kind":"note","text":"café — 3\u00a0memories"}]"#)
         .expect("ordinary words are drawn");
     assert_eq!(blocks.len(), 1);
+}
+
+#[test]
+fn facts_are_answered_as_labels_and_values_in_order() {
+    let blocks = answering(
+        r#"[{"kind":"facts","facts":[{"label":"Vault","value":"devops"},
+                                     {"label":"Tools","value":"Bash, Read"}]}]"#,
+    )
+    .expect("facts");
+    assert_eq!(
+        blocks,
+        vec![Block::Facts(vec![
+            Fact {
+                label: "Vault".into(),
+                value: "devops".into()
+            },
+            Fact {
+                label: "Tools".into(),
+                value: "Bash, Read".into()
+            },
+        ])]
+    );
+}
+
+#[test]
+fn facts_are_bounded_in_number_and_length() {
+    let fact = |label: &str, value: &str| serde_json::json!({ "label": label, "value": value });
+    let many: Vec<_> = (0..=MOST_FACTS)
+        .map(|n| fact(&format!("f{n}"), "v"))
+        .collect();
+    let too_many = serde_json::json!([{ "kind": "facts", "facts": many }]);
+    assert!(
+        answered(&too_many).is_err(),
+        "more facts than a block holds"
+    );
+
+    let long_label = "l".repeat(MOST_LABEL + 1);
+    let long_value = "v".repeat(MOST_TEXT + 1);
+    for facts in [
+        vec![fact(&long_label, "v")],
+        vec![fact("l", &long_value)],
+        vec![serde_json::json!({ "label": "l" })],
+        vec![serde_json::json!({ "label": "l", "value": "v", "runs": "chat.new" })],
+    ] {
+        let answer = serde_json::json!([{ "kind": "facts", "facts": facts }]);
+        assert!(answered(&answer).is_err(), "drawn: {answer}");
+    }
+}
+
+#[test]
+fn a_fact_holding_a_character_that_draws_as_nothing_is_refused() {
+    for (label, value) in [("Vault\u{202E}", "devops"), ("Vault", "dev\u{200B}ops")] {
+        let answer = serde_json::json!([{ "kind": "facts",
+                                          "facts": [{ "label": label, "value": value }] }]);
+        assert!(answered(&answer).is_err(), "drawn: {answer}");
+    }
+}
+
+#[test]
+fn a_declared_panel_cannot_carry_facts() {
+    // A manifest's panel is one list, and its keys are closed: facts arrive only in an answer.
+    let why = declaring(r#"[{ "id": "p", "title": "P", "facts": [{"label":"a","value":"b"}] }]"#)
+        .expect_err("facts in a manifest");
+    assert!(why.contains("\"facts\""), "{why}");
 }
 
 #[test]
