@@ -88,11 +88,12 @@ three. The program charter looks for before it starts anything is the wrapper �
 `ccs` is refused and named, and a `claude` your `PATH` cannot see is the wrapper's to find.
 
 **The wrapper has to pass its arguments on**, and not only yours: the app arms a chat with
-words it puts directly after the profile's program and before the profile's own —
-`--plugin-dir <bundled plugin> --settings <json>` for Claude Code, `-c hooks.<Event>=…` for
-Codex (see *Per profile — armed at launch*, below) — so a `ccs work` profile starts as
-`ccs --plugin-dir … --settings … work`, and those words have to reach `claude`. A wrapper
-that swallows them starts a chat with none of charter's hooks and none of its guard.
+words it puts after the profile's whole command — `--plugin-dir <bundled plugin> --settings
+<json>` for Claude Code, `-c hooks.<Event>=…` for Codex (see *Per profile — armed at
+launch*, below) — and its own session words after those. A `ccs work` profile starts as
+`ccs work --plugin-dir … --settings … --session-id <id> --name <name>`, so the wrapper reads
+its own `work` first, and the rest has to reach `claude`. A wrapper that swallows them
+starts a chat with none of charter's hooks and none of its guard.
 
 **There is no `charter harness add`.** A profile is added by editing `charter.local.toml`. A
 chat can run a command as easily as it can edit a file, so a command could never stand for
