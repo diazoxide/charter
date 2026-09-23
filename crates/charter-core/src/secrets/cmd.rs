@@ -270,12 +270,23 @@ pub fn audit(ctx: &Ctx, vault: &str, days: i64, io: &mut dyn Io) -> i32 {
 }
 
 /// Where `secret set` takes its value from. Never argv, unless the operator insists.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct SetFrom {
     pub stdin: bool,
     pub from_file: Option<String>,
     pub value: Option<String>,
     pub allow_empty: bool,
+}
+
+impl std::fmt::Debug for SetFrom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetFrom")
+            .field("stdin", &self.stdin)
+            .field("from_file", &self.from_file)
+            .field("value", &self.value.as_ref().map(|_| "***"))
+            .field("allow_empty", &self.allow_empty)
+            .finish()
+    }
 }
 
 /// `_read_value`: a file, an inline value (warned), a pipe on stdin, or — with a terminal on
@@ -305,6 +316,20 @@ fn read_value(ctx: &Ctx, key: &str, from: &SetFrom, io: &mut dyn Io) -> Result<S
 pub fn set(ctx: &Ctx, vault: &str, key: &str, from: &SetFrom, io: &mut dyn Io) -> i32 {
     let outcome = (|| -> Result<String, VaultError> {
         let v = provider(ctx, vault)?;
+        // The rule `vault add` applies, applied again where the plaintext is written: a
+        // registry is hand-editable and half of it is committed, so a plain-file vault can
+        // come to point inside the plane at a path git would take.
+        if v.provider == "plain-file"
+            && let Some(file) = super::config_str(&v.config, "file")
+            && let Some(unignored) = super::vaultcmd::unignored_plaintext(ctx, file)
+        {
+            return Err(VaultError::new(format!(
+                "refusing to write: '{unignored}' is inside the control plane and NOT gitignored \
+                 — a plain-file vault stores plaintext, so the next `charter save` would commit \
+                 it. Add it to .gitignore, or re-register the vault with a --file under .charter/ \
+                 or outside the plane."
+            )));
+        }
         let value = read_value(ctx, key, from, io)?;
         if value.is_empty() && !from.allow_empty {
             let how = if io.stdin_is_terminal() {

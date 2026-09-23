@@ -106,9 +106,9 @@ pub fn argv(uri: &str, scheme: &str) -> Result<(Vec<String>, &'static str), Vaul
         "op" => {
             let segments = parts.path.trim_matches('/').split('/').count();
             if parts.netloc.is_empty() || segments < 2 {
-                return Err(VaultError::new(format!(
-                    "malformed 1Password reference '{uri}' — expected op://<vault>/<item>/<field>"
-                )));
+                return Err(VaultError::new(
+                    "malformed 1Password reference — expected op://<vault>/<item>/<field>",
+                ));
             }
             Ok((
                 vec![
@@ -123,10 +123,15 @@ pub fn argv(uri: &str, scheme: &str) -> Result<(Vec<String>, &'static str), Vaul
         "vault" => {
             let path = format!("{}{}", parts.netloc, parts.path);
             let path = path.trim_matches('/').to_string();
-            if path.is_empty() || parts.fragment.is_empty() {
-                return Err(VaultError::new(format!(
-                    "malformed Vault reference '{uri}' — expected vault://<path>#<FIELD>"
-                )));
+            // A path or field that reads as a flag would be one to `vault`: refused, never passed.
+            if path.is_empty()
+                || parts.fragment.is_empty()
+                || path.starts_with('-')
+                || parts.fragment.starts_with('-')
+            {
+                return Err(VaultError::new(
+                    "malformed Vault reference — expected vault://<path>#<FIELD>",
+                ));
             }
             Ok((
                 vec![
@@ -139,10 +144,10 @@ pub fn argv(uri: &str, scheme: &str) -> Result<(Vec<String>, &'static str), Vaul
                 "vault",
             ))
         }
-        _ => Err(VaultError::unavailable(format!(
-            "'{uri}' is a browser reference, and reading a value out of a browser session is \
-             not in this version of charter."
-        ))),
+        _ => Err(VaultError::unavailable(
+            "a browser:// reference cannot be read: reading a value out of a browser session is \
+             not in this version of charter.",
+        )),
     }
 }
 
@@ -177,17 +182,22 @@ pub fn reference_for(ctx: &Ctx, vault: &Vault, key: &str) -> Result<Value, Vault
 /// resolver printed: its stderr can echo what it fetched.
 pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
     let uri_value = reference_for(ctx, vault, key)?;
-    let uri = super::py_str(&uri_value);
+    // **The stored entry is never put into a message**, on any path below. It is a URI only
+    // when the file is what it claims to be; a raw value hand-put here, or a reference vault
+    // pointed at another vault's file, would otherwise be printed by the error meant to
+    // report it.
     let Some(scheme) = scheme_of(&uri_value) else {
         return Err(VaultError::new(format!(
-            "'{key}' in vault '{}' is not a supported reference: '{uri}'",
+            "'{key}' in vault '{}' is not a supported reference (an entry must start with op:// \
+             or vault://; the entry itself is withheld, since it may be a value)",
             vault.name
         )));
     };
+    let uri = super::py_str(&uri_value);
     let (argv, cli) = argv(&uri, scheme)?;
     if ctx.which(cli).is_none() {
         return Err(VaultError::new(format!(
-            "'{key}' needs the '{cli}' CLI to resolve {uri} — it is not on PATH. Install it and \
+            "'{key}' needs the '{cli}' CLI to resolve it — it is not on PATH. Install it and \
              authenticate, then retry."
         )));
     }
@@ -204,6 +214,7 @@ pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
                 RESOLVE_TIMEOUT.as_secs()
             )));
         }
+        Err(RunError::Interrupted(_)) => return Err(VaultError::interrupted()),
         Err(RunError::Spawn(e)) => {
             return Err(VaultError::new(format!(
                 "resolving '{key}' via {cli} could not start it: {e}"
@@ -212,7 +223,7 @@ pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
     };
     if ran.code != 0 {
         return Err(VaultError::new(format!(
-            "resolving '{key}' via {cli} failed (exit {}) for {uri}{identity}.\n  Causes, roughly \
+            "resolving '{key}' via {cli} failed (exit {}){identity}.\n  Causes, roughly \
              in order of how often they are the real one:\n    - the item or field behind the \
              reference was renamed, moved or deleted (the vault stays healthy — `charter vault \
              verify` tests this)\n    - you are not authenticated to {cli}\n    - the identity \

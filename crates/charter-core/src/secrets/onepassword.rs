@@ -79,6 +79,7 @@ pub fn op_vault(vault: &Vault) -> Result<String, VaultError> {
         .or_else(|| super::config_str(&vault.config, "op_vault"))
         .map(|v| crate::memstore::py_strip(v).to_string())
         .unwrap_or_default();
+    not_a_flag("op-vault", &vault.name, &v)?;
     if v.is_empty() {
         return Err(VaultError::new(format!(
             "vault '{}' has no 'op-vault' configured — which 1Password vault should its items \
@@ -90,8 +91,26 @@ pub fn op_vault(vault: &Vault) -> Result<String, VaultError> {
     Ok(v)
 }
 
+/// A configured value that `op` would read as a flag is refused, never passed: the registry is
+/// hand-editable and its committed half arrives by `git pull`.
+pub fn not_a_flag(what: &str, vault: &str, value: &str) -> Result<(), VaultError> {
+    if value.starts_with('-') {
+        return Err(VaultError::new(format!(
+            "vault '{vault}' has an {what} that starts with '-', which `op` would read as an \
+             option; charter will not pass it. Re-register the vault with a real name."
+        )));
+    }
+    Ok(())
+}
+
 /// `op_item`: the one item whose fields are this vault's secrets; `charter-<vault>` by default.
-pub fn op_item(vault: &Vault) -> String {
+pub fn op_item(vault: &Vault) -> Result<String, VaultError> {
+    let item = op_item_unchecked(vault);
+    not_a_flag("op-item", &vault.name, &item)?;
+    Ok(item)
+}
+
+fn op_item_unchecked(vault: &Vault) -> String {
     let v = super::config_str(&vault.config, "op-item")
         .filter(|v| !v.is_empty())
         .or_else(|| super::config_str(&vault.config, "op_item"))
@@ -108,6 +127,16 @@ fn account(vault: &Vault) -> Option<String> {
     super::config_str(&vault.config, "account")
         .map(|a| crate::memstore::py_strip(a).to_string())
         .filter(|a| !a.is_empty())
+}
+
+/// Every configured value that lands in `op`'s argv, checked before any `op` is run.
+fn checked(vault: &Vault) -> Result<(), VaultError> {
+    op_vault(vault)?;
+    op_item(vault)?;
+    if let Some(a) = account(vault) {
+        not_a_flag("account", &vault.name, &a)?;
+    }
+    Ok(())
 }
 
 /// `_argv`: `op <args…>`, with the account pin appended when the vault has one.
@@ -130,6 +159,7 @@ fn op_run(
     argv: &[String],
     stdin: Option<&str>,
 ) -> Result<Ran, VaultError> {
+    checked(vault)?;
     if ctx.which("op").is_none() {
         return Err(VaultError::new(
             "the 1Password CLI ('op') is not on PATH. Install it and sign in \
@@ -139,6 +169,7 @@ fn op_run(
     let overlay = super::env_overlay(ctx, vault)?;
     run::run(&ctx.env, argv, stdin, &overlay, None).map_err(|e| match e {
         RunError::Timeout => VaultError::new("`op` did not finish and was stopped."),
+        RunError::Interrupted(_) => VaultError::interrupted(),
         RunError::Spawn(e) => VaultError::new(format!("`op` could not be started: {e}")),
     })
 }
@@ -177,7 +208,7 @@ fn fail(vault: &Vault, what: &str, ran: &Ran, write: bool) -> VaultError {
 /// `get`: one field via `op read` — one call, and only this secret.
 pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
     let v = op_vault(vault)?;
-    let item = op_item(vault);
+    let item = op_item(vault)?;
     let uri = format!("op://{v}/{item}/{key}");
     let ran = op_run(
         ctx,
@@ -254,7 +285,7 @@ pub fn document(
     reveal: bool,
 ) -> Result<Option<Map<String, Value>>, VaultError> {
     let v = op_vault(vault)?;
-    let item = op_item(vault);
+    let item = op_item(vault)?;
     let mut args = vec![
         "item",
         "get",
@@ -333,7 +364,7 @@ pub fn fields_of(
             return Err(VaultError::new(format!(
                 "1Password item '{}' has more than one field labelled '{name}', so charter cannot \
                  tell which secret that key means. Rename one in 1Password, then retry.",
-                op_item(vault)
+                op_item_unchecked(vault)
             )));
         }
         out.push((name, value.clone()));
@@ -371,7 +402,7 @@ fn write(
     creating: bool,
 ) -> Result<(), VaultError> {
     let v = op_vault(vault)?;
-    let item = op_item(vault);
+    let item = op_item(vault)?;
     let mut sorted: Vec<&(String, Value)> = fields.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     let rendered: Vec<Value> = sorted
@@ -431,7 +462,7 @@ pub fn set(ctx: &Ctx, vault: &Vault, key: &str, value: &str) -> Result<(), Vault
     }
     write(ctx, vault, &fields, &ids_of(doc.as_ref()), doc.is_none())?;
     let v = op_vault(vault)?;
-    let item = op_item(vault);
+    let item = op_item(vault)?;
     match get(ctx, vault, key) {
         Ok(got) if got == value => Ok(()),
         Ok(_) => Err(VaultError::new(format!(
@@ -481,7 +512,10 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
     if ctx.which("op").is_none() {
         return (false, "op CLI not on PATH".into());
     }
-    let item = op_item(vault);
+    let item = match op_item(vault) {
+        Ok(item) => item,
+        Err(e) => return (false, e.message),
+    };
     let n = match keys(ctx, vault) {
         Ok(k) => k.len(),
         Err(e) => {

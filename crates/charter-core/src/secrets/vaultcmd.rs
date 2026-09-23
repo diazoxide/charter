@@ -122,8 +122,28 @@ fn env_bindings(req: &AddRequest) -> Result<Map<String, Value>, String> {
     Ok(pairs)
 }
 
+/// The other registered vault whose file is `file`, if one is. `name` itself does not count:
+/// `--force` re-registering a vault over its own file is how it changes provider.
+fn file_owner(ctx: &Ctx, file: &str, name: &str) -> Option<String> {
+    let want = super::resolve(&ctx.vault_file_path(file))?;
+    let doc = registry::load_registry(ctx).ok()?;
+    let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
+    names.sort();
+    names.into_iter().filter(|n| n != name).find(|n| {
+        registry::vault_in(&doc, n)
+            .ok()
+            .and_then(|v| super::config_str(&v.config, "file").map(|f| ctx.vault_file_path(f)))
+            .and_then(|p| super::resolve(&p))
+            .is_some_and(|p| p == want)
+    })
+}
+
 /// `cmd_vault_add`.
 pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
+    if !registry::name_ok(&req.name) {
+        io.say(Say::Err(registry::name_refusal(&req.name)));
+        return 1;
+    }
     if let Some(p) = req.persona.as_deref().filter(|p| !p.is_empty())
         && let Some(refused) = crate::personas::name_refusal(&ctx.root, p)
     {
@@ -141,6 +161,16 @@ pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
             "file".into(),
             Value::String(portable_file(ctx, Path::new(f))),
         );
+    }
+    if let Some(file) = cfg.get("file").and_then(Value::as_str)
+        && let Some(owner) = file_owner(ctx, file, &req.name)
+    {
+        io.say(Say::Err(format!(
+            "'{file}' is already the file of vault '{owner}'. Two vaults over one file would read \
+             one vault's secrets as the other's entries — choose another --file, or remove \
+             '{owner}' first."
+        )));
+        return 1;
     }
     if req.provider == "plain-file"
         && let Some(file) = cfg.get("file").and_then(Value::as_str)
@@ -182,6 +212,14 @@ pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
         }
         if let Some(account) = req.account.as_deref().filter(|v| !v.is_empty()) {
             cfg.insert("account".into(), Value::String(account.into()));
+        }
+        for key in ["op-vault", "op-item", "account"] {
+            if let Some(value) = cfg.get(key).and_then(Value::as_str)
+                && let Err(e) = onepassword::not_a_flag(key, &req.name, value)
+            {
+                io.say(Say::Err(e.message));
+                return 1;
+            }
         }
     }
     let env_map = match env_bindings(req) {
@@ -270,7 +308,7 @@ pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
             io.say(Say::Info(format!(
                 "  charter keeps this vault in one 1Password item, '{}' in vault '{}', tagged \
                  'charter:{}' — each secret a concealed field of it.",
-                onepassword::op_item(&v),
+                onepassword::op_item(&v).unwrap_or_default(),
                 cfg.get("op-vault").map(super::py_str).unwrap_or_default(),
                 req.name
             )));

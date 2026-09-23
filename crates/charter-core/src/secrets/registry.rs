@@ -21,6 +21,28 @@ pub const PROVIDERS: [&str; 3] = ["1password", "plain-file", "reference"];
 /// Config keys that never travel — `registry.LOCAL_ONLY_KEYS`.
 pub const LOCAL_ONLY_KEYS: [&str; 1] = ["account"];
 
+/// Whether `name` may name a vault: `[A-Za-z0-9][A-Za-z0-9._-]*`, and never `..`.
+///
+/// A vault name reaches a path (`.charter/vaults/<name>.json` by default), an `op` item title
+/// and a tag, so one holding `/` or `..` would lead out of the vault directory and one opening
+/// with `-` would be read as an option. Checked when a vault is registered AND when the
+/// registry is read, because the committed half arrives by `git pull`.
+pub fn name_ok(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && !name.contains("..")
+}
+
+/// The refusal for a vault name [`name_ok`] rejects.
+pub fn name_refusal(name: &str) -> String {
+    format!(
+        "'{}' is not a vault name charter accepts: letters, digits, '.', '_' and '-', starting \
+         with a letter or digit, and never '..'.",
+        crate::personas::one_line(name)
+    )
+}
+
 /// One registered vault: its name, provider id, persona tag and provider config.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vault {
@@ -88,7 +110,7 @@ pub fn usable_vaults(half: &Map<String, Value>) -> Map<String, Value> {
         .and_then(Value::as_object)
         .map(|v| {
             v.iter()
-                .filter(|(_, e)| e.is_object())
+                .filter(|(n, e)| e.is_object() && name_ok(n))
                 .map(|(n, e)| (n.clone(), e.clone()))
                 .collect()
         })
@@ -141,6 +163,9 @@ pub fn vault(ctx: &Ctx, name: &str) -> Result<Vault, VaultError> {
 
 /// [`vault`] against a registry already loaded.
 pub fn vault_in(doc: &Map<String, Value>, name: &str) -> Result<Vault, VaultError> {
+    if !name_ok(name) {
+        return Err(VaultError::not_configured(name_refusal(name)));
+    }
     let all = vaults(doc);
     // `if not vc`: an empty object is as unregistered as a missing one.
     let entry = match all.get(name).and_then(Value::as_object) {
