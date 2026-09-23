@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use charter_core::hookwire::{Listener, Reading, Report};
+use charter_core::hookwire::{Answer, Ask, Listener, NOTHING_ANSWERS, Reading, Report};
 use charter_core::session::Exit;
 use charter_core::state::{Board, State};
 
@@ -58,7 +58,17 @@ pub struct Hooks {
     /// while they are still looking at the app.
     reading: Mutex<Option<Reading>>,
     socket: Option<PathBuf>,
+    /// Who answers an ask on this socket, once there is someone to (charter-app#204).
+    ///
+    /// A slot filled after the fact, because the answer needs the plane's chats and the
+    /// chats are built after the socket: a session's environment carries the socket's path,
+    /// so the socket has to exist first. Until it is filled every ask is answered with a
+    /// refusal, never with a silence an asker would have to wait out.
+    answering: Arc<Mutex<Option<Answering>>>,
 }
+
+/// What answers an ask, told which connection it came on.
+pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
 
 /// Where this app listens, and where containment of that path begins.
 ///
@@ -169,6 +179,7 @@ impl Hooks {
             board: Arc::new(Mutex::new(Board::new())),
             reading: Mutex::new(None),
             socket: None,
+            answering: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -181,20 +192,41 @@ impl Hooks {
         let listener = Listener::bind(&at.within, &at.socket)?;
         let socket = listener.path().to_path_buf();
         let board = Arc::new(Mutex::new(Board::new()));
-        let reading = listener.each({
-            let board = Arc::clone(&board);
-            let plane = plane.clone();
-            Box::new(move |report| {
-                if let Some(what) = apply(&board, &plane, &report) {
-                    moved(what);
-                }
-            })
-        });
+        let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
+        let reading = listener.each_answering(
+            {
+                let board = Arc::clone(&board);
+                let plane = plane.clone();
+                Box::new(move |report| {
+                    if let Some(what) = apply(&board, &plane, &report) {
+                        moved(what);
+                    }
+                })
+            },
+            {
+                let answering = Arc::clone(&answering);
+                Box::new(move |connection, ask| {
+                    // Taken out of the lock before it runs: an open starts a program, and a
+                    // program that dies at once reaches back into this plane.
+                    let answer = answering
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone();
+                    match answer {
+                        Some(answer) => answer(connection, ask),
+                        None => Answer::No {
+                            why: NOTHING_ANSWERS.to_owned(),
+                        },
+                    }
+                })
+            },
+        );
         Ok(Self {
             plane,
             board,
             reading: Mutex::new(Some(reading)),
             socket: Some(socket),
+            answering,
         })
     }
 
@@ -219,6 +251,14 @@ impl Hooks {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .is_some()
+    }
+
+    /// Who answers asks on this socket from now on.
+    pub fn answer_with(&self, answering: Answering) {
+        *self
+            .answering
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(answering);
     }
 
     pub fn socket(&self) -> Option<&Path> {

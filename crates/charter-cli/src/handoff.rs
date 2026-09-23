@@ -19,16 +19,34 @@
 //! 2. the brief on stdin, read before the frame check because the command charter prints when
 //!    there is no frame has to carry it;
 //! 3. the first message's own shape — empty, a flag, one word, a NUL, past the byte bound;
-//! 4. the frame, which in this charter is where it stops (see below).
+//! 4. the host: the app that started this chat, or — where there is none — the printed command.
 //!
-//! # This charter reaches step 4 every time, and writes nothing
+//! # Where this charter opens a chat, and where it prints the command instead
 //!
-//! There is no channel from this binary into the desktop app that opens a chat, so the frame
-//! check that Python reaches after every other refusal is the one this always reaches. It
-//! answers the way Python answers a shell that is not a chat: it prints the command to run in
-//! a new terminal, and exits 1. Python's writes — the workspace, its vision, the todo — all
-//! come *after* that check, so a handoff that cannot open a chat has created nothing in
-//! either implementation, and there is nothing here that could be half-done.
+//! Python opens a handed-off chat in a background window of its own tmux frame. This charter
+//! has no tmux; its frame is the desktop app, and a chat the app started carries the app's
+//! hook socket in `$CHARTER_HOOK_SOCKET` (`charter_core::hookwire`). So step 4 asks the app,
+//! over that socket, to open the chat: a tab in the target workspace, started on the stamped
+//! brief (charter-app#204). The consent is unchanged and is not asked for twice. It is the
+//! harness's permission prompt in front of this exact command, which the operator answered
+//! with the brief on screen.
+//!
+//! **Anything short of the app saying "opened" is today's answer, byte for byte**: no socket
+//! in the environment (a terminal, which is where every chat was before #204), an app that is
+//! not listening, one that does not answer in time, or one that answers nonsense. That answer
+//! prints the command to run in a new terminal and exits 1, which is Python's answer to a
+//! shell that is not a chat. An app that answers with a *refusal* gets the same command plus
+//! one line saying why, because a refusal nobody sees is a handoff that vanished.
+//!
+//! What the ticket on that socket is worth, and what it is not, is argued once, where it is
+//! implemented: `charter_core::hookwire::OpenChat`.
+//!
+//! **Python's writes after the open are not ported**: the todo in the target workspace, the
+//! dispatch tally, the arrival mark on the strip. This charter has no todo store and writes
+//! no dispatch log, and the differential declares the difference rather than hiding it
+//! (`tests/differential/run.py`, `HANDOFF_WRITES_NOTHING_AFTER_THE_OPEN`). With `--create`
+//! the app creates the workspace before it opens the chat, because a chat has to stand in a
+//! directory that exists.
 
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
@@ -158,8 +176,22 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // ---- the frame, which is where this charter stops --------------------------------
-    let (command, named) = printed_command(root, ws, &msg, vision.filter(|_| args.create), persona);
+    // ---- the host: the app that started this chat, if one did ---------------------------
+    let create_vision = vision.filter(|_| args.create);
+    let refused = match in_the_app(ws, &msg, create_vision, persona) {
+        Host::Opened(chat) => {
+            // `commands_handoff.OPENED`, word for word, on stdout where Python prints it.
+            println!(
+                "charter handoff: opened chat {chat} in workspace '{ws}', started on the brief"
+            );
+            return ExitCode::SUCCESS;
+        }
+        Host::Refused(why) => Some(why),
+        Host::None => None,
+    };
+
+    // ---- no host that would open it: the command to run in a terminal ----------------
+    let (command, named) = printed_command(root, ws, &msg, create_vision, persona);
     let mut said = format!(
         "charter handoff: this `charter` is the desktop app's binary, which has no frame to \
          open a chat in the background of and no way to ask the app to open one — nothing was \
@@ -174,8 +206,80 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
             handoff::UNKNOWN_HARNESS
         ));
     }
+    if let Some(why) = refused {
+        said.push('\n');
+        said.push_str(&format!(
+            "  The app that started this chat was asked, and would not open one: {}",
+            charter_core::personas::one_line(&why)
+        ));
+    }
     voice::err(&said);
     ExitCode::FAILURE
+}
+
+/// What the app that started this chat did with a handoff.
+enum Host {
+    /// The chat is open, under this number on the app's board.
+    Opened(u32),
+    /// The app answered, and said no, in its own words.
+    Refused(String),
+    /// There is no app to ask, or it did not answer: the terminal path, unchanged.
+    None,
+}
+
+/// How long the app has to mint a ticket. It is a map insert; two seconds is an app that is
+/// not going to answer.
+const A_TICKET_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long the app has to open the chat. It resolves a profile, which can run a subprocess
+/// to ask whether a file is tracked, and spawns a harness, so this is generous. It is still a
+/// bound, because the operator is waiting on a Bash tool call that has to end.
+const AN_OPEN_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Asks the app that started this chat to open the handoff (charter-app#204).
+///
+/// Two lines on ONE connection: a ticket for this chat, then the open that spends it. See
+/// `charter_core::hookwire::OpenChat` for what that ticket guarantees and what it does not.
+///
+/// **No app is not an error here, it is the terminal.** `$CHARTER_HOOK_SOCKET` and
+/// `$CHARTER_CHAT` are set only in a chat the app started (`sessions.rs`), so their absence is
+/// every chat charter had before the app existed, and it gets the answer it always got. Every
+/// failure after that (nothing listening, a deadline passed, a line that will not parse) is
+/// treated the same way, silently. `hookwire`'s own rule is that it can never break a turn,
+/// and the printed command is a handoff the operator can still carry out.
+fn in_the_app(ws: &str, msg: &str, create_vision: Option<&str>, persona: Option<&str>) -> Host {
+    use charter_core::hookwire::{Answer, Ask, Asking, CHAT_ENV, OpenChat, SOCKET_ENV};
+
+    let Some(socket) = std::env::var_os(SOCKET_ENV).filter(|s| !s.is_empty()) else {
+        return Host::None;
+    };
+    let Some(chat) = std::env::var(CHAT_ENV)
+        .ok()
+        .and_then(|chat| chat.parse::<u32>().ok())
+    else {
+        return Host::None;
+    };
+    let Ok(mut asking) = Asking::on(std::path::Path::new(&socket)) else {
+        return Host::None;
+    };
+    let ticket = match asking.ask(&Ask::Ticket { chat }, A_TICKET_TAKES_AT_MOST) {
+        Ok(Answer::Ticket { ticket }) => ticket,
+        Ok(Answer::No { why }) => return Host::Refused(why),
+        Ok(Answer::Opened { .. }) | Err(_) => return Host::None,
+    };
+    let open = OpenChat {
+        chat,
+        workspace: ws.to_owned(),
+        create_vision: create_vision.map(str::to_owned),
+        persona: persona.map(str::to_owned),
+        message: msg.to_owned(),
+        ticket,
+    };
+    match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
+        Ok(Answer::Opened { chat }) => Host::Opened(chat),
+        Ok(Answer::No { why }) => Host::Refused(why),
+        Ok(Answer::Ticket { .. }) | Err(_) => Host::None,
+    }
 }
 
 /// The brief on stdin, or why there is none.

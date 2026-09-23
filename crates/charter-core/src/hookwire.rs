@@ -200,6 +200,226 @@ fn conversation(
     }
 }
 
+// ----------------------------------------------------------------------------------------
+// the other direction: a chat ASKING the app to open a chat (charter-app#204)
+// ----------------------------------------------------------------------------------------
+
+/// What a chat asks the app for, when reporting is not what it wants.
+///
+/// **This is the one verb on this socket that makes something happen in the world**, and it is
+/// why the two lines below are a handshake rather than a single message. A report moves a
+/// chat that already exists; an open makes one, with a first message the operator approved,
+/// running with their authority. See [`OpenChat`] for what the ticket does and does not
+/// protect against.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ask {
+    /// Mint a ticket for the chat this asker is running inside. The app answers with
+    /// [`Answer::Ticket`], or with [`Answer::No`] when it will not.
+    Ticket { chat: u32 },
+    /// Spend a ticket: open the chat this describes. Boxed because it carries the whole
+    /// first message, which is the brief, and the other variant is two words — clippy's
+    /// `large_enum_variant` is right about it.
+    Open(Box<OpenChat>),
+}
+
+/// A handoff the app is asked to open, as `charter handoff` hands it over.
+///
+/// Every field here has already been through the command's own refusals
+/// ([`crate::handoff`]): the workspace is one this plane has (or one this call is creating),
+/// the persona is one it defines, and `message` is the stamped first message a chat may be
+/// started on. The app asks the questions only it can answer — is this a chat I started, is
+/// its harness one that takes a first message, is the workspace's directory there — and
+/// refuses rather than guessing.
+///
+/// # The ticket, and exactly what it is worth
+///
+/// `ticket` is a value the app minted moments earlier, on this same connection, in answer to
+/// [`Ask::Ticket`] for this same chat. It is spent here and can never be spent again.
+///
+/// **What that buys.** The socket carries no ambient "open a chat" verb: no single line on it
+/// opens anything, and no line that opened something can open a second thing. The ticket
+/// never touches a readable surface — not the environment, not argv (which is where the brief
+/// itself travels, and which `charter handoff`'s credential refusal already calls readable by
+/// any local process), not a file, not the transcript — so nothing that can read those can
+/// produce one. And because the app mints at most one live ticket per chat and forgets it the
+/// moment it is spent or the deadline passes, one approved `charter handoff` opens at most one
+/// chat.
+///
+/// **What it does not buy, plainly.** It does not authenticate the *approval*. A process
+/// already inside the chat's own process tree has the socket path and the chat number in its
+/// environment, so it can run this same two-line exchange — or simply exec `charter handoff`
+/// itself, which is the same command the operator's prompt stands in front of. charter cannot
+/// tell that process from the invocation the operator approved, because the consent lives in
+/// the harness's permission prompt and nothing inside the process tree witnesses it: no hook
+/// fires between the operator's yes and the command running, and anything a hook could say
+/// would arrive on this same socket, where the same process can say it too. ADR 0024 concedes
+/// exactly this for *moving* a chat, and this is the same concession for opening one.
+///
+/// **Why that is acceptable, and it is the whole of the justification.** Opening a chat with
+/// an arbitrary first message and the operator's authority is *already* within reach of any
+/// process in the tree, with no app involved: `claude -p "…"`, or
+/// `charter claude --workspace x "<msg>"`, starts a harness headless, in the background, where
+/// nobody sees it. What the app opens instead is a tab in the target workspace's strip, in the
+/// window the operator is looking at, whose first message is stamped with the chat it came from
+/// (`⟨handoff from chat N · …⟩`). That is strictly more visible than what the tree could
+/// already do. **Visibility is the control here, not the ticket**, which is why the app never
+/// opens a handed-off chat anywhere but on a strip, and why the stamp is not optional.
+/// (charter-app#204, where the operator ruled on this with the premise corrected: an earlier
+/// framing called opening a chat "a larger primitive than moving a tab", and that does not
+/// survive counting the harness itself.)
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OpenChat {
+    /// The chat that is handing off — the app's own number for it, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The workspace the new chat belongs to for life.
+    pub workspace: String,
+    /// `Some(vision)` when this handoff is creating that workspace, which is the only shape
+    /// `--create` can reach this in: `--create` without `--vision` is refused long before.
+    pub create_vision: Option<String>,
+    /// The persona the operator named, or none for the plane's own answer.
+    pub persona: Option<String>,
+    /// The whole of what the new chat is sent: the stamp line, a blank line, the brief.
+    pub message: String,
+    /// See the note above. Minted by the app, spent once, never written down.
+    pub ticket: String,
+}
+
+/// What the app answers an [`Ask`] with. One line, on the same connection.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Answer {
+    /// A ticket to spend on the next line, and on no other connection.
+    Ticket { ticket: String },
+    /// The chat is open, under this number on the app's board.
+    Opened { chat: u32 },
+    /// The app will not, and this is the sentence saying why. The asker prints the command
+    /// to run in a terminal and says this underneath it: a refusal the operator cannot see
+    /// is a handoff that vanished.
+    No { why: String },
+}
+
+/// How long a ticket lives unspent.
+///
+/// `charter handoff` spends its ticket on the very next line, milliseconds after the mint, so
+/// this bounds only a ticket that was minted and abandoned: a `charter` killed between the two
+/// lines, or something that minted with no intention of spending. While one is live no second
+/// ticket is minted for that chat, so this is also how long such an abandoned mint can hold up
+/// the next handoff from the same chat. Seconds, not minutes, for that reason.
+pub const A_TICKET_LIVES: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The tickets an app has minted and not yet seen spent, one per chat at most.
+///
+/// This is the whole of the ticket's mechanism, kept in the core so that it is plain Rust
+/// with tests of its own, and so the app holds a value rather than a policy. The argument for
+/// what it is worth is on [`OpenChat`].
+#[derive(Debug, Default)]
+pub struct Tickets {
+    live: std::sync::Mutex<std::collections::HashMap<u32, Live>>,
+}
+
+#[derive(Debug)]
+struct Live {
+    ticket: String,
+    connection: u64,
+    until: std::time::Instant,
+}
+
+impl Tickets {
+    /// A ticket for `chat`, bound to `connection`, or why not.
+    ///
+    /// **One live ticket per chat.** A second mint while one is live is refused rather than
+    /// replacing it. A replacement would let a second process cancel the handoff the operator
+    /// just approved without anybody seeing why; a refusal leaves the first one standing and,
+    /// if the second mint was the real handoff, it prints the command to run with the reason
+    /// underneath, which is noisy on purpose.
+    ///
+    /// The value is two v4 UUIDs, 244 random bits from the operating system's generator: the
+    /// same source charter already trusts for the session ids it mints (`harness::SessionId`).
+    pub fn mint(
+        &self,
+        chat: u32,
+        connection: u64,
+        now: std::time::Instant,
+    ) -> Result<String, String> {
+        let mut live = self.held();
+        live.retain(|_, one| one.until > now);
+        if live.contains_key(&chat) {
+            return Err(format!(
+                "a handoff from chat {chat} is already being opened; try again in a few seconds"
+            ));
+        }
+        let ticket = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        live.insert(
+            chat,
+            Live {
+                ticket: ticket.clone(),
+                connection,
+                until: now + A_TICKET_LIVES,
+            },
+        );
+        Ok(ticket)
+    }
+
+    /// Spends `ticket` for `chat` on `connection`, or says why it will not open anything.
+    ///
+    /// **The chat's ticket is gone after this whatever the answer.** A wrong guess spends the
+    /// real ticket too, so a guesser gets one try per mint, and the mint is one per chat at a
+    /// time. The comparison runs over every byte whatever it finds, so how long a wrong
+    /// ticket takes to refuse says nothing about how much of it was right.
+    pub fn spend(
+        &self,
+        chat: u32,
+        connection: u64,
+        ticket: &str,
+        now: std::time::Instant,
+    ) -> Result<(), String> {
+        let Some(live) = self.held().remove(&chat) else {
+            return Err(NO_TICKET.to_owned());
+        };
+        let same = live.ticket.len() == ticket.len()
+            && live
+                .ticket
+                .bytes()
+                .zip(ticket.bytes())
+                .fold(0u8, |differs, (a, b)| differs | (a ^ b))
+                == 0;
+        if !same || live.connection != connection || live.until <= now {
+            return Err(NO_TICKET.to_owned());
+        }
+        Ok(())
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u32, Live>> {
+        self.live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// What every spend that opens nothing says. One sentence for every reason, so the refusal
+/// does not tell a guesser which part it got wrong.
+pub const NO_TICKET: &str =
+    "that open was not preceded by a ticket this app minted for this chat on this connection";
+
+/// One line read off the socket, whichever kind it is.
+///
+/// **Untagged, and the report comes first**, so a `charter` older than this ask — a plane
+/// that has not been updated, a hook left in a settings file — writes exactly the bytes it
+/// always did and is read exactly as it always was. A [`Report`] requires both `chat` and
+/// `event`, and no [`Ask`] carries an `event`, so the two can never be mistaken for each
+/// other.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+enum Line {
+    Report(Report),
+    Ask(Ask),
+}
+
 /// Sends one report to the socket at `path`. Answers whether the app took it.
 ///
 /// One connection is one report, written and closed. Nothing is waited for: the app has the
@@ -217,6 +437,84 @@ pub fn send(path: &std::path::Path, report: &Report) -> io::Result<()> {
     socket.write_all(&line)?;
     socket.flush()
 }
+
+/// One conversation with the app: lines written, and each answered on the same connection.
+///
+/// **The same connection is the point.** A ticket is bound to the connection it was minted
+/// on ([`OpenChat`]), so the mint and the spend have to travel together, and a line copied
+/// onto a connection of its own spends nothing.
+#[cfg(unix)]
+pub struct Asking {
+    stream: std::io::BufReader<std::os::unix::net::UnixStream>,
+}
+
+#[cfg(unix)]
+impl Asking {
+    /// Connects to the app listening at `path`.
+    ///
+    /// A path that is not there, and a socket whose app has gone, both refuse at once —
+    /// `ENOENT` and `ECONNREFUSED` — so connecting cannot hang. What can is an app that
+    /// takes the line and never answers, which is what [`Asking::ask`]'s deadline is for.
+    pub fn on(path: &std::path::Path) -> io::Result<Self> {
+        let stream = std::os::unix::net::UnixStream::connect(path)?;
+        Ok(Self {
+            stream: std::io::BufReader::new(stream),
+        })
+    }
+
+    /// Writes `ask` and reads the app's answer, waiting at most `within` for each half.
+    ///
+    /// Every way this fails is an `Err` and never a wait: a handoff whose app did not answer
+    /// prints the command to run in a terminal, which is a handoff the operator can still
+    /// carry out, where a hang is a Bash tool call that never ends.
+    pub fn ask(&mut self, ask: &Ask, within: std::time::Duration) -> io::Result<Answer> {
+        use std::io::{BufRead, Read, Write};
+
+        let socket = self.stream.get_mut();
+        socket.set_write_timeout(Some(within))?;
+        socket.set_read_timeout(Some(within))?;
+        let mut line = serde_json::to_vec(ask).map_err(io::Error::other)?;
+        line.push(b'\n');
+        socket.write_all(&line)?;
+        socket.flush()?;
+        let mut said = String::new();
+        // The same cap the app holds a report to, turned round: an answer is a ticket or a
+        // sentence, and something that writes for ever without a newline is not the app.
+        (&mut self.stream)
+            .take(A_REPORT_IS_AT_MOST)
+            .read_line(&mut said)?;
+        if said.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the app closed the connection without answering",
+            ));
+        }
+        serde_json::from_str(&said).map_err(io::Error::other)
+    }
+}
+
+/// [`Asking`]'s counterpart where there is no unix socket: it refuses, so a handoff there
+/// prints the command to run in a terminal, as it always has.
+#[cfg(not(unix))]
+pub enum Asking {}
+
+#[cfg(not(unix))]
+impl Asking {
+    pub fn on(_path: &std::path::Path) -> io::Result<Self> {
+        Err(no_channel())
+    }
+
+    pub fn ask(&mut self, _ask: &Ask, _within: std::time::Duration) -> io::Result<Answer> {
+        match *self {}
+    }
+}
+
+/// What the app answers an ask with, told which connection it came on.
+///
+/// The connection is a number the listener deals, one per connection and never twice. It is
+/// how a ticket is bound to the connection that minted it without this module knowing what a
+/// ticket is.
+pub type Answerer = Box<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
 
 /// There is no channel to send on where charter has no unix socket.
 ///
@@ -306,11 +604,29 @@ impl Listener {
     /// One connection is one report. A caller that cannot keep up does not block a harness:
     /// the hook has already written its line and gone.
     pub fn each(self, each: Box<dyn Fn(Report) + Send + Sync + 'static>) -> Reading {
+        self.each_answering(
+            each,
+            Box::new(|_, _| Answer::No {
+                why: NOTHING_ANSWERS.to_owned(),
+            }),
+        )
+    }
+
+    /// [`Listener::each`], and every [`Ask`] handed to `answer`, whose [`Answer`] is written
+    /// back on the connection the ask came on.
+    pub fn each_answering(
+        self,
+        each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+        answer: Answerer,
+    ) -> Reading {
         let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let path = self.path.clone();
         let stopped = std::sync::Arc::clone(&stopping);
         let each: std::sync::Arc<dyn Fn(Report) + Send + Sync> = std::sync::Arc::from(each);
+        let answer: std::sync::Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync> =
+            std::sync::Arc::from(answer);
         let reading = std::thread::spawn(move || {
+            let mut dealt: u64 = 0;
             for connection in self.socket.incoming() {
                 if stopped.load(std::sync::atomic::Ordering::SeqCst) {
                     return;
@@ -334,13 +650,12 @@ impl Listener {
                 // takes to arrive, so this is not fifty threads; it is however many hooks
                 // are mid-write, which is almost always none.
                 let each = std::sync::Arc::clone(&each);
+                let answer = std::sync::Arc::clone(&answer);
+                dealt += 1;
+                let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
-                    .spawn(move || {
-                        if let Some(report) = read_one(connection) {
-                            each(report);
-                        }
-                    });
+                    .spawn(move || serve(connection, this, &*each, &*answer));
                 // A thread that will not start costs this one report. Refusing the rest of
                 // the channel over it would cost every report after it too.
                 let _ = started;
@@ -414,19 +729,69 @@ const A_REPORT_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_se
 #[cfg(unix)]
 const A_REPORT_IS_AT_MOST: u64 = 64 * 1024;
 
-/// Reads one report from one connection, or nothing.
+/// The most lines one connection may carry.
+///
+/// A hook's is one report; a handoff's is a mint and a spend. Anything past that is not
+/// charter, and bounding it is what keeps one connection from holding a thread in a loop.
 #[cfg(unix)]
-fn read_one(connection: std::os::unix::net::UnixStream) -> Option<Report> {
-    use std::io::{BufRead, Read};
+const A_CONNECTION_SAYS_AT_MOST: usize = 4;
+
+/// The most one line may be once asks share the socket with reports.
+///
+/// [`A_REPORT_IS_AT_MOST`] was sized for a report, and an open carries a whole first message:
+/// up to [`crate::handoff::FIRST_MESSAGE_MAX_BYTES`] bytes, which JSON can grow sixfold where
+/// the brief holds control characters (`\u001b`). This is that, with room, and it is still
+/// a bound: the reason the cap exists is a client that never sends a newline.
+#[cfg(unix)]
+const A_LINE_IS_AT_MOST: u64 = 6 * crate::handoff::FIRST_MESSAGE_MAX_BYTES as u64 + 4096;
+
+/// What an app with no answerer says to an ask, so an asker never waits on a silence.
+pub const NOTHING_ANSWERS: &str = "this app does not open chats on request";
+
+/// Reads one connection to its end: each report handed to `each`, each ask answered on it.
+///
+/// **A report still costs exactly what it did.** A hook writes its one line and closes, so
+/// the read after it sees the end at once; nothing here waits on a hook for a second line.
+#[cfg(unix)]
+fn serve(
+    connection: std::os::unix::net::UnixStream,
+    this: u64,
+    each: &(dyn Fn(Report) + Send + Sync),
+    answer: &(dyn Fn(u64, Ask) -> Answer + Send + Sync),
+) {
+    use std::io::{BufRead, Read, Write};
 
     // Both directions: a client that connects and neither writes nor closes must not hold
     // this thread past the deadline.
     let _ = connection.set_read_timeout(Some(A_REPORT_TAKES_AT_MOST));
-    let mut line = String::new();
-    std::io::BufReader::new(connection.take(A_REPORT_IS_AT_MOST))
-        .read_line(&mut line)
-        .ok()?;
-    serde_json::from_str::<Report>(&line).ok()
+    let _ = connection.set_write_timeout(Some(A_REPORT_TAKES_AT_MOST));
+    let Ok(mut writer) = connection.try_clone() else {
+        return;
+    };
+    let mut reader = std::io::BufReader::new(connection);
+    for _ in 0..A_CONNECTION_SAYS_AT_MOST {
+        let mut line = String::new();
+        // The cap is per line: `take` on the reader would make it per connection, and a
+        // brief is most of what an open carries.
+        match (&mut reader).take(A_LINE_IS_AT_MOST).read_line(&mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+        match serde_json::from_str::<Line>(&line) {
+            Ok(Line::Report(report)) => each(report),
+            Ok(Line::Ask(ask)) => {
+                let Ok(mut said) = serde_json::to_vec(&answer(this, ask)) else {
+                    return;
+                };
+                said.push(b'\n');
+                if writer.write_all(&said).is_err() {
+                    return;
+                }
+            }
+            // A line that is neither is the end of this connection, never of the channel.
+            Err(_) => return,
+        }
+    }
 }
 
 /// A listener being read on its own thread. Dropping it stops the reading.
@@ -477,6 +842,15 @@ impl Listener {
 
     /// Unreachable, for the same reason.
     pub fn each(self, _each: Box<dyn Fn(Report) + Send + Sync + 'static>) -> Reading {
+        match self {}
+    }
+
+    /// Unreachable, for the same reason.
+    pub fn each_answering(
+        self,
+        _each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+        _answer: Answerer,
+    ) -> Reading {
         match self {}
     }
 }
@@ -1252,5 +1626,255 @@ mod tests {
         let listener = Listener::bind(dir.path(), &path).expect("the socket is taken over");
 
         assert_eq!(listener.path(), path);
+    }
+
+    // ---- the ask, and the ticket (charter-app#204) --------------------------------------
+
+    fn an_open(chat: u32, ticket: &str) -> Ask {
+        Ask::Open(Box::new(OpenChat {
+            chat,
+            workspace: "alpha".to_owned(),
+            create_vision: None,
+            persona: None,
+            message: "⟨handoff from chat 3 · workspace default · 2026-05-04 11:32⟩\n\nbrief"
+                .to_owned(),
+            ticket: ticket.to_owned(),
+        }))
+    }
+
+    #[test]
+    fn a_ticket_opens_once_and_never_again() {
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let ticket = tickets.mint(3, 1, now).expect("a ticket");
+
+        assert_eq!(tickets.spend(3, 1, &ticket, now), Ok(()));
+        assert_eq!(
+            tickets.spend(3, 1, &ticket, now),
+            Err(NO_TICKET.to_owned()),
+            "a replay of the same line opens nothing"
+        );
+    }
+
+    #[test]
+    fn a_ticket_spends_only_on_the_connection_that_minted_it() {
+        // A line copied onto a connection of its own is a replay, whatever it carries.
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let ticket = tickets.mint(3, 1, now).expect("a ticket");
+
+        assert_eq!(tickets.spend(3, 2, &ticket, now), Err(NO_TICKET.to_owned()));
+    }
+
+    #[test]
+    fn a_ticket_spends_only_for_the_chat_it_was_minted_for() {
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let ticket = tickets.mint(3, 1, now).expect("a ticket");
+
+        assert_eq!(tickets.spend(4, 1, &ticket, now), Err(NO_TICKET.to_owned()));
+        assert_eq!(
+            tickets.spend(3, 1, &ticket, now),
+            Ok(()),
+            "3's is untouched"
+        );
+    }
+
+    #[test]
+    fn a_wrong_guess_spends_the_real_ticket_too() {
+        // One try per mint. Without this a guesser could keep trying against a live ticket
+        // for as long as it lived.
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let ticket = tickets.mint(3, 1, now).expect("a ticket");
+
+        assert!(tickets.spend(3, 1, "not-it", now).is_err());
+        assert_eq!(tickets.spend(3, 1, &ticket, now), Err(NO_TICKET.to_owned()));
+    }
+
+    #[test]
+    fn a_ticket_left_unspent_expires() {
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let ticket = tickets.mint(3, 1, now).expect("a ticket");
+
+        assert_eq!(
+            tickets.spend(3, 1, &ticket, now + A_TICKET_LIVES),
+            Err(NO_TICKET.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_chat_has_one_live_ticket_and_a_second_mint_does_not_replace_it() {
+        // Replacing would let a second process cancel the handoff the operator approved,
+        // silently. Refusing leaves the first standing and says so to the second.
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let first = tickets.mint(3, 1, now).expect("a ticket");
+
+        assert!(tickets.mint(3, 2, now).is_err());
+        assert_eq!(tickets.spend(3, 1, &first, now), Ok(()));
+        assert!(
+            tickets.mint(3, 2, now).is_ok(),
+            "and once it is spent, the chat can mint again"
+        );
+    }
+
+    #[test]
+    fn an_abandoned_ticket_stops_holding_up_the_chat_once_it_expires() {
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let _abandoned = tickets.mint(3, 1, now).expect("a ticket");
+
+        assert!(tickets.mint(3, 2, now + A_TICKET_LIVES).is_ok());
+    }
+
+    #[test]
+    fn two_tickets_are_never_the_same() {
+        let tickets = Tickets::default();
+        let now = std::time::Instant::now();
+        let one = tickets.mint(3, 1, now).expect("a ticket");
+        let two = tickets.mint(4, 1, now).expect("a ticket");
+
+        assert_ne!(one, two);
+        assert_eq!(one.len(), 64);
+        assert!(one.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    /// A listener at `path` whose answers are the ticket half and an open that always
+    /// succeeds as chat 9.
+    fn an_app_at(path: &std::path::Path, within: &std::path::Path) -> Reading {
+        let listener = Listener::bind(within, path).expect("a socket");
+        let tickets = Tickets::default();
+        listener.each_answering(
+            Box::new(|_| {}),
+            Box::new(move |connection, ask| {
+                let now = std::time::Instant::now();
+                match ask {
+                    Ask::Ticket { chat } => match tickets.mint(chat, connection, now) {
+                        Ok(ticket) => Answer::Ticket { ticket },
+                        Err(why) => Answer::No { why },
+                    },
+                    Ask::Open(open) => {
+                        match tickets.spend(open.chat, connection, &open.ticket, now) {
+                            Ok(()) => Answer::Opened { chat: 9 },
+                            Err(why) => Answer::No { why },
+                        }
+                    }
+                }
+            }),
+        )
+    }
+
+    fn ticket_from(asking: &mut Asking) -> String {
+        match asking
+            .ask(&Ask::Ticket { chat: 3 }, std::time::Duration::from_secs(2))
+            .expect("an answer")
+        {
+            Answer::Ticket { ticket } => ticket,
+            other => panic!("a ticket, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_mint_and_a_spend_on_one_connection_open_a_chat() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let _reading = an_app_at(&path, dir.path());
+
+        let mut asking = Asking::on(&path).expect("connected");
+        let ticket = ticket_from(&mut asking);
+
+        assert_eq!(
+            asking
+                .ask(&an_open(3, &ticket), std::time::Duration::from_secs(2))
+                .expect("an answer"),
+            Answer::Opened { chat: 9 }
+        );
+    }
+
+    #[test]
+    fn the_same_open_on_a_connection_of_its_own_opens_nothing_and_spends_the_ticket() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let _reading = an_app_at(&path, dir.path());
+        let within = std::time::Duration::from_secs(2);
+
+        let mut asking = Asking::on(&path).expect("connected");
+        let ticket = ticket_from(&mut asking);
+        let mut elsewhere = Asking::on(&path).expect("connected");
+
+        let refused = Answer::No {
+            why: NO_TICKET.to_owned(),
+        };
+        assert_eq!(
+            elsewhere
+                .ask(&an_open(3, &ticket), within)
+                .expect("an answer"),
+            refused
+        );
+        assert_eq!(
+            asking.ask(&an_open(3, &ticket), within).expect("an answer"),
+            refused,
+            "the copy spent it"
+        );
+    }
+
+    #[test]
+    fn a_listener_nobody_answers_for_refuses_an_ask_rather_than_going_quiet() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let _reading = listener.each(Box::new(|_| {}));
+
+        let answer = Asking::on(&path)
+            .expect("connected")
+            .ask(&Ask::Ticket { chat: 3 }, std::time::Duration::from_secs(2))
+            .expect("an answer");
+
+        assert_eq!(
+            answer,
+            Answer::No {
+                why: NOTHING_ANSWERS.to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_report_written_as_it_always_was_is_still_a_report_on_a_listener_that_answers() {
+        // An older `charter`, or a hook in a settings file nobody updated, writes exactly
+        // these bytes. The ask must not have taken the report's place.
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.each_answering(
+            Box::new(move |report| tx.lock().unwrap().send(report).unwrap()),
+            Box::new(|_, _| panic!("a report is not an ask")),
+        );
+
+        let mut socket = std::os::unix::net::UnixStream::connect(&path).expect("connected");
+        socket
+            .write_all(b"{\"chat\":7,\"event\":\"stop\"}\n")
+            .expect("written");
+        drop(socket);
+
+        let report = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the report arrives");
+        assert_eq!(report.chat, 7);
+        assert_eq!(report.event, Event::Stop);
+    }
+
+    #[test]
+    fn asking_where_no_app_is_listening_fails_at_once() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let started = std::time::Instant::now();
+
+        assert!(Asking::on(&dir.path().join("gone.sock")).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }

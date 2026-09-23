@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import clsx from "clsx";
+import { listen } from "@tauri-apps/api/event";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
@@ -67,6 +68,7 @@ import {
   focusPane,
   noTabs,
   openTab,
+  openTabBehind,
   panesOf,
   selectTab,
   showWorkspace,
@@ -369,6 +371,22 @@ export function PlaneView({
       // Nothing open is the ordinary first launch, and a window that cannot ask is still
       // a window the operator can open a chat in.
       .catch(() => setSettled(true));
+  }, [change, plane]);
+
+  // A chat a handoff opened (charter-app#204): the core has started it, and this puts it on
+  // its workspace's strip. **Behind whatever is in front** (`openTabBehind`), and the window is
+  // not raised: the handoff was work sent away from the chat on screen, and the tab on the
+  // strip, whose first message says which chat it came from, is how it is seen.
+  useEffect(() => {
+    const listening = listen<Arrived>("handoff-arrived", (event) => {
+      const arrived = event.payload;
+      if (arrived.plane !== plane) return;
+      // Already drawn: the adoption above can race the event and draw it first.
+      if (alreadyShows(now.current, arrived.session)) return;
+      setStartedIn((was) => ({ ...was, [arrived.session]: arrived.workspace }));
+      change((tabs) => openTabBehind(tabs, arrived.session, arrived.name, arrived.persona));
+    }).catch(() => undefined);
+    return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, [change, plane]);
 
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
@@ -1915,6 +1933,20 @@ export type WindowDoing = {
 
 /** The size a session starts at. The pane it lands in tells it the real one at once. */
 const STARTING_SIZE = { columns: 80, rows: 24 };
+
+/** What the core says when a handoff has opened a chat — `handoff::Arrived` in the app. */
+type Arrived = {
+  plane: string;
+  session: number;
+  name: string;
+  workspace: string;
+  persona: string | null;
+};
+
+/** Whether any tab already shows `session`, in any of its panes. */
+function alreadyShows(tabs: Tabs, session: number): boolean {
+  return tabs.order.some((id) => panesOf(tabs, id).some((pane) => pane.session === session));
+}
 
 /**
  * The verbs that end a chat, and therefore the ones that are asked about first.
