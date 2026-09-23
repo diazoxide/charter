@@ -34,9 +34,17 @@ fn main() -> ExitCode {
     }
 
     let mut line = String::new();
-    if let Err(why) = std::io::stdin().lock().read_line(&mut line) {
-        eprintln!("persona-statistics: could not read the request: {why}");
-        return ExitCode::FAILURE;
+    match std::io::stdin().lock().read_line(&mut line) {
+        // End of input before a question: charter closed its end, or is gone — it dies with
+        // its end of the socket, and cannot kill this when it crashes. There is nobody to
+        // answer, so this exits rather than waiting for one (charter's executor, "a program
+        // ends when its stdin does").
+        Ok(0) => return ExitCode::SUCCESS,
+        Ok(_) => {}
+        Err(why) => {
+            eprintln!("persona-statistics: could not read the request: {why}");
+            return ExitCode::FAILURE;
+        }
     }
     let said = match serde_json::from_str(&line) {
         Ok(request) => persona_statistics::answer(&request),

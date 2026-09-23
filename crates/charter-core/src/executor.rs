@@ -71,8 +71,35 @@
 //! sandbox, a writer who can win that race already runs as the operator and needs no race.
 //! Closing it would mean executing from a descriptor (`fexecve`, which needs `unsafe`) or from
 //! a private copy of the binary (a new, unseen executable per press, which macOS assesses before
-//! it runs — measured on this machine as the thing that hangs). Named, not closed.
-
+//! it runs — measured on this machine as the thing that hangs). Named, not closed — **but kept
+//! as narrow as the order allows**: the question is built (the plane read, the slow part)
+//! *before* the tree is hashed, so what lies between the hash and the start is the slot and the
+//! fork and nothing else. What makes a refused extension cost no plane read is the record, read
+//! first: an extension nobody approved is refused before `hand` runs.
+//!
+//! **Not closing what charter did not open for it.** A program is handed its two sockets and
+//! nothing else charter meant it to have: charter's own descriptors are close-on-exec, the
+//! executor's pairs are made under [`crate::forklock::while_descriptors_are_made`] so no other
+//! program can inherit them half-made, and a terminal is opened under the same lock. What is
+//! *not* closed is a descriptor something else in the process holds without close-on-exec — a C
+//! library's, or, on macOS, any socket in the moment between `socket(2)` and `FIOCLEX`. Closing
+//! everything above 2 in the child is the standard remedy (`portable-pty` does it for a
+//! terminal), and every way to run code in the child is `pre_exec`, which is `unsafe` and which
+//! this workspace forbids. Open, and pinned by an ignored test that asserts the fix.
+//!
+//! # A program ends when its stdin does
+//!
+//! **Part of the protocol, and the one thing a program owes charter.** charter kills a program's
+//! group when the question is over and every program's group when the window closes. It cannot
+//! when charter itself dies — a crash, a `kill -9`, a power cut to the process — and on macOS
+//! there is nothing that makes the kernel do it instead (Linux's `PR_SET_PDEATHSIG` would, has
+//! to be set in the child, so behind `pre_exec`, and fires on the death of the *thread* that
+//! started the program, which here is a pool thread that may end at any time). What does happen
+//! is that charter's end of the socket closes with it, so the program's stdin reaches
+//! end-of-file. **A program that reads end-of-file where its question should be exits**, rather
+//! than waiting for a question nobody is left to ask; one that works for longer than a moment
+//! checks its stdin as it goes. `persona-statistics` does the first, and needs nothing more.
+//!
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -120,6 +147,18 @@ pub const MOST_STDERR_BYTES: usize = 2 << 10;
 #[cfg_attr(not(unix), allow(dead_code))]
 const STDERR_AFTER_STOP: Duration = Duration::from_millis(100);
 
+/// Whether charter starts an extension's program on this platform at all — `false` on
+/// Windows, where [`ask`](Executor::ask) answers [`REFUSED_HERE`] to every question.
+///
+/// **For the window, so that it does not draw a button that can only ever refuse.** A view is
+/// still read, fingerprinted and shown in the consent dialog everywhere; what this says is
+/// whether opening one could ever do anything.
+pub const RUNS_PROGRAMS: bool = cfg!(unix);
+
+/// How much of a question is written in one `write(2)` ([`ask_within`]).
+#[cfg_attr(not(unix), allow(dead_code))]
+const WRITTEN_AT_ONCE: usize = 64 << 10;
+
 /// What charter says on a platform where it will not start an extension's program.
 pub const REFUSED_HERE: &str = "charter does not start an extension's program on this platform: \
      it talks to one over a unix socket, and this platform has none charter can use without \
@@ -156,14 +195,31 @@ pub struct Answer {
 /// goes, so that no program an extension was asked to run outlives the app that asked.
 #[derive(Debug, Default)]
 pub struct Executor {
-    running: Mutex<std::collections::BTreeMap<String, i32>>,
+    table: Mutex<Table>,
+}
+
+/// What [`Executor`] guards with its one lock.
+#[derive(Debug, Default)]
+struct Table {
+    /// Each extension with a question in flight, and its program's process group — `0` from
+    /// the moment the slot is taken until the program exists, and again once it has been taken
+    /// out to be reaped.
+    running: std::collections::BTreeMap<String, i32>,
+    /// Set by [`Executor::stop_all`], and never cleared: charter is closing. A slot is not given
+    /// out after it, and a program that was started before it and recorded after it is killed
+    /// the moment it is recorded.
+    closing: bool,
 }
 
 impl Executor {
     /// Ask `extension`'s program about `view`, or say why charter will not.
     ///
-    /// `hand` builds what the program is given, from the view's subject, and is called only
-    /// once the gate has passed — so a refused extension costs no plane read at all.
+    /// `hand` builds what the program is given, from the view's subject. It is called once the
+    /// **record** says the operator approved this extension — so an extension nobody installed
+    /// or approved costs no plane read at all — and *before* the extension's directory is
+    /// fingerprinted, so that the fingerprint is the last thing taken before the program starts
+    /// (see the module's note on ADR 0028). An extension whose directory changed since its yes
+    /// therefore costs one plane read and is then refused.
     /// `focus` is the one thing on screen the operator opened it from, when there is one (a
     /// persona's card), and is handed as a name.
     ///
@@ -180,14 +236,29 @@ impl Executor {
     ) -> Result<Answer, String> {
         supported()?;
         let began = Instant::now();
-        let found = cleared(config_root, extension)?;
-        let Some(asked) = found.manifest.views.iter().find(|it| it.id == view) else {
-            return Err(format!(
-                "'{extension}' has no view called '{view}'. The window's list of what is in \
-                 force is taken when it opens; reopen the window to see what '{extension}' \
-                 offers now."
-            ));
-        };
+        // The record alone first: whether this is an extension the operator said yes to at all.
+        let loaded = extension::read(config_root);
+        let entry = approved(&loaded, extension)?;
+        // Then only its manifest, for which view was asked and what that view is about.
+        let declared =
+            extension::manifest_at(&entry.path).map_err(|why| could_not_reread(extension, &why))?;
+        let asked = declared_view(extension, &declared, view)?;
+        let before_hand = began.elapsed();
+
+        // The question, built before the fingerprint rather than after it: `hand` reads the
+        // plane, which is the slow part, and every moment between the fingerprint and the start
+        // is a moment in which a write is run without having been hashed.
+        let handing = Instant::now();
+        let request = request_line(extension, &asked, focus, hand(asked.about))?;
+        let handed_in = handing.elapsed();
+
+        // **The gate, re-taken now over the whole tree**, and held to the view the question was
+        // built for: a manifest that changed between the two reads is refused, never run on the
+        // question it was not asked.
+        let found = fingerprinted(&loaded, extension, &entry)?;
+        if declared_view(extension, &found.manifest, view)? != asked {
+            return Err(changed(extension));
+        }
         let program = found.manifest.program.as_deref().ok_or_else(|| {
             // `views_of` refuses a view with no program at parse, so this is a manifest that
             // changed shape between two reads of the same bytes — which cannot happen, and is
@@ -196,9 +267,8 @@ impl Executor {
         })?;
         let at = found.path.join(program);
         runnable(&at, extension)?;
-        let gate = began.elapsed();
+        let gate = before_hand + began.elapsed().saturating_sub(before_hand + handed_in);
 
-        let request = request_line(extension, asked, focus, hand(asked.about))?;
         let _held = self.hold(extension)?;
         let started = Instant::now();
         let line = self.converse(extension, &found, &at, &request)?;
@@ -212,15 +282,23 @@ impl Executor {
         })
     }
 
-    /// Kill every program an extension was asked to run and has not finished. For the app's
-    /// exit, so that nothing charter started outlives the window that started it.
+    /// Kill every program an extension was asked to run and has not finished, and start no
+    /// more. For the app's exit, so that nothing charter started outlives the window that
+    /// started it.
     ///
     /// **Only what is still in the table**, and an entry leaves the table *before* its program
-    /// is reaped ([`Self::converse`]), so a process group named here is always one whose leader
+    /// is reaped ([`Running::stop`]), so a process group named here is always one whose leader
     /// has not been reaped — its id cannot have been given to anything else yet.
+    ///
+    /// **And what is not in it yet is caught on its way in.** A program is started and then
+    /// recorded, and a `stop_all` between the two would find a slot with no group in it. So
+    /// this marks the executor closing, under the same lock [`Self::started`] takes: whichever
+    /// of the two runs second sees the other, and a program recorded after this is killed as it
+    /// is recorded.
     pub fn stop_all(&self) {
-        let running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
-        for group in running.values() {
+        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        table.closing = true;
+        for group in table.running.values() {
             kill_group(*group);
         }
     }
@@ -228,9 +306,10 @@ impl Executor {
     /// Which extensions have a program running right now. For a test, and for anything that
     /// wants to say so.
     pub fn running(&self) -> Vec<String> {
-        self.running
+        self.table
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .running
             .keys()
             .cloned()
             .collect()
@@ -242,8 +321,13 @@ impl Executor {
     /// window that asks twice does not start a second copy of a program that is already
     /// running — and so one extension that stalls holds one slot of its own and nobody else's.
     fn hold(&self, extension: &str) -> Result<Held<'_>, String> {
-        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
-        if running.contains_key(extension) {
+        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        if table.closing {
+            return Err(format!(
+                "charter is closing, so it starts nothing more — '{extension}' was not asked."
+            ));
+        }
+        if table.running.contains_key(extension) {
             return Err(format!(
                 "'{extension}' is still answering the last thing it was asked. charter asks an \
                  extension one thing at a time; this one has at most {} left.",
@@ -252,19 +336,24 @@ impl Executor {
         }
         // Zero until the program exists: `stop_all` never signals a group of 0, which would be
         // charter's own.
-        running.insert(extension.to_owned(), 0);
+        table.running.insert(extension.to_owned(), 0);
         Ok(Held {
             by: self,
             extension: extension.to_owned(),
         })
     }
 
-    /// Record the process group a running program is in, so [`Self::stop_all`] can reach it.
+    /// Record the process group a running program is in, so [`Self::stop_all`] can reach it —
+    /// or, if `stop_all` has already run, kill it now: it was started before charter began
+    /// closing and would otherwise be the one program nobody stopped.
     #[cfg_attr(not(unix), allow(dead_code))]
     fn started(&self, extension: &str, group: i32) {
-        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(slot) = running.get_mut(extension) {
+        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(slot) = table.running.get_mut(extension) {
             *slot = group;
+        }
+        if table.closing {
+            kill_group(group);
         }
     }
 
@@ -272,8 +361,8 @@ impl Executor {
     /// [`Self::stop_all`] for why the order is load-bearing.
     #[cfg_attr(not(unix), allow(dead_code))]
     fn finished(&self, extension: &str) {
-        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(slot) = running.get_mut(extension) {
+        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(slot) = table.running.get_mut(extension) {
             *slot = 0;
         }
     }
@@ -286,9 +375,7 @@ impl Executor {
         program: &Path,
         request: &[u8],
     ) -> Result<Vec<u8>, String> {
-        use std::io::{Read, Write};
         use std::os::fd::OwnedFd;
-        use std::os::unix::net::UnixStream;
         use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
         use std::sync::Arc;
@@ -296,8 +383,16 @@ impl Executor {
 
         let could_not =
             |why: std::io::Error| format!("charter could not start '{extension}''s program: {why}");
-        let (ours, theirs) = UnixStream::pair().map_err(could_not)?;
-        let (err_ours, err_theirs) = UnixStream::pair().map_err(could_not)?;
+        let Channel {
+            ours,
+            theirs,
+            err_ours,
+            err_theirs,
+        } = channel().map_err(could_not)?;
+        // Every clone is made before the program exists, so nothing between its start and its
+        // stop can fail on the way and leave it running with nobody holding it.
+        let theirs_in = theirs.try_clone().map_err(could_not)?;
+        let ours_to_write = ours.try_clone().map_err(could_not)?;
 
         let mut command = Command::new(program);
         command
@@ -311,9 +406,7 @@ impl Executor {
             .current_dir(&found.path)
             // Its own process group, so the whole of what it starts is one thing to kill.
             .process_group(0)
-            .stdin(Stdio::from(OwnedFd::from(
-                theirs.try_clone().map_err(could_not)?,
-            )))
+            .stdin(Stdio::from(OwnedFd::from(theirs_in)))
             .stdout(Stdio::from(OwnedFd::from(theirs)))
             .stderr(Stdio::from(OwnedFd::from(err_theirs)));
         // `forklock`, never `Command::spawn` (charter-app#53): this process opens terminals, and
@@ -325,7 +418,7 @@ impl Executor {
         // this, charter's own copy would keep the socket open and "the program closed its
         // output" could never be seen.
         drop(command);
-        let mut child = spawned.map_err(|why| match why.kind() {
+        let child = spawned.map_err(|why| match why.kind() {
             std::io::ErrorKind::PermissionDenied => format!(
                 "'{}' could not be started: {why}. charter runs an extension's program \
                  directly, never through a shell, so it has to be executable by you.",
@@ -337,8 +430,11 @@ impl Executor {
                 program.display()
             ),
         })?;
-        let group = i32::try_from(child.id()).unwrap_or(0);
-        self.started(extension, group);
+        // **From here the program is owned by `running`**, and every way out of this function —
+        // an answer, a refusal, an error on the way, a panic — stops it: its group killed and it
+        // reaped, in the order `stop_all` relies on.
+        let mut running = Running::new(self, extension, child);
+        let until = Instant::now() + DEADLINE;
 
         // Its stderr is drained while it runs — a program that logs more than a socket buffer
         // would otherwise stall on its own diagnostics and read as hung — and only the tail is
@@ -346,70 +442,37 @@ impl Executor {
         let stop = Arc::new(AtomicBool::new(false));
         let tail = {
             let stop = Arc::clone(&stop);
-            let mut err_ours = err_ours;
-            std::thread::spawn(move || {
-                let _ = err_ours.set_read_timeout(Some(Duration::from_millis(50)));
-                let mut kept: Vec<u8> = Vec::new();
-                let mut chunk = [0u8; 1024];
-                // When charter said stop. What a program wrote just before it died is still in
-                // the socket, and it is the part worth quoting, so the drain goes on after stop
-                // — but for a bounded TIME, not a bounded number of bytes: a process that
-                // escaped the group (`setsid`) can hold stderr open and trickle into it for
-                // ever, and a byte cap is then a wait of however long it takes to trickle that
-                // many (measured: a byte a millisecond held a 64 KiB cap for 86 s). Either way
-                // the cost was this thread, and the extension's one slot, held with it.
-                let mut stopped_at: Option<Instant> = None;
-                loop {
-                    if stopped_at.is_none() && stop.load(Ordering::Relaxed) {
-                        stopped_at = Some(Instant::now());
-                    }
-                    if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) {
-                        break;
-                    }
-                    match err_ours.read(&mut chunk) {
-                        Ok(0) => break,
-                        Ok(got) => {
-                            kept.extend_from_slice(&chunk[..got]);
-                            if kept.len() > MOST_STDERR_BYTES {
-                                let cut = kept.len() - MOST_STDERR_BYTES;
-                                kept.drain(..cut);
-                            }
-                        }
-                        Err(_) if stopped_at.is_none() => {}
-                        Err(_) => break,
-                    }
-                }
-                kept
-            })
+            std::thread::Builder::new()
+                .name(format!("extension {extension} stderr"))
+                .spawn(move || drain(&err_ours, &stop))
+                .map_err(could_not)?
         };
 
         // The question is written on a thread of its own, so a program that answers before it
         // has read the whole of it cannot deadlock against charter reading the answer.
-        let writer = {
-            let mut ours = ours.try_clone().map_err(could_not)?;
-            let request = request.to_vec();
-            std::thread::spawn(move || {
-                let _ = ours.set_write_timeout(Some(DEADLINE));
-                let wrote = ours.write_all(&request).is_ok();
-                // EOF after the question: a program may read "all of stdin" rather than a line.
-                let _ = ours.shutdown(std::net::Shutdown::Write);
-                wrote
-            })
+        let writer = match std::thread::Builder::new()
+            .name(format!("extension {extension} request"))
+            .spawn({
+                let request = request.to_vec();
+                move || ask_within(&ours_to_write, &request, until)
+            }) {
+            Ok(writer) => writer,
+            Err(why) => {
+                stop.store(true, Ordering::Relaxed);
+                return Err(could_not(why));
+            }
         };
 
-        let heard = listen(&ours);
+        let heard = listen(&ours, until);
+        // **The conversation is over, whatever the program or anything it started still
+        // holds.** Shutting charter's end down wakes the writer if it is still in a `write` —
+        // a helper that left the group and holds the program's stdin, reading a byte a second,
+        // otherwise held this call for as long as the request took to trickle through (15.6 s
+        // measured, three times the deadline) — and it is what every other holder of the
+        // socket's far side reads as the end.
+        let _ = ours.shutdown(std::net::Shutdown::Both);
 
-        // **The order below is load-bearing** (see `stop_all`): out of the table, then the
-        // whole group killed, then reaped — so a group id charter signals is never one whose
-        // leader has already been reaped and whose number the system could have reused.
-        self.finished(extension);
-        kill_group(group);
-        // And the program itself, by the pid charter holds and has not reaped. A program that
-        // moved its own process out of the group it was started in (`setpgid`) is not reached
-        // by the group kill, and `wait` below would then wait for it for as long as it liked —
-        // a blocking thread, and this extension's slot, held for ever.
-        let _ = child.kill();
-        let status = child.wait().ok();
+        let status = running.stop();
         stop.store(true, Ordering::Relaxed);
         let said = tail.join().unwrap_or_default();
         let wrote = writer.join().unwrap_or(false);
@@ -491,22 +554,188 @@ struct Held<'a> {
 impl Drop for Held<'_> {
     fn drop(&mut self) {
         self.by
-            .running
+            .table
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .running
             .remove(&self.extension);
     }
 }
 
-/// Whether charter starts extension programs on this platform at all.
+/// A started program, stopped when this goes — however it goes.
+///
+/// **The one owner of the child from the moment it exists.** Between starting a program and
+/// reading its answer are two thread starts, and either can fail; a `?` or a panic there used to
+/// return with the program still running, its group never killed and its process never reaped.
+/// Now the only way out of [`Executor::converse`] runs [`Self::stop`], explicitly on the ordinary
+/// path and from `Drop` on every other.
 #[cfg(unix)]
-fn supported() -> Result<(), String> {
-    Ok(())
+struct Running<'a> {
+    by: &'a Executor,
+    extension: &'a str,
+    group: i32,
+    /// `None` once reaped, so that nothing is ever signalled by a number that may have been
+    /// given to another process since.
+    child: Option<std::process::Child>,
 }
 
-#[cfg(not(unix))]
+#[cfg(unix)]
+impl<'a> Running<'a> {
+    /// Own `child` and record its group where [`Executor::stop_all`] can reach it.
+    fn new(by: &'a Executor, extension: &'a str, child: std::process::Child) -> Self {
+        let group = i32::try_from(child.id()).unwrap_or(0);
+        by.started(extension, group);
+        Self {
+            by,
+            extension,
+            group,
+            child: Some(child),
+        }
+    }
+
+    /// Stop it and reap it, once. **The order is load-bearing** (see
+    /// [`Executor::stop_all`]): out of the table, then the whole group killed, then reaped — so
+    /// a group id charter signals is never one whose leader has already been reaped and whose
+    /// number the system could have reused.
+    fn stop(&mut self) -> Option<std::process::ExitStatus> {
+        let mut child = self.child.take()?;
+        self.by.finished(self.extension);
+        kill_group(self.group);
+        // And the program itself, by the pid charter holds and has not reaped. A program that
+        // moved its own process out of the group it was started in (`setpgid`) is not reached
+        // by the group kill, and `wait` below would then wait for it for as long as it liked —
+        // a blocking thread, and this extension's slot, held for ever.
+        let _ = child.kill();
+        child.wait().ok()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+/// Both sockets a program is started with: its stdin and stdout, and its stderr. Charter keeps
+/// the `_ours` ends.
+#[cfg(unix)]
+pub(crate) struct Channel {
+    ours: std::os::unix::net::UnixStream,
+    theirs: std::os::unix::net::UnixStream,
+    err_ours: std::os::unix::net::UnixStream,
+    err_theirs: std::os::unix::net::UnixStream,
+}
+
+/// Make a program's two socket pairs, with no program anywhere started while they are.
+///
+/// **One extension's channel is that extension's alone** — this module's header says so — and on
+/// macOS that is only true under [`crate::forklock::while_descriptors_are_made`]: a pair is made
+/// there in two system calls, and a program started on another thread between them inherits
+/// both ends, whoever's program it is.
+#[cfg(unix)]
+pub(crate) fn channel() -> std::io::Result<Channel> {
+    use std::os::unix::net::UnixStream;
+    crate::forklock::while_descriptors_are_made(|| {
+        let (ours, theirs) = UnixStream::pair()?;
+        let (err_ours, err_theirs) = UnixStream::pair()?;
+        Ok(Channel {
+            ours,
+            theirs,
+            err_ours,
+            err_theirs,
+        })
+    })
+}
+
+/// Read a program's stderr until it closes or charter says stop, keeping the tail.
+#[cfg(unix)]
+fn drain(
+    err_ours: &std::os::unix::net::UnixStream,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Vec<u8> {
+    use std::io::Read;
+    use std::sync::atomic::Ordering;
+    let mut err_ours = err_ours;
+    let _ = err_ours.set_read_timeout(Some(Duration::from_millis(50)));
+    let mut kept: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 1024];
+    // When charter said stop. What a program wrote just before it died is still in the socket,
+    // and it is the part worth quoting, so the drain goes on after stop — but for a bounded
+    // TIME, not a bounded number of bytes: a process that escaped the group (`setsid`) can hold
+    // stderr open and trickle into it for ever, and a byte cap is then a wait of however long it
+    // takes to trickle that many (measured: a byte a millisecond held a 64 KiB cap for 86 s).
+    // Either way the cost was this thread, and the extension's one slot, held with it.
+    let mut stopped_at: Option<Instant> = None;
+    loop {
+        if stopped_at.is_none() && stop.load(Ordering::Relaxed) {
+            stopped_at = Some(Instant::now());
+        }
+        if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) {
+            break;
+        }
+        match err_ours.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(got) => {
+                kept.extend_from_slice(&chunk[..got]);
+                if kept.len() > MOST_STDERR_BYTES {
+                    let cut = kept.len() - MOST_STDERR_BYTES;
+                    kept.drain(..cut);
+                }
+            }
+            Err(_) if stopped_at.is_none() => {}
+            Err(_) => break,
+        }
+    }
+    kept
+}
+
+/// Write the whole question to the program, by `until` or not at all, then close charter's
+/// writing half so a program that reads "all of stdin" sees the end of it. `true` when all of
+/// it was written.
+///
+/// **What bounds this is not in here.** A socket's write timeout bounds one wait for buffer
+/// space, and it starts again each time the reader takes some — measured: one `write(2)` of 8
+/// MiB, read 512 bytes every 20 ms, ran 393 s under a 300 ms timeout. So a reader that trickles
+/// holds any write for as long as it likes, whatever the timeout says, and `write_all` held the
+/// question for as long as the request took to go through. The bound is [`Executor::converse`]
+/// shutting charter's end down once [`listen`] returns — at the deadline at the latest — which
+/// ends a write in progress on every platform. The timeout here, set to what is left of the
+/// deadline on each call and over a small piece at a time, only stops a reader that takes
+/// nothing at all from being waited on past the deadline by this thread alone.
+#[cfg(unix)]
+fn ask_within(ours: &std::os::unix::net::UnixStream, request: &[u8], until: Instant) -> bool {
+    use std::io::Write;
+    let mut ours = ours;
+    let mut at = 0;
+    let wrote = loop {
+        if at == request.len() {
+            break true;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() || ours.set_write_timeout(Some(left)).is_err() {
+            break false;
+        }
+        let piece = &request[at..request.len().min(at + WRITTEN_AT_ONCE)];
+        match ours.write(piece) {
+            Ok(0) => break false,
+            Ok(put) => at += put,
+            Err(why) if why.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break false,
+        }
+    };
+    // EOF after the question: a program may read "all of stdin" rather than a line.
+    let _ = ours.shutdown(std::net::Shutdown::Write);
+    wrote
+}
+
+/// Whether charter starts extension programs on this platform at all ([`RUNS_PROGRAMS`]).
 fn supported() -> Result<(), String> {
-    Err(REFUSED_HERE.to_owned())
+    if RUNS_PROGRAMS {
+        Ok(())
+    } else {
+        Err(REFUSED_HERE.to_owned())
+    }
 }
 
 /// **The gate**: `extension` as it is on disk right now, if and only if the operator approved
@@ -519,6 +748,13 @@ fn supported() -> Result<(), String> {
 /// so in words the operator can act on.
 pub fn cleared(config_root: &Path, extension: &str) -> Result<Extension, String> {
     let loaded = extension::read(config_root);
+    let entry = approved(&loaded, extension)?;
+    fingerprinted(&loaded, extension, &entry)
+}
+
+/// The gate's first half: what the record says, and nothing read from the extension. Cheap —
+/// one small file — so that an extension nobody approved costs nothing more than this.
+fn approved(loaded: &extension::Loaded, extension: &str) -> Result<extension::Entry, String> {
     if let Some(why) = &loaded.unreadable {
         return Err(format!(
             "charter could not read its record of which extensions you approved, so it starts \
@@ -537,28 +773,64 @@ pub fn cleared(config_root: &Path, extension: &str) -> Result<Extension, String>
              Extensions to see what it declares and decide."
         ));
     }
+    Ok(entry.clone())
+}
+
+/// The gate's second half: the extension's whole directory, fingerprinted now and held to the
+/// fingerprint the operator approved at the path he approved it at.
+fn fingerprinted(
+    loaded: &extension::Loaded,
+    extension: &str,
+    entry: &extension::Entry,
+) -> Result<Extension, String> {
     // **Re-read now, the whole tree**, and never a fingerprint remembered from a survey. This
     // is the line that makes "will ask again if any of them changes" true at the moment it
     // matters, which is the moment something is about to run.
-    let found = extension::read_at(&entry.path).map_err(|why| {
-        format!(
-            "charter could not re-read '{extension}' just now, so it will not start anything \
-             from it: {why}"
-        )
-    })?;
+    let found = extension::read_at(&entry.path).map_err(|why| could_not_reread(extension, &why))?;
     let standing = if found.id() == extension {
         loaded.standing(&found)
     } else {
         Standing::Changed
     };
     if standing != Standing::Approved {
-        return Err(format!(
-            "'{extension}' has changed since you approved it — charter re-read its directory \
-             just now and it is not what you said yes to, so charter will not run it. Open \
-             Extensions: charter will show you what it declares now and ask again."
-        ));
+        return Err(changed(extension));
     }
     Ok(found)
+}
+
+fn could_not_reread(extension: &str, why: &str) -> String {
+    format!(
+        "charter could not re-read '{extension}' just now, so it will not start anything from \
+         it: {why}"
+    )
+}
+
+fn changed(extension: &str) -> String {
+    format!(
+        "'{extension}' has changed since you approved it — charter re-read its directory just \
+         now and it is not what you said yes to, so charter will not run it. Open Extensions: \
+         charter will show you what it declares now and ask again."
+    )
+}
+
+/// The view called `view` in `manifest`, or the sentence for its absence.
+fn declared_view(
+    extension: &str,
+    manifest: &extension::Manifest,
+    view: &str,
+) -> Result<extension::View, String> {
+    manifest
+        .views
+        .iter()
+        .find(|it| it.id == view)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "'{extension}' has no view called '{view}'. The window's list of what is in \
+                 force is taken when it opens; reopen the window to see what '{extension}' \
+                 offers now."
+            )
+        })
 }
 
 /// Refuse a program that is not a file charter can start directly.
@@ -647,13 +919,12 @@ enum Heard {
     Broken(String),
 }
 
-/// Read one line off `ours`, within [`DEADLINE`] of now, and then give the program [`GRACE`]
-/// to close its end on its own.
+/// Read one line off `ours` by `until`, and then give the program [`GRACE`] to close its end
+/// on its own.
 #[cfg(unix)]
-fn listen(ours: &std::os::unix::net::UnixStream) -> Heard {
+fn listen(ours: &std::os::unix::net::UnixStream, until: Instant) -> Heard {
     use std::io::Read;
     let mut ours = ours;
-    let until = Instant::now() + DEADLINE;
     let mut heard: Vec<u8> = Vec::new();
     let mut chunk = vec![0u8; 16 << 10];
     let line = loop {

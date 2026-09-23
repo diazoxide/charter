@@ -50,6 +50,26 @@ pub fn what(about: Subject) -> &'static str {
     }
 }
 
+/// How a memory's stamp is written, by charter and by the Python charter alike
+/// (`memstore.py`: `now.strftime('%Y-%m-%d %H:%M')`).
+const STAMP: &str = "%Y-%m-%d %H:%M";
+
+/// The time a memory's stamp says, in [`STAMP`]'s spelling, or `""` when it says none.
+///
+/// **This is what keeps [`what`]'s "never what a memory says" true, and it cannot be a lookup.**
+/// [`crate::workspaces`]' reader takes the first line of a memory that starts with `_` as its
+/// stamp, wherever it is — which is right for the file charter writes and wrong for one written
+/// by hand or by another tool: with no stamp line, the first `_emphasis_` or `__init__.py` in the
+/// body is taken instead, and handing that string would hand the body. So what leaves here is not
+/// the string that was read: it is a time *parsed* out of it and written again by charter, and a
+/// line that does not parse as one leaves as nothing. What a program can learn from a memory is
+/// therefore a minute, whatever the file holds.
+fn when(stamp: &str) -> String {
+    chrono::NaiveDateTime::parse_from_str(stamp.trim(), STAMP)
+        .map(|at| at.format(STAMP).to_string())
+        .unwrap_or_default()
+}
+
 /// What a view about the plane's personas is handed, read now.
 ///
 /// `now` is handed too, as charter's clock read once, so that a program's answer is a function
@@ -82,7 +102,7 @@ pub fn personas(root: &Path, now: chrono::NaiveDateTime) -> serde_json::Value {
                     }
                     // A memory with no stamp line is still a memory: it is counted, and it has
                     // no date. An empty string says that without inventing one.
-                    written.push(serde_json::Value::String(memory.stamp));
+                    written.push(serde_json::Value::String(when(&memory.stamp)));
                     handed += 1;
                 }
                 row.insert("written".into(), serde_json::Value::Array(written));
@@ -100,7 +120,7 @@ pub fn personas(root: &Path, now: chrono::NaiveDateTime) -> serde_json::Value {
     let mut doc = serde_json::Map::new();
     doc.insert(
         "now".into(),
-        serde_json::Value::String(now.format("%Y-%m-%d %H:%M").to_string()),
+        serde_json::Value::String(now.format(STAMP).to_string()),
     );
     doc.insert("personas".into(), serde_json::Value::Array(listed));
     doc.insert("truncated".into(), serde_json::Value::Bool(truncated));
@@ -229,5 +249,52 @@ mod tests {
         let handed = personas(dir.path(), at_noon());
         assert_eq!(handed["personas"], serde_json::json!([]));
         assert_eq!(handed["truncated"], false);
+    }
+
+    #[test]
+    fn a_memory_with_no_stamp_line_hands_no_line_of_its_body() {
+        // The reader takes the first `_` line anywhere as a memory's stamp. In a file charter
+        // did not write there may be none, and then a body line that happens to start with an
+        // underscore — markdown emphasis, a python dunder — is what it takes. `what` promises
+        // "never what a memory says"; this is that promise held against those two files.
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = dir.path().join("personas").join("steward");
+        std::fs::create_dir_all(at.join("memory")).expect("a persona");
+        std::fs::write(at.join("persona.md"), "---\nrole: x\n---\n").expect("a definition");
+        std::fs::write(
+            at.join("memory").join("db.md"),
+            "---\nname: db\n---\n# prod db\n\n_the prod password is hunter2_\n",
+        )
+        .expect("a memory");
+        std::fs::write(
+            at.join("memory").join("py.md"),
+            "# layout\n\n__init__.py re-exports the SECRET_TOKEN loader\n",
+        )
+        .expect("a memory");
+
+        let handed = personas(dir.path(), at_noon());
+
+        let text = handed.to_string();
+        assert!(!text.contains("hunter2"), "a body line was handed: {text}");
+        assert!(
+            !text.contains("SECRET_TOKEN"),
+            "a body line was handed: {text}"
+        );
+        // Both are still counted, with no date.
+        assert_eq!(
+            handed["personas"][0]["written"],
+            serde_json::json!(["", ""])
+        );
+    }
+
+    #[test]
+    fn a_stamp_is_handed_as_the_time_it_says_and_nothing_after_it() {
+        assert_eq!(when("2026-09-22 10:00"), "2026-09-22 10:00");
+        assert_eq!(when(" 2026-09-22 10:00 "), "2026-09-22 10:00");
+        // A stamp-shaped start with words after it is not a stamp.
+        assert_eq!(when("2026-09-22 10:00 and the password"), "");
+        assert_eq!(when("2026-09-22"), "");
+        assert_eq!(when("the prod password is hunter2"), "");
+        assert_eq!(when(""), "");
     }
 }

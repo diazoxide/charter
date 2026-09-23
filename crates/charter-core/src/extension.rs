@@ -490,6 +490,43 @@ impl Loaded {
 /// whose manifest charter could not read contributes nothing *and says so*, rather than
 /// contributing nothing quietly and being counted as fine.
 pub fn read_at(dir: &Path) -> Result<Extension, String> {
+    let (text, manifest) = read_manifest(dir)?;
+
+    // Before the walk, because the walk does not descend into it and this is the only thing
+    // that answers for what is in there (charter-app#152).
+    let mut budget = MOST_TREE_ENTRIES;
+    if let Some(state) = &manifest.state {
+        state_holds_no_code(dir, state, &mut budget)?;
+    }
+
+    // The fingerprint is taken over the bytes just read and the bytes about to be read, the
+    // declarations handed back come out of the same read, and the theme text the window will
+    // draw with is kept from it rather than fetched again. Two reads is charter-app#123.
+    let (fingerprint, theme_text) = tree(dir, text.as_bytes(), &manifest, budget)?;
+
+    Ok(Extension {
+        path: dir.to_path_buf(),
+        manifest,
+        fingerprint,
+        theme_text,
+    })
+}
+
+/// The manifest in `dir` and nothing else: [`read_at`]'s checks on the directory and the one
+/// file, without the walk and without a fingerprint.
+///
+/// **Never evidence of approval** — there is no fingerprint to compare. It is for a caller that
+/// has to know what an extension declares *before* it pays for the walk and will take
+/// [`read_at`] afterwards anyway: the executor reads which view it was asked about here, builds
+/// the question, and only then re-takes the fingerprint, so that the fingerprint is as close to
+/// the program starting as it can be (`crate::executor`).
+pub fn manifest_at(dir: &Path) -> Result<Manifest, String> {
+    read_manifest(dir).map(|(_, manifest)| manifest)
+}
+
+/// The directory's checks and the manifest's read, shared by [`read_at`] and [`manifest_at`] so
+/// that the two cannot disagree about what a manifest is.
+fn read_manifest(dir: &Path) -> Result<(String, Manifest), String> {
     if !dir.is_absolute() {
         return Err(format!(
             "'{}' is not an absolute path, and charter records an extension by where it is",
@@ -516,29 +553,11 @@ pub fn read_at(dir: &Path) -> Result<Extension, String> {
         Ok(_) => {}
     }
 
-    let manifest_at = dir.join(MANIFEST);
-    let text = slurp(dir, &manifest_at, MOST_MANIFEST_BYTES)
-        .map_err(|why| format!("'{}' {why}", manifest_at.display()))?;
-    let manifest = parse(&text).map_err(|why| format!("'{}' {why}", manifest_at.display()))?;
-
-    // Before the walk, because the walk does not descend into it and this is the only thing
-    // that answers for what is in there (charter-app#152).
-    let mut budget = MOST_TREE_ENTRIES;
-    if let Some(state) = &manifest.state {
-        state_holds_no_code(dir, state, &mut budget)?;
-    }
-
-    // The fingerprint is taken over the bytes just read and the bytes about to be read, the
-    // declarations handed back come out of the same read, and the theme text the window will
-    // draw with is kept from it rather than fetched again. Two reads is charter-app#123.
-    let (fingerprint, theme_text) = tree(dir, text.as_bytes(), &manifest, budget)?;
-
-    Ok(Extension {
-        path: dir.to_path_buf(),
-        manifest,
-        fingerprint,
-        theme_text,
-    })
+    let at = dir.join(MANIFEST);
+    let text =
+        slurp(dir, &at, MOST_MANIFEST_BYTES).map_err(|why| format!("'{}' {why}", at.display()))?;
+    let manifest = parse(&text).map_err(|why| format!("'{}' {why}", at.display()))?;
+    Ok((text, manifest))
 }
 
 /// Read one file under `root`, refusing everything that is not a plain, bounded file reached
@@ -627,6 +646,15 @@ fn parse(text: &str) -> Result<Manifest, String> {
         .filter(|name| !name.is_empty())
         .unwrap_or(id)
         .to_owned();
+    // The name is what the consent dialog asks about, so it is held to what a view's title is
+    // held to: nothing in it may draw as nothing, or turn the words beside it around.
+    if name.contains(crate::panel::undrawable) {
+        return Err(format!(
+            "has a name holding a control or invisible formatting character ({:?}), which \
+             charter will not draw where it asks you about the extension",
+            name
+        ));
+    }
 
     let contributes = match doc.get("contributes") {
         None => return Err("declares no contributions, so there is nothing to consent to".into()),
@@ -829,9 +857,12 @@ fn views_of(value: &serde_json::Value, program: Option<&str>) -> Result<Vec<View
             .map(str::trim)
             .filter(|title| !title.is_empty())
             .ok_or_else(|| format!("declares the view {id:?} with no title"))?;
-        if title.len() > 200 || title.contains(|c: char| c.is_control()) {
+        // `panel::undrawable`, not `is_control`: a title is drawn with ` · <extension id>`
+        // after it, and a bidirectional override in the title would draw that name backwards.
+        if title.len() > 200 || title.contains(crate::panel::undrawable) {
             return Err(format!(
-                "declares the view {id:?} with a title charter will not draw on a button"
+                "declares the view {id:?} with a title charter will not draw on a button: it is \
+                 longer than 200 bytes or holds a control or invisible formatting character"
             ));
         }
         let about = object

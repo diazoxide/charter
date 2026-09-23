@@ -391,6 +391,41 @@ fn an_answer_is_bounded_in_blocks_and_in_points() {
 }
 
 #[test]
+fn a_format_character_that_draws_as_nothing_is_refused_wherever_an_answer_puts_words() {
+    // `is_control` is `Cc` only. The bidirectional overrides and isolates, the zero-width
+    // characters and the byte-order mark are `Cf`: they draw nothing, and the overrides turn the
+    // words after them around — so a row reading "fine" could draw as anything its author liked.
+    for invisible in [
+        '\u{202A}', '\u{202E}', '\u{2066}', '\u{2069}', '\u{200B}', '\u{200F}', '\u{2060}',
+        '\u{FEFF}', '\u{00AD}', '\u{2028}',
+    ] {
+        let text = format!("fine{invisible}enif");
+        for answer in [
+            serde_json::json!([{ "kind": "note", "text": text }]),
+            serde_json::json!([{ "kind": "list", "rows": [{ "key": "k", "text": text }] }]),
+            serde_json::json!([{ "kind": "list", "rows": [{ "key": text, "text": "t" }] }]),
+            serde_json::json!([{ "kind": "chart", "title": "c",
+                                 "points": [{ "label": text, "value": 1 }] }]),
+        ] {
+            assert!(
+                answered(&answer).is_err(),
+                "U+{:04X} was drawn: {answer}",
+                u32::from(invisible)
+            );
+        }
+    }
+}
+
+#[test]
+fn ordinary_words_with_spaces_and_accents_are_still_drawn() {
+    // The refusal is of what draws as nothing, not of anything outside ASCII: an accent, an
+    // em-dash and a no-break space are content.
+    let blocks = answering(r#"[{"kind":"note","text":"café — 3\u00a0memories"}]"#)
+        .expect("ordinary words are drawn");
+    assert_eq!(blocks.len(), 1);
+}
+
+#[test]
 fn a_control_character_in_a_label_is_refused() {
     let refused =
         answering(r#"[{"kind":"chart","title":"x","points":[{"label":"a\u0007b","value":1}]}]"#)

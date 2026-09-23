@@ -217,3 +217,29 @@ fn what_asking_the_real_producer_costs() {
         size >> 10
     );
 }
+
+#[test]
+fn it_exits_on_end_of_input_rather_than_waiting_for_a_question() {
+    // charter cannot kill a program when charter itself dies; what the program sees is its stdin
+    // reaching end-of-file. So a program owes charter this: EOF where its question should be is
+    // the end, not a wait. Nothing written to stdout, because there is nobody to read it.
+    let mut program = std::process::Command::new(env!("CARGO_BIN_EXE_persona-statistics"));
+    program
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let began = Instant::now();
+    let out = program.output().expect("it runs");
+
+    assert!(out.status.success(), "{:?}", out);
+    assert!(
+        out.stdout.is_empty(),
+        "it answered nobody: {:?}",
+        out.stdout
+    );
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "it waited {:?} on a closed stdin",
+        began.elapsed()
+    );
+}

@@ -631,7 +631,7 @@ fn row_of(raw: &serde_json::Value) -> Result<Row, String> {
         .get("key")
         .and_then(serde_json::Value::as_str)
         .ok_or("has no key")?;
-    if key.is_empty() || key.len() > MOST_TEXT || key.contains(|c: char| c.is_control()) {
+    if key.is_empty() || key.len() > MOST_TEXT || key.contains(undrawable) {
         return Err(format!(
             "has the key {key:?}, which charter will not hold it by"
         ));
@@ -681,13 +681,31 @@ fn mark_of(value: Option<&serde_json::Value>) -> Result<Mark, String> {
     })
 }
 
+/// Whether `c` is a character charter refuses to draw in anything an extension wrote: a control
+/// character, a line or paragraph separator, or a **format** character (Unicode category `Cf`).
+///
+/// `Cf` is the one `char::is_control` does not cover and the one that matters most here. It
+/// holds the bidirectional overrides and isolates (U+202A–202E, U+2066–2069), which draw nothing
+/// and reverse what follows them — so a view titled `Stats\u{202E}` would draw the ` · <id>`
+/// charter puts after it backwards, and the surface would no longer say which extension it came
+/// from. It also holds the zero-width characters (U+200B–200F, U+2060, U+FEFF) that make two
+/// different strings look identical. The set is [`crate::tui::tables::INVISIBLE`], which CPython
+/// wrote for `charter/contain.py`, less its ordinary whitespace — a space or a tab in a row's
+/// text is content, and draws as what it is.
+pub(crate) fn undrawable(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{2028}' | '\u{2029}')
+        || (crate::tui::in_table(c, &crate::tui::tables::INVISIBLE) && !c.is_whitespace())
+}
+
 /// A string charter will put on the screen: present, non-empty, bounded, and with nothing in it
 /// that is not a character.
 ///
-/// **Control characters are refused rather than stripped.** A row's text is drawn as a text
-/// node, so there is no injection to filter; what a control character does is make two different
-/// strings look like one on screen, which is the deception half of ADR 0041's concern and the
-/// half no escaping helps with.
+/// **Control and format characters are refused rather than stripped** ([`undrawable`]). A row's
+/// text is drawn as a text node, so there is no injection to filter; what such a character does
+/// is make two different strings look like one on screen — or turn the words around it
+/// backwards — which is the deception half of ADR 0041's concern and the half no escaping helps
+/// with.
 fn words(
     value: Option<&serde_json::Value>,
     most: usize,
@@ -707,9 +725,10 @@ fn words(
             text.len()
         ));
     }
-    if text.contains(|c: char| c.is_control()) {
+    if text.contains(undrawable) {
         return Err(format!(
-            "has a '{what}' holding a control character, which charter will not draw"
+            "has a '{what}' holding a control character or an invisible formatting one, which \
+             charter will not draw"
         ));
     }
     Ok(Some(text.to_owned()))

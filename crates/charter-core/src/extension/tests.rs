@@ -1678,6 +1678,35 @@ fn a_view_that_says_where_it_goes_is_refused() {
 }
 
 #[test]
+fn a_view_title_that_would_turn_the_extension_s_name_around_is_refused() {
+    // A view's button and surface draw `<title> · <extension id>`. A right-to-left override at
+    // the end of the title would draw that id backwards, and the surface would no longer say
+    // honestly which extension it came from. `is_control` does not see it: it is `Cf`.
+    for invisible in ["\\u202E", "\\u2067", "\\u200B", "\\uFEFF"] {
+        let made = Made::new();
+        made.manifest(&format!(
+            r#"{{"version":1,"id":"x","contributes":{{"runs":"bin/x",
+                "views":[{{"id":"stats","title":"Statistics{invisible}","about":"personas"}}]}}}}"#
+        ));
+        made.file("bin/x", "#!/bin/sh\n");
+        let refused = read_at(&made.at()).expect_err("an invisible character in a title");
+        assert!(refused.contains("title"), "{refused}");
+    }
+}
+
+#[test]
+fn an_extension_name_holding_an_invisible_character_is_refused() {
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"x","name":"Stats\u2066x","contributes":{"runs":"bin/x",
+        "views":[{"id":"stats","title":"Statistics","about":"personas"}]}}"#,
+    );
+    made.file("bin/x", "#!/bin/sh\n");
+    let refused = read_at(&made.at()).expect_err("an isolate in the consent dialog's name");
+    assert!(refused.contains("name"), "{refused}");
+}
+
+#[test]
 fn two_views_with_one_id_are_refused() {
     let made = Made::new();
     made.manifest(

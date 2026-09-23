@@ -461,24 +461,8 @@ fn stopping_everything_kills_a_program_that_is_still_answering() {
         })
     };
     wait_for(&pid);
-    // The table knows the group only once `started` has run, a moment after the fork; the pid
-    // file can appear before that.
-    let until = Instant::now() + Duration::from_secs(5);
-    while executor
-        .running
-        .lock()
-        .expect("the table")
-        .get("probe")
-        .copied()
-        .unwrap_or(0)
-        == 0
-    {
-        assert!(
-            Instant::now() < until,
-            "the program never reached the table"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    // No waiting for the table to learn the group: a `stop_all` that comes between the program
+    // starting and its group being recorded is caught as it is recorded (`Executor::started`).
 
     executor.stop_all();
     let (said, took) = asking.join().expect("the asking thread");
@@ -834,4 +818,233 @@ fn what_a_round_trip_costs() {
         trip / rounds,
         whole / rounds
     );
+}
+
+// -------------------------------------------------------------------------------------
+// What else it can reach, and what cleans up after it (charter-app#212's review)
+// -------------------------------------------------------------------------------------
+
+/// A program that records which descriptors it holds, then answers.
+fn listing_fds(out: &Path) -> String {
+    format!(
+        "#!/bin/sh\nls /dev/fd > '{}'\nread line\nprintf '%s\\n' '{ANSWER}'\n",
+        out.display()
+    )
+}
+
+#[test]
+#[ignore = "open: closing every inherited descriptor in the child needs `pre_exec`, which is \
+            `unsafe`, and this workspace forbids `unsafe_code`; see the executor's module docs"]
+fn a_descriptor_charter_holds_without_close_on_exec_does_not_reach_the_program() {
+    // Anything in the app can hold a descriptor without FD_CLOEXEC — a C library, or a socket
+    // on macOS in the moment between `socket(2)` and `FIOCLEX`. `dup` sets no CLOEXEC, so this
+    // is one. The program runs as the operator and is owed nothing of charter's.
+    let rig = Rig::new();
+    let seen = rig.marker("fds");
+    rig.approved(&listing_fds(&seen));
+    let file = std::fs::File::create(rig.marker("held")).expect("a file");
+    let held = rustix::io::dup(&file).expect("dup");
+    let number = std::os::fd::AsRawFd::as_raw_fd(&held);
+
+    rig.ask(&Executor::default()).expect("an answer");
+
+    let listed = std::fs::read_to_string(&seen).expect("its descriptors");
+    let fds: Vec<i32> = listed
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    assert!(
+        !fds.contains(&number),
+        "descriptor {number}, held by charter, reached the program: {fds:?}"
+    );
+}
+
+#[test]
+fn a_program_s_channel_is_never_half_made_while_another_program_starts() {
+    // macOS makes a socket pair in two system calls, and a program started between them inherits
+    // both ends — for the executor's pair, possibly another extension's program, holding a
+    // channel charter says is one extension's alone. So the pair is made under the fork lock's
+    // write side, and this holds the read side exactly as a spawn in progress does.
+    let _alone = crate::forklock::tests::alone();
+    let spawning = crate::forklock::tests::as_a_fork_does();
+    let (made, was_made) = std::sync::mpsc::channel();
+    let maker = std::thread::spawn(move || {
+        let channel = channel();
+        made.send(()).expect("somebody is listening");
+        channel.map(|_| ())
+    });
+
+    assert_eq!(
+        was_made.recv_timeout(Duration::from_millis(300)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        "a socket pair was made while a program was being started"
+    );
+    drop(spawning);
+    assert_eq!(was_made.recv_timeout(Duration::from_secs(10)), Ok(()));
+    maker
+        .join()
+        .expect("the thread")
+        .expect("the pairs, once nothing was starting");
+}
+
+#[test]
+fn a_helper_that_holds_stdin_and_reads_slowly_cannot_hold_the_question_past_the_deadline() {
+    // A socket's write timeout bounds one `write(2)` and `write_all` loops, so a helper that
+    // left the group, kept the program's stdin and read a byte a second held the question for
+    // as long as a large request took to trickle — 15.6 s measured. The program itself answers
+    // at once; what is timed is charter giving up on the rest of the write.
+    let rig = Rig::new();
+    let escaped = rig.marker("escaped");
+    rig.approved(&format!(
+        "#!/bin/sh\nexec 3<&0\nperl -e 'setpgrp(0,0); open(F,\">{}\"); print F $$; close F; \
+         while(1){{ sysread(STDIN,$b,1) or exit; sleep 1 }}' <&3 &\n\
+         printf '%s\\n' '{ANSWER}'\n",
+        escaped.display()
+    ));
+    let executor = std::sync::Arc::new(Executor::default());
+    // On a thread of its own, so that a regression reads as a failure with a sentence on it
+    // rather than as a test run that never ends.
+    let (done, is_done) = std::sync::mpsc::channel();
+    let asking = {
+        let executor = std::sync::Arc::clone(&executor);
+        let config = rig.config();
+        std::thread::spawn(move || {
+            let began = Instant::now();
+            let said = executor.ask(&config, "probe", "stats", None, |_| {
+                serde_json::Value::String("x".repeat(4 << 20))
+            });
+            let _ = done.send(began.elapsed());
+            said
+        })
+    };
+    let took = is_done.recv_timeout(DEADLINE + Duration::from_secs(5));
+
+    wait_for(&escaped);
+    // Killed by the pid this test itself caused to exist, never by name. That also ends the
+    // question if charter was still waiting on it, so the thread can be joined either way.
+    if let Some(pid) = alive_from(&escaped)
+        && let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
+    {
+        let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
+    }
+    let said = asking.join().expect("the asking thread");
+    // Under the deadline, not merely near it: the program answered at once, and once it has
+    // there is nothing left worth waiting for — charter's end is shut down, which ends the
+    // write the helper is still trickling through.
+    let took = took.expect("a slow reader of the question held it past the deadline");
+    said.expect("the answer the program gave at once");
+    assert!(
+        took < DEADLINE,
+        "a slow reader of the question held it for {took:?}"
+    );
+    assert!(executor.running().is_empty(), "the slot was never released");
+}
+
+#[test]
+fn a_change_made_while_the_question_is_built_is_seen_by_the_gate() {
+    // ADR 0028's race, narrowed: the fingerprint is taken AFTER the plane is read for the
+    // question, so the slow part of an ask is no longer inside the window between the hash and
+    // the start. A file planted while `hand` runs is a change the gate sees.
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.approved(&marking(&marker));
+    let planted = rig.at().join("bin/planted.sh");
+
+    let refused = Executor::default()
+        .ask(&rig.config(), "probe", "stats", None, |_| {
+            std::fs::write(&planted, "echo planted\n").expect("a planted file");
+            serde_json::Value::Null
+        })
+        .expect_err("a directory that changed while the question was built ran");
+
+    assert!(
+        refused.contains("changed since you approved it"),
+        "{refused}"
+    );
+    assert!(!marker.exists(), "the program ran");
+}
+
+/// A program in its own group that starts a helper, says the helper's pid, and waits.
+fn with_a_helper(helper: &Path) -> std::process::Child {
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(r#"sleep 60 & echo $! > "$1"; wait"#)
+        .arg("sh")
+        .arg(helper)
+        .process_group(0);
+    let child = crate::forklock::spawn(&mut command).expect("a program");
+    wait_for(helper);
+    child
+}
+
+#[test]
+fn a_started_program_is_stopped_and_reaped_however_the_question_ends() {
+    // An error or a panic between the start and the answer — a thread that could not be
+    // started — returns through `Running`'s drop, and that has to stop the whole group and
+    // reap the program, exactly as the ordinary path does.
+    let dir = tempfile::tempdir().expect("a directory");
+    let helper = dir.path().join("helper");
+    let executor = Executor::default();
+    let held = executor.hold("probe").expect("the slot");
+    let child = with_a_helper(&helper);
+    let pid = child.id();
+
+    drop(Running::new(&executor, "probe", child));
+
+    assert!(gone(pid), "the program was left running, or never reaped");
+    let helper = alive_from(&helper).expect("the helper's pid");
+    assert!(gone(helper), "its helper was left running");
+    assert_eq!(
+        executor
+            .table
+            .lock()
+            .expect("the table")
+            .running
+            .get("probe"),
+        Some(&0),
+        "a group still in the table after its program was reaped"
+    );
+    drop(held);
+}
+
+#[test]
+fn a_program_started_as_charter_closes_is_killed_as_it_is_recorded() {
+    // `stop_all` kills what is in the table. A program started a moment before it and recorded a
+    // moment after would be in no table when it looked — so recording one after `stop_all` kills
+    // it on the spot.
+    let dir = tempfile::tempdir().expect("a directory");
+    let helper = dir.path().join("helper");
+    let executor = Executor::default();
+    let _held = executor.hold("probe").expect("the slot");
+    let child = with_a_helper(&helper);
+
+    executor.stop_all();
+    let running = Running::new(&executor, "probe", child);
+
+    // Asked while `running` still holds the program, so what killed the helper was the
+    // recording, not the drop below.
+    let helper = alive_from(&helper).expect("the helper's pid");
+    assert!(
+        gone(helper),
+        "a program recorded after stop_all was left running"
+    );
+    drop(running);
+}
+
+#[test]
+fn nothing_is_started_once_charter_is_closing() {
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.approved(&marking(&marker));
+    let executor = Executor::default();
+    executor.stop_all();
+
+    let refused = rig
+        .ask(&executor)
+        .expect_err("a program started after stop_all");
+
+    assert!(refused.contains("closing"), "{refused}");
+    assert!(!marker.exists(), "the program ran");
 }
