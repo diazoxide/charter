@@ -113,6 +113,11 @@ pub enum PersonaCommand {
         #[arg(long)]
         clear: bool,
     },
+    /// Read/write the ACTIVE persona's vault (values stay out of the model).
+    ///
+    /// Not a memory command; here because this is the enum `charter persona` dispatches on.
+    #[command(subcommand)]
+    Secret(crate::secret::PersonaSecretCommand),
     /// Show a persona's memory, or --query to search it.
     Recall {
         /// The persona (default: the active one).
@@ -687,7 +692,9 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
     let plane = &here.plane;
     match command {
         // Answered in `main` before a plane is even looked for.
-        PersonaCommand::Gc { .. } => unreachable!("answered before run"),
+        PersonaCommand::Gc { .. } | PersonaCommand::Secret(_) => {
+            unreachable!("answered before run")
+        }
         PersonaCommand::Current => {
             // `(none)` is the word charter prints, and it is NOT what it prints for a rung
             // that named a persona this plane does not have: THAT name is printed, because a
