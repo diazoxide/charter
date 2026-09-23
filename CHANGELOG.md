@@ -104,6 +104,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A macOS build is ad-hoc signed when no Apple Developer ID is set up. The first install needs
   one command, and the release page says which.
   ([#201](https://github.com/diazoxide/charter-app/pull/201))
+- Not merged yet: `charter version` prints the app's own version. A plane pinned to a release
+  of the Python charter is reported as that older line, not as drift. `charter doctor` and
+  every other message stop sending you to the Python charter, and `charter docs show`
+  describes this app.
 
 ### Fixed
 
