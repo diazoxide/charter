@@ -11,6 +11,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `charter secret`, `charter persona secret` and `charter vault` are back. A chat that runs
+  `charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl …` or `charter secret list
+  <vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without
+  them; they now answer as the Python charter did, with the plain-file, reference and 1Password
+  providers, and a value still never reaches the chat: `list` prints names, `get` a size band
+  and a keyed fingerprint, and `exec` hands values to the command's environment or to 0600 temp
+  files it removes, redacting what the command prints.
+- The Bash guard refuses a vault file read that is wrapped in `charter secret exec … --`, the
+  way it refuses one wrapped in `env`.
+
 ## [0.1.0] - 2026-09-23
 
 ### Added

@@ -1,6 +1,6 @@
 # Secrets: the vault
 
-> **This version of charter does not have `charter vault` or `charter secret` yet.** The Bash guard that keeps a vault file out of the transcript is in it, and is described in [hooks.md](hooks.md).
+> **In this version:** `charter vault`, `charter secret` and `charter persona secret` are here, with the `plain-file`, `reference` and `1password` providers, and they answer as the Python charter answered. One thing on this page is not: a `browser://` reference is recognised and refused when it is read, because the browser lane is not in charter-app yet. The Bash guard that keeps a vault file out of the transcript is described in [hooks.md](hooks.md); it also refuses a vault read wrapped in `charter secret exec … --`, which runs its command exactly as `env` does.
 
 `charter` has a small, provider-agnostic secret manager: **vaults**, addressed via
 `charter vault …` and `charter secret …` (or, scoped to a role, `charter persona
