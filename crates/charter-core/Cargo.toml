@@ -57,5 +57,10 @@ workspace = true
 
 [target."cfg(unix)".dependencies]
 # `termios` is for `ttyname`: the last rung of `session.terminal()` is the controlling tty's
-# device name, and `unsafe_code = "forbid"` rules out calling libc for it directly.
+# device name, and the workspace denies `unsafe_code`, which rules out calling libc for it
+# directly (the one exception is `executor::inherit_nothing_else`; see CLAUDE.md).
 rustix = { version = "1", features = ["fs", "process", "termios"] }
+# The system calls in the executor's one audited `pre_exec` (`fcntl`, and `close_range` on
+# Linux), made there because nothing that allocates may run in a forked child. Already in this
+# workspace's lockfile.
+libc = "0.2"

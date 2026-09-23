@@ -833,8 +833,6 @@ fn listing_fds(out: &Path) -> String {
 }
 
 #[test]
-#[ignore = "open: closing every inherited descriptor in the child needs `pre_exec`, which is \
-            `unsafe`, and this workspace forbids `unsafe_code`; see the executor's module docs"]
 fn a_descriptor_charter_holds_without_close_on_exec_does_not_reach_the_program() {
     // Anything in the app can hold a descriptor without FD_CLOEXEC — a C library, or a socket
     // on macOS in the moment between `socket(2)` and `FIOCLEX`. `dup` sets no CLOEXEC, so this
@@ -856,6 +854,60 @@ fn a_descriptor_charter_holds_without_close_on_exec_does_not_reach_the_program()
     assert!(
         !fds.contains(&number),
         "descriptor {number}, held by charter, reached the program: {fds:?}"
+    );
+}
+
+/// How many descriptors above 2 a `listing_fds` program saw — `ls`'s own among them.
+fn inherited(listed: &str) -> usize {
+    listed
+        .split_whitespace()
+        .filter_map(|s| s.parse::<i32>().ok())
+        .filter(|fd| *fd > 2)
+        .count()
+}
+
+#[test]
+fn a_socket_made_on_another_thread_as_the_program_starts_never_reaches_it() {
+    // On macOS a socket pair is `socketpair(2)` and then a close-on-exec call per end. A thread
+    // making pairs outside the fork lock — anything in the process that is not the executor —
+    // hands its pair to a program started in between: before the program closed what it
+    // inherited, 112 and 141 of 300 programs did get one. Now none may.
+    let rig = Rig::new();
+    let seen = rig.marker("fds");
+    rig.approved(&listing_fds(&seen));
+    let executor = Executor::default();
+    // What a program sees with nothing leaking: the shell's and `ls`'s own descriptors.
+    rig.ask(&executor).expect("an answer");
+    let baseline = inherited(&std::fs::read_to_string(&seen).expect("its descriptors"));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let makers: Vec<_> = (0..4)
+        .map(|_| {
+            let stop = std::sync::Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = std::os::unix::net::UnixStream::pair();
+                }
+            })
+        })
+        .collect();
+    let mut leaked = Vec::new();
+    for _ in 0..100 {
+        let _ = std::fs::remove_file(&seen);
+        rig.ask(&executor).expect("an answer");
+        let listed = std::fs::read_to_string(&seen).unwrap_or_default();
+        if inherited(&listed) > baseline {
+            leaked.push(listed);
+        }
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for maker in makers {
+        let _ = maker.join();
+    }
+    assert!(
+        leaked.is_empty(),
+        "{} of 100 programs inherited a descriptor: {:?}",
+        leaked.len(),
+        leaked.first()
     );
 }
 

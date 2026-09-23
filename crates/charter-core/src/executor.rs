@@ -77,24 +77,21 @@
 //! fork and nothing else. What makes a refused extension cost no plane read is the record, read
 //! first: an extension nobody approved is refused before `hand` runs.
 //!
-//! **Not closing what charter did not open for it.** A program is handed its two sockets and
-//! nothing else charter meant it to have: charter's own descriptors are close-on-exec, the
-//! executor's pairs are made under [`crate::forklock::while_descriptors_are_made`] so no other
-//! program can inherit them half-made, and a terminal is opened under the same lock. What is
-//! *not* closed is a descriptor something else in the process holds without close-on-exec — a C
-//! library's, or, on macOS, any socket in the moment between `socket(2)` and `FIOCLEX`. Closing
-//! everything above 2 in the child is the standard remedy (`portable-pty` does it for a
-//! terminal), and every way to run code in the child is `pre_exec`, which is `unsafe` and which
-//! this workspace forbids. Open, and pinned by an ignored test that asserts the fix.
+//! **Nothing of charter's but its two sockets.** A program is handed its stdin, stdout and
+//! stderr and no other descriptor: every one above 2 is closed as it starts
+//! ([`inherit_nothing_else`], this workspace's one audited `unsafe`), and the executor's pairs
+//! are made under [`crate::forklock::while_descriptors_are_made`], so no *other* program can
+//! inherit them half-made either.
 //!
 //! # A program ends when its stdin does
 //!
 //! **Part of the protocol, and the one thing a program owes charter.** charter kills a program's
 //! group when the question is over and every program's group when the window closes. It cannot
 //! when charter itself dies — a crash, a `kill -9`, a power cut to the process — and on macOS
-//! there is nothing that makes the kernel do it instead (Linux's `PR_SET_PDEATHSIG` would, has
-//! to be set in the child, so behind `pre_exec`, and fires on the death of the *thread* that
-//! started the program, which here is a pool thread that may end at any time). What does happen
+//! there is nothing that makes the kernel do it instead. Linux's `PR_SET_PDEATHSIG` would, for
+//! the program though not for what it starts, and it is not set: it has to be set in the child,
+//! and the one `unsafe` block allowed there closes descriptors and does nothing else. What does
+//! happen
 //! is that charter's end of the socket closes with it, so the program's stdin reaches
 //! end-of-file. **A program that reads end-of-file where its question should be exits**, rather
 //! than waiting for a question nobody is left to ask; one that works for longer than a moment
@@ -409,6 +406,9 @@ impl Executor {
             .stdin(Stdio::from(OwnedFd::from(theirs_in)))
             .stdout(Stdio::from(OwnedFd::from(theirs)))
             .stderr(Stdio::from(OwnedFd::from(err_theirs)));
+        // And nothing else of charter's: every descriptor above 2 is closed as the program
+        // starts, whoever opened it and however.
+        inherit_nothing_else(&mut command);
         // `forklock`, never `Command::spawn` (charter-app#53): this process opens terminals, and
         // a program forked while one is half-open inherits a chat's pty and holds it for as long
         // as it lives. An extension's program is the last thing that should be holding a chat.
@@ -616,6 +616,134 @@ impl Drop for Running<'_> {
         let _ = self.stop();
     }
 }
+
+/// The highest descriptor number the program could be handed, read in charter before the fork
+/// so that the child does nothing but system calls: the soft `RLIMIT_NOFILE`, or the hard one
+/// when the soft one is unlimited, or [`MOST_DESCRIPTORS`] when both are.
+///
+/// A descriptor above the soft limit can exist only if the limit was lowered after it was
+/// opened; charter lowers no limit.
+#[cfg(unix)]
+fn highest_descriptor() -> i32 {
+    let limit = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+    let most = limit.current.or(limit.maximum).unwrap_or(MOST_DESCRIPTORS);
+    i32::try_from(most.min(MOST_DESCRIPTORS)).unwrap_or(i32::MAX)
+}
+
+/// The bound on [`highest_descriptor`]: `kern.maxfilesperproc` on a stock macOS is 184 320, and
+/// no process on Linux is given more than `nr_open` (1 048 576 by default).
+#[cfg(unix)]
+const MOST_DESCRIPTORS: u64 = 1 << 20;
+
+/// Every descriptor above 2 is closed in the program as it starts: **the one `unsafe` in this
+/// workspace**, allowed by the operator on 2026-09-23 ("Allow one audited block").
+///
+/// charter's own descriptors are close-on-exec, but not everything in the process is charter's:
+/// a C library can hold a descriptor without the flag, and on macOS every socket the standard
+/// library makes is one for the moment between `socket(2)` and `FIOCLEX`. Measured before this:
+/// a descriptor `dup`ed in charter reached the program, and programs started beside a thread
+/// making socket pairs inherited one in 112 and 141 of 300. The standard remedy is the one
+/// `portable-pty` applies to every terminal charter opens: close what is above 2 in the child,
+/// between the fork and the exec. The only way to run code there is `pre_exec`, which is
+/// `unsafe` because of where it runs.
+///
+/// **Marked close-on-exec rather than closed**, so that the exec closes them: the standard
+/// library reports a failed exec back to charter through a pipe of its own, already
+/// close-on-exec, and closing that one would turn "the interpreter does not exist" into a
+/// program that silently exited.
+///
+/// **Which numbers**, per platform, cheapest first:
+/// - Linux: `close_range(3, ~0, CLOSE_RANGE_CLOEXEC)`, the whole range in one call (5.11+).
+/// - macOS: the child's own descriptor table, read with `proc_pidinfo(PROC_PIDLISTFDS)` into a
+///   buffer allocated before the fork, and one `fcntl` per descriptor it lists. A bounded loop
+///   is not good enough there: this machine's soft limit is 1 048 576, and a `fcntl` per number
+///   cost about 0.8 s per question.
+/// - Otherwise, or when either of those fails or the table did not fit the buffer: one `fcntl`
+///   per number up to [`highest_descriptor`], which answers `EBADF` at once for a number that
+///   is not open.
+///
+/// **Not `portable_pty::unix::close_random_fds`**, which is what portable-pty itself calls
+/// there: it lists `/dev/fd` with `read_dir`, which allocates, and after a fork in a
+/// multi-threaded process the allocator's lock may be held by a thread that no longer exists.
+#[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "the one audited block the operator allowed (2026-09-23); see the SAFETY comment"
+)]
+fn inherit_nothing_else(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    let highest = highest_descriptor();
+    #[cfg(target_os = "macos")]
+    let mut listed = vec![
+        libc::proc_fdinfo {
+            proc_fd: 0,
+            proc_fdtype: 0,
+        };
+        LISTED_AT_ONCE
+    ];
+    // SAFETY: `pre_exec` runs the closure in the child between `fork` and `exec`, where only
+    // async-signal-safe functions may be called — another thread may have held a lock (the
+    // allocator's among them) at the fork, and nothing in the child will ever release it.
+    // The closure allocates nothing, takes no lock and panics nowhere (no indexing, no
+    // unwrap). Everything it uses was made before the fork and moved in: `highest`, an `i32`,
+    // and on macOS `listed`, a buffer the child owns its own copy of. It calls only:
+    // - `fcntl(fd, F_SETFD, FD_CLOEXEC)`, which POSIX lists as async-signal-safe. On a number
+    //   that is not open it fails with `EBADF`, ignored; on one that is, it sets the one flag
+    //   and reads or writes no memory. Descriptors 0-2, the program's sockets, are never
+    //   passed to it.
+    // - Linux: the `close_range` system call through `syscall(2)`, a trap with no lock.
+    // - macOS: `getpid`, async-signal-safe, and `proc_pidinfo`, not on the POSIX list but a
+    //   single `proc_info` system call in libsystem with no lock and no allocation. It writes at
+    //   most `size` bytes into `listed`, which is exactly the buffer's length in bytes, and
+    //   what is read back is bounded by both what it returned and the buffer's length.
+    unsafe {
+        command.pre_exec(move || {
+            #[cfg(target_os = "linux")]
+            if libc::syscall(
+                libc::SYS_close_range,
+                3u32,
+                u32::MAX,
+                libc::CLOSE_RANGE_CLOEXEC,
+            ) == 0
+            {
+                return Ok(());
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let each = libc::PROC_PIDLISTFD_SIZE;
+                let size = i32::try_from(listed.len())
+                    .unwrap_or(0)
+                    .saturating_mul(each);
+                let got = libc::proc_pidinfo(
+                    libc::getpid(),
+                    libc::PROC_PIDLISTFDS,
+                    0,
+                    listed.as_mut_ptr().cast(),
+                    size,
+                );
+                // Equal to the buffer means it may not have been the whole table.
+                if got > 0 && got < size {
+                    let count = usize::try_from(got / each).unwrap_or(0);
+                    for one in listed.iter().take(count) {
+                        if one.proc_fd > 2 {
+                            libc::fcntl(one.proc_fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+            for fd in 3..=highest {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+            Ok(())
+        });
+    }
+}
+
+/// How many descriptors `proc_pidinfo` is given room to list: far more than charter holds (a few
+/// dozen, and a few hundred with many chats open), for 64 KiB allocated per question.
+#[cfg(target_os = "macos")]
+const LISTED_AT_ONCE: usize = 8192;
 
 /// Both sockets a program is started with: its stdin and stdout, and its stderr. Charter keeps
 /// the `_ours` ends.

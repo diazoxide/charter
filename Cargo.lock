@@ -668,6 +668,7 @@ dependencies = [
  "charter-core",
  "chrono",
  "dirs",
+ "libc",
  "memchr",
  "portable-pty",
  "proptest",

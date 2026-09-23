@@ -23,13 +23,20 @@ thiserror = "2"
 tempfile = "3"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`, for exactly one audited block: `executor::inherit_nothing_else`, the
+# `pre_exec` that closes every inherited descriptor in an extension's program (the operator,
+# 2026-09-23: "Allow one audited block"). `forbid` cannot be allowed anywhere, even there.
+# `crates/charter-core/tests/one_unsafe_block.rs` fails the build if `unsafe` or an allow of
+# this lint appears anywhere else.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 # Named rather than left to `all`, so that what the `clippy.toml` files disallow is refused
 # and not merely mentioned. It does nothing in a crate with no `clippy.toml` to configure it.
 disallowed_methods = "deny"
+# The one `unsafe` block says why it is sound, and so would any other.
+undocumented_unsafe_blocks = "deny"
 
 [profile.release]
 codegen-units = 1
