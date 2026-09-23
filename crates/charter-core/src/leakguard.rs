@@ -300,7 +300,7 @@ fn reveal_re() -> &'static Regex {
 /// pattern this way, on a spelling it has normalised by its own rule, and it must be the SAME
 /// pattern the leak guard refuses on: two copies of "what is a vault path" is how the Read route
 /// and the Bash route came to disagree about the vault directory (#462).
-pub fn vault_path_matches(text: &str) -> bool {
+pub(crate) fn vault_path_matches(text: &str) -> bool {
     vault_path_re().is_match(text)
 }
 
