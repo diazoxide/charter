@@ -9,8 +9,10 @@ the app extends with its bundle's directory.
 
 The app ships a Claude Code plugin in its bundle and loads it into each chat it starts, with
 `claude --plugin-dir`, so the hooks arrive with the chat and there is nothing to install per
-project or per machine. The bundled plugin is being built now; what it wires is recorded in
-[diazoxide/charter-app](https://github.com/diazoxide/charter-app).
+project or per machine. Its hooks name the app's `charter` through `$CHARTER_HOOK_BINARY`,
+which the app sets in the chat's environment. A Codex chat is armed with the state hooks and
+the Bash guard as `-c hooks.<Event>=…` flags. Both are for that session alone; see
+[harnesses.md](harnesses.md#per-profile--armed-at-launch).
 
 ## What this version answers
 

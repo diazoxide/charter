@@ -71,9 +71,16 @@ with `claude --plugin-dir`. There is nothing to install into Claude Code, no mar
 add and no per-project install to keep in step: the plugin and the binary its hooks call come
 from the same build, so they cannot drift apart.
 
-The bundled plugin is being built now; what it carries and how it is wired are recorded in
-[diazoxide/charter-app](https://github.com/diazoxide/charter-app). Until it lands, a chat's
-hooks are the ones described in [hooks.md](hooks.md).
+The plugin is called `charter-app`. It carries every hook charter answers — the ones that
+report a chat's state and the Bash guard, described in [hooks.md](hooks.md) — and the
+`handoff`, `working-in-a-clone` and `update` skills, which reach the model as
+`charter-app:<skill>`. It lives in `Contents/Resources/plugin` on macOS and
+`/usr/lib/charter/plugin` on Linux. A chat the app starts also turns the Python charter's
+`charter@charter` plugin off for itself, so a plane whose settings enable that plugin for your
+own terminal sessions does not give an app chat two sets of hooks; a `claude` you run in a
+terminal is untouched. A Codex chat gets charter's state hooks and Bash guard as `-c` flags on
+its command line, and Codex asks once to trust them. How each harness is armed is in
+[harnesses.md](harnesses.md#per-profile--armed-at-launch).
 
 `charter doctor --fix` is refused in this version, and `charter doctor` reports without
 it.
