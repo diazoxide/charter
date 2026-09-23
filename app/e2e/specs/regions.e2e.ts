@@ -283,6 +283,71 @@ describe("the right-hand region", () => {
     await untilSays("panel-personas", "default");
   });
 
+  /**
+   * **A panel is a contribution now, and this is the half only a scenario can carry**
+   * (charter-app#191).
+   *
+   * Todos and personas stopped being hardcoded React fed by named fields: they are
+   * `charter_core::panel` values, produced in `app/src-tauri/src/panels.rs` and drawn by the
+   * loop in `Panels.tsx` that draws a stranger's declared panel. The jsdom tests assert the
+   * renderer against contract values and the Rust tests assert the producer against a plane on
+   * disk; **neither can say that the two meet through a real command, across specta's generated
+   * bindings, in a Vite build.** That is this.
+   *
+   * `data-panel-from` is the attribute the claim rides on, and it is deliberately one charter
+   * ADR 0041 item 5 already wanted on screen — *show what is in force, after approval and not
+   * only at it*. If the production build dropped it, an operator would have no way to tell a
+   * panel his own charter draws from one an extension contributed, and this goes red.
+   */
+  it("draws its own panels as contributions, with the contributor named on each", async () => {
+    await onAlpha();
+    await untilSays("panel-todos", "Review the rollout plan");
+
+    const whose = await browser.execute(() =>
+      [...document.querySelectorAll("[data-panel-from]")].map((panel) => [
+        panel.getAttribute("data-testid"),
+        panel.getAttribute("data-panel-from"),
+      ]),
+    );
+
+    // The fixture plane has no extension installed, so every panel on screen is charter's —
+    // and every one of them still went through the seam, which is what `data-panel-from`
+    // existing at all proves.
+    expect(whose).toEqual([
+      ["panel-todos", "charter"],
+      ["panel-personas", "charter"],
+    ]);
+  });
+
+  /**
+   * **What a persona row opens is a list now, and it is the same list the panel is.**
+   *
+   * The operator asked for the memories to be readable from the window. They arrive as rows of
+   * the panel vocabulary (`persona_memories`), so the card's list is `PanelList` one surface in
+   * — the same shortening, the same card per row, the same bound and search. What a scenario
+   * adds over the jsdom test is that the command exists, answers off a real plane, and reaches
+   * a built window.
+   */
+  it("reads a persona's memories in the card its row opens", async () => {
+    await onAlpha();
+    await untilSays("panel-personas", "steward");
+
+    await (await personaRow("steward")).click();
+
+    const card = await $('[data-testid="row-detail-steward"]');
+    await card.waitForExist({ timeout: 20_000 });
+    await browser.waitUntil(async () => (await card.getText()).includes("Memory"), {
+      timeout: 20_000,
+      timeoutMsg: "the card never got as far as saying what the persona remembers",
+    });
+
+    await browser.keys("Escape");
+    await browser.waitUntil(async () => !(await card.isExisting()), {
+      timeout: 20_000,
+      timeoutMsg: "the card did not close on Escape",
+    });
+  });
+
   it("holds the needs-you queue, which used to be on the bar", async () => {
     await untilTheStripIsRead();
 
@@ -318,7 +383,7 @@ describe("the right-hand region", () => {
 
     await (await personaRow("devops")).click();
 
-    const card = await $('[data-testid="persona-details-devops"]');
+    const card = await $('[data-testid="row-detail-devops"]');
     await card.waitForExist({ timeout: 20_000 });
     await browser.waitUntil(async () => (await card.getText()).includes("DevOps Engineer"), {
       timeout: 20_000,
@@ -335,7 +400,7 @@ describe("the right-hand region", () => {
     // card says about a vault is a NAME, which is the whole of what charter will ever put on
     // a panel about one, so the name is what is read back.
     const vault = await browser.execute(() => {
-      const names = document.querySelectorAll('[data-testid="persona-details-devops"] code');
+      const names = document.querySelectorAll('[data-testid="row-detail-devops"] code');
       return [...names].map((name) => name.textContent);
     });
     expect(vault).toEqual(["devops", "personas/devops/persona.md"]);
@@ -355,7 +420,7 @@ describe("the right-hand region", () => {
 
     await (await personaRow("steward")).click();
 
-    const card = await $('[data-testid="persona-details-steward"]');
+    const card = await $('[data-testid="row-detail-steward"]');
     await card.waitForExist({ timeout: 20_000 });
     await browser.waitUntil(async () => (await card.getText()).includes("no credentials"), {
       timeout: 20_000,

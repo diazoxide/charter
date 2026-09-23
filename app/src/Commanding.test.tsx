@@ -433,7 +433,7 @@ describe("one list, two surfaces", () => {
     // three, which is the other half of moving them onto a hover surface.
     core();
     render(<App />);
-    await screen.findByText(/No sessions/);
+    await screen.findByTestId("empty-window");
 
     await palette("split right");
 
