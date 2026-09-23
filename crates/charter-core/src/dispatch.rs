@@ -69,7 +69,7 @@ pub fn rows(root: &Path) -> Vec<serde_json::Value> {
 
 /// Python's truth of a JSON value, for the `o.get("agent") or o.get("event")` guard: a
 /// missing key, `null`, `false`, `0` and `""` are all false.
-fn truthy(value: Option<&serde_json::Value>) -> bool {
+pub(crate) fn truthy(value: Option<&serde_json::Value>) -> bool {
     match value {
         None | Some(serde_json::Value::Null) => false,
         Some(serde_json::Value::Bool(b)) => *b,

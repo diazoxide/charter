@@ -588,6 +588,13 @@ pub fn persona(asking: &Asking) -> ActivePersona {
     }
 }
 
+/// The persona this PLANE puts first — `persona.plane_default`: the declared `[persona]
+/// default`, else the legacy `personas/.default`, each only when it names a persona that is
+/// here. Never a session rung: this is a committed fact, the same for every session.
+pub fn plane_default_persona(root: &Path) -> Option<String> {
+    declared_plane_persona(root).or_else(|| committed_default_persona(root))
+}
+
 /// `[persona] default`, when it names a persona this plane defines.
 ///
 /// A declaration naming a persona that was renamed or deleted resolves to *nothing* rather

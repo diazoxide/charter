@@ -218,6 +218,12 @@ pub fn frontmatter(text: &str) -> Vec<(String, String)> {
 /// not load: not a name, no file, a file charter will not read (out of the plane, not a
 /// regular file, past the bound), or one that is not UTF-8 text.
 pub fn load(root: &Path, name: &str) -> Option<Vec<(String, String)>> {
+    load_with_charter(root, name).map(|(pairs, _)| pairs)
+}
+
+/// [`load`], and the charter body beside the pairs — `persona.load`'s `meta` and `charter`,
+/// from one read of the file so the two cannot describe different versions of it.
+pub fn load_with_charter(root: &Path, name: &str) -> Option<(Vec<(String, String)>, String)> {
     if !valid_name(name) {
         return None;
     }
@@ -229,7 +235,21 @@ pub fn load(root: &Path, name: &str) -> Option<Vec<(String, String)>> {
     if crate::contain::readable(root, parent).is_err() || !memstore::readable_file(root, &path) {
         return None;
     }
-    memstore::read_text(&path).map(|text| frontmatter(&text))
+    memstore::read_text(&path).map(|text| (frontmatter(&text), charter_body(&text)))
+}
+
+/// The charter below the frontmatter, stripped — `persona._frontmatter`'s second answer.
+///
+/// Python splits on the first two `---` (`text.split("---", 2)`), wherever the second one
+/// falls, and takes everything after it; a text that does not open with `---`, or has no
+/// second one, is all body. The same cut as [`frontmatter`], so the pairs and the body are
+/// never read off two different boundaries.
+pub fn charter_body(text: &str) -> String {
+    let after = text
+        .strip_prefix("---")
+        .and_then(|rest| rest.find("---").map(|end| &rest[end + 3..]))
+        .unwrap_or(text);
+    memstore::py_strip(after).to_string()
 }
 
 /// The last value a definition gives `key` — `dict(pairs)`, where a later line wins.

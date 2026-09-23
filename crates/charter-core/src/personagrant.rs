@@ -156,7 +156,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Resolved> {
 
 /// The KNOWN key `key` is a case-variant of, when it is not itself known —
 /// `persona.misspelled_key`.
-fn misspelled_key(key: &str) -> Option<&'static str> {
+pub(crate) fn misspelled_key(key: &str) -> Option<&'static str> {
     if KNOWN_KEYS.contains(&key) {
         return None;
     }

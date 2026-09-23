@@ -50,6 +50,7 @@ pub mod personacmd;
 pub mod personagate;
 pub mod personagrant;
 pub mod personas;
+pub mod personaverbs;
 pub mod pieces;
 pub mod plane;
 pub mod planegit;
