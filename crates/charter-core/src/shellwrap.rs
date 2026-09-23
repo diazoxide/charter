@@ -548,6 +548,26 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
             continue;
         }
         let base = base_lower(&front);
+        if base == "charter"
+            && let Some(verb) = secret_exec_verb(&toks)
+        {
+            // `charter secret exec <vault> … -- <command>` RUNS `<command>`, with a vault's
+            // credential in its environment: it is a wrapper exactly as `env` is, and
+            // `charter secret exec devops -- cat .charter/vaults/devops.json` is a `cat` of the
+            // vault whose output redaction masks only the values that call resolved. Without a
+            // `--` the command's first word is not reliably placed, so the rest of the segment is
+            // reported as files it may open — the same fail-safe as an unplaced wrapper flag.
+            match toks.iter().skip(verb).position(|t| t == "--") {
+                Some(at) => {
+                    toks.drain(..verb + at + 1);
+                    continue;
+                }
+                None => {
+                    reads.extend(toks.iter().skip(verb).cloned());
+                    break;
+                }
+            }
+        }
         if !SHELL_KEYWORDS.contains(&front.as_str()) && !WRAPPERS.contains(&base.as_str()) {
             break;
         }
@@ -635,6 +655,17 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
         argv,
         chdir,
         reads,
+    }
+}
+
+/// How many tokens `charter secret exec` / `charter persona secret exec` occupies at the front
+/// of `toks` (the program included), or `None` when the segment is some other charter command.
+fn secret_exec_verb(toks: &VecDeque<String>) -> Option<usize> {
+    let words: Vec<&str> = toks.iter().take(4).map(String::as_str).collect();
+    match words.as_slice() {
+        [_, "secret", "exec", ..] => Some(3),
+        [_, "persona", "secret", "exec", ..] => Some(4),
+        _ => None,
     }
 }
 
