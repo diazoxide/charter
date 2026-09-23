@@ -57,7 +57,7 @@ import { useWorkspaceState } from "./workspaceState";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
-import { PaneGauge } from "./ChatGauge";
+import { ChatGauge, useChatUsage } from "./ChatGauge";
 import { usePin, useUpdates } from "./Updates";
 import { StatusLine, type Alerts } from "./StatusLine";
 import {
@@ -1911,6 +1911,53 @@ const STARTING_SIZE = { columns: 80, rows: 24 };
  */
 const ENDS_A_CHAT = new Set(["closeTab", "closePane"]);
 
+/**
+ * One pane's frame: the terminal, and what charter draws over it in the pane's two corners —
+ * side by side with the terminal, so neither is ever a child of the element xterm draws into.
+ *
+ * **Two corners, and neither thing in them places itself** (charter-app#193). The gauge is
+ * top-left and the controls top-right — the operator: *"context status indicator in pane right
+ * corner can be moved to left corner. to not make split and close buttons uggly"*. They shared
+ * one row in the right corner before that, because each had been written as the thing in the
+ * pane's top-right. A corner positions; its contents do not, so a third thing arriving here
+ * collides in review rather than at runtime. The controls keep their hover rule; the gauge,
+ * always drawn, is outside it.
+ *
+ * **The frame knows whether there is a gauge, and says so with a class** (`gauged`). At
+ * top-left the gauge would sit on the start of the terminal's first line at every pane size —
+ * a terminal's text begins at column 0 — so the pane gives it a row (`App.css`, which also
+ * records the margin-collapse that cost a first attempt). A class the component writes rather
+ * than a `:has(.chat-gauge)` selector, because the frame already knows: it reads the usage to
+ * draw the gauge, and a fact the component holds is plainer as a class than re-derived from
+ * the DOM by the stylesheet.
+ */
+function PaneFrame({
+  plane,
+  session,
+  moved,
+  running,
+  doing,
+  children,
+}: {
+  plane: PlaneId;
+  session: number;
+  moved: number;
+  running: boolean;
+  doing: ReactNode;
+  children: ReactNode;
+}) {
+  const usage = useChatUsage(plane, session, moved, running);
+  return (
+    <div className={clsx("pane-frame", usage !== undefined && "gauged")}>
+      {children}
+      <div className="pane-corner at-start">
+        <ChatGauge usage={usage} />
+      </div>
+      <div className="pane-corner at-end">{doing}</div>
+    </div>
+  );
+}
+
 /** A button that IS a row of the catalogue: its words, its availability and its reason.
  *
  *  Nothing is drawn for an id the catalogue no longer has. That is the point: the bar cannot
@@ -2177,30 +2224,20 @@ function LayoutPanes({
 }) {
   if (layout.kind === "pane") {
     return (
-      // The frame holds the terminal and what charter draws over it side by side, so neither
-      // is ever a child of the element xterm draws into.
-      <div className="pane-frame">
+      <PaneFrame
+        plane={plane}
+        session={layout.session}
+        moved={movedAt(states, layout.session)}
+        running={stateOf(states, layout.session) === "running"}
+        doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
+      >
         <SessionPane
           plane={plane}
           session={layout.session}
           focused={layout.pane === focused}
           onFocus={() => onFocus(layout.pane)}
         />
-        {/* **One corner, one row, because two changes landed in it at once.** The gauge
-            (M6.10) and these controls were each written as the thing in the pane's top-right,
-            and absolutely positioned there they would sit on top of each other. A row lays
-            them out side by side without either having to know the other's width — and the
-            gauge keeps the corner, because it is always drawn and the controls are not. */}
-        <div className="pane-corner">
-          <PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />
-          <PaneGauge
-            plane={plane}
-            session={layout.session}
-            moved={movedAt(states, layout.session)}
-            running={stateOf(states, layout.session) === "running"}
-          />
-        </div>
-      </div>
+      </PaneFrame>
     );
   }
   return (

@@ -698,33 +698,69 @@ button.show-more:focus-visible {
   min-height: 0;
 }
 
-/* **The corner itself, as one row — because two changes landed in it at once.** The gauge
-   (M6.10) and the pane's own controls were each written as "the thing in the pane's top-right",
-   and each absolutely positioned there they would sit on top of each other. A row lays them out
-   side by side without either having to know the other's width.
+/* **A pane's two corners, and the only two things in this window that position anything over a
+   terminal.** The gauge (M6.10) and the pane's own controls were each written as "the thing in
+   the pane's top-right", and absolutely positioned there they would have sat on top of each
+   other; they shared one row here for a while so neither had to know the other's width.
 
-   **The gauge keeps the corner and the controls sit inside it**, which is the right way round:
-   the gauge is always drawn and the controls appear only under the pointer, so the thing that
-   is always there is the thing that keeps its place. */
+   They are in different corners now — the operator: *"context status indicator in pane right
+   corner can be moved to left corner. to not make split and close buttons uggly"* (charter-app
+   #193) — the gauge top-left, the controls top-right. **The property that made the shared row
+   work is kept**: neither the gauge nor the controls position themselves; a corner does, and a
+   third thing arriving in a pane's corner has to go in one of these two, where it collides in
+   review rather than at runtime. */
 .pane-corner {
   position: absolute;
   top: 3px;
-  right: 8px;
   z-index: 2;
   display: flex;
   align-items: flex-start;
   gap: 0.3rem;
 }
 
-/* **A chat's `ctx`/`cache` gauge** (`app/src/ChatGauge.tsx`): small, in the pane's top-right
-   corner, over the terminal rather than taking a row from it. The corner is where a harness's
-   header leaves the most room, and a strip across every pane would cost every chat a line to
-   carry three numbers. Raised and bordered so it reads as charter's and not as the program's
-   output.
+.pane-corner.at-start {
+  left: 8px;
+}
 
-   **It no longer places itself**: `.pane-corner` above is what holds the corner now, because
-   the pane's controls arrived in the same corner and two absolutely positioned things at one
-   `top`/`right` are one thing on top of the other. Everything else about it is unchanged. */
+.pane-corner.at-end {
+  right: 8px;
+}
+
+/* **The gauge's own row, taken from the terminal only when there is a gauge.** At top-left the
+   gauge is over the first columns of the first row, and a terminal's text starts there at every
+   pane size — a prompt, Claude Code's header box — where the top-right it came from mostly
+   covered the blank end of a left-aligned line. A readout on top of the first line of a chat is
+   the thing the move must not ship, so the pane gives that row up instead.
+
+   **The pane's BOX shrinks, not the terminal's padding**, and that is load-bearing: the gauge
+   arrives after the terminal has been fitted, `SessionPane`'s `ResizeObserver` watches the pane,
+   and only a change to the pane's own size makes it fit again. A chat with no gauge — a shell,
+   a harness charter reads no usage for — keeps every row it had. The cost is the one the
+   gauge's first home refused: a Claude chat is a row shorter. It is paid only where the row
+   carries something.
+
+   **Padding on the frame, not a margin on the pane — measured, not chosen.** A `margin-top` on
+   `.pane` was the first version, and in the running window the gauge still sat 15 px into the
+   first row: the frame has no border or padding of its own, so the pane's margin collapsed
+   THROUGH it, the frame moved down with the pane, and the gauge — positioned against the frame
+   — moved with them. Padding cannot collapse. The pane's `height: 100%` resolves against the
+   frame's content box, so the pane is the row shorter, `SessionPane`'s `ResizeObserver` sees
+   it and refits. `.gauged` is written by `PaneFrame` (`PlaneView.tsx`), which reads the usage. */
+.pane-frame {
+  --gauge-room: 1.4rem;
+}
+
+.pane-frame.gauged {
+  padding-top: var(--gauge-room);
+}
+
+/* **A chat's `ctx`/`cache` gauge** (`app/src/ChatGauge.tsx`): small, in the pane's top-LEFT
+   corner since charter-app#193, on a row the pane gives up for it (`.pane-frame.gauged`
+   above says why the row, and what it costs). Raised and bordered so it reads as charter's and
+   not as the program's output.
+
+   **It does not place itself**: `.pane-corner.at-start` holds it. Everything else about it is
+   unchanged — in particular it is always drawn, and never takes the controls' hover rule. */
 .chat-gauge {
   display: flex;
   gap: 0.5rem;
