@@ -139,7 +139,8 @@ const record = join(plane, ".charter", "app", "reopen.json");
  *  record nobody can date is one nobody can debug. */
 const STAMPED = Math.floor(Date.now() / 1000) - 60;
 
-// A record as the app itself writes one, holding one chat under a conversation.
+// A record as the app itself writes one, holding one chat under a conversation — and one tab
+// that holds a view rather than a chat (charter ADR 0043, as amended), beside it.
 mkdirSync(join(plane, ".charter", "app"), { recursive: true });
 writeFileSync(
   record,
@@ -157,6 +158,7 @@ writeFileSync(
           active: true,
         },
       ],
+      views: [{ view: "persona", key: "steward", title: "steward", at: 1 }],
     },
     null,
     2,
@@ -197,6 +199,16 @@ check(
   "and kept the conversation, so the chat can be resumed again",
   written.chats?.[0]?.resume === CONVERSATION,
   `the record says ${JSON.stringify(written.chats?.[0]?.resume)}`,
+);
+
+// A view tab starts nothing, so nothing above could see it come back. What a relaunch owes it is
+// that the launch neither drops it on the way in nor writes it out of the record on the way out:
+// the core holds what the record put back until the window says otherwise, and a window that
+// loaded said the same tabs back.
+check(
+  "the record still holds the view tab, so the next launch puts that back too",
+  written.views?.some((view) => view.view === "persona" && view.key === "steward") === true,
+  `the record holds ${JSON.stringify(written.views)}`,
 );
 
 // The second launch reads what the first one wrote, not what this script hand-wrote.
