@@ -90,7 +90,7 @@ pub fn status(command: &mut Command) -> io::Result<ExitStatus> {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::sync::mpsc;
+    use std::sync::{Mutex, MutexGuard, mpsc};
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -101,8 +101,34 @@ mod tests {
     /// How long a test waits for something that should happen at once.
     const PATIENCE: Duration = Duration::from_secs(10);
 
+    /// The three tests below are each about what [`FORKING`] does to a thread that wants it,
+    /// and [`FORKING`] is one lock for the whole process — so run two of them at once and
+    /// each is measuring the other rather than the subject (charter-app#183).
+    ///
+    /// They deadlocked each other by construction, not by bad luck: `two_programs_…` holds a
+    /// read lock for `A_WHILE`, which blocks the write lock `waiting_for_…` is timing, and a
+    /// queued writer is what [`RwLock`] then makes `two_programs_…`'s second reader wait for.
+    /// Both failed on every one of five runs of the whole crate on macOS, and the wait that
+    /// came out — a little over `A_WHILE` — reads exactly like a real regression in the lock.
+    ///
+    /// So they are serialised against each other and against nothing else: `--test-threads=1`
+    /// would buy the same thing by giving up the other twelve hundred tests' parallelism.
+    /// Every other thread in this binary only ever takes the lock for READ, for the microsecond
+    /// a `spawn` takes, which is not something any bar below can notice.
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+    /// Held for as long as one of the three tests is using [`FORKING`].
+    ///
+    /// The poison is taken rather than unwrapped, for [`FORKING`]'s own reason: it guards no
+    /// data, so a test that panicked left nothing half-written — and a poisoned unwrap here
+    /// would report the first failure again in the next two tests instead of their own.
+    fn alone() -> MutexGuard<'static, ()> {
+        ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     #[test]
     fn nothing_can_be_started_while_a_terminal_is_being_opened() {
+        let _alone = alone();
         // The whole point. If this ever passes with the read lock in `spawn` deleted, the
         // lock is guarding nothing and charter-app#53 is open again.
         let (started, was_started) = mpsc::channel();
@@ -141,29 +167,73 @@ mod tests {
 
     #[test]
     fn waiting_for_a_program_to_finish_does_not_hold_a_terminal_back() {
+        let _alone = alone();
         // `output` and `status` wait for the program. Waiting under the read lock would mean
         // one slow `git` blocking every chat that wants to open, which is a worse bug than
         // the one this module exists for.
+        //
+        // **The program ends when this test says so, not on a clock** (charter-app#183).
+        // It was a `/bin/sleep 3` measured against a bar of `A_WHILE`, and a bar is a
+        // statement about the machine as much as about the lock: it read 399 ms against 400
+        // on a busy laptop and looked exactly like a regression in the lock. What is claimed
+        // here is an ORDER — the terminal opened while somebody was still waiting on a
+        // program — so the program is one that cannot finish until the line far below writes
+        // the file it is waiting for. Held under the read lock, opening would wait for a
+        // program that is waiting for opening: a hang with no end, which no machine is fast
+        // enough to squeak under. `PATIENCE` is what turns that hang into a failure with a
+        // sentence on it.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let running = dir.path().join("the-program-is-running");
+        let finish = dir.path().join("the-program-may-finish");
+        let mut waiter = Command::new("/bin/sh");
+        waiter
+            .arg("-c")
+            .arg(r#": > "$1"; until [ -e "$2" ]; do sleep 0.01; done"#)
+            .arg("sh")
+            .arg(&running)
+            .arg(&finish);
+
         let (ran, was_run) = mpsc::channel();
         let runner = std::thread::spawn(move || {
-            let mut sleeper = Command::new("/bin/sleep");
-            sleeper.arg("3");
-            let out = output(&mut sleeper);
+            let out = output(&mut waiter);
             ran.send(()).expect("somebody is listening");
             out
         });
 
-        // Long enough for the other thread to have reached its wait, and much shorter than
-        // the program it is waiting for.
-        std::thread::sleep(Duration::from_millis(200));
-        let began = Instant::now();
-        while_a_terminal_is_opened(|| ());
-        let took = began.elapsed();
+        // Not a guess at how long the other thread needs: the program says when it is up,
+        // and it says so from inside its own run, so by the time this returns `output` is
+        // past its fork and into the wait this test is about.
+        let up = Instant::now();
+        while !running.exists() {
+            assert!(up.elapsed() < PATIENCE, "the program never started");
+            std::thread::sleep(Duration::from_millis(5));
+        }
 
-        assert!(
-            took < A_WHILE,
-            "opening a terminal waited {took:?} for a program somebody else was waiting on"
+        // On its own thread, because the failure being caught is opening never returning,
+        // and a test that hangs says less than one that fails.
+        let (opened, was_opened) = mpsc::channel();
+        let opener = std::thread::spawn(move || {
+            while_a_terminal_is_opened(|| ());
+            opened.send(()).expect("somebody is listening");
+        });
+
+        assert_eq!(
+            was_opened.recv_timeout(PATIENCE),
+            Ok(()),
+            "opening a terminal is still waiting for a program somebody else is waiting on, \
+             and that program is waiting for this test — so the wait is being done under the \
+             lock (charter-app#53's fix turned into a worse bug)"
         );
+        // And the program really was still running while that happened, rather than having
+        // finished early and left the lock free for reasons that prove nothing.
+        assert_eq!(
+            was_run.try_recv(),
+            Err(mpsc::TryRecvError::Empty),
+            "the program ended before this test let it, so this run is not evidence"
+        );
+
+        std::fs::write(&finish, []).expect("the program is let go");
+        opener.join().expect("the thread finishes");
         assert!(was_run.recv_timeout(PATIENCE).is_ok());
         assert!(
             runner.join().expect("the thread finishes").is_ok(),
@@ -173,6 +243,7 @@ mod tests {
 
     #[test]
     fn two_programs_can_start_at_the_same_time() {
+        let _alone = alone();
         // A read lock, not a mutex: charter opens worktrees, asks git and refreshes a cache
         // at once, and serialising every fork behind one another would be a cost paid on
         // every panel for a window that is microseconds wide.

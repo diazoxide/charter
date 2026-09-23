@@ -158,10 +158,15 @@ export function DeleteWorkspace({
                 that failed — `--force` gets past none of them, and a button offering to force
                 past one would be a lie about what the next press does. The plain answer stays
                 there instead, because retrying is the only thing that could help. */}
+            {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186): WebKit
+                leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+                down. These two are the scope's edges, so Radix reached them anyway — but only
+                in one direction, and only for as long as there are exactly two. */}
             {refusal === undefined || risky.length === 0 ? (
               <button
                 type="button"
                 className="ends-it"
+                tabIndex={0}
                 disabled={deleting}
                 onClick={() => onDelete(false)}
               >
@@ -171,6 +176,7 @@ export function DeleteWorkspace({
               <button
                 type="button"
                 className="ends-it"
+                tabIndex={0}
                 disabled={deleting}
                 onClick={() => onDelete(true)}
               >
@@ -178,7 +184,7 @@ export function DeleteWorkspace({
               </button>
             )}
             <AlertDialog.Cancel asChild>
-              <button type="button" ref={cancel} onClick={onCancel}>
+              <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
                 Cancel
               </button>
             </AlertDialog.Cancel>

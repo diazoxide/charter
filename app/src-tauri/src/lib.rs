@@ -657,6 +657,9 @@ fn start_chat(
         // A chat is pinned by the operator afterwards, never at its start: a tab that
         // arrived already pinned would be an arrangement nobody made.
         pinned: false,
+        // A chat the operator has just asked for has no number yet: `Sessions`
+        // deals it one that this plane has never used (charter-app#90).
+        number: None,
     };
     let session = held
         .chats()
@@ -707,6 +710,9 @@ fn open_session(
         // path builds no charter environment at all (`Chats::start` passes an empty one).
         show_footer: false,
         pinned: false,
+        // A chat the operator has just asked for has no number yet: `Sessions`
+        // deals it one that this plane has never used (charter-app#90).
+        number: None,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.

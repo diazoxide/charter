@@ -119,11 +119,16 @@ export function NewWorkspace({
               </p>
             )}
 
+            {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). The name
+                box is this scope's first edge and `Cancel` is its last, so `Create workspace`
+                sat between them — where Radix's focus scope does nothing and WebKit will not
+                tab to a `<button>` whose `tabindex` is not written down. The two text boxes
+                were reachable and the one that acts on them was not. */}
             <div className="doing">
-              <button type="submit" disabled={!ready}>
+              <button type="submit" tabIndex={0} disabled={!ready}>
                 Create workspace
               </button>
-              <button type="button" onClick={onCancel}>
+              <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel
               </button>
             </div>

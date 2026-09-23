@@ -269,6 +269,16 @@ pub fn destination(root: &Path, ws: &str, ws_dir: &Path, name: &str) -> Result<P
             crate::shown::escaped(name)
         ));
     }
+    // A clone's directory is named in `workspace.json` and that manifest is committed, so the
+    // name travels (charter-app#96). The alphabet above admits `nul` and `alpha.`, and a
+    // forge may honestly hold a repo called either.
+    if let Err(why) = contain::mintable(name) {
+        return Err(format!(
+            "charter will not clone '{}' under that name: {why}. Clone it by hand under a \
+             name that travels, and charter will pick the checkout up from there",
+            crate::shown::escaped(name)
+        ));
+    }
     let dest =
         confine::within_workspace(root, ws, &ws_dir.join(name)).map_err(|e| e.to_string())?;
     contain::writable(root, &dest).map_err(|e| e.to_string())?;
@@ -583,6 +593,38 @@ mod tests {
         assert_eq!(
             destination(&root, "alpha", &ws, "widget").unwrap(),
             ws.join("widget")
+        );
+    }
+
+    #[test]
+    fn a_repo_name_the_next_machine_reads_as_something_else_gets_no_destination() {
+        // charter-app#96. `repo_name_ok`'s alphabet admits `nul` and `alpha.`, and this name
+        // is written into `workspace.json`, which is committed — so a forge that honestly
+        // holds a repo called `nul` would put a directory in this plane that is the null
+        // device on the next machine to check it out. `alpha:evil` reaches here at all only
+        // because `destination` asks `segment_ok`, which looks at the second character for a
+        // drive letter and nowhere else for a colon.
+        let (_dir, root) = plane();
+        let ws = root.join("workspaces/alpha");
+        for hostile in ["nul", "NUL", "con", "aux", "lpt9", "com1.txt", "alpha."] {
+            let refused = destination(&root, "alpha", &ws, hostile)
+                .expect_err("{hostile} must get no destination");
+            assert!(
+                refused.contains("charter will not clone"),
+                "{hostile}: {refused}"
+            );
+        }
+        // And the ones the alphabet was already catching keep being caught, by it.
+        for hostile in ["alpha:evil", "PROGRA~1"] {
+            assert!(
+                destination(&root, "alpha", &ws, hostile).is_err(),
+                "{hostile}"
+            );
+        }
+        assert_eq!(
+            destination(&root, "alpha", &ws, "nul-notes").unwrap(),
+            ws.join("nul-notes"),
+            "a name that merely starts like a device is an ordinary name"
         );
     }
 

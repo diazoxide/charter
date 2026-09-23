@@ -239,9 +239,11 @@ itself, on the last it acts on **Tab** and moves to the first. Anywhere in betwe
 nothing at all and the browser's own tab sequence decides.
 
 That matters because **WebKit does not put a `<button>` in the tab sequence at all** unless "tab
-to all controls" is turned on — and **WebKit is the engine on both platforms the scenarios run
-on**: a WKWebView on macOS and WebKitGTK on Linux. charter embeds the system WebView, so this is
-the window's own behaviour rather than one runner's quirk.
+to all controls" is turned on, or the button's `tabindex` is written down — and **WebKit is the
+engine on both platforms the scenarios run on**: a WKWebView on macOS and WebKitGTK on Linux.
+charter embeds the system WebView, so this is the window's own behaviour rather than one runner's
+quirk. The second half of that sentence is the whole of the fix and is the section below; it was
+not known when the rest of this was written.
 
 It was measured rather than reasoned about, three times, and the third measurement **corrected
 the first two**. `palette.e2e.ts`'s *"closes the chat it just opened, by the keyboard alone"*
@@ -267,6 +269,34 @@ when writing a spec: **a scenario cannot press a button by keyboard at all, by a
 why Escape works in these specs where nothing aimed at a button does — Radix listens for Escape on
 `document` — and why the palette's own Enter works, since the palette handles it in JavaScript.
 
+**A third face of the rig's finding, and it is the same fact underneath — measured in
+charter-app#186 while trying to prove the fix below in a real window.** The two above read like
+two unrelated quirks; they are one. **This driver dispatches a synthetic DOM keydown and performs
+no default action whatsoever.** The decisive measurement is a control nobody can argue with: two
+plain text `<input>`s, injected into an open dialog in the running app, with the focus on the
+first.
+
+```
+PROBE start: input "probe-one"
+PROBE after Tab from text box: input "probe-one"
+PROBE keys seen: ["Tab shift=false on INPUT prevented=false"]
+```
+
+**Tab did not move the focus between two text boxes.** WebKit tabs between text fields with full
+keyboard access off — that is ordinary Safari, and `TextFieldInputType::isKeyboardFocusable`
+never consults the gate at all — so there is nothing left for this to be but the driver. The
+keydown arrived, unprevented, and nothing followed it. That explains all three symptoms at once:
+no activation from `Enter`, no focus navigation from `Tab`, and no `shiftKey` on a chord, because
+a synthetic dispatch carries none of them.
+
+So, for whoever writes the next spec: **the keyboard half of a scenario can only assert what the
+app does in JavaScript.** Escape, `F2`, the palette's own Enter — all handled by a listener — are
+fair game. Anything the *engine* would have done in response to a key is not, and asking for it
+produces a red that looks like an app defect and is not one. The reachability half of
+charter-app#186 therefore stayed in jsdom, where the engine's rule is written down and modelled
+explicitly; `picker.e2e.ts` keeps the half a scenario really can prove, which is that the
+attribute the rule needs survives the build and is on the element in the shipped app.
+
 Three things follow, and the last is the one a reviewer should hold us to:
 
 - **Shift+Tab from the first answer is Radix's own `focus()` call**, not the engine's tab
@@ -276,14 +306,106 @@ Three things follow, and the last is the one a reviewer should hold us to:
   jsdom implements activation. A scenario can prove that the keyboard reaches a surface and that
   keys the app handles in JavaScript do their work — `palette.e2e.ts` keeps exactly that half,
   raising the question by keyboard and answering it with Escape.
-- **A dialog whose two answers are its only tabbables is wholly reachable by keyboard** — the
-  first and last ARE the two edges Radix handles. `EndingChat.tsx` is that shape.
-- **A third focusable in the middle of any modal in this window is unreachable by keyboard**:
-  the engine will not tab to it and Radix only handles the edges. That is a property to check
-  when a dialog grows a control, not a thing to discover from a scenario run — `App.test.tsx`'s
-  "asks with two answers, Cancel focused and the confirm at the other edge" reads the buttons
-  off the DOM and fails on a third. **It is also bigger than one dialog**, and charter-app#186
-  is where the window-wide half of it lives — the picker's `Start` is the one to look at first.
+- **A control that is neither edge of a modal is reachable by neither mechanism**: the engine
+  will not tab to a `<button>` and Radix only handles the edges. That was the state of this
+  window until charter-app#186, and the section below is what was measured and what was done
+  about it.
+
+## What Tab actually reached in each modal, and the one attribute that fixed it
+
+charter-app#186 asked the question above of **every** modal surface rather than of the one
+dialog a scenario happened to break on, and the answer was worse than the ticket's guess.
+`app/src/Modals.keyboard.test.tsx` is the measurement and now the guard; it walks each surface
+with a Tab that is dispatched for real, so Radix's edge handling runs rather than being modelled,
+and only the engine's half is written down. **This is a jsdom file on purpose**: a scenario
+cannot answer the question at all, for finding 2 above.
+
+What it found, before anything was changed:
+
+| surface                            | tabbables | opened on       | Tab reached                  | Shift+Tab reached      | reachable by neither                          |
+| ---------------------------------- | --------- | --------------- | ---------------------------- | ---------------------- | --------------------------------------------- |
+| `StartChat` (the picker)           | 6         | `Cancel`        | **nothing — it never moved** | the form, then `Start` | the footer checkbox                           |
+| `Updates` (the offer)              | 5         | channel         | nothing                      | `Close`                | `Install`, `Check now`                        |
+| `NewProject`                       | 5         | the folder box  | nothing                      | nothing                | `Browse…`, the checkbox, `Create project`     |
+| `Extensions`                       | 4         | `Add…`          | nothing                      | `Done`                 | `Review`, `Remove`, per row                   |
+| `NewWorkspace`                     | 4         | the name box    | the vision box               | nothing                | `Create workspace`                            |
+| `Doctor`                           | 3         | `<summary>`     | nothing                      | `Close`                | `Check again`                                 |
+| `QuitWarning`, `EndingChat`        | 2         | `Cancel`        | nothing                      | the other answer       | —                                             |
+| `ApprovePlane`, `ApproveExtension` | 2         | `Cancel`        | the other answer             | nothing                | —                                             |
+| `DeleteWorkspace`                  | 2         | `Cancel`        | nothing                      | the delete             | —                                             |
+| `AlertsDrawer`, `PinItem`          | 1         | its one control | —                            | —                      | —                                             |
+| `Palette`                          | 1         | its box         | —                            | —                      | —                                             |
+
+The last three rows arrived from charter-app#172 while this was being measured, each with the
+defect on the day it was written — which is the argument for a file that walks every surface
+rather than a fix per dialog. `NewProject` is the sharpest: only its folder box was in the
+engine's sequence at all, and the checkbox in the middle is the one that decides whether charter
+writes into a repository the operator already has.
+
+Read the `Tab reached` column first, because it is the one an operator lives in: **in eight of
+the fourteen surfaces, pressing Tab moved the focus nowhere at all**, and in a ninth it moved
+one step between two text boxes and then stopped. Three of the remaining five have a single
+control and nowhere to go by construction. That leaves two — `ApprovePlane` and
+`ApproveExtension` — where Tab did what Tab does, and it worked there for no better reason than
+that `Cancel` happens to be written second in their JSX rather than first.
+
+**The ticket's headline is half refuted, and the half that survives is the worse half.** It said
+the picker's `Start` could not be reached; `Start` could be reached, by walking the dialog
+backwards through every form control and out the far side on Radix's first edge — and never by
+Tab. What was reachable by neither key was the footer checkbox, charter ADR 0029's one choice.
+ADR 0022 makes this dialog the only way a chat ever starts, so "you may start a chat, but only
+by pressing Shift+Tab five times" was the keyboard-only path to starting one.
+
+**Also refuted: "radio groups and checkboxes are in WebKit's restricted tab sequence."** They
+are when they are `<input>`s. Radix's are not — `RadioGroup.Item` and `Checkbox.Root` both
+render `Primitive.button`, and the hidden `<input>` each keeps for form submission is
+`tabIndex={-1}`. The radio rows were reachable for an unrelated reason: roving focus writes a
+`tabindex` on them. The checkbox has no roving focus and was not.
+
+**The fix is one attribute, and it is the engine's own escape hatch rather than a handler of
+ours.** WebKit's rule, in full:
+
+```cpp
+bool HTMLFormControlElement::isKeyboardFocusable(const FocusEventData& focusEventData) const
+{
+    if (!!tabIndexSetExplicitly())
+        return Element::isKeyboardFocusable(focusEventData);
+    return isFocusable() && document().frame()
+        && document().frame()->eventHandler().tabsToAllFormControls(focusEventData);
+}
+```
+
+**A `tabindex` that is written down is never weighed against full keyboard access at all.** The
+two lines that say so are WebKit's own, added in `[popover] Improve focus handling`
+(r263447, 2023-04-29) and shipped in Safari 17 and WebKitGTK 2.42 — both older than anything
+charter runs on. So every `<button>` inside a modal surface in this window now says
+`tabIndex={0}`, and Tab moves through these dialogs the way it moves through every other window
+on the machine.
+
+Three things about that choice, because each was a fork:
+
+- **It is not a hand-written Tab handler, which charter ADR 0037 is against and which this
+  would have been the fourth of.** Nothing wraps a primitive, nothing intercepts a key, and
+  Radix's own edge behaviour is untouched and still does the wrapping at the ends.
+- **It is not a WebView setting, and that route does not exist.** Turning "tab to all controls"
+  on for charter's own window would be the tidier answer and there is no public API for it:
+  macOS exposes full keyboard access as a system preference and `WKPreferences` has only
+  private SPI for the web half of it. WebKitGTK's `enable-tabs-to-links` is about links.
+- **It goes on the two-answer dialogs as well**, which did not need it. "The keyboard works
+  here" was a property of *how many buttons there are*, and a dialog that grows a third control
+  should not silently lose it — which is the failure this whole section is the record of.
+
+One consequence worth knowing before the next one: the same WebKit change makes an explicit
+`tabindex` mouse-focusable too, so a click now leaves the keyboard on the button it pressed,
+as it does on Windows and Linux and unlike the macOS default.
+
+**Outside the modals, this is still true and is not fixed.** Every `<button>` in the window —
+the tabs, the pane controls, the status line, the explorer rows — is equally absent from
+WebKit's tab sequence, and nothing there has a focus scope to wrap at the edges, so there is no
+"reachable backwards" to fall back on. That is a bigger change than a dialog's answer row and a
+different question (where should Tab go between four regions?), so #186 stopped at the modals,
+where a focus scope makes the boundary obvious and the surfaces are countable. charter-app#189
+carries the rest.
 
 ## The four regions added no primitive, which is the rule working
 
@@ -368,7 +490,10 @@ class, because the class is how a pane is drawn and this is what it means.
 **A scenario cannot carry this claim.** WebDriver does not deliver a modifier chord here —
 `browser.keys(["Shift", "Tab"])` arrives with `shiftKey` unset, measured in #176 and recorded
 above — so a key claim is evaluated in jsdom, where the real event can be dispatched and what
-happened to it asserted. `Palette.test.tsx`'s *"a chord the chat's own terminal would encode"*
+happened to it asserted. The missing modifier is one symptom of a larger one, measured in #186
+and written up above: **this driver dispatches a synthetic DOM keydown and performs no default
+action at all**, which is also why no key it sends presses a button and why Tab does not move
+the focus even between two text boxes. `Palette.test.tsx`'s *"a chord the chat's own terminal would encode"*
 is where the rule is pinned, including the half that matters most: the keystroke reaches the
 document **unprevented**, which is what reaching the shell actually means.
 

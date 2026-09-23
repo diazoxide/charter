@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render as renderBare, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -91,6 +91,8 @@ function core(
   states: Moved[] = [],
 ): {
   asked: Asked[];
+  /** Resolves once this core has answered both commands the window's `settled` is made of. */
+  settled: Promise<unknown>;
   /** Fires the event the app is sent when something asks it to quit. */
   askToQuit: () => Promise<void>;
   /** Fires one `chat-moved`, the way the core pushes one. */
@@ -99,8 +101,33 @@ function core(
   const asked: Asked[] = [];
   const listeners = new Map<string, number>();
   let opened = 0;
+  /** One-shot: resolved the moment this core answers `cmd`. */
+  const answering = new Map<string, () => void>();
+  const answered = (cmd: string) =>
+    new Promise<void>((it) => answering.set(cmd, it)).then(() => answering.delete(cmd));
+  /**
+   * When the window is settled, as a fact to await rather than a thing to watch for
+   * (charter-app#138).
+   *
+   * `App` calls itself settled once the restore is over and every project has reported what
+   * it holds, and those two are `planes_to_restore` and `chats_that_would_not_start` — the
+   * last answers of the two chains a launch starts. Both are this mock's to give, so a test
+   * can await the answer going out instead of polling the window until it shows a sign of
+   * having received it, and `act` finishes the rest.
+   *
+   * That matters because a poll carries a deadline and an awaited promise does not. The
+   * deadline was one second, nothing in the quit path is timing-dependent, and on a run
+   * building eighteen jsdom environments at once one second was not always enough — so the
+   * test reported "the window did not quit" when what had happened was "the machine was
+   * busy". A budget for a whole test belongs to the runner, which already has one.
+   */
+  const settled = Promise.all([
+    answered("planes_to_restore"),
+    answered("chats_that_would_not_start"),
+  ]);
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
+    answering.get(cmd)?.();
     if (cmd === "plugin:event|listen") {
       const { event, handler } = args as { event: string; handler: number };
       listeners.set(event, handler);
@@ -118,6 +145,7 @@ function core(
   });
   return {
     asked,
+    settled,
     move: (moved: Moved) => {
       const handler = listeners.get("chat-moved");
       if (handler === undefined) throw new Error("the window is not listening for moves");
@@ -138,6 +166,29 @@ function core(
       await vi.waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     },
   };
+}
+
+/**
+ * Runs the window forward until something the core did is done, and no further.
+ *
+ * Each turn is one `act`: React commits whatever the last answer queued, and the microtask
+ * queue is handed back so the next answer can arrive. The loop ends the moment the promise
+ * the test named has resolved, and one more turn after it carries the window through what
+ * that answer left queued.
+ *
+ * **It has no deadline of its own, and that is the point** (charter-app#138). A `waitFor`
+ * does — one second by default — so a test written with one is racing the machine: under a
+ * suite that builds forty jsdom environments at once, the window that had not quit yet was
+ * reported as a window that would not quit. Nothing in that path is timing-dependent; only
+ * the deadline was. Here the thing awaited is a fact the mock itself produced rather than a
+ * sign a poll hoped to catch, and the only budget left is the runner's own — which is a
+ * backstop, not a limit anything is expected to approach.
+ */
+async function untilTheCoreHas(done: Promise<unknown>) {
+  let has = false;
+  void done.then(() => (has = true));
+  while (!has) await act(async () => {});
+  await act(async () => {});
 }
 
 const tabs = () =>
@@ -464,21 +515,17 @@ describe("being asked to quit", () => {
 
   it("quits straight away when there is nothing to end", async () => {
     // A warning listing nothing is a dialog in the way.
-    const { asked } = core();
+    const { asked, settled } = core();
     render(<App />);
-    await screen.findByText(/No sessions/);
     // And settled: the window asks its plane first and what it has open second, so "no tabs"
     // is only "nothing to end" once that second answer is back.
     //
-    // **Testing Library's `waitFor` and not `vi.waitFor`, and that is the whole of it.**
-    // `PlaneView` sets `settled` and asks `chats_that_would_not_start` in the same block, so
-    // the ask is recorded synchronously while the state is only queued — and the window reads
-    // `settled` through a ref a layout effect fills, which is a commit away. `vi.waitFor` knows
-    // nothing about React and could return in that gap, and then a quit arriving one line later
-    // was answered by an unsettled window: it warned, correctly, about a project that had not
-    // finished saying what it held. This one polls inside `act`, so React has committed by the
-    // time it returns and the precondition this test names is actually true.
-    await waitFor(() => expect(of("chats_that_would_not_start", asked)).toHaveLength(1));
+    // **The precondition is awaited, not polled** (charter-app#138): `untilTheCoreHas` says
+    // why, and `core`'s `settled` says which two answers the window's own `settled` is made
+    // of. What the next line fires at is a window that has committed both, as a fact rather
+    // than as something a poll caught in time.
+    await untilTheCoreHas(settled);
+    expect(screen.getByText(/No sessions/)).toBeInTheDocument();
 
     const listen = of("plugin:event|listen", asked).find(
       (one) => (one.args as { event: string }).event === "quit-asked",
@@ -489,7 +536,13 @@ describe("being asked to quit", () => {
       payload: null,
     });
 
-    await vi.waitFor(() => expect(of("quit", asked)).toHaveLength(1));
+    // **Asserted, not awaited.** The window's answer to a quit is synchronous — the listener
+    // reads the ref a layout effect filled and asks the core in the same turn — so `quit` is
+    // in `asked` by the time `runCallback` returns. Waiting for it bought nothing when the
+    // window quit, and when the window warned there was never going to be anything to wait
+    // for: the wait just spent a second before saying so, in a sentence about a timeout
+    // rather than about the window.
+    expect(of("quit", asked)).toHaveLength(1);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

@@ -61,8 +61,21 @@ pub const KEEP: usize = 16;
 /// What it does NOT do is validate the id's alphabet. Claude Code's ids are UUIDs, but
 /// `charter statusline` is wired for other harnesses too and an id charter refuses is a turn
 /// charter does not record — so the rule is the one property the filesystem cares about.
+///
+/// **`contain::mintable` and not `contain::segment_ok`** (charter-app#96). An id of `nul`
+/// makes this path `.charter/sessions/nul.usage`, which on Windows is the null device: the
+/// write succeeds, the bytes are gone, and every read answers empty — a turn silently not
+/// recorded rather than a refusal. `alpha:evil` is a stream inside `alpha.usage` that no walk
+/// over `.charter/` lists.
+///
+/// This is the one place the rule is asked of a READ as well as of a write, and it is the
+/// one place where that costs nothing: `.charter/` is machine-local and never committed, so
+/// there is no travelling plane to lock anybody out of — the most that can be lost is the
+/// cost trend of a session whose harness named it after a DOS device.
 pub fn file_for(plane: &Path, sid: &str) -> Option<PathBuf> {
-    contain::segment_ok(sid).then(|| plane.join(SESSIONS).join(format!("{sid}.usage")))
+    contain::mintable(sid)
+        .is_ok()
+        .then(|| plane.join(SESSIONS).join(format!("{sid}.usage")))
 }
 
 /// What one turn's payload says it cost.
@@ -763,6 +776,37 @@ mod tests {
         }
         // Python joins the id straight on, so this is the file it would have written.
         assert!(!here.join("escape.usage").exists());
+    }
+
+    #[test]
+    fn a_session_id_the_next_machine_reads_as_a_device_records_nothing_anywhere() {
+        // charter-app#96, measured on macOS: `contain::segment_ok` said `true` to every one
+        // of these, and `segment_ok` is the whole gate this path used to have. `nul` makes
+        // the file `.charter/sessions/nul.usage`, which on Windows is the null device — the
+        // write succeeds, the bytes are gone, and the trend a panel reads is empty for ever.
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+
+        for bad in [
+            "nul",
+            "NUL",
+            "con",
+            "aux",
+            "lpt9",
+            "com1.txt",
+            "alpha.",
+            "alpha ",
+            "alpha:evil",
+            "PROGRA~1",
+        ] {
+            assert_eq!(file_for(&plane, bad), None, "{bad:?}");
+            let mut doc = payload(90, 10);
+            doc["session_id"] = json!(bad);
+            assert_eq!(record(&plane, &doc), Recorded::Nothing, "{bad:?}");
+        }
+        // The ids a harness actually mints are untouched: a UUID, and Claude Code's own.
+        assert!(file_for(&plane, "8f14e45f-ceea-467a-9d3f-1b2c3d4e5f60").is_some());
+        assert!(file_for(&plane, "fixture-session-1").is_some());
     }
 
     #[test]

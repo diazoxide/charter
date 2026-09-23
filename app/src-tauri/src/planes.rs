@@ -1296,7 +1296,9 @@ mod tests {
                 persona: None,
                 show_footer: false,
                 pinned: false,
+                number: None,
             }],
+            dealt: 0,
         }
     }
 
@@ -1323,9 +1325,17 @@ mod tests {
                 persona: None,
                 show_footer: false,
                 pinned: false,
+                number: None,
             })
             .collect();
-        reopen::write(root, &reopen::Record { chats }).expect("the record is written");
+        reopen::write(
+            root,
+            &reopen::Record {
+                chats,
+                ..Default::default()
+            },
+        )
+        .expect("the record is written");
     }
 
     #[cfg(unix)]
