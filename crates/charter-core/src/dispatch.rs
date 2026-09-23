@@ -6,8 +6,12 @@
 //! file per month per machine. It is **committed**, which is what makes the roster block a
 //! fact every engineer sees the same way rather than a reading of one laptop.
 //!
-//! Nothing is written here. The roster reads; `charter persona dispatch` (not in this
-//! charter) writes.
+//! Two rows are written here, both by a hook: [`record`], when a `Task`/`Agent` call returns
+//! (`posttooluse-dispatch`), and [`record_resume`], when a `SendMessage` resumes a persona
+//! (`posttooluse-message`). Without them the roster `charter docs` draws would count only
+//! what the Python charter once logged. Committing the log is not done here: under `share =
+//! "commit"` or `"push"` the Python hook commits each row as it lands, and charter-app leaves
+//! that to `charter save`, which commits the plane's own files as one decision.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -110,6 +114,105 @@ pub fn generic_share(counts: &BTreeMap<String, u64>) -> (u64, u64) {
     (generic, counts.values().sum())
 }
 
+/// This machine's name as a filename part — `dispatch._host`: the first label of the host
+/// name, everything outside `[A-Za-z0-9_-]` removed, at most 32 characters, `unknown` for
+/// nothing. One file per machine is what keeps two laptops from conflicting on one line.
+pub fn host() -> String {
+    #[cfg(unix)]
+    let raw = rustix::system::uname()
+        .nodename()
+        .to_string_lossy()
+        .into_owned();
+    #[cfg(not(unix))]
+    let raw = String::new();
+    host_of(&raw)
+}
+
+/// [`host`]'s rule, for a name already in hand.
+pub fn host_of(raw: &str) -> String {
+    let first = raw.split('.').next().unwrap_or_default();
+    let kept: String = first
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        .take(32)
+        .collect();
+    if kept.is_empty() {
+        "unknown".to_string()
+    } else {
+        kept
+    }
+}
+
+/// `personas/_dispatch/<YYYY-MM>.<host>.jsonl` for the month `when` falls in (UTC) —
+/// `dispatch.path_for`.
+pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, host: &str) -> PathBuf {
+    dir(root).join(format!("{}.{host}.jsonl", when.format("%Y-%m")))
+}
+
+/// Append one row, keys sorted, as `json.dumps(…, sort_keys=True)` writes it — the three
+/// `dispatch.record*` writers' shared body. `None` when containment refuses the path or the
+/// write fails.
+pub fn append(path: &Path, root: &Path, row: &serde_json::Value) -> Option<PathBuf> {
+    use std::io::Write;
+    crate::contain::writable(root, path).ok()?;
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    let mut options = std::fs::OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o644);
+    }
+    let mut file = options.open(path).ok()?;
+    let line = format!("{}\n", crate::pyjson::dumps_sorted(row));
+    file.write_all(line.as_bytes()).ok()?;
+    Some(path.to_path_buf())
+}
+
+/// `isoformat(timespec="seconds")` of a UTC instant.
+pub fn stamp(when: chrono::DateTime<chrono::Utc>) -> String {
+    when.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+}
+
+/// Log one dispatch to `agent` — `dispatch.record`.
+pub fn record(
+    root: &Path,
+    agent: &str,
+    when: chrono::DateTime<chrono::Utc>,
+    host: &str,
+) -> Option<PathBuf> {
+    let agent = crate::memstore::py_strip(agent);
+    if agent.is_empty() {
+        return None;
+    }
+    append(
+        &path_for(root, when, host),
+        root,
+        &serde_json::json!({"agent": agent, "ts": stamp(when)}),
+    )
+}
+
+/// The `event` a resume row carries — `dispatch.RESUME`.
+pub const RESUME: &str = "resume";
+
+/// Log that `agent` was resumed rather than dispatched afresh — `dispatch.record_resume`.
+pub fn record_resume(
+    root: &Path,
+    agent: &str,
+    when: chrono::DateTime<chrono::Utc>,
+    host: &str,
+) -> Option<PathBuf> {
+    let agent = crate::memstore::py_strip(agent);
+    if agent.is_empty() {
+        return None;
+    }
+    append(
+        &path_for(root, when, host),
+        root,
+        &serde_json::json!({"agent": agent, "event": RESUME, "ts": stamp(when)}),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +263,31 @@ mod tests {
 
         assert!(tally(dir.path()).is_empty());
         assert_eq!(generic_share(&tally(dir.path())), (0, 0));
+    }
+
+    #[test]
+    fn a_dispatch_and_a_resume_are_logged_as_charter_logs_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let when = chrono::DateTime::parse_from_rfc3339("2026-05-04T11:32:17+00:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let p = record(dir.path(), " devops ", when, "box").unwrap();
+        record_resume(dir.path(), "devops", when, "box").unwrap();
+        assert_eq!(p, dir.path().join("personas/_dispatch/2026-05.box.jsonl"));
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "{\"agent\": \"devops\", \"ts\": \"2026-05-04T11:32:17+00:00\"}\n\
+             {\"agent\": \"devops\", \"event\": \"resume\", \"ts\": \"2026-05-04T11:32:17+00:00\"}\n"
+        );
+        assert_eq!(tally(dir.path()).get("devops"), Some(&1));
+        assert_eq!(record(dir.path(), "  ", when, "box"), None);
+    }
+
+    #[test]
+    fn the_host_is_one_safe_label() {
+        assert_eq!(host_of("Aarons-MacBook.local"), "Aarons-MacBook");
+        assert_eq!(host_of("bad host!"), "badhost");
+        assert_eq!(host_of(""), "unknown");
+        assert_eq!(host_of(&"x".repeat(40)).len(), 32);
     }
 }

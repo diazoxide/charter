@@ -3,18 +3,24 @@
 //! **This file is the switch M3.1 was built in front of.** Until it existed, `main.rs`'s
 //! `is_a_tool_hook` answered every word in the `pretooluse`/`posttooluse` namespace with exit 2
 //! — *block* — because refusing a tool call is the only safe thing a program that has checked
-//! nothing can do. The eight arms are now ported and assembled ([`charter_core::toolgate`]), so
-//! for one word in that namespace this binary has an answer. **Every other word still blocks**,
-//! and `main.rs` says which and why.
+//! nothing can do. The eight arms are ported and assembled ([`charter_core::toolgate`]), and so
+//! now is the rest of the tool-hook namespace (`hooks.rs`); `is_a_tool_hook` is left guarding
+//! only words charter has not invented yet.
 //!
-//! # What this does, and what the Python does that this does not
+//! # What this does
 //!
-//! `charter/hooks.py:pretooluse` is eight refusals, seven writers and one ALLOW. This is the
-//! eight refusals. It reads the payload, asks [`charter_core::toolgate::verdict`], and either
-//! prints one JSON object on stdout or says nothing. It writes nothing to the plane, keeps no
-//! tally, clears no routing mark and never answers `allow` — so a persona's declared tools do
-//! not skip their prompt under this charter. `toolgate`'s header argues that split; the short
-//! of it is that the refusals are the half that costs something to be missing.
+//! `charter/hooks.py:pretooluse` is its bookkeeping, eight refusals, and one ALLOW, in that
+//! order, and so is this:
+//!
+//! 1. **Bookkeeping** ([`charter_core::toolhooks::pretooluse_bookkeeping`]), in a plane only:
+//!    the heartbeat of the piece the command runs in, and the record-memory cadence reset a
+//!    `charter … remember` earns. The Python's guard sighting, turn marker and trace row are
+//!    not kept — nothing in charter-app reads them.
+//! 2. **The refusals** ([`charter_core::toolgate::verdict`]): one JSON object on stdout, or
+//!    nothing.
+//! 3. **The persona tool gate** ([`charter_core::personagate`]), in a plane only and only when
+//!    nothing refused: `allow`, so the harness does not prompt, when the active persona's
+//!    `tools:` declares the program. It never denies; the worst it can do is leave the prompt.
 //!
 //! # Why a denial is exit 0
 //!
@@ -62,7 +68,13 @@ struct Found {
 /// is deliberate and is not a fail-open — a guard with no command to judge has nothing to
 /// refuse, and refusing anyway would block every tool call on a harness whose payload charter
 /// does not understand.
-pub fn pretooluse(payload: &str) -> ExitCode {
+pub fn pretooluse(payload: &str, now: Option<&str>) -> ExitCode {
+    // Bookkeeping first, as the Python does: a refusal below still means the session was here.
+    crate::hooks::with_hook(
+        payload,
+        now,
+        charter_core::toolhooks::pretooluse_bookkeeping,
+    );
     let data: serde_json::Value = serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
     fn text(at: &serde_json::Value) -> String {
         at.as_str().unwrap_or_default().to_string()
@@ -112,10 +124,17 @@ pub fn pretooluse(payload: &str) -> ExitCode {
             permission_mode: permission_mode.as_deref(),
         },
     };
-    let Some(verdict) = toolgate::verdict(&call, plane.as_ref()) else {
-        return ExitCode::SUCCESS;
-    };
-    deny(&verdict)
+    if let Some(verdict) = toolgate::verdict(&call, plane.as_ref()) {
+        return deny(&verdict);
+    }
+    // Nothing refused, so the persona tool gate is asked. Its answer is an allow or nothing;
+    // one it could not print is simply the ordinary prompt.
+    if let Some(allow) =
+        crate::hooks::with_hook(payload, now, charter_core::toolhooks::persona_allow)
+    {
+        crate::hooks::say(&allow);
+    }
+    ExitCode::SUCCESS
 }
 
 /// Print the verdict, or fall back to the one status a harness reads as "refused".
@@ -123,7 +142,7 @@ pub fn pretooluse(payload: &str) -> ExitCode {
 /// `hooks.py:_deny`. The flush is inside the check on purpose: a `print` to a pipe lands in a
 /// userspace buffer and returns cleanly, so without it a broken stdout is discovered at exit,
 /// too late for any exit status to mean anything.
-fn deny(verdict: &toolgate::Verdict) -> ExitCode {
+pub(crate) fn deny(verdict: &toolgate::Verdict) -> ExitCode {
     let line = verdict.emitted();
     let mut out = std::io::stdout().lock();
     if writeln!(out, "{line}").is_ok() && out.flush().is_ok() {

@@ -62,6 +62,16 @@ pub struct RecallArgs {
 
 #[derive(Subcommand)]
 pub enum PersonaCommand {
+    /// Internal, answered and ignored: the Python plugin's SessionStart prune of ended
+    /// sessions' ephemeral scratch. Not ported, because its rule — a session idle for six hours
+    /// has ended — is wrong for a chat the app keeps open for days, and a prune that deletes a
+    /// live chat's scratch cannot be undone. Leaving it costs a few small files.
+    #[command(name = "_gc", hide = true)]
+    Gc {
+        /// Accepted and ignored: the Python charter re-runs itself in the background.
+        #[arg(long)]
+        detach: bool,
+    },
     /// Print the active persona — the name alone, or `(none)`.
     ///
     /// Not a memory command, and it lives here because this is the enum `charter persona`
@@ -676,6 +686,8 @@ fn persona_ok(root: &Path, name: &str) -> bool {
 pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, String> {
     let plane = &here.plane;
     match command {
+        // Answered in `main` before a plane is even looked for.
+        PersonaCommand::Gc { .. } => unreachable!("answered before run"),
         PersonaCommand::Current => {
             // `(none)` is the word charter prints, and it is NOT what it prints for a rung
             // that named a persona this plane does not have: THAT name is printed, because a

@@ -228,6 +228,11 @@ class Scenario:
     #: through it, and "the canonical spelling still passes" is not a claim any denial
     #: scenario can make.
     allows: bool = False
+    #: What BOTH stdouts must contain, for a hook whose answer is not a denial — the briefing a
+    #: `SessionStart` prints, the nudge a `PostToolUse` prints, an ask or an allow. `allows`
+    #: is "both said nothing"; this is its other half, because two sides that both printed
+    #: nothing compare equal byte for byte and prove nothing about a handler meant to speak.
+    says: str = ""
     #: Why the two stderrs are not expected to match. charter's refusals are prose and the
     #: Rust CLI's are not, so a refusal scenario states its own shape via `refusal` instead.
     stderr_differs: str = ""
@@ -5597,8 +5602,284 @@ for _s in PRETOOLUSE_SCENARIOS:
     assert bool(_s.denies) != _s.allows, f"{_s.name} says neither what it denies nor that it allows"
 
 
+
+
+
+# --------------------------------------------------------------------------- #
+# The rest of the hook namespace: the session briefing and the tool hooks        #
+# --------------------------------------------------------------------------- #
+#
+# charter-app answers every hook itself (the operator's ruling of 2026-09-23: "charter-app should
+# be standalone"). Each scenario is one `charter hook <word>` on both sides — the same payload,
+# the same fixture plane — and compares the exit status, stdout byte for byte, and the planes.
+#
+# **What the Rust side deliberately does not write is ignored by NAME**, as the guard scenarios
+# above do it: the trace, the guard sighting, the turn markers and the ask marks are charter's
+# bookkeeping for surfaces charter-app does not have (`toolhooks.rs`'s header says which and
+# why). The logs both sides DO write — the dispatch log, the skill log — carry this machine's
+# host name in their filename, which the oracle's shim pins and the Rust side reads from the
+# kernel, so they are compared as `facts` with the host taken out and not as files.
+HOOK_IGNORES = {
+    **GUARD_IGNORES,
+    ".charter/frame": "the tmux frame's chat state (`_record_harness_session`, `notify`). "
+    "`docs/plane-format.md` rules the app neither reads nor writes there",
+    ".charter/chat-turns": "the tmux frame's turn markers (`_turn_begin`/`_turn_end`); the app "
+    "has its own record of which chat is working",
+    "personas/_dispatch": "compared as `facts` (`_logged`): the filename carries the host",
+    "personas/_skills": "compared as `facts` (`_logged`): the filename carries the host",
+}
+# The snapshot the persona tool gate takes IS ported now, so `.charter/sessions` is compared.
+del HOOK_IGNORES[".charter/sessions"]
+
+#: The vault fixture's own path, spelled once.
+VAULT_FILE = ".charter/" + "vaults/fixture.json"
+
+
+def _logged(root: Path) -> str:
+    """The dispatch and skill logs, with the host taken out of each filename."""
+    rows = []
+    for sub in ("_dispatch", "_skills"):
+        d = root / "personas" / sub
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.jsonl")):
+            month = f.name.split(".", 1)[0]
+            for line in f.read_text().splitlines():
+                rows.append(f"{sub}/{month}: {line}")
+    # Every scenario that reads this is one where a row must have been written: two sides that
+    # both wrote nothing would compare equal and prove nothing.
+    assert rows, f"nothing was logged under {root}"
+    return "\n".join(rows)
+
+
+def _inflight(root: Path) -> str:
+    """The dispatch in-flight records: which agents, never the random name each file has."""
+    d = root / ".charter" / "dispatch-inflight"
+    if not d.is_dir():
+        return "(no directory)"
+    rows = []
+    for f in d.glob("*.json"):
+        rec = json.loads(f.read_text())
+        rows.append(f"{rec.get('agent')} {rec.get('kind')} {rec.get('ts')} "
+                    f"{oct(f.stat().st_mode & 0o777)}")
+    return "\n".join(sorted(rows))
+
+
+def _hook_call(word: str, payload: dict, *, name: str, plane: str = "daily", setup=None,
+               env=None, ignore=None, facts=None, denies: str = "", says: str = "",
+               allows: bool = False, stdout_mask=None, stdout_differs: str = "") -> Scenario:
+    """One `charter hook <word>`, put to both implementations with the clock pinned.
+
+    Exactly one of `denies`, `says` and `allows` — see the assertion under `HOOK_SCENARIOS`.
+    """
+    return Scenario(
+        name=name,
+        plane=plane,
+        setup=setup,
+        python=["hook", word],
+        stdin=json.dumps({"session_id": SESSION, "cwd": ".", **payload}),
+        denies=denies,
+        says=says,
+        allows=allows,
+        facts=facts,
+        stdout_mask=stdout_mask or [],
+        stdout_differs=stdout_differs,
+        ignore={**HOOK_IGNORES, **(ignore or {})},
+        env={"CHARTER_HARNESS": "claude-code", **(env or {})},
+    )
+
+
+def _with_persona(name: str, front: str):
+    """A setup that adds persona *name* with the frontmatter *front*."""
+    def setup(root: Path) -> None:
+        d = root / "personas" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "persona.md").write_text(f"---\n{front}\n---\n\n# {name}\n")
+    return setup
+
+
+def _a_running_dispatch(root: Path) -> None:
+    """One sub-agent already in flight, started at the pinned instant, and a persona that
+    writes code."""
+    d = root / ".charter" / "dispatch-inflight"
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (d / "Explore.fixture.json").write_text(
+        json.dumps({"agent": "Explore", "kind": "dispatch", "ts": NOW.timestamp()}))
+    _with_persona("web", "role: Web\ndispatch-isolation: worktree")(root)
+
+
+def _eleven_changes_since_a_memory(root: Path) -> None:
+    (root / ".charter" / "sessions" / f"{SESSION}.memnudge").write_text("11")
+
+
+
+def _a_piece_another_session_claimed(root: Path) -> None:
+    """A worktree piece of alpha's `svc`, claimed two hours ago by a session that is not this
+    one — the collision the briefing warns about."""
+    (root / "workspaces" / "alpha" / ".worktrees" / "svc" / "p1").mkdir(parents=True)
+    log = root / "workspaces" / "alpha" / "pieces" / "fixture-host.jsonl"
+    log.write_text(json.dumps({"event": "claimed", "repo": "svc", "piece": "p1",
+                               "session": "other-session",
+                               "ts": (NOW - timedelta(hours=2)).isoformat()}) + "\n")
+
+
+def _a_plane_that_commits_memory_with_one_unshared(root: Path) -> None:
+    """The plane root as a repository, `share = "commit"`, and one memory nobody committed."""
+    _a_plane_root_repo(root)
+    manifest = root / "charter.toml"
+    manifest.write_text(manifest.read_text().replace('share = "local"', 'share = "commit"'))
+    (root / "personas" / "steward" / "memory" / "unshared.md").write_text("# unshared\n")
+
+
+HOOK_SCENARIOS = [
+    # ---- SessionStart: the briefing.
+    # The fixture session is LOCKED to `alpha`, so there is no workspace gate: the persona the
+    # plane defaults to, its memory, alpha's open todo and the plane's other workspace.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart", "source": "startup"},
+               name="sessionstart-briefs-the-plane-default-persona",
+               says="You are the `steward` persona for this session"),
+    # A session with no lock is asked to confirm a workspace, first.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart", "source": "startup"},
+               name="sessionstart-asks-an-unlocked-session-for-a-workspace",
+               says="Confirm the workspace before any repo work",
+               env={"CHARTER_SESSION_ID": "unlocked-session"}),
+    # ...and an unattended one is told to stop rather than guess.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart",
+                                "permission_mode": "bypassPermissions"},
+               name="sessionstart-tells-an-unattended-unlocked-run-to-stop",
+               says="this run has no workspace and nobody to ask",
+               env={"CHARTER_SESSION_ID": "unlocked-session"}),
+    # The persona the app pins with `$CHARTER_PERSONA` is the one adopted, with its own memory.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart"},
+               name="sessionstart-adopts-the-persona-the-app-pins",
+               says="(via $CHARTER_PERSONA)",
+               env={"CHARTER_PERSONA": "devops"}),
+    # A pin naming a persona the plane does not have says so and adopts nothing.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart"},
+               name="sessionstart-says-a-pinned-persona-is-gone",
+               says="No persona is active for this session",
+               env={"CHARTER_PERSONA": "ghost"}),
+    # `$CHARTER_WORKSPACE` pins the workspace: no gate, and beta's todos rather than alpha's.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart"},
+               name="sessionstart-follows-a-pinned-workspace",
+               says="other workspace",
+               env={"CHARTER_SESSION_ID": "unlocked-session", "CHARTER_WORKSPACE": "beta"}),
+    # A session standing in a piece is told what it holds and owes — and, when another session
+    # claimed it, warned. The heartbeat both sides then write is compared as a file.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart", "source": "startup",
+                                "cwd": "workspaces/alpha/.worktrees/svc/p1"},
+               name="sessionstart-announces-a-piece-another-session-claimed",
+               setup=_a_piece_another_session_claimed,
+               says="This piece was already claimed by `other-session`, last seen 2h ago"),
+    # On a plane whose memory travels, memory nobody committed is said.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart"},
+               name="sessionstart-says-memory-is-unshared-on-a-plane-that-commits-it",
+               setup=_a_plane_that_commits_memory_with_one_unshared, ignore=ROOT_REPO_IGNORES,
+               # steward has a memory now and no index yet, so the digest names the index it
+               # could not read — by its absolute path, which is each side's own copy.
+               stdout_mask=[(r"/(?:python|rust)/plane/", "each side's plane copy is its own "
+                             "directory; the resolved prefix around it is still compared")],
+               says="1 persona memory/ref file(s) are **uncommitted**"),
+    # Outside a plane there is nothing to brief about.
+    _hook_call("sessionstart", {"hook_event_name": "SessionStart"},
+               name="sessionstart-outside-a-plane-says-nothing", plane="", allows=True),
+
+    # ---- PreToolUse on Read/Grep: the vault guard's second route. Ungated.
+    _hook_call("pretooluse-read", {"tool_name": "Read", "tool_input": {"file_path": VAULT_FILE}},
+               name="pretooluse-read-refuses-a-vault-file",
+               denies="reads a vault/secret file directly"),
+    _hook_call("pretooluse-read", {"tool_name": "Grep", "tool_input": {"pattern": "token"}},
+               name="pretooluse-read-refuses-a-grep-that-walks-into-the-vaults",
+               denies="walks a directory tree that contains the plane's own `vaults`"),
+    _hook_call("pretooluse-read", {"tool_name": "Grep",
+                                   "tool_input": {"pattern": "token", "glob": "*.py"}},
+               name="pretooluse-read-allows-a-grep-whose-glob-selects-no-vault", allows=True),
+    _hook_call("pretooluse-read", {"tool_name": "Read",
+                                   "tool_input": {"file_path": ".charter/vaults.json"}},
+               name="pretooluse-read-allows-the-vault-registry", allows=True),
+    _hook_call("pretooluse-read", {"tool_name": "Read", "tool_input": {"file_path": VAULT_FILE}},
+               name="pretooluse-read-still-refuses-outside-a-plane", plane="",
+               denies="reads a vault/secret file directly"),
+
+    # ---- PreToolUse on Write/Edit: charter's own state.
+    _hook_call("pretooluse-edit", {"tool_name": "Write",
+                                   "tool_input": {"file_path": ".charter/active-persona",
+                                                  "content": "devops"}},
+               name="pretooluse-edit-refuses-a-write-into-charters-state",
+               denies="writes charter's own state directly"),
+    _hook_call("pretooluse-edit", {"tool_name": "Edit",
+                                   "tool_input": {"file_path": "workspaces/alpha/workspace.md"}},
+               name="pretooluse-edit-allows-an-ordinary-edit", allows=True),
+
+    # ---- PreToolUse on Task/Agent: a code-writing persona sent out beside a running agent.
+    _hook_call("pretooluse-dispatch", {"tool_name": "Task",
+                                       "tool_input": {"subagent_type": "web", "prompt": "x"}},
+               name="pretooluse-dispatch-asks-before-a-second-writer",
+               says="charter nudge: `web` writes code and `Explore` is already running",
+               setup=_a_running_dispatch, facts=_inflight,
+               ignore={".charter/dispatch-inflight": "compared as `facts` (`_inflight`): each "
+                       "record's filename is random, as `mkstemp`'s is"}),
+    _hook_call("pretooluse-dispatch", {"tool_name": "Task",
+                                       "tool_input": {"subagent_type": "Explore", "prompt": "x"}},
+               name="pretooluse-dispatch-records-a-first-dispatch-and-says-nothing", allows=True,
+               facts=_inflight,
+               ignore={".charter/dispatch-inflight": "compared as `facts` (`_inflight`)"}),
+
+    # ---- PostToolUse.
+    _hook_call("posttooluse", {"tool_name": "Write", "tool_input": {
+                   "file_path": "personas/devops/memory/key.md",
+                   "content": "the mail key is am_us_abcd1234"}},
+               name="posttooluse-warns-of-a-secret-in-a-memory",
+               says="appears to contain a secret (AgentMail key)"),
+    _hook_call("posttooluse", {"tool_name": "Write", "tool_input": {
+                   "file_path": "workspaces/alpha/svc/main.py", "content": "x"}},
+               name="posttooluse-tells-the-first-edit-in-a-live-clone-the-flow",
+               says="You're changing **svc** in workspace **alpha**"),
+    _hook_call("posttooluse", {"tool_name": "Edit", "tool_input": {
+                   "file_path": "src/twelve.py", "new_string": "x"}},
+               name="posttooluse-re-surfaces-the-memory-habit-on-the-twelfth-change",
+               says="Memory check — ~12 file changes",
+               setup=_eleven_changes_since_a_memory),
+    _hook_call("posttooluse-skill", {"tool_name": "Skill",
+                                     "tool_input": {"skill": "charter:secrets"}},
+               name="posttooluse-skill-logs-the-skill", facts=_logged, allows=True),
+    _hook_call("posttooluse-dispatch", {"tool_name": "Task",
+                                        "tool_input": {"subagent_type": "devops"},
+                                        "tool_response": "done. agentId: 0f0f0f0f"},
+               name="posttooluse-dispatch-logs-it-and-remembers-the-agent", allows=True,
+               setup=_a_running_dispatch, facts=lambda r: _logged(r) + "\n" + _inflight(r),
+               ignore={".charter/dispatch-inflight": "compared as `facts` (`_inflight`)"}),
+    _hook_call("posttooluse-message", {"tool_name": "SendMessage",
+                                       "tool_input": {"to": "a1b2c3d4", "message": "go on"}},
+               name="posttooluse-message-logs-a-resume-of-the-persona-behind-an-agent",
+               facts=_logged, allows=True),
+    # `posttooluse-bash` is a no-op here; the oracle's own does nothing a plane can see either.
+    _hook_call("posttooluse-bash", {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+               name="posttooluse-bash-says-and-writes-nothing", allows=True),
+
+    # ---- The persona tool gate, at the end of the Bash guard.
+    _hook_call("pretooluse", {"tool_name": "Bash", "tool_input": {"command": "gh pr list"}},
+               name="pretooluse-allows-what-the-active-persona-declares",
+               says="persona 'ops' declares 'gh' in its tools",
+               setup=_with_persona("ops", "role: Ops\ntools: gh"),
+               env={"CHARTER_PERSONA": "ops"}),
+    _hook_call("pretooluse", {"tool_name": "Bash",
+                              "tool_input": {"command": "gh pr list | tee out"}},
+               name="pretooluse-does-not-smooth-a-pipeline-even-of-a-declared-tool", allows=True,
+               setup=_with_persona("ops", "role: Ops\ntools: gh"),
+               env={"CHARTER_PERSONA": "ops"}),
+]
+
+# Exactly one answer each: a denial, something said, or nothing at all. A hook scenario that
+# asserts none of them is one where both sides can say nothing and nothing is proved.
+for _s in HOOK_SCENARIOS:
+    assert (bool(_s.denies) + bool(_s.says) + _s.allows) == 1, (
+        f"{_s.name} does not say which answer it expects")
+
+
 SCENARIOS = [
     *PRETOOLUSE_SCENARIOS,
+    *HOOK_SCENARIOS,
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
     *NEWS_SCENARIOS,
@@ -6601,6 +6882,28 @@ def _declared(scenario: Scenario, py: subprocess.CompletedProcess,
     return problems
 
 
+def _spoken(out: str) -> str:
+    """What a hook's stdout SAYS: every string in each line of JSON it printed, decoded — the
+    stream itself is `json.dumps` with `ensure_ascii`, so `—` is `\\u2014` on the wire — and the
+    raw stream too, for a line that is not JSON."""
+    said = [out]
+    def leaves(value):
+        if isinstance(value, str):
+            said.append(value)
+        elif isinstance(value, dict):
+            for v in value.values():
+                leaves(v)
+        elif isinstance(value, list):
+            for v in value:
+                leaves(v)
+    for line in out.splitlines():
+        try:
+            leaves(json.loads(line))
+        except ValueError:
+            continue
+    return "\n".join(said)
+
+
 def _masked(text: str, scenario: Scenario) -> str:
     """*text* with each of the scenario's STDERR masks blanked — what neither side's words
     decide."""
@@ -6848,6 +7151,13 @@ def check(scenario: Scenario, binary: Path) -> bool:
             for side, out in (("python", py.stdout), ("rust", rs.stdout)):
                 if out:
                     problems.append(f"    {side} did not allow — it printed {out!r}")
+
+        if scenario.says:
+            for side, out in (("python", py.stdout), ("rust", rs.stdout)):
+                if scenario.says not in _spoken(out):
+                    problems.append(
+                        f"    {side} did not say {scenario.says!r} — it printed {out!r}"
+                    )
 
         if scenario.stdout_rewrite and (scenario.stdout_differs or scenario.stdout_cut_at):
             # Both of those take precedence in the chain above, so the rewrites would be
