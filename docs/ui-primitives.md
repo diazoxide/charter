@@ -452,6 +452,44 @@ component library gets added on.
 - **The region buttons are `aria-pressed` toggles**, which is what the platform has for a
   control that is on or off.
 
+## The title bar added no primitive either, and inherited a rule from Tauri
+
+The window's title bar (`app/src/TitleBar.tsx`) is a `<header>`, three `<span>`s and two
+buttons. The one thing about it that is not ordinary markup is the drag region, and that is a
+**third-party rule the window now depends on** — the same class of thing as WebKit's tab
+sequence above, so it is written down here for the same reason.
+
+- **`titleBarStyle: "Overlay"` is macOS only.** Windows and WebKitGTK ignore the key in
+  `tauri.conf.json` and keep drawing their own title bar above the webview. So charter's bar is
+  the title bar on one platform and the window's first row on the other two, and the only thing
+  that differs in the markup is how much leading padding it reserves for the system's window
+  controls. That number comes from `title_bar_room`, which is `cfg!(target_os = "macos")` in
+  Rust — the target the binary was built for, rather than a `navigator.userAgent` string's guess
+  at it, and it is a command because one frontend bundle is built per target and nothing in the
+  bundle is told which target it landed in.
+- **`data-tauri-drag-region="deep"`, never the bare attribute.** Tauri injects a `mousedown`
+  listener (`tauri/src/window/scripts/drag.js`) that walks the composed path up from what was
+  pressed. The bare attribute drags only on a **direct** press of the element carrying it —
+  which, on a bar whose content is text in spans, means the bar drags everywhere except on its
+  own words. `deep` drags anywhere in the subtree.
+- **A control inside a drag region needs nothing to stay a control.** That same walk returns
+  `false` at the first _clickable_ element it meets, and clickable there means a `<button>`, an
+  `<a>`, an `<input>`, a `contenteditable`, an interactive `role` — **or anything carrying a
+  `tabindex` other than `-1`**. Every button in this window already carries `tabIndex={0}` for
+  the WebKit rule above, so it satisfies this one twice over. Nothing in charter's own code
+  says "do not drag here".
+- **`core:window:allow-start-dragging` is NOT in `core:default`.** The handler ends in
+  `invoke('plugin:window|start_dragging')`, and without that permission named in
+  `capabilities/default.json` the call is refused at runtime — a title bar that looks right and
+  cannot be grabbed, with nothing on screen to say why. `internal_toggle_maximize`, the
+  double-click, _is_ in the default set, so the double-click worked and the drag did not.
+- **No test proves the window moves.** The rig performs no default action (above), and a
+  synthetic `mousedown` that reached Tauri's listener would end in an IPC call rather than an
+  observable drag. What is measured is the DOM the handler reads — the attribute on the bar, and
+  a `tabindex` on every control in it — in jsdom (`TitleBar.test.tsx`) and again in the shipped
+  bundle (`e2e/specs/title-bar.e2e.ts`), which is `picker.e2e.ts`'s split applied to a second
+  attribute. The permission is checked by nothing and is the sharpest thing to attack.
+
 ## Which keys belong to the chat, and which to the window
 
 Every pane in this window is a terminal running somebody's shell, and a shell's line editor has
