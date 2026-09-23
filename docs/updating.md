@@ -165,3 +165,4 @@ Management permission was requested, and the replaced bundle launched and update
 The **AppImage** updates itself. A **`.deb`** does not: `dpkg` owns it, and the manifest
 deliberately has no entry a `.deb` install would match. An Intel Mac and arm64 Linux get no
 updates at all, because the release has no runner for them.
+
