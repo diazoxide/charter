@@ -776,16 +776,27 @@ jobs:
           set -euo pipefail
           assets=()
           for f in dist/*; do [[ $f == *.json ]] || assets+=("$f"); done
+          # **The release page is the install page too.** The body is how to install this
+          # version (`.github/release-install.md`, with the tag and version filled in) and then
+          # the changelog section. `latest.json` and About Charter carry only the changelog: a
+          # running app is already installed.
+          sed -e "s/__TAG__/$TAG/g" -e "s/__VERSION__/$VERSION/g" .github/release-install.md \
+            > "$RUNNER_TEMP/body.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$RUNNER_TEMP/body.md"
+          if grep -q '__TAG__\|__VERSION__' "$RUNNER_TEMP/body.md"; then
+            echo "::error::release-install.md has a placeholder the release step does not fill"
+            exit 1
+          fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # A re-run over a release that exists: the same body, and the assets replaced by
             # name (the script says why not `--clobber`).
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/body.md"
             tools/replace-release-assets.sh "$TAG" "${assets[@]}"
           else
             # `--verify-tag`: refuse unless the tag already exists on the remote. This command
             # can never create a tag, which is the operator's rule enforced by the tool.
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --title "charter $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${assets[@]}"
+              --title "charter $VERSION" --notes-file "$RUNNER_TEMP/body.md" "${assets[@]}"
           fi
           tools/replace-release-assets.sh "$TAG" latest.json
 
