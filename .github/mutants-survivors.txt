@@ -96,19 +96,6 @@ crates/charter-core/src/hookwire.rs: replace match guard err.kind() == io::Error
 crates/charter-core/src/hookwire.rs: replace match guard err.kind() == io::ErrorKind::NotFound with true in Listener::bind
 crates/charter-core/src/hookwire.rs: replace no_channel -> io::Error with Default::default()
 crates/charter-core/src/hookwire.rs: replace send -> io::Result<()> with Ok(())
-crates/charter-core/src/inventory.rs: delete ! in root_default_branch
-crates/charter-core/src/inventory.rs: delete match arm Some(Value::String(s)) in record
-crates/charter-core/src/inventory.rs: replace == with != in merge
-crates/charter-core/src/inventory.rs: replace == with != in namespace
-crates/charter-core/src/inventory.rs: replace == with != in repos
-crates/charter-core/src/inventory.rs: replace match guard truthy(v) with false in record
-crates/charter-core/src/inventory.rs: replace match guard truthy(v) with true in record
-crates/charter-core/src/inventory.rs: replace record -> Value with Default::default()
-crates/charter-core/src/inventory.rs: replace root_default_branch -> String with "xyzzy".into()
-crates/charter-core/src/inventory.rs: replace root_default_branch -> String with String::new()
-crates/charter-core/src/inventory.rs: replace || with && in classify_kind
-crates/charter-core/src/inventory.rs: replace || with && in classify_stack
-crates/charter-core/src/inventory.rs: replace || with && in repos
 crates/charter-core/src/layer.rs: replace == with != in publish_io
 crates/charter-core/src/layer.rs: replace Record::names -> bool with false
 crates/charter-core/src/layer.rs: replace Record::names -> bool with true
@@ -136,10 +123,6 @@ crates/charter-core/src/machine.rs: replace config_root -> Option<PathBuf> with 
 crates/charter-core/src/machine.rs: replace config_root -> Option<PathBuf> with Some(Default::default())
 crates/charter-core/src/machine.rs: replace supported -> io::Result<()> with Ok(())
 crates/charter-core/src/machine.rs: replace tests::one_plane -> Store with Default::default()
-crates/charter-core/src/manifest.rs: replace match guard stored == digest(&doc) with true in ownership
-crates/charter-core/src/wiring.rs: replace && with || in hook_handlers
-crates/charter-core/src/wiring.rs: replace == with != in hook_handlers
-crates/charter-core/src/wiring.rs: replace || with && in hook_handlers
 crates/charter-core/src/workspaces.rs: delete ! in Plane::is_live
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::remember_titled
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::scaffold_memory

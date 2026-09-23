@@ -233,6 +233,8 @@ pub(crate) fn number(n: &serde_json::Number) -> String {
 /// that reads back exactly), so only the notation is decided here.
 pub(crate) fn float_repr(value: f64) -> String {
     if value.is_infinite() {
+        // `>` or `>=` cannot differ here: the value is an infinity, never zero
+        // (`.cargo/mutants.toml` excludes that mutant as equivalent).
         return if value > 0.0 { "Infinity" } else { "-Infinity" }.to_owned();
     }
     if value.is_nan() {
@@ -265,6 +267,8 @@ pub(crate) fn float_repr(value: f64) -> String {
         } else {
             format!("{lead}.{rest}")
         };
+        // Never `exp == 0` in this branch — that is inside `-4..16` — so `<` and `<=` are one
+        // test (`.cargo/mutants.toml` excludes that mutant as equivalent).
         let esign = if exp < 0 { '-' } else { '+' };
         format!("{mant}e{esign}{:02}", exp.abs())
     };
@@ -350,17 +354,17 @@ fn write_styled(
 /// "space" being Python's `\s`, which is wider than Rust's whitespace.
 pub fn json_style(text: &str) -> (Option<String>, String, String) {
     let space = crate::memstore::is_python_space;
-    let mut rest = text;
-    while let Some(at) = rest.find('\n') {
-        let after = &rest[at + 1..];
-        let pad: String = after
+    // Python's `re.search(r'\n([ \t]+)"', text)`: every line but the first follows a `\n`.
+    // Split rather than walked by index, so the scan is bounded by the text and no offset in
+    // it can be off by one into a loop that never ends (the nightly's `at + 1` TIMEOUTs).
+    for line in text.split('\n').skip(1) {
+        let pad: String = line
             .chars()
             .take_while(|c| *c == ' ' || *c == '\t')
             .collect();
-        if !pad.is_empty() && after[pad.len()..].starts_with('"') {
+        if !pad.is_empty() && line[pad.len()..].starts_with('"') {
             return (Some(pad), ",".to_owned(), ": ".to_owned());
         }
-        rest = after;
     }
     let follows = |mark: &str| {
         text.match_indices(mark)
@@ -509,5 +513,57 @@ mod styled_tests {
             (None, ",".to_owned(), ": ".to_owned())
         );
         assert_eq!(json_style(""), (None, ",".to_owned(), ":".to_owned()));
+    }
+
+    /// Verified against CPython: `json.dumps({"b": [1, "x", [2, 3]], "a": None},
+    /// sort_keys=True)`.
+    #[test]
+    fn a_sorted_dump_separates_every_array_item_and_only_between_items() {
+        let doc = serde_json::json!({"b": [1, "x", [2, 3]], "a": null});
+        assert_eq!(dumps_sorted(&doc), r#"{"a": null, "b": [1, "x", [2, 3]]}"#);
+    }
+
+    /// Verified against CPython: `json.dumps(d, indent=2, ensure_ascii=False) + "\n"`, which
+    /// is how `charter/inventory.py` writes `inventory/repos.json`.
+    #[test]
+    fn a_unicode_dump_keeps_every_character_from_space_up_and_escapes_only_controls() {
+        let doc =
+            serde_json::json!({"d": "\u{e9}\u{7f}\u{1} \u{2603}\u{1d11e}", "l": ["\u{fc}", 1]});
+        assert_eq!(
+            dumps_indent2_unicode(&doc),
+            "{\n  \"d\": \"\u{e9}\u{7f}\\u0001 \u{2603}\u{1d11e}\",\n  \"l\": [\n    \"\u{fc}\",\n    1\n  ]\n}\n"
+        );
+    }
+
+    /// Verified against CPython: `re.search(r'\n([ \t]+)"', text)` in
+    /// `charter/commands.py:_json_style`.
+    #[test]
+    fn only_a_line_after_a_newline_is_read_for_the_indent() {
+        // The FIRST line is not after a newline, so its indent is not the file's.
+        assert_eq!(
+            json_style("  \"a\": 1"),
+            (None, ",".to_owned(), ": ".to_owned())
+        );
+        // The first indented key wins, however far down it is.
+        assert_eq!(
+            json_style("{\n\n[\n    \"a\": 1,\n  \"b\": 2}"),
+            (Some("    ".to_owned()), ",".to_owned(), ": ".to_owned())
+        );
+        // A newline as the last byte leaves an empty line, which is no key.
+        assert_eq!(json_style("{}\n"), (None, ",".to_owned(), ":".to_owned()));
+    }
+
+    /// `charter/doctor.py:_json_as_claude_code_parses`: JSON as `JSON.parse` reads it.
+    #[test]
+    fn strict_json_is_the_document_and_a_python_only_constant_is_none() {
+        assert_eq!(
+            loads_strict(r#"{"hooks": {"a": [1, "x"]}}"#),
+            Some(serde_json::json!({"hooks": {"a": [1, "x"]}}))
+        );
+        assert_eq!(loads_strict("[]"), Some(serde_json::json!([])));
+        // Python's `json.loads` reads these three; `JSON.parse` and this refuse them.
+        for text in ["NaN", "Infinity", r#"{"a": -Infinity}"#, "", "{"] {
+            assert_eq!(loads_strict(text), None, "{text:?}");
+        }
     }
 }

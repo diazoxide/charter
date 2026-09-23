@@ -56,3 +56,21 @@ pub fn ownership(text: Option<&str>) -> Ownership {
         _ => Ownership::Operator,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stamp_that_no_longer_matches_the_body_makes_the_manifest_the_operators() {
+        // `charter/workspace.py:manifest_owner`: "charter" only when the stored digest equals
+        // the digest of the body as it is NOW. A hand edit after charter's write leaves the old
+        // stamp in place, and that file is the operator's — the automatic writers leave it be.
+        let mut doc = serde_json::json!({"name": "alpha", "repos": ["widget"]});
+        doc[KEY] = serde_json::Value::String(digest(&doc));
+        assert_eq!(ownership(Some(&doc.to_string())), Ownership::Charter);
+
+        doc["repos"] = serde_json::json!(["widget", "gadget"]);
+        assert_eq!(ownership(Some(&doc.to_string())), Ownership::Operator);
+    }
+}

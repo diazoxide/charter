@@ -192,3 +192,156 @@ fn a_fifo_or_an_oversized_file_is_not_a_memory() {
 
     assert_eq!(titles, vec!["Honest mondays"]);
 }
+
+#[test]
+fn every_workspace_is_a_directory_that_is_not_a_clone_and_a_loop_is_named_not_dropped() {
+    // `workspace.read_workspaces`: a name starting `.` is charter's own, a `.git` DIRECTORY
+    // makes a clone and a `.git` FILE a worktree (`is_clone`), a plain file and a dangling
+    // link are not workspaces (`_directory` answers False for a stat that finds nothing),
+    // and an entry whose kind `stat` will not tell — a link loop's ELOOP — is unread, with
+    // its errno, rather than dropped (#1043).
+    let (_dir, root) = plane();
+    let ws = root.join("workspaces");
+    for made in ["beta", ".worktrees", "clone/.git", "worktree"] {
+        std::fs::create_dir_all(ws.join(made)).unwrap();
+    }
+    std::fs::write(ws.join("worktree/.git"), "gitdir: /elsewhere\n").unwrap();
+    std::fs::write(ws.join("notes.txt"), "not a workspace\n").unwrap();
+    std::os::unix::fs::symlink(ws.join("nowhere"), ws.join("dangling")).unwrap();
+    std::os::unix::fs::symlink(ws.join("loop"), ws.join("loop")).unwrap();
+
+    let (names, unread) = recall::read_workspaces(&root).unwrap();
+
+    assert_eq!(names, ["alpha", "beta", "worktree"]);
+    assert_eq!(unread.len(), 1, "{unread:?}");
+    assert_eq!(unread[0].0, ws.join("loop"));
+    assert!(recall::is_loop(unread[0].1), "{unread:?}");
+}
+
+#[test]
+fn a_workspaces_that_is_missing_or_a_file_has_none_and_one_that_cannot_be_listed_is_an_error() {
+    // `workspace.read_directory`: a `workspaces/` that is not there, or is not a directory,
+    // has no entries; one that is there and cannot be LISTED raises, as `Path.iterdir` does.
+    let (_dir, root) = plane();
+    std::fs::remove_dir_all(root.join("workspaces")).unwrap();
+    assert_eq!(
+        recall::read_workspaces(&root).unwrap(),
+        (Vec::new(), Vec::new())
+    );
+
+    std::fs::write(root.join("workspaces"), "a file\n").unwrap();
+    assert_eq!(
+        recall::read_workspaces(&root).unwrap(),
+        (Vec::new(), Vec::new())
+    );
+
+    std::fs::remove_file(root.join("workspaces")).unwrap();
+    std::os::unix::fs::symlink(root.join("workspaces"), root.join("workspaces")).unwrap();
+    let refused = recall::read_workspaces(&root).unwrap_err();
+    assert!(recall::is_loop(refused.raw_os_error()), "{refused:?}");
+}
+
+fn only(scopes: &[&str], persona: Option<&str>) -> Ask {
+    Ask {
+        scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        persona: persona.map(str::to_string),
+        ..ask(None)
+    }
+}
+
+#[test]
+fn a_scope_not_asked_for_is_not_searched() {
+    // `recall.sources` offers a base only for a scope named in `scopes`.
+    let (_dir, root) = plane();
+
+    let (found, unread) = recall::sources(&root, &only(&["workspace"], Some("devops")));
+
+    assert_eq!(
+        found,
+        [(
+            "workspace:alpha".to_string(),
+            root.join("workspaces/alpha/memory")
+        )]
+    );
+    assert!(unread.is_empty(), "{unread:?}");
+}
+
+#[test]
+fn refs_are_offered_directory_by_directory_depth_first_and_a_missing_refs_is_not_unread() {
+    // `recall._ref_dirs`: the base and every directory under it, each its own source, walked
+    // in sorted order and depth first (`walk` appends a subdirectory, then walks it). A
+    // persona with no `refs/` offers none of its own and names nothing unread:
+    // `workspace._directory` answers False, not None, for a path that is not there.
+    let (_dir, root) = plane();
+    let refs = root.join("personas/devops/refs");
+    std::fs::create_dir_all(refs.join("a/b")).unwrap();
+    std::fs::create_dir_all(refs.join("c")).unwrap();
+    let shared = root.join("personas/_shared/refs");
+
+    let (found, unread) = recall::sources(&root, &only(&["refs"], Some("devops")));
+
+    let refs_of = |dir: &Path| ("refs:devops".to_string(), dir.to_path_buf());
+    assert_eq!(
+        found,
+        [
+            refs_of(&refs),
+            refs_of(&refs.join("a")),
+            refs_of(&refs.join("a/b")),
+            refs_of(&refs.join("c")),
+            ("refs:shared".to_string(), shared.clone()),
+        ]
+    );
+    assert!(unread.is_empty(), "{unread:?}");
+
+    let (found, unread) = recall::sources(&root, &only(&["refs"], Some("ghost")));
+    assert_eq!(found, [("refs:shared".to_string(), shared)]);
+    assert!(unread.is_empty(), "{unread:?}");
+}
+
+#[test]
+fn since_keeps_its_own_day_and_counts_the_undated_memories_and_refs_it_dropped() {
+    // `recall.recall`, both paths: `since` drops what was recorded EARLIER (`d < since`), so
+    // a memory of that very day stays. Of what it drops, a refs document counts toward
+    // `undated_refs`, a memory with no date toward `undated`, and a memory that is merely
+    // older toward neither.
+    let (_dir, root) = plane();
+    let journal = root.join("workspaces/alpha/memory");
+    for (file, title, stamp) in [
+        ("20260301-091400-early.md", "Early mondays", "2026-03-01"),
+        ("20260303-091400-late.md", "Late mondays", "2026-03-03"),
+    ] {
+        std::fs::write(
+            journal.join(file),
+            format!("# {title}\n\n_{stamp} 09:14 · persistent_\n\n{title}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(journal.join("undated.md"), "# Undated mondays\n\nmondays\n").unwrap();
+    std::fs::write(
+        root.join("personas/devops/refs/runbook.md"),
+        "# Runbook mondays\n\nmondays\n",
+    )
+    .unwrap();
+
+    // A query keeps score order, so its titles are compared sorted; the listing is newest
+    // first.
+    for (query, want) in [
+        (Some("mondays"), ["Honest mondays", "Late mondays"]),
+        (None, ["Late mondays", "Honest mondays"]),
+    ] {
+        let got = recall::recall(
+            &root,
+            &Ask {
+                since: Some("2026-03-02".parse().unwrap()),
+                query: query.map(str::to_string),
+                ..only(&["workspace", "refs"], Some("devops"))
+            },
+        );
+        let mut titles: Vec<&str> = got.hits.iter().map(|h| h.title.as_str()).collect();
+        if query.is_some() {
+            titles.sort();
+        }
+        assert_eq!(titles, want, "{query:?}");
+        assert_eq!((got.undated, got.undated_refs), (1, 1), "{query:?}");
+    }
+}

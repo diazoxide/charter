@@ -17,9 +17,13 @@ const CHARTER: &str = env!("CARGO_BIN_EXE_charter");
 const CLAUDE_STOP: &str = r#"{"session_id":"11111111-2222-4333-8444-555555555555","cwd":"/tmp","hook_event_name":"Stop","stop_hook_active":false}"#;
 
 /// Runs `charter hook <word>` with `payload` on stdin. Answers its exit code.
+///
+/// Outside every plane: `sessionstart` and `userpromptsubmit` now read the plane they stand in,
+/// and the test process stands in a checkout that may itself sit inside the operator's plane.
 fn hook(word: &str, payload: &str, env: &[(&str, &str)]) -> i32 {
     let mut child = Command::new(CHARTER)
         .args(["hook", word])
+        .current_dir(std::env::temp_dir())
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .envs(env.iter().copied())
@@ -173,24 +177,10 @@ fn a_tool_hook_this_binary_does_not_answer_blocks_rather_than_allowing() {
     // day charter adds a matcher the Rust binary on PATH would allow that whole tool class
     // silently. The namespace covers every matcher there is and every one there will be.
     //
-    // **`pretooluse` is NOT here any more (M3.1 stage 6).** It is the one word in the namespace
-    // this binary has ported and answers; the tests below are its. Every other word — the eight
-    // the charter plugin wires and every one charter has not invented — still blocks, and the
-    // argument is unchanged: a program that has checked nothing may not say `allow`.
-    for word in [
-        // The guard as it stands, minus the one answered.
-        "pretooluse-read",
-        "pretooluse-edit",
-        "pretooluse-dispatch",
-        "posttooluse",
-        "posttooluse-bash",
-        "posttooluse-skill",
-        "posttooluse-dispatch",
-        "posttooluse-message",
-        // And matchers charter has not added yet.
-        "pretooluse-notebook",
-        "posttooluse-web",
-    ] {
+    // **Every word charter has today is answered now** (the registry, `hookreg`), so what is
+    // left here is only the word nobody has invented yet — and the argument is unchanged: a
+    // program that has checked nothing may not say `allow`.
+    for word in ["pretooluse-notebook", "posttooluse-web", "pretooluse-"] {
         let out = Command::new(CHARTER)
             .args(["hook", word])
             .stdin(Stdio::null())
@@ -203,10 +193,218 @@ fn a_tool_hook_this_binary_does_not_answer_blocks_rather_than_allowing() {
             "`charter hook {word}` did not block; a harness reads anything else as allow"
         );
         assert!(
-            String::from_utf8_lossy(&out.stderr).contains("PATH"),
-            "`charter hook {word}` refused without saying what to check"
+            String::from_utf8_lossy(&out.stderr).contains("charter hook --list"),
+            "`charter hook {word}` refused without saying where the answered words are"
         );
     }
+}
+
+/// `charter <args>` with `payload` on stdin, standing in `cwd` with nothing but `PATH` and a
+/// `HOME` in the environment. Answers the exit code, stdout and stderr.
+fn run_hook(cwd: &std::path::Path, args: &[&str], payload: &str) -> (i32, String, String) {
+    let mut child = Command::new(CHARTER)
+        .args(args)
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("charter runs");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(payload.as_bytes())
+        .expect("the payload is written");
+    let out = child.wait_with_output().expect("charter finishes");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn every_word_the_python_plugin_wires_is_answered_and_none_of_them_blocks_on_nothing() {
+    // The standalone ruling: with no Python charter installed, every command the Python
+    // plugin's `hooks.json` runs lands on this binary. Each must answer — and on a payload
+    // with nothing in it, answer "no opinion": exit 0, nothing printed. Exit 2 would block the
+    // tool call (or keep a session from ending), so none may reach it by accident.
+    let nowhere = tempfile::tempdir().expect("a directory that is no plane");
+    let mut words: Vec<&str> = charter_core::hookreg::HANDLERS
+        .iter()
+        .map(|h| h.name)
+        .collect();
+    words.extend(charter_core::hookreg::NO_OPS);
+    for word in &words {
+        for payload in [
+            "",
+            "{}",
+            "not json",
+            r#"{"tool_name": 7, "tool_input": null}"#,
+        ] {
+            let (code, stdout, stderr) = run_hook(
+                nowhere.path(),
+                &["hook", word, "--plugin-version", "0.62.1"],
+                payload,
+            );
+            assert_eq!(code, 0, "`charter hook {word}` on {payload:?}: {stderr}");
+            assert!(
+                stdout.is_empty(),
+                "`charter hook {word}` on {payload:?} spoke: {stdout}"
+            );
+        }
+    }
+    // And the three internal words the plugin wires beside its hooks.
+    for args in [
+        &["workspace", "_reconcile"][..],
+        &["persona", "_gc", "--detach"][..],
+        &["workspace", "_autosave"][..],
+        &["ws", "_autosave"][..],
+    ] {
+        let (code, stdout, stderr) = run_hook(nowhere.path(), args, "{}");
+        assert_eq!(code, 0, "`charter {}`: {stderr}", args.join(" "));
+        assert!(
+            stdout.is_empty() && stderr.is_empty(),
+            "`charter {}` spoke",
+            args.join(" ")
+        );
+    }
+}
+
+#[test]
+fn the_registry_is_printed_for_whatever_generates_a_plugin() {
+    let nowhere = tempfile::tempdir().expect("a directory");
+    let (code, stdout, _) = run_hook(nowhere.path(), &["hook", "--list", "--json"], "");
+    assert_eq!(code, 0);
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim()).expect("one line of JSON");
+    assert_eq!(doc["schema"], 1);
+    let names: Vec<&str> = doc["handlers"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|h| h["name"].as_str().expect("a name"))
+        .collect();
+    assert!(names.contains(&"pretooluse-read") && names.contains(&"sessionstart"));
+    assert!(
+        !names.contains(&"posttooluse-bash"),
+        "a no-op is never wired"
+    );
+    // `--json` alone is a usage error, never a block.
+    let (code, _, _) = run_hook(nowhere.path(), &["hook", "--json"], "");
+    assert_eq!(code, 1);
+    let (code, table, _) = run_hook(nowhere.path(), &["hook", "--list"], "");
+    assert_eq!(code, 0);
+    assert!(
+        table
+            .lines()
+            .any(|l| l.starts_with("pretooluse-edit") && l.ends_with("Write|Edit|MultiEdit"))
+    );
+}
+
+/// The vault file the fixtures below hold, spelled once.
+const VAULT_FILE: &str = concat!(".charter/", "vaults/db.json");
+
+/// A plane with one persona the app might pin, and a vault holding a file.
+fn a_plane_with_a_persona() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a directory");
+    std::fs::write(
+        dir.path().join("charter.toml"),
+        "schema = 1\n\n[persona]\ndefault = \"ops\"\n",
+    )
+    .expect("a manifest");
+    let persona = dir.path().join("personas/ops");
+    std::fs::create_dir_all(persona.join("memory")).expect("a persona");
+    std::fs::write(
+        persona.join("persona.md"),
+        "---\nrole: Operations\ntools: gh\n---\n\n# ops\n",
+    )
+    .expect("its charter");
+    let vault = dir.path().join(VAULT_FILE);
+    std::fs::create_dir_all(vault.parent().expect("a parent")).expect("a vault directory");
+    std::fs::write(vault, "{}").expect("a vault");
+    dir
+}
+
+#[test]
+fn a_session_in_a_plane_is_briefed_on_its_persona_through_additional_context() {
+    // The gap this whole port closes: the app set `$CHARTER_PERSONA` and nothing read it.
+    let plane = a_plane_with_a_persona();
+    let (code, stdout, stderr) = run_hook(
+        plane.path(),
+        &["hook", "sessionstart", "--plugin-version", "0.62.1"],
+        r#"{"session_id": "s-1", "hook_event_name": "SessionStart"}"#,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim()).expect("one line of JSON");
+    let out = &doc["hookSpecificOutput"];
+    assert_eq!(out["hookEventName"], "SessionStart");
+    let context = out["additionalContext"].as_str().expect("context");
+    assert!(
+        context.contains("You are the `ops` persona for this session"),
+        "{context}"
+    );
+    assert!(context.contains("> role: Operations"));
+    // And no word about a Python charter: this binary is the whole of charter now.
+    assert!(!stdout.contains("Python"), "{stdout}");
+    assert!(doc.get("systemMessage").is_none(), "{stdout}");
+    // The persona tool gate's ceiling was frozen for the session.
+    assert!(plane.path().join(".charter/sessions/s-1.tools").is_file());
+}
+
+#[test]
+fn the_tool_guards_refuse_by_printing_and_exit_cleanly() {
+    let plane = a_plane_with_a_persona();
+    let read = serde_json::json!({"tool_name": "Read", "tool_input": {"file_path": VAULT_FILE}});
+    let edit = serde_json::json!({"tool_name": "Write", "cwd": ".",
+        "tool_input": {"file_path": ".charter/active-persona"}});
+    for (word, payload, sentence) in [
+        (
+            "pretooluse-read",
+            read,
+            "reads a vault/secret file directly",
+        ),
+        (
+            "pretooluse-edit",
+            edit,
+            "writes charter's own state directly",
+        ),
+    ] {
+        let (code, stdout, stderr) = run_hook(plane.path(), &["hook", word], &payload.to_string());
+        assert_eq!(code, 0, "{word}: {stderr}");
+        let said = decision(&stdout).unwrap_or_default();
+        assert!(said.contains(sentence), "{word} said {stdout:?}");
+    }
+}
+
+#[test]
+fn the_active_personas_declared_tool_runs_without_a_prompt() {
+    let plane = a_plane_with_a_persona();
+    let bash = |command: &str| {
+        serde_json::json!({"session_id": "s-1", "cwd": ".", "tool_name": "Bash",
+            "tool_input": {"command": command}})
+        .to_string()
+    };
+    let (code, stdout, _) = run_hook(plane.path(), &["hook", "pretooluse"], &bash("gh pr list"));
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains(r#""permissionDecision": "allow""#)
+            && stdout.contains("persona 'ops' declares 'gh' in its tools"),
+        "{stdout}"
+    );
+    // A refusal still wins over the grant: reading a vault is denied, never allowed.
+    let (_, stdout, _) = run_hook(
+        plane.path(),
+        &["hook", "pretooluse"],
+        &bash(&format!("cat {VAULT_FILE}")),
+    );
+    assert!(
+        stdout.contains(r#""permissionDecision": "deny""#),
+        "{stdout}"
+    );
 }
 
 /// `charter hook pretooluse` with `payload` on stdin, standing in `cwd`. Answers
@@ -494,7 +692,7 @@ fn a_typo_in_a_state_event_never_blocks_the_session() {
             "`charter hook {word}` did not fail quietly; 2 would wedge the session"
         );
         assert!(
-            String::from_utf8_lossy(&out.stderr).contains("not one of this binary's events"),
+            String::from_utf8_lossy(&out.stderr).contains("is not a hook this binary answers"),
             "`charter hook {word}` failed without saying why"
         );
     }
@@ -516,6 +714,7 @@ fn the_command_line_the_charter_plugin_actually_writes_is_answered() {
 
     let mut child = Command::new(CHARTER)
         .args(["hook", "sessionstart", "--plugin-version", "0.62.1"])
+        .current_dir(std::env::temp_dir())
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env(SOCKET_ENV, &path)
@@ -549,7 +748,9 @@ fn the_command_line_the_charter_plugin_actually_writes_is_answered() {
 fn the_plugin_notice_is_said_once_a_session_and_not_once_a_turn() {
     // The plugin wires `sessionstart`, `userpromptsubmit` and `stop`, so an ungated notice
     // reaches the operator on every prompt and every turn end. `charter/hooks.py` carries
-    // "the gate that keeps them to sessionstart" for the same reason.
+    // "the gate that keeps them to sessionstart" for the same reason. (This binary no longer
+    // says any notice at all — it answers the plugin's words itself — and none of these words
+    // may start speaking on every turn.)
     for word in [
         "userpromptsubmit",
         "stop",
@@ -559,6 +760,9 @@ fn the_plugin_notice_is_said_once_a_session_and_not_once_a_turn() {
     ] {
         let out = Command::new(CHARTER)
             .args(["hook", word, "--plugin-version", "0.62.1"])
+            .current_dir(std::env::temp_dir())
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
             .stdin(Stdio::null())
             .output()
             .expect("charter runs");
@@ -905,5 +1109,5 @@ fn every_hook_the_bundled_plugin_wires_answers_an_ordinary_call_with_exit_zero()
             }
         }
     }
-    assert_eq!(ran, charter_core::plugin::HOOKS.len());
+    assert_eq!(ran, charter_core::hookreg::HANDLERS.len());
 }

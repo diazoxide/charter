@@ -297,7 +297,7 @@ impl Harness {
             //
             // Codex has no plugin here: the guard used to reach a Codex chat through the
             // Python charter's Codex plugin, and now rides on the same `-c` flags as the state
-            // hooks, from the same registry ([`crate::plugin::HOOKS`]).
+            // hooks, from the same registry ([`crate::plugin::CODEX`] out of [`crate::hookreg`]).
             Self::Codex => StateHooks::ThisSessionOnly {
                 args: codex_session_flags(kit.binary),
                 env: Vec::new(),
@@ -400,7 +400,7 @@ fn claude_code_status_line(binary: &std::path::Path) -> serde_json::Value {
     })
 }
 
-/// The `-c` pairs that arm Codex's hooks on one session, out of [`crate::plugin::HOOKS`].
+/// The `-c` pairs that arm Codex's hooks on one session, out of [`crate::plugin::codex_handlers`].
 ///
 /// On the argument for the reason Claude Code's are: nothing is written, so nothing is left
 /// behind. Each value is TOML, because that is how Codex parses a `-c` value — and it is
@@ -411,7 +411,7 @@ fn claude_code_status_line(binary: &std::path::Path) -> serde_json::Value {
 /// variable of charter's to expand, and a Codex hook runs through a shell just the same —
 /// measured, a single-quoted argument holding spaces arrived as one word.
 fn codex_session_flags(binary: &std::path::Path) -> Vec<String> {
-    crate::plugin::grouped(crate::plugin::HOOKS.iter().filter(|hook| hook.codex))
+    crate::plugin::grouped(crate::plugin::codex_handlers())
         .into_iter()
         .flat_map(|(event, groups)| {
             let groups: Vec<toml::Value> = groups
@@ -424,10 +424,13 @@ fn codex_session_flags(binary: &std::path::Path) -> Vec<String> {
                                 ("type".to_owned(), toml::Value::from("command")),
                                 (
                                     "command".to_owned(),
-                                    toml::Value::from(crate::plugin::command_at(binary, hook.word)),
+                                    toml::Value::from(crate::plugin::command_at(binary, hook.name)),
                                 ),
                                 // Codex's own default is 600 seconds (its review screen says so).
-                                ("timeout".to_owned(), toml::Value::from(hook.timeout)),
+                                (
+                                    "timeout".to_owned(),
+                                    toml::Value::from(i64::from(hook.timeout)),
+                                ),
                             ]
                             .into_iter()
                             .collect();
@@ -742,6 +745,46 @@ mod tests {
         assert_eq!(args[0], "--plugin-dir");
     }
 
+    #[test]
+    fn every_hook_word_is_wired_exactly_once_across_the_settings_and_the_plugin() {
+        // One owner per word. The plugin's `hooks.json` owns every charter hook; the session
+        // `--settings` owns none. A word wired in both would brief a chat twice and report
+        // every state event twice. So the union is collected as (event, matcher, word) and
+        // must hold no duplicate — and the settings contribute nothing to it.
+        fn entries(doc: &serde_json::Value, out: &mut Vec<(String, String, String)>) {
+            let Some(events) = doc.get("hooks").and_then(serde_json::Value::as_object) else {
+                return;
+            };
+            for (event, groups) in events {
+                for group in groups.as_array().into_iter().flatten() {
+                    let matcher = group["matcher"].as_str().unwrap_or("").to_owned();
+                    for hook in group["hooks"].as_array().into_iter().flatten() {
+                        let command = hook["command"].as_str().unwrap_or("");
+                        let word = command.rsplit(" hook ").next().unwrap_or("").to_owned();
+                        out.push((event.clone(), matcher.clone(), word));
+                    }
+                }
+            }
+        }
+        let empty = tempfile::tempdir().expect("a directory");
+        let (args, _) = claude("/bin/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+        let plugin: serde_json::Value =
+            serde_json::from_str(&crate::plugin::hooks_json()).expect("JSON");
+
+        let mut from_settings = Vec::new();
+        entries(&settings, &mut from_settings);
+        assert!(from_settings.is_empty(), "{from_settings:?}");
+
+        let mut all = from_settings;
+        entries(&plugin, &mut all);
+        let before = all.len();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), before, "a hook is wired twice");
+        assert_eq!(all.len(), crate::hookreg::HANDLERS.len());
+    }
+
     /// Codex's `-c` pairs as (dotted key, parsed TOML value), failing on anything else.
     fn codex_flags(binary: &str) -> Vec<(String, toml::Value)> {
         let StateHooks::ThisSessionOnly { args, env, .. } =
@@ -784,11 +827,10 @@ mod tests {
         for (key, value) in &flags {
             let hook = &value[0]["hooks"][0];
             assert_eq!(hook["type"].as_str(), Some("command"), "{key}");
-            let word = crate::plugin::HOOKS
-                .iter()
+            let word = crate::plugin::codex_handlers()
                 .find(|h| format!("hooks.{}", h.event) == *key)
                 .expect("from the registry")
-                .word;
+                .name;
             assert_eq!(
                 hook["command"].as_str(),
                 Some(format!("'/usr/local/bin/charter' hook {word}").as_str()),

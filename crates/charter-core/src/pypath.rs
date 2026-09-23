@@ -797,6 +797,19 @@ mod tests {
         );
     }
 
+    /// `os.path.realpath` (CPython 3.14's `posixpath`) skips an empty part and a `.` alike, so
+    /// a doubled slash, a `./` and a trailing slash all vanish — asked of a path that does not
+    /// exist, so no filesystem enters into it. CPython answers `/nonexistent-q/a/b` for the
+    /// first and `/nonexistent-q/a` for the second.
+    #[test]
+    fn an_empty_part_and_a_dot_are_both_skipped_the_way_cpython_skips_them() {
+        assert_eq!(realpath("/nonexistent-q//a/./b/"), "/nonexistent-q/a/b");
+        assert_eq!(
+            realpath_of(Path::new("/nonexistent-q/./a")),
+            PathBuf::from("/nonexistent-q/a")
+        );
+    }
+
     proptest! {
         /// A matcher that panics is a matcher that does not answer, and the thing above it reads
         /// "did not answer" as an error rather than as a refusal. The class grammar indexes a

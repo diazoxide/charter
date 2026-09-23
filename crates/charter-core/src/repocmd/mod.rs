@@ -88,3 +88,23 @@ pub type Sink<'a> = &'a mut dyn FnMut(Say);
 pub fn banner(ws: &str, say: Sink) {
     say(Say::Info(format!("workspace: {ws}  (via --workspace)")));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_workspace_command_opens_by_naming_the_workspace_and_how_it_was_chosen() {
+        // `charter/workspace.py:banner`, `util.info(f"workspace: {active}  (via {source})")`,
+        // with `source` answering `--workspace` for an explicit `-w` — the only rung the Rust
+        // binary takes a workspace from.
+        let mut said = Vec::new();
+        banner("alpha", &mut |line| said.push(line));
+
+        assert_eq!(
+            said,
+            [Say::Info("workspace: alpha  (via --workspace)".into())]
+        );
+        assert_eq!(said[0].to_string(), "• workspace: alpha  (via --workspace)");
+    }
+}

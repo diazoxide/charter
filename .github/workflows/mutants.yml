@@ -1,7 +1,7 @@
 name: mutants
 
-# Mutation testing never gates a PR (spec decision 19). It runs nightly on the core crate
-# alone, and this file is about what its RED means.
+# Mutation testing never gates a PR (spec decision 19). It runs on the core crate alone —
+# nightly on what changed, weekly on everything — and this file is about what its RED means.
 #
 # It meant nothing for five consecutive nights. 2026-09-19 through 2026-09-21 all failed and
 # roughly fifty PRs merged past the red X, because "failure" was the answer to four different
@@ -21,17 +21,23 @@ name: mutants
 #     cargo-mutants tested nothing at all and said so in a line nobody read.
 #   * And underneath all of it, three genuinely surviving mutants in `pypath::realpath`.
 #
-# Four causes, one colour. The three changes below give each one its own answer:
+# Four causes, one colour. The changes below give each one its own answer, and the fourth
+# keeps the answer affordable:
 #
-# 1. **The budget fits.** Twenty-four shards, round-robin so no shard inherits a slow file.
-#    Sized against a dispatch of THIS file on 2026-09-22, which is the only measurement that
-#    includes the setup it actually pays for: 6,632 mutants, 414 to a shard at 16, and 38.7 s
-#    a mutant over the 359 that ran — so 16 shards would have been 4 h 28 m against a 5 h
-#    timeout, which is not headroom. At 24 it is ~2 h 58 m, and the crate can nearly double
-#    before the timeout bites.
-#    Sizing is a measurement and it WILL go stale: charter-core went from 3,640 mutants on
-#    2026-09-20 to 6,555 on 09-21 to 6,632 on 09-22. The `incomplete` verdict below is what
-#    says so, in words, instead of a job vanishing at the platform limit.
+# 1. **The budget fits.** Shards of at most 200 mutants, round-robin so no shard inherits a
+#    slow file, as many as the run needs — `plan` counts them, so the shard count cannot go
+#    stale the way a fixed one did (24 shards sized on 2026-09-22 for 6,632 mutants were
+#    already 337 apiece by 09-23, when the crate had 8,085: 4 h 40 m against a 5 h timeout).
+#    Measured from run 35837846519's artifacts (2026-09-23, 322 mutants over three shards):
+#    42.7 s a mutant — 23 s to build, 20 s to test, because a caught mutant usually stops at
+#    the first failing test binary. The longest test phase of any mutant that was not a
+#    TIMEOUT was 64.5 s, which is the whole suite: a missed mutant runs every binary. 200
+#    mutants is therefore ~2 h 20 m a shard against the 300-minute step timeout below.
+#    The whole suite is also ~28 s shorter than it was on that night: one test waited out a
+#    real 30 s git deadline on every mutant, and now waits 2 s
+#    (`profiles::ignore_check_within`).
+#    Sizing is a measurement and it WILL go stale. The `incomplete` verdict below is what says
+#    so, in words, instead of a job vanishing at the platform limit.
 # 2. **The baseline is checked ONCE.** With a per-shard baseline, 24 shards is 24 rolls of
 #    the same flaky dice: three separate deadline-bound tests were caught failing an
 #    unmutated charter-core while this was being written. One job asks the question, every
@@ -47,8 +53,20 @@ name: mutants
 #    comparing each shard's planned list (`mutants.json`) against what it actually finished
 #    (`outcomes.json`), rather than by reading an exit code that conflates them.
 #
+# 4. **Nightly tests what changed; Sunday tests everything.** At 8,085 mutants and ~43 s
+#    each the whole crate is ~96 runner-HOURS, which at eight runners wide (see `max-parallel`)
+#    is ~12 h of wall clock — every day, eight of the account's twenty job slots from 03:17
+#    UTC into the afternoon. So Monday to Saturday run `cargo mutants --in-diff` on the diff of
+#    `crates/charter-core` since the head of the last GREEN run of this workflow: measured on
+#    2026-09-23, one day of charter-core's churn is ~1,500 mutants, ~2 h at eight wide. With no
+#    green run in the last 72 hours it takes the last 24 hours instead of a diff that grows into
+#    a whole-crate run every night the survivors stay red.
+#    What the diff cannot see — a deleted test that stops catching an UNCHANGED line — is what
+#    Sunday's full run is for, and only a full run can say the crate is clean: a clean diff
+#    night never closes the issue below.
+#
 # And because the real failure here was that nobody LOOKED for five days, the last job keeps
-# one issue in this repo up to date with the answer, and closes it when the nightly is clean.
+# one issue in this repo up to date with the answer, and closes it when a full run is clean.
 # The run's own summary page carries the survivor table; the issue carries the link.
 #
 # Note there is deliberately no `RUSTFLAGS: -D warnings` here, unlike `ci.yml`. cargo-mutants
@@ -59,8 +77,17 @@ name: mutants
 
 on:
   schedule:
-    - cron: "17 3 * * *"
+    # Monday to Saturday: what changed since the last green run.
+    - cron: "17 3 * * 1-6"
+    # Sunday: the whole crate. `plan` tells the two apart by this exact string.
+    - cron: "17 3 * * 0"
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "diff (since the last green run) or full (the whole crate, ~12 h)"
+        type: choice
+        options: [diff, full]
+        default: diff
 
 permissions:
   contents: read
@@ -73,19 +100,111 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The number of shards lives here because it appears in three places — the matrix, the
-  # `--shard N/K` argument, and the denominator the report checks it received. The report
-  # fails if it does not get this many verdicts, so a drift between them is visible rather
-  # than a silent hole in the coverage.
-  SHARDS: "24"
+  # The most mutants one shard is given. `plan` divides the run's count by this, and that
+  # one number becomes the matrix, the `--shard N/K` denominator, and the count of verdicts
+  # the report checks it received — so a drift between them is visible rather than a silent
+  # hole in the coverage.
+  PER_SHARD: "200"
+  # The weekly full run's cron line, as `github.event.schedule` reports it.
+  FULL_CRON: "17 3 * * 0"
   # Pinned on purpose. An unpinned tool in a nightly changes its own answers, and "the
   # nightly went red" then has one more possible cause. 27.1.0 is what ran on 2026-09-21 and
   # what the sizing above was measured against.
   MUTANTS_VERSION: "27.1.0"
 
 jobs:
+  plan:
+    # Which mutants tonight tests, and how many shards that takes. The one job that decides
+    # the run's SHAPE, so every later job reads the same answer.
+    name: what this run tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      scope: ${{ steps.plan.outputs.scope }}
+      shards: ${{ steps.plan.outputs.shards }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # No cache: `--list` reads the source and `cargo metadata`, and builds nothing.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@${{ env.MUTANTS_VERSION }}
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          ASKED: ${{ inputs.scope }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = workflow_dispatch ]; then
+            SCOPE="${ASKED:-diff}"
+          elif [ "$SCHEDULE" = "$FULL_CRON" ]; then
+            SCOPE="full"
+          else
+            SCOPE="diff"
+          fi
+
+          if [ "$SCOPE" = diff ]; then
+            # The head of the newest green run of this workflow — full or diff, since either
+            # means everything up to that commit was tested clean against the backlog — if
+            # it is at most 72 hours old and still in main's history.
+            SINCE="$(date -u -d '72 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+            BASE="$(gh run list --workflow mutants.yml --status success --limit 50 \
+              --json headSha,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$SINCE\")][0].headSha // \"\"")" || BASE=""
+            if [ -n "$BASE" ] && git merge-base --is-ancestor "$BASE" HEAD; then
+              WHY="since the last green run of this workflow, at $BASE"
+            else
+              BASE="$(git rev-list -1 --before='24 hours ago' HEAD)"
+              WHY="over the last 24 hours only, at $BASE: there is no green run of this workflow in the last 72 hours to diff against"
+            fi
+            if [ -z "$BASE" ]; then
+              SCOPE="full"
+              WHY="of the whole crate: there is no commit 24 hours old to diff against"
+            fi
+          fi
+
+          if [ "$SCOPE" = diff ]; then
+            git diff "$BASE" HEAD -- crates/charter-core > mutants.diff
+            # An empty diff lists nothing (cargo-mutants says so on stderr and exits 0).
+            COUNT="$(cargo mutants --package charter-core --in-diff mutants.diff --list | wc -l)"
+          else
+            WHY="${WHY:-of the whole crate}"
+            : > mutants.diff
+            COUNT="$(cargo mutants --package charter-core --list | wc -l)"
+          fi
+
+          SHARDS=$(( (COUNT + PER_SHARD - 1) / PER_SHARD ))
+          if [ "$COUNT" -eq 0 ]; then
+            SCOPE="none"
+          fi
+          {
+            echo "scope=$SCOPE"
+            echo "shards=$SHARDS"
+            echo "matrix=$(python3 -c "import json,sys; print(json.dumps(list(range(int(sys.argv[1])))))" "$SHARDS")"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### $COUNT mutants, $SHARDS shards"
+            echo
+            echo "A **$SCOPE** run: the mutants $WHY."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plan-diff
+          path: mutants.diff
+          if-no-files-found: error
+
   baseline:
     name: charter-core's own tests
+    needs: plan
+    if: needs.plan.outputs.scope != 'none'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -94,20 +213,28 @@ jobs:
       # Exactly what cargo-mutants runs as its baseline, and the reason the shards below can
       # skip it. `--no-fail-fast` for `ci.yml`'s reason: cargo stops at the first failing test
       # binary and skips every later one, so a single flake would hide the rest.
-      - name: The unmutated tree, once, for all twenty-four shards
+      - name: The unmutated tree, once, for every shard
         run: cargo test --package charter-core --locked --no-fail-fast
 
   core:
     name: shard ${{ matrix.shard }}
-    needs: baseline
+    needs: [plan, baseline]
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
+      # EIGHT AT A TIME, and this is the line that matters to everyone else. GitHub runs at
+      # most twenty jobs at once across the whole account, and diazoxide/charter shares that
+      # ceiling with this repo. Unbounded, the 24 shards of 2026-09-23 took every slot there
+      # was and PR CI in both repos queued behind them for hours — a nightly that nobody reads
+      # until the afternoon must not hold the morning's merges. Eight leaves twelve for PRs.
+      max-parallel: 8
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-                12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: plan-diff
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
@@ -126,20 +253,25 @@ jobs:
       # 53% apart, which is most of the headroom. Round-robin gives every shard the same mix.
       #
       # `--timeout` and `--build-timeout` are explicit because `--baseline skip` removes the
-      # measurement cargo-mutants would otherwise derive them from. 300 s is above the 231–239 s
-      # it chose for itself on 2026-09-21, against a 42–47 s test phase, and above the 96.5 s
-      # slowest mutant measured on 2026-09-22.
+      # measurement cargo-mutants would otherwise derive them from. 150 s against the longest
+      # test phase of any mutant that did not time out: 64.5 s on 2026-09-23 and 96.5 s on
+      # 09-22, both with the 30 s git wait the suite no longer has. It was 300 s, and every
+      # TIMEOUT mutant — an infinite loop, which no timeout ends sooner — paid all of it.
+      #
+      # `--in-diff` on a `diff` run only; on a full run `plan` leaves `mutants.diff` empty and
+      # it is not passed, because cargo-mutants reads an empty diff as "nothing to test".
       - name: cargo mutants
         timeout-minutes: 300
         continue-on-error: true
         run: >
           cargo mutants
           --package charter-core
-          --shard ${{ matrix.shard }}/${{ env.SHARDS }}
+          --shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }}
           --sharding round-robin
           --baseline skip
-          --timeout 300
+          --timeout 150
           --build-timeout 900
+          ${{ needs.plan.outputs.scope == 'diff' && '--in-diff mutants.diff' || '' }}
       # `always()`, so this runs after a timeout, after a crash, and after a clean run. It is
       # the only thing that turns a killed step into a sentence.
       - name: What this shard actually finished
@@ -165,8 +297,8 @@ jobs:
     # and `always()` so that survivors found by the shards that DID finish are reported even
     # when another shard died.
     name: survivors
-    needs: core
-    if: always()
+    needs: [plan, core]
+    if: always() && needs.plan.outputs.scope != 'none' && needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -182,9 +314,10 @@ jobs:
         run: >
           python3 tools/mutants-report.py gather
           --verdicts artifacts
-          --shards ${{ env.SHARDS }}
+          --shards ${{ needs.plan.outputs.shards }}
           --known .github/mutants-survivors.txt
           --write-current mutants-survivors.current.txt
+          ${{ needs.plan.outputs.scope == 'diff' && '--partial' || '' }}
       # Always, and especially when the step above went red: this is the file you copy over
       # `.github/mutants-survivors.txt` once you have decided the new entries are acceptable.
       - if: always()
@@ -202,7 +335,7 @@ jobs:
     # issue and never a comment, so this cannot become noise — and closed the moment the
     # nightly is clean again.
     name: say so where someone will see it
-    needs: [baseline, core, survivors]
+    needs: [plan, baseline, core, survivors]
     if: always() && github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     permissions:
@@ -214,6 +347,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PLAN: ${{ needs.plan.result }}
+          SCOPE: ${{ needs.plan.outputs.scope }}
           BASELINE: ${{ needs.baseline.result }}
           CORE: ${{ needs.core.result }}
           SURVIVORS: ${{ needs.survivors.result }}
@@ -229,7 +364,16 @@ jobs:
           } >> "$BODY_FILE"
 
           CLEAN=1
-          if [ "$BASELINE" != success ]; then
+          if [ "$PLAN" != success ]; then
+            CLEAN=0
+            echo "- **The run could not decide what to test** (\`plan\`: $PLAN), so nothing" \
+                 "was tested." >> "$BODY_FILE"
+          elif [ "$SCOPE" = none ]; then
+            # Nothing in charter-core changed since the last green run: nothing to say, and
+            # no reason to touch the issue either way.
+            echo 'nothing in charter-core changed since the last green run'
+            exit 0
+          elif [ "$BASELINE" != success ]; then
             # The root cause, and the only line worth printing: with the baseline red the
             # shards never ran, so `core` and `survivors` are `skipped` and saying they failed
             # would send the reader after the wrong thing.
@@ -242,8 +386,9 @@ jobs:
               CLEAN=0
               echo "- **At least one shard did not finish** (\`core\`: $CORE)." \
                    "Each shard's verdict on the run summary says whether it ran out of budget or" \
-                   "lost its runner. Shards reporting \`incomplete\` mean charter-core has outgrown" \
-                   "\`SHARDS\` in \`.github/workflows/mutants.yml\` — the fix is more shards." >> "$BODY_FILE"
+                   "lost its runner. Shards reporting \`incomplete\` mean a mutant costs more than" \
+                   "\`PER_SHARD\` in \`.github/workflows/mutants.yml\` was sized for — the fix is a" \
+                   "smaller \`PER_SHARD\`." >> "$BODY_FILE"
             fi
             if [ "$SURVIVORS" != success ]; then
               CLEAN=0
@@ -262,6 +407,12 @@ jobs:
           EXISTING="$(awk -v t="$TITLE" \
             '{n=$1; $1=""; sub(/^ /,""); if ($0 == t) {print n; exit}}' "$RUNNER_TEMP/issues.txt")"
 
+          if [ "$CLEAN" = 1 ] && [ "$SCOPE" != full ]; then
+            # A clean DIFF says the new code is covered, not that the crate is. Only a full
+            # run may close the issue; an open one stays open, and nothing new is said.
+            echo "a clean $SCOPE run; only a full run closes the issue"
+            exit 0
+          fi
           if [ "$CLEAN" = 1 ]; then
             if [ -n "$EXISTING" ]; then
               gh issue close "$EXISTING" --comment "The nightly is clean again: $RUN_URL"

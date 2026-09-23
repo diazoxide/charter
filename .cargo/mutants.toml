@@ -1,0 +1,30 @@
+# cargo-mutants' configuration, read by `.github/workflows/mutants.yml` and by any local
+# `cargo mutants`.
+#
+# `exclude_re` is for EQUIVALENT mutants only: a change no input can observe, proved at the
+# code site in a comment the next reader will be standing on. "Hard to test" is not
+# equivalent — a mutant nobody has caught yet belongs in `.github/mutants-survivors.txt`,
+# the backlog, where it stays visible. Each entry names its file and function, and never a
+# line number, so that an edit above it does not quietly point it at a different mutant.
+
+exclude_re = [
+    # `now() < deadline` against `now() <= deadline` differs only at the one instant equal to
+    # the deadline; the loop polls every 10 ms and no test can land on it.
+    'src/profiles\.rs:\d+:\d+: replace < with <= in git_path_state$',
+    # `commit_at`'s `sha.ok()` guard against `true`: `git rev-parse --short HEAD` writes nothing
+    # to stdout when it fails (measured on an unborn branch, where plain `rev-parse HEAD`
+    # would echo `HEAD`), so a failed run's first line is the same `""` the other arm returns.
+    # Equivalent over git's behaviour rather than its documented contract; the site says so.
+    'src/repos\.rs:\d+:\d+: replace match guard sha\.ok\(\) with true in commit_at$',
+    # `float_repr`'s sign of an infinity: `value > 0.0` and `value >= 0.0` agree on both
+    # infinities, and that branch sees nothing else.
+    'src/pyjson\.rs:\d+:\d+: replace > with >= in float_repr$',
+    # `float_repr`'s exponent sign in scientific notation, which is only reached with the
+    # exponent outside `-4..16`, so never at the `0` where `<` and `<=` differ.
+    'src/pyjson\.rs:\d+:\d+: replace < with <= in float_repr$',
+    # `is_repo_top_level`'s `!top.ok() || top.line().is_empty()` against `&&`: a run that
+    # falls through compares git's first line with the resolved root, and neither a failed
+    # `rev-parse --show-toplevel` (nothing on stdout) nor an empty line can equal a real
+    # directory. Equivalent over git's behaviour; the site says so.
+    'src/scaffold/mod\.rs:\d+:\d+: replace \|\| with && in is_repo_top_level$',
+]

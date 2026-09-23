@@ -1,7 +1,10 @@
 //! What a workspace's **pieces** — its linked worktrees — have said about themselves.
 //!
 //! A port of the read half of `charter/pieces.py`: the append-only event log, the heartbeat
-//! store beside it, and the two questions the footer asks of them. Nothing here writes.
+//! store beside it, and the two questions the footer asks of them — and of the ONE writer the
+//! hooks need, [`seen`], the heartbeat itself. Without it every piece a Rust-only session
+//! worked in would read as silent in the footer, because nothing else records that a worker
+//! is alive.
 //!
 //! # The vocabulary is closed, and it has no verdict in it
 //!
@@ -415,6 +418,146 @@ fn piece_dirs(base: &Path) -> Vec<String> {
         .collect();
     entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     entries.into_iter().map(|(_, name)| name).collect()
+}
+
+/// How recently a persona must have been seen at a tree to still count as present there —
+/// `pieces.PRESENCE_WINDOW`.
+pub const PRESENCE_WINDOW_SECS: i64 = 3600;
+
+/// How many present personas one heartbeat keeps — `pieces.PRESENCE_KEEP`.
+pub const PRESENCE_KEEP: usize = 8;
+
+/// The latest observation of a tree — a piece, or with `piece` of `None` the clone itself.
+fn seen_record(plane: &Path, ws: &str, repo: &str, piece: Option<&str>) -> Option<Value> {
+    let text = std::fs::read_to_string(seen_path(plane, ws, repo, piece)).ok()?;
+    let obj: Value = serde_json::from_str(&text).ok()?;
+    (obj.is_object() && truthy(obj.get("ts"))).then_some(obj)
+}
+
+/// `isoformat(timespec="seconds")` of a UTC instant.
+fn iso_seconds(when: DateTime<Utc>) -> String {
+    when.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+}
+
+/// Record that the worker in a tree is alive — `pieces.seen`.
+///
+/// One small file, overwritten. With a `persona`, the record also carries `by`: every persona
+/// seen at this tree within [`PRESENCE_WINDOW_SECS`], newest [`PRESENCE_KEEP`], so a second
+/// persona picking up someone else's piece is visible rather than overwriting the first.
+///
+/// `None` when nothing was written: the path is refused by containment, the write failed, or
+/// the previous record holds a stamp with no offset — charter's own subtraction raises on one,
+/// and the whole touch is dropped rather than half-done.
+pub fn seen(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: Option<&str>,
+    session: Option<&str>,
+    persona: Option<&str>,
+    when: DateTime<Utc>,
+) -> Option<PathBuf> {
+    let path = seen_path(plane, ws, repo, piece);
+    let stamp = iso_seconds(when);
+    let mut by = serde_json::Map::new();
+    if let Some(persona) = persona.filter(|p| !p.is_empty()) {
+        let prev = seen_record(plane, ws, repo, piece);
+        if let Some(old) = prev
+            .as_ref()
+            .and_then(|p| p.get("by"))
+            .and_then(Value::as_object)
+        {
+            for (name, ts) in old {
+                match parse(Some(ts)) {
+                    Stamp::At(at) if (when - at).num_seconds() <= PRESENCE_WINDOW_SECS => {
+                        by.insert(name.clone(), ts.clone());
+                    }
+                    Stamp::Naive => return None,
+                    _ => {}
+                }
+            }
+        }
+        by.insert(persona.to_string(), Value::String(stamp.clone()));
+        if by.len() > PRESENCE_KEEP {
+            let mut keep: Vec<(String, Value)> = by.into_iter().collect();
+            // `sorted(key=ts, reverse=True)`: stable, so equal stamps keep their order.
+            keep.sort_by(|a, b| {
+                b.1.as_str()
+                    .unwrap_or_default()
+                    .cmp(a.1.as_str().unwrap_or_default())
+            });
+            keep.truncate(PRESENCE_KEEP);
+            by = keep.into_iter().collect();
+        }
+    }
+    let mut blob = serde_json::Map::new();
+    blob.insert("ts".into(), Value::String(stamp));
+    blob.insert(
+        "session".into(),
+        session.map_or(Value::Null, |s| Value::String(s.to_string())),
+    );
+    if let Some(persona) = persona.filter(|p| !p.is_empty()) {
+        blob.insert("persona".into(), Value::String(persona.to_string()));
+        blob.insert("by".into(), Value::Object(by));
+    }
+    crate::contain::writable(plane, &path).ok()?;
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    let text = format!("{}\n", crate::pyjson::dumps_sorted(&Value::Object(blob)));
+    std::fs::write(&path, text).ok()?;
+    Some(path)
+}
+
+/// The tree `cwd` stands in: a piece, or a clone (`piece` `None`) — `worktree.locate`, then
+/// `workspace.clone_of`. The plane's own root and a workspace's container are neither.
+pub fn tree_at(plane: &Path, cwd: &Path) -> Option<(String, String, Option<String>)> {
+    if let Some(found) = crate::worktree::locate(plane, cwd) {
+        return Some((found.workspace, found.repo, Some(found.piece)));
+    }
+    let here = std::fs::canonicalize(cwd).ok()?;
+    let workspaces = std::fs::canonicalize(plane.join("workspaces")).ok()?;
+    let rest = here.strip_prefix(&workspaces).ok()?;
+    let mut parts = rest.components().map(|c| c.as_os_str().to_string_lossy());
+    let ws = parts.next()?.into_owned();
+    let repo = parts.next()?.into_owned();
+    (!repo.starts_with('.')).then_some((ws, repo, None))
+}
+
+/// `hooks._touch_piece`: mark the worker in `cwd` alive. Silent and best-effort — a turn must
+/// never fail over bookkeeping.
+pub fn touch(
+    plane: &Path,
+    cwd: &Path,
+    session: Option<&str>,
+    persona: Option<&str>,
+    now: DateTime<Utc>,
+) {
+    if let Some((ws, repo, piece)) = tree_at(plane, cwd) {
+        let _ = seen(plane, &ws, &repo, piece.as_deref(), session, persona, now);
+    }
+}
+
+/// How long ago this piece was last seen, falling back to its claim — `pieces.seen_age`.
+/// `None` for the stamp with no offset charter cannot subtract.
+pub fn seen_age(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+    now: DateTime<Utc>,
+) -> Option<String> {
+    let mark = last_seen(plane, ws, repo, piece);
+    let claim = claims(plane, ws)
+        .get(&(repo.to_string(), piece.to_string()))
+        .cloned();
+    let stamp = match parse(mark.as_ref().and_then(|m| m.get("ts"))) {
+        Stamp::None => parse(claim.as_ref().and_then(|c| c.get("ts"))),
+        other => other,
+    };
+    match stamp {
+        Stamp::At(at) => Some(since(at, now)),
+        Stamp::None => Some("?".to_string()),
+        Stamp::Naive => None,
+    }
 }
 
 #[cfg(test)]

@@ -250,6 +250,12 @@ pub fn state_of(tree: &Path) -> Result<TreeState, Unreadable> {
 /// Asked only for a detached HEAD. A `rev-parse` that fails does not make the tree
 /// unreadable — `status` already answered — so the commit is simply not named.
 fn commit_at(tree: &Path) -> String {
+    // The `sha.ok()` guard cannot be told from `true` by any test (cargo-mutants reports it
+    // as a survivor, excluded in `.cargo/mutants.toml`): `rev-parse --short HEAD` writes
+    // nothing to stdout when it fails — measured on an unborn branch, where plain `rev-parse
+    // HEAD` echoes `HEAD` but `--short` prints nothing — so a failed run's `line()` is the
+    // same `""` the other arm returns. The guard is kept because that is git's behaviour and
+    // not its contract.
     match git::run(tree, &["rev-parse", "--short", "HEAD"], git::READ) {
         Ok(sha) if sha.ok() => sha.line().to_string(),
         _ => String::new(),
@@ -402,5 +408,47 @@ mod tests {
         // "understood nothing" must not read as "clean on no branch".
         assert_eq!(parse(""), None);
         assert_eq!(parse("?? scratch\n"), None);
+    }
+
+    #[test]
+    fn the_sentence_repeated_is_the_first_line_git_actually_wrote() {
+        // `charter/gitstate.py:said`: the first non-blank line, stripped once, or nothing.
+        // Blank lines before it are skipped, the advice after it is not repeated.
+        assert_eq!(
+            first_line("\n   \n  fatal: not a git repository  \nhint: run git init\n").as_deref(),
+            Some("fatal: not a git repository")
+        );
+        assert_eq!(first_line(""), None);
+        assert_eq!(first_line("\n \t \n"), None);
+    }
+
+    #[test]
+    fn a_detached_head_is_named_by_the_short_commit_git_gives_it() {
+        // "detached at <sha>" is the part an operator acts on, so it is git's own short sha
+        // and not merely something non-empty.
+        let dir = tempfile::tempdir().unwrap();
+        let tree = std::fs::canonicalize(dir.path()).unwrap();
+        let fixture = |args: &[&str]| {
+            let mut command = std::process::Command::new("git");
+            command
+                .args(args)
+                .current_dir(&tree)
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")
+                .env("HOME", &tree)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_AUTHOR_NAME", "Fixture")
+                .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+                .env("GIT_COMMITTER_NAME", "Fixture")
+                .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid");
+            let out = crate::forklock::output(&mut command).expect("git runs");
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        fixture(&["init", "-q", "-b", "main", "."]);
+        fixture(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        fixture(&["checkout", "-q", "--detach"]);
+
+        assert_eq!(commit_at(&tree), fixture(&["rev-parse", "--short", "HEAD"]));
     }
 }

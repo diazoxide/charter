@@ -198,3 +198,102 @@ fn a_piece_nobody_ever_claimed_is_not_silent_it_is_just_a_worktree() {
     assert!(summary.quiet.is_empty());
     assert_eq!(silence(&root, "alpha", "svc", "by-hand", now()), Ok(None));
 }
+
+// ---- the heartbeat writer (`pieces.seen`, `hooks._touch_piece`) ----
+
+fn a_canonical_plane() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    (dir, root)
+}
+
+#[test]
+fn a_heartbeat_is_written_as_charter_writes_it() {
+    let (_d, root) = a_canonical_plane();
+    let path = seen(
+        &root,
+        "alpha",
+        "svc",
+        Some("p1"),
+        Some("s-1"),
+        Some("ops"),
+        now(),
+    )
+    .unwrap();
+    assert_eq!(path, seen_path(&root, "alpha", "svc", Some("p1")));
+    let stamp = at(0);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        format!(
+            "{{\"by\": {{\"ops\": \"{stamp}\"}}, \"persona\": \"ops\", \"session\": \"s-1\", \
+             \"ts\": \"{stamp}\"}}\n"
+        )
+    );
+    // No persona, no session: the two keys that need one are absent and the session is null.
+    let clone = seen(&root, "alpha", "svc", None, None, None, now()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(clone).unwrap(),
+        format!("{{\"session\": null, \"ts\": \"{stamp}\"}}\n")
+    );
+}
+
+#[test]
+fn a_persona_seen_within_the_hour_stays_present_and_an_older_one_drops() {
+    let (_d, root) = a_canonical_plane();
+    let p = seen_path(&root, "alpha", "svc", Some("p1"));
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(
+        &p,
+        serde_json::json!({"ts": at(10), "by": {"recent": at(600), "stale": at(7200)}}).to_string(),
+    )
+    .unwrap();
+    seen(&root, "alpha", "svc", Some("p1"), None, Some("ops"), now()).unwrap();
+    let got: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let by = got["by"].as_object().unwrap();
+    assert!(by.contains_key("recent") && by.contains_key("ops"));
+    assert!(!by.contains_key("stale"));
+}
+
+#[test]
+fn a_touch_marks_the_piece_or_the_clone_the_cwd_stands_in_and_nothing_else() {
+    let (_d, root) = a_canonical_plane();
+    let piece = root.join("workspaces/alpha/.worktrees/svc/p1/src");
+    let clone = root.join("workspaces/alpha/svc/src");
+    std::fs::create_dir_all(&piece).unwrap();
+    std::fs::create_dir_all(&clone).unwrap();
+    touch(&root, &piece, Some("s"), None, now());
+    touch(&root, &clone, Some("s"), None, now());
+    touch(&root, &root, Some("s"), None, now());
+    touch(
+        &root,
+        &root.join("workspaces/alpha"),
+        Some("s"),
+        None,
+        now(),
+    );
+    assert!(seen_path(&root, "alpha", "svc", Some("p1")).is_file());
+    assert!(seen_path(&root, "alpha", "svc", None).is_file());
+    let listed: Vec<_> = std::fs::read_dir(dir_for(&root, "alpha").join(SEEN_DIR))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(listed.len(), 2, "{listed:?}");
+}
+
+#[test]
+fn the_age_falls_back_to_the_claim_and_then_to_a_question_mark() {
+    let (_d, root) = a_canonical_plane();
+    assert_eq!(
+        seen_age(&root, "alpha", "svc", "p1", now()).as_deref(),
+        Some("?")
+    );
+    std::fs::create_dir_all(dir_for(&root, "alpha")).unwrap();
+    log(
+        &root,
+        &[serde_json::json!({"event": "claimed", "repo": "svc", "piece": "p1", "ts": at(7200)})],
+    );
+    assert_eq!(
+        seen_age(&root, "alpha", "svc", "p1", now()).as_deref(),
+        Some("2h")
+    );
+}

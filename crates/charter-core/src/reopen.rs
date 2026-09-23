@@ -1539,4 +1539,18 @@ mod tests {
 
         assert_eq!(read(plane.path()).views.len(), MOST_VIEWS);
     }
+
+    #[test]
+    fn a_record_of_exactly_the_largest_size_is_still_read() {
+        // The bound is "never LARGER than", as `charter/contain.py`'s `st.st_size > MAX_BYTES`
+        // draws it: a record of exactly the cap is an honest one and is read.
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        write(&plane, &one_chat()).unwrap();
+        let mut text = std::fs::read(path(&plane)).unwrap();
+        text.resize(usize::try_from(MAX_BYTES).unwrap(), b' ');
+        std::fs::write(path(&plane), &text).unwrap();
+
+        assert_eq!(read_or_refusal(&plane).unwrap(), one_chat());
+    }
 }
