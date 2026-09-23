@@ -1,6 +1,6 @@
 //! What A3 and A3b answer on a real repository, and what they answer where the Python raises.
 //!
-//! The differential (`tests/differential/planeroot.py`) is the arbiter of fidelity; these are
+//! The recorded differential (`fixtures/corpora/planeroot-*`) is the arbiter of fidelity; these are
 //! the rules stated once each, on a fixture small enough to read, plus the three inputs the
 //! differential cannot arbitrate because the oracle raises on them (charter#1178).
 //!

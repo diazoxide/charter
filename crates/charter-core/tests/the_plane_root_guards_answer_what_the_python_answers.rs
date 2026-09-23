@@ -2,13 +2,16 @@
 //! filed from their port — answered here the way the frozen Python answers it, with no Python
 //! present.
 //!
-//! The answers are not written by hand. `tests/differential/planeroot.py --record` ran each case
-//! through the Python charter pinned at the fixture planes' commit, against a git-repository
-//! fixture it built from `fixtures/corpora/planeroot-fixture.json`; `--check` fails if either file
-//! stops being what the oracle says. This builds the SAME fixture from the same steps and replays
-//! the recording through the same code the differential's Rust side runs
-//! (`examples/planeroot_oracle.rs`, included below), so the ordinary `cargo test` job holds the
-//! line and the differential job, which fuzzes against the live oracle, is the wider net.
+//! The answers are not written by hand, and they no longer change on their own. The retired
+//! `planeroot.py` differential harness ran each case through the Python charter pinned at
+//! 50d31dc, against a git-repository fixture it built from
+//! `fixtures/corpora/planeroot-fixture.json`, and recorded what it said, once, on 2026-09-23: the
+//! curated rows (`planeroot-oracle.jsonl`) and a coverage-selected subset of its 50,000 seeded
+//! cases (`planeroot-generated.jsonl.gz`). Since then the recording IS this app's contract, and
+//! no Python is needed or consulted. To change an answer deliberately, edit the row and say why
+//! in the pull request (`fixtures/corpora/README.md`). This builds the SAME fixture from the same steps and replays
+//! both recordings through the code the harness's Rust side ran (`planeroot_answer`, which was
+//! its `planeroot_oracle` example). Where this file says "the harness" it means that script.
 //!
 //! # Why the replay runs in a child process
 //!
@@ -19,9 +22,8 @@
 //! binary for the one test, with the environment the harness gave both sides, and asserts on the
 //! child's verdict.
 
-#[allow(dead_code)]
-#[path = "../examples/planeroot_oracle.rs"]
-mod oracle;
+mod oracle_corpus;
+mod planeroot_answer;
 
 use std::path::{Path, PathBuf};
 
@@ -128,18 +130,20 @@ fn request(v: &Value, base: &str) -> Value {
 }
 
 fn replay(base: &str) -> Vec<String> {
-    let text = std::fs::read_to_string(repo_file("fixtures/corpora/planeroot-oracle.jsonl"))
-        .expect("the corpus is checked in");
-    let rows: Vec<Value> = text
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("one JSON object per line"))
-        .collect();
+    // The curated rows, then the frozen subset of the seeded fuzz: one replay, one comparison.
+    let mut rows = oracle_corpus::jsonl("planeroot-oracle.jsonl");
     assert!(
         rows.len() > 150,
         "the corpus has {} rows — it was cut, not answered",
         rows.len()
     );
+    let generated = oracle_corpus::jsonl_gz("planeroot-generated.jsonl.gz");
+    assert!(
+        generated.len() > 1500,
+        "the frozen fuzz subset has {} rows — it was cut, not answered",
+        generated.len()
+    );
+    rows.extend(generated);
     // Every sentence the two guards can refuse with is only evidence while the corpus really holds
     // a refusal that says it — asserted by name, so an edit to the corpus cannot quietly take one
     // away and leave this replaying nothing but allows.
@@ -171,7 +175,11 @@ fn replay(base: &str) -> Vec<String> {
     ] {
         let n = rows
             .iter()
-            .filter(|r| r["answer"][key].as_str().is_some_and(|s| s.contains(said)))
+            .filter(|r| {
+                r.row["answer"][key]
+                    .as_str()
+                    .is_some_and(|s| s.contains(said))
+            })
             .count();
         assert!(n > 0, "no recorded `{key}` refusal says {said:?}");
     }
@@ -201,16 +209,17 @@ fn replay(base: &str) -> Vec<String> {
     })
 }
 
-fn check(row: &Value, base: &str, scratch: &Path, wrong: &mut Vec<String>) {
+fn check(recorded: &oracle_corpus::Row, base: &str, scratch: &Path, wrong: &mut Vec<String>) {
+    let (at, row) = (&recorded.at, &recorded.row);
     let got = normalise(
-        &oracle::answer(&request(&row["request"], base), scratch),
+        &planeroot_answer::answer(&request(&row["request"], base), scratch),
         base,
     );
     let want = &row["answer"];
     for (key, value) in want.as_object().expect("an answer object") {
         if got.get(key) != Some(value) {
             wrong.push(format!(
-                "{:?} [{key}]\n    python: {value}\n    rust:   {}",
+                "{at} {:?} [{key}]\n    python: {value}\n    rust:   {}",
                 row["case"]["cmd"],
                 got.get(key).unwrap_or(&Value::Null)
             ));
@@ -219,7 +228,7 @@ fn check(row: &Value, base: &str, scratch: &Path, wrong: &mut Vec<String>) {
     for key in got.as_object().expect("an answer object").keys() {
         if want.get(key).is_none() {
             wrong.push(format!(
-                "{:?}: the Rust answered `{key}` and the recording has no such key",
+                "{at} {:?}: the Rust answered `{key}` and the recording has no such key",
                 row["case"]["cmd"]
             ));
         }

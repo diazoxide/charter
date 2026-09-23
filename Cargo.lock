@@ -680,6 +680,7 @@ dependencies = [
  "charter-core",
  "chrono",
  "dirs",
+ "flate2",
  "libc",
  "memchr",
  "portable-pty",

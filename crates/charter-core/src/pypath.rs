@@ -15,8 +15,8 @@
 //!   out — and therefore decides an ALLOW.
 //!
 //! Writing a second, plausible version of any of them is how this repository's guards have
-//! acquired holes before, so each is ported to the letter and each is compared per case in
-//! `tests/differential/shellseg.py`.
+//! acquired holes before, so each is ported to the letter and each is compared per case against
+//! the frozen Python's recorded answers (`fixtures/corpora/shellseg-*`).
 //!
 //! # The direction each one fails in
 //!

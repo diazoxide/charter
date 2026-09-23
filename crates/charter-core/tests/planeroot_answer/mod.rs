@@ -1,22 +1,16 @@
-//! The Rust side of the `planeroot` differential run: a case in, every answer A3 and A3b stand on
-//! out.
+//! Every answer A3 and A3b stand on, for one recorded plane-root request — the Rust side of the
+//! recording `the_plane_root_guards_answer_what_the_python_answers.rs` replays.
 //!
-//! One JSON object per line of stdin, one JSON object per line of stdout, in the same order. The
-//! harness (`tests/differential/planeroot.py`) builds the git-repository fixture, writes the
-//! cases, and derives every PROBE a case carries (the operands, the reset targets, the
-//! directories) — so this program has no table of its own to drift from the harness's, and does
-//! only what the Rust would do with each.
+//! A request carries every PROBE the recording derived (the operands, the reset targets, the
+//! directories), so this has no table of its own to drift from the recording's, and does only
+//! what the Rust would do with each. The answer's keys are the recorded answer's keys; a key the
+//! Rust answers and the recording lacks is a failure too.
 //!
-//! **Cases run on several threads.** Four of the answers ask a real git, and a git process costs
-//! milliseconds where everything else here costs microseconds; each case is independent, and the
-//! output order is the input order. The one piece of shared state is the scratch directory the
-//! config probes write into, which is per thread.
-//!
-//! An EXAMPLE rather than a binary because nothing ships it; the guards it reports on are wired to
-//! nothing yet either way.
+//! This was the `planeroot_oracle` example the Python differential drove over stdin until
+//! 2026-09-23, when the recording was frozen and the Python harness retired; its `main` went
+//! with the harness, and what is left is the per-request answer the replay has always shared.
 
-use std::io::{BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use charter_core::gitconfig;
 use charter_core::planeroot::{self, OptKind};
@@ -24,45 +18,6 @@ use charter_core::pypath;
 use charter_core::shellseg;
 use charter_core::shellwrap;
 use serde_json::{Value, json};
-
-fn main() {
-    let base =
-        PathBuf::from(std::env::var("PLANEROOT_BASE").expect("PLANEROOT_BASE names the fixture"));
-    let mut input = String::new();
-    std::io::stdin()
-        .read_to_string(&mut input)
-        .expect("stdin is readable");
-    let cases: Vec<Value> = input
-        .split('\n')
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
-        .collect();
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .clamp(1, 16);
-    let chunk = cases.len().div_ceil(threads).max(1);
-    let answers: Vec<Value> = std::thread::scope(|s| {
-        let handles: Vec<_> = cases
-            .chunks(chunk)
-            .enumerate()
-            .map(|(t, part)| {
-                let scratch = base.join(format!("cfgrs-{t}"));
-                s.spawn(move || part.iter().map(|c| answer(c, &scratch)).collect::<Vec<_>>())
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().expect("a worker thread finished"))
-            .collect()
-    });
-    let stdout = std::io::stdout();
-    let mut out = BufWriter::new(stdout.lock());
-    for a in answers {
-        writeln!(out, "{a}").expect("stdout is writable");
-    }
-    out.flush().expect("stdout is writable");
-}
 
 fn strs(v: &Value) -> Vec<String> {
     v.as_array()

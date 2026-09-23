@@ -45,6 +45,10 @@ fenced = []
 # dev-dependency on itself is how a crate turns a feature on for its tests and only its
 # tests; without it the fence would be a rule every crate but this one had to keep.
 charter-core = { path = ".", features = ["fenced"] }
+# The frozen fuzz subsets under `fixtures/corpora/*-generated.jsonl.gz` are read through it.
+# Test-only, and already in this workspace's lockfile (Tauri's `png` pulls it in), with the
+# same default features — so it adds no crate to the tree and no licence to review.
+flate2 = "1"
 proptest = "1"
 serde_json = { workspace = true }
 # A test that writes a program and then runs it goes through this and nothing else

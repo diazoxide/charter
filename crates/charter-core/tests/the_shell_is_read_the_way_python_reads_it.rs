@@ -1,12 +1,15 @@
 //! Every command line `charter/hooks.py` names as a bypass that SHIPPED, answered here the way
 //! the frozen Python answers it.
 //!
-//! The answers are not written by hand. `tests/differential/shellseg.py --record` ran each of
-//! these through the Python charter pinned at the commit the fixture planes come from, and wrote
-//! `fixtures/corpora/shellseg-oracle.jsonl`; `--check` fails if the file stops being what the
-//! oracle says. This test replays it with no Python present, so the ordinary `cargo test` job
-//! holds the line and the differential job — which fuzzes 200,000 generated cases against the
-//! live oracle — is the wider net rather than the only one.
+//! The answers are not written by hand, and they no longer change on their own. The retired
+//! `shellseg.py` differential harness ran each command line through the Python charter pinned at
+//! 50d31dc and recorded what it said, once, on 2026-09-23: the curated rows
+//! (`fixtures/corpora/shellseg-oracle.jsonl`) and a coverage-selected subset of its 200,000 seeded
+//! cases (`shellseg-generated.jsonl.gz`). Since then the recording IS this app's contract, and
+//! no Python is needed or consulted. To change an answer deliberately, edit the row and say why
+//! in the pull request (`fixtures/corpora/README.md`). Where this file says "the harness" it
+//! means that script; the names it cites are the script's, kept so a row can be traced to what
+//! produced it.
 //!
 //! Every answer is compared per case, and they are compared SEPARATELY so a failure names which
 //! function moved. Stage 1's six: `unbacktick`, `quote_map`, `splice_continuations`, `lex`
@@ -24,16 +27,17 @@
 //! **Every `pub` item of the three modules is in that list**, deliberately: stage 1's one real
 //! harness defect was a field nobody diffed, and it was found by mutation rather than by reading.
 
+mod oracle_corpus;
+
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 use charter_core::heredoc::{self, Header, Line};
 use charter_core::shellseg::{self, LexError, Tok};
 use charter_core::shellwrap;
 use serde_json::Value;
 
-/// Must stay in step with `PROBE_WRAPPERS` in `tests/differential/shellseg.py`, which is what
-/// recorded the rows this replays.
+/// `PROBE_WRAPPERS` in the harness: every recorded `wo` answer was asked with exactly these, so
+/// changing one changes what every row means.
 const PROBE_WRAPPERS: [&str; 8] = [
     "env", "sudo", "xargs", "stdbuf", "timeout", "doas", "exec", "nonesuch",
 ];
@@ -62,14 +66,12 @@ fn sorted(set: HashSet<usize>) -> Value {
     serde_json::json!(v)
 }
 
+/// The curated rows alone — the command lines a docstring names. The wide replay below reads
+/// the frozen fuzz subset as well (`oracle_corpus::shellseg`).
 fn corpus() -> Vec<Value> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/corpora/shellseg-oracle.jsonl");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
-    text.lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
+    oracle_corpus::jsonl("shellseg-oracle.jsonl")
+        .into_iter()
+        .map(|r| r.row)
         .collect()
 }
 
@@ -90,19 +92,22 @@ fn said(err: LexError) -> &'static str {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_module_gives() {
-    let rows = corpus();
+    let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
+        .into_iter()
+        .map(|r| (r.at, r.row))
+        .unzip();
     assert!(
         rows.len() >= 300,
         "the corpus is the evidence; {} rows is not it",
         rows.len()
     );
     let mut wrong: Vec<String> = Vec::new();
-    for row in &rows {
+    for (at, row) in ats.iter().zip(&rows) {
         let cmd = row["cmd"].as_str().expect("every row names its command");
         let mut check = |what: &str, want: &Value, got: Value| {
             if want != &got {
                 wrong.push(format!(
-                    "{cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
+                    "{at} {cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
                 ));
             }
         };

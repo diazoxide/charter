@@ -1,12 +1,17 @@
 //! Every handoff spelling `docs/handoff.md` records as having run with NO PROMPT, answered here
 //! the way the frozen Python answers it — with no Python present.
 //!
-//! The answers are not written by hand. `tests/differential/shellseg.py --record` ran each of
-//! these through the Python charter pinned at the commit the fixture planes come from;
-//! `--check` fails if the file stops being what the oracle says. This replays the stage-6 half
-//! of that recording — A7 and the seven readers under it — so the ordinary `cargo test` job
-//! holds the line and the differential job, which fuzzes 200,000 generated cases against the
-//! live oracle, is the wider net rather than the only one.
+//! The answers are not written by hand, and they no longer change on their own. The retired
+//! `shellseg.py` differential harness ran each command line through the Python charter pinned at
+//! 50d31dc and recorded what it said, once, on 2026-09-23: the curated rows
+//! (`fixtures/corpora/shellseg-oracle.jsonl`) and a coverage-selected subset of its 200,000 seeded
+//! cases (`shellseg-generated.jsonl.gz`). Since then the recording IS this app's contract, and
+//! no Python is needed or consulted. To change an answer deliberately, edit the row and say why
+//! in the pull request (`fixtures/corpora/README.md`). Where this file says "the harness" it
+//! means that script; the names it cites are the script's, kept so a row can be traced to what
+//! produced it.
+//!
+//! This replays the stage-6 half of that recording — A7 and the seven readers under it.
 //!
 //! # This one needs nothing on disk
 //!
@@ -15,7 +20,7 @@
 //! judges a SOURCE SPELLING and two fields of a payload. That is the same fact the module
 //! header states as its reason for existing, and it is why this file can be a plain replay.
 
-use std::path::PathBuf;
+mod oracle_corpus;
 
 use charter_core::handoffguard::{self, Caller};
 use charter_core::{heredoc, shellseg, shellwrap};
@@ -93,14 +98,12 @@ fn rotation<T: Clone>(cmd: &str, table: &[T], count: usize) -> Vec<T> {
         .collect()
 }
 
+/// The curated rows alone — the command lines a docstring names. The wide replay below reads
+/// the frozen fuzz subset as well (`oracle_corpus::shellseg`).
 fn corpus() -> Vec<Value> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/corpora/shellseg-oracle.jsonl");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
-    text.lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
+    oracle_corpus::jsonl("shellseg-oracle.jsonl")
+        .into_iter()
+        .map(|r| r.row)
         .collect()
 }
 
@@ -148,19 +151,22 @@ fn tables(cmd: &str) -> Value {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
-    let rows = corpus();
+    let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
+        .into_iter()
+        .map(|r| (r.at, r.row))
+        .unzip();
     assert!(
         rows.len() >= 500,
         "the corpus is the evidence; {} rows is not it",
         rows.len()
     );
     let mut wrong: Vec<String> = Vec::new();
-    for row in &rows {
+    for (at, row) in ats.iter().zip(&rows) {
         let cmd = row["cmd"].as_str().expect("every row names its command");
         let mut check = |what: &str, want: &Value, got: Value| {
             if want != &got {
                 wrong.push(format!(
-                    "{cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
+                    "{at} {cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
                 ));
             }
         };
