@@ -69,6 +69,7 @@ pub mod repocmd;
 pub mod repos;
 pub mod roster;
 pub mod scaffold;
+pub mod secrets;
 pub mod secretshape;
 pub mod session;
 pub mod shellseg;
