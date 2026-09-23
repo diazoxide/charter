@@ -15,17 +15,22 @@ pub const MISSING: &str = "no persona by that name exists, so no persona is acti
 /// its provider. Python asks the provider's `health()`, which for a plain-file vault counts
 /// its secrets and for a 1Password one runs `op` — the secrets registry, being ported on its
 /// own branch; see the module header of [`super`].
-pub const REGISTERED_UNCHECKED: &str =
-    "registered — its health is not checked here yet (`charter vault list` will say)";
+pub const REGISTERED_UNCHECKED: &str = "registered — its health is not checked here yet";
 
-/// `persona.ways_out`: the commands that move a selection held at `rung`, as a clause.
-pub fn ways_out(rung: PersonaRung) -> &'static str {
-    if rung == PersonaRung::Environment {
+/// `persona.ways_out`: the commands that move a selection held at the rung labelled
+/// `source`, as a clause. **One answer for every surface that names a missing persona** —
+/// this roster and the session briefing — because the true answer depends on the rung, and a
+/// second copy is the one that offers a command that does nothing.
+///
+/// Python's clause also offers `charter persona clear`, which this charter does not have;
+/// what it offers instead is the one thing that makes the missing name a persona.
+pub fn ways_out(source: &str) -> &'static str {
+    if source == PersonaRung::Environment.label() {
         return "unset `$CHARTER_PERSONA`, or set it to a persona that exists; it outranks \
-                `charter persona use` and `charter persona clear`, so neither moves it";
+                `charter persona use`, so that does not move it";
     }
-    "`charter persona use <persona>` selects one that exists, or `charter persona clear` \
-     drops the selection"
+    "`charter persona use <persona>` selects one that exists, or add the missing one as \
+     `personas/<name>/persona.md`"
 }
 
 /// `persona.selection().exists`: the name a rung decided is a persona this plane defines.
@@ -50,7 +55,7 @@ pub fn list(root: &Path, state: &Path, selection: &ActivePersona, say: Sink) -> 
     let names = super::names(root);
     if names.is_empty() {
         say(Say::Info(
-            "No personas yet. Create one: charter persona create <name> --role \"<Role>\"".into(),
+            "No personas yet. Add one: write personas/<name>/persona.md".into(),
         ));
         return 0;
     }
@@ -67,7 +72,10 @@ pub fn list(root: &Path, state: &Path, selection: &ActivePersona, say: Sink) -> 
         }
     )));
     if missing {
-        say(Say::Out(format!("Ways out: {}.", ways_out(selection.rung))));
+        say(Say::Out(format!(
+            "Ways out: {}.",
+            ways_out(selection.rung.label())
+        )));
     }
     say(Say::Out(String::new()));
 

@@ -124,7 +124,7 @@ pub fn default_command(root: &Path, name: Option<&str>, clear: bool, say: Sink) 
             )));
         }
         say(Say::Info(
-            "Overridden per chat by the persona the app's picker pins, or by $CHARTER_PERSONA."
+            "Overridden per-developer by `charter persona use` / $CHARTER_PERSONA / --persona."
                 .to_string(),
         ));
         return 0;

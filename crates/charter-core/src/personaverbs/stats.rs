@@ -390,8 +390,8 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
     }
     if total == 0 {
         say(Say::Info(
-            "No dispatches recorded yet — the tally starts filling as sub-agents are dispatched \
-             (`charter persona dispatch-backfill` seeds it from past sessions)."
+            "No dispatches recorded yet — the tally starts filling as sub-agents are dispatched; \
+             seeding it from past sessions is not in this version yet."
                 .into(),
         ));
     }
@@ -401,8 +401,8 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
     );
     say(Say::Info(format!(
         "Tallied live from a PostToolUse hook, which can miss background dispatches — treat \
-         DISP and ⚑ as a FLOOR ({when}). Reconcile against this project's transcripts: charter \
-         persona dispatch-backfill."
+         DISP and ⚑ as a FLOOR ({when}). Reconciling it against this project's transcripts \
+         is not in this version yet."
     )));
     if unused > 0 {
         say(Say::Warn(format!(

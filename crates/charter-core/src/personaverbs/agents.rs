@@ -484,7 +484,7 @@ fn sync_in(
     };
     if names.is_empty() {
         say(Say::Info(
-            "No personas to sync. Create one first: charter persona create <name>.".into(),
+            "No personas to sync. Add one first: write personas/<name>/persona.md.".into(),
         ));
         return 0;
     }
