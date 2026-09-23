@@ -46,6 +46,8 @@ pub enum Kind {
     NotFound,
     /// The provider is not implemented, or its backend is missing — `ProviderUnavailable`.
     Unavailable,
+    /// A terminating signal arrived while a resolver ran, and it was stopped.
+    Interrupted,
     /// Any other vault failure — `VaultError`.
     Other,
 }
@@ -82,6 +84,13 @@ impl VaultError {
         }
     }
 
+    pub fn interrupted() -> Self {
+        Self {
+            kind: Kind::Interrupted,
+            message: "stopped by a signal before the value was read".into(),
+        }
+    }
+
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self {
             kind: Kind::Unavailable,
@@ -103,9 +112,33 @@ impl std::error::Error for VaultError {}
 /// A snapshot rather than reads of `std::env` wherever one is needed, for two reasons: a child
 /// is handed exactly the environment the decisions were made against, and a test can build one
 /// without mutating its own process (which edition 2024 makes `unsafe`).
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Env {
     vars: Vec<(OsString, OsString)>,
+}
+
+/// Names only: an environment holds tokens, and a `{:?}` in a panic or a log line is a
+/// print.
+impl std::fmt::Debug for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(
+                self.vars
+                    .iter()
+                    .map(|(k, _)| format!("{}=***", k.to_string_lossy())),
+            )
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Ctx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ctx")
+            .field("root", &self.root)
+            .field("state", &self.state)
+            .field("env", &self.env)
+            .finish()
+    }
 }
 
 impl Env {
@@ -145,7 +178,7 @@ impl Env {
 /// Where a plane keeps its vaults: the root (for the SHARED registry half and for resolving a
 /// relative vault `file`) and the state directory (the LOCAL half, the default vault files and
 /// the fingerprint key).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Ctx {
     pub root: PathBuf,
     pub state: PathBuf,

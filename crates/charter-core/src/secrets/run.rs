@@ -17,16 +17,53 @@ use std::time::{Duration, Instant};
 use super::Env;
 
 /// What a CLI said and how it exited.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Ran {
     pub code: i32,
     pub stdout: String,
     pub stderr: String,
 }
 
+/// The signal a command that takes over termination caught, shared with every CLI it runs.
+///
+/// `secret exec` installs handlers so a SIGTERM or Ctrl-C does not leave a 0600 file behind —
+/// which also means the signal no longer ends the process by itself. A resolver that is slow
+/// (`op` waiting on a sign-in) must therefore notice the flag and stop, or the command it was
+/// resolving for would still be started, with the credential, after charter was told to stop.
+static INTERRUPT: std::sync::OnceLock<std::sync::Arc<std::sync::atomic::AtomicUsize>> =
+    std::sync::OnceLock::new();
+
+/// The shared flag a signal handler sets to the signal's number.
+pub fn interrupt_flag() -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+    std::sync::Arc::clone(
+        INTERRUPT.get_or_init(|| std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0))),
+    )
+}
+
+/// The signal that arrived, if one did.
+pub fn interrupted() -> Option<i32> {
+    match INTERRUPT.get()?.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => None,
+        n => Some(n as i32),
+    }
+}
+
+/// The exit status and the SIZE of what was said: a resolver's stdout is the secret.
+impl std::fmt::Debug for Ran {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ran")
+            .field("code", &self.code)
+            .field("stdout", &format_args!("*** ({} bytes)", self.stdout.len()))
+            .field("stderr", &format_args!("*** ({} bytes)", self.stderr.len()))
+            .finish()
+    }
+}
+
 /// Why a CLI could not be run to completion.
 #[derive(Debug)]
 pub enum RunError {
+    /// A terminating signal arrived while it ran; it was killed.
+    Interrupted(i32),
     /// It ran past its timeout and was killed — `util.ProcTimeout`.
     Timeout,
     /// It could not be started at all.
@@ -118,6 +155,11 @@ pub fn run(
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(e) => return Err(RunError::Spawn(e)),
+        }
+        if let Some(sig) = interrupted() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(RunError::Interrupted(sig));
         }
         if timeout.is_some_and(|t| started.elapsed() >= t) {
             let _ = child.kill();

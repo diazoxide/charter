@@ -99,12 +99,13 @@ fn set_var(env: &mut Vec<(OsString, OsString)>, name: &str, value: impl Into<OsS
     }
 }
 
-/// A temp file named `charter-<vault>-<tag>-…`, 0600, registered for removal before `bytes`
-/// are written into it.
-fn temp_file(cleanup: &mut Cleanup, prefix: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+/// A temp file named `charter-secret-<random>`, 0600, registered for removal before `bytes` are
+/// written into it. Never named after the vault or the key: a name is visible to every account
+/// that can list the temp directory, and a key name is a user's word that could shape a path.
+fn temp_file(cleanup: &mut Cleanup, bytes: &[u8]) -> std::io::Result<PathBuf> {
     let (mut file, path) = tempfile::Builder::new()
-        .prefix(prefix)
-        .rand_bytes(8)
+        .prefix("charter-secret-")
+        .rand_bytes(12)
         .tempfile()?
         .keep()
         .map_err(|e| e.error)?;
@@ -178,10 +179,22 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
     let mut cleanup = Cleanup::default();
     let signals = Termination::install();
 
-    macro_rules! vault_err {
-        ($e:expr) => {{
-            io.say(Say::Err($e.message));
-            return 1;
+    // One value, and then the question every resolution has to be followed by: did a
+    // terminating signal arrive meanwhile? If so nothing is started — the credential already
+    // read goes no further than this process, and the files made so far are removed.
+    macro_rules! resolve {
+        ($key:expr) => {{
+            let got = cmd::get_value(ctx, &v, $key);
+            if let Some(sig) = signals.caught() {
+                return 128 + sig;
+            }
+            match got {
+                Ok(val) => val,
+                Err(e) => {
+                    io.say(Say::Err(e.message));
+                    return 1;
+                }
+            }
         }};
     }
 
@@ -193,10 +206,7 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
                 return 2;
             }
         };
-        let val = match cmd::get_value(ctx, &v, key) {
-            Ok(val) => val,
-            Err(e) => vault_err!(e),
-        };
+        let val = resolve!(key);
         set_var(&mut env, name, val.clone());
         secret_values.push(val);
         key_names.push(key.to_string());
@@ -210,15 +220,11 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
                 return 2;
             }
         };
-        let val = match cmd::get_value(ctx, &v, key) {
-            Ok(val) => val,
-            Err(e) => vault_err!(e),
-        };
+        let val = resolve!(key);
         secret_values.push(val.clone());
         key_names.push(key.to_string());
         env_names.push(name.to_string());
-        let prefix = format!("charter-{}-{key}-", req.vault);
-        match temp_file(&mut cleanup, &prefix, val.as_bytes()) {
+        match temp_file(&mut cleanup, val.as_bytes()) {
             Ok(path) => set_var(&mut env, name, path.into_os_string()),
             Err(e) => {
                 io.say(Say::Err(format!(
@@ -264,10 +270,7 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
         let mut lines: Vec<String> = Vec::new();
         env_names.push(envvar.clone());
         for (name, key) in entries {
-            let val = match cmd::get_value(ctx, &v, key) {
-                Ok(val) => val,
-                Err(e) => vault_err!(e),
-            };
+            let val = resolve!(key);
             secret_values.push(val.clone());
             key_names.push(key.clone());
             let escaped = dotenv::escaped(&val);
@@ -282,9 +285,8 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
                 }
             }
         }
-        let prefix = format!("charter-{}-dotenv-", req.vault);
         let body = format!("{}\n", lines.join("\n"));
-        match temp_file(&mut cleanup, &prefix, body.as_bytes()) {
+        match temp_file(&mut cleanup, body.as_bytes()) {
             Ok(path) => set_var(&mut env, envvar, path.into_os_string()),
             Err(e) => {
                 io.say(Say::Err(format!(
@@ -293,6 +295,11 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
                 return 1;
             }
         }
+    }
+
+    // The last point before anything is started or recorded as handed out.
+    if let Some(sig) = signals.caught() {
+        return 128 + sig;
     }
 
     // ONE record, above the three ways the child is started: everything that runs a command
@@ -493,7 +500,8 @@ impl Termination {
     fn install() -> Self {
         #[cfg(unix)]
         {
-            let flag = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let flag = super::run::interrupt_flag();
+            flag.store(0, std::sync::atomic::Ordering::SeqCst);
             let mut ids = Vec::new();
             for sig in Self::signals() {
                 let f = std::sync::Arc::clone(&flag);
