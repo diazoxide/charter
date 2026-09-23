@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "persona-statistics",
+  "name": "Persona statistics",
+  "contributes": {
+    "runs": "bin/persona-statistics",
+    "views": [
+      {
+        "id": "statistics",
+        "title": "Statistics",
+        "about": "personas"
+      }
+    ]
+  }
+}

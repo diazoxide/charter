@@ -281,6 +281,12 @@ body {
   color: var(--danger-text);
 }
 
+/* A view tab's `×` ends nothing (`Closer`), so it hovers as the tab does and not as a danger. */
+.tab .closer.keeps:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
 .tab .closer:focus-visible,
 .project .closer:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -3262,49 +3268,6 @@ button.show-more:focus-visible {
   overflow-wrap: anywhere;
 }
 
-/* A persona's card: what the definition says, and then everything it remembers. The memories
-   are the same primitive one surface in, so they bring their own rules with them. */
-.persona-card-body h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.9rem;
-}
-
-.persona-card-body .role {
-  color: var(--text-muted);
-  font-weight: normal;
-}
-
-.persona-card-body dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.15rem 0.6rem;
-  margin: 0;
-}
-
-.persona-card-body dt {
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.persona-card-body dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.persona-memories {
-  margin-top: 0.6rem;
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.persona-memories h4 {
-  margin: 0 0 0.25rem;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-
 /* **The empty state, centred, with the way out in it** (`EmptyState.tsx`). `page` is the
    centre region's — the operator's *"open new tab button on empty page center"*. `panel` is
    the same component at a sidebar's width, where a page's type would wrap the headline to
@@ -3364,6 +3327,291 @@ button.show-more:focus-visible {
 
 .empty-state-action {
   margin-top: 0.4rem;
+}
+
+/* =====================================================================================
+   THE PERSONAS PLUGIN, END TO END — view tabs and the chart (charter ADR 0041 stage 2, and
+   ADR 0043 as amended 2026-09-23)
+   =====================================================================================
+   A view in a tab's pane — the persona view, an extension's statistics — and the chart block
+   an extension's program answers with (`Views.tsx`).
+
+   **Its own section, at the end**, for the reason the panel contract's section above gives:
+   a section with one owner is the difference between a merge conflict and a merge.
+
+   No colour is written here and nothing moves. Every value is a semantic token out of
+   `app/src/theme/`; there is no transition, no animation and no timing, because an answer
+   arrives once per opening and a chart that grew into place each time would be motion that
+   says nothing its numbers do not (charter-app#209). */
+
+/* **A view in a pane** (`Views.ViewPane`) — a tab that holds something other than a chat
+   (charter ADR 0043, as amended 2026-09-23). The pane is the same `.pane` a terminal is drawn
+   in, with the same focus rule, so a view and a chat split side by side read as two panes of
+   one tab and not as a chat with something laid over it.
+
+   **Told apart from a terminal by its shade and nothing else.** A view is a page to read, on
+   `surface.raised`; there is no border and no colour of its own (the operator's rule: layers
+   are told apart by a subtle background, never by a coloured edge). */
+.pane.view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.view-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The heading stays and the body scrolls. Room is left at the end for the pane's own corner
+   (split, close), which sits over the heading's row as it sits over a terminal's first row. */
+.view-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 6rem 0.5rem 1rem;
+  background: var(--surface-sunken);
+}
+
+.view-head h2 {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  margin: 0;
+  font-size: 1rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.view-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem 1rem 1rem;
+}
+
+/* A view's sentences: the definition's facts, a count, a producer's note. Read, not scanned —
+   so they wrap, which a panel row does not. */
+.view-body .note {
+  margin: 0.25rem 0;
+  max-width: 60rem;
+}
+
+.view-body .pending,
+.view-body .none {
+  margin: 0.25rem 0;
+  color: var(--text-muted);
+}
+
+.view-body .trouble {
+  border-radius: 3px;
+  margin: 0.25rem 0;
+}
+
+/* A view's facts: label beside value, the two columns the persona card drew. The label column
+   is as wide as its longest label and never wraps; the value wraps anywhere, because a path or
+   a tool list has no spaces to break at. */
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.4rem 0;
+  max-width: 60rem;
+}
+
+.facts .fact {
+  display: contents;
+}
+
+.facts dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A list in a view has the pane's height to use, not a side region's. */
+.view-body .panel-list {
+  margin-top: 0.6rem;
+}
+
+.view-body .panel-rows {
+  max-height: none;
+}
+
+/* The mark a view's tab carries in place of a chat's state: what kind of thing the tab holds. */
+.tab-mark {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  color: var(--text-muted);
+}
+
+/* How long the producer took, under its answer. Quiet: it is for noticing a view that has
+   become slow before it becomes one that times out. */
+.view-took {
+  margin: 0.4rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A panel's heading with a view's button beside it — the persona statistics button. The
+   heading keeps its own look; the row is what carries the margin it used to. */
+.panels .panel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.panels .panel-head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.panel-view {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: var(--control-base);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: default;
+}
+
+.panel-view:hover {
+  background: var(--control-hover);
+}
+
+.panel-view:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* ---- The chart ---------------------------------------------------------------------- */
+
+.chart {
+  margin: 0.6rem 0 0.9rem;
+}
+
+.chart figcaption {
+  margin-bottom: 0.35rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chart .chart-unit {
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
+.chart-points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chart-label,
+.chart-value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-note {
+  color: var(--text-muted);
+}
+
+.chart-track {
+  display: block;
+  position: relative;
+  background: var(--surface-sunken);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.chart-bar {
+  display: block;
+  background: var(--accent-base);
+}
+
+/* Bars: label, track, value on one line each, the labels in a column of their own so every
+   track starts at the same place and lengths can be compared at a glance. */
+.chart-bars .chart-point {
+  display: grid;
+  grid-template-columns: minmax(4rem, 9rem) minmax(4rem, 1fr) minmax(3rem, auto);
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.1rem 0;
+}
+
+.chart-bars .chart-track {
+  height: 0.65rem;
+}
+
+.chart-bars .chart-bar {
+  height: 100%;
+}
+
+.chart-bars .chart-value {
+  color: var(--text-secondary);
+}
+
+/* Columns: one per step in order, the value over it and the label under it, all bottoms on
+   one line. */
+.chart-columns .chart-points {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  height: 9rem;
+}
+
+/* The label under the track and the value over it: `column-reverse` draws the DOM's
+   label-track-value order bottom to top, so a screen reader still hears the label first. */
+.chart-columns .chart-point {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column-reverse;
+  align-items: stretch;
+  gap: 0.2rem;
+  min-width: 0;
+  text-align: center;
+  font-size: 0.7rem;
+}
+
+.chart-columns .chart-track {
+  flex: 1 1 auto;
+}
+
+.chart-columns .chart-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+.chart-columns .chart-label {
+  color: var(--text-muted);
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════════════════════

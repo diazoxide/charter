@@ -22,7 +22,13 @@ in `diazoxide/charter` as history (ADR 0044). A new decision is the next number 
 - **Nothing shipped depends on the Python charter.** No message, doc page or code path in the
   app or the `charter` binary tells anyone to install or run it. It is allowed only as the
   differential oracle in CI (ADR 0044, ADR 0045).
-- **No `unsafe`** (`unsafe_code = "forbid"` workspace-wide).
+- **No `unsafe`, with one audited exception** (`unsafe_code = "deny"` workspace-wide). The
+  exception is `charter_core::executor::inherit_nothing_else`: the `pre_exec` hook that closes
+  every descriptor above 2 in an extension's program, because nothing but code run between
+  `fork` and `exec` can. The operator's ruling, 2026-09-23: *"Allow one audited block."* It has
+  a `// SAFETY:` comment (clippy's `undocumented_unsafe_blocks` is denied), and
+  `crates/charter-core/tests/one_unsafe_block.rs` fails if `unsafe` or an allow of the lint
+  appears anywhere else. A second block is a new ruling, not an edit.
 - **UI is built from Radix primitives, never hand-rolled markup**, and never behind a charter API
   of our own — no `<Modal>`, no `<Field>`. A shadcn/ui component's source **copied into the repo
   is allowed** and is not that layer (ADR 0037, amended 2026-09-22).

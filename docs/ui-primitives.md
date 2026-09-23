@@ -181,6 +181,24 @@ outside closes it**, because there is no answer to lose. `side="left"` is where 
 the default arrangement and no more than that — a region MOVES (ADR 0038), and Radix flips to the
 other side when there is no room, which is what makes naming a side safe at all.
 
+**And then the persona card left the popover for a tab (2026-09-23).** It had grown a searchable
+archive of everything a persona remembers and an extension's statistics, which a popover anchored
+in a 260 px column is a thin surface for; a non-modal sheet over the centre region was built and
+then replaced the same day, when the operator was asked where the card should open and chose
+**"Its own tab"**: *"we dont have other tabs then sessions, and this can be good example for us -
+that in tabs we can have what we want - not only harnesses"*.
+
+So a persona is a **view**, and a view is what a tab's pane holds when it does not hold a chat
+(charter ADR 0043, as amended; `app/src/tabs.ts`, `app/src/Views.tsx`). No primitive is involved
+beyond the tablist the strip already is, and that is the point: the accessibility the sheet had to
+argue for — not modal, not hiding the queue, dismissible, focus returned — is a tab's by
+construction. A tab is not dismissed by focus leaving it, which is what closed the sheet when the
+palette handed the keyboard back to a terminal (#212's adversarial review, finding 5). Every other
+row's card is still the popover above, because a todo's six short rows are what a popover is for.
+
+An extension's view — persona statistics — opens in a tab of its own the same way, from a button
+on the personas panel's heading, a button on a persona's tab, or its palette row.
+
 Two decisions those four share, taken once so they do not have to be taken again per dialog:
 
 - **A click outside answers nothing.** `onInteractOutside` is prevented on all four, which is

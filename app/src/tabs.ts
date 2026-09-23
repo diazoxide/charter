@@ -1,9 +1,22 @@
 /**
  * The tabs the window shows, and how each one is split into panes.
  *
- * A pane shows one session. Only the tab in front has panes on screen, which is what keeps
- * fifty sessions cheap: the core holds every session's terminal, and the panes that are
- * visible are the only ones drawing.
+ * **A tab is a layout of panes, and a pane holds a session or a view** (charter ADR 0043, as
+ * amended 2026-09-23). A session is a chat's terminal; a view is anything else a tab can show —
+ * a persona, an extension's statistics — named by data ({@link ViewRef}) rather than by a
+ * component, so charter's own views and an extension's take the same path. The operator's
+ * words, choosing a tab for the persona card: *"we dont have other tabs then sessions, and this
+ * can be good example for us - that in tabs we can have what we want - not only harnesses"*.
+ *
+ * **The pane is what was generalised, not the tab.** A tab stays one thing — a layout — so a
+ * view can be split beside a chat, and every rule a tab already had (the fixed order, pinning,
+ * the overflow menu, closing the pane in focus) holds for a tab that shows no chat without a
+ * second copy of it. What a tab does NOT have any more is a chat of its own by definition: the
+ * chat's name lives on the session a pane shows, so a tab holding only a view has no chat to
+ * pretend about ({@link chatOf}).
+ *
+ * Only the tab in front has panes on screen, which is what keeps fifty sessions cheap: the core
+ * holds every session's terminal, and the panes that are visible are the only ones drawing.
  *
  * **A tab belongs to a workspace, and the strip shows one workspace's tabs** (ADR 0036). It is
  * not a field on the tab: which workspace a chat is in is the plane's answer, read off the
@@ -27,15 +40,59 @@
 /** Which way a split divides its two children: `row` side by side, `column` one above the other. */
 export type Direction = "row" | "column";
 
+/**
+ * A view, named by data: **who draws it, which of theirs, and what it is about.**
+ *
+ * `from` is `null` for a view charter draws itself and an approved extension's id for one it
+ * offers, which is `charter_core::panel::By` on the wire; `view` is which of theirs; `key` is
+ * what it is about inside that — a persona's name, or `""` for the whole plane. The persona view
+ * is `{ from: null, view: "persona", key: "steward" }` and persona statistics is
+ * `{ from: "persona-statistics", view: "statistics", key: "" }`: **the same shape, the same
+ * command (`open_view`), the same renderer** — nothing about a built-in view is a path an
+ * extension's cannot take.
+ */
+export type ViewRef = { from: string | null; view: string; key: string };
+
+/** What a pane shows. */
+export type Content =
+  /**
+   * A chat's terminal. `chat` is the chat's own name, as the plane records it and as the core
+   * was told it — separate from the tab's `name`, because a split starts a second chat under
+   * the first one's name and the core must be told that name, not the sentence the tab draws.
+   */
+  | { kind: "session"; session: number; chat: string }
+  /**
+   * A view. **It carries its workspace, because it has nothing else to be filed by**: a chat is
+   * on the strip of the workspace it works in (the plane's answer, `FiledIn`), and a view works
+   * nowhere. So it is on the strip it was opened from — the one in front — and says so.
+   */
+  | {
+      kind: "view";
+      view: ViewRef;
+      workspace: string;
+      /**
+       * Put back by a launch, and **not asked anything until the operator presses for it.**
+       *
+       * An extension's view runs that extension's program when it is asked (ADR 0041 stage 2,
+       * *one round trip per deliberate human action*), and a tab the record put back was
+       * opened by nobody at this launch — the record is a file in the plane, and a line in it
+       * must not become a program run at every start. So a put-back tab waits, says so, and
+       * asks on a press; one the operator opens is asked at once. charter's own views run no
+       * program and ignore it.
+       */
+      waits?: boolean;
+    };
+
 export type Layout =
-  | { kind: "pane"; pane: number; session: number }
+  | { kind: "pane"; pane: number; content: Content }
   | { kind: "split"; direction: Direction; children: [Layout, Layout] };
 
 export type Tab = {
   id: number;
   /**
    * What the tab bar shows: the chat's name and the persona it adopted, where charter knows
-   * one — `3 steward` rather than `3` (charter-app#130).
+   * one — `3 steward` rather than `3` (charter-app#130) — or the view's title for a tab that
+   * opened on a view.
    *
    * A number identifies a chat to charter and tells the operator nothing, and the strip is
    * where an operator with fifty of them works out which is which. The persona is known at
@@ -43,13 +100,6 @@ export type Tab = {
    * chat put back at a launch carries its own — so this is never filled in later.
    */
   name: string;
-  /**
-   * The chat's own name, as the plane records it and as the core was told it.
-   *
-   * Separate from `name`, because a split starts a second chat under the tab's name and the
-   * core must be told the chat's name, not the sentence the tab bar draws.
-   */
-  chat: string;
   layout: Layout;
   /** The pane a split or a close acts on. */
   focused: number;
@@ -86,24 +136,184 @@ export function openTab(
   chat = "",
   persona: string | null = null,
 ): Tabs {
+  const named = chat || String(tabs.named.tabs + 1);
+  return withTab(
+    tabs,
+    persona ? `${named} ${persona}` : named,
+    { kind: "session", session, chat: named },
+    tabs.order.length,
+  );
+}
+
+/** The one place a tab is minted: `content` in one pane, at `at` in the order, in front. */
+function withTab(tabs: Tabs, name: string, content: Content, at: number): Tabs {
   const id = tabs.named.tabs + 1;
   const pane = tabs.named.panes + 1;
-  const named = chat || String(id);
+  const order = [...tabs.order];
+  order.splice(Math.max(0, Math.min(at, order.length)), 0, id);
   return {
     byId: {
       ...tabs.byId,
-      [id]: {
-        id,
-        name: persona ? `${named} ${persona}` : named,
-        chat: named,
-        layout: { kind: "pane", pane, session },
-        focused: pane,
-      },
+      [id]: { id, name, layout: { kind: "pane", pane, content }, focused: pane },
     },
-    order: [...tabs.order, id],
+    order,
     inFront: id,
     named: { tabs: id, panes: pane },
   };
+}
+
+/** What one view is called as a key: unique per plane, and the same for the same view. */
+export function viewKey(view: ViewRef): string {
+  // Namespaced as `charter_core::panel::Panel::key` is, so an extension that calls itself
+  // `charter` cannot answer to charter's own view's name.
+  return view.from === null
+    ? `charter/${view.view}/${view.key}`
+    : `ext/${view.from}/${view.view}/${view.key}`;
+}
+
+/** The tab and pane already showing `view`, where one is. */
+export function findView(tabs: Tabs, view: ViewRef): { tab: number; pane: number } | undefined {
+  const wanted = viewKey(view);
+  for (const tab of tabs.order) {
+    const found = contents(tabs.byId[tab].layout).find(
+      (one) => one.content.kind === "view" && viewKey(one.content.view) === wanted,
+    );
+    if (found) return { tab, pane: found.pane };
+  }
+  return undefined;
+}
+
+/**
+ * Opens `view` in a tab of its own, in front — **or brings forward the one already showing it.**
+ *
+ * One view, one surface: a second tab for the persona that already has one is two answers to
+ * "where is steward" that can drift apart (one scrolled, one searched), and the operator asked
+ * for a tab, not a tab per click. The pane showing it takes the focus too, so a view that is
+ * one side of a split is the side that answers the keyboard.
+ *
+ * `workspace` is the strip it goes on: the one in front, which is where it was opened from.
+ */
+export function openView(tabs: Tabs, view: ViewRef, name: string, workspace: string): Tabs {
+  const open = findView(tabs, view);
+  if (open) {
+    const tab = tabs.byId[open.tab];
+    // Opening it is the operator asking for it, so a tab that was waiting for a press has had
+    // one (`Content.waits`).
+    const layout = replace(tab.layout, open.pane, (found) =>
+      found.content.kind === "view" && found.content.waits
+        ? { ...found, content: { ...found.content, waits: false } }
+        : found,
+    );
+    return {
+      ...tabs,
+      byId: { ...tabs.byId, [tab.id]: { ...tab, layout, focused: open.pane } },
+      inFront: tab.id,
+    };
+  }
+  return withTab(tabs, name, { kind: "view", view, workspace }, tabs.order.length);
+}
+
+/**
+ * Puts back a view tab the last launch recorded, at the place it had — **behind** whatever is in
+ * front, because a launch decides what is in front once, from the whole record.
+ *
+ * `at` is where it was on the strip, over chats and views together. It is a place and not a
+ * promise: a chat that did not come back moves it by one, and a place past the end is the end.
+ * A view already open is left where it is rather than drawn twice.
+ */
+export function putViewBack(
+  tabs: Tabs,
+  view: ViewRef,
+  name: string,
+  workspace: string,
+  at: number,
+): Tabs {
+  if (findView(tabs, view)) return tabs;
+  const opened = withTab(tabs, name, { kind: "view", view, workspace, waits: true }, at);
+  return { ...opened, inFront: tabs.inFront };
+}
+
+/**
+ * The operator pressed to have a waiting view asked (`Content.waits`): that pane of the tab in
+ * front stops waiting. Anything else is left as it is.
+ */
+export function stopWaiting(tabs: Tabs, pane: number): Tabs {
+  const tab = frontTab(tabs);
+  if (!tab) return tabs;
+  let changed = false;
+  const layout = replace(tab.layout, pane, (found) => {
+    if (found.content.kind !== "view" || !found.content.waits) return found;
+    changed = true;
+    return { ...found, content: { ...found.content, waits: false } };
+  });
+  return changed ? { ...tabs, byId: { ...tabs.byId, [tab.id]: { ...tab, layout } } } : tabs;
+}
+
+/**
+ * The tab's own chat: **the session in its first pane, and nothing when that pane is a view.**
+ *
+ * What a tab's state mark, its pin and the core's "chat in front" are about. A tab that opened
+ * on a view and was split to start a chat beside it is still the view's tab — its first pane
+ * says what it is — so it draws no chat state and has no chat to pin.
+ */
+export function chatOf(tabs: Tabs, id: number): number | undefined {
+  const first = contentsOf(tabs, id)[0]?.content;
+  return first?.kind === "session" ? first.session : undefined;
+}
+
+/**
+ * The name a new chat started beside this tab's panes is given: the name of the first chat in
+ * it, or nothing when it has none — a view's tab split to start a chat starts one with a name of
+ * its own, not the view's title.
+ */
+export function chatNameOf(tabs: Tabs, id: number): string | undefined {
+  const tab = tabs.byId[id];
+  if (!tab) return undefined;
+  const first = contents(tab.layout).find((one) => one.content.kind === "session");
+  return first?.content.kind === "session" ? first.content.chat : undefined;
+}
+
+/** What each pane of a tab shows, left to right and top to bottom. */
+export function contentsOf(tabs: Tabs, id: number): { pane: number; content: Content }[] {
+  const tab = tabs.byId[id];
+  return tab ? contents(tab.layout) : [];
+}
+
+/** What the focused pane of the tab in front shows, when anything is in front. */
+export function focusedContent(tabs: Tabs): Content | undefined {
+  const tab = frontTab(tabs);
+  return tab && contents(tab.layout).find((one) => one.pane === tab.focused)?.content;
+}
+
+/**
+ * Every view tab whose strip is not a workspace any more, moved to `outside`.
+ *
+ * A chat's strip is re-read off the plane every time (`FiledIn`), so a workspace that goes takes
+ * its chats' strip with it. A view carries its own, so nothing would move it: it would be on a
+ * strip that is never drawn, unreachable. This is the one place that says what a view's strip is
+ * when the plane stops having it — the same strip a chat that works in no workspace is on.
+ *
+ * Answers `tabs` itself when nothing moved, so a caller can tell.
+ */
+export function refileViews(
+  tabs: Tabs,
+  stands: (workspace: string) => boolean,
+  outside: string,
+): Tabs {
+  let moved = false;
+  const refile = (layout: Layout): Layout => {
+    if (layout.kind === "split")
+      return { ...layout, children: layout.children.map(refile) as [Layout, Layout] };
+    const content = layout.content;
+    if (content.kind !== "view" || content.workspace === outside || stands(content.workspace))
+      return layout;
+    moved = true;
+    return { ...layout, content: { ...content, workspace: outside } };
+  };
+  const byId = Object.fromEntries(
+    tabs.order.map((id) => [id, { ...tabs.byId[id], layout: refile(tabs.byId[id].layout) }]),
+  );
+  return moved ? { ...tabs, byId } : tabs;
 }
 
 /**
@@ -159,10 +369,14 @@ export function closeTab(
   return { ...tabs, byId, order, inFront };
 }
 
-/** Which workspace a tab belongs to: its first pane's chat is the tab's own chat. */
+/**
+ * Which workspace a tab belongs to: **its first pane's.** A chat is filed where it works — the
+ * plane's answer — and a view where it was opened, which it carries.
+ */
 export function workspaceOf(tabs: Tabs, id: number, filedIn: FiledIn): string | undefined {
-  const session = panesOf(tabs, id)[0]?.session;
-  return session === undefined ? undefined : filedIn(session);
+  const first = contentsOf(tabs, id)[0]?.content;
+  if (first === undefined) return undefined;
+  return first.kind === "session" ? filedIn(first.session) : first.workspace;
 }
 
 /**
@@ -271,15 +485,30 @@ export function focusPane(tabs: Tabs, pane: number): Tabs {
   return { ...tabs, byId: { ...tabs.byId, [tab.id]: { ...tab, focused: pane } } };
 }
 
-/** Divides the focused pane in two, the new one showing `session` and focused. */
-export function splitFocusedPane(tabs: Tabs, direction: Direction, session: number): Tabs {
+/**
+ * Divides the focused pane in two, the new one showing `session` and focused.
+ *
+ * `chat` is the new chat's name. It defaults to the name of the tab's own chat, which is what a
+ * split has always meant; a tab showing only a view has none, and the caller names it.
+ */
+export function splitFocusedPane(
+  tabs: Tabs,
+  direction: Direction,
+  session: number,
+  chat?: string,
+): Tabs {
   const tab = frontTab(tabs);
   if (!tab) return tabs;
   const pane = tabs.named.panes + 1;
+  const content: Content = {
+    kind: "session",
+    session,
+    chat: chat ?? chatNameOf(tabs, tab.id) ?? String(session),
+  };
   const layout = replace(tab.layout, tab.focused, (focused) => ({
     kind: "split",
     direction,
-    children: [focused, { kind: "pane", pane, session }],
+    children: [focused, { kind: "pane", pane, content }],
   }));
   return {
     ...tabs,
@@ -305,16 +534,22 @@ export function closeFocusedPane(
   return { ...tabs, byId: { ...tabs.byId, [tab.id]: { ...tab, layout: left, focused } } };
 }
 
-/** The panes of a tab, left to right and top to bottom. */
+/**
+ * The panes of a tab **that show a chat**, left to right and top to bottom.
+ *
+ * Every caller of this is asking about chats — which to end when the tab closes, which one a
+ * queue row brings forward, when the tab last moved — and a pane showing a view has none of
+ * those. {@link contentsOf} is every pane.
+ */
 export function panesOf(tabs: Tabs, id: number): { pane: number; session: number }[] {
-  const tab = tabs.byId[id];
-  return tab ? panes(tab.layout).map(({ pane, session }) => ({ pane, session })) : [];
+  return contentsOf(tabs, id).flatMap(({ pane, content }) =>
+    content.kind === "session" ? [{ pane, session: content.session }] : [],
+  );
 }
 
 /** The sessions with a pane on screen: the only ones a terminal is drawing. */
 export function visibleSessions(tabs: Tabs): number[] {
-  const tab = frontTab(tabs);
-  return tab ? panes(tab.layout).map((pane) => pane.session) : [];
+  return tabs.inFront === undefined ? [] : panesOf(tabs, tabs.inFront).map((one) => one.session);
 }
 
 function frontTab(tabs: Tabs): Tab | undefined {
@@ -325,6 +560,10 @@ type Pane = Extract<Layout, { kind: "pane" }>;
 
 function panes(layout: Layout): Pane[] {
   return layout.kind === "pane" ? [layout] : layout.children.flatMap(panes);
+}
+
+function contents(layout: Layout): { pane: number; content: Content }[] {
+  return panes(layout).map(({ pane, content }) => ({ pane, content }));
 }
 
 /** `layout` with the pane `pane` put through `change`. */

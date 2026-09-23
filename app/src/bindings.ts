@@ -285,22 +285,6 @@ export const commands = {
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
-	 *  One persona's memories, as rows of the same vocabulary a panel is drawn from.
-	 * 
-	 *  **It answers in `PanelRow`s, and that is the point rather than a convenience.** The window's
-	 *  list primitive shortens a row, opens its card, bounds the count, offers more and grows a
-	 *  search once there is more than a page of them — and it does all of that for these without
-	 *  knowing what a memory is, because they arrive as rows. A panel body and a row's detail
-	 *  surface are the same vocabulary drawn by the same code, which is the test of whether the
-	 *  contract was worth defining.
-	 * 
-	 *  **Its own command, asked when a persona's card is opened.** `workspace_panels` carries the
-	 *  *count*, which is a `read_dir`; this reads every memory file, and folding it in would read
-	 *  every persona's whole store on every workspace focus for something nobody has asked to see —
-	 *  `persona_details`' reason, at a larger size.
-	 */
-	personaMemories: (plane: PlaneId, persona: string) => typedError<PanelRow[], string>(__TAURI_INVOKE("persona_memories", { plane, persona })),
-	/**
 	 *  Make a workspace: `charter workspace create <name>`, with the vision when one was typed.
 	 * 
 	 *  **The name is checked by the core and by nothing in the window.** `wscmd::create` runs
@@ -333,23 +317,6 @@ export const commands = {
 	 *  the window asks for it only after showing them the refusal the core gave.
 	 */
 	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], Refused>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
-	/**
-	 *  What one persona's definition says about it: its role, when to delegate to it, its tools,
-	 *  the vault it names and what it extends.
-	 * 
-	 *  **Its own command, asked when a row is clicked, and not part of `workspace_panels`.** The
-	 *  panels are the hot path of focusing a workspace — the spec gives that 100 ms — and folding
-	 *  this in would read every persona's definition, and every definition up every `extends:`
-	 *  chain, on every focus, for something nobody has asked to see. A plane with twenty personas
-	 *  would pay for twenty file reads per click on the workspace strip.
-	 * 
-	 *  **It names its plane**, like every other command here: a persona belongs to a plane, and a
-	 *  window holds several.
-	 * 
-	 *  It answers with `charter_core::personas::name_refusal`'s own sentence where it will not
-	 *  answer — the same words the CLI gives for the same name.
-	 */
-	personaDetails: (plane: PlaneId, persona: string) => typedError<PersonaDetails, string>(__TAURI_INVOKE("persona_details", { plane, persona })),
 	/**
 	 *  What git says about each of the focused workspace's clones, and what the forge cache
 	 *  last recorded for the branch each is on.
@@ -513,6 +480,39 @@ export const commands = {
 	 *  doing its one job, and a contributed panel rests on it entirely.
 	 */
 	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
+	/**
+	 *  Every view an approved extension offers this window.
+	 * 
+	 *  An extension that is new, changed or unreadable offers nothing — the registry's one job, as
+	 *  for themes and panels. **What this returns is a list of buttons, not a list of permissions**:
+	 *  [`open_view`] asks the gate again when one is pressed.
+	 */
+	extensionViews: () => typedError<ExtensionView[], string>(__TAURI_INVOKE("extension_views")),
+	/**
+	 *  Whether this platform runs extension programs at all
+	 *  ([`charter_core::executor::RUNS_PROGRAMS`]). On one that does not, [`extension_views`]
+	 *  offers nothing and the window should not draw a place for a view to go.
+	 */
+	extensionProgramsRun: () => __TAURI_INVOKE<boolean>("extension_programs_run"),
+	/**
+	 *  What one view shows for this plane, now.
+	 * 
+	 *  `from` is `None` for a view charter draws itself and an extension's id for one it offers;
+	 *  `view` is which of theirs; `key` is what it is about inside that — a persona's name, or
+	 *  empty for the whole plane. For an extension's view a non-empty key is handed to its program
+	 *  as the persona it was opened from, and is checked as a persona name before it is.
+	 * 
+	 *  **Every refusal comes back as the core's sentence**, which names what refused and says what
+	 *  to do. The window draws it where the answer would have been.
+	 */
+	openView: (plane: PlaneId, from: string | null, view: string, key: string) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, from, view, key })),
+	/**
+	 *  The view tabs this plane had open when it was last recorded — at a launch, the ones the
+	 *  record put back. The window opens a tab for each; nothing in one is asked until it is drawn.
+	 */
+	reopenedViews: (plane: PlaneId) => typedError<ViewTab[], string>(__TAURI_INVOKE("reopened_views", { plane })),
+	/**  What view tabs the window has open now, so the record brings them back at the next launch. */
+	windowViews: (plane: PlaneId, views: ViewTab[]) => typedError<null, string>(__TAURI_INVOKE("window_views", { plane, views })),
 	/**
 	 *  Every row `charter doctor` would print for this plane, run inside the app.
 	 * 
@@ -827,6 +827,22 @@ export type ExtensionTheme = {
 	text: string,
 };
 
+/**  One view an approved extension offers, as the window draws its button. */
+export type ExtensionView = {
+	/**
+	 *  The extension's id, which is what the view is asked through and what the surface says
+	 *  it came from (ADR 0041 item 5 — what is in force is shown after approval, not only at
+	 *  it).
+	 */
+	extension: string,
+	/**  The view's id within it. */
+	id: string,
+	/**  What the button and the surface are called. */
+	title: string,
+	/**  What it is about (`panel::Subject`) — which decides where the window offers it. */
+	about: string,
+};
+
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
@@ -992,7 +1008,16 @@ export type Opened = {
 };
 
 /**  One part of a panel's body. */
-export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } | { kind: "note"; text: string; tone: string };
+export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } | { kind: "note"; text: string; tone: string } | 
+/**
+ *  Magnitudes charter draws — only ever in an answer from an extension's program
+ *  (`panel::answered`), never declared. See `charter_core::panel`'s header for why.
+ */
+{ kind: "chart"; title: string; 
+/**  `bars` or `columns` (`panel::Shape`). */
+shape: string; unit: string | null; points: PanelPoint[] } | 
+/**  Labelled facts, drawn as two columns (`panel::Block::Facts`). */
+{ kind: "facts"; facts: PanelFact[] };
 
 /**
  *  What opens when a row is opened, as the window receives it.
@@ -1002,15 +1027,12 @@ export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } |
  *  app's wire types are what generate `app/src/bindings.ts`.
  */
 export type PanelDetail = 
-/**  The row's own words, in full. The only kind a contributed panel may use. */
-{ kind: "text"; text: string } | 
 /**
- *  What this plane says this persona is. **A name and not an answer**: the window asks
- *  `persona_details` when the card opens, because a definition is a file an operator edits
- *  while charter is running, and because folding it in here would read every persona's
- *  definition on every workspace focus for something nobody has asked to see.
+ *  The row's own words, in full — the only kind there is. A persona row runs
+ *  `persona.show:<name>`, which opens the persona's view tab, rather than a card that reads
+ *  the definition (`panel::Detail` retired that kind).
  */
-{ kind: "persona"; persona: string };
+{ kind: "text"; text: string };
 
 /**  What a list says when it has no rows. */
 export type PanelEmpty = {
@@ -1021,6 +1043,20 @@ export type PanelEmpty = {
 	 *  reason.
 	 */
 	offer: string | null,
+};
+
+/**  One labelled fact. */
+export type PanelFact = {
+	label: string,
+	value: string,
+};
+
+/**  One magnitude in a chart. */
+export type PanelPoint = {
+	label: string,
+	/**  A whole count. `u32` so it is a `number` in TypeScript and not a `bigint`. */
+	value: number,
+	note: string | null,
 };
 
 /**  One row of a panel's list. */
@@ -1076,6 +1112,12 @@ export type PanelView = {
 	blocks: PanelBlock[],
 	/**  The extension that contributed it, or `null` for charter's own. */
 	from: string | null,
+	/**
+	 *  What it is about (`panel::Subject`), when it is about a subject charter publishes. The
+	 *  window offers the views about the same subject on this panel's heading — which is
+	 *  charter's choice of where, made once, rather than an extension's.
+	 */
+	about: string | null,
 };
 
 /**  Everything the panels can draw without running git. */
@@ -1125,12 +1167,11 @@ export type Panels = {
 	 *  the problem, and splitting it would cost something real: focusing a workspace has 100 ms
 	 *  and this command is the one that has to answer inside it.
 	 * 
-	 *  **A contributed panel needs no round trip of its own, and that is a fact about stage 1.**
-	 *  With no executor there is nothing to ask: an extension's panel is declared, so its rows
-	 *  came off the disk at survey time, and charter's own are produced from the plane read
-	 *  this command already does. The day an executor lands, a panel that wants live rows asks
-	 *  its extension — and that is a second call, made when the panel is drawn, and it is stage
-	 *  2's to design.
+	 *  **A contributed panel needs no round trip of its own.** An extension's panel is
+	 *  declared, so its rows came off the disk at survey time, and charter's own are produced
+	 *  from the plane read this command already does. What an extension answers LIVE is a
+	 *  *view* (`crate::views`), asked when the operator opens it and never on this path: a
+	 *  program started on every workspace focus would spend the 100 ms on a fork.
 	 */
 	contributed: PanelView[],
 };
@@ -1143,43 +1184,6 @@ export type Percent = {
 	 */
 	value: number,
 	tone: GaugeTone,
-};
-
-/**
- *  What one persona says about itself, for the row a reader clicked.
- * 
- *  **The vault is a NAME and nothing else.** charter refuses a secret by kind and never
- *  echoes one, and a panel is the last place that rule should get a special case: this struct
- *  carries the word `vault: <name>` puts in the definition, so the window can say which vault
- *  a chat as this persona would open. Nothing here ever reads the vault.
- */
-export type PersonaDetails = {
-	name: string,
-	/**  `role:`, inherited-inclusive. */
-	role: string | null,
-	/**
-	 *  `delegate-when:` — the work that should come to this persona, which is what makes it
-	 *  findable and what a router reads.
-	 */
-	delegate_when: string | null,
-	/**  `tools:`, the union down the `extends:` chain. */
-	tools: string[],
-	/**  The vault's name, where the definition declares one. */
-	vault: string | null,
-	/**
-	 *  Whether the definition declares `vault: none` — that it holds no credentials at all.
-	 * 
-	 *  **Separate from `vault` being absent, and the window must keep them apart.** charter's
-	 *  own `vault_of` falls back to a vault tagged with this persona in the registry, and
-	 *  nothing in Rust reads that registry yet — so "no `vault:` line" means charter-app has
-	 *  not looked, not that there is nothing. Drawing the two the same way would have the
-	 *  window claim a persona holds no credentials on the strength of a file nobody read.
-	 */
-	declares_no_vault: boolean,
-	/**  The `extends:` chain, child first. One name long for a persona that extends nothing. */
-	lineage: string[],
-	/**  The definition file, relative to the plane. */
-	file: string,
 };
 
 /**  One piece, as the window shows it. */
@@ -1552,6 +1556,50 @@ export type UsageTurn = {
 	context: Percent | null,
 	/**  What that turn wrote to the cache, as charter spells tokens. */
 	written: string | null,
+};
+
+/**
+ *  What a view answered.
+ * 
+ *  **`Gone` is not a refusal, and the window must keep them apart.** A tab that came back at a
+ *  launch can name a persona that has since been deleted, or an extension that has since been
+ *  uninstalled; that tab is drawn as a view whose source has gone — a sentence in the middle of
+ *  the tab, with nothing to repair — and not as an error. A refusal (`Err`) is something the
+ *  operator can act on: approve the extension again, make its program runnable.
+ */
+export type ViewAnswer = { kind: "answered"; 
+/**  The blocks, in the panel vocabulary, parsed and re-emitted by the core. */
+blocks: PanelBlock[]; 
+/**
+ *  How long it took, gate and round trip together, in milliseconds. Drawn quietly
+ *  under the answer, because a producer that has become slow is worth noticing before
+ *  it becomes one that times out.
+ */
+took_ms: number } | 
+/**  What the view was about is not there any more, and why, in one sentence. */
+{ kind: "gone"; why: string };
+
+/**
+ *  A tab that holds a view, as the window and the record both know it (`reopen::View`).
+ * 
+ *  **The window says these and the record keeps them**; nothing in the core decides one. They
+ *  travel as a whole list every time it changes, because a tab strip is small and a list that
+ *  is the window's arrangement is easier to keep true than a stream of edits to one.
+ */
+export type ViewTab = {
+	/**  The extension's id, or `null` for charter's own view. */
+	from: string | null,
+	view: string,
+	/**  A persona's name, or empty for the whole plane. */
+	key: string,
+	/**  What the tab says. */
+	title: string,
+	/**  The strip it is on, or `null` for the strip of chats outside every workspace. */
+	workspace: string | null,
+	/**  Where it is on the strip, counted over chats and views together from the left. */
+	at: number,
+	active: boolean,
+	pinned: boolean,
 };
 
 /**

@@ -1,0 +1,26 @@
+[package]
+name = "persona-statistics"
+version.workspace = true
+description = "The persona statistics view: charter's first extension program, and the executor's first consumer"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# **No dependency on charter-core, deliberately.** This is an extension, written the way a
+# stranger would write one: it knows the protocol (a line of JSON in, a line of JSON out) and
+# nothing of charter's insides. If it needed charter-core to work, the contract would not be
+# one a stranger could meet.
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serde_json.workspace = true
+
+# The end-to-end test drives this program through charter's real executor, so the test —
+# and only the test — depends on the core.
+[dev-dependencies]
+charter-core = { workspace = true, features = ["fenced"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true
