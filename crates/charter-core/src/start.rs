@@ -46,7 +46,7 @@ pub struct Start {
     /// Whether THIS chat draws charter's footer in its pane rather than a blank line.
     ///
     /// Default `false`, which is the app as it has always behaved. See [`FOOTER_ENV`] for
-    /// what it does and charter ADR 0029 for why it is a chat's property and not a plane's.
+    /// what it does and ADR 0029 for why it is a chat's property and not a plane's.
     pub show_footer: bool,
 }
 
