@@ -1,5 +1,7 @@
 # MCP servers, personas, and credentials
 
+> **This version of charter does not manage MCP servers yet.** The host behaviour this page describes is Claude Code's own and holds whatever charter does.
+
 ## The host scopes servers per sub-agent
 
 A sub-agent's frontmatter takes `mcpServers:` — a list whose entries are either a string

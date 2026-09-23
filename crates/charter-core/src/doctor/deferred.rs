@@ -1,57 +1,61 @@
-//! The rows this binary does not check yet — each still printed, under its own name, as a
-//! warning that says so.
+//! The rows this version of charter does not check yet — each still printed, under its own
+//! name, as a warning that says so.
 //!
 //! **Not dropped, and not green.** A doctor that stops printing a row tells its reader the
 //! problem that row reported has gone, and one that prints it green says it looked. Both
-//! would be false: nothing here looked. So each unported check keeps its place in the table
-//! and in `--json`, in Python's own "not checked" shape, with the reason in the detail and a
-//! hint saying where the check still runs.
+//! would be false: nothing here looked. So each unchecked row keeps its place in the table
+//! and in `--json`, in the "not checked" shape every other doctor row uses, with the reason in
+//! the detail and a hint saying its silence means nothing.
+//!
+//! **No hint points anywhere else.** Earlier builds said the Python charter's `charter doctor`
+//! still ran these checks. This app is standalone (ADR 0044, ADR 0045): a row it does not check
+//! says so, and sends nobody to another program to find out.
 //!
 //! The reasons are grouped by what is missing rather than by row, because that is what
-//! changes: the day vaults are ported, four rows stop being deferred at once, and the
-//! differential test's list of deferred names is where that has to be said.
+//! changes: the day vaults land, four rows stop being deferred at once, and the differential
+//! test's list of deferred names is where that has to be said.
 
 use super::Row;
 
 /// What every deferred row says to do about it.
 pub(crate) const DEFERRED_HINT: &str = "This charter does not run this check yet, so its \
                                         silence means nothing — it is not saying the check \
-                                        passed. The Python charter's `charter doctor` still \
-                                        runs it.";
+                                        passed.";
 
 /// A row for a check this binary does not run, saying why.
 pub(crate) fn row(name: &str, why: &str) -> Row {
     Row::warn(name, format!("not checked ({why})"), DEFERRED_HINT)
 }
 
-/// Python's first row reports its own interpreter. This binary has none, and the Python
-/// charter the plane's hooks still run is the one that needs it.
+/// The Python charter's first row reported its own interpreter. This charter has none and
+/// needs none; the row keeps its place so a script reading `--json` still finds it.
 pub(crate) fn python3() -> Row {
     row("python3", PYTHON)
 }
 
-pub(crate) const PYTHON: &str = "this charter is not written in Python; the Python charter \
-                                 this plane's hooks still run needs Python 3.11+, and its own \
-                                 doctor reports whether it has it";
-pub(crate) const FORGES: &str = "forges are not ported to this charter yet";
-pub(crate) const GIT_POLICY: &str = "the one-credential git policy is not ported to this \
-                                     charter yet";
-pub(crate) const HARNESS: &str = "the harness registry's capability ceilings are not ported \
-                                  to this charter yet";
-pub(crate) const FRAME: &str = "the tmux frame is the Python charter's, and this charter does \
-                                not check it";
-pub(crate) const GUARD: &str = "the guard is not ported to this charter yet (M3)";
-pub(crate) const WORKSPACE_LAYER: &str = "whether each workspace's generated layer is current \
-                                          is not ported to this charter yet";
-pub(crate) const CHANGES: &str = "cross-repo changes are not ported to this charter yet";
-pub(crate) const VAULTS: &str = "vaults and the credentials they hold are not ported to this \
-                                 charter yet (M3)";
-pub(crate) const PERSONA_LINT: &str = "persona lint is not ported to this charter yet";
-pub(crate) const NEWS: &str = "charter's release news is not ported to this charter yet";
-pub(crate) const ASK_RULES: &str = "whether an ask rule shadows a persona's tools is not \
-                                    ported to this charter yet";
-pub(crate) const HANDOFF_GATE: &str = "the handoff gate is not ported to this charter yet";
-pub(crate) const SHADOWED_DOCS: &str = "charter's shipped knowledge is not ported to this \
-                                        charter yet";
-pub(crate) const PLUGIN: &str = "the Claude Code plugin's install and version checks are not \
-                                 ported to this charter yet";
+pub(crate) const PYTHON: &str = "this charter does not run on Python and has no interpreter \
+                                 to report";
+pub(crate) const FORGES: &str = "this version of charter does not check forges yet";
+pub(crate) const GIT_POLICY: &str = "this version of charter does not check the one-credential \
+                                     git policy yet";
+pub(crate) const HARNESS: &str = "this version of charter does not check the harness \
+                                  registry's capability ceilings yet";
+pub(crate) const FRAME: &str = "this charter has no tmux frame; its window takes the frame's \
+                                place";
+pub(crate) const GUARD: &str = "this version of charter does not check the guard yet";
+pub(crate) const WORKSPACE_LAYER: &str = "this version of charter does not check whether each \
+                                          workspace's generated layer is current yet";
+pub(crate) const CHANGES: &str = "this version of charter does not check cross-repo changes \
+                                  yet";
+pub(crate) const VAULTS: &str = "this version of charter does not check vaults and the \
+                                 credentials they hold yet";
+pub(crate) const PERSONA_LINT: &str = "this version of charter does not lint personas yet";
+pub(crate) const NEWS: &str = "this version of charter does not check release news";
+pub(crate) const ASK_RULES: &str = "this version of charter does not check whether an ask rule \
+                                    shadows a persona's tools yet";
+pub(crate) const HANDOFF_GATE: &str = "this version of charter does not check the handoff gate \
+                                       yet";
+pub(crate) const SHADOWED_DOCS: &str = "this version of charter does not check shadowed \
+                                        knowledge docs yet";
+pub(crate) const PLUGIN: &str = "this version of charter does not check the Claude Code \
+                                 plugin's install and version yet";

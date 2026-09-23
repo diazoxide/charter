@@ -84,8 +84,7 @@ pub fn live(root: &Path, name: &str, off: bool, say: Sink) -> u8 {
     {
         say(Say::Warn(format!(
             "'{name}' has no memory/{} yet, and this charter does not create one — it is \
-             LIVE with nothing to share. The Python charter's `charter workspace live {name}` \
-             scaffolds it; so does `charter workspace remember`.",
+             LIVE with nothing to share. `charter workspace remember` scaffolds it.",
             crate::memstore::INDEX
         )));
     }

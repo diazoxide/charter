@@ -10,7 +10,7 @@ import App from "./App";
  *
  * **Two claims, and the second is the one that matters.** That the dialog is reachable and
  * sends what was typed; and that a plane charter has just created is still opened **through
- * the trust gate** (charter ADR 0035) — so the ordinary end of this flow is the approval
+ * the trust gate** (ADR 0035) — so the ordinary end of this flow is the approval
  * dialog, exactly as it would be for a project that came from a recents row.
  *
  * What `create_project` writes is `scaffold::init`'s and is tested in

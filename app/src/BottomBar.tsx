@@ -17,7 +17,7 @@ import type { WorkspaceState } from "./workspaceState";
 import { useArrived } from "./lib/arrived";
 
 /**
- * The bottom region: what the focused workspace's repos are doing (charter ADR 0038).
+ * The bottom region: what the focused workspace's repos are doing (ADR 0038).
  *
  * Repo git state, worktrees and pipelines, which used to be two sections of the right-hand
  * side. They moved because the right-hand side is what is asking for you and this is not: it

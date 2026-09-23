@@ -73,7 +73,7 @@ async function tabNames(): Promise<string[]> {
  * **The one answer to "how many tabs are there" that does not come from the strip under
  * test.** The catalogue emits one `End chat <name>` row per tab and the palette lists them
  * all, which is what makes it the right oracle for a strip that no longer draws every tab —
- * and it is the find surface charter ADR 0039 names, so it is not a second one invented here.
+ * and it is the find surface ADR 0039 names, so it is not a second one invented here.
  *
  * **Tabs and not sessions**, which is the distinction that made the first version of the
  * assertion below wrong on both platforms: a split puts two sessions in ONE tab, the spec
@@ -149,7 +149,7 @@ describe("the window", () => {
   });
 
   /**
-   * The strip collapsing, against a real layout (charter ADR 0039, as amended).
+   * The strip collapsing, against a real layout (ADR 0039, as amended).
    *
    * **This is the only place the measurement itself is under test.** How many tabs fit is a
    * property of the strip's laid-out width, and jsdom gives every element a zero-sized box

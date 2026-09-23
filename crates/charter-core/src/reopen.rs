@@ -66,14 +66,14 @@ pub struct Chat {
     pub profile: Option<String>,
     /// The persona this chat adopted.
     pub persona: Option<String>,
-    /// Whether this chat draws charter's footer in its pane (charter ADR 0029).
+    /// Whether this chat draws charter's footer in its pane (ADR 0029).
     ///
     /// Recorded for the same reason `persona` is: it is a choice the operator made about
     /// THIS chat in the picker, and a relaunch that dropped it would silently blank a footer
     /// they had turned on. A record written before ADR 0029 has no such key, and `false` is
     /// both serde's default and the behaviour every such record was written under.
     pub show_footer: bool,
-    /// Whether the operator pinned this chat (charter ADR 0039, stored per ADR 0040).
+    /// Whether the operator pinned this chat (ADR 0039, stored per ADR 0040).
     ///
     /// **A chat pin is an app record and not machine state**, which is the one of the three
     /// levels that does not go in `machine.rs`: ADR 0034 forbids a chat name outside a plane
@@ -119,7 +119,7 @@ pub const MOST_TITLE: usize = 120;
 
 /// One tab that held a **view** rather than a chat, as it was when the app last wrote this.
 ///
-/// **A tab is a layout of panes, and a pane holds a session or a view** (charter ADR 0043, as
+/// **A tab is a layout of panes, and a pane holds a session or a view** (ADR 0043, as
 /// amended for view tabs). A chat comes back because its program is started again; a view has
 /// no program of charter's to start, so what comes back is only the fact that the tab was
 /// there — which view, on which strip, where among the tabs, and whether it was in front.
@@ -154,7 +154,7 @@ pub struct View {
     pub at: u32,
     /// Whether it was the tab in front.
     pub active: bool,
-    /// Whether the operator pinned it (charter ADR 0039), for [`Chat::pinned`]'s reasons.
+    /// Whether the operator pinned it (ADR 0039), for [`Chat::pinned`]'s reasons.
     pub pinned: bool,
 }
 
@@ -299,7 +299,7 @@ pub fn path(plane_root: &Path) -> PathBuf {
 ///
 /// The last component is also held to being a plain file no bigger than [`MAX_BYTES`], and
 /// **those two questions are now asked of the open descriptor** rather than of the name
-/// (charter ADR 0028). A `symlink_metadata` on the path and a `read_to_string` of the path
+/// (ADR 0028). A `symlink_metadata` on the path and a `read_to_string` of the path
 /// are two different objects with a window between them: a FIFO swapped in after the check
 /// blocked the launch for ever, which is the very failure the check exists to stop.
 /// `contain::open_no_link` returns the descriptor the read will use, and [`refuse_unusable`]
@@ -384,7 +384,7 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     // `contain::create_no_link` and not `no_link_on_the_way` + `fs::write`: the walk answers
     // about a name and the write opens that name again, and a link planted in between put
     // the whole record outside the plane 7600 times per 20,000 writes when it was measured
-    // (charter ADR 0028). The flag makes the kernel answer the last component at the instant
+    // (ADR 0028). The flag makes the kernel answer the last component at the instant
     // of the create instead.
     let beside = file.with_extension("json.writing");
     {
@@ -423,7 +423,7 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     let file = path(plane_root);
     // A record reached through a link is not this plane's record, and what it holds is a
     // command line this launch would run — so the walk AND the open both answer, and the
-    // open's answer is the kernel's at the instant it happens (charter ADR 0028). Measured
+    // open's answer is the kernel's at the instant it happens (ADR 0028). Measured
     // before that flag: 1881 launches per 20,000 took a planted command line from outside
     // the plane.
     let mut open = match crate::contain::open_no_link(plane_root, &file) {
@@ -1227,7 +1227,7 @@ mod tests {
         assert_eq!(read_or_refusal(held.path()).unwrap(), Record::default());
     }
 
-    // ----- a pinned chat (charter ADR 0039, stored per ADR 0040) -----
+    // ----- a pinned chat (ADR 0039, stored per ADR 0040) -----
 
     #[test]
     fn a_pinned_chat_comes_back_pinned() {
@@ -1251,7 +1251,7 @@ mod tests {
 
     #[test]
     fn a_record_written_before_pins_existed_reads_as_nothing_pinned() {
-        // **This is why there is no version bump**, although charter ADR 0039 expected one:
+        // **This is why there is no version bump**, although ADR 0039 expected one:
         // a bump would read every such record as "nothing to put back" and take the
         // operator's open chats with it at the first launch after the upgrade. A field is
         // owed a bump when its absence cannot be read honestly, and this one's reads as
@@ -1388,7 +1388,7 @@ mod tests {
         assert_eq!(read(plane.path()).dealt, 4);
     }
 
-    // ----- view tabs (charter ADR 0043, as amended: a pane holds a session or a view) -----
+    // ----- view tabs (ADR 0043, as amended: a pane holds a session or a view) -----
 
     fn persona_view(name: &str) -> View {
         View {

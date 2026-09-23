@@ -79,7 +79,7 @@ to add to it.
 `StartChat`, `QuitWarning`, `ApprovePlane` and `Palette` — every modal surface the window has.
 The terminal panes are xterm.js and are not a candidate.
 
-And the chat strip's **show-more menu** (`@radix-ui/react-dropdown-menu`, charter ADR 0039),
+And the chat strip's **show-more menu** (`@radix-ui/react-dropdown-menu`, ADR 0039),
 which is the first surface built under this rule rather than converted to it. Two decisions it
 does NOT share with the four dialogs, both because it is a menu and not a question:
 
@@ -166,7 +166,7 @@ over the other two surfaces Radix has for the same content:
 
 - **Not a dialog**, because a dialog is modal and modal is wrong here twice. Radix marks
   everything outside an open dialog `aria-hidden`, including the needs-you queue two sections up
-  — the one surface charter ADR 0038 says this region must never compete with — and a modal is
+  — the one surface ADR 0038 says this region must never compete with — and a modal is
   for a question that has to be answered before anything else happens. A persona's role is
   reading.
 - **Not a sheet**, because the window already has one and it is the window's: `AlertsDrawer` is a
@@ -189,7 +189,7 @@ then replaced the same day, when the operator was asked where the card should op
 that in tabs we can have what we want - not only harnesses"*.
 
 So a persona is a **view**, and a view is what a tab's pane holds when it does not hold a chat
-(charter ADR 0043, as amended; `app/src/tabs.ts`, `app/src/Views.tsx`). No primitive is involved
+(ADR 0043, as amended; `app/src/tabs.ts`, `app/src/Views.tsx`). No primitive is involved
 beyond the tablist the strip already is, and that is the point: the accessibility the sheet had to
 argue for — not modal, not hiding the queue, dismissible, focus returned — is a tab's by
 construction. A tab is not dismissed by focus leaving it, which is what closed the sheet when the
@@ -370,7 +370,7 @@ that `Cancel` happens to be written second in their JSX rather than first.
 **The ticket's headline is half refuted, and the half that survives is the worse half.** It said
 the picker's `Start` could not be reached; `Start` could be reached, by walking the dialog
 backwards through every form control and out the far side on Radix's first edge — and never by
-Tab. What was reachable by neither key was the footer checkbox, charter ADR 0029's one choice.
+Tab. What was reachable by neither key was the footer checkbox, ADR 0029's one choice.
 ADR 0022 makes this dialog the only way a chat ever starts, so "you may start a chat, but only
 by pressing Shift+Tab five times" was the keyboard-only path to starting one.
 
@@ -402,7 +402,7 @@ on the machine.
 
 Three things about that choice, because each was a fork:
 
-- **It is not a hand-written Tab handler, which charter ADR 0037 is against and which this
+- **It is not a hand-written Tab handler, which ADR 0037 is against and which this
   would have been the fourth of.** Nothing wraps a primitive, nothing intercepts a key, and
   Radix's own edge behaviour is untouched and still does the wrapping at the ends.
 - **It is not a WebView setting, and that route does not exist.** Turning "tab to all controls"
@@ -427,7 +427,7 @@ carries the rest.
 
 ## The three strips say their depth in shade, and that took no primitive either
 
-charter ADR 0036 makes the window an axis — a project holds workspaces, a workspace holds chats —
+ADR 0036 makes the window an axis — a project holds workspaces, a workspace holds chats —
 and charter-app#171 drew that with three signals so the nesting would be legible before a word
 was read: **height** (a project's row is the tallest), **inset** (each row began under its
 parent's first tab) and **surface** (deep, raised, then the bar). charter-app#193 keeps
@@ -472,7 +472,7 @@ strip's tab carries an edge, and there is no `--nested` left to indent anything 
 
 ## The four regions added no primitive, which is the rule working
 
-charter ADR 0038 split the window into four regions, and the whole layout came out of what was
+ADR 0038 split the window into four regions, and the whole layout came out of what was
 already here — a fact worth recording, because "a layout change" is the sort of ticket a
 component library gets added on.
 

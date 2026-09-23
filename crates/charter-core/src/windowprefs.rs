@@ -2,7 +2,7 @@
 //! `machine.json`** in charter's own config directory.
 //!
 //! Both are "how one operator likes their window" rather than facts about a plane — the
-//! argument charter ADR 0040 made for pins — so neither is committed to `charter.toml`, where it
+//! argument ADR 0040 made for pins — so neither is committed to `charter.toml`, where it
 //! would arrive with every clone and rearrange or repaint somebody else's window. And neither is
 //! a field of the machine store: [`crate::machine`] keeps five things and says the count is
 //! load-bearing, and a region arrangement or a colour names nothing that store holds.

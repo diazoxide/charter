@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { browser, expect, $ } from "@wdio/globals";
 import { built, READY } from "../harness.js";
@@ -143,7 +143,24 @@ describe("a chat's context gauge", () => {
     const socket = now[`socket-${chat}`];
     const settings = JSON.parse(now[settingsFile]) as {
       statusLine?: { type: string; command: string };
+      enabledPlugins?: Record<string, boolean>;
     };
+
+    // 0. **The bundled plugin** (`charter_core::plugin`): the chat is started with the plugin
+    // the app ships, loaded for this session alone, its hooks reading the binary from the
+    // variable the app sets — and the Python charter's plugin turned off for this session.
+    const pluginDir = now[`plugin-${chat}`];
+    expect(pluginDir).toBeTruthy();
+    const manifest = JSON.parse(
+      readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"),
+    ) as { name: string };
+    expect(manifest.name).toBe("charter-app");
+    expect(existsSync(join(pluginDir, "hooks", "hooks.json"))).toBe(true);
+    expect(realpathSync(now[`hookbinary-${chat}`])).toBe(realpathSync(built("charter")));
+    expect(settings.enabledPlugins).toEqual({
+      "charter@charter": false,
+      "charter-app@inline": true,
+    });
 
     // 1. The feed: charter armed its own statusline as this session's statusLine — which it
     // may only where nothing else fills the line (the ruling of 2026-09-22). The fixture plane

@@ -1,7 +1,9 @@
 # Working in charter-app
 
-Read the spec before changing behaviour: `docs/superpowers/specs/2026-09-17-charter-app.md` in the
-charter repo (linked from `README.md`). ADR 0025 there holds the reasons.
+Read the spec before changing behaviour: [`docs/spec.md`](docs/spec.md). The decisions and their
+reasons are in [`docs/adr/`](docs/adr/), starting at ADR 0025; the plane on disk is
+[`docs/plane-format.md`](docs/plane-format.md). ADRs 0001 to 0024 are the Python charter's and stay
+in `diazoxide/charter` as history (ADR 0044). A new decision is the next number in `docs/adr/`.
 
 ## Priorities, in order
 
@@ -15,8 +17,11 @@ charter repo (linked from `README.md`). ADR 0025 there holds the reasons.
 - **The core never depends on Tauri or the UI.** `charter-core` is plain Rust. The app and the
   CLI call into it.
 - **Nothing parses harness output to decide anything.** A session's state comes from hooks only.
-- **The plane on disk has the Python charter's format.** Never change it here without the
-  plane-format spec changing first.
+- **The plane on disk has the format `docs/plane-format.md` records.** Never change it here
+  without that document changing first.
+- **Nothing shipped depends on the Python charter.** No message, doc page or code path in the
+  app or the `charter` binary tells anyone to install or run it. It is allowed only as the
+  differential oracle in CI (ADR 0044, ADR 0045).
 - **No `unsafe`, with one audited exception** (`unsafe_code = "deny"` workspace-wide). The
   exception is `charter_core::executor::inherit_nothing_else`: the `pre_exec` hook that closes
   every descriptor above 2 in an extension's program, because nothing but code run between
@@ -26,7 +31,7 @@ charter repo (linked from `README.md`). ADR 0025 there holds the reasons.
   appears anywhere else. A second block is a new ruling, not an edit.
 - **UI is built from Radix primitives, never hand-rolled markup**, and never behind a charter API
   of our own — no `<Modal>`, no `<Field>`. A shadcn/ui component's source **copied into the repo
-  is allowed** and is not that layer (charter ADR 0037, amended 2026-09-22).
+  is allowed** and is not that layer (ADR 0037, amended 2026-09-22).
   `docs/ui-primitives.md` says which, why, and what it costs; `docs/design-system.md` says what a
   copy has to satisfy.
 - **No colour is written anywhere but `app/src/theme/`.** A theme is a data file; the CSS

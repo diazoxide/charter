@@ -122,7 +122,7 @@ to change that changes one value rather than hunting for the second one.
 ### Where a user's theme lives
 
 `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config` — then `charter/theme.json`.
-That is `machine.rs`'s ladder, rung for rung, and the argument is the one charter ADR 0040 made
+That is `machine.rs`'s ladder, rung for rung, and the argument is the one ADR 0040 made
 for pins: **a theme is how one operator likes their window, not a fact about the plane.** A
 theme committed to `charter.toml` would arrive with every clone and repaint somebody else's
 window in colours they never chose.
@@ -150,7 +150,7 @@ new object through `pane.options.theme`, which is xterm's own way to retheme a l
 A theme and a **layout** — which regions are drawn, on which side, in what order and how big
 (`app/src/regions.ts`) — are both "how one operator likes their window", and both are files
 beside `machine.json`: `$CHARTER_CONFIG_HOME` (else `$XDG_CONFIG_HOME`, else `~/.config`), then
-`charter/layout.json`. It is not a field of the machine store: charter ADR 0040 amended ADR
+`charter/layout.json`. It is not a field of the machine store: ADR 0040 amended ADR
 0034 for _"how the operator arranged what this file already names"_, and a region arrangement
 names nothing that file holds.
 
@@ -266,7 +266,7 @@ A theme file carries them under `motion`, beside `tokens`:
   built-in of its appearance does; a bad value falls back and is reported, exactly as a colour is.
 - **`0` turns a motion off.** A theme that sets every duration to zero is a still window.
 - **An extension restyles motion the same way it restyles colour** — through the theme it
-  contributes (charter ADR 0041; the panel contract of ADR 0043 is the same registry). Nothing
+  contributes (ADR 0041; the panel contract of ADR 0043 is the same registry). Nothing
   about the extension path changed: the theme text goes to `load`, and `load` now reads `motion`.
 
 ### Reduced motion is the layer's job, once
@@ -413,7 +413,7 @@ on the first three, because they are about what the window is drawn _in_:
   value; it does not catch a class that does not exist, and `tailwind.test.ts` checks that the
   palette is gone rather than that a source file avoided it. The result of missing one is an
   element rendered undressed — which is exactly the `claudeclaudeclaudebuilt-indefault` defect
-  charter ADR 0037 was written about. **Read the copied file's classes against the `@theme` block
+  ADR 0037 was written about. **Read the copied file's classes against the `@theme` block
   in `app/src/styles.css` before the PR, and look at the component running.**
   `bg-surface-base text-text-primary` is the shape they should end up in.
 - **No arbitrary value survives the paste** — `text-[13px]`, `rounded-[6px]`, `bg-[#fff]`. This

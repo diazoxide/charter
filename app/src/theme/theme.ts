@@ -91,8 +91,8 @@ export const TOKENS = [
   "focus.ring",
   "tab.active",
 
-  // **The three strips of the axis, one quiet shade each, and the tab you are on** (charter
-  // ADR 0036, charter-app#193). A project holds workspaces and a workspace holds chats; #171
+  // **The three strips of the axis, one quiet shade each, and the tab you are on** (ADR
+  // 0036, charter-app#193). A project holds workspaces and a workspace holds chats; #171
   // drew that by indenting each row under the one above, the operator read the indent as stray
   // padding, and then turned down coloured rules in its place — *"this is not looks
   // professional, it should be minimalistic, and i prefer to change little bit backgrounds of

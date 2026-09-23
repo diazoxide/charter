@@ -1,5 +1,7 @@
 # A change that spans several repos
 
+> **This version of charter does not have `charter change` yet.** This page describes what it is for and how it will behave.
+
 One piece of work often touches five repositories. Git has no word for that, and neither
 did charter: what you got was eleven branches across five clones and nothing saying which
 five go together, which one has to land first, or what any of it was for.
@@ -81,7 +83,7 @@ does not ask the divergences that are read against it.
 The refusals are the design, so they are in one place.
 
 1. **No `--all` on `land`.** The flag does not exist and the parser refuses it. See
-   [ADR 0020](adr/0020-there-is-no-cross-repo-merge-loop.md).
+   [ADR 0020](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0020-there-is-no-cross-repo-merge-loop.md).
 2. **No automatic cross-repo rollback.** A revert is a new change.
 3. **No synthetic monorepo on disk.** No symlink farm, no union mount, no subtree. The
    monorepo is the workspace directory — the clones are already siblings, so `rg` already

@@ -1,5 +1,7 @@
 # The browser lane
 
+> **This version of charter does not have the vault commands this page's credential flow uses yet** (see [secrets.md](secrets.md)).
+
 Driving a browser splits cleanly in two, and only one half is charter's.
 
 | | owner |
@@ -22,7 +24,7 @@ charter browser install --version 0.1.19
 ## The paths it leaves behind
 
 Three, of different kinds. Charter decides one and states the others — see
-[ADR 0017](adr/0017-charter-ignores-what-carries-credentials.md) for why the line falls
+[ADR 0017](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0017-charter-ignores-what-carries-credentials.md) for why the line falls
 there.
 
 | path | what it is | posture |

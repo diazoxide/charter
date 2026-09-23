@@ -5,7 +5,7 @@
 //! ([`pick_extension`]), read one and ask about it ([`install_extension`]), and record the
 //! yes ([`approve_extension`]).
 //!
-//! **There is no executor here, and that is still deliberate.** charter ADR 0041 staged it —
+//! **There is no executor here, and that is still deliberate.** ADR 0041 staged it —
 //! the registry first, the subprocess afterwards — so that the first extension runtime was not
 //! also the thing that invented the list it runs against. The runtime now exists
 //! (`charter_core::executor`, drawn by `crate::views`) and it was built against this list: it
@@ -102,7 +102,7 @@ pub struct ExtensionRow {
     pub ask: Option<ExtensionAsk>,
 }
 
-/// What has contributed what to this window — charter ADR 0041's item 2, and the thing every
+/// What has contributed what to this window — ADR 0041's item 2, and the thing every
 /// later decision about extensions is read off.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct InstalledExtensions {

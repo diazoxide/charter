@@ -1,5 +1,5 @@
 //! Whether this plane's `[charter] version` pin is one this charter meets — asked of
-//! `adopt::version_report`, and of nothing else (charter ADR 0030).
+//! `adopt::version_report`, and of nothing else (ADR 0030, as amended by ADR 0045).
 //!
 //! ADR 0030 rules the comparison out of every surface but one: *"when `doctor`'s `version lock`
 //! row stops deferring, it asks `adopt::version_report`'s comparison, not one of its own."* The
@@ -7,9 +7,13 @@
 //! exit status — `charter version`'s 1 — and never a comparison made here; the sentences are
 //! the report's own, so the window cannot say "in sync" where the CLI refuses to.
 //!
-//! What this adds is the **news**: the entries between the pin and what this charter brought
-//! (`news::between`, the range `charter news --since <pin>` prints). A pin that drifts is a
-//! plane that has not taken up what came since, and those entries are what came since.
+//! **A pin on the Python charter's line is not drift** (ADR 0045). The report names it as an
+//! older charter line and exits 0, so the window shows no drift for it either.
+//!
+//! What this adds is the **news**: the entries between the pin and this charter's version
+//! (`news::between`). The corpus is the Python charter's frozen history and names none of this
+//! app's versions, so for a pin on this app's line the range is empty — which is true: there is
+//! no news about the app's own versions in it.
 
 use charter_core::scaffold::Say;
 use charter_core::{adopt, news};
@@ -32,13 +36,13 @@ pub struct NewsItem {
 pub struct PinReport {
     /// `charter version`'s verdict: its exit status was 1. The only thing the line keys on.
     pub drift: bool,
-    /// The release this charter brought (`news::shipped_version`).
+    /// This charter's version: the app's (`adopt::app_version`, ADR 0045).
     pub brought: String,
     /// `[charter] version` as written, or none.
     pub pinned: Option<String>,
     /// What `charter version` said, line by line, in its own words.
     pub said: Vec<String>,
-    /// What came between the pin and what this charter brought — only when it drifts.
+    /// What the news corpus has between the pin and this charter's version — only on drift.
     pub news: Vec<NewsItem>,
     /// How many more entries there were than `news` carries.
     pub more_news: u32,
@@ -54,15 +58,14 @@ pub fn plane_pin(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Pin
 pub(crate) fn report(root: &std::path::Path) -> PinReport {
     let version = adopt::version_report(Some(root));
     let drift = version.code == 1;
-    let brought = news::shipped_version();
+    let brought = adopt::app_version().to_owned();
     let pinned = adopt::locked_version(root);
-    // Newest first: the ones furthest from what the plane has are the ones to read first. No
-    // guard on `drift` is needed, and none is written: a pin that is met is the range's own
-    // exclusive bottom, so `between` is empty for it by construction, and so is a pin newer
-    // than what this charter brought.
+    // Newest first: the ones furthest from what the plane has are the ones to read first.
+    // Only on drift: a pin on the Python line keys below this app's version on no scale that
+    // means anything, and the entries between them are not news about this app.
     let range: Vec<news::Entry> = match &pinned {
-        Some(pin) => news::between(pin, &brought).into_iter().rev().collect(),
-        None => Vec::new(),
+        Some(pin) if drift => news::between(pin, &brought).into_iter().rev().collect(),
+        _ => Vec::new(),
     };
     PinReport {
         drift,
@@ -110,8 +113,8 @@ mod tests {
     }
 
     #[test]
-    fn a_plane_pinning_what_this_charter_brought_does_not_drift() {
-        let brought = news::shipped_version();
+    fn a_plane_pinning_this_charters_version_does_not_drift() {
+        let brought = adopt::app_version();
         let (_d, root) = plane(&format!("schema = 1\n[charter]\nversion = \"{brought}\"\n"));
 
         let pin = report(&root);
@@ -121,8 +124,26 @@ mod tests {
     }
 
     #[test]
-    fn an_older_pin_drifts_in_charter_versions_own_words_and_carries_what_came_since() {
+    fn a_pin_on_the_python_charters_line_is_not_drift_and_carries_no_news() {
         let (_d, root) = plane("schema = 1\n[charter]\nversion = \"0.50.0\"\n");
+
+        let pin = report(&root);
+
+        assert!(!pin.drift, "{pin:?}");
+        assert_eq!(pin.brought, adopt::app_version());
+        assert!(
+            pin.said
+                .iter()
+                .any(|s| s.starts_with("this control plane pins 0.50.0, a release of the Python")),
+            "{:?}",
+            pin.said
+        );
+        assert!(pin.news.is_empty());
+    }
+
+    #[test]
+    fn a_pin_past_the_python_line_drifts_in_charter_versions_own_words() {
+        let (_d, root) = plane("schema = 1\n[charter]\nversion = \"9.0.0\"\n");
 
         let pin = report(&root);
 
@@ -130,25 +151,31 @@ mod tests {
         assert!(
             pin.said
                 .iter()
-                .any(|s| s.starts_with("drift: this control plane pins 0.50.0")),
+                .any(|s| s.starts_with("drift: this control plane pins 9.0.0")),
             "{:?}",
             pin.said
         );
-        // Everything listed is newer than the pin, newest first.
-        assert!(!pin.news.is_empty());
-        assert!(pin.news.len() <= MOST_NEWS);
-        assert_eq!(pin.news[0].version, news::shipped_version());
-        assert!(pin.news.iter().all(|n| n.version.as_str() != "0.50.0"));
+        // The corpus is the Python line's history and names nothing past 0.62.1.
+        assert!(pin.news.is_empty());
     }
 
     #[test]
-    fn a_pin_that_is_not_a_version_lists_no_more_than_the_cap() {
+    fn a_pin_that_is_not_a_version_drifts_and_is_not_handed_the_whole_corpus() {
+        // A malformed pin keys below every version, so the range from it would be every entry
+        // the corpus has below this charter's version. The corpus is the Python line's history,
+        // and none of it is news about this app.
         let (_d, root) = plane("schema = 1\n[charter]\nversion = \"banana\"\n");
 
         let pin = report(&root);
 
         assert!(pin.drift);
-        assert_eq!(pin.news.len(), MOST_NEWS);
-        assert!(pin.more_news > 0);
+        assert!(pin.news.len() <= MOST_NEWS);
+        assert!(
+            pin.news
+                .iter()
+                .all(|n| charter_core::version::version_key(&n.version)
+                    <= charter_core::version::version_key(adopt::app_version())),
+            "{pin:?}"
+        );
     }
 }

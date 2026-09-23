@@ -1,5 +1,7 @@
 # Personas
 
+> **In this version** the CLI's `charter persona` has `current`, `default`, `remember` and `recall`; the other persona commands on this page are not in it yet. Where it describes the tmux frame, read [frame.md](frame.md): this app has no frame, and its window takes the frame's place.
+
 A **persona** is a role identity an agent adopts — `devops`, `qa`, `keycloak-master`,
 whatever your work needs. It's the piece that turns "an LLM with tools" into "a team of
 specialists with their own knowledge and credentials," and it's `charter`'s
@@ -28,7 +30,7 @@ charter persona show devops      # lists them under `scripts:`
 
 They are **not** put on `PATH`, and cannot be: a `PreToolUse` hook decides *whether* a Bash
 call runs, not what environment it runs in, and wrapping every Bash call to inject one would
-be charter taking over a mechanism the host owns ([ADR 0014](adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md)).
+be charter taking over a mechanism the host owns ([ADR 0014](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0014-policy-that-fits-a-pattern-belongs-to-the-host.md)).
 Call them by path. Charter names each script's path in the persona's generated sub-agent, so
 a dispatched agent knows what it is carrying without being told twice.
 

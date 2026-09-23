@@ -94,7 +94,7 @@ describe("the opener", () => {
   });
 
   it("says what a project contributes instead of opening it, and opens nothing until asked", async () => {
-    // charter ADR 0035. `.charter/app/reopen.json` is an execution input and a project is a
+    // ADR 0035. `.charter/app/reopen.json` is an execution input and a project is a
     // DIRECTORY, so "open this folder" must not be able to mean "run what is written in it".
     const { asked } = core((cmd) => {
       if (cmd === "open_plane")

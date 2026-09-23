@@ -196,7 +196,7 @@ function draw(
 
 describe("the right-hand region", () => {
   it("holds the needs-you queue, which used to share a line with six other things", () => {
-    // charter ADR 0038 moved it here off `<header className="bar">`.
+    // ADR 0038 moved it here off `<header className="bar">`.
     draw({ queue: [7] });
 
     expect(within(screen.getByTestId("panels")).getByLabelText("Needs you")).toBeInTheDocument();
@@ -277,7 +277,7 @@ describe("a panel", () => {
     expect(headings).toEqual(["Todos", "Reviews · acme", "Personas"]);
   });
 
-  it("says whose it is, which is what charter ADR 0041 item 5 asks the window for", () => {
+  it("says whose it is, which is what ADR 0041 item 5 asks the window for", () => {
     // *Show what is in force, after approval and not only at it.* An operator has to be able
     // to tell a panel his own charter draws from one a stranger's extension contributed,
     // without opening a dialog to find out.

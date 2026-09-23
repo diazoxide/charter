@@ -99,12 +99,12 @@ default = "claude"               # "claude" | "opencode" | "codex" — the word 
                                   # not pick one for you. A name it does not know is
                                   # REPORTED, not ignored — see "Bare `charter`" below.
 
-# Which charter this plane tracks. Opt-in; absent, you track published releases.
+# Which release channel this plane expects. Which build the app installs is chosen
+# per machine, with `charter update --channel`; see "[update].channel" below.
 [update]
 channel = "stable"               # "stable" | "dev". Default: "stable". A CLOSED set:
                                   # anything else is not sanitised, it is discarded, and
-                                  # the plane stays on "stable". See "The dev channel"
-                                  # below and docs/install.md.
+                                  # the plane stays on "stable".
 ```
 
 ### `group` vs `owner`
@@ -122,7 +122,7 @@ task touches, each of which can carry worktrees. That is the only arrangement.
 
 charter used to have a second one, `shape = "embedded"`: charter installed *inside* the
 single codebase it served, where a workspace held worktrees of the plane's own root rather
-than clones. It was removed — see [ADR 0007](adr/0007-one-plane-shape.md) — because every
+than clones. It was removed — see [ADR 0007](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) — because every
 plane exercised exactly one of the two, so the other was carried on trust. An existing
 `shape` key is simply ignored.
 
@@ -149,9 +149,9 @@ same `origin` it has; take the second and this repo becomes the plane. Either wa
 control plane itself is identical, and until you choose, nothing is written to your repo at
 all.
 
-**This page describes charter-app**, whose default here is the opposite of the Python
-charter's, which scaffolds a plane into the repo and *offers* to clone it into the first
-workspace. See [ADR 0035](adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md) and
+**This default is charter-app's**, and it is the opposite of the one the earlier Python
+charter had, which scaffolded a plane into the repo and *offered* to clone it into the first
+workspace. See [ADR 0035](https://github.com/diazoxide/charter-app/blob/main/docs/adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md) and
 charter-app spec decision 27 for why it was reversed. `charter init` anywhere that is not the
 top of a git repo is unchanged.
 
@@ -169,7 +169,7 @@ two different workspaces.
 
 So the status line warns when the plane root is dirty or off its default branch, and
 `doctor` checks the same thing at session start. See
-[ADR 0008](adr/0008-the-plane-root-is-not-a-work-tree.md) for why those are warnings rather
+[ADR 0008](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0008-the-plane-root-is-not-a-work-tree.md) for why those are warnings rather
 than refusals.
 
 ### Where worktrees live
@@ -398,115 +398,42 @@ Anything else degrades to `"default"`, the same way a `[frame]` key charter cann
 sense of degrades to its shipped value. The committed `workspaces/.default` file, written
 by `charter workspace default`, is held to the identical rule.
 
-## `[charter].version` — pinning the CLI
+## `[charter].version` — pinning charter
 
-**Opt-in.** Absent, charter does nothing: you track whatever you have installed. Present,
-this control plane pins one charter version and every machine conforms to it — shared the
-way a lockfile is.
+**Opt-in.** Absent, charter does nothing with it. Present, this control plane names the
+charter version it expects, shared the way a lockfile is.
 
 ```toml
 [charter]
-version = "0.7.1"
+version = "0.1.0"
 ```
 
-| Command | What it does |
-| --- | --- |
-| `charter version` | Shows installed / locked / latest, and the exact next command |
-| `charter version sync` | Installs the locked version on this machine |
-| `charter version bump [--to X] [--push]` | Moves the pin, after verifying the target installs |
+The pin names a version of **this app**: the number `charter version` prints. `charter
+version` shows that number and the pin, and its exit status is the part a script reads — 0
+with no pin, 0 when the pin is met, 1 when it is not (drift). The status line draws a row for
+drift, and the window marks it.
 
-**It is exact, not a floor — so it downgrades.** Pinning a team back to a known-good
-release is precisely the case the pin exists for. `charter version sync --cli` performs it.
+This charter does not install anything to meet a pin. It is a binary inside the app, and the
+app is what moves it (see [install.md](install.md)), so `charter version sync` and `charter
+version bump` are refused by name rather than run.
 
-**The pin must be an exact `X.Y.Z`.** It becomes the right-hand side of a pip requirement,
-`charter-cp==<pin>`, where a wildcard (`0.*`), a range (`>=0.47`) or a dist-name would also
-be accepted — and would resolve to whatever is published, which is the one thing a lock
-exists to prevent. Anything else is refused by name rather than installed.
+A plane written by the earlier Python charter may carry a pin from that program's own
+release line, which ended at `0.62.1`. **That pin is not drift.** A pin that is a version, is
+not this app's own and is no newer than `0.62.1` is read as naming the Python charter's line:
+`charter version` says so and exits 0, the status line draws no row, and nothing asks you to
+move it — a teammate still on the Python charter may rely on it. To hold the plane to this app
+instead, set `version` to the number `charter version` prints, or remove the pin. A pin newer
+than `0.62.1` that is not this app's version, or one that is not a version at all, is drift.
 
-**Auto-conformance runs once per session, and only upwards.** The `SessionStart` hook
-installs the locked version when it is *newer* than what is running, and says so:
-
-```
-⬢ charter: auto-updated 0.7.1 → 0.8.0 to match this control plane's lock.
-  The next `charter …` call uses it.
-```
-
-A pin **older** than what is running is reported and not installed:
-
-```
-⬢ charter: this control plane pins 0.7.1, which is OLDER than the 0.8.0 you are
-  running. charter did not install it: a downgrade replaces the binary that enforces
-  the credential guard with one that knows less, and session start has nobody to ask.
-```
-
-`charter.toml` is committed, so the pin is data a teammate can change — and an unattended
-downgrade past a fix would re-open it on every teammate's next session. An upgrade can only
-add guards; a downgrade can only remove them, so only one of the two directions happens by
-itself. The pin-back stays one deliberate command, run by the person who read the message.
-
-That wording is literal — a running process cannot replace itself mid-call, so *this*
-invocation finishes on the old build and every later `charter …` in the session uses the
-new one.
-
-It never runs on the plane render and never mid-turn: the install replaces the binary
-enforcing the credential guard, and a session boundary is the only safe moment for that.
-
-**A failed auto-update never blocks you.** Offline, no `uv`, or a pin that does not exist
-— charter warns, names the manual command, and the session proceeds on whatever is
-installed. Being on a plane is not a defect. The drift stays visible in `charter doctor`
-until it is resolved.
-
-**Bumping is deliberate, because it is team-wide.** `charter version bump` installs and
-verifies the target *before* writing the lock, so you cannot pin colleagues to a build you
-have not run; `--push` commits and pushes, and everyone conforms on their next session.
-charter only ever *shows* you that command — it never bumps on its own.
-
-**With no `--to`, it pins what PyPI tells that same command.** If PyPI does not answer, it
-refuses and asks for `--to`. It does not fall back to the cached reading `charter version`
-shows, which can be days old and older than the charter you are running. Before #937 it
-did fall back, and a failed request installed that older release over the running one and
-pushed it to the team as the pin. If PyPI answers with a release older than the charter you
-are running, it refuses too, before installing or writing anything. To pin a team back to an
-older release, name it: `charter version bump --to X.Y.Z`.
-
-On a plane that declares the [dev channel](install.md#4-the-dev-channel--trying-main-without-cutting-a-release),
-`charter version` never suggests this command, because a pin and the dev channel cannot
-both be declared. It names `charter update` instead, and so does `charter version sync` on
-a plane there that pins nothing. `charter version bump` itself refuses on such a plane,
-`--to` or not. It refuses before asking PyPI, installing anything or writing the lock, and
-names the two ways out: drop `[update] channel = "dev"`, or keep no `[charter] version`. Before
-#947 it wrote the pin, and with `--push` every teammate's session start then refused the plane.
-
-A plane there can still carry a pin: one written before #947, one typed by hand, one from an
-older charter. That is one refused state, and every command that reads it prints the same
-conflict and the same two ways out:
-
-```
-$ charter version sync --cli
-✗ refusing to sync this control plane: a `[charter] version` pin and `[update] channel = "dev"` ask for two different charters. Nothing was installed.
-•   to follow a pinned release, drop `[update] channel = "dev"` from the plane's `charter.toml`
-•   to stay on `main`, keep no `[charter] version` in the plane's `charter.toml` and move this charter onto it:  charter update
-```
-
-`charter version sync` refuses with or without `--cli`, before it installs anything or asks
-the harness to move this plane's artifact, and exits 1. `charter version` prints the conflict
-instead of `conform this machine: charter version sync`, and exits 1 as it does for drift.
-Session start installs nothing and says the same, **whether or not the pin equals the version
-you are running**. A dev build prints the version of the release it was built from, so equal
-numbers do not mean the plane is on the pinned release. `charter doctor`'s `version lock` row
-warns with the same conflict and puts both ways out in its hint. The status line has room for
-one row, so it prints a short form of the same words:
-
-```
-⚠ charter 0.61.0 pin + dev channel: two different charters · charter version
-```
-
-Before #1018, `version sync` installed the pinned release over a plane following `main`.
-`charter version` and the status line both sent you to that command, and `doctor` named a
-plugin update. A pin equal to the running number got nothing at session start, "in sync with
-the lock" from `charter version` and `plugin in sync` from `doctor`.
+While this app's own version is at or below `0.62.1` the two lines share numbers, so a pin
+written by hand for this app in that range reads as the Python line too. The reasons are
+[ADR 0045](https://github.com/diazoxide/charter-app/blob/main/docs/adr/0045-charters-version-is-the-apps-version.md).
 
 ## `[harness]` — profiles, and the default
+
+**In this version a chat is opened from the app's window.** Where this section describes
+opening one from a terminal — `charter claude-work`, `--no-frame`, bare `charter`'s profile
+selector, `charter reopen` — it describes commands this version's CLI does not have yet.
 
 Two Claude Code accounts, work in one config folder and personal in another, or a Codex
 pinned to an older release: charter ran one program per harness, one way, and had no way to
@@ -514,7 +441,7 @@ be told otherwise. A shell alias does not help — charter runs the harness with
 the alias never resolves. A **harness profile** is the way: a kind, a command and an
 environment, declared in a file that stays on your machine. The decisions behind the shape
 of this, and the reason each one rests on, are
-[ADR 0022](adr/0022-a-harness-profile-belongs-to-one-machine.md).
+[ADR 0022](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md).
 
 **Every chat now starts through charter's own launcher.** Charter reads the profiles,
 refuses the broken ones by name, and keeps the file out of git; `charter claude-work`, bare
@@ -798,42 +725,23 @@ whether charter is installed gets an answer instead of an agent session, and a p
 place to draw a selector either. `charter claude` into a pipe is unaffected: it runs the
 harness bare, as it always did.
 
-## `[update].channel` — the dev channel
+## `[update].channel`
 
-**Opt-in.** Absent, this plane tracks published releases and nothing below applies.
+**Opt-in.** Absent, the plane says nothing about channels.
 
 ```toml
 [update]
 channel = "dev"
 ```
 
-On `dev`, three things change and nothing else does:
+Which build the app installs, and from which channel, is decided **per machine** and not per
+plane: `charter update --channel dev` or `--channel stable` (see [install.md](install.md)).
+A plane is committed and arrives from a teammate's machine, so nothing in it decides what the
+app installs on yours.
 
-| | `stable` | `dev` |
-| --- | --- | --- |
-| "newer" means | a higher version is on PyPI | `main`'s head commit is not the one installed |
-| `charter update` installs | `charter-cp==<version>` | `git+https://github.com/diazoxide/charter@main` |
-| the brand chip (frame top bar, `charter statusline`) | `⬢ charter 0.51.0` | `⬢ charter 0.51.0 dev` |
-
-`charter update` on `dev` also force-refreshes the Claude Code plugin, because a
-version-keyed `claude plugin update` cannot see a change that does not move the version —
-see [install.md](install.md#the-plugin-needs-forcing-and-only-on-this-channel).
-
-**The value is a closed set of two, not a string.** `charter.toml` is committed: it arrives
-from a teammate's machine, and this key decides how charter installs itself. Anything that
-is not exactly `"stable"` or `"dev"` is discarded and the plane stays on `stable` — nothing
-you can write here is passed through to a URL, a command line, or an argv element. The
-repository charter installs from is a constant in charter's own source, and no `charter.toml`
-can name a different one.
-
-**Never both this and `[charter] version`.** A pin names a published release a whole team
-conforms to; a commit of `main` has no such number, and a dev build carries the *same*
-version number as the release it was built from — so a pin would silently reinstall the
-published wheel over it at every session start. Declare both and charter installs neither,
-and says which two keys disagree.
-
-**Nothing installs itself.** The render nudges when `main` moves; you run `charter
-update`.
+**The value is a closed set of two, not a string.** Anything that is not exactly `"stable"`
+or `"dev"` is discarded and read as `stable`; nothing you can write here reaches a URL, a
+command line, or an argv element.
 
 ## Schema drift and healing
 
@@ -851,8 +759,8 @@ four, each of which is a question about charter rather than a read of the plane'
 | still runs | why |
 |---|---|
 | `charter doctor` | where the refusal is reported — the `schema` row names both versions |
-| `charter --version`, `charter version`, `charter _version-check` | which charter is this |
-| `charter update` | the only remedy; nothing but a newer charter can understand a newer plane |
+| `charter --version`, `charter version` | which charter is this |
+| `charter update` | nothing but a newer charter can understand a newer plane, and the app is what installs one |
 
 `charter init` and `charter reinit` are deliberately **not** exempt: writing into a layout
 charter has been told it does not understand is the most damaging guess available to it.
@@ -879,14 +787,13 @@ The two are never compared against each other.
 charter's own scratch — per frame, per machine, gitignored, reaped when the frame dies, and
 written and read by one charter inside one process tree. It has no format version and never
 will: a version is only worth stamping where the writer and the reader can be different
-charters. Read it through `charter frame`; the files themselves may change shape in any
-release.
+charters. The files themselves may change shape in any release.
 
 ## The plane, rendered
 
 `charter statusline` — the whole plane read off disk in one block. **`charter init` does
 not wire it into Claude Code's footer** and has not since 0.57.0 (#895): you reach this
-render through the frame's panels (`charter claude`), through `charter statusline --watch`
+render through the app's window, through `charter statusline --watch`
 in any spare terminal, through opencode's `/charter`, or by running `charter statusline`
 yourself. A `statusLine` key in `.claude/settings.json` still works exactly as it always
 did if you write one; charter neither adds it nor removes it.

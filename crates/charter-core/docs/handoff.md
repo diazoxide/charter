@@ -1,5 +1,7 @@
 # You asked one chat for a second thing, and it did it there
 
+> **In this version** `charter handoff` opens the chat in the app when it runs inside a chat the app started, and prints the command to run everywhere else. Where it describes the tmux frame, read [frame.md](frame.md): this app has no frame, and its window takes the frame's place.
+
 You are in a chat about the API and you ask about the deploy script. Three things happen
 today, and all three cost you:
 
@@ -23,7 +25,7 @@ a brief you read and approved.
 
 2 and 3 are one mechanism — a **handoff** — because a chat belongs to its workspace for life.
 The only thing that differs is the workspace. A **chat**, a **handoff** and a **brief** are
-defined in [CONTEXT.md](../CONTEXT.md)'s *Chats* section, each with the words charter stops
+defined in [CONTEXT.md](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/CONTEXT.md)'s *Chats* section, each with the words charter stops
 using for it — every one of them implies a child that reports back, and a handed-off chat is
 nobody's child: it has its own workspace, its own todos and no way to answer the chat that
 opened it.
@@ -232,8 +234,8 @@ and spends it on the same connection, so no single line on the socket opens a ch
 can be replayed. The ticket cannot tell the command you approved from another process running
 inside the same chat, which could run `charter handoff` itself, just as it can already start a
 harness in the background with `claude -p`. That is why a handed-off chat always lands as a tab
-you can see, stamped with the chat it came from. This describes charter-app; the Python charter
-has no app, and opens the chat in a background tmux window.
+you can see, stamped with the chat it came from. The earlier Python charter, which had no
+app, opened the chat in a background tmux window instead.
 
 ## Isolation and continuation
 
@@ -340,7 +342,7 @@ Unlike the persona roster it embeds, it does **not** wait for the acting persona
 declared a posture still has chats doing two tasks at once.
 
 It names **no** placement and **no** other workspace. charter has no model and cannot judge
-the work ([ADR 0016](adr/0016-charter-presents-the-roster-it-never-guesses-the-owner.md)); what it states is
+the work ([ADR 0016](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0016-charter-presents-the-roster-it-never-guesses-the-owner.md)); what it states is
 the rules a proposal follows, and the model reads the visions off `charter workspace list`,
 which grew a `VISION` column for exactly this. On an unattended run the block says instead
 that `charter handoff` is refused there, and names `charter ws todo --workspace` — the
@@ -369,7 +371,7 @@ refuses the spellings it can recognise that the rule was measured not to match.
 
 Why the gate is the host's prompt rather than a charter-side ask, a quiz or a `--brief-file`,
 and what each of those decisions cost, is
-[ADR 0021](adr/0021-a-handoffs-consent-is-the-harness-prompt.md). This page is what happens;
+[ADR 0021](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0021-a-handoffs-consent-is-the-harness-prompt.md). This page is what happens;
 that one is why it is shaped this way and what to read before changing it.
 
 ## The prompt is the consent

@@ -9,19 +9,23 @@
 //! follows is only what is DIFFERENT about the Rust charter, because a port's own docstring
 //! earns its place by naming the seams.
 //!
+//! **The corpus is history, and it is frozen** (ADR 0045). Every entry in it is a note the
+//! Python charter published about one of its own releases, 0.44.0 to 0.62.1, plus the few it had
+//! staged when it stopped. None of it is news about this app — the app's own release notes are
+//! `CHANGELOG.md` — and nothing is added to it. It stays compiled in so `charter news` can still
+//! answer what a plane pinned on the Python line skipped, read-only.
+//!
 //! **It ships in the binary, and the binary is the only copy.** Python resolves entries
 //! packaged-copy-first with a checkout fallback; a charter that ships inside a signed app has
 //! no checkout to fall back to, so `news/` is compiled in by `build.rs` and there is no second
-//! source. That makes the drift `charter/news.py` warns about impossible rather than merely
-//! discouraged — and it moves the drift risk one level up, to *this repository's copy of
-//! charter's `docs/news/`*. Nothing here can check that; the differential suite can, and does:
-//! `news --for <version>` is compared byte for byte against the pinned Python charter, so a
-//! corpus that drifts from the oracle turns those scenarios red.
+//! source. The one risk left is that this copy drifts from what the Python charter published;
+//! the differential suite checks that: `news --for <version>` is compared byte for byte against
+//! the pinned Python charter, so a corpus that drifts from the oracle turns those scenarios red.
 //!
 //! **`--until` defaults to the newest version the corpus names, not to this binary's version**
-//! — see [`shipped_version`]. This is the one behavioural difference from Python in the whole
-//! module and it is forced: `charter/__version__` is a PYTHON PACKAGE version, and this binary
-//! carries the workspace's `0.1.0`. Defaulting to that would make every range empty.
+//! — see [`history_ends`]. This is the one behavioural difference from Python in the whole
+//! module and it is forced: this binary carries the app's version, which counts a different
+//! line from the corpus (ADR 0045). Defaulting to it would make every range empty.
 //!
 //! **Every SHIPPED probe reports unchecked here, and that is a fact about this CLI rather than
 //! a gap in the port.** `check:` may only name a command from [`PROBEABLE`], and of those four
@@ -361,21 +365,17 @@ pub fn released() -> Vec<Entry> {
         .collect()
 }
 
-/// The newest version this build's entries name — `--until`'s default.
+/// The newest version the frozen corpus names — where the Python charter's line ended, and
+/// `--until`'s default.
 ///
-/// **Python asks `charter.__version__` and this cannot.** That number is the version of a
-/// PYTHON PACKAGE: a pin in `charter.toml`, a thing `uv tool install` moves. This binary ships
-/// inside an app and carries the workspace's own `0.1.0`, which is below every entry in the
-/// corpus — so `--until` defaulting to it would make every range empty and `charter news`
-/// would answer "nothing new" forever.
-///
-/// The corpus IS this build's content record: an entry travels with the code that implements
-/// it, so the newest entry a binary ships is the newest thing that binary brought. That makes
-/// this the same question Python's `__version__` was standing in for, asked of the thing that
-/// actually moved.
+/// **Not this charter's version, and never compared with a pin as if it were** (ADR 0045,
+/// amending ADR 0030, which used it for exactly that). This charter's version is the app's —
+/// `adopt::app_version` — and it counts a different line. The range views default to this one
+/// because the corpus is history: `--until` defaulting to the app's version would make every
+/// range empty and `charter news` would answer "nothing new" forever.
 ///
 /// Empty when the corpus holds no released entry, which `build.rs` makes impossible.
-pub fn shipped_version() -> String {
+pub fn history_ends() -> String {
     released()
         .last()
         .map(|e| e.version.clone())
@@ -661,19 +661,20 @@ pub fn unreadable() -> Vec<String> {
 // Rendering a release body
 // ------------------------------------------------------------------------------------------
 
-/// The repository a rendered note links into, and the branch a staged one points at.
+/// The repository a rendered note links into, and the ref a staged one points at.
 ///
-/// **Constants, not configuration.** `charter.toml` decides whether charter follows the dev
-/// channel and never what it follows; a value interpolated into a *published* release body
-/// must not come from anywhere else either.
+/// **History, not a dependency** (ADR 0045). Every entry here is a note the Python charter
+/// published, and each is linked by tag (`v0.62.0`) to the note **as that release shipped it**
+/// in the repository that published it — so the links are where the history is, and
+/// repointing them at this repository would make every one of them 404. Nothing in this app
+/// is published from that repository, and no new entry is written against it.
 ///
-/// Still `diazoxide/charter` rather than this repository, and deliberately: these entries are
-/// charter's, they are linked by tag (`v0.62.0`) to the note **as that release shipped it**,
-/// and repointing them at charter-app would make every link in every past release body 404.
-/// The day news is authored here, this constant moves with the authoring and not before.
-pub const DEV_REPO: &str = "diazoxide/charter";
-/// See [`DEV_REPO`].
-pub const DEV_BRANCH: &str = "main";
+/// A staged entry was never released, so it has no tag, and it is linked at that repository's
+/// branch exactly as the Python charter links it — the render is a preview nobody publishes, and
+/// the differential compares it byte for byte with the oracle's.
+pub const HISTORY_REPO: &str = "diazoxide/charter";
+/// See [`HISTORY_REPO`].
+pub const HISTORY_BRANCH: &str = "main";
 
 /// The most characters GitHub's create-release API accepts in a body.
 ///
@@ -761,12 +762,12 @@ fn quote_path(name: &str) -> String {
 /// tag to point at, and its render is a preview nobody publishes.
 fn entry_url(e: &Entry) -> String {
     let git_ref = if e.version == UNRELEASED {
-        DEV_BRANCH.to_owned()
+        HISTORY_BRANCH.to_owned()
     } else {
         format!("v{}", e.version)
     };
     format!(
-        "https://github.com/{DEV_REPO}/blob/{git_ref}/{}",
+        "https://github.com/{HISTORY_REPO}/blob/{git_ref}/{}",
         entry_file(e)
     )
 }
@@ -1516,12 +1517,12 @@ pub fn pending_report(d: &dyn Dispatch, has_plane: bool) -> Report {
 /// `since` and `until` are the flags as typed, with `""` for "not given". The default for
 /// `until` is chosen BEFORE the strip and not after, which is `(args.until or …).strip()` in
 /// Python: `--until "  "` is a bound the operator typed, strips to nothing, is not a version,
-/// and gives an empty range — where no flag at all gives [`shipped_version`].
+/// and gives an empty range — where no flag at all gives [`history_ends`].
 pub fn range_report(since: &str, until: &str, d: &dyn Dispatch, has_plane: bool) -> Report {
     let mut report = Report::new();
     let since = py_strip(since);
     let until = if until.is_empty() {
-        py_strip(&shipped_version()).to_owned()
+        py_strip(&history_ends()).to_owned()
     } else {
         py_strip(until).to_owned()
     };
@@ -1871,20 +1872,19 @@ mod tests {
         assert!(between("0.62.1", "0.62.1").is_empty());
         // A staged entry is in no range.
         assert!(
-            !between("0.44.0", &shipped_version())
+            !between("0.44.0", &history_ends())
                 .iter()
                 .any(|e| e.version == UNRELEASED)
         );
     }
 
     #[test]
-    fn the_shipped_version_is_the_newest_entry_and_not_the_crate_version() {
-        let shipped = shipped_version();
+    fn the_history_ends_at_the_newest_released_entry_whatever_the_apps_version() {
+        let shipped = history_ends();
         assert!(version_key(&shipped).is_version());
-        assert!(
-            version_key(&shipped) > version_key(env!("CARGO_PKG_VERSION")),
-            "the corpus stops at {shipped}, below this crate's own version — the `--until` \
-             default would make every range empty"
+        assert_eq!(
+            shipped, "0.62.1",
+            "the corpus is frozen; nothing is released into it"
         );
         for e in released() {
             assert!(version_key(&e.version) <= version_key(&shipped));

@@ -2,8 +2,7 @@
 
 Two control planes, written by the Python charter itself, for tests on both sides of the
 rebuild to read. The format they are in is specified in
-[`docs/plane-format.md`](https://github.com/diazoxide/charter/blob/main/docs/plane-format.md)
-in the charter repo; this directory is the "fixture planes" that spec calls for (ADR 0025,
+[`docs/plane-format.md`](../../../docs/plane-format.md); this directory is the "fixture planes" that spec calls for (ADR 0025,
 spec decision 13).
 
 | Plane | What it is |

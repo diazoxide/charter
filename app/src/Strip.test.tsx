@@ -8,7 +8,7 @@ import { LEAST } from "./fits";
 import type { Moved, OpenChat } from "./bindings";
 
 /**
- * The chat strip when it holds more than it has room for (charter ADR 0039, as amended).
+ * The chat strip when it holds more than it has room for (ADR 0039, as amended).
  *
  * Two rules, and they are opposites on purpose:
  *

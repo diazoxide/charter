@@ -17,7 +17,7 @@ import {
 import { useArrived } from "./lib/arrived";
 
 /**
- * **The window, drawn from the arrangement** (charter ADR 0038, and `regions.ts` for why the
+ * **The window, drawn from the arrangement** (ADR 0038, and `regions.ts` for why the
  * arrangement is data).
  *
  * Four panels and nothing else: a slot on the left, the centre, a slot on the right, a slot
@@ -203,7 +203,7 @@ function Edge({ open }: { open: boolean }) {
 }
 
 /**
- * The button that puts a region away and brings it back (charter ADR 0038).
+ * The button that puts a region away and brings it back (ADR 0038).
  *
  * **Not a row of the catalogue**, deliberately, and this is the one place in the bar where that
  * is true. The catalogue is what a project can DO — open a chat, split a pane, remove a

@@ -26,7 +26,7 @@
 //!   [`Recent::pinned_workspaces`]);
 //! - **which stream this machine takes charter from** ([`Store::channel`]).
 //!
-//! **The fourth was three until charter ADR 0040, and the fifth is newer still; the count is
+//! **The fourth was three until ADR 0040, and the fifth is newer still; the count is
 //! load-bearing.** Those records are the amendments: the operator ruled on 2026-09-22 that a
 //! pin is how one operator likes their window rather than a fact about the plane, so it
 //! cannot be committed to `charter.toml`, where it would arrive with every clone and put
@@ -149,7 +149,7 @@ pub const MAX_BYTES: u64 = 1 << 20;
 /// entry (see [`Recent`]). That direction is the safe one: the plane is asked about again the
 /// next time it is opened.
 ///
-/// **A pinned plane does not count against it** (charter ADR 0040). Losing a pinned project to
+/// **A pinned plane does not count against it** (ADR 0040). Losing a pinned project to
 /// the sixty-fifth plane opened would make pinning meaningless on exactly the machine that
 /// most needs it — the one with a lot of planes — and pinning is the only thing an operator
 /// can say to mean "not this one". [`MOST_PINNED`] is what keeps the file bounded all the
@@ -293,7 +293,7 @@ pub(crate) fn supported() -> io::Result<()> {
         io::ErrorKind::Unsupported,
         "charter keeps no machine-level store on this platform: the 0600 on the file and the \
          0700 on its directory have no expression here (charter-app#98), and a guard that \
-         cannot be expressed refuses rather than degrades (charter ADR 0031)",
+         cannot be expressed refuses rather than degrades (ADR 0031)",
     ))
 }
 
@@ -720,7 +720,7 @@ pub struct Recent {
     /// plane forgets its approval with it, which is both the simple implementation and the
     /// safe direction: the plane is asked about again.
     pub trust: Option<Trust>,
-    /// Whether the operator pinned this project (charter ADR 0039, stored per ADR 0040).
+    /// Whether the operator pinned this project (ADR 0039, stored per ADR 0040).
     ///
     /// A field of the entry for the same reason the approval is: forgetting a plane forgets
     /// its pin, and there is never a second list of pins to go stale against this one. It is
@@ -796,7 +796,7 @@ impl Store {
     /// Drops the oldest **unpinned** entries past [`MOST_RECENTS`], keeping every pinned one
     /// up to [`MOST_PINNED`] ([`Room`]).
     ///
-    /// **Not `truncate`, and charter ADR 0040 is why.** A pin is the only thing an operator
+    /// **Not `truncate`, and ADR 0040 is why.** A pin is the only thing an operator
     /// can say to mean "not this one", so a pin that the sixty-fifth plane opened could
     /// silently undo would be a feature that stops working on the machine it is for.
     /// [`MOST_PINNED`] is what keeps the file bounded in its place; a pin beyond that is
@@ -1026,7 +1026,7 @@ pub struct Loaded {
 /// **This never fails**, because every caller is a launch. A missing file is a first launch;
 /// anything else is an empty store plus a reason.
 ///
-/// The read is gated the way every read of charter's own state is (charter ADR 0028):
+/// The read is gated the way every read of charter's own state is (ADR 0028):
 ///
 /// - [`crate::contain::open_no_link`] against `config_root`, so a link at `charter/` or at the
 ///   file itself cannot make this answer out of somebody else's file — and so the last
@@ -1842,7 +1842,7 @@ mod tests {
         assert_eq!(back.unreadable, None);
     }
 
-    // The fifth thing this file holds (charter ADR 0042): which stream the app updates from.
+    // The fifth thing this file holds (ADR 0042): which stream the app updates from.
 
     #[test]
     fn a_machine_that_never_chose_a_channel_is_on_stable_and_its_file_says_nothing() {
@@ -3060,7 +3060,7 @@ mod tests {
         assert_eq!(back.dropped.len(), 5);
     }
 
-    // ------------------------------------------------- pins (charter ADR 0039, 0040)
+    // ------------------------------------------------- pins (ADR 0039, 0040)
 
     /// A store remembering `planes`, in the order they were opened.
     fn remembering(planes: &[&str]) -> Store {
@@ -3101,7 +3101,7 @@ mod tests {
 
     #[test]
     fn a_pinned_project_does_not_fall_off_the_end_of_the_recents() {
-        // charter ADR 0040: a pin is the only thing an operator can say to mean "not this
+        // ADR 0040: a pin is the only thing an operator can say to mean "not this
         // one", so the sixty-fifth plane opened must not silently undo it.
         let mut store = remembering(&["/planes/kept"]);
         store.pin(Path::new("/planes/kept"), true).unwrap();
@@ -3432,7 +3432,7 @@ mod tests {
     #[test]
     fn unix_has_an_expression_for_the_mode_so_nothing_here_refuses() {
         // The other side of it is not testable from here: off unix the whole store refuses
-        // (charter ADR 0031, charter-app#98) and this module's tests do not compile at all.
+        // (ADR 0031, charter-app#98) and this module's tests do not compile at all.
         // What that platform does is one sentence, and `supported` is where it is said.
         assert!(supported().is_ok());
     }

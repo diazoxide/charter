@@ -8,7 +8,7 @@ import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
 
 /**
- * **The window is four regions** (charter ADR 0038), against the whole app, because three of
+ * **The window is four regions** (ADR 0038), against the whole app, because three of
  * them only mean anything together: the explorer picks where the next chat goes, the bar
  * starts it there, and the right-hand side is where the queue went.
  */
@@ -80,7 +80,7 @@ function core(
     if (cmd === "opened_chats") return [];
     if (cmd === "start_chat") {
       chats.push(chat(++next, String(a.name), a.cwd as string | null));
-      return { session: next, wired: null };
+      return { session: next };
     }
     if (cmd === "plane_sidebar")
       return {
@@ -150,7 +150,7 @@ async function openAChat() {
   await userEvent.click(await screen.findByRole("button", { name: "Start" }));
 }
 
-/** Focuses a workspace from the strip, which is the axis (charter ADR 0036). */
+/** Focuses a workspace from the strip, which is the axis (ADR 0036). */
 async function focus(workspace: string) {
   const tab = within(screen.getByRole("tablist", { name: "Workspaces" }))
     .getAllByRole("tab")

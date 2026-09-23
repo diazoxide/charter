@@ -4,7 +4,7 @@ import { LoaderCircle, Stethoscope } from "lucide-react";
 import { commands, type DoctorReport, type DoctorRow, type PlaneId } from "./bindings";
 
 /**
- * **`charter doctor`, from inside the window** — the last of charter ADR 0038's named gaps.
+ * **`charter doctor`, from inside the window** — the last of ADR 0038's named gaps.
  *
  * The case for it is one incident, and it decides the shape. A charter launched from Finder
  * could not find `claude`, because macOS hands a GUI app a four-directory `PATH`

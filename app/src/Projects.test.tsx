@@ -7,7 +7,7 @@ import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
 
 /**
- * A window holding more than one project (charter ADR 0033, spec decision 23).
+ * A window holding more than one project (ADR 0033, spec decision 23).
  *
  * **The thing being pinned is that switching is navigation and not a teardown.** The operator
  * asked for Zed's project tabs by name and gave the reason: eight projects is eight things to

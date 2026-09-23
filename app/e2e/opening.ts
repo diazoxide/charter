@@ -115,7 +115,7 @@ export async function endChat(name: string): Promise<void> {
 /**
  * Ends every chat the strip is drawing, and the ones it is not.
  *
- * **The strip collapses rather than scrolling** (charter ADR 0039, as amended), so at fifty
+ * **The strip collapses rather than scrolling** (ADR 0039, as amended), so at fifty
  * chats it draws a handful and hides the rest. This terminates because closing a drawn tab
  * gives the strip room for a hidden one — the hidden tabs flow onto the strip as the drawn
  * ones go — and it is bounded so that a close which stops taking is a failure and not a hang.

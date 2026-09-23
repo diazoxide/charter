@@ -6,7 +6,7 @@ import { commands } from "./bindings";
 /**
  * Making a new project — a plane charter scaffolds — and the one decision it asks about.
  *
- * **The prompt IS the prompt** (charter ADR 0035). The CLI's shape is `mkdir`, `cd`, `charter
+ * **The prompt IS the prompt** (ADR 0035). The CLI's shape is `mkdir`, `cd`, `charter
  * init`, because a hook blocked on stdin hangs a turn and `util.py` reads none; here there is a
  * window and a person looking at it, so the directory is picked and the question is asked where
  * the answer is given. Nothing is copied from the printed two-command shape.

@@ -372,7 +372,7 @@ export const commands = {
 	 *  and that one opens the operator's shell.
 	 * 
 	 *  `show_footer` is the picker's footer checkbox, and it is a property of THIS chat
-	 *  (charter ADR 0029). It reaches the harness as an environment variable set at the exec, so
+	 *  (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
 	 *  environment its harness was started with, and no later click can change it.
 	 */
@@ -558,6 +558,11 @@ export const commands = {
 	 *  holds no project for the first moments of every launch.
 	 */
 	aboutCharter: () => __TAURI_INVOKE<About>("about_charter"),
+	/**
+	 *  Links the app's `charter` into `/usr/local/bin`, asking macOS for an administrator's
+	 *  password when that directory is not this user's to write. Answers the sentence to say.
+	 */
+	installCliOnPath: () => typedError<string, string>(__TAURI_INVOKE("install_cli_on_path")),
 	/**
 	 *  Keeps the window's layout, replacing what the file held.
 	 * 
@@ -847,7 +852,7 @@ export type ExtensionView = {
 export type GaugeTone = "ok" | "warn" | "bad";
 
 /**
- *  What has contributed what to this window — charter ADR 0041's item 2, and the thing every
+ *  What has contributed what to this window — ADR 0041's item 2, and the thing every
  *  later decision about extensions is read off.
  */
 export type InstalledExtensions = {
@@ -987,7 +992,7 @@ export type OpenChat = {
 	/**  What its harness cannot tell charter, said on the chat — none where it tells all. */
 	unreported: string | null,
 	/**
-	 *  Whether the operator pinned it (charter ADR 0039). It rides the plane's own app
+	 *  Whether the operator pinned it (ADR 0039). It rides the plane's own app
 	 *  record, so a pinned chat comes back pinned at the next launch.
 	 */
 	pinned: boolean,
@@ -1209,20 +1214,20 @@ export type Piece = {
 export type PinReport = {
 	/**  `charter version`'s verdict: its exit status was 1. The only thing the line keys on. */
 	drift: boolean,
-	/**  The release this charter brought (`news::shipped_version`). */
+	/**  This charter's version: the app's (`adopt::app_version`, ADR 0045). */
 	brought: string,
 	/**  `[charter] version` as written, or none. */
 	pinned: string | null,
 	/**  What `charter version` said, line by line, in its own words. */
 	said: string[],
-	/**  What came between the pin and what this charter brought — only when it drifts. */
+	/**  What the news corpus has between the pin and this charter's version — only on drift. */
 	news: NewsItem[],
 	/**  How many more entries there were than `news` carries. */
 	more_news: number,
 };
 
 /**
- *  What the operator has pinned in one project (charter ADR 0039, stored per ADR 0040).
+ *  What the operator has pinned in one project (ADR 0039, stored per ADR 0040).
  * 
  *  The project's own pin and its pinned workspaces come from the machine store; a pinned
  *  CHAT is not here, because a chat pin rides that chat's own record and reaches the window
@@ -1524,13 +1529,9 @@ export type StartOptions = {
 	declares_none: boolean,
 };
 
-/**
- *  A chat that started: its session, and the one line to say if charter wired its profile
- *  on the way.
- */
+/**  A chat that started: its session. */
 export type Started = {
 	session: number,
-	wired: string | null,
 };
 
 /**  What the operating system has already spent of the window's own title bar. */

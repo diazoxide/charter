@@ -54,7 +54,7 @@ The same guard covers the vault: it refuses `--reveal` on a non-interactive stdo
 refuses file-reading tools pointed at a vault file, so an accidental `cat` cannot put a
 secret in the transcript. Those are the accidental roads, and they are the only ones a
 name-based guard can close — a command you chose to run is not one of them. See
-[secrets.md](secrets.md) and [SECURITY.md](../SECURITY.md).
+[secrets.md](secrets.md) and [SECURITY.md](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/SECURITY.md).
 
 ## Submodules are outside the rule, and charter says so rather than reaching past it
 

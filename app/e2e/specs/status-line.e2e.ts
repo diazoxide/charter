@@ -278,7 +278,7 @@ describe("the status line", () => {
     // **The updater used to be asserted here beside it and has moved** to `title-bar.e2e.ts`
     // with the item itself. The two read as one pair of "version facts" and only one of them
     // is about a project: the pin is `charter version`'s verdict on THIS plane's
-    // `[charter] version` (charter ADR 0030) and belongs on the line that names the project,
+    // `[charter] version` (ADR 0030) and belongs on the line that names the project,
     // while an offer is about the app and the line is drawn once per open project.
     await untilTheStripIsRead();
 

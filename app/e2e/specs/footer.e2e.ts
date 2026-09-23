@@ -5,7 +5,7 @@ import { READY } from "../harness.js";
 import { endChat, harnessRowsDrawn, pressOnly } from "../opening.js";
 
 /**
- * Charter's footer inside a chat's pane, per chat, against the real app (charter ADR 0029).
+ * Charter's footer inside a chat's pane, per chat, against the real app (ADR 0029).
  *
  * Inside a pane charter prints an empty line where its footer would go, because the app's
  * panels already draw the plane — a transposition of ADR 0019 that a port made and nobody

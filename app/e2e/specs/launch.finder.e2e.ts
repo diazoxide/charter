@@ -13,8 +13,8 @@ import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
  * whose only `claude` is in `.local/bin`. Nothing is declared in the plane, so the profile
  * the picker offers is charter's own built-in, whose command is the bare word `claude`.
  *
- * Before charter-app#134 was fixed this could not get past the picker: the probe's spawn
- * failed, `wiring` answered `State::Unknown`, and the app refused with *"an unknown is not a
+ * Before charter-app#134 was fixed this could not get past the picker: the harness could not
+ * be found, `wiring` answered `State::Unknown`, and the app refused with *"an unknown is not a
  * pass — nothing was started"*. Every other spec in this suite passed throughout, because
  * they all run under CI's own `PATH` against an absolute command.
  */
@@ -130,12 +130,11 @@ describe("an app opened from Finder", () => {
   });
 
   // charter-app#136. The chat above is running; its harness then runs `charter hook
-  // sessionstart` spelled as the charter plugin spells it — by the bare word. The hooks charter
-  // arms on a chat itself name the binary by its absolute path, so they reach the board from
-  // any launch; this one reaches it only if the chat's own `PATH` can find a `charter`. From
-  // Finder, before #136, it could not: `/bin/sh: charter: command not found`, the tab stayed
-  // `unknown`, and — the same failure one event over — the plugin's `PreToolUse` guard never
-  // ran, which a harness reads as non-blocking.
+  // sessionstart` by the bare word, as a plane's own `.claude/settings.json` spells it. The
+  // hooks charter arms on a chat itself name the binary by its absolute path, so they reach the
+  // board from any launch; this one reaches it only if the chat's own `PATH` can find a
+  // `charter`. From Finder, before #136, it could not: `/bin/sh: charter: command not found`,
+  // and the tab stayed `unknown`.
   it("lets a hook that names charter by its bare word reach charter", async () => {
     // No `charter` anywhere in this `$HOME`: the one found is the app's own, beside its
     // executable — the floor under a machine where the app is the only charter there is.
@@ -145,33 +144,28 @@ describe("an app opened from Finder", () => {
     );
   });
 
-  it("gives the chat its inherited PATH, then where a shell finds things, then charter's own", () => {
+  it("gives the chat charter's own directory, then its inherited PATH, then where a shell finds things", () => {
     const path = theNewestChatsPath();
     const home = given("CHARTER_FINDER_HOME");
-    // Strictly additive: what the app inherited comes first, in its own order.
-    expect(path.slice(0, 4).join(":")).toBe(A_FINDER_LAUNCHS_PATH);
+    // FIRST: nothing the app ships runs on a Python fallback (ADR 0025), so a bare `charter`
+    // in a chat is the one this app was built with (the next test).
+    expect(path[0]).toBe(dirname(built("charter-app")));
+    // Then strictly additive: what the app inherited, in its own order.
+    expect(path.slice(1, 5).join(":")).toBe(A_FINDER_LAUNCHS_PATH);
     // `programs::USER_BIN` and `SYSTEM_BIN` — the list that found the harness is the list the
     // harness then searches, so a `node`, `gh` or `uv` installed through Homebrew or a user
     // installer is not "missing from this machine" to the model.
     for (const dir of [join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"]) {
       expect(path).toContain(dir);
     }
-    // LAST, so a `charter` the operator installed wins over the app's (the next test).
-    expect(path[path.length - 1]).toBe(dirname(built("charter-app")));
   });
 
-  it("runs the charter the operator installed, where there is one, before the app's own", async () => {
-    // The operator's own shape: `charter` in `~/.local/bin`, where `uv`/`pipx` put it. The
-    // plugin's `hooks.json` is that charter's, and its tool hooks are mostly ones the app's
-    // binary BLOCKS — so the order is load-bearing, not a preference. A stand-in that says it
-    // was asked, then hands the call to the real binary.
-    //
-    // **M3.1 narrowed "mostly" and did not change the conclusion** (charter-app#181).
-    // `pretooluse` is now answered rather than blocked; the other eight tool-hook words the
-    // plugin wires still block, `pretooluse-read` among them, which Claude Code fires on every
-    // `Read` and `Grep`. And for `pretooluse` the app's binary decides strictly less than the
-    // Python — no persona tool-gate, no guard sighting, no trace — so shadowing an installed
-    // charter is a regression either way. `programs::chat_path_from` carries the argument.
+  it("runs the app's own charter even where the operator installed another", async () => {
+    // The operator's own shape: the Python charter in `~/.local/bin`, where `uv`/`pipx` put
+    // it. An app chat no longer loads that charter's plugin, and nothing the app ships runs on
+    // a Python fallback (ADR 0025) — so a bare `charter` in the chat is the app's, and the
+    // installed one is never asked. `programs::chat_path_from` carries the argument. A
+    // stand-in that says it was asked, then hands the call to the real binary.
     const home = given("CHARTER_FINDER_HOME");
     const asked = join(home, "the-installed-charter-was-asked");
     const installed = join(home, ".local", "bin", "charter");
@@ -191,7 +185,7 @@ describe("an app opened from Finder", () => {
       "waiting on you",
       "charter-app#136: the second chat's bare `charter` hook never reached the board",
     );
-    expect(existsSync(asked) ? readFileSync(asked, "utf8") : "").toContain("hook sessionstart");
+    expect(existsSync(asked) ? readFileSync(asked, "utf8") : "").toBe("");
   });
 
   it("has a doctor that answers for the app, with the PATH Finder gave it", async () => {

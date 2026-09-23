@@ -598,7 +598,7 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
 
 /// **The persona view: charter's own view, in the vocabulary a stranger's view answers in.**
 ///
-/// A tab can hold a view (charter ADR 0043, as amended), and this is the first built-in one —
+/// A tab can hold a view (ADR 0043, as amended), and this is the first built-in one —
 /// what the persona card was, as a sheet over the centre, until the operator ruled on
 /// 2026-09-23 that it is a tab. It is produced HERE, in Rust, as `charter_core::panel` blocks,
 /// and the window draws it with exactly the code that draws persona statistics' answer

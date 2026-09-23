@@ -1,4 +1,4 @@
-//! `charter doctor`, as the window can reach it (charter ADR 0038's last named gap).
+//! `charter doctor`, as the window can reach it (ADR 0038's last named gap).
 //!
 //! **Why this exists, in one incident.** On 2026-09-21 a charter launched from Finder could not
 //! find `claude`: macOS starts a GUI app from `launchd` with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`
@@ -27,10 +27,10 @@
 //! beside the table rather than inside it. Keeping it out of `rows` is what lets the test below
 //! hold "what the window draws is what `charter doctor --json` prints" as an equality.
 //!
-//! - **The full doctor** (`full: true`) also probes each harness profile — it RUNS the harness,
-//!   costs hundreds of milliseconds, and can write into the profile's config folder. The core
-//!   says only a doctor *a person asked for* may do that (`doctor/profiles.rs`, ruling 11), so
-//!   the window asks it only when the operator opens the doctor. Opening it is the asking.
+//! - **The full doctor** (`full: true`) also answers for each harness profile — whether its
+//!   program can be found, the search a launch makes. The core keeps that to a doctor *a
+//!   person asked for* (`doctor/profiles.rs`, ruling 11), so the window asks it only when the
+//!   operator opens the doctor. Opening it is the asking.
 
 use charter_core::doctor::{Doctor, Row, Status};
 

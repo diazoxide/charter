@@ -17,7 +17,7 @@ import type { PinReport } from "./bindings";
  *
  * # It is NOT a region, and that is a decision
  *
- * charter ADR 0038's window is four regions — left, centre, right, bottom — and
+ * ADR 0038's window is four regions — left, centre, right, bottom — and
  * `app/src/regions.ts` makes adding one a line in a catalogue and a line in an arrangement.
  * This is deliberately not that, and the reasons are in the shape of the thing rather than in
  * taste:
@@ -79,7 +79,7 @@ import type { PinReport } from "./bindings";
  *
  * **And the update offer is NOT here any more.** It was, beside the pin, and the two read as
  * one pair of "version facts" — but only one of them is about a project. The pin is
- * `charter version`'s verdict on THIS plane's `[charter] version` (charter ADR 0030), so two
+ * `charter version`'s verdict on THIS plane's `[charter] version` (ADR 0030), so two
  * open projects can honestly disagree about it and it belongs on the line that names the
  * project. An update offer is about the app: the same offer whichever project is in front, and
  * the line is drawn once per project, so eight projects meant eight `useUpdates` clients
@@ -138,7 +138,7 @@ export function StatusLine({
    *  is drawn only when it drifts. */
   pin?: { pin?: PinReport; again: () => void };
   /**
-   * Which regions the window is drawing, and the way to change that (charter ADR 0038).
+   * Which regions the window is drawing, and the way to change that (ADR 0038).
    *
    * **The arrangement, already in the order the window draws it** — `PlaneView` flattens
    * `inSlots` and hands the result over. Nothing here sorts, filters or names a region: a
@@ -157,7 +157,7 @@ export function StatusLine({
   const pieces = pieceCount(state);
   return (
     <footer className="status-line" aria-label="Status" data-testid="status-line">
-      {/* **Which regions are drawn** (charter ADR 0038), FIRST on the line, at the window's
+      {/* **Which regions are drawn** (ADR 0038), FIRST on the line, at the window's
           bottom-left corner — the operator's *"show hide buttons can be movet to bottom status
           bar — again like ZED"*, with a screenshot of Zed that has them at the far left. #207
           put them at the right-hand end and called that Zed's place; it is not, and the

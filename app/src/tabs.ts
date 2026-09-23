@@ -1,7 +1,7 @@
 /**
  * The tabs the window shows, and how each one is split into panes.
  *
- * **A tab is a layout of panes, and a pane holds a session or a view** (charter ADR 0043, as
+ * **A tab is a layout of panes, and a pane holds a session or a view** (ADR 0043, as
  * amended 2026-09-23). A session is a chat's terminal; a view is anything else a tab can show —
  * a persona, an extension's statistics — named by data ({@link ViewRef}) rather than by a
  * component, so charter's own views and an extension's take the same path. The operator's

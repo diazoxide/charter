@@ -140,7 +140,7 @@ const record = join(plane, ".charter", "app", "reopen.json");
 const STAMPED = Math.floor(Date.now() / 1000) - 60;
 
 // A record as the app itself writes one, holding one chat under a conversation — and one tab
-// that holds a view rather than a chat (charter ADR 0043, as amended), beside it.
+// that holds a view rather than a chat (ADR 0043, as amended), beside it.
 mkdirSync(join(plane, ".charter", "app"), { recursive: true });
 writeFileSync(
   record,

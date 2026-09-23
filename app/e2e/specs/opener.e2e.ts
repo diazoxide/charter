@@ -10,7 +10,7 @@ import { copyFixturePlane } from "../harness.js";
  * back STARTS the programs it names, and for a chat that was not on a harness profile what
  * runs is decided from the record alone. A project is a DIRECTORY, and a directory arrives by
  * zip, by shared folder or on a stick as readily as by `git clone`. So "open this folder" must
- * not be able to mean "run what is written in it" (charter ADR 0035).
+ * not be able to mean "run what is written in it" (ADR 0035).
  *
  * It is driven through the window's own `invoke` rather than through the opener's buttons, and
  * that is deliberate rather than a shortcut. The opener only draws when the window has no

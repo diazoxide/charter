@@ -4,7 +4,7 @@ import { $, $$, browser, expect } from "@wdio/globals";
 import { copyFixturePlane } from "../harness.js";
 
 /**
- * **A tab that holds something other than a chat**, in the built app (charter ADR 0043, as
+ * **A tab that holds something other than a chat**, in the built app (ADR 0043, as
  * amended 2026-09-23). The operator, choosing a tab for the persona card: *"we dont have other
  * tabs then sessions, and this can be good example for us - that in tabs we can have what we
  * want - not only harnesses"*.

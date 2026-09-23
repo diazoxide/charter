@@ -110,24 +110,30 @@ fn a_healthy_plane_has_no_alerts_and_can_say_so_with_a_number() {
 
 #[test]
 fn a_pin_this_charter_does_not_meet_names_both_numbers_and_the_command() {
-    let (_held, root) = plane(&format!("{HEALTHY}\n[charter]\nversion = \"0.44.0\"\n"));
-    let running = crate::news::shipped_version();
-    assert_ne!(
-        running, "0.44.0",
-        "this test is vacuous if the corpus reaches the pin"
-    );
+    let (_held, root) = plane(&format!("{HEALTHY}\n[charter]\nversion = \"9.0.0\"\n"));
+    let running = crate::adopt::app_version();
     assert_eq!(
         lines(&root),
         vec![format!(
-            "{W}⚠\x1b[0m \x1b[2mcharter\x1b[0m {running} \x1b[2m→ pinned\x1b[0m 0.44.0\x1b[2m · \
+            "{W}⚠\x1b[0m \x1b[2mcharter\x1b[0m {running} \x1b[2m→ pinned\x1b[0m 9.0.0\x1b[2m · \
              charter version\x1b[0m"
         )]
     );
 }
 
 #[test]
+fn a_pin_on_the_python_charters_line_is_not_drift_and_draws_no_row() {
+    // ADR 0045: the plane a Python charter pinned is an older charter line, not a plane this
+    // app is behind. The Python charter draws its drift row here; this one draws nothing.
+    for pin in [crate::adopt::PYTHON_LINE_LAST, "0.44.0"] {
+        let (_held, root) = plane(&format!("{HEALTHY}\n[charter]\nversion = \"{pin}\"\n"));
+        assert_eq!(lines(&root), Vec::<String>::new(), "{pin}");
+    }
+}
+
+#[test]
 fn a_pin_this_charter_meets_is_not_drift() {
-    let running = crate::news::shipped_version();
+    let running = crate::adopt::app_version();
     let (_held, root) = plane(&format!(
         "{HEALTHY}\n[charter]\nversion = \"  {running} \"\n"
     ));
@@ -152,7 +158,7 @@ fn a_pin_beside_the_dev_channel_is_its_own_row_and_not_drift() {
 #[test]
 fn a_channel_charter_does_not_know_is_stable_and_the_pin_is_ordinary_drift() {
     let (_held, root) = plane(&format!(
-        "{HEALTHY}\n[charter]\nversion = \"0.44.0\"\n\n[update]\nchannel = \"DEV\"\n"
+        "{HEALTHY}\n[charter]\nversion = \"9.0.0\"\n\n[update]\nchannel = \"DEV\"\n"
     ));
     assert!(matches!(
         reading(&root).alerts.as_slice(),
@@ -278,7 +284,7 @@ fn a_raise_keeps_the_rows_before_it_and_drops_the_rows_after_it() {
     // `persona = "steward"` is truthy and not a table: charter's `.get` raises there, after the
     // pin row and before the reinit row.
     let (_held, root) =
-        plane("schema = 1\npersona = \"steward\"\n\n[charter]\nversion = \"0.44.0\"\n");
+        plane("schema = 1\npersona = \"steward\"\n\n[charter]\nversion = \"9.0.0\"\n");
     stale(&root, "beta");
     let got = reading(&root);
     assert!(
@@ -501,7 +507,7 @@ fn every_finding_shares_one_row_in_charters_order() {
 #[test]
 fn every_row_comes_in_charters_order() {
     let (_held, root) =
-        plane("schema = 1\n\n[persona]\ndefault = \"ghost\"\n\n[charter]\nversion = \"0.44.0\"\n");
+        plane("schema = 1\n\n[persona]\ndefault = \"ghost\"\n\n[charter]\nversion = \"9.0.0\"\n");
     stale(&root, "beta");
     repo(&root);
     std::fs::write(root.join("notes.md"), "# notes\n\nedited\n").unwrap();

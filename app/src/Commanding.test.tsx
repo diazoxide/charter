@@ -111,7 +111,7 @@ function core(over: (cmd: string, args: unknown) => unknown = () => undefined) {
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "start_options") return START_OPTIONS;
-    if (cmd === "start_chat") return { session: ++opened, wired: null };
+    if (cmd === "start_chat") return { session: ++opened };
     if (cmd === "worktree_of_chat") return PIECE;
     return null;
   });
@@ -155,7 +155,7 @@ const WATCHING = new Set([
   "plane_at_launch",
   "plane_sidebar",
   // What the machine store says is pinned here. Asked off the sidebar's answer, so where it
-  // lands in a sequence is about how many awaits the chain took (charter ADR 0039).
+  // lands in a sequence is about how many awaits the chain took (ADR 0039).
   "plane_pins",
   "opened_chats",
   "chats_that_would_not_start",
@@ -272,7 +272,7 @@ describe("the palette reaching what the window can do", () => {
     render(<App />);
     await screen.findByTestId("panels");
     // The right-hand region names the workspace whose todos and personas it is drawing
-    // (charter ADR 0038 renamed it: it is what is asking for you, not the workspace).
+    // (ADR 0038 renamed it: it is what is asking for you, not the workspace).
     expect(await screen.findByLabelText("Attention · alpha")).toBeInTheDocument();
 
     await runFromPalette("focus workspace beta");

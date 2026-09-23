@@ -5,7 +5,7 @@ import { THE_RUNS_TREE, anEmptyRecord, copyFixturePlane } from "../harness.js";
 import { answerTheAsk, pressAndStart } from "../opening.js";
 
 /**
- * A window holding more than one project, in the built app (charter ADR 0033, decision 23).
+ * A window holding more than one project, in the built app (ADR 0033, decision 23).
  *
  * **What this is for.** The operator asked for Zed's project tabs by name, and the reason he
  * wanted one window per project before that was the same one: fifty chats in project A must

@@ -168,7 +168,7 @@ describe("the bottom bar", () => {
   });
 
   // ---------------------------------------------------------------------------------------
-  // Worktrees, which are the bottom bar's half of the pair (charter ADR 0038)
+  // Worktrees, which are the bottom bar's half of the pair (ADR 0038)
   // ---------------------------------------------------------------------------------------
 
   it("counts the worktrees cut off each clone", () => {
@@ -593,7 +593,7 @@ describe("the bottom bar", () => {
   });
 
   // ---------------------------------------------------------------------------------------
-  // The rule, as far as a test can hold it (charter ADR 0038)
+  // The rule, as far as a test can hold it (ADR 0038)
   // ---------------------------------------------------------------------------------------
 
   it("has nothing in it to press, because the bottom is what is true and not what you do", () => {

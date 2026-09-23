@@ -3,7 +3,7 @@ import { commands } from "./bindings";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
- * **The window's layout is data** (charter ADR 0038, charter-app#141 for the four regions
+ * **The window's layout is data** (ADR 0038, charter-app#141 for the four regions
  * themselves).
  *
  * The four regions used to be four pieces of JSX in a fixed arrangement, with `localStorage`
@@ -55,7 +55,7 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
  */
 
 /** A region. Data, but a closed set in this build: nothing outside the app contributes one
- *  until charter ADR 0041's plugin runtime exists, and a `Record` keyed on it is what makes
+ *  until ADR 0041's plugin runtime exists, and a `Record` keyed on it is what makes
  *  the catalogue exhaustive at compile time. */
 export type RegionId = "explorer" | "aside" | "bottom";
 
@@ -128,7 +128,7 @@ export type Placement = {
 
 export type Arrangement = Placement[];
 
-/** Today's four-region window (charter ADR 0038), as the default *value* of the arrangement
+/** Today's four-region window (ADR 0038), as the default *value* of the arrangement
  *  rather than as a shape in `PlaneView`. */
 export const DEFAULT_ARRANGEMENT: Arrangement = [
   { id: "explorer", side: "left", order: 0, collapsed: false },

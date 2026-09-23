@@ -87,7 +87,7 @@ describe("the picker a chat starts from", () => {
   });
 
   it("leaves the pane's footer blank unless this chat asks for charter's", async () => {
-    // The default, and charter ADR 0029 keeps it: nobody's pane moves on an upgrade. The
+    // The default, and ADR 0029 keeps it: nobody's pane moves on an upgrade. The
     // box is drawn unticked and the start carries `false`.
     const { onStart, user } = show();
 

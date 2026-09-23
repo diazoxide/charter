@@ -1,7 +1,7 @@
 //! The extension registry: what has contributed what to this window, and what the operator
 //! agreed to.
 //!
-//! **This is charter ADR 0041's item 2 — "an extension registry with no executor" — and there
+//! **This is ADR 0041's item 2 — "an extension registry with no executor" — and there
 //! is still no executor here.** Nothing in this module spawns a process, opens a socket or
 //! evaluates anything. It answers three questions and no others: what an extension *is*, what
 //! this machine has installed, and what the operator approved each one to contribute.
@@ -37,7 +37,7 @@
 //!
 //! Beside [`crate::machine::FILE`], not inside it: `$CHARTER_CONFIG_HOME/charter/` (else
 //! `$XDG_CONFIG_HOME`, else `~/.config`) holds `machine.json` and, next to it,
-//! [`RECORD`]. charter ADR 0034's rule is "four things, and nothing else" and ADR 0040 already
+//! [`RECORD`]. ADR 0034's rule is "four things, and nothing else" and ADR 0040 already
 //! argued it to five; the whole value of that limit is that the fifth had to be argued for,
 //! and a sixth key appended to the same file without an argument would spend it. A separate
 //! file in the same directory is a different claim: `machine.json` still holds exactly what
@@ -53,7 +53,7 @@
 //! # Windows refuses rather than degrades
 //!
 //! `chmod 0o755` leaves a file at `0o666` on Windows (measured, charter-app#98), so the
-//! `0600`/`0700` this record depends on has no expression there, and charter ADR 0031 settles
+//! `0600`/`0700` this record depends on has no expression there, and ADR 0031 settles
 //! what to do: refuse. Every entry point that touches the record answers
 //! [`io::ErrorKind::Unsupported`], exactly as [`crate::machine`] does, and charter keeps no
 //! extension list at all on that platform. A world-writable list of "which programs the
@@ -88,7 +88,7 @@
 //!
 //! # What is *in* the vocabulary today
 //!
-//! Themes, panels (`crate::panel`, charter ADR 0043), and **views**. A theme and a panel are
+//! Themes, panels (`crate::panel`, ADR 0043), and **views**. A theme and a panel are
 //! declarative data against a closed vocabulary charter owns, charter chooses the consumer, and
 //! charter parses and re-emits rather than interpolating — ADR 0041's four properties.
 //!
@@ -1491,7 +1491,7 @@ pub fn file(config_root: &Path) -> PathBuf {
 }
 
 /// Whether charter keeps an extension record on this platform at all. See the module
-/// docstring, and [`crate::machine`]'s, and charter ADR 0031.
+/// docstring, and [`crate::machine`]'s, and ADR 0031.
 #[cfg(unix)]
 fn supported() -> io::Result<()> {
     Ok(())
@@ -1503,7 +1503,7 @@ fn supported() -> io::Result<()> {
         io::ErrorKind::Unsupported,
         "charter keeps no extension record on this platform: the 0600 on the file and the 0700 \
          on its directory have no expression here (charter-app#98), and a guard that cannot be \
-         expressed refuses rather than degrades (charter ADR 0031)",
+         expressed refuses rather than degrades (ADR 0031)",
     ))
 }
 

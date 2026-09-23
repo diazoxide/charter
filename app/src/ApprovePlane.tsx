@@ -5,7 +5,7 @@ import type { Ask } from "./bindings";
 /**
  * What opening this project will put in force, and the question about it.
  *
- * **The prompt IS the prompt** (charter ADR 0035). charter's CLI asks by printing a second
+ * **The prompt IS the prompt** (ADR 0035). charter's CLI asks by printing a second
  * command to type, because `util.py` has nothing that reads stdin and a hook blocked on stdin
  * hangs a turn — a constraint about the CLI and about nothing else. Here there is a window and
  * a person looking at it, so the question is asked where the answer is given, and nothing is

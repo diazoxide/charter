@@ -81,6 +81,18 @@ PYTHON_WRITES = {
 DEFERRED_HINT = "This charter does not run this check yet, so its silence means nothing"
 
 
+#: The one decided difference in the schema refusal: how to get a newer charter. charter names
+#: `uv tool install charter-cp`, and charter-app is updated as an app (ADR 0044, ADR 0045 — no
+#: shipped text sends the operator to the Python charter). EXACTLY those two remedies are
+#: blanked, so the sentence around them, and every other byte of every row, is still compared,
+#: and a third wording on either side is a difference.
+_UPGRADE_REMEDY = (
+    r"Upgrade charter: (?:`uv tool install charter-cp --force --refresh`|update the app)\.",
+    "the remedy for a plane from a newer charter: charter-cp's installer for charter, the app's "
+    "update for charter-app (ADR 0045)",
+)
+
+
 @dataclass
 class DoctorScenario:
     name: str
@@ -379,7 +391,7 @@ DOCTOR_SCENARIOS = [
         setup=_rewrite_charter_toml('schema = 1\n\n[plane]\nworktrees = "../../far/away"\n')),
     DoctorScenario(
         name="doctor-a-plane-from-the-future", plane="daily", args=["--json"],
-        setup=_rewrite_charter_toml("schema = 2\n")),
+        setup=_rewrite_charter_toml("schema = 2\n"), mask=[_UPGRADE_REMEDY]),
     DoctorScenario(
         name="doctor-a-charter-toml-that-will-not-parse", plane="daily", args=["--json"],
         setup=_rewrite_charter_toml("[harness\n"), mask=[_TOML_DIAGNOSTIC]),

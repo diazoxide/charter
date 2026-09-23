@@ -1053,3 +1053,61 @@ fn a_session_starting_outside_every_plane_refreshes_nothing() {
         "charter left a cache directory in a plain directory"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn every_hook_the_bundled_plugin_wires_answers_an_ordinary_call_with_exit_zero() {
+    // The registry is the whole of what the app's plugin wires, and a word in it that this
+    // binary does not answer would refuse a tool call — or keep a session from ending — in
+    // every chat. So each command is run exactly as the generated `hooks.json` spells it,
+    // through `/bin/sh -c` as Claude Code runs it, with the variable the app sets.
+    let plane = a_plane();
+    let doc: serde_json::Value =
+        serde_json::from_str(&charter_core::plugin::hooks_json()).expect("the hooks file");
+    let mut ran = 0;
+    for (event, groups) in doc["hooks"].as_object().expect("events") {
+        for group in groups.as_array().expect("groups") {
+            for hook in group["hooks"].as_array().expect("hooks") {
+                let command = hook["command"].as_str().expect("a command");
+                let payload = serde_json::json!({
+                    "session_id": "11111111-2222-4333-8444-555555555555",
+                    "cwd": plane.path(),
+                    "hook_event_name": event,
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "ls"},
+                })
+                .to_string();
+                let mut child = Command::new("/bin/sh")
+                    .args(["-c", command])
+                    .current_dir(plane.path())
+                    .env_clear()
+                    .env("PATH", "/usr/bin:/bin")
+                    .env("CHARTER_ROOT", plane.path())
+                    .env("CHARTER_HARNESS", "claude-code")
+                    .env(charter_core::plugin::BINARY_ENV, CHARTER)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("sh runs");
+                child
+                    .stdin
+                    .take()
+                    .expect("stdin")
+                    .write_all(payload.as_bytes())
+                    .expect("written");
+                let out = child.wait_with_output().expect("it finishes");
+                let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{event}: `{command}` did not answer: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                assert_eq!(decision(&stdout), None, "{event} refused `ls`: {stdout}");
+                ran += 1;
+            }
+        }
+    }
+    assert_eq!(ran, charter_core::hookreg::HANDLERS.len());
+}

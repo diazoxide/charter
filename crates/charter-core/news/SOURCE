@@ -17,10 +17,16 @@ the binary invisibly and in both directions. The Python charter satisfies that w
 has no checkout to fall back on, so the entries are compiled in — `build.rs` reads this
 directory and `include_str!`s every file.
 
-What that leaves is one copy per implementation for as long as both exist. It ends the way it
-started: when news is authored here rather than in charter's repository, this becomes the only
-copy and `news::DEV_REPO` moves with the authoring — not before, because every link in every
-published release body points at `diazoxide/charter` by tag.
+THIS IS FROZEN HISTORY (ADR 0045)
+
+These are the Python charter's notes about its own releases, 0.44.0 to 0.62.1, and the few
+entries it had staged when it stopped. None of them is news about this app, whose release notes
+are `CHANGELOG.md`, and nothing is added here. They stay compiled in, read-only, so `charter
+news` can still say what a plane pinned on the Python line skipped. `news::HISTORY_REPO` keeps
+linking each entry into `diazoxide/charter` by tag, because that is where each one was published.
+
+The pin above stays for as long as the corpus is compared byte for byte with the oracle, which
+is what keeps this copy honest about what the Python charter actually shipped.
 
 NO FILE IN HERE IS NOT AN ENTRY
 

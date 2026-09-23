@@ -1,0 +1,155 @@
+{
+  "description": "Generated from charter_core::hookreg (charter hook --list --json). Do not edit: `cargo test -p charter-app -- --ignored` rewrites it.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook sessionstart",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook userpromptsubmit",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook pretooluse",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook pretooluse-read",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook pretooluse-edit",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook pretooluse-dispatch",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook posttooluse",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook posttooluse-skill",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook posttooluse-dispatch",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook posttooluse-message",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook notification",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook subagentstop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CHARTER_HOOK_BINARY}\" hook sessionend",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,5 +1,7 @@
 # Secrets: the vault
 
+> **This version of charter does not have `charter vault` or `charter secret` yet.** The Bash guard that keeps a vault file out of the transcript is in it, and is described in [hooks.md](hooks.md).
+
 `charter` has a small, provider-agnostic secret manager: **vaults**, addressed via
 `charter vault …` and `charter secret …` (or, scoped to a role, `charter persona
 secret …`). Read this page before storing anything real in one.
@@ -110,7 +112,7 @@ shell history**, while still letting an agent *use* the credential:
   unscrubbed, and `--exec`/`--stream` capture nothing and therefore redact nothing. The
   guarantee is that charter never prints the value into the conversation; where it goes
   after that is a property of the command you chose. Details below, and in
-  [SECURITY.md](../SECURITY.md).
+  [SECURITY.md](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/SECURITY.md).
 
 - **`charter secret cp`** materializes a secret to a 0600 file (e.g. a kubeconfig) and
   prints only the path, never the contents. The destination has to be a **real file it
@@ -214,8 +216,8 @@ shell history**, while still letting an agent *use* the credential:
   COMMAND LINE, before any shell runs.** Four things fall out of that sentence. It is a
   claim about *that sentence's consequences*, not a promise that the list is exhaustive —
   the review that produced this section found a fifth by re-reading the code, not the prose,
-  and the honest version of the promise is that each item below is pinned as behaviour in
-  `tests/test_documented_limits.py` or `tests/test_vault_path_spellings.py`.
+  and the honest version of the promise is that each item below is pinned as behaviour by a
+  test.
 
   *The name.* Everything not on the reader list runs: an interpreter
   (`python3 -c "print(open('.charter/vaults/db.json').read())"`), a program that reads
@@ -247,7 +249,7 @@ shell history**, while still letting an agent *use* the credential:
   path and a symlinked parent are one question — and it fires only when the guarded entries
   exist and hold something, so a plane with no file-backed vault never sees it. The denial
   names the fix: `grep -rn --exclude-dir=.charter …`, `rg --glob '!.charter' …`, and both
-  are asserted to run in `tests/test_vault_path_spellings.py`.
+  are asserted to run by a test.
 
   The ceiling on *that* predicate is the same one the reader list has: it knows which
   programs walk directories, so `find . -type f -exec cat {} +`, `tar cf - .` and an
@@ -266,7 +268,7 @@ shell history**, while still letting an agent *use* the credential:
   knowing: a glob only escapes when the metacharacter falls *inside* `.charter/vaults/`, so
   `cat .charter/vaults/*.json` is still denied.
 
-  Treat all of it the way [SECURITY.md](../SECURITY.md) frames it: the guard is against
+  Treat all of it the way [SECURITY.md](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/SECURITY.md) frames it: the guard is against
   mistakes, and the property that does not depend on a name is that *charter* never prints
   the value.
 
@@ -418,7 +420,7 @@ merely legal.
 `Read`/`Grep` guard both recognise a vault by its *path* — `.charter/vaults/…` — so a
 plain-file vault at `~/creds/devops.json` is an ordinary file to them, and `cat` on it is
 an ordinary read. That is the direct cost of the remedy in the paragraph above, and it is
-not hidden in the code: `charter/hooks.py` says so where the check is made, and explains
+not hidden in the code: the guard says so where the check is made, and explains
 why it is not fixed there — this runs on **every** Bash tool call, and consulting the vault
 registry per invocation is a real cost on a hot path. Prefer the default location under
 `.charter/`, which `charter init` gitignores; move the file out only when the alternative

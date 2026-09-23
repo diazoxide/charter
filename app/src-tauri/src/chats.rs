@@ -38,7 +38,7 @@ pub struct Open {
     /// that could not be resumed — the difference is only interesting at a relaunch, which
     /// is where the UI says it.
     pub how: Reopened,
-    /// Whether the operator pinned it (charter ADR 0039). It rides the record, so a pinned
+    /// Whether the operator pinned it (ADR 0039). It rides the record, so a pinned
     /// chat comes back pinned; see [`charter_core::reopen::Chat::pinned`].
     pub pinned: bool,
 }
@@ -80,8 +80,8 @@ pub struct Chats {
     /// Told when a chat that was announced turned out not to start.
     #[allow(clippy::type_complexity)]
     never_started: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
-    /// The `charter` binary a hook runs, when the app knows where its own is.
-    binary: Option<PathBuf>,
+    /// What the app ships that a chat is armed with: its own `charter` and its own plugin.
+    shipped: crate::Shipped,
     open: Mutex<HashMap<u32, Running>>,
     front: Mutex<Option<u32>>,
     /// Chats a launch could not start, and why. They are kept because the record has to
@@ -121,7 +121,7 @@ impl Chats {
             sessions: Sessions::reporting_to(reporting),
             starting: Mutex::new(None),
             never_started: Mutex::new(None),
-            binary: None,
+            shipped: crate::Shipped::default(),
             open: Mutex::new(HashMap::new()),
             front: Mutex::new(None),
             would_not_start: Mutex::new(Vec::new()),
@@ -157,33 +157,38 @@ impl Chats {
         &self.sessions
     }
 
-    /// Where the `charter` binary a hook runs is, when the app knows.
+    /// What the app ships that a chat is armed with: the `charter` binary a hook runs and the
+    /// plugin a Claude Code chat loads, when the app knows where each is.
     ///
-    /// Its own executable, because the app and the binary ship together: the one on `PATH`
-    /// may be an older install, or the Python charter, and a hook pointed at either would be
-    /// answering a different program's idea of these events.
-    pub fn arming_with(&mut self, binary: Option<PathBuf>) {
-        self.binary = binary;
+    /// Its own, because the app and both ship together: the `charter` on `PATH` may be an
+    /// older install, or the Python charter, and a hook pointed at either would be answering a
+    /// different program's idea of these events.
+    pub fn arming_with(&mut self, shipped: crate::Shipped) {
+        self.shipped = shipped;
     }
 
-    /// The arguments that arm this harness's state hooks on this session alone, if any.
+    /// The arguments and the environment that arm this harness on this session alone, if any.
     ///
     /// `cwd` is the chat's own directory, which decides whether charter may also fill Claude
     /// Code's status line for it (`charter_core::footerclaim`): project settings are read from
     /// the session's own directory, so that is the directory the question is asked about.
-    fn state_hook_args(
+    fn state_hooks(
         &self,
         harness: Option<Harness>,
         cwd: Option<&std::path::Path>,
-    ) -> Vec<String> {
-        let (Some(harness), Some(binary)) = (harness, self.binary.as_ref()) else {
-            return Vec::new();
+    ) -> (Vec<String>, Vec<(String, String)>) {
+        let (Some(harness), Some(binary)) = (harness, self.shipped.binary.as_deref()) else {
+            return (Vec::new(), Vec::new());
         };
-        match harness.state_hooks(binary, cwd) {
-            StateHooks::ThisSessionOnly { args, .. } => args,
+        let kit = charter_core::harness::Kit {
+            binary,
+            plugin: self.shipped.plugin.as_deref(),
+        };
+        match harness.state_hooks(kit, cwd) {
+            StateHooks::ThisSessionOnly { args, env, .. } => (args, env),
             // Nothing is added to the command line, and nothing of the operator's is written
             // behind their back. The chat shows `unknown`.
-            StateHooks::None => Vec::new(),
+            StateHooks::None => (Vec::new(), Vec::new()),
         }
     }
 
@@ -288,12 +293,15 @@ impl Chats {
         // Charter's own words first, and the state hooks before even those: a harness reads
         // its settings before it reads anything else on the line, and a chat's own recorded
         // arguments may end in a positional prompt that nothing may come after.
-        let mut all = self.state_hook_args(harness, chat.cwd.as_deref());
+        let (mut all, armed) = self.state_hooks(harness, chat.cwd.as_deref());
         all.extend(args);
-        // The directories charter searched for the harness, then the `charter` the hooks
-        // above name by absolute path — so a hook the plugin or the plane spells as the bare
-        // word `charter` finds one from a Finder launch too (charter-app#136).
-        let env = charter_core::start::with_chat_path(env, self.binary.as_deref());
+        let mut env = env;
+        env.extend(armed);
+        env.sort();
+        // The app's own `charter` first, then the directories charter searched for the
+        // harness — so a hook the plane spells as the bare word `charter`, or a skill's
+        // command, finds the one this app shipped, from a Finder launch too (charter-app#136).
+        let env = charter_core::start::with_chat_path(env, self.shipped.binary.as_deref());
         // What the announcement below said, so a start that fails can take it back.
         let announced = std::sync::atomic::AtomicU32::new(0);
         let session = self
@@ -370,7 +378,7 @@ impl Chats {
     ///
     /// **A chat charter does not have open cannot be pinned**, and the answer says so rather
     /// than inventing an entry: a pin is an arrangement of what is there, and the record is
-    /// the only thing that says a chat exists at all (charter ADR 0040). It follows that a
+    /// the only thing that says a chat exists at all (ADR 0040). It follows that a
     /// pinned chat that does not come back at a launch takes its pin with it, which is the
     /// dangling-pin question answered by there being nowhere for one to dangle.
     ///
@@ -1741,7 +1749,7 @@ mod tests {
         assert_eq!(again.chats[0].resume, Some(SessionId::new(ID).unwrap()));
     }
 
-    // ----- a pinned chat (charter ADR 0039, stored per ADR 0040) -----
+    // ----- a pinned chat (ADR 0039, stored per ADR 0040) -----
 
     #[test]
     fn a_pin_is_written_into_the_record_so_it_outlives_the_app() {
@@ -1833,7 +1841,7 @@ mod tests {
         // that added `profile: None` beside the spread would do it: the record would still
         // be written, still be read, and every chat would come back as a shell.
         //
-        // The footer choice (charter ADR 0029) rides the same spread and fails the same way:
+        // The footer choice (ADR 0029) rides the same spread and fails the same way:
         // it would be dropped at the quit and the chat would come back blanked.
         let chats = Chats::new();
         let chat = Chat {
@@ -1903,7 +1911,6 @@ mod tests {
             how: charter_core::reopen::Reopened::Fresh(
                 charter_core::reopen::Fresh::NoConversationRecorded,
             ),
-            wired: String::new(),
         };
 
         let session = chats
@@ -1969,7 +1976,6 @@ mod tests {
             how: charter_core::reopen::Reopened::Fresh(
                 charter_core::reopen::Fresh::NoConversationRecorded,
             ),
-            wired: String::new(),
         };
 
         let session = chats.start_ready(&chat, &ready, SIZE).unwrap();

@@ -78,9 +78,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Not merged yet: the personas panel opens a statistics view with a chart, drawn by an approved
   extension that charter runs for one question at a time. A tab can hold a view like this, not
   only a chat. ([#212](https://github.com/diazoxide/charter-app/pull/212))
+- The palette can put the app's own `charter` on your terminal's `PATH` on macOS: **Install
+  `charter` command in PATH** links `/usr/local/bin/charter` to it, and never replaces a
+  `charter` something else put there. ([#221](https://github.com/diazoxide/charter-app/pull/221))
 
 ### Changed
 
+- A chat needs nothing installed from the Python charter. The app carries its own Claude Code
+  plugin with charter's hooks, its Bash guard and its skills, and loads it into each chat it
+  starts, for that chat alone. The chat turns the Python charter's plugin off for itself, and
+  finds the app's own `charter` first on its `PATH`. A chat starts offline.
+  ([#221](https://github.com/diazoxide/charter-app/pull/221))
 - The light and dark themes are data files, and the window and the terminal are both drawn from
   them. ([#144](https://github.com/diazoxide/charter-app/pull/144))
 - Not merged yet: the terminal follows a theme switch while it is open, and the window's layout
@@ -104,6 +112,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A macOS build is ad-hoc signed when no Apple Developer ID is set up. The first install needs
   one command, and the release page says which.
   ([#201](https://github.com/diazoxide/charter-app/pull/201))
+- Not merged yet: `charter version` prints the app's own version. A plane pinned to a release
+  of the Python charter is reported as that older line, not as drift. `charter doctor` and
+  every other message stop sending you to the Python charter, and `charter docs show`
+  describes this app. ([#219](https://github.com/diazoxide/charter-app/pull/219))
 
 ### Fixed
 

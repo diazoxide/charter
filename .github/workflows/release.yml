@@ -5,7 +5,7 @@ name: release
 # `ci.yml`'s `app` job proves the app COMPILES on both platforms; it builds `--debug
 # --no-bundle`, so it produces nothing anyone can run. This workflow is the only place that
 # uses the release profile, the only place Tauri's bundler runs, and the only place anything is
-# signed or published (charter ADR 0042).
+# signed or published (ADR 0042).
 #
 # Three ways in, and what each one makes:
 #
@@ -542,6 +542,23 @@ jobs:
             echo; echo "ldd of the app:"; ldd target/release/charter-app || true
           fi
 
+      # The plugin every Claude Code chat loads (`charter_core::plugin`). A bundle without it
+      # starts every chat unarmed — no state, no guard, no skills — so its absence fails the
+      # build rather than reaching anyone.
+      - name: The bundle carries charter's own plugin
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            plugin=target/release/bundle/macos/charter.app/Contents/Resources/plugin
+            ls -R "$plugin"
+            test -f "$plugin/.claude-plugin/plugin.json"
+            test -f "$plugin/hooks/hooks.json"
+          else
+            dpkg -c dist/*.deb | grep -E 'plugin/' || true
+            dpkg -c dist/*.deb | grep -q 'plugin/.claude-plugin/plugin.json'
+            dpkg -c dist/*.deb | grep -q 'plugin/hooks/hooks.json'
+          fi
+
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
@@ -575,7 +592,7 @@ jobs:
               cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           ### A first install on macOS meets Gatekeeper, and this is expected
 
-          This build is **signed with a Developer ID and not notarized** (charter ADR 0042). A
+          This build is **signed with a Developer ID and not notarized** (ADR 0042). A
           browser marks everything it downloads as quarantined, and macOS 15 and later answer a
           quarantined app that Apple has not notarized with a dialog — **"charter" Not Opened**,
           *Apple could not verify "charter" is free of malware* — offering only *Done* and
@@ -602,7 +619,7 @@ jobs:
           ### A first install on macOS needs one command, and this is expected
 
           This build is **ad-hoc signed**: charter has no Apple Developer account behind it
-          (charter ADR 0042, amended 2026-09-23). The app is signed — on Apple Silicon nothing
+          (ADR 0042, amended 2026-09-23). The app is signed — on Apple Silicon nothing
           unsigned runs at all — but it is signed by nobody in particular, so Gatekeeper has no
           developer to check and refuses a *quarantined* copy. A browser marks everything it
           downloads as quarantined. Before the first launch, run:

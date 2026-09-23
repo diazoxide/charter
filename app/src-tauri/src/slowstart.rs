@@ -26,7 +26,7 @@
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
-/// The spec's cold-start limit (`docs/superpowers/specs/2026-09-17-charter-app.md`, Limits;
+/// The spec's cold-start limit (`docs/spec.md`, Limits;
 /// ADR 0026 holds it at 2 s). A launch that passes it is a launch worth explaining.
 pub const LIMIT: Duration = Duration::from_secs(2);
 

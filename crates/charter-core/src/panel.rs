@@ -3,7 +3,7 @@
 //! **This is the contribution contract, and it is [`crate::extension`]'s vocabulary widened by
 //! exactly one word.** Until now an extension could contribute `themes` and declare a `program`
 //! nothing runs. A panel is the second entry in that vocabulary, and it is admitted on the same
-//! four properties charter ADR 0041 requires of a declarative extension point — the properties
+//! four properties ADR 0041 requires of a declarative extension point — the properties
 //! the theme already had before the registry existed:
 //!
 //! 1. **The vocabulary is closed and charter decides it.** A panel fills in values for names
@@ -47,7 +47,7 @@
 //! # Where the numbers in a chart come from
 //!
 //! [`Block::Chart`] is the third kind of block, and it is admitted **only in an answer**, never
-//! in a manifest. charter ADR 0043 refused a chart block while there was no executor, for a
+//! in a manifest. ADR 0043 refused a chart block while there was no executor, for a
 //! reason that still holds for a manifest: *a declared chart is a chart of numbers the extension
 //! wrote down at install time*, and stale statistics under the word *statistics* are worse than
 //! none. A program the executor asks when the operator opens a view answers with numbers read

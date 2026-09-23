@@ -1,5 +1,9 @@
 //! charter's OWN documentation pages, for `charter docs list` and `charter docs show`.
 //!
+//! **The pages are this app's, written in this repository** (ADR 0044). They began as a copy
+//! of the Python charter's `docs/*.md`, held byte for byte against it; they describe this app
+//! now, so nothing compares them with that copy any more and nothing here ties them to it.
+//!
 //! `charter/docsrc.py`, ported (M2.21). The reason the pages travel with the binary rather
 //! than with the plane is that module's and is not repeated here: *a control plane has no
 //! reason to vendor a copy and every reason not to — the page a user reads should come from
@@ -10,8 +14,8 @@
 //! error is what a Makefile or a wrapper script meets when a Rust `charter` is first on
 //! `$PATH` — for a verb the tool being replaced has. M2.11 shipped `docs generate` and scoped
 //! these out; the cost of closing the gap turned out to be one directory and one lookup,
-//! because [`news`](crate::news) had already built the road: a vendored corpus, `build.rs`
-//! compiling it in, and a differential that renders both sides byte for byte.
+//! because [`news`](crate::news) had already built the road: a corpus in the crate and
+//! `build.rs` compiling it in.
 //!
 //! **There is ONE source here, where Python has two.** Python resolves `charter/_docs`
 //! (the wheel) first and falls back to the repo's `docs/` for a contributor running from a

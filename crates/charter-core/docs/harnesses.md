@@ -1,5 +1,7 @@
 # Harnesses
 
+> **In this version** the CLI has `charter harness list` only, and chats are started from the app's window; `charter harness install` and the `charter <profile>` terminal launch are not in it yet. Where it describes the tmux frame, read [frame.md](frame.md): this app has no frame, and its window takes the frame's place.
+
 You use Claude Code. A teammate uses opencode. CI runs Codex.
 
 Same repos, same rules — or three sets of habits that drift until nobody knows which guard
@@ -464,4 +466,4 @@ If it finds hooks declared in `~/.codex/config.toml` it refuses and says so — 
 run alongside the plugin's, and charter would fire twice a turn.
 
 Why the boundary sits where it does:
-[ADR 0015](adr/0015-the-boundary-moves-with-the-harness.md).
+[ADR 0015](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0015-the-boundary-moves-with-the-harness.md).

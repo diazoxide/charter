@@ -14,10 +14,10 @@
 //! **Resolution and execution are separate questions.** [`resolve`] answers the first: what
 //! it hands back is an absolute path, and nothing a child inherits is involved. [`chat_path`]
 //! is the one place this module answers the second, for exactly one kind of child — the
-//! program a CHAT runs — and it says why at length (charter-app#136). A probe's environment
-//! is still [`crate::wiring::environment`]'s, a forge CLI's is still `forge::cli_env`'s, and
-//! git's is still `worktree::git`'s fixed one: widening what a chat can reach is not a reason
-//! to widen what charter's own subprocesses can.
+//! program a CHAT runs — and it says why at length (charter-app#136). A forge CLI's
+//! environment is still `forge::cli_env`'s and git's is still `worktree::git`'s fixed one:
+//! widening what a chat can reach is not a reason to widen what charter's own subprocesses
+//! can.
 //!
 //! **Why a fixed, audited list and not a login shell.** Asking `$SHELL -lc 'echo $PATH'`
 //! once at startup was the obvious candidate and it is the wrong one:
@@ -108,9 +108,9 @@ impl NotFound {
     /// installed" from "the harness is installed somewhere this process cannot see". That one
     /// missing fact is what made charter-app#134 take a code read to diagnose.
     ///
-    /// **The fix comes before the list.** A caller holds this to a budget
-    /// (`wiring::SAID_LIMIT` is 1024 characters) and a directory list built from a long `$HOME`
-    /// can pass it on its own. Whatever is clipped has to be the least load-bearing thing in
+    /// **The fix comes before the list.** A caller holds this to a budget (a refusal is
+    /// clipped to a length a person reads) and a directory list built from a long `$HOME` can
+    /// pass it on its own. Whatever is clipped has to be the least load-bearing thing in
     /// the sentence, and that is the tail of the search, not the action.
     ///
     /// Every value that came from outside charter — the program word, each directory — goes
@@ -281,20 +281,18 @@ pub fn search_dirs() -> Vec<PathBuf> {
     )
 }
 
-/// The `PATH` a chat's program is started with: exactly the directories [`search_dirs_from`]
-/// searched to find the harness, then the directory of the `charter` the app ships — or none,
+/// The `PATH` a chat's program is started with: the directory of the `charter` the app ships,
+/// then exactly the directories [`search_dirs_from`] searched to find the harness — or none,
 /// where the answer cannot be written as a `PATH` without losing something inherited.
 ///
 /// **charter-app#136.** A chat used to inherit the app's own `PATH`, and a Finder-launched
-/// `.app` gets `/usr/bin:/bin:/usr/sbin:/sbin`. The hooks charter arms on a chat itself were
-/// never affected — they name the bundled binary by its absolute path, so a hostile `PATH`
-/// cannot redirect them either, and they stay that way. What broke was everything that names
-/// a program by its bare word from INSIDE the chat: the charter plugin's `hooks.json` and a
-/// plane's own `.claude/settings.json` both say `charter hook …`, because they are files that
-/// travel between machines and cannot carry one machine's path. So every `SessionStart` said
-/// `/bin/sh: charter: command not found`, the plugin's `PreToolUse` guard failed the same way
-/// — which a harness reads as non-blocking, so the tool call ran UNGUARDED — and the model's
-/// own Bash tool could not find `node`, `gh` or `uv` and concluded the machine lacked them.
+/// `.app` gets `/usr/bin:/bin:/usr/sbin:/sbin`. The hooks charter arms on a chat were never
+/// affected — the bundled plugin's hooks and the status line name the bundled binary by its
+/// absolute path, so a hostile `PATH` cannot redirect them either. What broke was everything
+/// that names a program by its bare word from INSIDE the chat: a plane's own
+/// `.claude/settings.json` says `charter hook …`, because it is a file that travels between
+/// machines and cannot carry one machine's path, and the model's own Bash tool could not find
+/// `node`, `gh` or `uv` and concluded the machine lacked them.
 ///
 /// **Why this list and nothing wider.** It is the list that already chose which harness runs,
 /// so a chat searches exactly where charter searched on its behalf and nowhere else. It is in
@@ -304,29 +302,25 @@ pub fn search_dirs() -> Vec<PathBuf> {
 /// that can write `~/.local/bin` can write `~/.zshrc`, so no boundary is crossed that a
 /// terminal-launched chat did not already cross.
 ///
-/// **Why in this order.** The inherited `PATH` first and in its own order, so the change is
-/// strictly additive: a terminal-launched chat finds every program it found before, the same
-/// one, and a Finder-launched one gains a floor. The fixed list next. The app's own `charter`
-/// LAST, and that is load-bearing rather than taste: the plugin's `hooks.json` belongs to the
-/// Python charter the operator installed, and the app's binary BLOCKS every tool hook it does
-/// not answer (`charter-cli`'s `hook`), so putting it first would refuse every tool call in
-/// every chat of an operator who has both. Last, it answers only where nothing else would —
-/// a machine where the app is the only charter there is.
+/// **Why the app's own `charter` comes FIRST.** Nothing the app ships runs on a Python
+/// fallback (ADR 0025): a chat is the app's, so the `charter` it reaches by the bare
+/// word — the hand-off command the `handoff` skill runs, `charter workspace list`, a plane's
+/// own hook — is the one built and shipped with this app, whatever else the machine has
+/// installed. An operator with the Python charter in `~/.local/bin` used to get THAT one in
+/// every chat, because this directory went last: a hand-off then went through a program with
+/// no channel into the app and printed a command for a terminal instead of opening the chat
+/// (charter-app#204), and a plane hook was answered by whichever charter happened to be
+/// installed.
 ///
-/// **M3.1 narrowed that sentence and did not change this conclusion** (charter-app#168 asked to
-/// be told either way). The Bash guard is now ported, so the binary answers `pretooluse`
-/// instead of blocking it. It still blocks the other EIGHT tool-hook words the plugin wires —
-/// `pretooluse-read` above all, which Claude Code fires on every `Read` and `Grep` — so an
-/// operator with both charters and this binary first would still have those refused. The
-/// hazard went from nine words to eight; it did not go away.
+/// What made last the right answer before no longer holds. It was there because the Python
+/// charter's plugin wired nine tool-hook words by the bare word, and this binary blocks every
+/// one it has not ported — first, it would have refused every `Read` in every chat. An app
+/// chat no longer loads that plugin (`crate::plugin::SUPERSEDED` is turned off for the
+/// session), and the bundled plugin wires only words this binary answers.
 ///
-/// And a second reason now stands on its own, which is the one that would survive porting all
-/// nine: for `pretooluse` this binary decides strictly LESS than the Python. There is no
-/// persona tool-gate, so a persona's declared tools stop skipping their prompt; no guard
-/// sighting, so `doctor` and the status line report the guard as never seen; no turn bump, no
-/// piece touch, no routing-mark clear and no trace row. Shadowing an installed Python charter
-/// with a binary that answers less is a regression whichever way the blocking question lands,
-/// and LAST is what keeps the app's binary out of that chat's way entirely.
+/// **Otherwise the inherited `PATH` in its own order, then the fixed list**, so the change is
+/// strictly additive for every other program: a terminal-launched chat finds every program it
+/// found before, the same one, and a Finder-launched one gains a floor.
 ///
 /// **What is dropped.** A relative or empty entry: it resolves against the chat's working
 /// directory, which is a repository a chat can write, and "the program is whatever `./git`
@@ -346,9 +340,9 @@ pub fn chat_path_from(
     let mut dirs = search_dirs_from(path, home);
     if let Some(dir) = charter.and_then(Path::parent)
         && dir.is_absolute()
-        && !dirs.iter().any(|have| have == dir)
     {
-        dirs.push(dir.to_path_buf());
+        dirs.retain(|have| have != dir);
+        dirs.insert(0, dir.to_path_buf());
     }
     let inherited: Vec<PathBuf> = path
         .map(|p| std::env::split_paths(p).collect())
@@ -496,7 +490,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_finder_launched_chat_searches_where_charter_searched_and_then_charters_own_directory() {
+    fn a_finder_launched_chat_searches_charters_own_directory_and_then_where_charter_searched() {
         let home = PathBuf::from("/home/op");
         let charter = PathBuf::from("/Applications/charter.app/Contents/MacOS/charter");
         let path =
@@ -504,14 +498,14 @@ mod tests {
         assert_eq!(
             path,
             [
+                "/Applications/charter.app/Contents/MacOS",
                 FINDER,
                 "/home/op/.local/bin:/home/op/bin:/home/op/.opencode/bin:/home/op/.bun/bin",
                 "/home/op/.volta/bin:/home/op/.npm-global/bin",
                 "/opt/homebrew/bin:/usr/local/bin",
-                "/Applications/charter.app/Contents/MacOS",
             ]
             .join(":"),
-            "the inherited four, the list that found the harness, then the app's charter"
+            "the app's charter, then the inherited four, then the list that found the harness"
         );
     }
 
@@ -539,11 +533,11 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_charter_the_operator_installed_is_found_before_the_apps_own() {
-        // The ORDER is the security property and the correctness one at once. The plugin's
-        // `hooks.json` belongs to the charter the operator installed, and the app's binary
-        // blocks every tool hook it does not answer — so an app `charter` found first would
-        // refuse every tool call in every chat. Asked the way `/bin/sh` asks: first hit wins.
+    fn the_apps_own_charter_is_found_before_an_installed_one() {
+        // Nothing the app ships runs on a Python fallback (ADR 0025). A chat that reaches
+        // `charter` by the bare word — the hand-off the skill runs, a plane's own hook — gets
+        // the binary this app was built with, even where the operator also installed the
+        // Python one. Asked the way `/bin/sh` asks: first hit wins.
         let home = tempfile::tempdir().expect("a home");
         let app = tempfile::tempdir().expect("an app bundle");
         let installed = home.path().join(".local/bin/charter");
@@ -557,18 +551,15 @@ mod tests {
         let path = chat_path_from(Some(OsStr::new(FINDER)), Some(home.path()), Some(&bundled))
             .expect("a PATH");
         let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
-        assert_eq!(find("charter", &dirs), Some(installed));
-
-        // And where nothing else answers, the app's own does — the floor.
-        std::fs::remove_file(home.path().join(".local/bin/charter")).unwrap();
         assert_eq!(find("charter", &dirs), Some(bundled));
+        assert_eq!(dirs[0], app.path(), "{path}");
     }
 
     #[cfg(unix)]
     #[test]
-    fn charters_directory_already_on_the_path_keeps_its_place() {
+    fn charters_directory_already_on_the_path_moves_to_the_front_and_is_named_once() {
         let path = chat_path_from(
-            Some(OsStr::new("/opt/charter:/usr/bin")),
+            Some(OsStr::new("/usr/bin:/opt/charter")),
             None,
             Some(Path::new("/opt/charter/charter")),
         )

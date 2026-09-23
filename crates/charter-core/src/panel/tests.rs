@@ -59,7 +59,7 @@ fn a_panel_is_a_title_an_ordering_and_a_body() {
 fn a_contributed_panel_may_not_run_a_charter_verb() {
     // **The most important refusal in this file.** A row that ran a catalogue offer on a click
     // would be the first thing in charter that executes on an extension's say-so, through a
-    // path with no hook, no prompt and no grant — charter ADR 0041's second door, opened by a
+    // path with no hook, no prompt and no grant — ADR 0041's second door, opened by a
     // panel. The asymmetry it creates is charter's own panels' and is written down in
     // `panel.rs`'s header rather than smoothed over.
     let why = declaring(

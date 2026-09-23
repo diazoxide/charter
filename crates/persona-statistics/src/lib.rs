@@ -1,7 +1,7 @@
 //! Persona statistics: what an operator looks at when he asks how the plane's personas are
 //! doing, computed from what charter hands a view about personas.
 //!
-//! **This is an extension, and the executor's first consumer** (charter ADR 0041 stage 2). It
+//! **This is an extension, and the executor's first consumer** (ADR 0041 stage 2). It
 //! is in charter-app's repository because the operator asked for statistics on the personas
 //! panel and because a contract with no consumer is a guess; it is built exactly as a
 //! stranger's would be. It does not link charter's core, it does not read the plane, and it

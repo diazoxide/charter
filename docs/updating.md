@@ -1,7 +1,7 @@
 # How charter updates itself, and the steps only the operator can take
 
 charter-app updates itself with Tauri's updater, from GitHub Releases, on one of two channels.
-The reasons are charter ADR 0042. This page is the part a person has to do by hand: generate
+The reasons are ADR 0042. This page is the part a person has to do by hand: generate
 one keypair, store two secrets, create one release. Until they are done, nothing is published
 and the app offers no updates. Every error the release workflow prints points back to one of
 these steps.
@@ -176,6 +176,31 @@ replica of the updater's own install code, running inside an ad-hoc-signed app i
 `/Applications`: a quarantine flag on the old bundle did not survive onto the new one, no App
 Management permission was requested, and the replaced bundle launched and updated again. ADR
 0042 §3 has the table and the limits.
+
+## The `charter` command in a terminal
+
+The app ships its own `charter`, and every chat the app starts finds that one first on its
+`PATH`. A terminal does not, until it is put there:
+
+- **macOS**: run **Install `charter` command in PATH** from the command palette. It links
+  `/usr/local/bin/charter` to the `charter` inside `charter.app`, the way VS Code's "Install
+  'code' command in PATH" does, and macOS asks for an administrator's password when that
+  directory is not yours. A link rather than a copy, so the command follows every update the
+  app installs. It never replaces a `charter` somebody else put there — the Python charter,
+  most likely — and says so instead; remove that one first if you want this one.
+- **Linux**: the `.deb` installs `/usr/bin/charter`. The AppImage runs from a mount point that
+  changes at every launch, so there is nothing stable to link to.
+
+## What a chat brings with it
+
+Nothing has to be installed into Claude Code or Codex. The bundle carries its own Claude Code
+plugin, `charter-app` (`Contents/Resources/plugin` on macOS, `/usr/lib/charter/plugin` on
+Linux), and each Claude Code chat the app starts loads it for that session alone with
+`--plugin-dir`: charter's hooks, its Bash guard, and the `handoff`, `working-in-a-clone` and
+`update` skills. The same chat turns the Python charter's `charter@charter` plugin off for
+itself, so a plane whose settings enable that plugin for your terminal sessions does not give
+an app chat two sets of hooks. A Codex chat is armed the same way with `-c` flags. A `claude`
+or `codex` you run in a terminal is untouched, and an update to the app updates all of it.
 
 ## What an operator on Linux gets
 

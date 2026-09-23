@@ -2,7 +2,7 @@
  * How many of a strip's tabs it draws, and which ones collapse into its show-more menu.
  *
  * **The strip does not scroll any more** — the operator's call on 2026-09-22, against what
- * charter ADR 0039 left open ("whether the row still scrolls"), and the amendment to that
+ * ADR 0039 left open ("whether the row still scrolls"), and the amendment to that
  * record is where the argument lives. What does not fit is not drawn, and the show-more
  * button beside the strip is how it is reached.
  *

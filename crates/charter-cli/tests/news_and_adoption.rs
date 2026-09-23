@@ -23,7 +23,7 @@ fn charter(root: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(root)
         .env("CHARTER_ROOT", root)
-        // `update` reads the machine store for the update channel (charter ADR 0042), so the
+        // `update` reads the machine store for the update channel (ADR 0042), so the
         // store is pinned too, inside the run's own temp tree. Unpinned, a
         // fenced build dies rather than read the operator's `~/.config` (charter-app#129).
         .env("CHARTER_CONFIG_HOME", config_home(root))

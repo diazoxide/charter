@@ -18,7 +18,7 @@ import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
- * The left region: the repo and worktree **explorer** (charter ADR 0038).
+ * The left region: the repo and worktree **explorer** (ADR 0038).
  *
  * **It replaces the workspace listing, it does not extend it.** What used to be here was
  * every workspace with its vision text and its chats — the axis ADR 0036 had just given the

@@ -12,10 +12,10 @@
 //!    NAME and never given another (ADR 0022);
 //! 2. the persona is one this plane has;
 //! 3. the plane's guest layer reaches the directory the chat starts in, or gets written
-//!    there — a git root of its own cuts the walk-up off, and `enabledPlugins` in that
-//!    directory is what the next step's probe reads (ADR 0027, closed by M1.x);
-//! 4. [`crate::wiring::wired_or_refusal`] — the kind is startable, the file is not one git
-//!    would carry, the operator approved the command, and the folder is wired or gets wired;
+//!    there — a git root of its own cuts the walk-up off (ADR 0027, closed by M1.x);
+//! 4. [`crate::wiring::refusal`] — the kind is startable, the file is not one git would
+//!    carry, and the operator approved the command. Nothing is installed: the app arms the
+//!    chat itself ([`crate::plugin`]);
 //! 5. only then are the arguments and the environment built.
 //!
 //! **The harness comes from the DECLARED kind**, never from the program's name.
@@ -46,7 +46,7 @@ pub struct Start {
     /// Whether THIS chat draws charter's footer in its pane rather than a blank line.
     ///
     /// Default `false`, which is the app as it has always behaved. See [`FOOTER_ENV`] for
-    /// what it does and charter ADR 0029 for why it is a chat's property and not a plane's.
+    /// what it does and ADR 0029 for why it is a chat's property and not a plane's.
     pub show_footer: bool,
 }
 
@@ -92,8 +92,6 @@ pub struct Ready {
     /// The conversation this chat is now under — resumed, or the one charter just chose.
     pub session: Option<SessionId>,
     pub how: Reopened,
-    /// The one line to say when this start wired the profile on its way; empty otherwise.
-    pub wired: String,
 }
 
 /// Everything a chat needs to start, or the one sentence saying why it may not.
@@ -137,23 +135,16 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     };
 
     let here = start.cwd.clone().unwrap_or_else(|| root.to_path_buf());
-    // The plane's layer, and it is **before** the wiring probe rather than after it. Two
-    // halves of one question, asked in the order the answers depend on: `wiring` asks whether
-    // charter's guard is installed in the harness's CONFIG FOLDER, and Claude Code resolves
-    // `enabled` for that install at the probe's own working directory — out of the
-    // `enabledPlugins` in the settings the layer writes. Probing a worktree before its layer
-    // exists asks about a directory charter is one step from finishing, and answers "not
-    // wired" about a chat that would have been guarded.
+    // The plane's layer: its ask/deny rules have to be in the tree before a chat stands in it.
     //
     // Nothing here runs a command out of a file a chat can write, which is what the consent
     // gate below exists for: this writes charter's own documents into a tree charter owns,
     // and it is idempotent, so doing it for a start that is then refused costs nothing.
     layered_or_refusal(&here, root)?;
-    // The gate. Startable kind, ignored file, approved command, wired folder — one call, so
-    // no caller can start a chat past a check another caller makes.
-    let answer = crate::wiring::wired_or_refusal(profile, &here, root);
-    if !answer.may_start() {
-        return Err(answer.refusal);
+    // The gate. Startable kind, ignored file, approved command — one call, so no caller can
+    // start a chat past a check another caller makes.
+    if let Some(why) = crate::wiring::refusal(profile, root) {
+        return Err(why);
     }
 
     let harness = Harness::of_kind(&profile.kind);
@@ -162,9 +153,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     // Resolved HERE, in charter's own process, and the absolute path is what the terminal is
     // given (charter-app#134). A bare word handed to a pty is resolved against whatever
     // `PATH` the app itself was started with — which for a Finder-launched `.app` is
-    // `/usr/bin:/bin:/usr/sbin:/sbin` and holds no harness. A Codex profile reaches this
-    // without ever having been spawned (its wiring check reads a file), so this is the only
-    // place that answer can be given for it at all.
+    // `/usr/bin:/bin:/usr/sbin:/sbin` and holds no harness.
     let mut argv = crate::programs::resolve_argv(&profiles::expanded_command(profile, &home))
         .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
     let program = argv.remove(0);
@@ -182,7 +171,6 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
         harness,
         session,
         how,
-        wired: answer.wired,
     })
 }
 
@@ -201,7 +189,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
 /// this is for is the tree charter did *not* cut — `git worktree add` run by hand, or by
 /// another tool — where the repair is this call, not a trip to another binary. A tree whose
 /// layer charter cannot finish is refused with the sentence naming what blocked it, because a
-/// chat that looks guarded and is not is the failure [`crate::wiring`] exists to prevent.
+/// chat that looks guarded and is not is the failure this refusal exists to prevent.
 pub fn layered_or_refusal(here: &Path, root: &Path) -> Result<(), String> {
     let Some(found) = crate::worktree::locate(root, here) else {
         return Ok(());
@@ -311,12 +299,12 @@ fn environment(
 /// **A profile that declares `env = { PATH = "…" }` wins, whole** — the escape hatch
 /// charter-app#136 was asked to keep. It is the operator's own line in their own machine's
 /// file, and a `PATH` they wrote down is one they meant; charter does not append to it behind
-/// their back. `charter` in the app's own hooks is still found, because those name it by its
-/// absolute path.
+/// their back. The app's own hooks still reach the bundled `charter`, because they name it by
+/// its absolute path.
 ///
 /// **Applied where a chat's program is opened, for every chat** — a profile's and the
 /// operator's shell alike — and not inside [`ready`], because the `charter` whose directory
-/// goes last is the app's to know ([`crate::harness::Harness::state_hooks`] is handed it the
+/// goes first is the app's to know ([`crate::harness::Harness::state_hooks`] is handed it the
 /// same way) and a shell chat never passes through `ready` at all.
 ///
 /// Sorted afterwards, like everything [`environment`] builds, so two starts of one chat are
@@ -427,7 +415,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_chat_with_no_declared_path_is_given_one_ending_in_charters_own_directory() {
+    fn a_chat_with_no_declared_path_is_given_one_starting_in_charters_own_directory() {
         let env = with_chat_path(
             vec![("CHARTER_ROOT".to_owned(), "/plane".to_owned())],
             Some(Path::new("/app/bundle/charter")),
@@ -437,7 +425,7 @@ mod tests {
             .find(|(name, _)| name == "PATH")
             .map(|(_, value)| value.as_str())
             .expect("a PATH was added");
-        assert!(path.ends_with(":/app/bundle"), "{path}");
+        assert!(path.starts_with("/app/bundle:"), "{path}");
         assert!(path.contains("/usr/local/bin"), "{path}");
         let mut sorted = env.clone();
         sorted.sort();

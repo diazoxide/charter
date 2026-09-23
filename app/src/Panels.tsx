@@ -19,7 +19,7 @@ import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
- * The right region: **what is asking for you** (charter ADR 0038).
+ * The right region: **what is asking for you** (ADR 0038).
  *
  * **Alerts are not here any more, and that is a correction to ADR 0038, not an omission.** It
  * put them on this side, and this side is one project's: it follows the project in front and
@@ -231,7 +231,7 @@ function Contributed({
         <h2>
           <Mark className="node-icon" />
           {panel.title}
-          {/* **What is in force, after approval and not only at it** — charter ADR 0041 item
+          {/* **What is in force, after approval and not only at it** — ADR 0041 item
               5. An operator has to be able to tell a panel his own charter draws from one a
               stranger's extension contributed, without opening a dialog to find out. */}
           {panel.from !== null && <span className="panel-from">{` · ${panel.from}`}</span>}

@@ -340,11 +340,11 @@ pub(super) fn schema(d: &Doctor) -> Row {
 
 /// `version lock`: `[charter] version`, opt-in. A plane that pins nothing reports OK.
 ///
-/// **Ported up to the pin, and no further.** Python measures a pin against the Claude Code
-/// plugin serving this project, or failing that against its own version — and neither is
-/// this binary's: its version is charter-app's, not the Python charter's a pin names. So a
-/// plane that DOES pin gets a row that says it did not compare, rather than a comparison
-/// against the wrong number.
+/// **Reported up to the pin, and no further.** The comparison is `adopt::pin_verdict`'s (ADR
+/// 0045), and `charter version` is the surface that makes it; this row still names the pin and
+/// sends the reader there rather than comparing on its own. Moving it onto the verdict changes
+/// the row the differential compares byte for byte with the Python charter's, which is its own
+/// change (ADR 0030's follow-up, still open).
 pub(super) fn version_lock(d: &Doctor) -> Row {
     const NAME: &str = "version lock";
     let cfg = match &d.config {
@@ -375,8 +375,7 @@ pub(super) fn version_lock(d: &Doctor) -> Row {
         Some(pin) => deferred::row(
             NAME,
             &format!(
-                "pinned {}; whether the charter serving this plane matches the pin is not \
-                 ported to this charter yet",
+                "pinned {}; this row does not compare it — `charter version` does",
                 super::one_line(pin, super::DISPLAY_LIMIT)
             ),
         ),

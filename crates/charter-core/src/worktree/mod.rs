@@ -58,9 +58,9 @@ pub enum Refusal {
     #[error(transparent)]
     GitUnavailable(#[from] git::GitUnavailable),
     #[error(
-        "this plane relocates its worktree root ([plane] worktrees = {0:?}), and the app does \
-         not follow that yet. Use `charter wt add` from the Python charter, or unset [plane] \
-         worktrees to keep worktrees in the plane"
+        "this plane relocates its worktree root ([plane] worktrees = {0:?}), and this version \
+         of charter does not follow that yet: unset [plane] worktrees to keep worktrees in the \
+         plane"
     )]
     Relocated(String),
     #[error("'{0}' is not a git repository. Clone it into this workspace first: charter clone {0}")]
@@ -711,7 +711,7 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
                 what: "merge".into(),
                 err: format!(
                     "the base '{branch}' was cut from was not recorded, so charter does not \
-                     know what to merge it into. (A piece cut by the Python charter has no \
+                     know what to merge it into. (A piece cut by an older charter has no \
                      such record.) Merge it yourself, or record it: git -C {} config \
                      {} <branch>",
                     clone.display(),
