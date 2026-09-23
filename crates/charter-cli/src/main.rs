@@ -360,8 +360,17 @@ struct InitCommand {
     #[arg(long)]
     host: Option<String>,
     /// Also clone the git repo you are standing in into the first workspace.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "adopt")]
     clone_this_repo: bool,
+    /// Adopt an existing repository as this plane's first clone: the plane is made HERE and
+    /// that repo is cloned into the first workspace, with nothing written into the repo
+    /// itself. ADR 0035's default, where the directory this runs in is the "beside it".
+    #[arg(long, value_name = "REPO")]
+    adopt: Option<std::path::PathBuf>,
+    /// The instant the first workspace's manifest records. Testing only; the wall clock
+    /// otherwise.
+    #[arg(long, hide = true)]
+    now: Option<String>,
     /// Make the git repo you are standing in BE the control plane: write charter.toml,
     /// personas/, inventory/, workspaces/ and charter's rules into that repo's own tracked
     /// .gitignore. Without it, `init` at the top of a repo writes nothing and says how to put
@@ -2021,6 +2030,17 @@ fn main() -> ExitCode {
                 host: init.host.clone(),
                 clone_this_repo: init.clone_this_repo,
                 plane_is_this_repo: init.plane_is_this_repo,
+                adopt: init.adopt.clone(),
+                // Refused rather than quietly replaced by the wall clock: the flag exists so
+                // the differential can pin the first workspace's manifest, and a pin that
+                // silently did not take would make that comparison green for the wrong reason.
+                now: match instant(init.now.as_deref()) {
+                    Ok(secs) => chrono::DateTime::from_timestamp(secs as i64, 0),
+                    Err(why) => {
+                        eprintln!("charter: {why}");
+                        return ExitCode::FAILURE;
+                    }
+                },
                 front_door: if init.no_front_door {
                     None
                 } else {

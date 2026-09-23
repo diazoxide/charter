@@ -33,6 +33,7 @@ afterEach(() => {
 
 const PLANE = "/home/dev/plane";
 const MADE = "/home/dev/new-thing";
+const REPO = "/home/dev/widget";
 
 /** The four-line refusal `init` gives inside a git repository (ADR 0035, decision 27). */
 const NOT_INTO_A_REPO = [
@@ -140,8 +141,47 @@ describe("making a project", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
 
     expect(calls("create_project").map((one) => one.args)).toEqual([
-      { path: MADE, planeIsThisRepo: false },
+      { path: MADE, planeIsThisRepo: false, adopt: null },
     ]);
+  });
+
+  it("sends the repository to adopt beside the folder the plane goes in", async () => {
+    // ADR 0035's default: the plane in a directory of its own and that repo as its first
+    // clone. Two answers, two boxes — neither derived from the other.
+    const { calls } = core();
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
+    await userEvent.type(within(dialog).getByLabelText("Repository to adopt"), REPO);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+    expect(calls("create_project").map((one) => one.args)).toEqual([
+      { path: MADE, planeIsThisRepo: false, adopt: REPO },
+    ]);
+  });
+
+  it("sends no repository when the box that makes this repo the plane is ticked", async () => {
+    // The two are answers to one question — which repository this plane starts from — so
+    // ticking the box takes the adopt field out of the dialog's answer as well as out of
+    // reach, rather than sending both and letting the core rank them.
+    const { calls } = core();
+    render(<App />);
+    const dialog = await askForOne();
+
+    await userEvent.type(within(dialog).getByLabelText("Repository to adopt"), REPO);
+    await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
+    await userEvent.click(within(dialog).getByLabelText("Make this repo itself the plane"));
+
+    expect(within(dialog).getByLabelText("Repository to adopt")).toBeDisabled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
+
+    expect(calls("create_project")[0].args).toEqual({
+      path: MADE,
+      planeIsThisRepo: true,
+      adopt: null,
+    });
   });
 
   it("asks for the old shape only when the box is ticked", async () => {

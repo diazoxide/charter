@@ -848,16 +848,65 @@ def _both(*steps):
 INIT = ["init", "--forge", "github", "--owner", "acme"]
 
 
+# The two readers a cloned repo is compared through, up here because `init --clone-this-repo`
+# makes the plane's FIRST clone and its scenario sits with the other `init` ones.
+def _clone_facts(name: str, ws: str = "alpha") -> "Callable[[Path], str]":
+    """What a clone's `.git` says that the tree comparison cannot read.
+
+    `ws` because the FIRST clone lands in the workspace a fresh plane starts with (`default`)
+    and every other scenario's lands in the fixture's (`alpha`). One reader either way: what
+    is checked of a clone `charter init` made must be what is checked of one `charter clone`
+    made, or the first clone is held to a weaker bar than every later one.
+    """
+
+    def facts(root: Path) -> str:
+        clone = root / "workspaces" / ws / name
+        if not (clone / ".git").is_dir():
+            return "no clone"
+
+        def ask(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(clone), *args], capture_output=True, text=True,
+                env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1"},
+            ).stdout
+
+        exclude = clone / ".git" / "info" / "exclude"
+        return (f"head: {ask('symbolic-ref', '-q', 'HEAD')}"
+                f"commit: {ask('rev-parse', 'HEAD')}"
+                f"config:\n{ask('config', '--local', '--list')}"
+                f"exclude:\n{exclude.read_text() if exclude.exists() else '<none>'}\n"
+                f"status:\n{ask('status', '--porcelain')}")
+
+    return facts
+
+
+#: A clone's `.git`, whose index and reflogs carry timestamps and inode numbers. `facts`
+#: compares what it says instead.
+def _clone_git(name: str, ws: str = "alpha") -> dict[str, str]:
+    return {f"workspaces/{ws}/{name}/.git": "compared through `facts`: the index and the "
+            "reflogs carry timestamps and inodes no two runs share"}
+
+
 def _init(name: str, *, python=INIT, rust=None, plane="", setup=None, refusal="",
-          diverges=None, local_origin_why="") -> Scenario:
+          diverges=None, local_origin_why="", pins_the_clock=False, ignore=None,
+          facts=None) -> Scenario:
     """An `init` or `reinit` scenario: no clock, opencode's global files installed first, and
-    the whole tree each side leaves compared."""
+    the whole tree each side leaves compared.
+
+    **`pins_the_clock` is off by default and on for exactly one scenario.** `init` writes no
+    timestamp of its own — that is why it was hard-coded off — but `--clone-this-repo` makes
+    the plane's first workspace, and a workspace manifest carries `updated_at`. Left unpinned
+    the two sides would differ by the second they happened to run in, which is a red that says
+    nothing about either implementation.
+    """
     return Scenario(
         name=name,
         plane=plane,
         python=python,
         rust=rust,
-        pins_the_clock=False,
+        ignore=ignore or {},
+        facts=facts,
+        pins_the_clock=pins_the_clock,
         setup=_both(_opencode_already_installed, *([setup] if setup else [])),
         refusal=refusal,
         # Python's stderr is not compared word for word when a divergence is declared — the
@@ -883,9 +932,8 @@ NOT_COLONISED = """\
 ✗ this is the git repo 'widget', and `charter init` does not make a repository into a control plane unless you ask it to. Nothing was written.
 • A plane is a directory of its own, and this repo is the first clone in it:
       mkdir ../widget-plane && cd ../widget-plane
-      charter init --forge github --owner acme
-      charter discover && charter clone widget
-  Nothing in this repo is read or written by any of that.
+      charter init --forge github --owner acme --adopt ../plane
+  That clones this repo into the plane's first workspace. Nothing here is written by any of it — this repo is read, and only read.
 • To make THIS repo the plane instead — charter's own plane is one, which is why the option is here — ask for it by name:
       charter init --plane-is-this-repo --forge github --owner acme
   That writes charter.toml, .claude/settings.json, opencode.json, personas/, inventory/, workspaces/ into this repo, and charter's own rules into its tracked .gitignore.
@@ -1016,6 +1064,17 @@ INIT_SCENARIOS = [
     _init("init-inside-a-repository-when-asked-is-the-python-charters-init-byte-for-byte",
           setup=_in_a_git_repository,
           rust=[*INIT, "--plane-is-this-repo"]),
+    # `commands._clone_first_workspace`, ported as `scaffold::firstclone` (charter-app#175).
+    # Spec decision 14: a module that moves to Rust is owed a scenario against the frozen
+    # oracle, and this is it — the same flag, the same repo, the same plane afterwards, down
+    # to what the clone's `.git` config says. Until #175 the Rust side refused here on the
+    # grounds that `gitpolicy` was unported; it had been ported since M2.5 (#64), so what this
+    # scenario replaces is a refusal that had outlived its reason.
+    _init("init-with-clone-this-repo-clones-the-repo-into-the-first-workspace",
+          python=[*INIT, "--clone-this-repo"], setup=_in_a_git_repository,
+          pins_the_clock=True,
+          ignore=_clone_git("widget", ws="default"),
+          facts=_clone_facts("widget", ws="default")),
     _init("reinit-on-a-current-plane", python=["reinit"], plane="minimal"),
     _init("reinit-on-a-plane-in-use", python=["reinit"], plane="daily"),
     _init("reinit-heals-a-missing-baseline-directory", python=["reinit"], plane="minimal",
@@ -1165,30 +1224,6 @@ def _diverged_from_the_forge(root: Path) -> None:
     _git(root.parent, "commit", "-q", "-m", "mine", cwd=clone)
 
 
-def _clone_facts(name: str) -> "Callable[[Path], str]":
-    """What a clone's `.git` says that the tree comparison cannot read."""
-
-    def facts(root: Path) -> str:
-        clone = root / "workspaces" / "alpha" / name
-        if not (clone / ".git").is_dir():
-            return "no clone"
-
-        def ask(*args: str) -> str:
-            return subprocess.run(
-                ["git", "-C", str(clone), *args], capture_output=True, text=True,
-                env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1"},
-            ).stdout
-
-        exclude = clone / ".git" / "info" / "exclude"
-        return (f"head: {ask('symbolic-ref', '-q', 'HEAD')}"
-                f"commit: {ask('rev-parse', 'HEAD')}"
-                f"config:\n{ask('config', '--local', '--list')}"
-                f"exclude:\n{exclude.read_text() if exclude.exists() else '<none>'}\n"
-                f"status:\n{ask('status', '--porcelain')}")
-
-    return facts
-
-
 def _stub_gh(root: Path, authed: bool = True) -> None:
     """A recorded `gh` first on the side's `PATH`: three repos, two trees, one failing probe."""
     bin_dir = root.parent / "bin"
@@ -1245,13 +1280,6 @@ CLONE_FRAME_STATE = {
     ".charter/dispatch-inflight": "Python's in-flight record directory, created by the "
     "clone and emptied when it ends; the app draws its own progress",
 }
-
-#: A clone's `.git`, whose index and reflogs carry timestamps and inode numbers. `facts`
-#: compares what it says instead.
-def _clone_git(name: str) -> dict[str, str]:
-    return {f"workspaces/alpha/{name}/.git": "compared through `facts`: the index and the "
-            "reflogs carry timestamps and inodes no two runs share"}
-
 
 # --------------------------------------------------------------------------------------- #
 # gl-refresh and statusline                                                                 #
@@ -4580,8 +4608,7 @@ $ charter init --forge github --owner acme
   control plane unless you ask it to. Nothing was written.
 • A plane is a directory of its own, and this repo is the first clone in it:
       mkdir ../myapp-plane && cd ../myapp-plane
-      charter init --forge github --owner acme
-      charter discover && charter clone myapp
+      charter init --forge github --owner acme --adopt ../myapp
 • To make THIS repo the plane instead, ask for it by name:
       charter init --plane-is-this-repo --forge github --owner acme
 ```
@@ -4613,7 +4640,7 @@ repo, because `default` *was* the plane root. It no longer is (ADR 0007), so the
                 """\
 A solo user with one repo used to be able to `charter init` and carry on working in that
 repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is a
-plane in a directory of its own and then `charter clone <repo>` — the first way out of the
+plane in a directory of its own and `charter init --adopt <repo>` — the first way out of the
 refusal above — and then work in `workspaces/default/<repo>/`.
 
 """,
@@ -4635,8 +4662,9 @@ also *offers* to clone that repo into your first workspace — accept with `char
 `--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
 org/user whose repos this control plane tracks. Run at the top of an existing git repo,
 `init` writes nothing at all and says so: a plane is a directory of its own and that repo
-becomes its first clone (`charter clone <repo>`), because work happens in a workspace, never
-in the plane root. To make that repo the plane instead, ask for it by name with `charter
+becomes its first clone — make the plane beside it and adopt the repo in one command
+(`charter init --adopt ../<repo>`), because work happens in a workspace, never in the plane
+root. To make that repo the plane instead, ask for it by name with `charter
 init --plane-is-this-repo`. That default is charter-app's and is the opposite of the Python
 charter's, which scaffolds the plane into the repo — ADR 0035, and charter-app spec
 decision 27.

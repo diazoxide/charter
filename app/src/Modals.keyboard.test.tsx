@@ -180,7 +180,14 @@ function said(el: Element): string {
  */
 async function reachableByKeyboard({ shift = false } = {}): Promise<string[]> {
   let at = document.activeElement as HTMLElement;
-  const seen = [said(at)];
+  // **The elements, and the words only at the end** (charter-app#197). This used to remember
+  // where it had been by what each control is CALLED, and that is a false positive waiting for
+  // a dialog with two controls of the same name: `NewProject` grew a second directory picker,
+  // its second `Browse…` read as a place already visited, the walk stopped there, and the
+  // three controls after it were reported unreachable when every one of them was fine. A guard
+  // that says a working dialog is broken is worse than no guard, because the obvious repair is
+  // to weaken the expectation until it passes.
+  const visited = [at];
   let stuck = 0;
   for (let press = 0; press < 30; press += 1) {
     await tab({ shift });
@@ -199,11 +206,10 @@ async function reachableByKeyboard({ shift = false } = {}): Promise<string[]> {
     }
     stuck = 0;
     at = now;
-    const words = said(now);
-    if (seen.includes(words)) break;
-    seen.push(words);
+    if (visited.includes(now)) break;
+    visited.push(now);
   }
-  return seen;
+  return visited.map(said);
 }
 
 const PROFILES = [
@@ -592,6 +598,16 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // sequence at all — a text `<input>` — and it is the scope's first edge, with `Cancel` the
     // last. `Browse…`, the checkbox that decides whether charter writes into a repository the
     // operator already has, and `Create project` were all in between, reachable by nothing.
+    //
+    // **And it grew a control after the sweep, which is the second half of the argument**
+    // (charter-app#197, ADR 0035's adopt default). A second directory picker arrived with no
+    // `tabIndex={0}` on its `Browse…`, because the sweep was over by the time it was written —
+    // so the class of defect came back on the one dialog that had just been fixed for it. It
+    // is the case for a walk that enumerates rather than a rule somebody has to remember.
+    //
+    // The two `Browse…` buttons carry `aria-label`s naming the box each one fills, which is
+    // what stops a screen reader announcing the same three words for two different pickers —
+    // and it is also why this walk can tell them apart in its answer.
     render(<NewProject making={false} onCreate={() => {}} onCancel={() => {}} />);
     // Answered first: both dialogs disable their create button until they have been, and a
     // disabled control is out of the tab sequence everywhere and rightly so. The state worth
@@ -599,7 +615,9 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     await userEvent.type(screen.getByLabelText("Folder"), "/where/it/goes");
     expect(await reachableByKeyboard()).toEqual([
       'input "Folder"',
-      'button "Browse…"',
+      'button "Browse for the folder"',
+      'input "Repository to adopt"',
+      'button "Browse for the repository to adopt"',
       'checkbox "Make this repo itself the plane"',
       'button "Create project"',
       'button "Cancel"',

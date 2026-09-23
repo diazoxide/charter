@@ -91,6 +91,21 @@ impl Scene {
         }
     }
 
+    /// One value out of a clone's LOCAL config — what `gitpolicy` writes and what the first
+    /// clone's `origin` was repointed to. The test's own git, with the machine's global and
+    /// system config shut out so the answer is the repo's own.
+    fn git_config(&self, repo: &Path, key: &str) -> String {
+        let out = Command::new("git")
+            .args(["config", "--local", "--get", key])
+            .current_dir(repo)
+            .env("HOME", &self.home)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
     fn write(&self, rel: &str, body: &str) {
         let path = self.plane.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -580,22 +595,217 @@ fn the_flag_that_asks_for_it_makes_the_repo_the_plane_and_offers_the_first_clone
 }
 
 #[test]
-fn clone_this_repo_asks_for_the_plane_here_too_and_is_not_refused_by_the_new_default() {
-    // It asks for a clone INTO the plane this run makes here, so it says the same thing
-    // `--plane-is-this-repo` says. Its own refusal — this charter does not clone yet — is
-    // what it must reach; being turned back by the repo check instead would hide it.
+fn clone_this_repo_makes_the_plane_here_and_clones_the_repo_into_the_first_workspace() {
+    // It asks for a clone INTO the plane this run makes here, so it is not turned back by
+    // the repo check — and since `gitpolicy` was ported (M2.5, #64) there is nothing left
+    // for it to refuse over either (charter-app#175). Python's `_clone_first_workspace`,
+    // and the differential holds the two byte for byte.
     let scene = Scene::new();
     scene.git_repo(&scene.plane);
 
     let out = scene.run(&["init", "--clone-this-repo", "--forge", "github"]);
 
-    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(scene.plane.join("charter.toml").is_file());
+    let clone = scene.plane.join("workspaces/default/widget");
+    assert!(clone.join(".git").exists(), "{}", stderr(&out));
+    // Named from the origin, and the origin is repointed at the source's own upstream: left
+    // at the plane root it would look right and fail at the first push.
+    assert_eq!(
+        scene.git_config(&clone, "remote.origin.url"),
+        "https://github.com/acme/widget.git"
+    );
+    // Golden rule 0, applied to the first clone as it is to every later one.
+    assert_eq!(
+        scene.git_config(&clone, "credential.helper"),
+        "!gh auth git-credential"
+    );
     assert!(
-        stderr(&out).contains("does not clone the repo you are standing in yet"),
+        stderr(&out).contains("widget → workspaces/default/widget"),
         "{}",
         stderr(&out)
     );
+}
+
+// ------------------------------------------------------------------------------------------
+// `--adopt`: ADR 0035's default, as something charter DOES (charter-app#175)
+// ------------------------------------------------------------------------------------------
+//
+// The record's sentence is "`charter init` on an existing repo adopts that repo as the plane's
+// first clone and makes the plane beside it". Where "beside" IS is typed, never guessed —
+// `init` writes nothing outside the directory it was pointed at, and picking `../x-plane` for
+// the operator would be exactly that write. So the plane is this directory and `--adopt` names
+// the repo.
+
+#[test]
+fn adopt_makes_the_plane_here_and_the_repo_its_first_clone_and_writes_nothing_into_the_repo() {
+    let scene = Scene::new();
+    let repo = scene.outside.join("widget");
+    std::fs::create_dir_all(&repo).unwrap();
+    scene.git_repo(&repo);
+    let untouched = tree(&repo);
+
+    let out = scene.run(&[
+        "init",
+        "--forge",
+        "github",
+        "--owner",
+        "acme",
+        "--adopt",
+        repo.to_str().unwrap(),
+    ]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
     assert!(scene.plane.join("charter.toml").is_file());
+    let clone = scene.plane.join("workspaces/default/widget");
+    assert!(clone.join(".git").exists(), "{}", stderr(&out));
+    assert_eq!(
+        scene.git_config(&clone, "remote.origin.url"),
+        "https://github.com/acme/widget.git"
+    );
+    assert_eq!(
+        scene.git_config(&clone, "credential.helper"),
+        "!gh auth git-credential"
+    );
+    // The whole subject of ADR 0035: the repository the operator pointed at is read, and
+    // only read. Not one byte of it moved, `.git` included.
+    assert_eq!(tree(&repo), untouched, "the adopted repo was written into");
+}
+
+#[test]
+fn adopt_refuses_a_directory_that_is_not_the_top_of_a_repository() {
+    let scene = Scene::new();
+
+    let out = scene.run(&[
+        "init",
+        "--forge",
+        "github",
+        "--adopt",
+        scene.outside.join("dir").to_str().unwrap(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("is not the top level of a git working tree"),
+        "{}",
+        stderr(&out)
+    );
+    // The plane itself is still created, as Python creates it before cloning.
+    assert!(scene.plane.join("charter.toml").is_file());
+    assert!(!scene.plane.join("workspaces/default").exists());
+}
+
+#[test]
+fn adopt_refuses_the_planes_own_directory_and_names_the_flag_that_means_that() {
+    let scene = Scene::new();
+    scene.git_repo(&scene.plane);
+
+    let out = scene.run(&[
+        "init",
+        "--plane-is-this-repo",
+        "--forge",
+        "github",
+        "--adopt",
+        scene.plane.to_str().unwrap(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("ask for `--clone-this-repo`"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn adopt_refuses_a_repository_this_plane_is_inside() {
+    // The clone would land inside the repository it came from — a write into somebody's
+    // repo arriving through the flag that is supposed to be the safe half of ADR 0035.
+    let scene = Scene::new();
+    let repo = scene.outside.join("widget");
+    let under = repo.join("planes").join("acme");
+    std::fs::create_dir_all(&under).unwrap();
+    scene.git_repo(&repo);
+
+    let out = Command::new(charter())
+        .args([
+            "init",
+            "--forge",
+            "github",
+            "--adopt",
+            repo.to_str().unwrap(),
+        ])
+        .current_dir(&under)
+        .env_remove("CHARTER_ROOT")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("XDG_CONFIG_HOME")
+        .env("HOME", &scene.home)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("the binary runs");
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("would write the clone into the repository it came from"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn adopt_and_clone_this_repo_together_are_refused_before_anything_is_written() {
+    // Two flags naming two different sources for one first clone. Ranking them silently is
+    // how charter would clone one repo while the operator read the other one's name back.
+    let scene = Scene::new();
+    let repo = scene.outside.join("widget");
+    std::fs::create_dir_all(&repo).unwrap();
+    scene.git_repo(&repo);
+    let before = tree(&scene.plane);
+
+    let out = scene.run(&[
+        "init",
+        "--forge",
+        "github",
+        "--clone-this-repo",
+        "--adopt",
+        repo.to_str().unwrap(),
+    ]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    // clap says it at the door; `scaffold::init` says it again for the app, which has no
+    // argument parser between the dialog and the core (`opener::create_project`).
+    assert!(
+        stderr(&out).contains("cannot be used with '--adopt"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(tree(&scene.plane), before, "a refused run wrote something");
+}
+
+#[test]
+fn the_refusal_in_a_repository_names_the_command_that_adopts_it() {
+    // Before charter-app#175 this printed three commands ending in `charter clone <name>`,
+    // which is the printed-command shape with a window around it. It is now two, and the
+    // second one actually adopts.
+    let scene = Scene::new();
+    scene.git_repo(&scene.plane);
+
+    let out = scene.init();
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let said = stderr(&out);
+    assert!(
+        said.contains("charter init --forge github --owner acme --adopt ../plane"),
+        "{said}"
+    );
+    assert!(
+        said.contains("That clones this repo into the plane's first workspace."),
+        "{said}"
+    );
+    assert!(
+        !said.contains("charter discover && charter clone"),
+        "{said}"
+    );
 }
 
 #[test]

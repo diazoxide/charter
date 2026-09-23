@@ -157,8 +157,15 @@ export const commands = {
 	 *  not an answer about a folder somebody just pointed at.
 	 *  `the_refusal_names_the_plane_the_cli_would_have_scaffolded_into` holds the identity, so a
 	 *  change that made the two walks disagree lands in this file.
+	 * 
+	 *  **`adopt` is the third answer, and ADR 0035's default** (charter-app#175). Beside "refuse"
+	 *  and "scaffold the old shape" there is now "make the plane here and take that repository as
+	 *  its first clone", which is what the record actually decided — *"`charter init` on an
+	 *  existing repo adopts that repo as the plane's first clone and makes the plane beside it"*.
+	 *  It is two directories because it is two answers: the dialog asks for both, and neither is
+	 *  guessed from the other.
 	 */
-	createProject: (path: string, planeIsThisRepo: boolean) => typedError<Opened, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo })),
+	createProject: (path: string, planeIsThisRepo: boolean, adopt: string | null) => typedError<Opened, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo, adopt })),
 	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
