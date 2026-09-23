@@ -89,8 +89,7 @@ pub fn live(root: &Path, name: &str, off: bool, say: Sink) -> u8 {
         )));
     }
     say(Say::Info(format!(
-        "Record its repos: charter workspace snapshot {name}  ·  share: charter workspace \
-         save {name}"
+        "Record its repos: charter workspace snapshot {name}  ·  share: charter save"
     )));
     0
 }

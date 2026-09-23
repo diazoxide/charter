@@ -473,3 +473,95 @@ fn a_persona_whose_directory_leaves_the_plane_is_refused() {
 
     assert!(why.contains("resolves outside this plane"), "{why}");
 }
+
+/// What the app arms `harness` with for this session, as the app asks for it: the bundled
+/// plugin for Claude Code, the `-c` flags for Codex.
+fn armed(harness: Harness, root: &Path) -> Vec<String> {
+    let binary = root.join("charter");
+    let plugin = root.join("plugin");
+    let kit = charter_core::harness::Kit {
+        binary: &binary,
+        plugin: Some(&plugin),
+    };
+    match harness.state_hooks(kit, Some(root)) {
+        charter_core::harness::StateHooks::ThisSessionOnly { args, .. } => args,
+        charter_core::harness::StateHooks::None => panic!("{harness:?} is armed"),
+    }
+}
+
+/// A profile `work` of `kind` whose command is the stand-in followed by `rest`.
+fn a_wrapper_profile(plane: &Plane, kind: &str, rest: &[&str]) -> PathBuf {
+    let bin = plane.harness_as("ccs");
+    let mut words = vec![format!("{:?}", bin.display().to_string())];
+    words.extend(rest.iter().map(|w| format!("{w:?}")));
+    plane.declares(&format!(
+        "[harness.work]\nkind = {kind:?}\ncommand = [{}]\n",
+        words.join(", ")
+    ));
+    plane.approve("work");
+    bin
+}
+
+#[test]
+fn a_wrapper_profiles_own_words_come_before_everything_the_app_adds() {
+    // M8.3: `["ccs", "work"]` is ONE command the operator wrote — `work` is the wrapper's own
+    // subcommand, read before it hands the rest to the harness. The app's flags went straight
+    // after argv[0] and started `ccs --plugin-dir … --settings … work`, which a wrapper that
+    // expects its subcommand first cannot read.
+    let plane = Plane::new();
+    let bin = a_wrapper_profile(&plane, "claude", &["work"]);
+
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+    let hooks = armed(Harness::ClaudeCode, plane.root());
+    let line = ready.command_line(hooks.clone());
+
+    assert_eq!(ready.program, bin.display().to_string());
+    assert_eq!(
+        line[0], "work",
+        "the wrapper's subcommand is first: {line:?}"
+    );
+    assert_eq!(line[1..1 + hooks.len()], hooks[..], "then the app's flags");
+    assert_eq!(hooks[0], "--plugin-dir", "the premise");
+    let id = ready.session.clone().expect("an id was chosen");
+    assert_eq!(
+        line[1 + hooks.len()..],
+        ["--session-id", id.as_str(), "--name", "ide.7"],
+        "and charter's own words last"
+    );
+}
+
+#[test]
+fn a_plain_profile_is_started_on_the_line_it_always_was() {
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+    let hooks = armed(Harness::ClaudeCode, plane.root());
+
+    assert_eq!(ready.command, Vec::<String>::new());
+    let id = ready.session.clone().expect("an id was chosen");
+    let mut want = hooks.clone();
+    want.extend(["--session-id", id.as_str(), "--name", "ide.7"].map(str::to_owned));
+    assert_eq!(ready.command_line(hooks), want);
+}
+
+#[test]
+fn a_codex_wrapper_resumes_after_its_own_words_and_the_apps_flags() {
+    // Codex takes the same rule: its `-c` flags after the wrapper's words, and the `resume`
+    // SUBCOMMAND last of all.
+    let plane = Plane::new();
+    a_wrapper_profile(&plane, "codex", &["codex-work"]);
+    let id = SessionId::new("11111111-2222-4333-8444-555555555555").unwrap();
+    let mut start = plane.start("work");
+    start.resume = Some(id.clone());
+
+    let ready = start::ready(&start, plane.root()).expect("it starts");
+    let hooks = armed(Harness::Codex, plane.root());
+    let line = ready.command_line(hooks.clone());
+
+    assert_eq!(hooks[0], "-c", "the premise");
+    assert_eq!(line[0], "codex-work", "{line:?}");
+    assert_eq!(line[1..1 + hooks.len()], hooks[..]);
+    assert_eq!(line[1 + hooks.len()..], ["resume", id.as_str()]);
+}

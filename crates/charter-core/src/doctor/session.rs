@@ -77,8 +77,7 @@ static HARNESSES: [Harness; 3] = [
                read an in-repo `opencode.json` at the repository root and `.opencode/agent/` \
                from the project (measured, 1.18.23); charter mirrors the plane's \
                `.opencode/agent/` into a workspace's checkouts and leaves `opencode.json` \
-               alone — that file is where `charter guard` keeps this plane's own permission \
-               grants",
+               alone — that file is where this plane's own permission grants live",
         trust_gate: "",
     },
     Harness {

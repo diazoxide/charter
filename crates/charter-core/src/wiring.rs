@@ -98,7 +98,11 @@ fn not_asked(p: &Profile, root: &Path) -> Option<(String, String)> {
                  Approve it once so charter can run it.",
                 state.as_str()
             ),
-            format!("charter {}", whole(&p.name)),
+            format!(
+                "start a chat on '{}' from the app's new-chat picker, which shows its command \
+                 and asks once",
+                whole(&p.name)
+            ),
         )
     })
 }

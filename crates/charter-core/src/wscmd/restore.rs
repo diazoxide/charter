@@ -159,8 +159,8 @@ pub fn restore(request: &Request, say: Sink) -> u8 {
         .unwrap_or_default();
     if repos.is_empty() {
         say(Say::Fail(format!(
-            "no manifest for '{ws}' (workspaces/{ws}/workspace.json). Pull fresh metadata \
-             first: charter workspace sync"
+            "no manifest for '{ws}' (workspaces/{ws}/workspace.json). Pull the plane's latest \
+             first: git pull"
         )));
         return 1;
     }

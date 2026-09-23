@@ -132,8 +132,8 @@ fn a_key_a_profile_does_not_have_refuses_that_profile_rather_than_being_ignored(
         "[harness.typo-env] holds a table enviroment, which charter reads neither way — \
          enviroment is not a key a profile has (kind, command and env), and if a profile \
          named 'typo-env.enviroment' was meant, a profile's name is letters, digits, '_' \
-         and '-', with no dot, because a dot breaks tmux targets. Rename the key, or give \
-         that profile a name of its own."
+         and '-', with no dot — the plane format fixes that alphabet. Rename the key, or \
+         give that profile a name of its own."
     );
 }
 
@@ -223,7 +223,7 @@ fn a_profile_may_not_set_one_of_charters_own_variables() {
 }
 
 #[test]
-fn a_name_with_a_dot_is_refused_because_a_dot_breaks_tmux_targets() {
+fn a_name_with_a_dot_is_refused_because_the_plane_format_fixes_the_alphabet() {
     let dir = plane(
         "",
         "[harness.\"has.dot\"]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
@@ -234,8 +234,8 @@ fn a_name_with_a_dot_is_refused_because_a_dot_breaks_tmux_targets() {
     assert_eq!(
         why(&set, "has.dot"),
         "profile 'has.dot' is not a name charter accepts — letters, digits, '_' and '-', \
-         starting with a letter or digit, and no dot, because a dot breaks tmux targets. \
-         Rename the table."
+         starting with a letter or digit, and no dot — the plane format fixes that \
+         alphabet. Rename the table."
     );
 }
 

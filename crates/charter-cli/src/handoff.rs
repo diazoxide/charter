@@ -149,7 +149,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
              opened. A brief travels to the new chat as a command-line argument any local \
              process can read while the harness starts, so it never carries a secret. Name \
              where the credential lives instead of pasting it, as the whole value on its \
-             line: `vault:<vault>/<key>`, or `charter secret get <vault> <key>`."
+             line: `vault:<vault>/<key>`."
         ));
         return ExitCode::FAILURE;
     }
@@ -190,27 +190,26 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         Host::None => None,
     };
 
-    // ---- no host that would open it: the command to run in a terminal ----------------
-    let (command, named) = printed_command(root, ws, &msg, create_vision, persona);
-    let mut said = format!(
-        "charter handoff: this `charter` is the desktop app's binary, which has no frame to \
-         open a chat in the background of and no way to ask the app to open one — nothing was \
-         opened.\n  Run this in a new terminal instead:\n  {command}"
-    );
-    if !named {
-        said.push('\n');
-        said.push_str(&format!(
-            "  Nothing here says which harness to start and this plane declares no `[harness] \
-             default`, so put the one you want where `{}` stands (opencode takes `--prompt` \
-             in front of the message; `claude` and `codex` take it as it is).",
-            handoff::UNKNOWN_HARNESS
-        ));
-    }
-    if let Some(why) = refused {
-        said.push('\n');
-        said.push_str(&format!(
-            "  The app that started this chat was asked, and would not open one: {}",
+    // ---- no app that would open it --------------------------------------------------
+    // The app is the only thing that opens a chat: this binary has no window of its own and no
+    // command that starts a harness. So the answer is where to go, not a command to paste.
+    let mut said = match refused {
+        // The app answered and said no: that is the whole answer, in its words.
+        Some(why) => format!(
+            "charter handoff: the charter app that started this chat was asked, and would not \
+             open one: {} — nothing was opened.",
             charter_core::personas::one_line(&why)
+        ),
+        None => format!(
+            "charter handoff: no charter app answered this call, so nothing was opened. Open \
+             charter, then run this handoff again from a chat the app started — or start a \
+             chat in workspace '{ws}' from the window and give it the brief."
+        ),
+    };
+    if create_vision.is_some() {
+        said.push('\n');
+        said.push_str(&format!(
+            "  '{ws}' was not created either: --create makes it when the app opens the chat."
         ));
     }
     voice::err(&said);
@@ -307,68 +306,6 @@ fn read_brief() -> Result<String, NoBrief> {
         // not there, which is what `Closed` says.
         Err(_) => charter_core::handoff::read_brief(None, false),
     }
-}
-
-/// `(the command to run in a new terminal, whether a harness could be named)`.
-///
-/// The harness is the one THIS process is running inside — a handoff never changes harness —
-/// read from `$CHARTER_HARNESS`, which carries a REGISTRY name (`claude-code`). A plane's
-/// `[harness] default` is the fallback, said for a shell that is not a chat.
-///
-/// A harness charter has not measured the first message of is treated as no harness at all
-/// rather than handed the positional spelling as a guess.
-fn printed_command(
-    root: &std::path::Path,
-    ws: &str,
-    msg: &str,
-    create_vision: Option<&str>,
-    persona: Option<&str>,
-) -> (String, bool) {
-    let word = harness_word(root);
-    let extra = word
-        .as_deref()
-        .and_then(|word| handoff::first_message_argv(word, msg));
-    match extra {
-        Some(extra) => (
-            handoff::terminal_command(
-                word.as_deref().unwrap_or(handoff::UNKNOWN_HARNESS),
-                ws,
-                &extra,
-                create_vision,
-                persona,
-            ),
-            true,
-        ),
-        None => (
-            handoff::terminal_command(
-                handoff::UNKNOWN_HARNESS,
-                ws,
-                std::slice::from_ref(&msg.to_string()),
-                create_vision,
-                persona,
-            ),
-            false,
-        ),
-    }
-}
-
-/// The `charter <word>` this process's harness answers to, or `None`.
-fn harness_word(root: &std::path::Path) -> Option<String> {
-    // `$CHARTER_HARNESS` is what charter's own launcher exports into a chat, and it carries
-    // the REGISTRY name (`claude-code`) rather than the word after `charter`.
-    if let Ok(registry) = std::env::var("CHARTER_HARNESS")
-        && let Some(kind) = charter_core::profiles::KINDS
-            .iter()
-            .find(|k| k.registry == registry)
-    {
-        return Some(kind.word.to_string());
-    }
-    let set = charter_core::profiles::current(root);
-    let default = set.default.clone()?;
-    // `[harness] default` names a profile; a profile's KIND is the word `charter <word>`
-    // takes. Python compares the declaration against each harness's `cli_name`, which is the
-    // same word for every built-in profile.
-    set.get(&default).map(|p| p.kind.clone())
 }
 
 /// `names`, contained, capped, saying how many were left out — `frame/switch._some`.

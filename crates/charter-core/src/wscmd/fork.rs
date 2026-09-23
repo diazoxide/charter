@@ -307,9 +307,7 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
         )));
     }
     if live {
-        say(Say::Info(format!(
-            "Share the fork: charter workspace save {new}"
-        )));
+        say(Say::Info("Share the fork: charter save".to_string()));
     }
     u8::from(!missed.is_empty())
 }
@@ -816,13 +814,7 @@ mod tests {
         a_parent(dir.path(), "alpha");
         let (_code, lines) = run(dir.path(), "alpha", "gamma", true);
         assert!(lines[0].contains("(LIVE)"), "{lines:?}");
-        assert!(
-            lines
-                .last()
-                .unwrap()
-                .contains("charter workspace save gamma"),
-            "{lines:?}"
-        );
+        assert!(lines.last().unwrap().contains("charter save"), "{lines:?}");
         let ignore = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
         assert!(
             ignore.contains("!/workspaces/gamma/workspace.json"),

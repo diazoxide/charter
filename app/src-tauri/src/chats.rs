@@ -206,6 +206,7 @@ impl Chats {
         self.open_it(
             chat,
             ready.program.clone(),
+            ready.command.clone(),
             ready.args.clone(),
             ready.env.clone(),
             ready.harness,
@@ -264,6 +265,10 @@ impl Chats {
         self.open_it(
             chat,
             launch.program,
+            // A chat on no profile runs its program by name, so there is no wrapper's
+            // command to keep in front: its recorded words follow charter's, as they always
+            // have, because they may end in a positional prompt.
+            Vec::new(),
             launch.args,
             Vec::new(),
             chat.harness(),
@@ -283,6 +288,7 @@ impl Chats {
         &self,
         chat: &Chat,
         program: String,
+        command: Vec<String>,
         args: Vec<String>,
         env: Vec<(String, String)>,
         harness: Option<Harness>,
@@ -290,11 +296,12 @@ impl Chats {
         how: charter_core::reopen::Reopened,
         size: Size,
     ) -> Result<u32, String> {
-        // Charter's own words first, and the state hooks before even those: a harness reads
-        // its settings before it reads anything else on the line, and a chat's own recorded
+        // The profile's own command first — a wrapper reads its own words before it hands the
+        // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
-        let (mut all, armed) = self.state_hooks(harness, chat.cwd.as_deref());
-        all.extend(args);
+        // `charter_core::start::Ready::command_line` is the one place that order is decided.
+        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref());
+        let all = charter_core::start::Ready::line(command, hooks, args);
         let mut env = env;
         env.extend(armed);
         env.sort();
@@ -1903,7 +1910,8 @@ mod tests {
         );
         let ready = charter_core::start::Ready {
             program: "/bin/sh".to_owned(),
-            args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            command: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            args: Vec::new(),
             env: Vec::new(),
             cwd: None,
             harness: Some(Harness::ClaudeCode),
@@ -1968,7 +1976,8 @@ mod tests {
         );
         let ready = charter_core::start::Ready {
             program: "/bin/sh".to_owned(),
-            args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            command: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            args: Vec::new(),
             env: Vec::new(),
             cwd: None,
             harness: Some(Harness::ClaudeCode),
@@ -1987,5 +1996,107 @@ mod tests {
             "the board was told something other than the profile's declared kind"
         );
         let _ = chats.close(session);
+    }
+
+    /// The words a profile chat's program was started with, one to an element, once the
+    /// profile's command is `command` (its first word replaced by a stand-in that writes its
+    /// arguments down) and the app arms it with a plugin.
+    fn argv_of_a_profile_chat(command: &[&str]) -> (Vec<String>, String) {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = dir.path().join("plane");
+        std::fs::create_dir_all(&root).expect("the plane");
+        std::fs::write(root.join(charter_core::plane::MANIFEST), "").expect("charter.toml");
+        let argv = root.join("argv");
+        let program = stand_in::program(
+            &root,
+            command[0],
+            &format!(
+                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > {argv:?}.part\n\
+                 mv {argv:?}.part {argv:?}\n"
+            ),
+        );
+        let mut words = vec![format!("{:?}", program.display().to_string())];
+        words.extend(command[1..].iter().map(|w| format!("{w:?}")));
+        std::fs::write(
+            root.join(charter_core::profiles::LOCAL_FILE),
+            format!(
+                "[harness.work]\nkind = \"claude\"\ncommand = [{}]\n",
+                words.join(", ")
+            ),
+        )
+        .expect("the profile");
+        let set = charter_core::profiles::current(&root);
+        charter_core::profiletrust::record_launched(
+            &root,
+            "work",
+            &charter_core::profiletrust::fingerprint(set.get("work").expect("it reads")),
+        )
+        .expect("approved");
+
+        let plugin = root.join("plugin");
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: Some(root.join("charter")),
+            plugin: Some(plugin.clone()),
+        });
+        let ready = charter_core::start::ready(
+            &charter_core::start::Start {
+                profile: Some("work".to_owned()),
+                persona: None,
+                name: "ide.7".to_owned(),
+                cwd: Some(root.clone()),
+                resume: None,
+                show_footer: false,
+            },
+            &root,
+        )
+        .expect("the chat starts");
+        let chat = Chat {
+            program: ready.program.clone(),
+            args: Vec::new(),
+            cwd: ready.cwd.clone(),
+            name: "ide.7".to_owned(),
+            resume: ready.session.clone(),
+            active: false,
+            profile: Some("work".to_owned()),
+            persona: None,
+            show_footer: false,
+            pinned: false,
+            number: None,
+        };
+        let session = chats.start_ready(&chat, &ready, SIZE).expect("it runs");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !argv.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let _ = chats.close(session);
+        let said = std::fs::read_to_string(&argv).expect("the stand-in ran");
+        (
+            said.lines().map(str::to_owned).collect(),
+            plugin.display().to_string(),
+        )
+    }
+
+    #[test]
+    fn a_wrapper_profile_keeps_its_own_words_first_and_the_apps_come_after_them() {
+        // M8.3: a profile's command is commonly a WRAPPER whose first argument is its own
+        // subcommand (`ccs work`). The app's flags used to go straight after argv[0], which
+        // started `ccs --plugin-dir … --settings … work` and broke the wrapper.
+        let (argv, plugin) = argv_of_a_profile_chat(&["ccs", "work"]);
+        assert_eq!(argv.first().map(String::as_str), Some("work"), "{argv:?}");
+        assert_eq!(argv[1..3], ["--plugin-dir".to_owned(), plugin], "{argv:?}");
+        assert_eq!(argv[3], "--settings", "{argv:?}");
+        // The app's own session words come after the flags, where they always were.
+        assert_eq!(argv[5], "--session-id", "{argv:?}");
+        assert_eq!(argv[7..], ["--name", "ide.7"], "{argv:?}");
+    }
+
+    #[test]
+    fn a_plain_profile_is_started_exactly_as_before() {
+        let (argv, plugin) = argv_of_a_profile_chat(&["claude"]);
+        assert_eq!(argv[..2], ["--plugin-dir".to_owned(), plugin], "{argv:?}");
+        assert_eq!(argv[2], "--settings", "{argv:?}");
+        assert_eq!(argv[4], "--session-id", "{argv:?}");
+        assert_eq!(argv[6..], ["--name", "ide.7"], "{argv:?}");
     }
 }

@@ -291,11 +291,11 @@ enum Command {
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
     /// heredoc on stdin. Your harness asks before it runs.
     ///
-    /// **This charter cannot open a chat** — it has no frame and no channel into the app —
-    /// so every call reaches the frame refusal and is told the command to run in a new
-    /// terminal. Every refusal in front of that one is ported and is the point: charter
-    /// refuses every shape the permission prompt in front of this command cannot stand in
-    /// front of (`charter_core::handoff`).
+    /// **The app opens the chat.** Run from a chat the charter app started, the new chat
+    /// opens there as a tab in the workspace you name. With no app running, nothing is
+    /// opened and charter says to open the app. Every refusal in front of that is the
+    /// point: charter refuses every shape the permission prompt in front of this command
+    /// cannot stand in front of (`charter_core::handoff`).
     Handoff {
         /// Where the chat opens — an existing workspace, or a new one with --create. Always
         /// named, this workspace included.

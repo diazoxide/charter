@@ -18,15 +18,17 @@ This plane has no other personas yet, so there is nothing to route to. That is t
 thing worth fixing, not a reason to do everything here:
 
 ```
-charter persona create <name> --role "<Role>" \
-  --delegate-when "<the work that should come to it>"
+personas/<name>/persona.md
+---
+role: <Role>
+delegate-when: <the work that should come to it>
+---
 ```
 
 `delegate-when` is what makes a persona findable — it becomes the description whoever is
 routing reads. Create one the moment a second kind of work appears in this plane.
 
-Once others exist, `routing: advise` above puts them in front of you on work-shaped
-prompts: who exists, what each claims, when each was last dispatched. charter never says
+Once others exist, route to them by what each one's `delegate-when` claims. charter never says
 which one owns the request — that call is yours. Route on the *work*, not on the file a
 change happens to touch.
 
