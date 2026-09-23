@@ -3,11 +3,14 @@
 charter as one cross-platform desktop app: run tons of harness sessions (Claude Code, Codex) in
 parallel, across workspaces and repos, and always know which one needs you.
 
-This is the rebuild decided in [ADR 0025](https://github.com/diazoxide/charter/blob/main/docs/adr/0025-charter-is-rebuilt-as-a-desktop-app-on-a-rust-core.md).
-The spec, with its milestones and acceptance limits, is
-[`docs/superpowers/specs/2026-09-17-charter-app.md`](https://github.com/diazoxide/charter/blob/main/docs/superpowers/specs/2026-09-17-charter-app.md)
-in the charter repo. Until M4 the Python charter stays the reference implementation, and both
-work on the same plane.
+This is the rebuild decided in [ADR 0025](docs/adr/0025-charter-is-rebuilt-as-a-desktop-app-on-a-rust-core.md),
+and it stands alone: nothing it ships needs the Python charter it replaces. The spec, with its
+milestones and acceptance limits, is [`docs/spec.md`](docs/spec.md); the decisions since are in
+[`docs/adr/`](docs/adr/), and the plane's on-disk format is
+[`docs/plane-format.md`](docs/plane-format.md). All three moved here from
+[diazoxide/charter](https://github.com/diazoxide/charter), where ADRs 0001 to 0024 stay as
+history ([ADR 0044](docs/adr/0044-charter-apps-design-record-lives-in-charter-app.md)).
+`charter version` is the app's version ([ADR 0045](docs/adr/0045-charters-version-is-the-apps-version.md)).
 
 **Status:** M0, walking skeleton. Not usable yet.
 
@@ -69,7 +72,7 @@ CI runs a `windows` job too, and it is **evidence, not a gate**: `continue-on-er
 of the nine required checks, and it reports the whole `cargo check` error list rather than
 stopping at the first line. Nothing has been ported to Windows, so it is expected to be red —
 what it is for is making "what is true on Windows" a measurement instead of a guess. What it
-has found so far is [ADR 0031](https://github.com/diazoxide/charter/blob/main/docs/adr/0031-windows-gets-charters-guards-or-it-gets-no-charter.md),
+has found so far is [ADR 0031](docs/adr/0031-windows-gets-charters-guards-or-it-gets-no-charter.md),
 and #95 to #103.
 
 Every plane write is also checked against the Python charter itself: the same command is run by
@@ -104,7 +107,7 @@ The app updates itself from those channels, and `charter update --channel dev|st
 one. Published builds are updater-signed (minisign) and Developer ID signed, **not notarized**,
 so a first install from a browser meets Gatekeeper once and updates do not. How that works, and
 the keys and secrets only the operator can set up, are in [`docs/updating.md`](docs/updating.md)
-and charter ADR 0042.
+and [ADR 0042](docs/adr/0042-charter-updates-itself-and-nothing-it-cannot-verify-reaches-it.md).
 
 The bundles carry the `charter` binary beside the app's own executable, because the app runs
 that one for hooks and deliberately does not look at `PATH`. It is staged as a Tauri sidecar by

@@ -1,5 +1,9 @@
 # A Rust charter reports the charter it brought, and names the pin it does not meet
 
+**Amended by [ADR 0045](0045-charters-version-is-the-apps-version.md) (2026-09-23):** `charter
+version` now prints the app's version, a pin names a version of the app, and a pin on the Python
+charter's line is not drift. What follows is the record as it was decided.
+
 `charter version` in Python prints three numbers, and all three are facts about a **Python
 package**: the `charter-cp` wheel `uv tool install` put on this machine, the release
 `[charter] version` pins, and the newest release on PyPI. It compares the first two and exits
