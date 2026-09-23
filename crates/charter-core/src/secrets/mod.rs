@@ -357,6 +357,7 @@ pub fn loose_dirs(leaf: &Path, stop: &Path) -> Vec<(PathBuf, u32)> {
     if !under {
         chain.truncate(1);
     }
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut out = Vec::new();
     #[cfg(unix)]
     for d in chain {

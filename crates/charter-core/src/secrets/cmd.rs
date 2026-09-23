@@ -416,6 +416,7 @@ pub fn persona_vault(ctx: &Ctx, name: &str) -> Result<String, String> {
 // cp
 
 /// `e.strerror`: the OS's sentence, without Rust's ` (os error N)` suffix.
+#[cfg(unix)]
 fn strerror(e: &std::io::Error) -> String {
     let text = e.to_string();
     match text.rfind(" (os error ") {
@@ -540,6 +541,7 @@ fn cp_dest_refusal(dest: &Path, force: bool) -> Option<String> {
 }
 
 /// `os.path.abspath`: joined to the working directory and normalised, links NOT resolved.
+#[cfg(unix)]
 fn abspath(p: &Path) -> std::path::PathBuf {
     let joined = if p.is_absolute() {
         p.to_path_buf()
