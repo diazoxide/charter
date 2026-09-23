@@ -272,11 +272,13 @@ fn a_status_line_charter_cannot_read_is_an_unknown_and_not_a_tracked_file() {
 fn a_git_that_never_answers_refuses_too_because_a_hang_is_not_a_pass() {
     // The unknown branch was only ever driven by a git that EXITS. A git that hangs is the
     // one that would turn "an unknown is not a pass" into a pass, and it was unexercised —
-    // found in review. This test waits out the real timeout, which is why it is the slow one.
+    // found in review. It waits two seconds rather than the real thirty: at thirty it was half
+    // of charter-core's test time, paid again for every mutant the nightly tests.
     let dir = repo("/charter.local.toml\n");
     let hanging = a_git_that(dir.path(), "git-that-hangs", "sleep 300");
 
-    let check = profiles::ignore_check_with(dir.path(), &hanging);
+    let check =
+        profiles::ignore_check_within(dir.path(), &hanging, std::time::Duration::from_secs(2));
 
     assert!(
         check
@@ -286,7 +288,7 @@ fn a_git_that_never_answers_refuses_too_because_a_hang_is_not_a_pass() {
         check.reason
     );
     assert!(
-        check.reason.contains("did not answer within"),
+        check.reason.contains("did not answer within 2 seconds"),
         "{:?}",
         check.reason
     );
