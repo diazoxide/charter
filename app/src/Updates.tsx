@@ -33,8 +33,8 @@ import { ReleaseNotes } from "./ReleaseNotes";
  *
  * Only when `charter version` says the plane's `[charter] version` is one this charter does not
  * meet — and that verdict is `adopt::version_report`'s exit status (`app/src-tauri/src/pin.rs`),
- * never a comparison made here (charter ADR 0030). Its dialog carries `charter version`'s own
- * sentences and the news between the pin and what this charter brought.
+ * never a comparison made here (ADR 0030, as amended by ADR 0045). Its dialog carries `charter version`'s own
+ * sentences and the news between the pin and this charter's version.
  */
 
 /** Where the updater is, as the window knows it. */
@@ -324,7 +324,7 @@ export function usePin(plane: PlaneId): { pin?: PinReport; again: () => void } {
 /** The pin item: nothing unless `charter version` says the pin drifts. */
 export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) {
   if (!pin?.drift) return null;
-  const label = `The plane pins charter ${pin.pinned ?? "(unreadable)"}; this charter brought ${pin.brought}`;
+  const label = `The plane pins charter ${pin.pinned ?? "(unreadable)"}; this charter is ${pin.brought}`;
   return (
     <Dialog.Root onOpenChange={(now) => now && again()}>
       <Dialog.Trigger asChild>

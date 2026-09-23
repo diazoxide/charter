@@ -35,13 +35,23 @@
 //! smaller number than the truth with nothing on it saying so. `footer.rs`'s rule: a number
 //! charter cannot stand behind is dropped, never shown.
 //!
-//! # The one decided difference
+//! # The decided differences
 //!
-//! charter's pin row ends `· charter version sync`, a verb that installs a published
-//! charter-cp. This binary is not one and answers that verb with a refusal that points at
-//! `charter version` (`adopt::version_move_refusal`), so this row names `charter version`
-//! directly (ADR 0030). The differential declares it (`PIN_ROW_REMEDY` in
-//! `tests/differential/run.py`) and still compares every other byte of the row.
+//! Both are in the pin row, and both come from what a version is here (ADR 0030, as amended by
+//! ADR 0045):
+//!
+//! - **Which pins draw it.** The row asks `adopt::pin_verdict` — the one comparison every
+//!   surface asks — and draws only on drift. A pin on the Python charter's line (0.62.1 and
+//!   below, not this app's version) is an older charter line, not drift, so it draws nothing
+//!   where the Python charter draws its row.
+//! - **What it says.** The running number is the app's version, and the row ends `· charter
+//!   version` where the Python charter's ends `· charter version sync`: that verb installs the
+//!   pinned charter, and this binary answers it with a refusal that points at `charter version`
+//!   (`adopt::version_move_refusal`).
+//!
+//! The differential declares the second (`PIN_ROW_REMEDY` in `tests/differential/run.py`) and
+//! still compares every other byte of the row; the first is `alerts/tests.rs`'s, because the
+//! Python side draws a row the harness would have to count differently.
 
 use std::path::{Path, PathBuf};
 
@@ -194,7 +204,7 @@ impl Alert {
             ),
             Alert::PinDrift { running, pinned } => (
                 "charter",
-                format!("this charter brought {running}, and the plane pins {pinned}"),
+                format!("this charter is {running}, and the plane pins {pinned}"),
                 PIN_REMEDY.to_owned(),
             ),
             Alert::FrontDoor { declared } => (
@@ -267,8 +277,8 @@ const TWO_CHARTERS: &str = "two different charters";
 /// whose output carries both ways out of it.
 const PIN_BESIDE_DEV_BRIEF: &str = "pin + dev channel: two different charters · charter version";
 
-/// Where the pin row sends the operator. charter says `charter version sync`; see the module
-/// docs for why this binary says `charter version`.
+/// Where the pin row sends the operator. The Python charter says `charter version sync`; see
+/// the module docs for why this binary says `charter version`.
 pub const PIN_REMEDY: &str = "charter version";
 const FRONT_DOOR_REMEDY: &str = "charter persona default <name>";
 const REINIT_REMEDY: &str = "charter ws reinit --all";
@@ -334,11 +344,15 @@ fn gather(ask: &Asking, out: &mut Vec<Alert>) -> Result<(), String> {
         .filter(|v| !v.is_empty())
         .map(str::to_owned);
     if let Some(pinned) = locked {
-        let running = crate::news::shipped_version();
         if follows_dev(&cfg) {
             out.push(Alert::PinBesideDev { pinned });
-        } else if pinned != running {
-            out.push(Alert::PinDrift { running, pinned });
+        } else if let crate::adopt::PinVerdict::Drift(pinned) =
+            crate::adopt::pin_verdict(Some(&pinned))
+        {
+            out.push(Alert::PinDrift {
+                running: crate::adopt::app_version().to_owned(),
+                pinned,
+            });
         }
     }
 

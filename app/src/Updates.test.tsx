@@ -238,10 +238,10 @@ describe("useUpdates", () => {
 describe("the pin item", () => {
   const DRIFT: PinReport = {
     drift: true,
-    brought: "0.62.1",
-    pinned: "0.50.0",
-    said: ["drift: this control plane pins 0.50.0, and this charter brought 0.62.1."],
-    news: [{ version: "0.62.1", headline: "Something came" }],
+    brought: "0.1.0",
+    pinned: "9.0.0",
+    said: ["drift: this control plane pins 9.0.0, and this charter is 0.1.0."],
+    news: [{ version: "0.2.0", headline: "Something came" }],
     more_news: 0,
   };
 
@@ -264,7 +264,7 @@ describe("the pin item", () => {
     render(<PinItem pin={DRIFT} again={() => (asked += 1)} />);
 
     const item = screen.getByTestId("status-pin");
-    expect(item.textContent).toContain("pin 0.50.0");
+    expect(item.textContent).toContain("pin 9.0.0");
 
     await userEvent.click(item);
     const dialog = await screen.findByRole("dialog");

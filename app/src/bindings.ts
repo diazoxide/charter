@@ -1205,13 +1205,13 @@ export type Piece = {
 export type PinReport = {
 	/**  `charter version`'s verdict: its exit status was 1. The only thing the line keys on. */
 	drift: boolean,
-	/**  The release this charter brought (`news::shipped_version`). */
+	/**  This charter's version: the app's (`adopt::app_version`, ADR 0045). */
 	brought: string,
 	/**  `[charter] version` as written, or none. */
 	pinned: string | null,
 	/**  What `charter version` said, line by line, in its own words. */
 	said: string[],
-	/**  What came between the pin and what this charter brought — only when it drifts. */
+	/**  What the news corpus has between the pin and this charter's version — only on drift. */
 	news: NewsItem[],
 	/**  How many more entries there were than `news` carries. */
 	more_news: number,

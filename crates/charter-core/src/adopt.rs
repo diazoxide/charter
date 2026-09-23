@@ -14,11 +14,11 @@
 //! command at all. So this command does the half it can do and says plainly which half that is.
 //!
 //! **That question — what a version means for a binary that is not a Python package — is
-//! answered here too, and it is why `charter version` shares this file.** M2.12 settled it
-//! (ADR 0030): the binary reports the charter release its news corpus comes up to, the build
-//! carrying it, and the pin, and says so in the same sentence as `update` when the plane pins
-//! something the corpus does not reach. The two commands live together because they turn on one
-//! fact — [`THE_APP_MOVES_IT`] — and a fact stated twice is a fact that drifts.
+//! answered here too, and it is why `charter version` shares this file.** ADR 0045 settles it,
+//! amending ADR 0030: this charter's version is the app's, a plane's pin names a version of the
+//! app, and a pin on the Python charter's line is named as that rather than called drift. The
+//! two commands live together because they turn on one fact — [`THE_APP_MOVES_IT`] — and a
+//! fact stated twice is a fact that drifts.
 //!
 //! **A charter that tells an operator to adopt something it cannot install is worse than one
 //! that says which half it does.** So the refusal is the first line of the output, before the
@@ -86,15 +86,15 @@ fn not_the_installer() -> String {
 const THE_HALF_IT_DOES: &str = "  the other half is this command's: what the versions this plane skipped brought, and \
      what it has not taken up.";
 
-/// `--to <version>`: a published Python package version, which is the one thing there is
-/// nothing here to install.
+/// `--to <version>`: a version to install, which is the one thing this command cannot do.
 const NO_TARGET: &str = "--to names a published version to install, and this command installs nothing — the \
-     version was ignored. What this charter ships is the news it was built with: charter news \
-     --for <version>.";
+     version was ignored. The app installs its own updates, from the channel `charter update \
+     --channel` picks.";
 
-/// `--bump`: the pin is a Python package pin.
-const NO_BUMP: &str = "--bump moves this plane's `[charter] version` pin, which names a PUBLISHED charter-cp \
-     release. This charter is not installed from one, so the pin was left alone.";
+/// `--bump`: moving the pin to what was installed, when nothing was.
+const NO_BUMP: &str = "--bump moves this plane's `[charter] version` pin to the version it installs, and this \
+     command installs nothing, so the pin was left alone. What this charter is, and what the \
+     plane pins: charter version";
 
 /// What `charter update` was asked for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -171,56 +171,104 @@ pub fn locked_version(root: &Path) -> Option<String> {
     (!pinned.is_empty()).then(|| pinned.to_owned())
 }
 
+/// The last release of the Python charter — `charter-cp` on PyPI — and the newest version the
+/// frozen news corpus names (ADR 0045).
+///
+/// **A constant, not [`news::history_ends`], though the two are the same string.** The corpus
+/// is history and nothing is added to it, so today they cannot part; but this number is the
+/// boundary a pin is read against, and a boundary that moved whenever somebody added a file to
+/// `news/` would change what every plane's pin means without anybody deciding it. A test holds
+/// the two equal, so the day they part is a red test and a decision rather than a quiet shift.
+pub const PYTHON_LINE_LAST: &str = "0.62.1";
+
+/// This charter's version: the app's, which every crate in the workspace shares (ADR 0045).
+///
+/// The one number `charter version` prints for "which charter is this", and the one a plane's
+/// `[charter] version` pin is compared with.
+pub fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// What a plane's `[charter] version` pin says against this charter — ADR 0045, and the one
+/// comparison every surface asks (`charter version`, the status line's alert row, the window's
+/// pin dialog). ADR 0030's rule, kept: no surface compares a pin its own way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinVerdict {
+    /// The plane pins nothing.
+    Unpinned,
+    /// The pin is this charter's version.
+    Met(String),
+    /// The pin names a release of the Python charter (`charter-cp`) — an older charter line,
+    /// not a version of this app. Not drift: there is nothing here to compare it with.
+    PythonLine(String),
+    /// The pin names a version of this app that this charter is not, or is not a version.
+    Drift(String),
+}
+
+impl PinVerdict {
+    /// `charter version`'s exit status for this verdict: 1 on drift, 0 otherwise.
+    pub fn code(&self) -> u8 {
+        u8::from(matches!(self, Self::Drift(_)))
+    }
+}
+
+/// The verdict for `pinned` — a pin as [`locked_version`] reads it.
+///
+/// **How a Python pin is told from an app pin.** Every pin a plane carries today was written by
+/// the Python charter (`charter version bump`); this charter writes none. The Python line ended
+/// at [`PYTHON_LINE_LAST`], so a pin that is a version, is not this app's own, and is no newer
+/// than that release names the Python line. Anything newer, or anything that is not a version at
+/// all, is a pin on this app's line that this charter does not meet.
+///
+/// **The cost, stated rather than hidden** (ADR 0045): while the app's own version is at or
+/// below 0.62.1 the two lines share numbers, so a pin written by hand for this app below that
+/// release reads as the Python line and is never called drift. The ambiguity ends when the app's
+/// version passes 0.62.1, or when this charter starts writing pins of its own.
+pub fn pin_verdict(pinned: Option<&str>) -> PinVerdict {
+    let Some(pin) = pinned else {
+        return PinVerdict::Unpinned;
+    };
+    let pin = pin.to_owned();
+    if pin == app_version() {
+        return PinVerdict::Met(pin);
+    }
+    let key = crate::version::version_key(&pin);
+    if key.is_version() && key <= crate::version::version_key(PYTHON_LINE_LAST) {
+        return PinVerdict::PythonLine(pin);
+    }
+    PinVerdict::Drift(pin)
+}
+
 /// `charter version`: which charter this is, what the plane asks for, and whether they agree.
 ///
-/// **This is a decision, not a port — ADR 0030, and it is the question `adopt`'s own module
-/// note parks beside `charter update`'s.** Python's three rows are three facts about a PYTHON
-/// PACKAGE: the `charter-cp` wheel installed on this machine, the release the plane pins, and
-/// the newest release on PyPI. Two of the three have no subject here. This binary is not
-/// installed from an index, so there is no *installed* wheel to name and no *latest* to
-/// compare against — `charter update` already says why, in the same sentence this does
-/// ([`THE_APP_MOVES_IT`]).
+/// **ADR 0045, amending ADR 0030.** This charter's version is the app's — [`app_version`] — and
+/// a plane's `[charter] version` means a version of the app. ADR 0030 printed the newest release
+/// the Python news corpus names as "the charter this brought", with the app's own number second
+/// as the build; that corpus is now frozen history, and a number taken from it is not this
+/// charter's.
 ///
-/// So the command answers the question the rows were for, with the numbers this artifact
-/// actually has:
-///
-/// * `charter` — [`crate::news::shipped_version`], the release this build's news corpus comes
-///   up to. That function's own note is why it stands in for `charter.__version__`: an entry
-///   travels with the code that implements it, so the newest entry a binary ships is the
-///   newest thing that binary brought. **It is the only number here on the same scale as the
-///   pin**, which is what makes a comparison possible at all.
-/// * `build` — `charter-app`'s own version, the artifact carrying it. Two numbers rather than
-///   one because they move independently and an operator debugging a plane needs both: the
-///   first says which charter this behaves like, the second says which build to re-download.
+/// * `charter` — [`app_version`].
 /// * `pinned` — `[charter] version`, verbatim.
 ///
-/// **The verdict does not reuse charter's sentences, and that is deliberate.** Python says *in
-/// sync with the lock* when the numbers match. A Rust charter saying that would claim parity
-/// it does not have: M2 is still porting commands, so a binary whose corpus reaches 0.62.1 is
-/// not everything 0.62.1 does. ADR 0013's rule — the absence of information is not evidence of
-/// health — applies to charter's own claims about itself, so the line states the fact it can
-/// substantiate (*this charter brought X, which is what the plane pins*) and no more.
-///
-/// **The exit status IS charter's**, and that is the part scripts read: 0 with no pin, 0 when
-/// the pin is met, 1 on drift. A wrapper that branches on `charter version` behaves the same
-/// against either implementation even though neither sentence matches — which is what the
-/// differential scenarios compare, since the words legitimately differ.
+/// **The verdict does not reuse the Python charter's sentences** (ADR 0030's reason stands):
+/// *in sync with the lock* would claim a parity with a release this app is not. The exit status
+/// is still the one scripts read: 0 with no pin, 0 when the pin is met, 0 for a pin on the
+/// Python charter's line — it is not drift — and 1 on drift.
 pub fn version_report(root: Option<&Path>) -> Report {
     let mut report = Report::new_public();
-    let brought = crate::news::shipped_version();
+    let version = app_version();
     let pinned = root.and_then(locked_version);
 
-    report.out.push_str(&format!("  charter    {brought}\n"));
-    report
-        .out
-        .push_str(&format!("  build      charter-app {}\n", build_version()));
+    report.out.push_str(&format!("  charter    {version}\n"));
     report.out.push_str(&format!(
         "  pinned     {}\n\n",
         pinned.as_deref().unwrap_or(NO_PIN)
     ));
 
-    match pinned {
-        None => {
+    let verdict = pin_verdict(pinned.as_deref());
+    report.code = verdict.code();
+    match verdict {
+        PinVerdict::Unpinned => {
             report.said.push(Say::Info(
                 "this control plane pins no charter version, so there is nothing to conform \
                  to."
@@ -228,46 +276,49 @@ pub fn version_report(root: Option<&Path>) -> Report {
             ));
             report.said.push(Say::Info(format!("  {THE_APP_MOVES_IT}")));
         }
-        Some(pin) if pin == brought => {
+        PinVerdict::Met(pin) => {
             report.said.push(Say::Ok(format!(
-                "this charter brought {pin}, which is what this control plane pins."
+                "this charter is {pin}, which is what this control plane pins."
             )));
         }
-        Some(pin) => {
+        PinVerdict::PythonLine(pin) => {
+            report.said.push(Say::Info(format!(
+                "this control plane pins {pin}, a release of the Python charter (charter-cp): an \
+                 older charter line, not a version of this app, so it is not drift and there is \
+                 nothing to compare."
+            )));
+            report.said.push(Say::Info(format!(
+                "  to hold this plane to this app instead:  set `[charter] version = \
+                 \"{version}\"` in charter.toml, or remove the pin."
+            )));
+        }
+        PinVerdict::Drift(pin) => {
             report.said.push(Say::Warn(format!(
-                "drift: this control plane pins {pin}, and this charter brought {brought}."
+                "drift: this control plane pins {pin}, and this charter is {version}."
             )));
             report.said.push(Say::Info(format!("  {THE_APP_MOVES_IT}")));
-            report.said.push(Say::Info(
-                "  conform the plane instead:  move `[charter] version` to the release this \
-                 charter brought, or run the charter-cp the plane names."
-                    .to_owned(),
-            ));
-            report.code = 1;
+            report.said.push(Say::Info(format!(
+                "  conform the plane instead:  set `[charter] version = \"{version}\"` in \
+                 charter.toml, or update the app to the version the plane pins."
+            )));
         }
     }
     report
 }
 
-/// This build's own version — `charter-app`'s, which every crate in the workspace shares.
-fn build_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
 /// `charter version sync` and `charter version bump`: what neither of them can do here.
 ///
 /// **They are answered rather than left to clap**, for M2.21's reason: a usage error is what a
-/// script meets for a verb the tool being replaced has, and it says nothing about why. Both
-/// move a PUBLISHED `charter-cp` release — `sync` installs one over this machine's binary,
-/// `bump` writes one into `charter.toml` after installing and verifying it — and this binary
-/// is neither installed from an index nor able to verify a wheel it cannot run.
+/// script meets for a verb a plane's scripts may already call, and it says nothing about why.
+/// Both install a charter — `sync` the one the plane pins, `bump` a newer one whose version it
+/// then writes into `charter.toml` — and this binary cannot install itself: the app moves it.
 ///
 /// Exit 1, because the operator asked for something that did not happen.
 pub fn version_move_refusal(verb: &str) -> Report {
     let mut report = Report::new_public();
     report.said.push(Say::Err(format!(
-        "charter version {verb} moves a published charter-cp release, and this charter is not \
-         one."
+        "charter version {verb} moves a pin by installing the charter it names, and this \
+         charter cannot install itself."
     )));
     report.said.push(Say::Info(format!("  {THE_APP_MOVES_IT}")));
     report.said.push(Say::Info(
@@ -449,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn the_two_flags_that_move_a_python_package_are_refused_by_name() {
+    fn the_two_flags_that_install_a_charter_are_refused_by_name() {
         let dir = tempfile::tempdir().unwrap();
         let args = UpdateArgs {
             to: "0.63.0".to_owned(),
@@ -460,7 +511,7 @@ mod tests {
         assert!(text.contains("--bump moves this plane's `[charter] version` pin"));
     }
 
-    // `charter version` (M2.12, ADR 0030)
+    // `charter version` (M2.12, ADR 0030 as amended by ADR 0045)
 
     /// A plane whose manifest is `manifest`.
     fn pinned(manifest: &str) -> tempfile::TempDir {
@@ -470,54 +521,118 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_name_the_charter_this_build_brought_and_the_build_carrying_it() {
-        // Two numbers, not one, and they are different numbers: the corpus reaches a charter
-        // release and the artifact has a version of its own. A row that printed only the
-        // second would answer the pin with a number that cannot be compared to it; a row that
-        // printed only the first would hide which build to re-download.
+    fn the_rows_name_the_apps_version_and_the_pin_and_nothing_from_the_news_corpus() {
+        // ADR 0045: one number for "which charter is this", and it is the app's. The frozen
+        // corpus reaches 0.62.1, and printing that here is the answer this replaced.
         let dir = pinned("");
         let report = version_report(Some(dir.path()));
-        let brought = crate::news::shipped_version();
-        assert!(!brought.is_empty(), "the corpus names no released version");
-        assert_ne!(
-            brought,
-            build_version(),
-            "this test is vacuous if the two numbers are the same"
-        );
         assert_eq!(
             report.out,
-            format!(
-                "  charter    {brought}\n  build      charter-app {}\n  pinned     {NO_PIN}\n\n",
-                build_version()
-            )
+            format!("  charter    {}\n  pinned     {NO_PIN}\n\n", app_version())
+        );
+        assert!(
+            !report.out.contains(PYTHON_LINE_LAST),
+            "the corpus's version leaked into the rows: {}",
+            report.out
         );
         assert_eq!(report.code, 0, "pinning nothing is not drift");
     }
 
     #[test]
-    fn a_pin_the_corpus_reaches_is_met_and_a_pin_it_does_not_is_drift() {
-        let brought = crate::news::shipped_version();
-        let met = pinned(&format!("[charter]\nversion = \"{brought}\"\n"));
+    fn the_python_lines_last_release_is_where_the_frozen_corpus_ends() {
+        // The boundary a pin is read against is a constant, and this holds it to the corpus it
+        // describes. They part only if somebody adds a released entry to the corpus, which is
+        // then a decision about what every plane's pin means — so it has to be a red test.
+        assert_eq!(crate::news::history_ends(), PYTHON_LINE_LAST);
+        assert!(
+            crate::version::version_key(app_version())
+                != crate::version::version_key(PYTHON_LINE_LAST),
+            "the app's version and the Python line's last are the same number; the verdict \
+             for that pin would be `Met` and the tests below would say less than they claim"
+        );
+    }
+
+    #[test]
+    fn the_apps_own_version_is_met_and_says_so_without_claiming_a_python_parity() {
+        let met = pinned(&format!("[charter]\nversion = \"{}\"\n", app_version()));
         let report = version_report(Some(met.path()));
         assert_eq!(report.code, 0, "{}", said(&report));
         assert!(
-            said(&report).contains(&format!("this charter brought {brought}, which is what")),
+            said(&report).contains(&format!("this charter is {}, which is what", app_version())),
             "{}",
             said(&report)
         );
-        // And NOT charter's own verdict: "in sync with the lock" claims a parity a partial
-        // port does not have (ADR 0013, applied to charter's claims about itself).
         assert!(!said(&report).contains("in sync with the lock"));
+    }
 
-        let adrift = pinned("[charter]\nversion = \"0.44.0\"\n");
-        let report = version_report(Some(adrift.path()));
-        assert_eq!(report.code, 1, "drift is exit 1, as it is in charter");
-        assert!(said(&report).contains("drift: this control plane pins 0.44.0"));
-        assert!(
-            report.out.contains("  pinned     0.44.0\n"),
-            "the row prints the pin as written: {}",
-            report.out
+    #[test]
+    fn a_pin_on_the_python_line_is_named_as_that_and_is_not_drift() {
+        // The plane every Python charter left behind: pinned to a charter-cp release. Opening
+        // it with the app must not turn it red, and must not tell the operator to run Python.
+        for pin in [PYTHON_LINE_LAST, "0.44.0", "0.2.0"] {
+            if pin == app_version() {
+                continue;
+            }
+            let dir = pinned(&format!("[charter]\nversion = \"{pin}\"\n"));
+            let report = version_report(Some(dir.path()));
+            let text = said(&report);
+            assert_eq!(report.code, 0, "{pin}: {text}");
+            assert!(
+                text.contains(&format!(
+                    "this control plane pins {pin}, a release of the Python charter"
+                )),
+                "{text}"
+            );
+            assert!(text.contains("not drift"), "{text}");
+            assert!(!text.contains("drift:"), "{text}");
+            assert!(
+                text.contains(&format!("[charter] version = \"{}\"", app_version())),
+                "the way to hold the plane to this app is named: {text}"
+            );
+            assert!(
+                !text.contains("uv tool") && !text.contains("run the charter-cp"),
+                "{text}"
+            );
+            assert!(report.out.contains(&format!("  pinned     {pin}\n")));
+        }
+    }
+
+    #[test]
+    fn a_pin_past_the_python_line_that_this_app_is_not_is_drift_and_exits_one() {
+        for pin in ["0.62.2", "0.63.0", "1.0.0", "not-a-version"] {
+            let dir = pinned(&format!("[charter]\nversion = \"{pin}\"\n"));
+            let report = version_report(Some(dir.path()));
+            let text = said(&report);
+            assert_eq!(report.code, 1, "{pin}: drift is exit 1");
+            assert!(
+                text.contains(&format!(
+                    "drift: this control plane pins {pin}, and this charter is {}.",
+                    app_version()
+                )),
+                "{text}"
+            );
+            assert!(!text.contains("charter-cp"), "{text}");
+        }
+    }
+
+    #[test]
+    fn every_surface_reads_one_verdict() {
+        assert_eq!(pin_verdict(None), PinVerdict::Unpinned);
+        assert_eq!(
+            pin_verdict(Some(app_version())),
+            PinVerdict::Met(app_version().to_owned())
         );
+        assert_eq!(
+            pin_verdict(Some("0.50.0")),
+            PinVerdict::PythonLine("0.50.0".to_owned())
+        );
+        assert_eq!(
+            pin_verdict(Some("9.0.0")),
+            PinVerdict::Drift("9.0.0".to_owned())
+        );
+        assert_eq!(PinVerdict::Unpinned.code(), 0);
+        assert_eq!(PinVerdict::PythonLine("0.50.0".to_owned()).code(), 0);
+        assert_eq!(PinVerdict::Drift("9.0.0".to_owned()).code(), 1);
     }
 
     #[test]
@@ -569,10 +684,11 @@ mod tests {
             assert!(report.out.is_empty(), "nothing goes to stdout");
             let text = said(&report);
             assert!(
-                text.contains(&format!("charter version {verb} moves a published")),
+                text.contains(&format!("charter version {verb} moves a pin")),
                 "{text}"
             );
             assert!(text.contains(THE_APP_MOVES_IT), "{text}");
+            assert!(!text.contains("charter-cp"), "{text}");
         }
     }
 

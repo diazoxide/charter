@@ -59,6 +59,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -5043,42 +5044,60 @@ DOCS_SCENARIOS = [
 # M2.12: what `charter version` means when the CLI is not a Python package
 # --------------------------------------------------------------------------------------------
 #
-# ADR 0030. charter's three rows are three facts about a `charter-cp` wheel; two of them have no
-# subject for a binary that ships inside the app, and the one number this binary carries of its
-# own (`charter-app 0.1.0`) counts a different thing from a pin. So the words differ by
-# decision, and what these scenarios compare is the half that must NOT: the **exit status**, in
-# each of the three states a script branches on.
+# ADR 0030, as amended by ADR 0045. charter's three rows are three facts about a `charter-cp`
+# wheel; charter-app's `charter` is the app's binary, prints the APP's version and the pin, and
+# reads the pin as a version of the app. So the words differ by decision, and what these
+# scenarios compare is the half that must not, the **exit status** — except in the one state
+# ADR 0045 decides differently, which is declared as a `Divergence` rather than waived:
 #
-# **A scenario whose stdout and stderr both carry a `_differs` note asserts less than most here,
-# and that is stated rather than hidden.** What is left is real — charter exits 0 with no pin, 0
-# when the pin is met and 1 on drift, and a wrapper reading `charter version` behaves the same
-# against either implementation — but it is one number, so the three states are all covered
-# rather than one standing in for the rest.
-#
-# **The pin that is MET is `0.62.1` because that is both numbers at once**, and the coincidence
-# is load-bearing enough to name: at the oracle's pinned commit `charter.__version__` and the
-# newest entry in the vendored news corpus are the same string, so one pin puts both
-# implementations in their "pin met" arm. They move together — the corpus and the oracle come
-# from one commit — but they are not the same field, and the day they part this scenario reports
-# an exit-status difference, which is the right place to find out.
+# - no pin: both 0;
+# - a pin at the Python charter's last release: Python calls it in sync and exits 0; charter-app
+#   calls it the Python charter's line — not drift — and exits 0;
+# - an OLDER Python release: Python calls it drift and exits 1; charter-app names it as the
+#   Python line and exits 0 (the divergence);
+# - a version past the Python line that the app is not: drift, exit 1, on both sides.
 
-#: The number both implementations call "what is running here": `charter.__version__` on the
-#: Python side, the newest entry in the vendored corpus on charter-app's.
-PIN_BOTH_SIDES_MEET = "0.62.1"
+#: `charter.__version__` at the oracle's pinned commit, and the last release on the Python line.
+PIN_THE_PYTHON_LINE_ENDS_AT = "0.62.1"
 
-#: A release neither side is. Old enough that no future bump makes it accidentally current.
-PIN_NEITHER_SIDE_MEETS = "0.44.0"
+#: A release on the Python line that is not the oracle's own: drift for Python, not for the app.
+PIN_AN_OLDER_PYTHON_RELEASE = "0.44.0"
+
+#: A version past the Python line that the app is not either: drift on both sides. Far enough
+#: ahead that no app release makes it accidentally current.
+PIN_NEITHER_SIDE_MEETS = "9.0.0"
+
+#: charter-app's own version — what its `charter version` prints and what its alert row calls
+#: the running charter. The workspace's, which every crate shares.
+APP_VERSION = tomllib.loads((REPO / "Cargo.toml").read_text())["workspace"]["package"]["version"]
 
 VERSION_ROWS_DIFFER = (
     "charter prints `installed`, `locked` and `latest` — three facts about a charter-cp wheel. "
-    "Two have no subject for a binary that ships inside the app, so charter-app prints the "
-    "charter release its news corpus reaches, the build carrying it, and the pin (ADR 0030)."
+    "charter-app prints its own version and the pin (ADR 0030, as amended by ADR 0045)."
 )
 VERSION_VERDICT_DIFFERS = (
     "charter's verdict names a wheel and points at `charter version sync`, which cannot reach a "
-    "binary inside an app bundle; charter-app says what it brought and how to conform the PLANE. "
-    "It deliberately does NOT reuse `in sync with the lock`, which would claim a parity a "
-    "partial port does not have (ADR 0030)."
+    "binary inside an app bundle; charter-app says what it is and how to conform the PLANE. "
+    "It deliberately does NOT reuse `in sync with the lock` (ADR 0030, ADR 0045)."
+)
+
+#: ADR 0045: a pin on the Python charter's line is not drift for charter-app.
+AN_OLDER_PYTHON_PIN_IS_NOT_DRIFT = Divergence(
+    why=(
+        "ADR 0045 (amending ADR 0030; spec decision 17 freezes the Python charter): a plane's "
+        "`[charter] version` names a version of the APP, and a pin on the Python charter's line "
+        "is an older charter line rather than drift, so charter-app exits 0 where charter exits 1"
+    ),
+    python_exit=1,
+    rust_exit=0,
+    rust_stderr=(
+        f"• this control plane pins {PIN_AN_OLDER_PYTHON_RELEASE}, a release of the Python charter "
+        "(charter-cp): an older charter line, not a version of this app, so it is not drift and "
+        "there is nothing to compare.\n"
+        "•   to hold this plane to this app instead:  set `[charter] version = "
+        f'"{APP_VERSION}"` in charter.toml, or remove the pin.\n'
+    ),
+    python_stderr_has="drift",
 )
 
 
@@ -5107,16 +5126,25 @@ VERSION_SCENARIOS = [
         stderr_differs=VERSION_VERDICT_DIFFERS,
     ),
     Scenario(
-        name="version-on-a-plane-pinning-what-both-sides-are-is-not-drift",
+        name="version-on-a-plane-pinning-the-last-python-release-is-not-drift",
         plane="daily",
-        setup=_pinning(PIN_BOTH_SIDES_MEET),
+        setup=_pinning(PIN_THE_PYTHON_LINE_ENDS_AT),
         python=["version"],
         pins_the_clock=False,
         stdout_differs=VERSION_ROWS_DIFFER,
         stderr_differs=VERSION_VERDICT_DIFFERS,
     ),
     Scenario(
-        # The one that must agree, and the reason the other two are here: an exit 1 that only
+        name="version-on-a-plane-pinning-an-older-python-release-is-not-drift-for-the-app",
+        plane="daily",
+        setup=_pinning(PIN_AN_OLDER_PYTHON_RELEASE),
+        python=["version"],
+        pins_the_clock=False,
+        stdout_differs=VERSION_ROWS_DIFFER,
+        diverges=AN_OLDER_PYTHON_PIN_IS_NOT_DRIFT,
+    ),
+    Scenario(
+        # The one that must agree, and the reason the others are here: an exit 1 that only
         # one implementation gives turns a wrapper's `charter version || conform` into a no-op
         # on the other.
         #
@@ -5152,18 +5180,20 @@ VERSION_SCENARIOS = [
 # inside another plane's `workspaces/`, which `_refuse_enclosing_plane` exists to make
 # impossible for this harness — it is `alerts.rs`'s own tests that drive it.
 
-#: One decided difference, and only one. charter's pin row points at `charter version sync`,
-#: which INSTALLS a published charter-cp; charter-app is a binary inside the app and answers
-#: that verb with a refusal whose last line is "what this charter is, and what this plane
-#: pins:  charter version". So charter-app's row names `charter version` directly — the command
-#: that prints both numbers and how to conform the plane — rather than a verb that refuses and
-#: then points at it.
+#: The decided differences in the drift row, as one rewrite from the running number to the end.
+#: The running number is each side's own version — `charter.__version__` for charter, the app's
+#: for charter-app (ADR 0045). And charter's row points at `charter version sync`, which
+#: INSTALLS the pinned charter; charter-app is a binary inside the app and answers that verb
+#: with a refusal whose last line is "what this charter is, and what this plane pins:  charter
+#: version", so its row names `charter version` directly (ADR 0030).
 PIN_ROW_REMEDY = (
-    "· charter version sync",
-    "· charter version",
-    "ADR 0030: `charter version sync` moves a published charter-cp release, which charter-app "
-    "is not; its row names the command that says what this charter brought and how to "
-    "conform the plane, which is where `version sync` itself sends the operator here.",
+    f"\x1b[0m {PIN_THE_PYTHON_LINE_ENDS_AT} \x1b[2m→ pinned\x1b[0m {PIN_NEITHER_SIDE_MEETS}"
+    "\x1b[2m · charter version sync",
+    f"\x1b[0m {APP_VERSION} \x1b[2m→ pinned\x1b[0m {PIN_NEITHER_SIDE_MEETS}"
+    "\x1b[2m · charter version",
+    "ADR 0045 and ADR 0030: the running number is the app's own version, and `charter version "
+    "sync` installs the pinned charter, which charter-app cannot; its row names the command "
+    "that says what this charter is and how to conform the plane.",
 )
 
 
@@ -5328,8 +5358,10 @@ ALERT_SCENARIOS = [
     # A pin neither side meets: charter's row, with the one decided difference in its remedy.
     _alert("a-pin-this-charter-does-not-meet", 1, setup=_pinning(PIN_NEITHER_SIDE_MEETS),
            rewrite=PIN_ROW_REMEDY),
-    # A pin both sides meet is not drift, and draws nothing.
-    _alert("a-pin-this-charter-meets", 0, setup=_pinning(PIN_BOTH_SIDES_MEET)),
+    # The oracle's own version: in sync for charter, the Python line for charter-app (ADR 0045).
+    # Neither is drift, and neither draws a row. An OLDER Python pin draws charter's row and not
+    # charter-app's; `alerts/tests.rs` holds that, since the rows could not be compared here.
+    _alert("a-pin-this-charter-meets", 0, setup=_pinning(PIN_THE_PYTHON_LINE_ENDS_AT)),
     # A pin beside `[update] channel = "dev"` is its own state with its own row (#1018): the
     # drift row's `version sync` would install the pin over a plane following `main`.
     _alert("a-pin-beside-the-dev-channel", 1, setup=_manifest_ends_with(
