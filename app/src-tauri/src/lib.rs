@@ -1,6 +1,7 @@
 //! The app's Rust side: what the UI can ask the core to do, as commands generated into
 //! TypeScript by `tauri-specta`, so no shape is written by hand on either side.
 
+mod about;
 mod alerts;
 mod chats;
 mod doctor;
@@ -177,6 +178,60 @@ fn reached(step: &str) {
             "charter-launch {:>5} ms  {step}",
             STARTED.elapsed().as_millis()
         );
+    }
+}
+
+/// How many CSS pixels of the leading edge macOS's window controls occupy.
+///
+/// The close, minimise and zoom buttons sit at x = 20, 40 and 60 and are 12 px across, so the
+/// group ends at 72; this is that, rounded up to the next multiple of six so a title bar that
+/// starts here is not one pixel off the last button. The window's own gutter is added on top
+/// of it in `App.css` rather than folded in, because the gutter is the same on every platform
+/// and this is not.
+///
+/// **A constant and not a measurement, because there is nothing to measure.** `NSWindow` gives
+/// no public geometry for the button group, and the number has been 20/40/60 since Big Sur.
+/// It is here rather than in the stylesheet so that the fact it is macOS's — not charter's —
+/// is written where `cfg!(target_os)` decides it.
+const MACOS_WINDOW_CONTROLS: u32 = 78;
+
+/// What the operating system has already spent of the window's own title bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct TitleBarRoom {
+    /// Whether charter's bar is drawn UNDERNEATH the system's window controls.
+    ///
+    /// True only where `tauri.conf.json`'s `titleBarStyle: "Overlay"` is honoured, which is
+    /// macOS alone — every other platform ignores the key and keeps drawing its own title bar
+    /// above the webview, so charter's bar is a row inside the window rather than the title
+    /// bar itself, and nothing is reserved.
+    pub overlaid: bool,
+    /// How many CSS pixels at the leading edge the system's controls occupy, or zero.
+    pub reserved: u32,
+}
+
+/// Where charter's title bar may start.
+///
+/// **Asked of the binary and never sniffed from a user agent.** The one fact that decides this
+/// is whether `titleBarStyle: "Overlay"` in `tauri.conf.json` was honoured, and that is a
+/// property of the target this binary was built for — which `cfg!` knows exactly and a
+/// `navigator.userAgent` string only guesses at. It is also why this is a command rather than
+/// a stylesheet constant: one frontend bundle is built per target by the same CI job that
+/// builds the binary, but nothing in the bundle is told which target it landed in.
+///
+/// The window asks once, after the first frame, and the bar shifts right by
+/// [`MACOS_WINDOW_CONTROLS`] when the answer lands. That settle is deliberate: the alternative
+/// is awaiting an IPC round trip before `createRoot().render()`, which puts a command between
+/// the process starting and the first frame — the one thing `main.tsx` is written to avoid
+/// (ADR 0026's 2 s cold start). A title bar that finishes placing itself a millisecond after
+/// it is drawn is the same settle the project strip, the workspace strip and the status line
+/// all already have.
+#[tauri::command]
+#[specta::specta]
+fn title_bar_room() -> TitleBarRoom {
+    let overlaid = cfg!(target_os = "macos");
+    TitleBarRoom {
+        overlaid,
+        reserved: if overlaid { MACOS_WINDOW_CONTROLS } else { 0 },
     }
 }
 
@@ -1043,6 +1098,7 @@ fn commands() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![
             first_frame,
+            title_bar_room,
             plane_at_launch,
             open_planes,
             close_plane,
@@ -1101,6 +1157,7 @@ fn commands() -> Builder<tauri::Wry> {
             doctor::plane_doctor,
             usage::chat_usage,
             pin::plane_pin,
+            about::about_charter,
         ])
         // What `update://checked` carries. It crosses on an event rather than a command, so it
         // is named here or the window would have to write the shape out by hand.

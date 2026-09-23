@@ -3061,3 +3061,152 @@ button.show-more:focus-visible {
 .warning .doing button.ends-it:hover:not(:disabled) {
   background: var(--danger-surface);
 }
+
+/* ==========================================================================================
+   THE TITLE BAR (`app/src/TitleBar.tsx`)
+   Kept in one block at the end of the file, and nothing above it is touched: three branches
+   were editing this stylesheet the night it landed.
+   ========================================================================================== */
+
+/* **The window's title bar**: where you are on the left, what charter is on the right.
+
+   On macOS `titleBarStyle: "Overlay"` stops the system drawing a bar of its own and leaves the
+   traffic lights floating over the webview, so this element IS the title bar and has to start
+   after them — `--window-controls` is what the core answered (`title_bar_room`), 0 until it
+   has and 0 forever on every other platform, where the system's own bar is still above this
+   one. The gutter is added on top of it rather than folded in, because the gutter is the same
+   everywhere and the controls are not.
+
+   `min-height` is a floor and not a height: macOS places the traffic lights at ITS standard
+   title bar height whatever this element does, so a bar shorter than that would have them
+   overlapping the project strip below. `surface.deep` is the theme's colour for the top of the
+   window, which is what the project strip under it already uses — the two read as one frame. */
+.title-bar {
+  display: flex;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+  min-height: 2.1rem;
+  padding: 0.1rem 0.6rem 0.1rem calc(var(--window-controls, 0px) + 0.6rem);
+  font-size: 0.8rem;
+  background: var(--surface-deep);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow: hidden;
+  /* A bar the pointer can grab is not one the pointer selects text in. Tauri's handler calls
+     `preventDefault` on the press it acts on, but only on the press it acts on — a drag that
+     began on a word would otherwise leave the word highlighted behind the moving window. */
+  user-select: none;
+}
+
+/* The left-hand side: `project / workspace / N chats running`. It takes what is left after the
+   controls, and `min-width: 0` is what lets it shrink below its own content so that the names
+   inside it can truncate — without it a flex item's floor is its text and a long project name
+   would push the controls off the window. */
+.crumbs {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.4rem;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The two names give way, in that order, and the count never does: `3 chats running` cut to
+   `3 cha…` is a number with no unit, while `charter-app` cut to `charter-a…` is still legible.
+   `flex-shrink` is the whole of that rule — the workspace gives up twice as much as the
+   project, because the project is the thing that holds it. */
+.crumb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb-project {
+  flex: 0 1 auto;
+  min-width: 2.5rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.crumb-workspace {
+  flex: 0 2 auto;
+  min-width: 2.5rem;
+  color: var(--text-secondary);
+}
+
+/* Never truncated, never wrapped: it is the shortest clause and the only one that is a fact
+   rather than a name. */
+.crumb-chats {
+  flex: none;
+  color: var(--text-muted);
+}
+
+/* The separator the operator asked for. Quieter than either side of it, so the eye reads the
+   three clauses rather than the punctuation. */
+.crumb-sep {
+  flex: none;
+  color: var(--border-strong);
+}
+
+/* A reading charter is still waiting for, and one it has and is empty. Both are sentences
+   rather than gaps (`TitleBar.tsx` argues why), so both are drawn in the muted colour the rest
+   of the window uses for exactly that. */
+.crumbs .pending,
+.crumbs .none {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* The right-hand end, which never gives way. */
+.title-bar-doing {
+  display: flex;
+  flex: none;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+/* About charter, in the same chrome as the update item beside it — one row, one shape. */
+.title-about {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--text-secondary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.title-about:hover {
+  border-color: var(--accent-base);
+}
+
+.title-about:focus-visible,
+.title-bar .status-update:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* What the version brought, one entry per row. The headline is the line to read; the body is
+   the paragraph its author wrote under it, and it is scrollable rather than allowed to grow
+   the dialog past the window — a release has shipped 47 entries in a day. */
+.about-news {
+  max-height: 22rem;
+  margin: 0.4rem 0 0.75rem;
+  padding-left: 1.1rem;
+  overflow-y: auto;
+}
+
+.about-news li {
+  margin: 0 0 0.6rem;
+}
+
+.about-news p {
+  margin: 0.2rem 0 0;
+  color: var(--text-secondary);
+}

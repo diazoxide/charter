@@ -271,20 +271,17 @@ describe("the status line", () => {
     await untilTheButtonSays("Alerts: none");
   });
 
-  it("carries the updater as a quiet icon, and no pin item for a plane that pins nothing", async () => {
-    // A scenario build never checks on its own (`charter_core::updates::checks_on_its_own`),
-    // so nothing is on offer: the button is the way in to the channel, with no words. The
-    // fixture plane pins no charter version, so `charter version` reports no drift and the
+  it("draws no pin item for a plane that pins nothing", async () => {
+    // The fixture plane pins no charter version, so `charter version` reports no drift and the
     // pin item — which is drawn only on drift — is not there at all.
+    //
+    // **The updater used to be asserted here beside it and has moved** to `title-bar.e2e.ts`
+    // with the item itself. The two read as one pair of "version facts" and only one of them
+    // is about a project: the pin is `charter version`'s verdict on THIS plane's
+    // `[charter] version` (charter ADR 0030) and belongs on the line that names the project,
+    // while an offer is about the app and the line is drawn once per open project.
     await untilTheStripIsRead();
 
-    const update = await $('[data-testid="status-update"]');
-    await update.waitForExist({ timeout: 20_000 });
-    await browser.waitUntil(
-      async () => ((await update.getAttribute("aria-label")) ?? "").includes("channel"),
-      { timeout: 20_000, timeoutMsg: "the update button never said which channel it is on" },
-    );
-    expect(await update.getAttribute("aria-label")).toContain("nothing new known");
     expect(await $('[data-testid="status-pin"]').isExisting()).toBe(false);
   });
 
