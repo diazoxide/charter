@@ -27,6 +27,13 @@ serde = { workspace = true, features = ["derive"] }
 # `f64` at PARSE time — the digest would then be taken over a number the file never held.
 serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "0.10"
+# The keyed fingerprint `secret get` prints (`charter/secrets/fingerprint.py`): HMAC-SHA256 over
+# `sha2`, and 32 random bytes for the plane's key. Both already in this workspace's lockfile.
+hmac = "0.12"
+getrandom = "0.3"
+# `secret exec --file`/`--dotenv`: a 0600 temp file, created with a random name that cannot
+# collide or be pre-planted. Already a dev-dependency here and in the lockfile.
+tempfile.workspace = true
 thiserror.workspace = true
 toml = { version = "0.9", features = ["preserve_order"] }
 unicode-normalization = "0.1.25"
@@ -69,3 +76,7 @@ rustix = { version = "1", features = ["fs", "process", "system", "termios"] }
 # Linux), made there because nothing that allocates may run in a forked child. Already in this
 # workspace's lockfile.
 libc = "0.2"
+# `secret exec`'s cleanup: while a 0600 temp file exists, a terminating signal sets a flag
+# instead of killing charter, so the file is removed on the way out — Python's
+# `_exit_on_termination`. Already in this workspace's lockfile (alacritty_terminal uses it).
+signal-hook = "0.4"

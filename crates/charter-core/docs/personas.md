@@ -47,7 +47,7 @@ The frontmatter is flat `key: value` lines. The keys this version acts on:
 | `extends` | Inherit another persona's frontmatter (see *Inheritance*). |
 | `uses` | Other personas whose `tools:` this one may also run without a prompt, unless `borrows:` narrows it. |
 | `borrows` | Which of those personas' tools are unioned in: a list of names, or `none`. |
-| `vault` | Shown in the persona view. The vault commands are not in this version yet ([secrets.md](secrets.md)). |
+| `vault` | The vault `charter persona secret` reads for this persona; `none` says it holds no credentials ([secrets.md](secrets.md)). |
 
 Other keys are kept in the file and not acted on in this version.
 

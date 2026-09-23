@@ -57,6 +57,34 @@ pub fn record(
     let _ = append_private(root, &path, line.as_bytes());
 }
 
+/// [`record`] for fields that are not all text — `trace.record(event, **fields)` where a field
+/// is a list, a bool or a number. A `null` field is left out, as Python leaves out `None`.
+pub fn record_values(
+    root: &Path,
+    session: &str,
+    event: &str,
+    fields: &[(&str, serde_json::Value)],
+    stamp: chrono::NaiveDateTime,
+) {
+    let path = file(root, session);
+    let mut rec = serde_json::Map::new();
+    rec.insert(
+        "ts".into(),
+        stamp.format("%Y-%m-%dT%H:%M:%S").to_string().into(),
+    );
+    rec.insert("event".into(), event.into());
+    for (key, value) in fields {
+        if !value.is_null() {
+            rec.insert((*key).into(), value.clone());
+        }
+    }
+    let line = format!(
+        "{}\n",
+        crate::pyjson::dumps(&serde_json::Value::Object(rec), None, ", ", ": ")
+    );
+    let _ = append_private(root, &path, line.as_bytes());
+}
+
 /// Append `bytes` to a file of charter's own state: every directory it has to make at
 /// 0700, the file at 0600 — an existing one tightened too, before a byte is added, because
 /// a file charter is putting its own bytes into is charter's whatever its history.
