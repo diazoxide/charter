@@ -8,18 +8,11 @@
 //! Every sentence here is the Python charter's, byte for byte; the recorded scenarios named
 //! `persona-list-…`, `persona-use-…`, `persona-sync-agents-…` and `persona-stats-…` hold them.
 //!
-//! # One divergence, declared: a registered vault's health
+//! # The vault registry is [`crate::secrets`]'s
 //!
-//! `persona list`'s VAULT STATUS column asks a registered vault's PROVIDER how it is — a
-//! plain-file vault counts its secrets, a 1Password one runs `op`. That is the secrets
-//! registry, which is being ported on its own (`secret`, `persona secret`, `vault`), and this
-//! module does not grow a second copy of it. So a vault the registry names is reported as
-//! [`list::REGISTERED_UNCHECKED`] until that port lands and [`list::vault_status`] asks it.
-//! "No vault" and "not set up (local)" are answered exactly as Python answers them, because
-//! both are read off the registry's names alone.
-//!
-//! Every other answer — the roster, the selection, the generated sub-agents, the stats — is
-//! Python's.
+//! Which vault a persona uses when it declares none, and how a registered vault is (`persona
+//! list`'s VAULT STATUS), are asked of the secrets port's registry and providers, so a vault
+//! name it refuses or a half it cannot read is refused here in the same words.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -140,72 +133,20 @@ pub fn declared_skills(root: &Path, name: &str) -> Vec<String> {
         .collect()
 }
 
-/// The vault registry's entries by name, the committed half (`<root>/vaults.json`) overlaid
-/// by this machine's (`<state>/vaults.json`) — `registry.load_registry`'s merged view, read
-/// for NAMES and the `persona` tag only.
-///
-/// This is the one piece of the secrets registry these commands need, and only its shape:
-/// no provider is built and no vault file is opened. The secrets port owns the rest (see the
-/// module header). A half that is missing, unreadable or not JSON contributes nothing, and an
-/// entry that is not an object is dropped as `usable_vaults` drops it.
-pub fn registered_vaults(
-    root: &Path,
-    state: &Path,
-) -> Result<BTreeMap<String, serde_json::Value>, String> {
-    // A half that is absent is empty; one that is there and is not a JSON object is the
-    // whole registry failing, as `registry.load_registry` raises for it.
-    fn half(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Ok(Default::default());
-        };
-        let corrupt = || format!("vault registry {} is corrupt", path.display());
-        let doc: serde_json::Value = serde_json::from_str(&text).map_err(|_| corrupt())?;
-        let doc = doc.as_object().ok_or_else(corrupt)?;
-        Ok(doc
-            .get("vaults")
-            .and_then(|v| v.as_object())
-            .cloned()
-            .unwrap_or_default())
+/// The secrets registry as these commands read it: the tree's committed half
+/// (`<root>/vaults.json`) and this machine's (`<state>/vaults.json`), and this process's
+/// environment for the providers' own lookups (`op`, `~`).
+pub fn vault_ctx(root: &Path, state: &Path) -> crate::secrets::Ctx {
+    crate::secrets::Ctx {
+        root: root.to_path_buf(),
+        state: state.to_path_buf(),
+        env: crate::secrets::Env::from_process(),
     }
-    let shared = half(&root.join("vaults.json"))?;
-    let local = half(&state.join("vaults.json"))?;
-    let mut merged: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-    for (name, entry) in shared {
-        if entry.is_object() {
-            merged.insert(name, entry);
-        }
-    }
-    for (name, entry) in local {
-        let Some(local) = entry.as_object() else {
-            continue;
-        };
-        match merged.get_mut(&name).and_then(|b| b.as_object_mut()) {
-            None => {
-                merged.insert(name, entry.clone());
-            }
-            Some(base) => {
-                for (k, v) in local {
-                    if k == "config" {
-                        let cfg = base
-                            .entry("config")
-                            .or_insert_with(|| serde_json::Value::Object(Default::default()));
-                        if let (Some(cfg), Some(add)) = (cfg.as_object_mut(), v.as_object()) {
-                            for (ck, cv) in add {
-                                cfg.insert(ck.clone(), cv.clone());
-                            }
-                        }
-                    } else if !v.is_null() {
-                        base.insert(k.clone(), v.clone());
-                    }
-                }
-            }
-        }
-    }
-    Ok(merged)
 }
 
 /// `persona.vault_of`: the resolved `vault:` (`None` for [`NO_VAULT`]), else the first vault
-/// the registry tags with this persona, by name.
+/// the registry tags with this persona, by name. A registry that does not read names no
+/// vault — Python catches the error here.
 pub fn vault_of(root: &Path, state: &Path, name: &str) -> Option<String> {
     if let Some(r) = resolve(root, name)
         && let Some(v) = r.get("vault")
@@ -213,12 +154,10 @@ pub fn vault_of(root: &Path, state: &Path, name: &str) -> Option<String> {
         let v = crate::memstore::py_strip(v);
         return (v != NO_VAULT && !v.is_empty()).then(|| v.to_string());
     }
-    // A registry that cannot be read names no vault: `vault_of` catches the error.
-    registered_vaults(root, state)
-        .ok()?
+    let doc = crate::secrets::registry::load_registry(&vault_ctx(root, state)).ok()?;
+    crate::secrets::registry::vaults_for_persona(&doc, name)
         .into_iter()
-        .find(|(_, entry)| entry.get("persona").and_then(|p| p.as_str()) == Some(name))
-        .map(|(vault, _)| vault)
+        .next()
 }
 
 /// Where a persona's definition sits, relative to the plane — `def_path(name).relative_to(ROOT)`.
@@ -311,7 +250,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vault_of(dir.path(), &state, "solo"), None);
-        assert!(registered_vaults(dir.path(), &state).is_err());
     }
 
     #[test]

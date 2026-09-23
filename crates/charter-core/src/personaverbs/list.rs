@@ -11,12 +11,6 @@ use crate::tui::{Align, column, pad};
 /// `commands_persona._MISSING`.
 pub const MISSING: &str = "no persona by that name exists, so no persona is active";
 
-/// What VAULT STATUS says for a vault the registry names, until the secrets port can ask
-/// its provider. Python asks the provider's `health()`, which for a plain-file vault counts
-/// its secrets and for a 1Password one runs `op` — the secrets registry, being ported on its
-/// own branch; see the module header of [`super`].
-pub const REGISTERED_UNCHECKED: &str = "registered — its health is not checked here yet";
-
 /// `persona.ways_out`: the commands that move a selection held at the rung labelled
 /// `source`, as a clause. **One answer for every surface that names a missing persona** —
 /// this roster and the session briefing — because the true answer depends on the rung, and a
@@ -39,17 +33,24 @@ pub fn exists(root: &Path, name: &str) -> bool {
 }
 
 /// `commands_persona._vault_status`: `no vault`, `not set up (local)` when the registry does
-/// not name it, else the registered vault's own health — see [`REGISTERED_UNCHECKED`].
+/// not name it, else the registered vault's provider's own health line — a plain-file
+/// vault's count and mode, a 1Password item's field count — or the registry's refusal.
 pub fn vault_status(root: &Path, state: &Path, vault: Option<&str>) -> String {
+    use crate::secrets::{cmd, registry};
     let Some(vault) = vault.filter(|v| !v.is_empty() && *v != "—") else {
         return "no vault".into();
     };
-    match super::registered_vaults(root, state) {
-        // Python's sentence carries `json`'s own reason after the path; this one stops at
-        // the path, which is the part the reader acts on.
-        Err(why) => why,
-        Ok(vaults) if !vaults.contains_key(vault) => "not set up (local)".into(),
-        Ok(_) => REGISTERED_UNCHECKED.into(),
+    let ctx = super::vault_ctx(root, state);
+    let doc = match registry::load_registry(&ctx) {
+        Ok(doc) => doc,
+        Err(e) => return e.to_string(),
+    };
+    if !registry::vaults(&doc).contains_key(vault) {
+        return "not set up (local)".into();
+    }
+    match registry::vault_in(&doc, vault) {
+        Ok(v) => cmd::health(&ctx, &v).1,
+        Err(e) => e.to_string(),
     }
 }
 
@@ -172,7 +173,7 @@ mod tests {
         );
         assert_eq!(
             vault_status(dir.path(), &state, Some("ops")),
-            REGISTERED_UNCHECKED
+            "no 'file' configured"
         );
     }
 }
