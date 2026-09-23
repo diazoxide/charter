@@ -102,7 +102,17 @@ pub fn slug(name: &str) -> Option<String> {
     // A trailing `.` or `_` can survive the loop; a piece name ending in one is legal but
     // ugly, and `.lock` endings are refused by git anyway.
     let out = out.trim_end_matches(['.', '_', '-']).to_string();
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        return None;
+    }
+    // And a chat called "NUL" must not slug to `nul`, which `add` refuses because Windows
+    // reads it as the null device (charter-app#96). Only a device stem can reach here — the
+    // loop above emits `[a-z0-9._-]` and the trim takes the strippable endings off — and
+    // every device name is four characters or fewer, so the suffix never crowds `MAX_SLUG`.
+    if contain::mintable(&out).is_err() {
+        return Some(format!("{out}-piece"));
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -198,6 +208,21 @@ mod tests {
                     "slug({raw:?}) = {s:?} must be a legal piece name"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_chat_named_after_a_device_still_slugs_to_a_name_that_travels() {
+        // charter-app#96's half of the rule above: `worktree::add` refuses a piece name that
+        // means another directory on the next machine, so the convenience must never hand
+        // the operator one — a chat called "NUL" would otherwise slug to `nul`, be shown to
+        // them as the piece name, and be refused after the fact.
+        for raw in ["NUL", "nul", "Con", "aux", "COM1", "lpt9", "prn", "alpha."] {
+            let Some(s) = slug(raw) else { continue };
+            assert!(
+                contain::mintable(&s).is_ok(),
+                "slug({raw:?}) = {s:?} is a name `add` would have to refuse"
+            );
         }
     }
 }

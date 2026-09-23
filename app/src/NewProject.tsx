@@ -106,7 +106,11 @@ export function NewProject({
                 placeholder="/where/it/goes"
                 onChange={(event) => setPath(event.target.value)}
               />
-              <button type="button" onClick={pick}>
+              {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186): WebKit leaves
+                  a `<button>` out of the tab sequence unless its `tabindex` is written down,
+                  and the folder box beside this one is the scope's first edge, so nothing
+                  reached this at all. */}
+              <button type="button" tabIndex={0} onClick={pick}>
                 Browse…
               </button>
             </div>
@@ -123,6 +127,11 @@ export function NewProject({
                 className="box"
                 checked={planeIsThisRepo}
                 onCheckedChange={(next) => setPlaneIsThisRepo(next === true)}
+                // In the tab sequence, said out loud (`docs/ui-primitives.md`,
+                // charter-app#186). Radix's checkbox is a `<button>`, and this is the one
+                // decision on this dialog that writes into a repository the operator already
+                // has — it is not a control to leave off the keyboard's route.
+                tabIndex={0}
               >
                 <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
               </Checkbox.Root>
@@ -148,11 +157,15 @@ export function NewProject({
               </p>
             )}
 
+            {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). Only the
+                folder box was in WebKit's tab sequence here: it is this scope's first edge and
+                `Cancel` is its last, so `Browse…`, the checkbox and `Create project` were all
+                in the middle, where neither the engine nor Radix reaches. */}
             <div className="doing">
-              <button type="submit" disabled={!ready}>
+              <button type="submit" tabIndex={0} disabled={!ready}>
                 Create project
               </button>
-              <button type="button" onClick={onCancel}>
+              <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel
               </button>
             </div>

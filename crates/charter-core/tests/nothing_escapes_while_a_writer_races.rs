@@ -70,6 +70,7 @@ fn a_racer_planting(
 
 fn one_chat() -> Record {
     Record {
+        dealt: 0,
         chats: vec![Chat {
             program: "claude".to_owned(),
             args: vec!["--resume".to_owned(), "abc".to_owned()],
@@ -81,6 +82,7 @@ fn one_chat() -> Record {
             persona: None,
             show_footer: false,
             pinned: false,
+            number: None,
         }],
     }
 }

@@ -420,20 +420,23 @@ describe("App", () => {
   });
 
   it("asks with two answers, Cancel focused and the confirm at the other edge", async () => {
-    // **The shape the keyboard route depends on, pinned because the route is not obvious.**
+    // **Two answers in this order, pinned for what it decides now rather than for what it used
+    // to decide.**
     //
-    // Radix's `FocusScope` intercepts Tab only at the EDGES of the scope
-    // (`@radix-ui/react-focus-scope`, `handleKeyDown`): on the FIRST tabbable it acts on
-    // Shift+Tab and moves the focus to the last itself; on the LAST it acts on Tab and moves
-    // to the first. In between it does nothing and the platform decides — and a WKWebView on
-    // macOS does not put a `<button>` in the tab sequence unless Full Keyboard Access is on,
-    // which is what sent `palette.e2e.ts` back red pressing plain Tab (charter-app#176).
+    // Until charter-app#186 this was a test about reachability. Radix's `FocusScope` intercepts
+    // Tab only at the EDGES of the scope (`@radix-ui/react-focus-scope`, `handleKeyDown`), the
+    // engine is a WebView that leaves a `<button>` out of the tab sequence, and so the confirm
+    // was reachable exactly while these two were the only tabbables and the confirm was the
+    // second — Cancel the first edge, the confirm the last, and Shift+Tab Radix's own `focus()`
+    // call. A third control between them would have taken that away in silence.
     //
-    // So the confirm is reachable by keyboard on every platform exactly while these two are
-    // the only tabbables and the confirm is the second: then Cancel IS the first edge and the
-    // confirm IS the last, and Shift+Tab is Radix's own `focus()` call rather than the
-    // browser's tab sequence. **A third focusable added between them would take that away
-    // silently on one platform**, and this is what fails instead.
+    // **That is no longer what holds it up**: both answers carry `tabIndex={0}`, which is what
+    // puts a form control in WebKit's tab sequence whatever full keyboard access says, and
+    // `Modals.keyboard.test.tsx` walks every modal in the window to prove it. What this still
+    // pins is the ORDER, which matters for a different reason and always did: **Cancel is
+    // first and focused, so a Return pressed by reflex cancels rather than ends a chat.** The
+    // Shift+Tab below is now one route to the confirm among two, and is kept because it is the
+    // one Radix owns.
     core();
     render(<App />);
     await openAChat();

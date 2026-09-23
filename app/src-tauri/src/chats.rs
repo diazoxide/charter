@@ -291,6 +291,10 @@ impl Chats {
         let session = self
             .sessions
             .open(
+                // The number this chat already answers to, where it has one. A chat put
+                // back keeps the key its workspace pointer and session lock are under; a
+                // chat the operator just started has none yet (charter-app#90).
+                chat.number,
                 &Opening {
                     program: Some(program),
                     args: all,
@@ -432,10 +436,21 @@ impl Chats {
             let chat = &open.get(&session)?.chat;
             Some(Chat {
                 active: front == Some(session),
+                // The number it is actually running under, which is the key its workspace
+                // pointer and session lock are written at. Taken from the session and not
+                // from the chat, so the two can never come to say different things.
+                number: Some(session),
                 ..chat.clone()
             })
         }));
-        Record { chats }
+        Record {
+            chats,
+            // What the next launch must not deal again — charter-app#90. It is the high
+            // water mark and not the count of what is open, so the numbers of chats that
+            // were closed are spent too, and no new chat lands on a pointer one of them
+            // left behind.
+            dealt: self.sessions.dealt(),
+        }
     }
 
     /// Puts a record back: one session per chat it holds, resumed where it can be.
@@ -445,6 +460,12 @@ impl Chats {
     /// than one that came back short.
     pub fn put_back(&self, record: &Record, root: &std::path::Path, size: Size) -> Vec<Open> {
         self.putting_back.store(true, Ordering::SeqCst);
+        // Before a single chat starts, so that a number the record spent on a chat it no
+        // longer holds — one the operator closed before quitting — is not dealt again to a
+        // chat that would then read its workspace pointer and take its lock
+        // (charter-app#90). The chats below raise the counter past their own numbers as they
+        // go; this is the part of it no chat in the record can say.
+        self.sessions.already_dealt(record.dealt);
         // Every chat here starts a program, synchronously, before there is a window. A
         // record with thousands in it — a runaway, or a file nobody meant — would give an
         // app that hangs on launch with no way to intervene. The cap is far above the
@@ -564,6 +585,7 @@ mod tests {
                     persona: None,
                     show_footer: false,
                     pinned: false,
+                    number: None,
                 },
                 Size {
                     columns: 80,
@@ -625,6 +647,7 @@ mod tests {
                     persona: None,
                     show_footer: false,
                     pinned: false,
+                    number: None,
                 },
                 Size {
                     columns: 80,
@@ -671,6 +694,7 @@ mod tests {
                 persona: None,
                 show_footer: false,
                 pinned: false,
+                number: None,
             },
             Size {
                 columns: 80,
@@ -718,6 +742,7 @@ mod tests {
                     persona: None,
                     show_footer: false,
                     pinned: false,
+                    number: None,
                 },
                 Size {
                     columns: 80,
@@ -778,6 +803,7 @@ mod tests {
             persona: None,
             show_footer: false,
             pinned: false,
+            number: None,
         }
     }
 
@@ -1024,6 +1050,7 @@ mod tests {
                 chats: (0..5)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
                     .collect(),
+                dealt: 0,
             },
             SIZE,
         );
@@ -1170,6 +1197,7 @@ mod tests {
         chats.put_back_here(
             &Record {
                 chats: vec![chat(&claude, "ide.7", None), was_in_front],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1196,6 +1224,7 @@ mod tests {
                     chat(&claude, "ide.7", Some(ID)),
                     chat(&claude, "ide.8", None),
                 ],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1214,6 +1243,7 @@ mod tests {
         let open = chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1246,6 +1276,7 @@ mod tests {
                         ..chat(&claude, "ide.8", None)
                     },
                 ],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1266,6 +1297,7 @@ mod tests {
         let open = chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", None)],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1288,6 +1320,7 @@ mod tests {
                     chat("/definitely/not/a/program", "ide.7", Some(ID)),
                     chat(&claude, "ide.8", None),
                 ],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1313,6 +1346,7 @@ mod tests {
                 chats: (0..MOST_AT_ONCE + 3)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
                     .collect(),
+                dealt: 0,
             },
             SIZE,
         );
@@ -1332,6 +1366,7 @@ mod tests {
         chats.put_back_here(
             &Record {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1352,6 +1387,7 @@ mod tests {
         chats.put_back_here(
             &Record {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1375,12 +1411,211 @@ mod tests {
                     chat("/definitely/not/a/program", "ide.7", Some(ID)),
                     chat(&claude, "ide.8", None),
                 ],
+                dealt: 0,
             },
             SIZE,
         );
 
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].name, "ide.8");
+    }
+
+    // --- a chat keeps its number across a relaunch (charter-app#90) --------------------- //
+
+    /// A plane with nothing selected anywhere, so the only rung that can answer about a
+    /// workspace is the per-session pointer the tests below write.
+    ///
+    /// The same shape `sessions.rs` uses for charter-app#63, and for the same reason: these
+    /// two defects are one defect at two levels, and a reproduction that let another rung
+    /// answer would prove nothing about which chat a pointer belongs to.
+    fn bare_plane() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("a plane");
+        let root = std::fs::canonicalize(dir.path()).expect("a resolved plane");
+        std::fs::write(root.join("charter.toml"), "").expect("a manifest");
+        std::fs::create_dir_all(root.join(".charter/sessions")).expect("a state directory");
+        (dir, root)
+    }
+
+    /// Who a `charter` running inside chat `session` says it is.
+    ///
+    /// No pane id and no tty, which is the app's own case: a chat gets a pty of its own and
+    /// none of `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/`$SSH_TTY`, so the per-session pointer
+    /// is the only one there is and nothing catches a wrong key by accident.
+    fn who_it_is(session: u32) -> charter_core::active::Ids {
+        let held = HashMap::from([(
+            charter_core::active::SESSION_ID_ENV.to_owned(),
+            session.to_string(),
+        )]);
+        charter_core::active::Ids::of(&|name| held.get(name).cloned())
+    }
+
+    /// `charter ws use <name>` from inside chat `session`, through the writer the command
+    /// itself uses.
+    fn picks(root: &std::path::Path, session: u32, name: &str) {
+        use charter_core::wscmd::select::{Scope, set_active};
+        assert_eq!(
+            set_active(root, name, &who_it_is(session), false),
+            Scope::Session,
+            "the selection did not land on the chat's own pointer"
+        );
+    }
+
+    /// The workspace a `charter` inside chat `session` resolves, and the rung that answered.
+    fn workspace_of(root: &std::path::Path, session: u32) -> charter_core::active::ActiveWorkspace {
+        charter_core::active::workspace(&charter_core::active::Asking {
+            root,
+            // Not inside any tree, so the cwd rung cannot answer and the pointers decide.
+            cwd: root,
+            flag: None,
+            ids: &who_it_is(session),
+            env: None,
+        })
+    }
+
+    #[test]
+    fn a_chat_that_comes_back_reads_the_workspace_it_picked_and_not_the_one_below_it() {
+        // **The defect as the operator meets it** (charter-app#90). Two chats, each with a
+        // workspace of its own. Close the first, quit, launch again: the second chat comes
+        // back — and before this fix it came back as chat 1, reading the workspace the
+        // CLOSED chat had picked and holding the lock that chat took. Nothing on screen says
+        // so; the sidebar shows the chat the operator left, filed under a stranger's
+        // workspace.
+        //
+        // It is the issue's headline shape turned around, and the turn matters: the report
+        // was about a NEW chat inheriting a closed one's pointer, but a chat does not have to
+        // be new. Numbers were dealt again at every launch in the order the record held, so
+        // closing ANY chat shifted every later one down by one, and each of them landed on
+        // the pointer of the chat that used to sit above it.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (_plane, root) = bare_plane();
+        let chats = Chats::new();
+        let first = chats.start(&chat(&claude, "ide.7", None), SIZE).unwrap();
+        let second = chats.start(&chat(&claude, "ide.8", None), SIZE).unwrap();
+        picks(&root, first, "finance");
+        picks(&root, second, "ops");
+        chats.close(first).expect("it closes");
+        let record = chats.record();
+        chats.end_all();
+
+        let relaunched = Chats::new();
+        let back = relaunched.put_back(&record, &root, SIZE);
+
+        assert_eq!(
+            back.len(),
+            1,
+            "the chat that was left open did not come back"
+        );
+        let found = workspace_of(&root, back[0].session);
+        assert_eq!(
+            found.name, "ops",
+            "chat {} came back under number {} and read the workspace of the chat that closed",
+            back[0].name, back[0].session
+        );
+        assert_eq!(
+            found.rung,
+            charter_core::active::WorkspaceRung::SessionPointer,
+            "it landed on 'ops' by some other rung, which proves nothing about the key"
+        );
+        relaunched.end_all();
+    }
+
+    #[test]
+    fn a_new_chat_is_not_given_the_number_of_one_that_closed_before_the_quit() {
+        // The half the issue reports in as many words: close a chat, and the number it was
+        // using is free again at the next launch, while its `.charter/sessions/<n>.workspace`
+        // and `<n>.lock` are still on disk — `wscmd::select`'s prune only drops them at 30
+        // days. So the next chat the operator starts is filed in a workspace a chat they
+        // closed had chosen, and is locked to it.
+        //
+        // Keeping each chat's number is not enough for this one. The closed chat is not in
+        // the record at all, so nothing the chats say could hold the number; it is the
+        // record's own counter that does (`Record::dealt`).
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (_plane, root) = bare_plane();
+        let chats = Chats::new();
+        let staying = chats.start(&chat(&claude, "ide.7", None), SIZE).unwrap();
+        let going = chats.start(&chat(&claude, "ide.8", None), SIZE).unwrap();
+        picks(&root, staying, "finance");
+        picks(&root, going, "ops");
+        chats.close(going).expect("it closes");
+        let record = chats.record();
+        chats.end_all();
+
+        let relaunched = Chats::new();
+        relaunched.put_back(&record, &root, SIZE);
+        let fresh = relaunched
+            .start(&chat(&claude, "ide.9", None), SIZE)
+            .unwrap();
+
+        let found = workspace_of(&root, fresh);
+        assert_eq!(
+            found.name, "default",
+            "a chat the operator just started was handed number {fresh}, which a closed chat \
+             had already selected a workspace under"
+        );
+        assert_eq!(found.rung, charter_core::active::WorkspaceRung::BuiltIn);
+        relaunched.end_all();
+    }
+
+    #[test]
+    fn the_record_keeps_the_number_each_chat_is_running_under() {
+        // What the two tests above rest on, written out so a record that stops carrying it
+        // fails here rather than only in a reproduction that takes a plane to see.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let chats = Chats::new();
+        let first = chats.start(&chat(&claude, "ide.7", None), SIZE).unwrap();
+        let second = chats.start(&chat(&claude, "ide.8", None), SIZE).unwrap();
+
+        let record = chats.record();
+
+        let numbers: Vec<Option<u32>> = record.chats.iter().map(|one| one.number).collect();
+        assert_eq!(numbers, vec![Some(first), Some(second)]);
+        assert_eq!(record.dealt, second, "the counter is not what was dealt");
+        chats.end_all();
+    }
+
+    #[test]
+    fn the_counter_a_quit_records_counts_the_chats_that_closed_too() {
+        // `dealt` is a high water mark and not a count of what is open. A record that wrote
+        // the number of chats it holds would hand the next launch a number it had already
+        // spent, which is the whole defect.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let chats = Chats::new();
+        chats.start(&chat(&claude, "ide.7", None), SIZE).unwrap();
+        let going = chats.start(&chat(&claude, "ide.8", None), SIZE).unwrap();
+
+        chats.close(going).expect("it closes");
+
+        let record = chats.record();
+        assert_eq!(record.chats.len(), 1);
+        assert_eq!(record.dealt, going);
+        chats.end_all();
+    }
+
+    #[test]
+    fn a_record_written_before_chats_kept_their_numbers_is_put_back_as_it_always_was() {
+        // Every operator has one of these at the first launch after this change, and it says
+        // nothing about which chat was which. Dealing them in order is what the app did
+        // before and the only honest answer; from that launch on they carry numbers.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let chats = Chats::new();
+
+        let back = chats.put_back_here(
+            &Record {
+                chats: vec![chat(&claude, "ide.7", None), chat(&claude, "ide.8", None)],
+                dealt: 0,
+            },
+            SIZE,
+        );
+
+        let numbers: Vec<u32> = back.iter().map(|one| one.session).collect();
+        assert_eq!(numbers, vec![1, 2]);
+        chats.end_all();
     }
 
     #[test]
@@ -1391,6 +1626,7 @@ mod tests {
         chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
+                dealt: 0,
             },
             SIZE,
         );
@@ -1477,8 +1713,13 @@ mod tests {
 
         chats.end_all();
 
-        assert_eq!(chats.record(), Record::default());
+        let record = chats.record();
+        assert_eq!(record.chats, vec![]);
         assert_eq!(chats.sessions().running(), Vec::<u32>::new());
+        // The counter is NOT reset with them. A chat that ends does not give its number
+        // back: `.charter/sessions/1.workspace` outlives it by 30 days, and a later chat
+        // dealt 1 again would read it (charter-app#90).
+        assert_eq!(record.dealt, 1);
     }
     #[test]
     fn the_record_keeps_the_profile_persona_and_footer_a_chat_was_started_on() {
@@ -1502,6 +1743,7 @@ mod tests {
             persona: Some("steward".to_owned()),
             show_footer: true,
             pinned: false,
+            number: None,
         };
 
         let session = chats
@@ -1540,6 +1782,7 @@ mod tests {
             persona: None,
             show_footer: false,
             pinned: false,
+            number: None,
         };
         assert_eq!(
             chat.harness(),
@@ -1605,6 +1848,7 @@ mod tests {
             persona: Some("steward".to_owned()),
             show_footer: false,
             pinned: false,
+            number: None,
         };
         assert_eq!(
             chat.harness(),

@@ -38,6 +38,27 @@ pub fn ensure(
             crate::personas::one_line(name)
         ));
     };
+    // **The name also has to mean the same directory on the next machine** (charter-app#96).
+    // The alphabet above is not enough on its own: it admits `nul`, which is a device on
+    // Windows whatever is appended to it, and `alpha.`, which is `alpha` there — and a plane
+    // is committed and travels, so `contain::SEPARATORS`' own reasoning applies to a name
+    // minted here exactly as it does to a separator.
+    //
+    // **Only when the directory is not there yet**, which is what makes this a gate on
+    // MINTING rather than on reading. `ensure` is also the idempotent repair `workspace
+    // reinit`, `workspace restore` and `workspace use` run over a workspace that already
+    // exists; refusing there would strand whoever already has `workspaces/alpha.` in a plane
+    // some earlier charter minted, which is the opposite of protecting them.
+    if !workspace.dir().exists()
+        && let Err(why) = crate::contain::mintable(name)
+    {
+        return Err(format!(
+            "charter will not create a workspace called '{}': {why}. A plane is committed and \
+             travels, so a name that means one directory here and another where the plane \
+             lands is a defect wherever it was written down",
+            crate::personas::one_line(name)
+        ));
+    }
     // `create_dir_all`, so an existing directory is not an error: `ensure` is idempotent and
     // is reached from a launch path where raising would cost the operator their tab.
     let _ = std::fs::create_dir_all(workspace.dir());
@@ -106,6 +127,40 @@ mod tests {
         }
         assert!(!dir.path().join("esc").exists());
         assert!(!dir.path().parent().unwrap().join("esc").exists());
+    }
+
+    #[test]
+    fn a_name_the_next_machine_reads_as_another_directory_creates_nothing() {
+        // charter-app#96, measured on macOS against `origin/main`: `workspace_name_ok` said
+        // `true` to `nul` and to `alpha.`, so charter would mint them into a plane, commit
+        // it, and hand it to a machine that resolves both somewhere else.
+        let dir = plane();
+        for bad in ["nul", "NUL", "con", "aux", "lpt9", "com1.txt", "alpha."] {
+            let refused = ensure(dir.path(), bad, now(), "fixture")
+                .expect_err("{bad} must not be a workspace charter creates");
+            assert!(
+                refused.contains("charter will not create a workspace called"),
+                "{bad}: {refused}"
+            );
+            assert!(!dir.path().join("workspaces").join(bad).exists(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_workspace_of_that_name_the_plane_already_holds_is_still_scaffolded() {
+        // The gate is on MINTING and nowhere else. A plane that already carries
+        // `workspaces/nul` was minted by some charter, and one that refused to repair it
+        // would have locked the operator out of their own plane rather than protected them.
+        let dir = plane();
+        std::fs::create_dir_all(dir.path().join("workspaces").join("nul")).unwrap();
+        ensure(dir.path(), "nul", now(), "fixture").expect("an existing workspace is repaired");
+        assert!(
+            dir.path()
+                .join("workspaces")
+                .join("nul")
+                .join("workspace.json")
+                .exists()
+        );
     }
 
     #[test]

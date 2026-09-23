@@ -216,6 +216,12 @@ export function StartChat({
                 className="box"
                 name="pane-footer"
                 id="pane-footer"
+                // In the window's tab sequence, said out loud (`docs/ui-primitives.md`,
+                // charter-app#186). Radix's checkbox is a `<button>`, and WebKit leaves a form
+                // control out of the tab sequence unless its `tabindex` is written down. The
+                // radio rows above already carry one from the roving focus; this is the same
+                // attribute for the same reason.
+                tabIndex={0}
                 checked={showFooter}
                 onCheckedChange={(checked) => setShowFooter(checked === true)}
                 aria-describedby="pane-footer-why"
@@ -266,14 +272,23 @@ export function StartChat({
             </p>
           )}
 
+          {/* **Every button here says `tabIndex={0}`, and on this dialog it is what makes
+              `Start` reachable at all** (charter-app#186). WebKit leaves a `<button>` out of
+              the tab sequence unless its `tabindex` is written down, and Radix's focus scope
+              only acts at the scope's two edges — so `Cancel`, which is neither edge nor
+              engine-tabbable, could be reached only by being focused on opening, and a
+              keyboard that left it could not come back. ADR 0022 makes this dialog the only
+              way a chat starts, so that was the keyboard-only path to starting one.
+              `docs/ui-primitives.md` holds the measurement and the engine's own rule. */}
           <div className="answer">
             {/* Cancel first and focused: see `onOpenAutoFocus` above. */}
-            <button ref={cancel} onClick={onCancel}>
+            <button ref={cancel} tabIndex={0} onClick={onCancel}>
               Cancel
             </button>
             {picked?.approval ? (
               <button
                 className="ends-it"
+                tabIndex={0}
                 onClick={() => onApprove(picked.name, persona, showFooter, picked.shown)}
                 disabled={!picked}
               >
@@ -281,6 +296,7 @@ export function StartChat({
               </button>
             ) : (
               <button
+                tabIndex={0}
                 onClick={() => profile && onStart(profile, persona, showFooter)}
                 disabled={!profile}
               >
