@@ -37,20 +37,14 @@ impl Plane {
     }
 
     /// Declares `work`, of kind `claude`, running `command` — and approves it, so what these
-    /// tests read is the probe's answer and never the consent gate's.
+    /// tests read is the search's answer and never the consent gate's.
     fn running(&self, command: &str) -> Profile {
-        self.declare(&format!(
-            "[harness.work]\nkind = \"claude\"\ncommand = [{command:?}]\n"
-        ))
+        self.running_kind("claude", command)
     }
 
-    /// The same for a Codex profile, which is gated on a file rather than on a probe and so
-    /// needs the `CODEX_HOME` holding its three marks.
-    fn running_kind(&self, kind: &str, command: &str, codex_home: &Path) -> Profile {
+    fn running_kind(&self, kind: &str, command: &str) -> Profile {
         self.declare(&format!(
-            "[harness.work]\nkind = {kind:?}\ncommand = [{command:?}]\n\
-             env = {{ CODEX_HOME = {:?} }}\n",
-            codex_home.display().to_string()
+            "[harness.work]\nkind = {kind:?}\ncommand = [{command:?}]\n"
         ))
     }
 
@@ -84,10 +78,9 @@ fn a_harness_charter_cannot_find_is_an_unknown_that_names_every_directory_it_loo
     let plane = Plane::new();
     let p = plane.running(NOWHERE);
 
-    let w = wiring::detect(&p, plane.root(), plane.root());
+    let w = wiring::detect(&p, plane.root());
 
-    // Unknown and NOT Unwired: charter never opened a config folder, so it knows nothing
-    // about whether the guard is installed in one. An Unwired here would be installed over.
+    // Unknown, never a pass: a chat on this profile cannot start at all.
     assert_eq!(w.state, State::Unknown, "{w:?}");
     assert!(
         w.detail
@@ -109,7 +102,8 @@ fn a_harness_charter_cannot_find_is_an_unknown_that_names_every_directory_it_loo
             "the search has to be in the message, and ~/{rel} is not: {w:?}"
         );
     }
-    // And never `charter harness install`, which runs the same missing binary.
+    // The fix is the operator's own line, and never a command that runs the same missing
+    // binary.
     assert!(
         w.fix.contains("absolute command in charter.local.toml"),
         "{w:?}"
@@ -124,8 +118,7 @@ fn a_chat_is_not_started_on_a_harness_charter_cannot_find_and_the_refusal_says_w
 
     let refusal = start::ready(&plane.start(), plane.root()).expect_err("nothing starts");
 
-    // For a Claude Code profile the WIRING gate answers first — a probe is a run of the
-    // profile's command, so it meets the missing harness before the launch does. What matters
+    // The launch's own resolution answers: nothing is probed before it any more. What matters
     // is that the sentence the operator reads carries the search, which is the whole of
     // charter-app#134's second half.
     assert!(
@@ -133,34 +126,15 @@ fn a_chat_is_not_started_on_a_harness_charter_cannot_find_and_the_refusal_says_w
         "{refusal}"
     );
     assert!(refusal.contains("/usr/bin"), "{refusal}");
-    assert!(refusal.ends_with("nothing was started."), "{refusal}");
+    assert!(refusal.ends_with("Nothing was started."), "{refusal}");
 }
 
 #[test]
-fn a_codex_chat_whose_program_is_missing_is_refused_by_the_launch_and_not_by_a_probe() {
-    // The one kind where the LAUNCH's own resolution is what answers. Codex's wiring check
-    // reads `$CODEX_HOME/config.toml` and never spawns anything (a hook Codex has not trusted
-    // is inert, so the marks are in a file), so a Codex profile can pass every gate and reach
-    // the terminal with a program that is nowhere. Before charter-app#134 that was a pane that
-    // opened onto nothing; now it is a refusal naming the search.
+fn a_codex_chat_whose_program_is_missing_is_refused_the_same_way() {
+    // Codex's home used to be read for three marks before the launch; nothing is read now, so
+    // the launch's resolution is what answers for both kinds, in the same words.
     let plane = Plane::new();
-    let codex_home = plane.root().join("codex");
-    let hooks = codex_home.join("plugins/cache/charter/charter/0.62.1/hooks");
-    fs::create_dir_all(&hooks).unwrap();
-    fs::write(
-        hooks.join("hooks.json"),
-        r#"{"hooks":{"PreToolUse":[{"hooks":[{"command":"charter hook pretooluse"}]}]}}"#,
-    )
-    .unwrap();
-    fs::write(
-        codex_home.join("config.toml"),
-        "[plugins.\"charter@charter\"]\nenabled = true\n\n\
-         [shell_environment_policy.set]\nCHARTER_HARNESS = \"codex\"\n\n\
-         [hooks.state.\"charter@charter:hooks/hooks.json:pre_tool_use:0:0\"]\n\
-         trusted_hash = \"written-by-a-test\"\n",
-    )
-    .unwrap();
-    plane.running_kind("codex", NOWHERE, &codex_home);
+    plane.running_kind("codex", NOWHERE);
 
     let refusal = start::ready(&plane.start(), plane.root()).expect_err("nothing starts");
 
@@ -183,14 +157,17 @@ fn a_command_the_operator_wrote_as_a_path_is_never_searched_for_and_fails_where_
     let missing = plane.root().join("nowhere").join("claude");
     let p = plane.running(&missing.display().to_string());
 
-    let w = wiring::detect(&p, plane.root(), plane.root());
+    let w = wiring::detect(&p, plane.root());
 
     assert_eq!(w.state, State::Unknown, "{w:?}");
     assert!(
         !w.detail.contains("could not find a program called"),
         "a declared path is not a search: {w:?}"
     );
-    assert!(w.detail.contains("could not be read in"), "{w:?}");
+    assert!(
+        w.detail.contains("is not a program on this machine"),
+        "{w:?}"
+    );
     // And the program the spawn was given is the one that was written down, named in the
     // message so the operator can see which path charter actually tried.
     assert!(w.detail.contains(&missing.display().to_string()), "{w:?}");
@@ -203,39 +180,12 @@ fn a_profile_that_names_an_absolute_program_starts_that_exact_program() {
     // `/private/var/…`, and a launch that silently swapped them would start a program under a
     // path the record then could not match.
     let plane = Plane::new();
-    let bin = stand_in::program(
-        plane.root(),
-        "claude-stand-in",
-        "#!/bin/sh\n\
-         cat <<'JSON'\n\
-         [{\"id\":\"charter@charter\",\"scope\":\"user\",\"enabled\":true}]\n\
-         JSON\n",
-    );
+    let bin = stand_in::program(plane.root(), "claude-stand-in", "#!/bin/sh\n");
     plane.running(&bin.display().to_string());
 
     let ready = start::ready(&plane.start(), plane.root()).expect("it starts");
 
     assert_eq!(ready.program, bin.display().to_string());
-}
-
-#[test]
-fn a_harness_charter_cannot_find_is_one_failed_install_step_and_not_two_silent_ones() {
-    // `install` runs the harness twice — a marketplace add, then a plugin install. Without
-    // the same resolution the probe uses it would spawn a missing binary twice and report two
-    // failures that each name a command line and no reason.
-    let plane = Plane::new();
-    let p = plane.running(NOWHERE);
-
-    let steps = wiring::install(&p, plane.root());
-
-    assert_eq!(steps.len(), 1, "{steps:?}");
-    assert_eq!(steps[0].status, "failed", "{steps:?}");
-    assert!(
-        steps[0]
-            .detail
-            .contains(&format!("could not find a program called {NOWHERE}")),
-        "{steps:?}"
-    );
 }
 
 #[test]

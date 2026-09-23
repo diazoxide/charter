@@ -99,9 +99,9 @@ export const A_FINDER_LAUNCHS_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
  * **This is charter-app#134's whole shape** (`wdio.finder.conf.ts`). The operator's harness
  * was installed, findable by their shell, and invisible to the app, so a double-clicked
  * charter refused every chat on a built-in profile. The program is the same wrapper
- * `declareAProfile` writes — it answers `claude plugin list --json` as a wired Claude Code
- * does and then runs the fake harness — but it is reached by its BARE NAME out of the
- * registry, which is the part no other scenario exercises.
+ * `declareAProfile` writes — it writes down what charter started it with and then runs the
+ * fake harness — but it is reached by its BARE NAME out of the registry, which is the part no
+ * other scenario exercises.
  */
 export function writeAHarnessOnlyAShellWouldFind(fakeHarness: string): string {
   const home = mkdtempSync(join(THE_RUNS_TREE, "finder-home-"));
@@ -133,16 +133,15 @@ export function writeShell(fakeHarness: string): string {
 }
 
 /**
- * A harness that runs a hook the way the charter PLUGIN spells it — `charter hook
- * sessionstart`, the bare word — and writes down the `PATH` it was given.
+ * A harness that runs a hook the way a plane's own `.claude/settings.json` spells it —
+ * `charter hook sessionstart`, the bare word — and writes down the `PATH` it was given.
  *
- * **charter-app#136.** The hooks charter arms on a chat itself (`--settings`) name the bundled
- * binary by its absolute path, so they never depended on `PATH`. The ones that did are the
- * plugin's `hooks.json` and a plane's own `.claude/settings.json`: both are files that travel
- * to other machines, so they say `charter` and leave it to the chat's `PATH` — and a chat
- * started from a Finder-launched app got Finder's four directories, where no `charter` is.
- * The operator saw `/bin/sh: charter: command not found` on every `SessionStart`, and the
- * plugin's `PreToolUse` guard failed the same way, which a harness reads as non-blocking.
+ * **charter-app#136.** The hooks charter arms on a chat itself (the bundled plugin's) name the
+ * bundled binary by its absolute path, so they never depended on `PATH`. A plane's own
+ * settings do: they travel to other machines, so they say `charter` and leave it to the chat's
+ * `PATH` — and a chat started from a Finder-launched app got Finder's four directories, where
+ * no `charter` is. The operator saw `/bin/sh: charter: command not found` on every
+ * `SessionStart`.
  *
  * The payload is the shape Claude Code pipes to a hook, and `CLAUDE_PID` is the harness's own
  * pid — `$PPID` inside the `/bin/sh -c` the fake harness runs the hook in — so the board
@@ -173,7 +172,7 @@ export function writeAPluginHookingShell(fakeHarness: string): string {
     shell,
     [
       "#!/bin/sh",
-      "# Written by the scenario tests: a harness running a hook the plugin's way, by bare word.",
+      "# Written by the scenario tests: a harness running a hook by charter's bare word.",
       `exec ${JSON.stringify(fakeHarness)} \\`,
       "  --synthetic 4096 \\",
       `  --sentinel ${JSON.stringify(READY)} \\`,
@@ -279,13 +278,11 @@ export function copyFixturePlane(name = "daily"): string {
 /**
  * A `charter.local.toml` in `plane` declaring one profile that runs `program`.
  *
- * The profile's own program is a wrapper around `program`, and both halves of that are the
- * real thing being tested. Charter probes a profile's command with `plugin list --json`
- * before it will start a chat on it — a chat whose config folder holds no charter plugin
- * looks guarded and is not (ADR 0022) — so the wrapper answers that probe as a wired Claude
- * Code would. And charter puts `--session-id <uuid> --name <name>` on the line for a Claude
- * Code chat, which the fake harness has no flags for, so the wrapper drops its arguments
- * exactly as a real wrapper profile does.
+ * The profile's own program is a wrapper around `program`. charter puts its own words on the
+ * line for a Claude Code chat — `--plugin-dir`, `--settings`, `--session-id <uuid> --name
+ * <name>` — which the fake harness has no flags for, so the wrapper writes down what it was
+ * given and drops its arguments exactly as a real wrapper profile does. Nothing is installed
+ * and nothing is asked of it first: the app arms the chat itself.
  *
  * Two profiles are declared, not one. `scenario` is the default, which every spec that just
  * wants a chat picks; `needs-approval` exists only for the picker scenario's approval test.
@@ -294,12 +291,6 @@ export function copyFixturePlane(name = "daily"): string {
  * promise that.
  */
 export function declareAProfile(plane: string, program: string, kind = "claude"): void {
-  // A Codex profile is gated on a file, not on a probe: charter refuses to start a Codex
-  // chat unless `$CODEX_HOME/config.toml` carries all three marks — the plugin enabled, the
-  // harness named, and a guard hook the operator trusted — because a hook Codex has not
-  // trusted is inert, and a plugin nobody approved reads exactly like wired to anything that
-  // stops at the plugin table. So a plane that declares one writes that home.
-  const env: Record<string, string> = kind === "codex" ? { CODEX_HOME: writeCodexHome(plane) } : {};
   const wrapper = join(plane, "claude-stand-in");
   writeFileSync(wrapper, theProfilesProgram(program));
   chmodSync(wrapper, 0o755);
@@ -312,20 +303,18 @@ export function declareAProfile(plane: string, program: string, kind = "claude")
       "[harness.scenario]",
       `kind = ${JSON.stringify(kind)}`,
       `command = [${JSON.stringify(wrapper)}]`,
-      ...envLines(env),
       "",
       "[harness.needs-approval]",
       `kind = ${JSON.stringify(kind)}`,
       `command = [${JSON.stringify(wrapper)}]`,
-      ...envLines(env),
       "",
     ].join("\n"),
   );
 }
 
 /**
- * The shell script a profile's command points at: a wired Claude Code's answer to the wiring
- * probe, then `program`.
+ * The shell script a profile's command points at: it writes down what charter started it
+ * with, then runs `program`.
  *
  * Its own function because two callers write it — `declareAProfile` puts it in the plane as a
  * declared profile's absolute command, and `writeAHarnessOnlyAShellWouldFind` puts the same
@@ -335,11 +324,7 @@ export function declareAProfile(plane: string, program: string, kind = "claude")
 function theProfilesProgram(program: string): string {
   return [
     "#!/bin/sh",
-    "# Written by the scenario tests: a profile's command, which charter probes first.",
-    'if [ "$1" = "plugin" ]; then',
-    '  echo \'[{"id":"charter@charter","scope":"user","enabled":true}]\'',
-    "  exit 0",
-    "fi",
+    "# Written by the scenario tests: a profile's command.",
     "# What the chat's environment says about charter's footer (ADR 0029), written",
     "# down where a scenario can read it. `charter statusline` is Claude Code's `statusLine`",
     "# command and inherits this environment; the fake harness runs no such command, so this",
@@ -365,12 +350,17 @@ function theProfilesProgram(program: string): string {
     '  SEEN="$CHARTER_ROOT/.charter/scenario-harness"',
     '  mkdir -p "$SEEN"',
     `  printf '%s' "\${CHARTER_HOOK_SOCKET:-}" > "$SEEN/socket-$CHARTER_CHAT"`,
+    "  # The binary the bundled plugin's hooks run (`charter_core::plugin::BINARY_ENV`).",
+    `  printf '%s' "\${CHARTER_HOOK_BINARY:-}" > "$SEEN/hookbinary-$CHARTER_CHAT"`,
     "fi",
     "while [ $# -gt 0 ]; do",
     '  if [ "$1" = "--session-id" ]; then',
     "    CLAUDE_CODE_SESSION_ID=$2",
     "    export CLAUDE_CODE_SESSION_ID",
     `    [ -n "$SEEN" ] && printf '%s' "$2" > "$SEEN/session-$CHARTER_CHAT"`,
+    "  fi",
+    '  if [ "$1" = "--plugin-dir" ]; then',
+    `    [ -n "$SEEN" ] && printf '%s' "$2" > "$SEEN/plugin-$CHARTER_CHAT"`,
     "  fi",
     '  if [ "$1" = "--settings" ]; then',
     `    [ -n "$SEEN" ] && printf '%s' "$2" > "$SEEN/settings-$CHARTER_CHAT"`,
@@ -380,49 +370,6 @@ function theProfilesProgram(program: string): string {
     `exec ${JSON.stringify(program)}`,
     "",
   ].join("\n");
-}
-
-/** A profile's `env` table, or nothing when it sets none. */
-function envLines(env: Record<string, string>): string[] {
-  const names = Object.keys(env);
-  if (names.length === 0) return [];
-  return [`env = { ${names.map((n) => `${n} = ${JSON.stringify(env[n])}`).join(", ")} }`];
-}
-
-/**
- * A `CODEX_HOME` inside `plane` carrying the three marks charter requires, and an installed
- * plugin whose `hooks.json` places charter's guard.
- *
- * The trust key is spelled the way Codex spells it — `<plugin>:hooks/hooks.json:<event>:
- * <group>:<hook>`, with the event in snake case — and the position is read out of the
- * INSTALLED plugin's own manifest rather than hard-coded, which is why this writes a
- * manifest at all rather than only a config.
- */
-function writeCodexHome(plane: string): string {
-  const home = join(plane, "codex-home");
-  const hooks = join(home, "plugins", "cache", "charter", "charter", "0.62.1", "hooks");
-  mkdirSync(hooks, { recursive: true });
-  writeFileSync(
-    join(hooks, "hooks.json"),
-    JSON.stringify({
-      hooks: { PreToolUse: [{ hooks: [{ command: "charter hook pretooluse" }] }] },
-    }),
-  );
-  writeFileSync(
-    join(home, "config.toml"),
-    [
-      '[plugins."charter@charter"]',
-      "enabled = true",
-      "",
-      "[shell_environment_policy.set]",
-      'CHARTER_HARNESS = "codex"',
-      "",
-      '[hooks.state."charter@charter:hooks/hooks.json:pre_tool_use:0:0"]',
-      'trusted_hash = "written-by-the-scenario-tests"',
-      "",
-    ].join("\n"),
-  );
-  return home;
 }
 
 /**
@@ -551,9 +498,8 @@ export function aConfigHomeOfItsOwn(): string {
  * is how a scenario puts something there. The Finder launcher uses it, because that launch
  * already has a `$HOME` of its own.
  *
- * **Through `$HOME` and not `$CLAUDE_CONFIG_DIR`**: charter's wiring probe reads that variable
- * too, and pointing it at a directory with no plugin in it makes a wired harness read as
- * unwired — measured, by a chat that then would not start.
+ * **Through `$HOME`**, which that launch already has of its own, so nothing about the
+ * machine running the suite is read.
  */
 export function writeAStatusLineOfTheirOwn(home: string, command: string): void {
   mkdirSync(join(home, ".claude"), { recursive: true });

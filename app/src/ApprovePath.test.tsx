@@ -59,7 +59,7 @@ function core(options: typeof START_OPTIONS = START_OPTIONS) {
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "start_options") return options;
     if (cmd === "approve_profile") return null;
-    if (cmd === "start_chat") return { session: ++opened, wired: null };
+    if (cmd === "start_chat") return { session: ++opened };
     return null;
   });
   return { asked };

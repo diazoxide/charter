@@ -123,9 +123,6 @@ crates/charter-core/src/machine.rs: replace config_root -> Option<PathBuf> with 
 crates/charter-core/src/machine.rs: replace config_root -> Option<PathBuf> with Some(Default::default())
 crates/charter-core/src/machine.rs: replace supported -> io::Result<()> with Ok(())
 crates/charter-core/src/machine.rs: replace tests::one_plane -> Store with Default::default()
-crates/charter-core/src/wiring.rs: replace && with || in hook_handlers
-crates/charter-core/src/wiring.rs: replace == with != in hook_handlers
-crates/charter-core/src/wiring.rs: replace || with && in hook_handlers
 crates/charter-core/src/workspaces.rs: delete ! in Plane::is_live
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::remember_titled
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::scaffold_memory

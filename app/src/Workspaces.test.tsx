@@ -89,7 +89,7 @@ function core(opened: ReturnType<typeof chat>[] = [], waiting: number[] = []) {
       const cwd = (args as { cwd: string | null }).cwd;
       const name = (args as { name: string }).name;
       chats.push(chat(++next, name, cwd));
-      return { session: next, wired: null };
+      return { session: next };
     }
     if (cmd === "close_session") {
       const session = (args as { session: number }).session;

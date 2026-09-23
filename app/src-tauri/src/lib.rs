@@ -4,6 +4,7 @@
 mod about;
 mod alerts;
 mod chats;
+mod clipath;
 mod doctor;
 mod extensions;
 mod handoff;
@@ -57,6 +58,35 @@ pub(crate) fn charter_binary() -> Option<PathBuf> {
         .and_then(|exe| Some(exe.parent()?.join("charter")));
     named.into_iter().chain(beside).find(|path| path.is_file())
 }
+
+/// What the app ships that a chat is armed with, found once at launch.
+///
+/// A property of this build and not of a project, so every plane arms with the same one.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Shipped {
+    /// The `charter` every hook runs ([`charter_binary`]).
+    pub binary: Option<PathBuf>,
+    /// The Claude Code plugin a chat loads (`charter_core::plugin`), inside the bundle.
+    pub plugin: Option<PathBuf>,
+}
+
+/// Where the bundled plugin is, or none when this build has none.
+///
+/// Tauri's resource directory: `Contents/Resources` in a macOS bundle, `/usr/lib/charter` in a
+/// `.deb` and an AppImage, and the directory the executable is in for a development build.
+/// It must hold the plugin's manifest: `--plugin-dir` pointed at a directory that is not one
+/// would start every chat with an error.
+fn bundled_plugin(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let dir = app.path().resource_dir().ok()?.join(PLUGIN_DIR);
+    dir.join(".claude-plugin")
+        .join("plugin.json")
+        .is_file()
+        .then_some(dir)
+}
+
+/// The plugin's directory, in the repository beside `tauri.conf.json` and in the bundle's
+/// resources alike.
+pub(crate) const PLUGIN_DIR: &str = "plugin";
 
 /// What the window is sent whenever a chat moves, and the one case that also interrupts.
 ///
@@ -698,18 +728,13 @@ fn start_chat(
     let session = held
         .chats()
         .start_ready(&chat, &ready, Size { columns, rows })?;
-    Ok(Started {
-        session,
-        wired: (!ready.wired.is_empty()).then_some(ready.wired),
-    })
+    Ok(Started { session })
 }
 
-/// A chat that started: its session, and the one line to say if charter wired its profile
-/// on the way.
+/// A chat that started: its session.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 struct Started {
     session: u32,
-    wired: Option<String>,
 }
 
 /// Starts a session, and remembers it as a chat so a quit can write it down. No program is
@@ -1142,6 +1167,7 @@ fn commands() -> Builder<tauri::Wry> {
             usage::chat_usage,
             pin::plane_pin,
             about::about_charter,
+            clipath::install_cli_on_path,
             windowprefs::write_layout,
             windowprefs::adopt_layout,
         ])
@@ -1289,6 +1315,13 @@ pub fn run() {
                      state; every one will show as unknown"
                 );
             }
+            let plugin = bundled_plugin(app.handle());
+            if plugin.is_none() {
+                eprintln!(
+                    "charter: no plugin in the app's resources, so a Claude Code chat is started \
+                     without charter's hooks, guard or skills; every one will show as unknown"
+                );
+            }
             // The registry is managed BEFORE a plane is opened, because opening one starts
             // programs, and a program that dies at once tells the board, which tells the
             // window, which asks this registry what the chat is called.
@@ -1298,7 +1331,7 @@ pub fn run() {
                         let window = app.handle().clone();
                         std::sync::Arc::new(move |moved: Moved| told(&window, moved))
                     },
-                    binary,
+                    Shipped { binary, plugin },
                     // Resolved once, here, like the plane: it is an environment ladder, and a
                     // second reader of it is a second answer to where this machine's store is.
                     charter_core::machine::config_root(),
@@ -1372,6 +1405,57 @@ mod tests {
         commands()
             .export(typescript(), BINDINGS)
             .expect("the bindings are written");
+    }
+
+    /// The bundled plugin's `hooks/hooks.json`, in the repository.
+    fn hooks_file() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(PLUGIN_DIR)
+            .join(charter_core::plugin::HOOKS_FILE)
+    }
+
+    /// Writes the bundled plugin's `hooks.json` from `charter_core::plugin::HOOKS`, for when
+    /// the registry changes: `cargo test -p charter-app -- --ignored`.
+    #[test]
+    #[ignore = "writes the plugin's hooks file instead of checking it"]
+    fn regenerate_the_bundled_plugins_hooks() {
+        std::fs::write(hooks_file(), charter_core::plugin::hooks_json())
+            .expect("the hooks file is written");
+    }
+
+    #[test]
+    fn the_bundled_plugins_hooks_are_the_ones_the_registry_generates() {
+        // One registry, and the file a chat loads is generated from it — never edited by hand,
+        // so a hook cannot be wired that `charter hook` does not answer.
+        assert_eq!(
+            std::fs::read_to_string(hooks_file()).unwrap_or_default(),
+            charter_core::plugin::hooks_json(),
+            "{} is out of date: run `cargo test -p charter-app -- --ignored`",
+            hooks_file().display()
+        );
+    }
+
+    #[test]
+    fn the_bundled_plugin_is_called_what_the_app_loads_it_as() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(PLUGIN_DIR)
+            .join(".claude-plugin/plugin.json");
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest).expect("plugin.json"))
+                .expect("plugin.json is JSON");
+        assert_eq!(doc["name"], charter_core::plugin::NAME);
+    }
+
+    #[test]
+    fn the_bundle_carries_the_plugin_as_a_resource() {
+        // `bundled_plugin` looks for it in the resource directory, so a build that did not
+        // copy it there would start every chat unarmed.
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json is JSON");
+        assert_eq!(
+            conf["bundle"]["resources"][format!("{PLUGIN_DIR}/")],
+            format!("{PLUGIN_DIR}/")
+        );
     }
 
     #[test]

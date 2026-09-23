@@ -111,7 +111,7 @@ function core(over: (cmd: string, args: unknown) => unknown = () => undefined) {
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "start_options") return START_OPTIONS;
-    if (cmd === "start_chat") return { session: ++opened, wired: null };
+    if (cmd === "start_chat") return { session: ++opened };
     if (cmd === "worktree_of_chat") return PIECE;
     return null;
   });

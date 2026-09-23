@@ -48,6 +48,20 @@ import { useUpdates } from "./Updates";
 import { noTabs } from "./tabs";
 
 /**
+ * Puts the app's own `charter` on a terminal's `PATH`, and answers what the core said — the
+ * link it made, or why it made none. Nothing else in the window is involved, so it is not a
+ * hook: the core decides and the operating system asks for the password.
+ */
+async function installCli(): Promise<Ran> {
+  const answer = await commands
+    .installCliOnPath()
+    .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+  return answer.status === "ok"
+    ? { ok: true, said: answer.data }
+    : { ok: false, refused: answer.error };
+}
+
+/**
  * The window, which holds projects.
  *
  * **A project is a plane and a window may hold several** (ADR 0033, spec decision 23).
@@ -370,6 +384,7 @@ function App() {
         setCreating(true);
       },
       showExtensions: () => setExtensions(true),
+      installCli,
       selectProject: (plane: string) => setShowing({ at: "plane", plane }),
       closeProject,
       pinProject,
@@ -602,6 +617,7 @@ function App() {
       openProject: windowDoes.openProject,
       createProject: windowDoes.createProject,
       showExtensions: windowDoes.showExtensions,
+      installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       quit: windowDoes.quit,

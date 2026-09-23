@@ -264,9 +264,9 @@ pub type Teller = Arc<dyn Fn(Moved) + Send + Sync + 'static>;
 /// The planes this process holds, by root.
 pub struct Planes {
     tell: Teller,
-    /// The `charter` binary a hook runs, where the app found one. Every plane arms with the
-    /// same one: it is a property of this build, not of a project.
-    binary: Option<PathBuf>,
+    /// The `charter` binary a hook runs and the plugin a chat loads, where the app found them.
+    /// Every plane arms with the same ones: they are a property of this build, not of a project.
+    shipped: crate::Shipped,
     /// Where this machine's store lives, or none on a machine with no config home at all.
     config: Option<PathBuf>,
     open: Mutex<HashMap<PlaneId, Arc<Held>>>,
@@ -277,10 +277,10 @@ pub struct Planes {
 impl Planes {
     /// A registry holding nothing, which is what the app comes up as before a plane is
     /// opened — and stays as, perfectly happily, when there is no plane to open.
-    pub fn telling(tell: Teller, binary: Option<PathBuf>, config: Option<PathBuf>) -> Self {
+    pub fn telling(tell: Teller, shipped: crate::Shipped, config: Option<PathBuf>) -> Self {
         Self {
             tell,
-            binary,
+            shipped,
             config,
             open: Mutex::new(HashMap::new()),
             // Nobody to tell yet. A registry with no window still opens a handed-off chat;
@@ -715,7 +715,7 @@ impl Planes {
             Box::new(move |record| writes.write(record)),
             reporting,
         );
-        chats.arming_with(self.binary.clone());
+        chats.arming_with(self.shipped.clone());
 
         // **Before a single session is started, because putting the record back starts them.**
         // A harness fires `SessionStart` at its own exec, and a board that learned the chat's
@@ -1198,7 +1198,7 @@ mod tests {
     use super::*;
 
     fn planes() -> Planes {
-        Planes::telling(Arc::new(|_: Moved| {}), None, None)
+        Planes::telling(Arc::new(|_: Moved| {}), crate::Shipped::default(), None)
     }
 
     /// A plane on disk, with nothing in it but the marker that makes it one.
@@ -1786,7 +1786,11 @@ mod tests {
     /// A registry whose machine store is `config`, which is what a real one has.
     #[cfg(unix)]
     fn planes_keeping(config: &Path) -> Planes {
-        Planes::telling(Arc::new(|_: Moved| {}), None, Some(config.to_path_buf()))
+        Planes::telling(
+            Arc::new(|_: Moved| {}),
+            crate::Shipped::default(),
+            Some(config.to_path_buf()),
+        )
     }
 
     /// The `Ask` arm, or a failure naming what came back instead.

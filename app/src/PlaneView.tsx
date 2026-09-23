@@ -198,8 +198,6 @@ export function PlaneView({
   }>();
   /** Why the last start did not happen, shown in the picker rather than behind it. */
   const [pickerTrouble, setPickerTrouble] = useState<string>();
-  /** The one line to say when charter wired a profile on its way to starting a chat. */
-  const [wired, setWired] = useState<string>();
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
   /** What the core last said about where a chat is working, and which directory it was
@@ -881,8 +879,6 @@ export function PlaneView({
       }
       setPicking(undefined);
       setPickerTrouble(undefined);
-      // Software went into somebody's config folder, so it is said.
-      setWired(started.data.wired ?? undefined);
       const session = started.data.session;
       // Where charter put it, written down before the tab is drawn: the plane will say the
       // same thing a tick later, and until it does this is what keeps the tab on the strip
@@ -1342,6 +1338,7 @@ export function PlaneView({
       openProject: windowDoes.openProject,
       createProject: windowDoes.createProject,
       showExtensions: windowDoes.showExtensions,
+      installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       quit: windowDoes.quit,
@@ -1849,14 +1846,6 @@ export function PlaneView({
         </p>
       )}
 
-      {/* Software went into a config folder on the way to starting a chat, so it says what
-          and where. Dismissible, because it is news and not a fault. */}
-      {wired && (
-        <p className="came-back" role="status">
-          {wired} <button onClick={() => setWired(undefined)}>dismiss</button>
-        </p>
-      )}
-
       {/* What happened to the chat in front when it was put back. Only a chat that came from
           the record has either, so a chat the operator just opened says nothing. */}
       {frontChat?.resumed && (
@@ -2120,6 +2109,8 @@ export type WindowDoing = {
   /** Shows what has contributed what to this window. The window's and not a project's: an
    *  extension is machine state (ADR 0041), so it is the same list behind every tab. */
   showExtensions: () => void;
+  /** Puts the app's `charter` on a terminal's PATH. The window's: it is about the machine. */
+  installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
