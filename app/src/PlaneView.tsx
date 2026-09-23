@@ -1499,11 +1499,29 @@ export function PlaneView({
               );
             })}
           </div>
-          {/* And what it had no room for. One affordance per strip, with the strip's own
-              noun in it: "workspaces" and not "tabs", because a window drawing three of
-              these owes an operator — and a scenario spec — an answer to WHICH strip is
-              not showing everything. */}
-          <div className="more">
+          {/* This strip's own controls, in the shape the project strip above already has
+              (`App.tsx`): the `+` that makes one more of what the strip lists, then what the
+              strip had no room for. `.strip-doing` and not a `.more` of its own, because the
+              two strips now hold the same two things and a second class name would be a
+              second place to dress them.
+
+              **The `+` is the operator's, and it is drawing a control over a row that was
+              already there** — *"also no new workspace button in workspaces tab — it should
+              be like projects tabs buttons"* (charter-app#193). `workspace.create` has been in
+              the catalogue since #172, with the dialog behind it; the palette runs it and the
+              tab's own menu lists it, and the one strip that is entirely about workspaces had
+              no way to make one. Nothing here knows what it does: it is one `Doer` over that
+              row, so its words, its availability and its refusal are the catalogue's, exactly
+              as they are in the other two surfaces that offer it.
+
+              **`Plus`, which is the chat strip's glyph and not the project strip's pair.**
+              charter-app#178 split `project.open` and `project.create` into `FolderOpen` and
+              `FolderPlus` because that strip draws two of them an inch apart and one glyph on
+              both is a strip aimed at by memory. There is one control here, and the rule it
+              falls under is the older one: the `+` at the end of a strip makes one more of
+              what the strip lists, which an operator learns once for all three. */}
+          <div className="strip-doing">
+            <Doer offer={by("workspace.create")} onPress={press} iconOnly />
             <ShowMore
               noun="workspace"
               hidden={workspacesShown.hidden.map((workspace) => ({
@@ -1961,9 +1979,16 @@ export function Doer({
  * `project.open` wore `FolderPlus` only because it was the strip's one control when #171 drew
  * it — two icon-only buttons an inch apart carrying one glyph is a strip an operator has to
  * aim at by memory.
+ *
+ * **`workspace.create` and `chat.new` share `Plus`, and that is the rule rather than an
+ * oversight of the one above** (charter-app#193). Each is the ONE control at the end of its
+ * own strip, a whole row apart from the other, and what both mean is the same thing: make one
+ * more of what this strip lists. #178's rule is about two controls side by side; this is the
+ * `+` an operator learns once and then reads on every strip in the window.
  */
 export const MARKS: Record<string, typeof Plus> = {
   "chat.new": Plus,
+  "workspace.create": Plus,
   "pane.split.right": SquareSplitHorizontal,
   "pane.split.down": SquareSplitVertical,
   "pane.close": X,

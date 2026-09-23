@@ -371,8 +371,14 @@ body {
 /* A strip's own controls: the `+` that makes one more of what the strip lists, and the
    show-more button. **Never sized with the tabs and never collapsed with them** — the
    measured defect of charter-app#130/#131 was a wanted control living inside the thing that
-   hides controls, and a collapse is that thing. `useRoom` takes this element's width off the
-   room the tabs are given, which is how the two stay out of each other's way. */
+   hides controls, and a collapse is that thing. On the project strip, whose buttons are
+   INSIDE its tablist because a `role="tab"` has to be owned by the tablist it belongs to,
+   `useRoom` takes this element's width off the room the tabs are given; on the workspace
+   strip it is a sibling of the tablist, so what the tablist measures is already what is left.
+
+   **One class for both**, since charter-app#193 gave the workspace strip the same two things
+   the project strip has. A second class name for the same row would be a second place to
+   dress it, which is how the two would come to look different again. */
 .strip-doing {
   display: flex;
   align-items: stretch;
@@ -556,15 +562,28 @@ body {
 
    Written as `button.bare` and placed here on purpose: `.bar button` above dresses every
    button on the bar, and a plain `.bare` would lose to it on specificity and draw a bordered
-   box with a `+` in it. */
+   box with a `+` in it.
+
+   **And it says the whole of what it is, rather than the half the bar does not already say.**
+   It used to inherit `display`, `font` and `cursor` from `.bar button` or `.projects button`,
+   which was true of the only two strips that had one — and then charter-app#193 put a `+` on
+   the workspace strip, where there is no such rule, and the same class drew an inline box at
+   the browser's own font with its icon off centre. A rule that works in two places because of
+   where it is written is one that breaks at the third. */
 button.bare {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
   align-self: center;
+  gap: 0.3rem;
   min-width: 1.9rem;
   padding: 0.25rem;
   border: 0;
+  border-radius: 4px;
   background: none;
   color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
 }
 
 button.bare:hover:not(:disabled) {
@@ -579,16 +598,11 @@ button.bare:focus-visible {
 }
 
 /* The show-more button on a strip that is not the chat strip. The chat strip's sits on the
-   bar and is dressed by `.bar button`; these two sit inside their own strip. */
-.workspaces .more,
+   bar and is dressed by `.bar button`; these two sit inside their own strip's `.strip-doing`,
+   whose rule above already makes it a row that never shrinks. */
 .projects .show-more {
   display: flex;
   align-items: center;
-}
-
-.workspaces .more {
-  flex: none;
-  padding-inline: 0.3rem;
 }
 
 .workspaces .show-more {

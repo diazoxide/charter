@@ -34,6 +34,11 @@ describe("the bar's buttons carry a mark beside their words", () => {
     // Two icon-only buttons an inch apart carrying one icon is a strip aimed at by memory.
     ["project.create", "New project…", "lucide-folder-plus"],
     ["project.open", "Open a project…", "lucide-folder-open"],
+    // And the workspace strip's own `+` (charter-app#193), which shares `chat.new`'s glyph
+    // rather than taking a third folder icon: each is the one control at the end of its own
+    // strip, a whole row apart from the other, and both mean *make one more of what this
+    // strip lists*. #178's rule above is about two controls drawn side by side.
+    ["workspace.create", "New workspace…", "lucide-plus"],
   ])("%s is named %s and draws its mark", (id, title, mark) => {
     render(<Doer offer={offer(id, title)} onPress={() => {}} />);
 
@@ -65,20 +70,41 @@ describe("the bar's buttons carry a mark beside their words", () => {
         "pane.split.right",
         "project.create",
         "project.open",
+        "workspace.create",
       ].sort(),
     );
   });
 
   /**
-   * **Icon-only is only legible while the icons differ** (charter-app#178). The project
-   * strip's controls carry no words at all — `aria-label` is their whole name — so two of
-   * them drawing one glyph would leave a pointer with nothing to tell them apart, and the
-   * operator pressing *New project…* when they meant *Open a project…* is a folder-picker
-   * they did not ask for at best. Held here because it is a property of the set, which
-   * neither row's own test can see.
+   * **Icon-only is only legible while the icons drawn TOGETHER differ** (charter-app#178,
+   * narrowed in charter-app#193 to what its own argument supports).
+   *
+   * The argument was about the project strip: its controls carry no words at all —
+   * `aria-label` is their whole name — so two of them an inch apart drawing one glyph leaves
+   * a pointer with nothing to tell them apart, and the operator pressing *New project…* when
+   * they meant *Open a project…* gets a folder-picker they did not ask for at best. That is a
+   * claim about **adjacency**, and it was written down as a claim about the whole set because
+   * at the time the whole set was one group.
+   *
+   * It is not any more. `workspace.create` is the one control at the end of the workspace
+   * strip and `chat.new` is the one control on the bar, a whole row apart, and they share
+   * `Plus` on purpose: the `+` at the end of a strip makes one more of what the strip lists,
+   * which is the thing an operator learns once and then reads on every strip in the window.
+   * Holding the whole set to be distinct would forbid exactly that, so the groups are written
+   * down instead and each is held to the original rule.
    */
-  it("never gives two rows the same mark", () => {
-    const marks = Object.values(MARKS);
+  const SIDE_BY_SIDE: Record<string, string[]> = {
+    // `App.tsx`'s `.strip-doing`, the only place two icon-only rows are drawn together.
+    "the project strip": ["project.open", "project.create"],
+    // One each, so these cannot collide with anything — listed so that a second control
+    // arriving on either strip has somewhere to be added and something to fail against.
+    "the workspace strip": ["workspace.create"],
+    "the chat strip": ["chat.new"],
+  };
+
+  it.each(Object.keys(SIDE_BY_SIDE))("never gives %s two rows with the same mark", (strip) => {
+    const marks = SIDE_BY_SIDE[strip].map((id) => MARKS[id]);
+    expect(marks.filter(Boolean)).toHaveLength(SIDE_BY_SIDE[strip].length);
     expect(new Set(marks).size).toBe(marks.length);
   });
 });
