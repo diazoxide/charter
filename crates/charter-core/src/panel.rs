@@ -27,17 +27,32 @@
 //! by charter's own contributions, in Rust, in this process. An extension that declared one is
 //! refused by name at [`declared`], and the refusal says why rather than dropping the field:
 //!
-//! **there is no executor** (ADR 0041, stage 1 — `extension.rs`'s `charter_runs_nothing` pins
-//! it). A contributed panel is a declaration the window renders, not code it runs. A row that
-//! ran a charter verb on a click would be the first thing in charter that executes on an
-//! extension's say-so, and it would do it through a path with no hook, no prompt and no grant —
-//! which is ADR 0041's *"a second door beside the one being built"*, opened by a panel.
+//! **what an extension puts in the window is data, not a verb.** A row that ran a charter verb
+//! on a click would be charter acting on an extension's say-so, through a path with no hook, no
+//! prompt and no grant — which is ADR 0041's *"a second door beside the one being built"*,
+//! opened by a panel.
+//!
+//! **That is still true now that the executor exists** ([`crate::executor`], ADR 0041 stage 2),
+//! and the reason is worth saying because the tempting reading is the opposite. The executor
+//! runs an extension's *own* program, once, when the operator opens one of its views, and what
+//! comes back is data in this vocabulary ([`answered`]) — which refuses `runs` exactly as a
+//! manifest does. The grant that would lift it is *this extension may offer this catalogue
+//! row*, consented per extension, per row, and nobody has asked for it yet: ADR 0041's rule is
+//! that a capability is written down for a plugin that wants it, never ahead of one.
 //!
 //! So the asymmetry is real and is written down rather than smoothed over: **charter's own
 //! panels can put a charter verb on a row and a stranger's cannot.** It is not a property of
-//! being charter; it is a property of being code that is already in the process. The day the
-//! executor lands, the grant that lifts it is *this extension may offer this catalogue row*,
-//! consented per extension, per row — and it is stage 2, not this.
+//! being charter; it is a property of being code that is already in the process.
+//!
+//! # Where the numbers in a chart come from
+//!
+//! [`Block::Chart`] is the third kind of block, and it is admitted **only in an answer**, never
+//! in a manifest. charter ADR 0043 refused a chart block while there was no executor, for a
+//! reason that still holds for a manifest: *a declared chart is a chart of numbers the extension
+//! wrote down at install time*, and stale statistics under the word *statistics* are worse than
+//! none. A program the executor asks when the operator opens a view answers with numbers read
+//! at that moment, so the chart is current, and that is the whole difference. [`declared`]
+//! has no key a chart could arrive in; [`answered`] accepts one.
 //!
 //! # And the one that is not about execution at all
 //!
@@ -178,17 +193,122 @@ impl Tone {
 /// what a todo should do when it is clicked was *"like persona description"*. So there is one
 /// popover and the vocabulary says what goes in it, rather than a second surface per panel.
 ///
-/// [`Self::Persona`] is charter's own — it costs a `persona_details` call against the plane —
-/// and a declared panel gets [`Self::Text`], which is its own longer words and no read of
-/// anything. That is the same asymmetry [`Row::runs`] draws, one notch smaller: charter's
-/// contribution may name a consumer that runs code, a stranger's may only carry data.
+/// One kind now: the row's own words. There was a second, `Persona`, which named a persona for
+/// the window to go and read; a persona row now opens the persona's own view tab
+/// ([`Block::Facts`] is how that view says what the definition says), so nothing named one and
+/// it was retired rather than left as a way for a card to read the plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detail {
-    /// The row's own words, in full. The only kind a declared panel may use.
+    /// The row's own words, in full.
     Text(String),
-    /// What this plane says this persona is — `charter_core::personas::details`, read when the
-    /// card is opened and never cached, because a definition is a file an operator edits.
-    Persona(String),
+}
+
+/// What a panel or a view is ABOUT, as a closed set of subjects charter publishes.
+///
+/// **A subject and never a place.** ADR 0043's property 3 is that a panel never says *where*;
+/// a subject says what a thing concerns, and charter decides where things about it are offered.
+/// charter's own personas panel is about [`Self::Personas`]; an extension's view about
+/// personas is therefore offered on that panel's heading and inside a persona's card — both of
+/// which are charter's choices, made in the window, not the extension's.
+///
+/// **It is also what decides what charter hands a program** ([`crate::handed`]). A view about
+/// personas is told this plane's persona names and when each memory was written, and nothing
+/// else; a subject this list does not have is a view charter has nothing to hand, so the
+/// manifest naming it is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Subject {
+    /// The plane's personas and what each one remembers.
+    Personas,
+}
+
+impl Subject {
+    /// The word charter publishes for it, which is the word a manifest writes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Personas => "personas",
+        }
+    }
+
+    /// Every word in the vocabulary, for a refusal that lists what was allowed.
+    pub fn every() -> [Self; 1] {
+        [Self::Personas]
+    }
+
+    /// The subject that word names, or nothing.
+    pub fn parse(word: &str) -> Option<Self> {
+        Self::every().into_iter().find(|it| it.as_str() == word)
+    }
+}
+
+/// How a chart is drawn, as a closed set of two.
+///
+/// **Two, because the two questions statistics answer are two**: how things compare
+/// ([`Self::Bars`] — one bar per thing) and how one thing moves over a sequence
+/// ([`Self::Columns`] — one column per step, in the order given). A pie, a line and a scatter
+/// are each a third word, added the day a producer wants one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Shape {
+    /// Horizontal bars, one per point, labelled at the start.
+    #[default]
+    Bars,
+    /// Vertical columns, one per point, in the order given, labelled underneath.
+    Columns,
+}
+
+impl Shape {
+    /// The word charter publishes for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bars => "bars",
+            Self::Columns => "columns",
+        }
+    }
+
+    /// Every word in the vocabulary, for a refusal that lists what was allowed.
+    pub fn every() -> [Self; 2] {
+        [Self::Bars, Self::Columns]
+    }
+
+    /// The shape that word names, or nothing.
+    pub fn parse(word: &str) -> Option<Self> {
+        Self::every().into_iter().find(|it| it.as_str() == word)
+    }
+}
+
+/// One magnitude in a chart: a label, a whole number, and a short note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Point {
+    pub label: String,
+    /// **A whole number, and not a float**, because every statistic a producer has asked for
+    /// is a count, and a count cannot be `NaN`, negative or `1e308`. A float is the day a
+    /// producer wants a ratio, and it arrives with its own refusals.
+    pub value: u32,
+    /// Drawn quietly beside the value — a share, a date. Never a colour: see [`Tone`].
+    pub note: Option<String>,
+}
+
+/// A chart: a title, a shape, what its values count, and the points.
+///
+/// **Numbers and words, and nothing that says how they look.** charter draws the bars from
+/// theme tokens (`app/src/theme/`), scales them to the largest value itself, and writes every
+/// label as a text node. A producer cannot choose a colour, a width, a font or an axis — ADR
+/// 0041's four properties, one block further on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chart {
+    pub title: String,
+    pub shape: Shape,
+    /// What the values count — `memories`. Said once, beside the title, rather than per point.
+    pub unit: Option<String>,
+    pub points: Vec<Point>,
+}
+
+/// One labelled fact: `Vault` and `devops`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fact {
+    /// What the fact is about. Short, and drawn quietly in the first column.
+    pub label: String,
+    /// What it says.
+    pub value: String,
 }
 
 /// One row of a list.
@@ -236,10 +356,15 @@ pub struct Empty {
 
 /// One part of a panel's body.
 ///
-/// Two kinds, because two is what the panels charter has actually needed: a list of things, and
-/// a sentence about why there is no list. A third is added when a panel wants one, not before —
-/// ADR 0041's rule about capabilities invented for hypothetical extensions, applied to a
-/// vocabulary.
+/// Four kinds. The first two are what a panel has needed since the contract was written: a
+/// list of things, and a sentence about why there is no list. **The third, [`Self::Chart`],
+/// arrived with the first producer that wanted one** — the persona statistics view, which is
+/// the executor's first consumer — and not before it, which is ADR 0041's rule about
+/// capabilities invented for hypothetical extensions, applied to a vocabulary. **The fourth,
+/// [`Self::Facts`], arrived the same way**: the persona view, drawn in a tab, had to say its
+/// definition as sentences because nothing could say it as a label and a value. Both are
+/// accepted in an answer ([`answered`]) and have no way into a manifest ([`declared`]), whose
+/// panel is one list; the module header says why for a chart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
     /// A bounded, searchable list of rows. The window draws at most a page of them, scrolls
@@ -248,6 +373,11 @@ pub enum Block {
     /// A sentence. A [`Tone::Trouble`] one is what charter could not do, in its own words, and
     /// is drawn as an alert.
     Note { text: String, tone: Tone },
+    /// Magnitudes, drawn by charter. Only ever answered, never declared.
+    Chart(Chart),
+    /// Labelled facts, drawn as two columns: what a definition says, key by key. Answered,
+    /// never declared — a declared panel is a list, and nothing has asked for more.
+    Facts(Vec<Fact>),
 }
 
 /// Who contributed a panel.
@@ -273,6 +403,12 @@ pub struct Panel {
     pub mark: Mark,
     pub blocks: Vec<Block>,
     pub from: By,
+    /// What this panel is about, when it is about a subject charter publishes. charter's own
+    /// personas panel is, and the views about the same subject are offered on its heading.
+    /// **Never from a manifest**: a declared panel that claimed a subject would be choosing
+    /// which of charter's surfaces a stranger's view is offered on, and that is charter's to
+    /// choose.
+    pub about: Option<Subject>,
 }
 
 impl Panel {
@@ -319,7 +455,7 @@ pub fn declares(panel: &Panel) -> String {
         .iter()
         .map(|block| match block {
             Block::List { rows, .. } => rows.len(),
-            Block::Note { .. } => 0,
+            Block::Note { .. } | Block::Chart(_) | Block::Facts(_) => 0,
         })
         .sum();
     format!(
@@ -409,59 +545,8 @@ fn one(raw: &serde_json::Value, by: &str) -> Result<Panel, String> {
 
     let mark = mark_of(object.get("mark"))?;
 
-    let mut rows = Vec::new();
-    let declared_rows = match object.get("rows") {
-        None => &Vec::new(),
-        Some(value) => value
-            .as_array()
-            .ok_or("has a 'rows' that is not an array")?,
-    };
-    if declared_rows.len() > MOST_ROWS {
-        return Err(format!(
-            "declares {} rows, and charter holds at most {MOST_ROWS} per panel",
-            declared_rows.len()
-        ));
-    }
-    let mut keys = BTreeSet::new();
-    for (at, raw) in declared_rows.iter().enumerate() {
-        let row = row_of(raw).map_err(|why| format!("has a row at {at} that {why}"))?;
-        if !keys.insert(row.key.clone()) {
-            return Err(format!(
-                "has two rows called {:?}, and a row's key is what the window remembers it by",
-                row.key
-            ));
-        }
-        rows.push(row);
-    }
-
-    let empty = match object.get("empty") {
-        None => Empty {
-            headline: "Nothing here".into(),
-            body: None,
-            offer: None,
-        },
-        Some(value) => {
-            let object = value
-                .as_object()
-                .ok_or("has an 'empty' that is not an object")?;
-            if object.contains_key("offer") {
-                return Err(format!("has an empty state that {NO_VERB}"));
-            }
-            only(
-                object.keys().map(String::as_str),
-                &EMPTY_KEYS,
-                "an empty state",
-            )?;
-            Empty {
-                headline: words(object.get("headline"), MOST_TEXT, "empty.headline")?
-                    .unwrap_or_else(|| "Nothing here".into()),
-                body: words(object.get("body"), MOST_DETAIL, "empty.body")?,
-                // Never from a manifest: an empty state's button is a verb, and a verb is
-                // charter's. Refused rather than dropped — `only` above does it by name.
-                offer: None,
-            }
-        }
-    };
+    let rows = rows_of(object.get("rows"))?;
+    let empty = empty_of(object.get("empty"))?;
 
     Ok(Panel {
         id: id.to_owned(),
@@ -470,6 +555,7 @@ fn one(raw: &serde_json::Value, by: &str) -> Result<Panel, String> {
         mark,
         blocks: vec![Block::List { rows, empty }],
         from: By::Extension(by.to_owned()),
+        about: None,
     })
 }
 
@@ -479,10 +565,72 @@ fn one(raw: &serde_json::Value, by: &str) -> Result<Panel, String> {
 /// and about an empty state's button, and changed only by changing a file with tests on it —
 /// [`crate::extension::RUNS_AS_YOU`]'s reason, applied to the refusal rather than to the
 /// consent.
-pub const NO_VERB: &str = "names a charter action, and a contributed panel may not run one: \
-     this charter has no extension runtime, so a contributed panel is a declaration the window \
-     draws and not code it runs. A row that ran a charter verb on a click would be an executor \
-     with nothing behind it.";
+pub const NO_VERB: &str = "names a charter action, and an extension may not put one on a row: \
+     what an extension contributes to the window is data charter draws, whether its manifest \
+     declared it or its program answered it, and a row that ran a charter verb on a click would \
+     be charter acting on an extension's say-so with nothing in front of it.";
+
+/// A list's rows, bounded, each with a key unique within the list.
+///
+/// One function for a declared panel and an answered list, so the two cannot drift: a row an
+/// extension's program answers is held to exactly the rules a row its manifest declares is.
+fn rows_of(value: Option<&serde_json::Value>) -> Result<Vec<Row>, String> {
+    let listed = match value {
+        None => return Ok(Vec::new()),
+        Some(value) => value
+            .as_array()
+            .ok_or("has a 'rows' that is not an array")?,
+    };
+    if listed.len() > MOST_ROWS {
+        return Err(format!(
+            "declares {} rows, and charter holds at most {MOST_ROWS} per panel",
+            listed.len()
+        ));
+    }
+    let mut keys = BTreeSet::new();
+    let mut rows = Vec::with_capacity(listed.len());
+    for (at, raw) in listed.iter().enumerate() {
+        let row = row_of(raw).map_err(|why| format!("has a row at {at} that {why}"))?;
+        if !keys.insert(row.key.clone()) {
+            return Err(format!(
+                "has two rows called {:?}, and a row's key is what the window remembers it by",
+                row.key
+            ));
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// A list's empty state, or charter's default one.
+fn empty_of(value: Option<&serde_json::Value>) -> Result<Empty, String> {
+    let Some(value) = value else {
+        return Ok(Empty {
+            headline: "Nothing here".into(),
+            body: None,
+            offer: None,
+        });
+    };
+    let object = value
+        .as_object()
+        .ok_or("has an 'empty' that is not an object")?;
+    if object.contains_key("offer") {
+        return Err(format!("has an empty state that {NO_VERB}"));
+    }
+    only(
+        object.keys().map(String::as_str),
+        &EMPTY_KEYS,
+        "an empty state",
+    )?;
+    Ok(Empty {
+        headline: words(object.get("headline"), MOST_TEXT, "empty.headline")?
+            .unwrap_or_else(|| "Nothing here".into()),
+        body: words(object.get("body"), MOST_DETAIL, "empty.body")?,
+        // Never from an extension: an empty state's button is a verb, and a verb is charter's.
+        // Refused rather than dropped — by name, above.
+        offer: None,
+    })
+}
 
 fn row_of(raw: &serde_json::Value) -> Result<Row, String> {
     let object = raw.as_object().ok_or("is not an object")?;
@@ -494,7 +642,7 @@ fn row_of(raw: &serde_json::Value) -> Result<Row, String> {
         .get("key")
         .and_then(serde_json::Value::as_str)
         .ok_or("has no key")?;
-    if key.is_empty() || key.len() > MOST_TEXT || key.contains(|c: char| c.is_control()) {
+    if key.is_empty() || key.len() > MOST_TEXT || key.contains(undrawable) {
         return Err(format!(
             "has the key {key:?}, which charter will not hold it by"
         ));
@@ -505,7 +653,7 @@ fn row_of(raw: &serde_json::Value) -> Result<Row, String> {
         note: words(object.get("note"), MOST_TEXT, "note")?,
         mark: mark_of(object.get("mark"))?,
         tone: tone_of(object.get("tone"))?,
-        // A declared card is the row's own longer words and nothing else: `Detail::Persona`
+        // A declared card is the row's own longer words and nothing else: a card that
         // reads a file off the plane, which is a consumer charter chooses and not a value an
         // extension names.
         detail: words(object.get("detail"), MOST_DETAIL, "detail")?.map(Detail::Text),
@@ -544,13 +692,31 @@ fn mark_of(value: Option<&serde_json::Value>) -> Result<Mark, String> {
     })
 }
 
+/// Whether `c` is a character charter refuses to draw in anything an extension wrote: a control
+/// character, a line or paragraph separator, or a **format** character (Unicode category `Cf`).
+///
+/// `Cf` is the one `char::is_control` does not cover and the one that matters most here. It
+/// holds the bidirectional overrides and isolates (U+202A–202E, U+2066–2069), which draw nothing
+/// and reverse what follows them — so a view titled `Stats\u{202E}` would draw the ` · <id>`
+/// charter puts after it backwards, and the surface would no longer say which extension it came
+/// from. It also holds the zero-width characters (U+200B–200F, U+2060, U+FEFF) that make two
+/// different strings look identical. The set is [`crate::tui::tables::INVISIBLE`], which CPython
+/// wrote for `charter/contain.py`, less its ordinary whitespace — a space or a tab in a row's
+/// text is content, and draws as what it is.
+pub(crate) fn undrawable(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{2028}' | '\u{2029}')
+        || (crate::tui::in_table(c, &crate::tui::tables::INVISIBLE) && !c.is_whitespace())
+}
+
 /// A string charter will put on the screen: present, non-empty, bounded, and with nothing in it
 /// that is not a character.
 ///
-/// **Control characters are refused rather than stripped.** A row's text is drawn as a text
-/// node, so there is no injection to filter; what a control character does is make two different
-/// strings look like one on screen, which is the deception half of ADR 0041's concern and the
-/// half no escaping helps with.
+/// **Control and format characters are refused rather than stripped** ([`undrawable`]). A row's
+/// text is drawn as a text node, so there is no injection to filter; what such a character does
+/// is make two different strings look like one on screen — or turn the words around it
+/// backwards — which is the deception half of ADR 0041's concern and the half no escaping helps
+/// with.
 fn words(
     value: Option<&serde_json::Value>,
     most: usize,
@@ -570,9 +736,10 @@ fn words(
             text.len()
         ));
     }
-    if text.contains(|c: char| c.is_control()) {
+    if text.contains(undrawable) {
         return Err(format!(
-            "has a '{what}' holding a control character, which charter will not draw"
+            "has a '{what}' holding a control character or an invisible formatting one, which \
+             charter will not draw"
         ));
     }
     Ok(Some(text.to_owned()))
@@ -598,6 +765,193 @@ fn only<'a>(
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------
+// What an extension's program answers (ADR 0041 stage 2)
+// ---------------------------------------------------------------------------------------
+
+/// The most blocks one answer may hold. A view is one surface the operator opened; sixteen
+/// charts and lists in it is a report nobody reads, and past that it is a program that is not
+/// answering the question it was asked.
+pub const MOST_BLOCKS: usize = 16;
+
+/// The most points one chart may hold. A bar per persona or a column per week fits well under
+/// it; a chart of a thousand bars is a list, and the list block is the one that searches.
+pub const MOST_POINTS: usize = 64;
+
+/// The most facts one facts block may hold. A persona's definition says six; a block of more
+/// than this is a list, and the list block is the one that searches.
+pub const MOST_FACTS: usize = 32;
+
+/// The most a fact's label may be. It is drawn in a column that does not wrap, so it is a word
+/// or two and not a sentence.
+pub const MOST_LABEL: usize = 64;
+
+/// The keys each kind of answered block may carry. Anything else is refused by name — property
+/// 1, as [`PANEL_KEYS`] is for a declared panel.
+const LIST_KEYS: [&str; 3] = ["kind", "rows", "empty"];
+const NOTE_KEYS: [&str; 3] = ["kind", "text", "tone"];
+const CHART_KEYS: [&str; 5] = ["kind", "title", "shape", "unit", "points"];
+const POINT_KEYS: [&str; 3] = ["label", "value", "note"];
+const FACTS_KEYS: [&str; 2] = ["kind", "facts"];
+const FACT_KEYS: [&str; 2] = ["label", "value"];
+
+/// The blocks an extension's program answered, or why charter will not draw them.
+///
+/// **The same vocabulary as a declared panel, parsed by the same functions, plus one word.**
+/// A list's rows go through [`rows_of`] and so through [`row_of`], which refuses `runs` with
+/// [`NO_VERB`]; a note is a note; and a chart is [`Block::Chart`], which only an answer may
+/// carry. Nothing here is evaluated, nothing names a file or a place, and an unknown key refuses
+/// the whole answer rather than being dropped — for the reason [`declared`] gives, which is
+/// stronger here: a program that answers a key this charter does not know is a program written
+/// against a charter that is not this one, and half an answer drawn as though it were whole is
+/// the consent surface lying in the harmless direction.
+pub fn answered(value: &serde_json::Value) -> Result<Vec<Block>, String> {
+    let list = value
+        .as_array()
+        .ok_or("answered 'blocks' that are not an array")?;
+    if list.len() > MOST_BLOCKS {
+        return Err(format!(
+            "answered {} blocks, and charter draws at most {MOST_BLOCKS} in one view",
+            list.len()
+        ));
+    }
+    list.iter()
+        .enumerate()
+        .map(|(at, raw)| {
+            block_of(raw).map_err(|why| format!("answered a block at {at} that {why}"))
+        })
+        .collect()
+}
+
+fn block_of(raw: &serde_json::Value) -> Result<Block, String> {
+    let object = raw.as_object().ok_or("is not an object")?;
+    let kind = object
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("says no 'kind', so charter cannot say what it is")?;
+    match kind {
+        "list" => {
+            only(object.keys().map(String::as_str), &LIST_KEYS, "a list")?;
+            Ok(Block::List {
+                rows: rows_of(object.get("rows"))?,
+                empty: empty_of(object.get("empty"))?,
+            })
+        }
+        "note" => {
+            only(object.keys().map(String::as_str), &NOTE_KEYS, "a note")?;
+            Ok(Block::Note {
+                text: words(object.get("text"), MOST_DETAIL, "text")?.ok_or("has no text")?,
+                tone: tone_of(object.get("tone"))?,
+            })
+        }
+        "chart" => {
+            only(object.keys().map(String::as_str), &CHART_KEYS, "a chart")?;
+            Ok(Block::Chart(chart_of(object)?))
+        }
+        "facts" => {
+            only(
+                object.keys().map(String::as_str),
+                &FACTS_KEYS,
+                "a facts block",
+            )?;
+            Ok(Block::Facts(facts_of(object.get("facts"))?))
+        }
+        other => Err(format!(
+            "is a {other:?}, and charter draws a list, a note, a chart or facts — a block says \
+             what it holds, and charter decides what that looks like"
+        )),
+    }
+}
+
+fn chart_of(object: &serde_json::Map<String, serde_json::Value>) -> Result<Chart, String> {
+    let title = words(object.get("title"), MOST_TEXT, "title")?.ok_or("has no title")?;
+    let shape = match object.get("shape") {
+        None => Shape::Bars,
+        Some(value) => {
+            let word = value.as_str().ok_or("has a 'shape' that is not a word")?;
+            Shape::parse(word).ok_or_else(|| {
+                let every: Vec<&str> = Shape::every().iter().map(|it| it.as_str()).collect();
+                format!(
+                    "has the shape {word:?}, and charter's chart shapes are {}",
+                    every.join(", ")
+                )
+            })?
+        }
+    };
+    let unit = words(object.get("unit"), MOST_TEXT, "unit")?;
+    let listed = object
+        .get("points")
+        .ok_or("has no points")?
+        .as_array()
+        .ok_or("has 'points' that are not an array")?;
+    if listed.len() > MOST_POINTS {
+        return Err(format!(
+            "has {} points, and charter draws at most {MOST_POINTS} in one chart",
+            listed.len()
+        ));
+    }
+    let mut points = Vec::with_capacity(listed.len());
+    for (at, raw) in listed.iter().enumerate() {
+        let point = point_of(raw).map_err(|why| format!("has a point at {at} that {why}"))?;
+        points.push(point);
+    }
+    Ok(Chart {
+        title,
+        shape,
+        unit,
+        points,
+    })
+}
+
+/// A facts block's pairs, bounded, each label and value held to [`words`]'s rules.
+fn facts_of(value: Option<&serde_json::Value>) -> Result<Vec<Fact>, String> {
+    let listed = value
+        .ok_or("has no facts")?
+        .as_array()
+        .ok_or("has 'facts' that are not an array")?;
+    if listed.len() > MOST_FACTS {
+        return Err(format!(
+            "has {} facts, and charter draws at most {MOST_FACTS} in one block",
+            listed.len()
+        ));
+    }
+    let mut facts = Vec::with_capacity(listed.len());
+    for (at, raw) in listed.iter().enumerate() {
+        let fact = fact_of(raw).map_err(|why| format!("has a fact at {at} that {why}"))?;
+        facts.push(fact);
+    }
+    Ok(facts)
+}
+
+fn fact_of(raw: &serde_json::Value) -> Result<Fact, String> {
+    let object = raw.as_object().ok_or("is not an object")?;
+    only(object.keys().map(String::as_str), &FACT_KEYS, "a fact")?;
+    Ok(Fact {
+        label: words(object.get("label"), MOST_LABEL, "label")?.ok_or("has no label")?,
+        value: words(object.get("value"), MOST_TEXT, "value")?.ok_or("has no value")?,
+    })
+}
+
+fn point_of(raw: &serde_json::Value) -> Result<Point, String> {
+    let object = raw.as_object().ok_or("is not an object")?;
+    only(object.keys().map(String::as_str), &POINT_KEYS, "a point")?;
+    let label = words(object.get("label"), MOST_TEXT, "label")?.ok_or("has no label")?;
+    // `as_u64` and then `u32`, so a negative, a fraction, a string of digits and a number past
+    // four billion are each refused rather than rounded, wrapped or read as zero.
+    let value = object
+        .get("value")
+        .ok_or("has no value")?
+        .as_u64()
+        .ok_or("has a value that is not a whole number of at least zero")?;
+    let value = u32::try_from(value)
+        .map_err(|_| format!("has the value {value}, and charter draws counts below 2^32"))?;
+    Ok(Point {
+        label,
+        value,
+        note: words(object.get("note"), MOST_TEXT, "note")?,
+    })
 }
 
 #[cfg(test)]

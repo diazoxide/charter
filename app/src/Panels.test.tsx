@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks } from "@tauri-apps/api/mocks";
 import { Panels } from "./Panels";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
-import type { PanelRow, PanelView, Panels as PanelsModel, PersonaDetails } from "./bindings";
+import type { ExtensionView, PanelRow, PanelView, Panels as PanelsModel } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
 afterEach(() => {
@@ -57,6 +57,7 @@ function todosPanel(rows: PanelRow[], refused?: string): PanelView {
     order: 10,
     mark: "todo",
     from: null,
+    about: null,
     blocks: [
       ...(refused === undefined ? [] : [{ kind: "note" as const, text: refused, tone: "trouble" }]),
       {
@@ -75,6 +76,7 @@ function personasPanel(names: string[], fallback: string | null): PanelView {
     order: 20,
     mark: "persona",
     from: null,
+    about: "personas",
     blocks: [
       {
         kind: "list",
@@ -83,7 +85,8 @@ function personasPanel(names: string[], fallback: string | null): PanelView {
             mark: "persona",
             tone: name === fallback ? "default" : "plain",
             note: name === fallback ? "default · 2 memories" : "2 memories",
-            detail: { kind: "persona", persona: name },
+            // No card: the row opens the persona's own tab (`panels.rs`, `charters_own`).
+            detail: null,
             runs: `persona.show:${name}`,
           }),
         ),
@@ -101,6 +104,7 @@ function contributedPanel(over: Partial<PanelView> = {}): PanelView {
     order: 15,
     mark: "note",
     from: "acme",
+    about: null,
     blocks: [
       {
         kind: "list",
@@ -165,13 +169,13 @@ function draw(
     offers?: Catalogued;
     onPress?: (offer: Offer) => void;
     contributed?: PanelView[];
+    views?: ExtensionView[];
   } = {},
 ) {
   function Window() {
     const [shownRow, setShownRow] = useState<string>();
     return (
       <Panels
-        plane={PLANE}
         workspace={"workspace" in on ? on.workspace : "alpha"}
         state={on.state ?? state()}
         queue={on.queue ?? []}
@@ -181,6 +185,7 @@ function draw(
         offers={on.offers ?? new Map()}
         onPress={on.onPress ?? (() => {})}
         contributed={on.contributed ?? []}
+        views={on.views ?? []}
         shownRow={shownRow}
         onShowRow={setShownRow}
       />
@@ -359,6 +364,7 @@ function everyOffer(): Catalogued {
       workspaces: [],
       plane: PLANE,
       personas: ["devops", "steward"],
+      views: [STATISTICS],
       needsYou: [],
       nameOf: String,
     }),
@@ -431,204 +437,27 @@ describe("the needs-you count's colours", () => {
 });
 
 // ---------------------------------------------------------------------------------------
-// What a persona row opens
+// What a persona row opens: the persona's own tab (the operator's ruling, 2026-09-23)
 // ---------------------------------------------------------------------------------------
 
-/** A definition the core would have answered with. */
-function definition(on: Partial<PersonaDetails> = {}): PersonaDetails {
-  return {
-    name: "devops",
-    role: "DevOps Engineer",
-    delegate_when: "CI/CD pipelines, k8s deploys",
-    tools: ["kubectl", "glab"],
-    vault: "devops",
-    declares_no_vault: false,
-    lineage: ["devops"],
-    file: "personas/devops/persona.md",
-    ...on,
-  };
-}
+describe("a persona's row", () => {
+  it("runs the catalogue row that opens the persona's tab, and opens no card beside it", async () => {
+    const pressed: Offer[] = [];
+    draw({ offers: everyOffer(), onPress: (offer) => pressed.push(offer) });
 
-/** One memory, as `persona_memories` answers with — a row of the same vocabulary. */
-function memory(key: string, title: string, body: string): PanelRow {
-  return row(key, title, {
-    mark: "note",
-    note: "2026-09-20",
-    detail: { kind: "text", text: body },
-  });
-}
+    await userEvent.click(
+      within(screen.getByTestId("panel-personas")).getByRole("button", { name: /devops/ }),
+    );
 
-/** The core, answering both of the card's asks and counting what it was asked. */
-function core(
-  answer: (persona: string) => unknown,
-  memories: (persona: string) => PanelRow[] = () => [],
-): { asked: Record<string, unknown>[] } {
-  const asked: Record<string, unknown>[] = [];
-  mockIPC((cmd, args) => {
-    const given = (args ?? {}) as Record<string, unknown>;
-    if (cmd === "persona_memories") return memories(String(given.persona));
-    if (cmd !== "persona_details") return undefined;
-    asked.push({ ...given, cmd });
-    return answer(String(given.persona));
-  });
-  return { asked };
-}
-
-/** Opens a persona's row and waits for the card it opens. */
-async function open(persona: string): Promise<HTMLElement> {
-  const user = userEvent.setup();
-  await user.click(
-    within(screen.getByTestId("panel-personas")).getByRole("button", { name: new RegExp(persona) }),
-  );
-  return waitFor(() => screen.getByTestId(`row-detail-${persona}`));
-}
-
-describe("a persona's card", () => {
-  it("shows what the definition says: its role, when to delegate to it, its tools and its vault", async () => {
-    core(() => definition());
-    draw();
-
-    const card = await open("devops");
-
-    expect(card).toHaveTextContent("DevOps Engineer");
-    expect(card).toHaveTextContent("CI/CD pipelines, k8s deploys");
-    expect(card).toHaveTextContent("kubectl, glab");
-    expect(card).toHaveTextContent("personas/devops/persona.md");
-  });
-
-  it("asks the core about this plane's persona, and asks again the next time it is opened", async () => {
-    // A definition is a file an operator edits while charter is running, so a cached first
-    // answer would show a role that was corrected an hour ago.
-    const { asked } = core((persona) => definition({ name: persona }));
-    draw();
-
-    await open("devops");
-    await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByTestId("row-detail-devops")).toBeNull());
-    await open("devops");
-
-    expect(asked.filter((one) => one.cmd === "persona_details")).toHaveLength(2);
-    expect(asked[0]).toMatchObject({ plane: PLANE, persona: "devops" });
-  });
-
-  it("names the vault and nothing that is in it", async () => {
-    // charter refuses a secret by kind and never echoes one; a panel gets no exception.
-    core(() => definition({ vault: "devops" }));
-    draw();
-
-    const card = await open("devops");
-
-    expect(card).toHaveTextContent("devops");
-    expect(card).toHaveTextContent("what is in it is never shown here");
-  });
-
-  it("says a persona holds no credentials only where it says so itself", async () => {
-    // "No `vault:` line" means charter has not looked, not that there is nothing —
-    // `PersonaDetails::declares_no_vault` has the whole of why.
-    core(() => definition({ vault: null, declares_no_vault: false }));
-    draw();
-
-    expect(await open("devops")).toHaveTextContent("not declared in its definition");
-  });
-
-  it("draws the core's own refusal rather than an empty card", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "persona_memories") return [];
-      if (cmd === "persona_details") throw new Error("no persona 'devops'");
-      return undefined;
+    expect(pressed.map((offer) => offer.id)).toEqual(["persona.show:devops"]);
+    expect(pressed[0].does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "persona", key: "devops" },
+      title: "devops",
     });
-    draw();
-
-    expect(await open("devops")).toHaveTextContent("no persona 'devops'");
-  });
-
-  it("is not modal, so the queue this region exists for stays reachable", async () => {
-    // Radix marks everything outside an open DIALOG `aria-hidden` — including the needs-you
-    // queue two sections up, which ADR 0038 says this region must never compete with. A
-    // popover takes the menu's decisions instead (ADR 0039).
-    core(() => definition());
-    draw({ queue: [7] });
-
-    await open("devops");
-
-    expect(screen.getByLabelText("Needs you")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /ide\.7/ })).toBeInTheDocument();
-  });
-
-  it("closes on Escape and puts the keyboard back on the row", async () => {
-    core(() => definition());
-    draw();
-    const card = await open("devops");
-    expect(card).toBeInTheDocument();
-
-    await userEvent.keyboard("{Escape}");
-
-    await waitFor(() => expect(screen.queryByTestId("row-detail-devops")).toBeNull());
-    expect(document.activeElement).toHaveTextContent("devops");
-  });
-});
-
-describe("a persona's memories", () => {
-  it("are readable from the window, which is what the operator asked for", async () => {
-    // *"on clicking to persona we should open maybe list of memories … user will be able to
-    // read all memories from ui"*.
-    core(
-      () => definition(),
-      () => [memory("a", "Charter defects go upstream", "File the issue; do not patch around it.")],
-    );
-    draw();
-
-    const card = await open("devops");
-
-    expect(within(card).getByText(/Charter defects go upstream/)).toBeVisible();
-  });
-
-  it("get the same list primitive the panel itself has, one surface in", async () => {
-    // **The second consumer, and the one that decides whether `PanelList` is a primitive or a
-    // panel with a general-sounding name.** Nothing in the card knows what a memory is: they
-    // arrive as rows, so they are searched, bounded and opened by the code the panel uses.
-    core(
-      () => definition(),
-      () => Array.from({ length: 30 }, (_, at) => memory(`m${at}`, `Memory ${at}`, `body ${at}`)),
-    );
-    draw();
-
-    const card = await open("devops");
-
-    const search = await within(card).findByRole("searchbox");
-    await userEvent.type(search, "Memory 7");
-    await waitFor(() =>
-      expect(within(card).getByLabelText("devops's memories").children).toHaveLength(1),
-    );
-  });
-
-  it("says charter could not read them rather than saying there are none", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "persona_memories") throw new Error("memory/ is a link out of the plane");
-      if (cmd === "persona_details") return definition();
-      return undefined;
-    });
-    draw();
-
-    const card = await open("devops");
-
-    await waitFor(() =>
-      expect(within(card).getByRole("alert")).toHaveTextContent("link out of the plane"),
-    );
-  });
-
-  it("says nothing is remembered yet where the store is simply empty", async () => {
-    core(
-      () => definition(),
-      () => [],
-    );
-    draw();
-
-    const card = await open("devops");
-
-    await waitFor(() =>
-      expect(within(card).getByText("Nothing remembered yet")).toBeInTheDocument(),
-    );
+    // A card beside the row would be a second surface for the same persona.
+    expect(screen.queryByTestId("row-detail-devops")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 
@@ -654,7 +483,6 @@ describe("a persona row's menu", () => {
   }
 
   it("opens on a right-click with the catalogue's row for that persona", async () => {
-    core(() => definition());
     draw({ offers: everyOffer() });
 
     rightClick("panel-personas", "devops");
@@ -667,8 +495,7 @@ describe("a persona row's menu", () => {
     ).toEqual(["Show what devops is"]);
   });
 
-  it("hands back the row that opens the card, which is the state the window holds", async () => {
-    core(() => definition());
+  it("hands back the row that opens the persona's tab", async () => {
     const pressed: Offer[] = [];
     draw({ offers: everyOffer(), onPress: (offer) => pressed.push(offer) });
 
@@ -677,15 +504,82 @@ describe("a persona row's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Show what devops is" }));
 
     expect(pressed.map((offer) => offer.id)).toEqual(["persona.show:devops"]);
-    expect(pressed[0].does).toEqual({ verb: "showPersona", persona: "devops" });
+    expect(pressed[0].does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "persona", key: "devops" },
+      title: "devops",
+    });
   });
 
   it("gives a contributed panel's row no menu, which is the contract's asymmetry", async () => {
-    core(() => definition());
     draw({ offers: everyOffer(), contributed: [contributedPanel()] });
 
     rightClick("panel-ext-acme-reviews", "Land the panel");
 
     await expect(vi.waitFor(() => screen.getByRole("menu"), { timeout: 200 })).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Persona statistics: an extension's view, asked through the executor (ADR 0041 stage 2)
+// ---------------------------------------------------------------------------------------
+
+/** The view an approved persona statistics extension offers. */
+const STATISTICS: ExtensionView = {
+  extension: "persona-statistics",
+  id: "statistics",
+  title: "Statistics",
+  about: "personas",
+};
+
+describe("persona statistics", () => {
+  it("are a button on the personas heading when an extension offers a view about personas", () => {
+    draw({ views: [STATISTICS], offers: everyOffer() });
+
+    const panel = screen.getByTestId("panel-personas");
+    expect(within(panel).getByRole("button", { name: "Statistics" })).toBeInTheDocument();
+    // The todos panel is about nothing charter publishes, so it is offered nothing.
+    expect(
+      within(screen.getByTestId("panel-todos")).queryByRole("button", { name: "Statistics" }),
+    ).toBeNull();
+  });
+
+  it("are no button at all when no extension offers them", () => {
+    // The statistics are a plugin's, and so is their absence: a personas panel with no
+    // extension installed has no button that could only ever say "not installed".
+    draw();
+
+    expect(
+      within(screen.getByTestId("panel-personas")).queryByRole("button", { name: "Statistics" }),
+    ).toBeNull();
+  });
+
+  it("run the catalogue's row that opens the whole plane's statistics in a tab of their own", async () => {
+    // **Pressing it asks nothing here.** It runs the row the palette lists; the window opens a
+    // tab, and the tab asks the extension's program (`Views.test.tsx`). Reading this panel
+    // starts no program at all.
+    const pressed: Offer[] = [];
+    draw({ views: [STATISTICS], offers: everyOffer(), onPress: (offer) => pressed.push(offer) });
+
+    await userEvent.click(
+      within(screen.getByTestId("panel-personas")).getByRole("button", { name: "Statistics" }),
+    );
+
+    expect(pressed.map((offer) => offer.id)).toEqual(["view.open:persona-statistics/statistics"]);
+    expect(pressed[0].does).toEqual({
+      verb: "openView",
+      view: { from: "persona-statistics", view: "statistics", key: "" },
+      title: "Statistics",
+    });
+  });
+
+  it("are never offered on a contributed panel, which cannot claim a subject", () => {
+    draw({ views: [STATISTICS], offers: everyOffer(), contributed: [contributedPanel()] });
+
+    expect(
+      within(screen.getByTestId("panel-ext-acme-reviews")).queryByRole("button", {
+        name: "Statistics",
+      }),
+    ).toBeNull();
   });
 });

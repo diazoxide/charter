@@ -14,7 +14,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::Size;
 use charter_core::harness::Harness;
-use charter_core::reopen::{Chat, Record, Reopened};
+use charter_core::reopen::{Chat, Record, Reopened, View};
 
 use charter_core::harness::StateHooks;
 
@@ -88,6 +88,13 @@ pub struct Chats {
     /// keep them: a workspace directory that has moved, or a harness mid-reinstall, must
     /// not silently delete the chat on the next write.
     would_not_start: Mutex<Vec<(Chat, String)>>,
+    /// The tabs the window has open that hold a view rather than a chat, as it last said.
+    ///
+    /// **The window's to say and this layer's to write down**, and nothing else: a view has no
+    /// session, so there is nothing here that could know one opened. They are held beside the
+    /// chats only because the record is one file and is written whole, in one place, under
+    /// [`Self::writing`] — a second writer of `reopen.json` would be two answers racing to disk.
+    views: Mutex<Vec<View>>,
     record_it: Recorder,
     /// Held across building a record and handing it over, so two changes at once cannot
     /// write themselves out of order and leave the older one on disk.
@@ -118,6 +125,7 @@ impl Chats {
             open: Mutex::new(HashMap::new()),
             front: Mutex::new(None),
             would_not_start: Mutex::new(Vec::new()),
+            views: Mutex::new(Vec::new()),
             record_it,
             writing: Mutex::new(()),
             putting_back: AtomicBool::new(false),
@@ -391,6 +399,21 @@ impl Chats {
         Ok(())
     }
 
+    /// What the window says its view tabs are now. Written down when it differs from what was
+    /// held, and not otherwise — for [`Self::pin`]'s reason: every write is a fingerprint the
+    /// machine store then has to vouch for.
+    pub fn hold_views(&self, views: Vec<View>) {
+        let changed = std::mem::replace(&mut *lock(&self.views), views.clone()) != views;
+        if changed {
+            self.write_it_down();
+        }
+    }
+
+    /// The view tabs the window last said it had — at a launch, the ones the record put back.
+    pub fn views(&self) -> Vec<View> {
+        lock(&self.views).clone()
+    }
+
     /// Says which chat is in front, so the record knows which one to bring back in front.
     pub fn bring_to_front(&self, session: Option<u32>) {
         let changed = std::mem::replace(&mut *lock(&self.front), session) != session;
@@ -453,6 +476,7 @@ impl Chats {
         }));
         Record {
             chats,
+            views: lock(&self.views).clone(),
             // What the next launch must not deal again — charter-app#90. It is the high
             // water mark and not the count of what is open, so the numbers of chats that
             // were closed are spent too, and no new chat lands on a pointer one of them
@@ -474,6 +498,9 @@ impl Chats {
         // (charter-app#90). The chats below raise the counter past their own numbers as they
         // go; this is the part of it no chat in the record can say.
         self.sessions.already_dealt(record.dealt);
+        // The view tabs start nothing, so they are simply held until the window asks for them
+        // (`reopened_views`) — and written back out with everything else at the next change.
+        *lock(&self.views) = record.views.clone();
         // Every chat here starts a program, synchronously, before there is a window. A
         // record with thousands in it — a runaway, or a file nobody meant — would give an
         // app that hangs on launch with no way to intervene. The cap is far above the
@@ -544,6 +571,7 @@ impl Chats {
         self.sessions.end_all();
         lock(&self.open).clear();
         lock(&self.would_not_start).clear();
+        lock(&self.views).clear();
         *lock(&self.front) = None;
     }
 }
@@ -978,6 +1006,69 @@ mod tests {
         (chats, wrote)
     }
 
+    fn a_view(key: &str) -> charter_core::reopen::View {
+        charter_core::reopen::View {
+            from: None,
+            view: "persona".into(),
+            key: key.into(),
+            title: key.into(),
+            workspace: None,
+            at: 0,
+            active: false,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn the_view_tabs_the_window_holds_are_written_into_the_record_beside_the_chats() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+        chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        chats.hold_views(vec![a_view("steward")]);
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(
+            last.chats.len(),
+            1,
+            "the chats went missing from the record"
+        );
+        assert_eq!(last.views, vec![a_view("steward")]);
+    }
+
+    #[test]
+    fn saying_the_same_view_tabs_again_writes_nothing() {
+        // The window says what its view tabs are after every change to its tabs, and most of
+        // those changes are to chats.
+        let (chats, wrote) = recorded();
+        chats.hold_views(vec![a_view("steward")]);
+        let so_far = lock(&wrote).len();
+
+        chats.hold_views(vec![a_view("steward")]);
+
+        assert_eq!(lock(&wrote).len(), so_far);
+    }
+
+    #[test]
+    fn a_record_s_view_tabs_are_held_for_the_window_and_not_written_back_while_it_is_put_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+
+        chats.put_back(
+            &Record {
+                views: vec![a_view("steward")],
+                ..Default::default()
+            },
+            dir.path(),
+            SIZE,
+        );
+
+        assert_eq!(chats.views(), vec![a_view("steward")]);
+        assert!(lock(&wrote).is_empty(), "putting a record back wrote it");
+    }
+
     #[test]
     fn opening_a_chat_writes_the_record_without_waiting_for_a_quit() {
         // An app that is killed, or crashes, runs no exit handler. Everything open would be
@@ -1055,6 +1146,7 @@ mod tests {
 
         chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: (0..5)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
                     .collect(),
@@ -1204,6 +1296,7 @@ mod tests {
 
         chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![chat(&claude, "ide.7", None), was_in_front],
                 dealt: 0,
             },
@@ -1228,6 +1321,7 @@ mod tests {
 
         let open = chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![
                     chat(&claude, "ide.7", Some(ID)),
                     chat(&claude, "ide.8", None),
@@ -1250,6 +1344,7 @@ mod tests {
 
         let open = chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
                 dealt: 0,
             },
@@ -1275,6 +1370,7 @@ mod tests {
 
         let open = chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![
                     chat(&claude, "ide.7", None),
                     Chat {
@@ -1304,6 +1400,7 @@ mod tests {
 
         let open = chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", None)],
                 dealt: 0,
             },
@@ -1324,6 +1421,7 @@ mod tests {
 
         chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![
                     chat("/definitely/not/a/program", "ide.7", Some(ID)),
                     chat(&claude, "ide.8", None),
@@ -1351,6 +1449,7 @@ mod tests {
 
         let open = chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: (0..MOST_AT_ONCE + 3)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
                     .collect(),
@@ -1373,6 +1472,7 @@ mod tests {
 
         chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
                 dealt: 0,
             },
@@ -1394,6 +1494,7 @@ mod tests {
         let (chats, wrote) = recorded();
         chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
                 dealt: 0,
             },
@@ -1415,6 +1516,7 @@ mod tests {
 
         let open = chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![
                     chat("/definitely/not/a/program", "ide.7", Some(ID)),
                     chat(&claude, "ide.8", None),
@@ -1615,6 +1717,7 @@ mod tests {
 
         let back = chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![chat(&claude, "ide.7", None), chat(&claude, "ide.8", None)],
                 dealt: 0,
             },
@@ -1633,6 +1736,7 @@ mod tests {
         let chats = Chats::new();
         chats.put_back_here(
             &Record {
+                views: Vec::new(),
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
                 dealt: 0,
             },

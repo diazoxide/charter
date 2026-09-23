@@ -854,7 +854,7 @@ pub fn body(text: &str) -> String {
 }
 
 /// `^_.*·.*_\s*$` on a stripped line: starts and ends with `_`, a `·` between.
-fn is_stamp_line(line: &str) -> bool {
+pub(crate) fn is_stamp_line(line: &str) -> bool {
     let Some(inner) = line.strip_prefix('_') else {
         return false;
     };

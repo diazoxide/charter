@@ -2,11 +2,16 @@
 //! agreed to.
 //!
 //! **This is charter ADR 0041's item 2 — "an extension registry with no executor" — and there
-//! is no executor here.** Nothing in this module spawns a process, opens a socket or evaluates
-//! anything. It answers three questions and no others: what an extension *is*, what this
-//! machine has installed, and what the operator approved each one to contribute. The
-//! subprocess runtime that 0041 recommends is a later stage and will be built *against* this
-//! list rather than inventing one under pressure.
+//! is still no executor here.** Nothing in this module spawns a process, opens a socket or
+//! evaluates anything. It answers three questions and no others: what an extension *is*, what
+//! this machine has installed, and what the operator approved each one to contribute.
+//!
+//! **The executor is [`crate::executor`], and it was built against this list rather than
+//! beside it** (ADR 0041 stage 2). It starts a program only after asking *this* module, at the
+//! moment of starting, whether the extension is approved and whether what is on disk is still
+//! what was approved — [`read_at`] re-taken over the whole tree, [`Loaded::standing`] compared.
+//! Keeping the two apart is deliberate: the module that decides what a yes covers has no way to
+//! run anything, so a defect here can never *be* an execution, only a refusal to allow one.
 //!
 //! # It is called an extension, and never a plugin
 //!
@@ -83,18 +88,17 @@
 //!
 //! # What is *in* the vocabulary today
 //!
-//! Themes, and nothing else. A theme is declarative data against a closed vocabulary charter
-//! owns (`app/src/theme/theme.ts`'s `TOKENS`), its values are hex and only hex, charter chooses
-//! the consumer, and charter parses and re-emits rather than interpolating — ADR 0041's four
-//! properties, all four of which the theme already had before this module existed. Wiring the
-//! one extension point that has **nothing to isolate** through the registry is how the registry
-//! is proved without an executor behind it.
+//! Themes, panels (`crate::panel`, charter ADR 0043), and **views**. A theme and a panel are
+//! declarative data against a closed vocabulary charter owns, charter chooses the consumer, and
+//! charter parses and re-emits rather than interpolating — ADR 0041's four properties.
 //!
-//! A manifest may also *declare* a program ([`Manifest::program`]). It is hashed into the
-//! fingerprint, it is named in the prompt, and **nothing here runs it** — `charter_runs_nothing`
-//! pins that. It is in the vocabulary now rather than later for one reason: ADR 0041's
-//! difference from ADR 0035 is that *this fingerprints code*, and a fingerprint tested only over
-//! JSON is a fingerprint nobody has seen do its job.
+//! A view ([`View`]) is the one that is not data. It is ADR 0041's second minimum capability —
+//! *"a named palette command that, when the operator invokes it, sends one request to the
+//! plugin and displays the text that comes back"* — with *the text* widened to the panel
+//! vocabulary: the operator opens it, charter starts the extension's declared program
+//! ([`Manifest::program`]) once, hands it what the view is [about](crate::panel::Subject), and
+//! draws what comes back. [`crate::executor`] is what does the starting; this module is what it
+//! asks first.
 //!
 //! # The fingerprint is over the DIRECTORY, not over the declared list (charter-app#152)
 //!
@@ -263,10 +267,12 @@ pub const FINGERPRINTED: &str = "charter has read every file in this extension's
 /// about it — otherwise the wording has the same defect #152 opened over, one carve-out later.
 pub fn state_note(state: &str) -> String {
     format!(
-        "charter does not read '{state}/'. That is this extension's state directory: the one \
-         place it may write without charter asking again. charter refuses to load the extension \
-         if that directory holds a link or a program, so what is in there is data — but charter \
-         cannot stop a program it has already read from treating its own data as code."
+        "charter does not read '{state}/'. That is this extension's state directory: what is \
+         written there does not make charter ask you again. What is written anywhere else in \
+         this extension's directory does — and what its program writes outside that directory \
+         charter does not see at all, because it runs as you do. charter refuses to load the \
+         extension if '{state}/' holds a link or a program, so what is in there is data — but \
+         charter cannot stop a program it has already read from treating its own data as code."
     )
 }
 
@@ -295,11 +301,15 @@ pub struct Manifest {
     /// it is inside the manifest's own bytes, which are hashed into the fingerprint with
     /// everything else, and there is no second file for a later read to disagree with.
     pub panels: Vec<crate::panel::Panel>,
+    /// The views it contributes: surfaces the operator opens, which charter fills by asking
+    /// [`Self::program`]. Declaring one requires declaring the program.
+    pub views: Vec<View>,
     /// A program it declares, relative to its own directory.
     ///
-    /// **Declared, hashed, named in the prompt, and never run.** There is no executor in this
-    /// stage; when there is one it will find the declaration already fingerprinted and already
-    /// consented to, rather than inventing both at the moment it first needs them.
+    /// **Declared, hashed, named in the prompt, and started only by [`crate::executor`]** —
+    /// when the operator opens one of [`Self::views`], and only while [`Loaded::standing`] says
+    /// the bytes on disk are the bytes he approved. A program declared with no view is never
+    /// started at all: nothing would ask it anything.
     pub program: Option<String>,
     /// The one directory charter does not fingerprint, and the only place this extension may
     /// write without being asked about again (charter-app#152).
@@ -315,6 +325,30 @@ pub struct Manifest {
     /// state directory and has no exclusion at all.
     pub state: Option<String>,
 }
+
+/// One view an extension contributes: a surface the operator opens, filled by its program.
+///
+/// **Its id, a title, and what it is about. Nothing that says where.** charter decides where a
+/// view about [`crate::panel::Subject::Personas`] is offered — on the personas panel's heading
+/// and in a persona's card — and the view cannot ask for a region, a size or a key. That is ADR
+/// 0043's property 3 for a panel, carried to the one thing an extension contributes that runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct View {
+    /// One segment, unique within the extension. It is what the window asks for by name.
+    pub id: String,
+    /// What the button and the surface say.
+    pub title: String,
+    /// What it is about, which is also what charter hands its program ([`crate::handed`]).
+    pub about: crate::panel::Subject,
+}
+
+/// The most views one extension may contribute. Each one is a button charter puts on one of
+/// its own surfaces, and a heading with twenty buttons on it is a heading nobody reads.
+const MOST_VIEWS: usize = 8;
+
+/// The keys a declared view may carry. Anything else refuses the extension, for the reason
+/// `panel::declared` gives.
+const VIEW_KEYS: [&str; 3] = ["id", "title", "about"];
 
 /// An extension charter has read off the disk, with the fingerprint of the bytes it read.
 ///
@@ -456,6 +490,43 @@ impl Loaded {
 /// whose manifest charter could not read contributes nothing *and says so*, rather than
 /// contributing nothing quietly and being counted as fine.
 pub fn read_at(dir: &Path) -> Result<Extension, String> {
+    let (text, manifest) = read_manifest(dir)?;
+
+    // Before the walk, because the walk does not descend into it and this is the only thing
+    // that answers for what is in there (charter-app#152).
+    let mut budget = MOST_TREE_ENTRIES;
+    if let Some(state) = &manifest.state {
+        state_holds_no_code(dir, state, &mut budget)?;
+    }
+
+    // The fingerprint is taken over the bytes just read and the bytes about to be read, the
+    // declarations handed back come out of the same read, and the theme text the window will
+    // draw with is kept from it rather than fetched again. Two reads is charter-app#123.
+    let (fingerprint, theme_text) = tree(dir, text.as_bytes(), &manifest, budget)?;
+
+    Ok(Extension {
+        path: dir.to_path_buf(),
+        manifest,
+        fingerprint,
+        theme_text,
+    })
+}
+
+/// The manifest in `dir` and nothing else: [`read_at`]'s checks on the directory and the one
+/// file, without the walk and without a fingerprint.
+///
+/// **Never evidence of approval** — there is no fingerprint to compare. It is for a caller that
+/// has to know what an extension declares *before* it pays for the walk and will take
+/// [`read_at`] afterwards anyway: the executor reads which view it was asked about here, builds
+/// the question, and only then re-takes the fingerprint, so that the fingerprint is as close to
+/// the program starting as it can be (`crate::executor`).
+pub fn manifest_at(dir: &Path) -> Result<Manifest, String> {
+    read_manifest(dir).map(|(_, manifest)| manifest)
+}
+
+/// The directory's checks and the manifest's read, shared by [`read_at`] and [`manifest_at`] so
+/// that the two cannot disagree about what a manifest is.
+fn read_manifest(dir: &Path) -> Result<(String, Manifest), String> {
     if !dir.is_absolute() {
         return Err(format!(
             "'{}' is not an absolute path, and charter records an extension by where it is",
@@ -482,29 +553,11 @@ pub fn read_at(dir: &Path) -> Result<Extension, String> {
         Ok(_) => {}
     }
 
-    let manifest_at = dir.join(MANIFEST);
-    let text = slurp(dir, &manifest_at, MOST_MANIFEST_BYTES)
-        .map_err(|why| format!("'{}' {why}", manifest_at.display()))?;
-    let manifest = parse(&text).map_err(|why| format!("'{}' {why}", manifest_at.display()))?;
-
-    // Before the walk, because the walk does not descend into it and this is the only thing
-    // that answers for what is in there (charter-app#152).
-    let mut budget = MOST_TREE_ENTRIES;
-    if let Some(state) = &manifest.state {
-        state_holds_no_code(dir, state, &mut budget)?;
-    }
-
-    // The fingerprint is taken over the bytes just read and the bytes about to be read, the
-    // declarations handed back come out of the same read, and the theme text the window will
-    // draw with is kept from it rather than fetched again. Two reads is charter-app#123.
-    let (fingerprint, theme_text) = tree(dir, text.as_bytes(), &manifest, budget)?;
-
-    Ok(Extension {
-        path: dir.to_path_buf(),
-        manifest,
-        fingerprint,
-        theme_text,
-    })
+    let at = dir.join(MANIFEST);
+    let text =
+        slurp(dir, &at, MOST_MANIFEST_BYTES).map_err(|why| format!("'{}' {why}", at.display()))?;
+    let manifest = parse(&text).map_err(|why| format!("'{}' {why}", at.display()))?;
+    Ok((text, manifest))
 }
 
 /// Read one file under `root`, refusing everything that is not a plain, bounded file reached
@@ -593,6 +646,15 @@ fn parse(text: &str) -> Result<Manifest, String> {
         .filter(|name| !name.is_empty())
         .unwrap_or(id)
         .to_owned();
+    // The name is what the consent dialog asks about, so it is held to what a view's title is
+    // held to: nothing in it may draw as nothing, or turn the words beside it around.
+    if name.contains(crate::panel::undrawable) {
+        return Err(format!(
+            "has a name holding a control or invisible formatting character ({:?}), which \
+             charter will not draw where it asks you about the extension",
+            name
+        ));
+    }
 
     let contributes = match doc.get("contributes") {
         None => return Err("declares no contributions, so there is nothing to consent to".into()),
@@ -645,7 +707,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
     // **The second word in the vocabulary, and the one this charter grew for**
     // (`crate::panel`). A panel is declarative data against a closed vocabulary charter owns,
     // exactly as a theme is — no file is named, nothing is evaluated, and a row that tried to
-    // carry a charter verb is refused by name, because there is still no executor.
+    // carry a charter verb is refused by name (`panel::NO_VERB`).
     //
     // It is parsed here, from these bytes, so that what the fingerprint was taken over and what
     // the operator is shown are one read (charter-app#123's shape). Note that a panel declares
@@ -656,7 +718,14 @@ fn parse(text: &str) -> Result<Manifest, String> {
         Some(value) => crate::panel::declared(value, id)?,
     };
 
-    if themes.is_empty() && panels.is_empty() && program.is_none() {
+    // **The one word that runs something.** Parsed here, from these bytes, for the reason
+    // panels are: the fingerprint and the declarations have to be one read.
+    let views = match contributes.get("views") {
+        None => Vec::new(),
+        Some(value) => views_of(value, program.as_deref())?,
+    };
+
+    if themes.is_empty() && panels.is_empty() && views.is_empty() && program.is_none() {
         return Err("declares no contributions, so there is nothing to consent to".into());
     }
     if themes.len() + usize::from(program.is_some()) > MOST_DECLARED_FILES {
@@ -717,9 +786,107 @@ fn parse(text: &str) -> Result<Manifest, String> {
         name,
         themes,
         panels,
+        views,
         program,
         state,
     })
+}
+
+/// The views a manifest's `contributes.views` declares, or why charter will not read them.
+///
+/// **A view with no program is refused rather than drawn as a button that does nothing**, and
+/// a view about a subject charter does not publish is refused rather than drawn as one that is
+/// handed nothing: each would be a contribution the operator consented to and then did not get.
+fn views_of(value: &serde_json::Value, program: Option<&str>) -> Result<Vec<View>, String> {
+    let list = value
+        .as_array()
+        .ok_or("has a 'contributes.views' that is not an array")?;
+    if list.is_empty() {
+        return Ok(Vec::new());
+    }
+    if program.is_none() {
+        return Err(
+            "declares a view and no program ('runs') to answer it, so charter would \
+             draw a button that can never do anything"
+                .into(),
+        );
+    }
+    if list.len() > MOST_VIEWS {
+        return Err(format!(
+            "declares {} views, and charter offers at most {MOST_VIEWS} from one extension",
+            list.len()
+        ));
+    }
+    let mut views: Vec<View> = Vec::with_capacity(list.len());
+    for (at, raw) in list.iter().enumerate() {
+        let object = raw
+            .as_object()
+            .ok_or_else(|| format!("declares a view at {at} that is not an object"))?;
+        for key in object.keys() {
+            if !VIEW_KEYS.contains(&key.as_str()) {
+                return Err(format!(
+                    "declares a view at {at} carrying {key:?}, which is not part of what a view \
+                     may say — a view is {}",
+                    VIEW_KEYS.join(", ")
+                ));
+            }
+        }
+        let id = object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("declares a view at {at} with no id"))?;
+        if !crate::contain::segment_ok(id)
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            || !id.starts_with(|c: char| c.is_ascii_alphanumeric())
+        {
+            return Err(format!(
+                "declares the view id {id:?}, and a view's id is letters, digits, '-' and '_', \
+                 starting with a letter or a digit"
+            ));
+        }
+        if views.iter().any(|seen| seen.id == id) {
+            return Err(format!(
+                "declares two views called {id:?}, and a view's id is how charter asks for it"
+            ));
+        }
+        let title = object
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .ok_or_else(|| format!("declares the view {id:?} with no title"))?;
+        // `panel::undrawable`, not `is_control`: a title is drawn with ` · <extension id>`
+        // after it, and a bidirectional override in the title would draw that name backwards.
+        if title.len() > 200 || title.contains(crate::panel::undrawable) {
+            return Err(format!(
+                "declares the view {id:?} with a title charter will not draw on a button: it is \
+                 longer than 200 bytes or holds a control or invisible formatting character"
+            ));
+        }
+        let about = object
+            .get("about")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("declares the view {id:?} without saying what it is about"))?;
+        let about = crate::panel::Subject::parse(about).ok_or_else(|| {
+            let every: Vec<&str> = crate::panel::Subject::every()
+                .iter()
+                .map(|it| it.as_str())
+                .collect();
+            format!(
+                "declares the view {id:?} about {about:?}, and charter has something to hand a \
+                 view about {} and nothing else",
+                every.join(", ")
+            )
+        })?;
+        views.push(View {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            about,
+        });
+    }
+    Ok(views)
 }
 
 fn ok_in_an_id(c: char) -> bool {
@@ -881,6 +1048,21 @@ fn tree(
     // A domain tag first, so this digest can never equal one taken over the same bytes for
     // another purpose, and the scheme with it.
     framed.part("charter-extension", &FINGERPRINT_SCHEME.to_be_bytes());
+    // **What a yes to a program covers, inside the hash** (ADR 0041 stage 2). Until the
+    // executor existed the prompt said of a declared program *"this charter has no extension
+    // runtime and does not start it"*, and an operator who approved one approved THAT sentence.
+    // Starting the program on that yes would be running something he said yes to under words
+    // that are no longer true, so an extension that declares a program carries the executor's
+    // protocol in its fingerprint: every one approved before this existed reads as changed and
+    // is asked about again, with the prompt that says it will run. A theme-only extension is
+    // not touched — nothing about what its yes covered has moved. And the day the protocol
+    // changes what charter hands a program, the number moves and every such yes is re-asked.
+    if manifest.program.is_some() {
+        framed.part(
+            "charter-starts-it",
+            &crate::executor::PROTOCOL.to_be_bytes(),
+        );
+    }
 
     let wanted: BTreeMap<&str, ()> = manifest
         .themes
@@ -1641,6 +1823,20 @@ impl Surveyed {
             _ => &[],
         }
     }
+
+    /// The views it is offering right now, on the same terms.
+    ///
+    /// **This decides what buttons the window draws, and it does not decide what runs.** A
+    /// survey is taken once per window; the extension can change after it. So the button this
+    /// puts on screen is a question the operator can ask, and [`crate::executor`] re-reads the
+    /// record and re-takes the fingerprint when he asks it — a view that was in force at the
+    /// survey and changed since is refused at the press, not run on the survey's word.
+    pub fn views_in_force(&self) -> &[View] {
+        match (&self.found, self.standing.may_contribute()) {
+            (Some(found), true) => &found.manifest.views,
+            _ => &[],
+        }
+    }
 }
 
 /// What has contributed what to this window.
@@ -1758,14 +1954,26 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         .map(|theme| format!("a theme, “{}”", theme.name))
         .collect();
     declares.extend(found.manifest.panels.iter().map(crate::panel::declares));
+    declares.extend(found.manifest.views.iter().map(|view| {
+        format!(
+            "a view, “{}” — when you open it, charter starts this extension's program and hands \
+             it {}",
+            view.title,
+            crate::handed::what(view.about)
+        )
+    }));
     if let Some(program) = &found.manifest.program {
-        // Named, and named as not running. An extension that declares a program and is
-        // approved by a charter with no executor must not leave the operator believing they
-        // approved it running — nor believing they refused it, when the next charter will run
-        // it on the same approval.
-        declares.push(format!(
-            "a program, {program} — this charter has no extension runtime and does not start it"
-        ));
+        // **Named as a program charter starts, with what bounds charter puts on it and what it
+        // does not.** ADR 0041's amendment: the prompt says what charter will do, and says that
+        // it is conduct and not a cage — [`RUNS_AS_YOU`] carries the second half, below.
+        declares.push(if found.manifest.views.is_empty() {
+            format!(
+                "a program, {program} — it declares no view, so nothing ever asks charter to \
+                 start it"
+            )
+        } else {
+            format!("a program, {program} — {}", crate::executor::HOW_IT_RUNS)
+        });
     }
     Prompt {
         id: found.id().to_owned(),

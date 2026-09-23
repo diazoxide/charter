@@ -70,6 +70,7 @@ fn a_racer_planting(
 
 fn one_chat() -> Record {
     Record {
+        views: Vec::new(),
         dealt: 0,
         chats: vec![Chat {
             program: "claude".to_owned(),

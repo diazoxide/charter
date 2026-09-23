@@ -36,8 +36,8 @@ import { EmptyState } from "./EmptyState";
  *
  * - **charter's todos panel** and **charter's personas panel**, which are contributions now
  *   (`Panels.tsx`);
- * - **a persona's memories**, which is a row's detail surface rather than a panel — a list
- *   inside a list, searched and paged by this same code, fed by `persona_memories`;
+ * - **a persona's memories**, in the persona's own tab — a list in a view rather than in a
+ *   panel, searched and paged by this same code, answered by `open_view` like any view;
  * - **a contributed panel**, whose rows an extension declared in its manifest and which gets
  *   every one of the four properties for free.
  *
@@ -214,11 +214,7 @@ export function PanelList({
 /** The card a row opens when the panel does not supply a richer one: the row's own words. */
 function defaultDetail(row: PanelRow): ReactNode {
   if (row.detail === null) return null;
-  if (row.detail.kind === "text") return <p className="row-detail">{row.detail.text}</p>;
-  // A `persona` detail is charter's own and is drawn by whoever knows how to ask for one.
-  // Reaching here means a panel declared it without supplying the card, which is a defect in
-  // that panel rather than something to invent a second renderer for.
-  return null;
+  return <p className="row-detail">{row.detail.text}</p>;
 }
 
 /**
@@ -256,21 +252,34 @@ function Row({
     </>
   );
 
+  // **The catalogue row runs on the way open and never on the way shut.** A persona row's
+  // `persona.show:<name>` is the same verb the palette and a context menu run (charter-app#174),
+  // so the three are one state rather than three that look alike — and running it again on
+  // dismissal would re-open what was just closed.
+  const opened = (opening: boolean) => {
+    onOpen(opening);
+    if (opening && row.runs !== null) onRun?.(row.runs);
+  };
+
   const inner =
     detail === null && row.runs === null ? (
       <span className="row">{body}</span>
-    ) : (
-      <Popover.Root
-        open={open}
-        onOpenChange={(opening) => {
-          onOpen(opening);
-          // **The catalogue row runs on the way open and never on the way shut.** A persona
-          // row's `persona.show:<name>` is the same verb the palette and a context menu run
-          // (charter-app#174), so the three are one state rather than three that look alike —
-          // and running it again on dismissal would re-open what was just closed.
-          if (opening && row.runs !== null) onRun?.(row.runs);
+    ) : detail === null && row.runs !== null ? (
+      /* **A row that does something and opens nothing is a plain button that does it.** A
+         persona's row opens that persona's tab (`persona.show:<name>`, the operator's ruling of
+         2026-09-23): a card beside the row as well would be two surfaces for one persona. */
+      <button
+        type="button"
+        className="row"
+        tabIndex={0}
+        onClick={() => {
+          if (row.runs !== null) onRun?.(row.runs);
         }}
       >
+        {body}
+      </button>
+    ) : (
+      <Popover.Root open={open} onOpenChange={opened}>
         <Popover.Trigger asChild>
           <button type="button" className="row" tabIndex={0}>
             {body}

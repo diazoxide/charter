@@ -26,8 +26,17 @@
  * gave travels to the operator as the core's own sentence rather than as whatever a `catch`
  * decided to say about it.
  */
-import type { ChatWorktree } from "./bindings";
-import { panesOf, type Direction, type Tabs } from "./tabs";
+import type { ChatWorktree, ExtensionView } from "./bindings";
+import {
+  chatOf,
+  contentsOf,
+  focusedContent,
+  panesOf,
+  viewKey,
+  type Direction,
+  type Tabs,
+  type ViewRef,
+} from "./tabs";
 
 /** What running an action answered: one line to say, or a refusal in the words it came in. */
 export type Ran = { ok: true; said?: string } | { ok: false; refused: string };
@@ -97,8 +106,10 @@ export type Does =
   | { verb: "split"; direction: Direction }
   /** Hands a key the palette claimed to the chat in front, rather than swallowing it. */
   | { verb: "sendKey"; key: string }
-  | { verb: "closePane" }
-  | { verb: "closeTab"; tab: number }
+  /** `ends` is whether carrying it out ends a chat — a pane showing a view closes and kills
+   *  nothing, and only a row that ends a chat is asked about first (`PlaneView.ENDS_A_CHAT`). */
+  | { verb: "closePane"; ends: boolean }
+  | { verb: "closeTab"; tab: number; ends: boolean }
   | { verb: "selectTab"; tab: number }
   /** Pins or unpins a chat, a workspace or a project (charter ADR 0039).
    *
@@ -121,12 +132,15 @@ export type Does =
    *  discards work with nobody warned — the same objection `worktree.discard` records. */
   | { verb: "removeWorkspace"; workspace: string }
   | { verb: "showChat"; session: number }
-  /** Opens the card the right-hand panel draws for one persona — what #173 put there.
+  /** Opens a view in a tab of its own, or brings forward the tab already showing it.
    *
-   *  It reads a definition and changes nothing. It is a row here rather than only a click on
-   *  the panel because a menu is a third reader of this list (`Menus.tsx`) and the persona
-   *  rows had nothing in it to read (charter-app#174). */
-  | { verb: "showPersona"; persona: string }
+   *  **One verb for charter's views and an extension's** — the persona view is
+   *  `{ from: null, view: "persona", key }` and persona statistics is the extension's id and
+   *  its view's. It reads and changes nothing by itself: what an extension's view shows is
+   *  asked of its program when the tab draws it, through the core's gate. A persona's row is
+   *  here rather than only a click on the panel because a menu is a third reader of this list
+   *  (`Menus.tsx`) and the persona rows had nothing in it to read (charter-app#174). */
+  | { verb: "openView"; view: ViewRef; title: string }
   /** **Names the worktree it acts on**, and never "whichever one is in front".
    *
    *  It used to carry only `force`, which made `worktree.remove` a row about the chat in
@@ -230,6 +244,11 @@ export type Now = {
    * One row each, and they are cheap: a plane has a handful, not a workspace's worth.
    */
   personas?: readonly string[];
+  /**
+   * The views approved extensions offer this window (`extension_views`), one row each. The
+   * palette is how a keyboard reaches them; the personas panel's heading is how a pointer does.
+   */
+  views?: readonly ExtensionView[];
   /** The plane's root. Every worktree command needs it, and there may not be one. */
   plane?: string;
   /**
@@ -261,6 +280,8 @@ export type Now = {
    */
   pinned?: {
     readonly chats: readonly number[];
+    /** View tabs, by `tabs.viewKey`. A tab with no chat is pinned as the view it shows. */
+    readonly views?: readonly string[];
     readonly workspaces: readonly string[];
     readonly projects: readonly string[];
   };
@@ -293,9 +314,9 @@ export type Doing = {
    *  core's guard. */
   removeWorkspace: (workspace: string) => void;
   showChat: (session: number) => void;
-  /** Opens the card the right-hand panel draws for one persona. It reads a definition and
-   *  changes nothing, so it answers no `Ran`. */
-  showPersona: (persona: string) => void;
+  /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
+   *  by itself, so it answers no `Ran`. */
+  openView: (view: ViewRef, title: string) => void;
   /** Each takes the piece it acts on. The window no longer decides which worktree a removal
    *  meant by looking at what happens to be in front (charter-app#174). */
   removeWorktree: (cut: Cut, force: boolean) => Promise<Ran>;
@@ -486,6 +507,10 @@ function cannot(id: string, title: string, reason: string, name?: string): Offer
  */
 export function catalogue(now: Now): Offer[] {
   const front = now.tabs.inFront === undefined ? undefined : now.tabs.byId[now.tabs.inFront];
+  // What the pane with the keyboard shows. A row about "the chat in front" is about THIS, and a
+  // pane showing a view has no chat for it to be about.
+  const focusedOn = focusedContent(now.tabs);
+  const chatInFocus = focusedOn?.kind === "session";
   const offers: Offer[] = [];
 
   // A chat starts through the picker, which is the only path ADR 0022 admits. The palette
@@ -513,9 +538,15 @@ export function catalogue(now: Now): Offer[] {
   // how an operator whose harness binds `F2` types `F2` at all (charter-app#47).
   const sendKey = `Send ${PASS_THROUGH_KEY} to the chat in front`;
   offers.push(
-    front
+    chatInFocus
       ? can(PASS_THROUGH_ID, sendKey, { verb: "sendKey", key: PASS_THROUGH_KEY })
-      : cannot(PASS_THROUGH_ID, sendKey, "No chat is in front, so there is nowhere to send it."),
+      : cannot(
+          PASS_THROUGH_ID,
+          sendKey,
+          front
+            ? "The pane in focus shows a view, not a chat, so there is nowhere to send it."
+            : "No chat is in front, so there is nowhere to send it.",
+        ),
   );
 
   // The needs-you queue, as rows. The first row is always here so it can be browsed to on a
@@ -558,11 +589,19 @@ export function catalogue(now: Now): Offer[] {
   // thing gets on its strip is a mark, and pressing the mark runs this same row.
   for (const tab of now.tabs.order) {
     const name = now.tabs.byId[tab].name;
-    const held = isPinned(pinned.chats, tab);
+    // A tab is pinned as its own chat, or — a tab with none — as the view it opened on. The
+    // pin is stored with whichever it is (the chat's record, or the view tab's), so it goes
+    // away with the thing it pins.
+    const chat = chatOf(now.tabs, tab);
+    const first = contentsOf(now.tabs, tab)[0]?.content;
+    const held =
+      chat !== undefined
+        ? isPinned(pinned.chats, chat)
+        : first?.kind === "view" && isPinned(pinned.views ?? [], viewKey(first.view));
     offers.push({
       ...can(
         `tab.pin:${tab}`,
-        `${held ? "Unpin" : "Pin"} chat ${name}`,
+        `${held ? "Unpin" : "Pin"} ${chat === undefined ? "tab" : "chat"} ${name}`,
         { verb: "pinTab", tab, pinned: !held },
         name,
       ),
@@ -621,25 +660,48 @@ export function catalogue(now: Now): Offer[] {
   const projects = projectRows(now.projects ?? [], now.plane, pinned.projects);
   offers.push(projects.open, projects.create, ...projects.switchTo, ...projects.pin);
 
-  // **The plane's personas, one row each** (charter-app#174). What the row opens is the card
-  // #173 put on the panel, and this is the whole of what charter can do to a persona today:
+  // **The plane's personas, one row each** (charter-app#174). What the row opens is the
+  // persona's view — its own tab — and this is the whole of what charter can do to a persona today:
   // a definition is a file an operator edits, and nothing in this window writes one. A row
   // that only READS is still a row — it is how the persona rows get a menu without a second
   // list being invented for them, and it is how a persona is reachable from the palette.
+  //
+  // **It opens the persona's own tab** — the operator's ruling of 2026-09-23, *"Its own tab"* —
+  // which is charter's first built-in view, and the same verb an extension's view is opened by.
   for (const persona of now.personas ?? []) {
     offers.push(
       can(
         `persona.show:${persona}`,
         `Show what ${persona} is`,
-        { verb: "showPersona", persona },
+        { verb: "openView", view: { from: null, view: "persona", key: persona }, title: persona },
         persona,
+      ),
+    );
+  }
+
+  // **And every view an approved extension offers, one row each.** The personas panel's heading
+  // draws the same views as buttons for a pointer; this is how a keyboard reaches them, and it
+  // is the same verb. The extension's id is in the words, because what is in force is shown
+  // after approval and not only at it (charter ADR 0041 item 5). The whole plane's view, never
+  // one persona's — a persona's is opened from that persona's own tab.
+  for (const view of now.views ?? []) {
+    offers.push(
+      can(
+        `view.open:${view.extension}/${view.id}`,
+        `Open ${view.title} from ${view.extension}`,
+        {
+          verb: "openView",
+          view: { from: view.extension, view: view.id, key: "" },
+          title: view.title,
+        },
+        view.title,
       ),
     );
   }
 
   // The worktree of the chat in front. Merging is not destructive — it is fast-forward only
   // and never pushes — so it sits above the line; removing is below it.
-  const inFront = frontWorktree(now, front !== undefined);
+  const inFront = frontWorktree(now, chatInFocus);
   const merge = "Merge this chat's worktree into its clone";
   offers.push(
     "cut" in inFront
@@ -668,14 +730,20 @@ export function catalogue(now: Now): Offer[] {
   // ----- destructive, and therefore last -----
 
   // A pane's close ends its chat exactly as a tab's does, so it says the same thing.
+  // A pane showing a view closes and ends nothing, so it says so and is not asked about.
   offers.push(
-    front
-      ? { ...can("pane.close", "End this pane's chat", { verb: "closePane" }), note: ENDS_IT }
-      : cannot(
-          "pane.close",
-          "End this pane's chat",
-          "No chat is in front, so there is no pane to close.",
-        ),
+    focusedOn?.kind === "view"
+      ? can("pane.close", "Close this view", { verb: "closePane", ends: false })
+      : front
+        ? {
+            ...can("pane.close", "End this pane's chat", { verb: "closePane", ends: true }),
+            note: ENDS_IT,
+          }
+        : cannot(
+            "pane.close",
+            "End this pane's chat",
+            "No chat is in front, so there is no pane to close.",
+          ),
   );
 
   // **`End`, not `Close`** (charter-app#130). Closing a tab calls `close_session`, which ends
@@ -684,10 +752,25 @@ export function catalogue(now: Now): Offer[] {
   // was ending fifty live harnesses on that reading. The words are the fix: the row says what
   // it does, and every surface draws these words — the palette row, the `×`'s accessible name
   // and its tooltip are all this one string.
+  //
+  // **A tab showing only a view is closed, not ended** — nothing runs in it, so nothing is
+  // killed and nothing is asked. A view's tab with a chat split beside it ends that chat, and
+  // says so.
   for (const tab of now.tabs.order) {
     const name = now.tabs.byId[tab].name;
+    const chats = panesOf(now.tabs, tab).length;
+    if (chats === 0) {
+      offers.push(
+        can(`tab.close:${tab}`, `Close ${name}`, { verb: "closeTab", tab, ends: false }, name),
+      );
+      continue;
+    }
+    const title =
+      chatOf(now.tabs, tab) === undefined
+        ? `Close ${name} and end the chat beside it`
+        : `End chat ${name}`;
     offers.push({
-      ...can(`tab.close:${tab}`, `End chat ${name}`, { verb: "closeTab", tab }, name),
+      ...can(`tab.close:${tab}`, title, { verb: "closeTab", tab, ends: true }, name),
       note: ENDS_IT,
     });
   }
@@ -843,8 +926,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "showChat":
       doing.showChat(does.session);
       return DID;
-    case "showPersona":
-      doing.showPersona(does.persona);
+    case "openView":
+      doing.openView(does.view, does.title);
       return DID;
     case "removeWorktree":
       return doing.removeWorktree(does.cut, does.force);

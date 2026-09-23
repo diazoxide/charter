@@ -55,8 +55,26 @@ static FORKING: RwLock<()> = RwLock::new(());
 /// charter spends waiting — and a [`spawn`] inside it would ask this same lock for a read
 /// while this thread holds it for write, which [`RwLock`] answers by never returning.
 pub fn while_a_terminal_is_opened<T>(open: impl FnOnce() -> T) -> T {
+    while_descriptors_are_made(open)
+}
+
+/// Makes descriptors with every fork in this process held off until they are close-on-exec —
+/// [`while_a_terminal_is_opened`]'s lock, for anything else that is made in two steps.
+///
+/// **A socket on macOS is.** The standard library's `UnixStream::pair` there is `socketpair(2)`
+/// and then an `ioctl(FIOCLEX)` on each end, because Darwin has no `SOCK_CLOEXEC`; a spawn on
+/// another thread between the two hands its child both ends. For the executor's pair that child
+/// could be a *different* extension's program, holding a channel charter promised was one
+/// extension's alone (`crate::executor`). The window is not theoretical: programs started
+/// beside a thread making pairs outside this lock inherited one in 112 of 300 runs, and 141 of
+/// 300 on another (charter-app#212's review). Linux makes the pair close-on-exec in the one
+/// call, and the lock costs it a microsecond.
+///
+/// The same rule as the terminal's: `make` makes descriptors and nothing else, and never starts
+/// a program.
+pub fn while_descriptors_are_made<T>(make: impl FnOnce() -> T) -> T {
     let _held = FORKING.write().unwrap_or_else(PoisonError::into_inner);
-    open()
+    make()
 }
 
 /// Starts `command`, as [`Command::spawn`] does, without a terminal half-open anywhere.
@@ -89,7 +107,7 @@ pub fn status(command: &mut Command) -> io::Result<ExitStatus> {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{Mutex, MutexGuard, mpsc};
     use std::time::{Duration, Instant};
 
@@ -117,12 +135,18 @@ mod tests {
     /// a `spawn` takes, which is not something any bar below can notice.
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
+    /// Hold [`FORKING`] as a fork does, for a test elsewhere that asks what waits for one.
+    /// Taken under [`alone`], for the reason [`ONE_AT_A_TIME`] gives.
+    pub(crate) fn as_a_fork_does() -> std::sync::RwLockReadGuard<'static, ()> {
+        FORKING.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Held for as long as one of the three tests is using [`FORKING`].
     ///
     /// The poison is taken rather than unwrapped, for [`FORKING`]'s own reason: it guards no
     /// data, so a test that panicked left nothing half-written — and a poisoned unwrap here
     /// would report the first failure again in the next two tests instead of their own.
-    fn alone() -> MutexGuard<'static, ()> {
+    pub(crate) fn alone() -> MutexGuard<'static, ()> {
         ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner)
     }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  chatNameOf,
   byLastActivity,
   closeFocusedPane,
   closeTab,
@@ -17,6 +18,14 @@ import {
   workspaceOf,
   type FiledIn,
   type Tabs,
+  chatOf,
+  focusedContent,
+  openView,
+  putViewBack,
+  refileViews,
+  stopWaiting,
+  viewKey,
+  type ViewRef,
 } from "./tabs";
 
 /** A plane charter has not read yet files every chat the same way, which is the shape every
@@ -32,6 +41,11 @@ function front(tabs: Tabs): number {
 /** Two tabs, each showing one session: the second is the one in front. */
 function twoTabs(): Tabs {
   return openTab(openTab(noTabs(), 11), 22);
+}
+
+/** A pane showing a chat, as a layout holds one. Every chat here is the first tab's, `1`. */
+function chatPane(pane: number, session: number) {
+  return { kind: "pane", pane, content: { kind: "session", session, chat: "1" } };
 }
 
 describe("a tab's name", () => {
@@ -61,7 +75,7 @@ describe("a tab's name", () => {
     // chat is called. The persona is the operator's choice, not part of the chat's name.
     const tabs = openTab(noTabs(), 7, "3", "steward");
 
-    expect(tabs.byId[tabs.order[0]].chat).toBe("3");
+    expect(chatNameOf(tabs, tabs.order[0])).toBe("3");
   });
 
   it("says only the chat's name when charter knows no persona for it", () => {
@@ -174,10 +188,7 @@ describe("tabs and their panes", () => {
     expect(tab.layout).toEqual({
       kind: "split",
       direction: "row",
-      children: [
-        { kind: "pane", pane: 1, session: 11 },
-        { kind: "pane", pane: 2, session: 12 },
-      ],
+      children: [chatPane(1, 11), chatPane(2, 12)],
     });
     expect(tab.focused).toBe(2);
   });
@@ -193,10 +204,7 @@ describe("tabs and their panes", () => {
     expect(layout.kind === "split" && layout.children[0]).toEqual({
       kind: "split",
       direction: "column",
-      children: [
-        { kind: "pane", pane: 1, session: 11 },
-        { kind: "pane", pane: 3, session: 13 },
-      ],
+      children: [chatPane(1, 11), chatPane(3, 13)],
     });
   });
 
@@ -204,7 +212,7 @@ describe("tabs and their panes", () => {
     const tabs = closeFocusedPane(splitFocusedPane(openTab(noTabs(), 11), "row", 12), oneWorkspace);
     const tab = tabs.byId[front(tabs)];
 
-    expect(tab.layout).toEqual({ kind: "pane", pane: 1, session: 11 });
+    expect(tab.layout).toEqual(chatPane(1, 11));
     expect(tab.focused).toBe(1);
     expect(visibleSessions(tabs)).toEqual([11]);
   });
@@ -514,12 +522,146 @@ describe("a tab a handoff opened (charter-app#204)", () => {
 
     expect(after.inFront).toBe(reading.inFront);
     expect(panesOf(after, after.order[1])).toEqual([{ pane: 2, session: 7 }]);
-    expect(after.byId[after.order[1]].chat).toBe("handoff from 1");
+    expect(chatNameOf(after, after.order[1])).toBe("handoff from 1");
   });
 
   it("takes the front of a window with nothing in front, where there is nothing to interrupt", () => {
     const after = openTabBehind(noTabs(), 7, "handoff from 1");
 
     expect(after.inFront).toBe(after.order[0]);
+  });
+});
+
+describe("a tab that shows a view (charter ADR 0043, as amended 2026-09-23)", () => {
+  const STEWARD: ViewRef = { from: null, view: "persona", key: "steward" };
+  const STATISTICS: ViewRef = { from: "persona-statistics", view: "statistics", key: "" };
+  const filed = () => "alpha";
+
+  it("opens in front, on the strip it was opened from, named by the view", () => {
+    const tabs = openView(openTab(noTabs(), 11), STEWARD, "steward", "beta");
+    const id = front(tabs);
+
+    expect(tabs.byId[id].name).toBe("steward");
+    expect(workspaceOf(tabs, id, filed)).toBe("beta");
+    expect(tabsIn(tabs, "beta", filed)).toEqual([id]);
+  });
+
+  it("has no chat of its own, so nothing pretends it does", () => {
+    const tabs = openView(noTabs(), STEWARD, "steward", "alpha");
+    const id = front(tabs);
+
+    expect(chatOf(tabs, id)).toBeUndefined();
+    expect(panesOf(tabs, id)).toEqual([]);
+    expect(visibleSessions(tabs)).toEqual([]);
+    expect(focusedContent(tabs)).toEqual({ kind: "view", view: STEWARD, workspace: "alpha" });
+  });
+
+  it("is brought forward, not opened twice, when the same view is opened again", () => {
+    const once = openView(openTab(noTabs(), 11), STEWARD, "steward", "alpha");
+    const back = selectTab(once, once.order[0]);
+
+    const again = openView(back, STEWARD, "steward", "beta");
+
+    expect(again.order).toEqual(once.order);
+    expect(again.inFront).toBe(once.inFront);
+    // Where it already was, and not moved to the strip it was asked for from a second time.
+    expect(workspaceOf(again, front(again), filed)).toBe("alpha");
+  });
+
+  it("tells two views apart by who draws them and what they are about", () => {
+    const tabs = [STEWARD, { ...STEWARD, key: "release" }, STATISTICS].reduce(
+      (open, view) => openView(open, view, viewKey(view), "alpha"),
+      noTabs(),
+    );
+
+    expect(tabs.order).toHaveLength(3);
+    expect(viewKey(STATISTICS)).toBe("ext/persona-statistics/statistics/");
+    expect(viewKey(STEWARD)).toBe("charter/persona/steward");
+  });
+
+  it("finds a view on the far side of a split, and focuses that pane", () => {
+    const beside = splitFocusedPane(openView(noTabs(), STEWARD, "steward", "alpha"), "row", 11);
+    const away = openTab(beside, 22);
+
+    const back = openView(away, STEWARD, "steward", "alpha");
+
+    expect(back.inFront).toBe(beside.inFront);
+    expect(back.byId[front(back)].focused).toBe(1);
+  });
+
+  it("gives a chat split beside it a name of its own, not the view's", () => {
+    const tabs = splitFocusedPane(openView(noTabs(), STEWARD, "steward", "alpha"), "row", 11, "2");
+
+    expect(chatNameOf(tabs, front(tabs))).toBe("2");
+    expect(panesOf(tabs, front(tabs))).toEqual([{ pane: 2, session: 11 }]);
+    // The tab is still the view's: its first pane says what it is.
+    expect(chatOf(tabs, front(tabs))).toBeUndefined();
+  });
+
+  it("closes with its last pane and leaves no chat behind to end", () => {
+    const tabs = openView(openTab(noTabs(), 11), STEWARD, "steward", "alpha");
+
+    const closed = closeFocusedPane(tabs, filed);
+
+    expect(closed.order).toEqual([tabs.order[0]]);
+    expect(closed.inFront).toBe(tabs.order[0]);
+  });
+
+  it("keeps the fixed order: appended when opened, and never moved (ADR 0039)", () => {
+    const tabs = openTab(openView(openTab(noTabs(), 11), STEWARD, "steward", "alpha"), 22);
+
+    expect(tabs.order).toEqual([1, 2, 3]);
+    expect(selectTab(tabs, 2).order).toEqual([1, 2, 3]);
+  });
+
+  describe("put back by a launch", () => {
+    it("goes back at the place it had, behind whatever is in front", () => {
+      const chats = openTab(openTab(noTabs(), 11), 22);
+
+      const tabs = putViewBack(chats, STEWARD, "steward", "alpha", 1);
+
+      expect(tabs.order).toEqual([1, 3, 2]);
+      expect(tabs.inFront).toBe(chats.inFront);
+    });
+
+    it("goes at the end when the place it had is past the end", () => {
+      const tabs = putViewBack(openTab(noTabs(), 11), STEWARD, "steward", "alpha", 9);
+
+      expect(tabs.order).toEqual([1, 2]);
+    });
+
+    it("waits for a press before it is asked anything, and stops waiting on one", () => {
+      const tabs = selectTab(putViewBack(noTabs(), STATISTICS, "Statistics", "alpha", 0), 1);
+
+      expect(focusedContent(tabs)).toMatchObject({ kind: "view", waits: true });
+      expect(focusedContent(stopWaiting(tabs, 1))).toMatchObject({ waits: false });
+    });
+
+    it("stops waiting when the operator opens the same view, which is the press", () => {
+      const tabs = openView(
+        putViewBack(openTab(noTabs(), 11), STATISTICS, "Statistics", "alpha", 1),
+        STATISTICS,
+        "Statistics",
+        "alpha",
+      );
+
+      expect(focusedContent(tabs)).toMatchObject({ kind: "view", waits: false });
+    });
+
+    it("is not drawn twice when the view is already open", () => {
+      const open = openView(noTabs(), STEWARD, "steward", "alpha");
+
+      expect(putViewBack(open, STEWARD, "steward", "alpha", 0)).toBe(open);
+    });
+  });
+
+  it("moves to the strip outside every workspace when its own workspace goes", () => {
+    const tabs = openView(noTabs(), STEWARD, "steward", "gone");
+
+    const refiled = refileViews(tabs, (name) => name === "alpha", "outside");
+
+    expect(workspaceOf(refiled, front(refiled), filed)).toBe("outside");
+    // And nothing at all when every view's workspace is still there, so a caller can tell.
+    expect(refileViews(refiled, () => true, "outside")).toBe(refiled);
   });
 });

@@ -18,6 +18,7 @@ mod sessions;
 mod slowstart;
 mod updates;
 mod usage;
+mod views;
 mod windowprefs;
 mod workspaces;
 mod worktrees;
@@ -462,30 +463,6 @@ fn workspace_panels(
     workspace: String,
 ) -> Result<panels::Panels, String> {
     panels::of(planes.held(&plane)?.root(), &workspace)
-}
-
-/// What one persona's definition says about it: its role, when to delegate to it, its tools,
-/// the vault it names and what it extends.
-///
-/// **Its own command, asked when a row is clicked, and not part of `workspace_panels`.** The
-/// panels are the hot path of focusing a workspace — the spec gives that 100 ms — and folding
-/// this in would read every persona's definition, and every definition up every `extends:`
-/// chain, on every focus, for something nobody has asked to see. A plane with twenty personas
-/// would pay for twenty file reads per click on the workspace strip.
-///
-/// **It names its plane**, like every other command here: a persona belongs to a plane, and a
-/// window holds several.
-///
-/// It answers with `charter_core::personas::name_refusal`'s own sentence where it will not
-/// answer — the same words the CLI gives for the same name.
-#[tauri::command]
-#[specta::specta]
-fn persona_details(
-    planes: tauri::State<'_, Planes>,
-    plane: PlaneId,
-    persona: String,
-) -> Result<panels::PersonaDetails, String> {
-    panels::persona(planes.held(&plane)?.root(), &persona)
 }
 
 /// What git says about each of the focused workspace's clones, and what the forge cache
@@ -1157,11 +1134,9 @@ fn commands() -> Builder<tauri::Wry> {
             window_showing,
             plane_sidebar,
             workspace_panels,
-            panels::persona_memories,
             workspaces::workspace_create,
             workspaces::workspace_at_risk,
             workspaces::workspace_remove,
-            persona_details,
             workspace_repos,
             alerts_everywhere,
             start_options,
@@ -1182,6 +1157,11 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::forget_extension,
             extensions::extension_themes,
             extensions::extension_panels,
+            views::extension_views,
+            views::extension_programs_run,
+            views::open_view,
+            views::reopened_views,
+            views::window_views,
             doctor::plane_doctor,
             usage::chat_usage,
             pin::plane_pin,
@@ -1310,6 +1290,9 @@ pub fn run() {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
+            // The extension executor (charter ADR 0041 stage 2). Managed for the table of
+            // programs it is running, which `Exit` below empties.
+            app.manage(views::Views::default());
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
@@ -1396,6 +1379,10 @@ pub fn run() {
         // system, and one that ignores a hangup outlives the app that started it.
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                // An extension's program still answering is killed with its whole process
+                // group, so that nothing an extension was asked to run outlives the window
+                // that asked (`charter_core::executor`).
+                app.state::<views::Views>().stop_all();
                 // Every plane, not "the" plane: each one writes its own record into itself
                 // and ends its own sessions. A failure is not worth refusing to exit over —
                 // the next launch of that plane reads no record and starts empty.
