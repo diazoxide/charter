@@ -138,12 +138,27 @@ describe("view tabs", function () {
       const view = await theView("devops", "DevOps Engineer");
       expect(await inFront()).toBe("devops");
       const said = await view.getText();
-      // `delegate-when` is what makes a persona findable, and what a router reads.
-      expect(said).toContain("k8s deploys");
-      // The vault's NAME, and nothing that is in it.
-      expect(said).toContain("Vault: devops");
-      expect(said).toContain("personas/devops/persona.md");
       expect(said).toMatch(/It remembers \d+ things?\./);
+      // The definition is a `facts` block, drawn as a <dl>: read it as label -> value pairs,
+      // which is what an operator reads, rather than as run-together text.
+      // No named helpers inside `execute`: the spec's bundler wraps them in a `__name` the page
+      // does not have.
+      const facts: Record<string, string> = await browser.execute(() => {
+        const out: Record<string, string> = {};
+        for (const dt of document.querySelectorAll(
+          '[data-testid="view-pane-charter-persona-devops"] dl dt',
+        )) {
+          const dd = dt.nextElementSibling;
+          if (dd?.tagName === "DD")
+            out[(dt.textContent ?? "").trim()] = (dd.textContent ?? "").trim();
+        }
+        return out;
+      });
+      // `delegate-when` is what makes a persona findable, and what a router reads.
+      expect(facts["Delegate to it for"]).toContain("k8s deploys");
+      // The vault's NAME, and nothing that is in it.
+      expect(facts["Vault"]).toMatch(/^devops\b/);
+      expect(facts["Defined in"]).toContain("personas/devops/persona.md");
     });
 
     it("says a persona holds no credentials where its definition says so", async () => {
