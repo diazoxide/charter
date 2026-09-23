@@ -41,13 +41,13 @@
 //! # What `init` does not do here, on purpose
 //!
 //! - **It installs no software.** Python's `init` runs `claude plugin install` when `claude`
-//!   is on `PATH` (`_provision_harnesses`). The app wires a Claude Code profile at the
-//!   launch that needs it (`wiring::wired_or_refusal`), and one door for an install is the
-//!   design (ADR 0022).
+//!   is on `PATH` (`_provision_harnesses`). The app installs nothing anywhere: it ships its
+//!   own plugin and loads it into each chat it starts, for that session alone
+//!   (`crate::plugin`).
 //! - **It writes nothing outside the plane.** Python's `init` puts opencode's plugin, command
 //!   and instructions into `~/.config/opencode` (`OpenCodeHarness.wire`). charter-app v1
-//!   does not start opencode (`wiring::not_startable`), and a shim whose every hook reaches
-//!   a binary that refuses opencode's tool hooks would block opencode on the whole machine.
+//!   does not start opencode (`wiring::refusal`), and a shim whose every hook reaches a
+//!   binary that refuses opencode's tool hooks would block opencode on the whole machine.
 //!   The plane's own `opencode.json` ask rule IS written: it is part of the plane.
 //!
 //! # The other half of ADR 0035's default: adopting the repo
@@ -163,17 +163,6 @@ __pycache__/
 
 const LOCAL_SETTINGS_IGNORE: &str = "/.claude/settings.local.json";
 const LOCAL_PROFILES_IGNORE: &str = "/charter.local.toml";
-
-/// The statuses that report what charter DID (`commands._WIRED_NOTES`); every other one is
-/// something the operator has to act on, so it is a warning.
-const WIRED_NOTES: [&str; 6] = [
-    "created",
-    "installed",
-    "present",
-    "refreshed",
-    "current",
-    "added",
-];
 
 /// A path that resolves somewhere charter will not write: `(the path as named, where it lands)`.
 type Escape = (String, String);
@@ -361,7 +350,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
 
     handoff_gate(&mut run, root, settings_ok);
 
-    profile_wiring(&mut run, root, true);
+    profile_approvals(&mut run, root);
 
     if let Some(name) = &args.front_door {
         front_door(&mut run, root, name);
@@ -473,7 +462,7 @@ pub fn reinit(place: &Place) -> Outcome {
         }
     }
 
-    profile_wiring(&mut run, root, false);
+    profile_approvals(&mut run, root);
 
     if settings_ok {
         match settings::ensure_guard_hook(root, crate::profiles::home().as_deref()) {
@@ -780,66 +769,30 @@ fn handoff_gate(run: &mut Run, root: &Path, settings_ok: bool) {
     }
 }
 
-/// `commands._wire_profiles`: wire each DECLARED profile's own config folder, one line each.
+/// `commands._wire_profiles`, as much of it as is left: one line for each DECLARED profile
+/// nobody has approved yet.
 ///
-/// Nothing here fails `init` or `reinit` — a profile's own account folder is not what those
-/// commands are for. `install` is `init`'s door (ADR 0022's ruling 9: `reinit` installs no
-/// software). What charter-app cannot wire — opencode's shim, which Python writes — is said
-/// in `wiring::install`'s words rather than skipped.
-fn profile_wiring(run: &mut Run, root: &Path, install: bool) {
+/// Python's version also wired each profile's own config folder — `claude plugin install`,
+/// Codex's marketplace, opencode's shim. The app wires nothing there: it arms every chat it
+/// starts with its own plugin, for that session alone (`crate::plugin`), so there is no folder
+/// to wire and nothing for `init` or `reinit` to report about one. What still stops a chat is
+/// a command the operator has not approved, and that is worth a line here.
+fn profile_approvals(run: &mut Run, root: &Path) {
     use crate::profiles::{self, Source};
     if !profiles::ignore_check(root).passes() {
         return;
     }
-    let set = profiles::current(root);
-    let mut lines: Vec<(String, String)> = Vec::new();
-    for p in set.profiles() {
+    for p in profiles::current(root).profiles() {
         if p.source == Source::BuiltIn {
             continue;
         }
-        let name = crate::shown::short(&p.name);
-        let label = format!("profile '{name}'");
         if let Some(state) = crate::profiletrust::approval_needed(root, p) {
-            lines.push((
-                "skipped".to_owned(),
-                format!(
-                    "{label} is {} and not approved yet — run charter {name} once to approve \
-                     its command",
-                    state.as_str()
-                ),
+            let name = crate::shown::short(&p.name);
+            run.warn(format!(
+                "  profile '{name}' is {} and not approved yet — run charter {name} once to \
+                 approve its command",
+                state.as_str()
             ));
-            continue;
-        }
-        if p.kind == "codex" {
-            lines.push((
-                "opt-in".to_owned(),
-                format!("{label}: charter harness install {name}"),
-            ));
-            continue;
-        }
-        if install || p.kind == "opencode" {
-            for step in crate::wiring::install(p, root) {
-                lines.push((step.status, format!("{label}: {}", step.detail)));
-            }
-            continue;
-        }
-        let w = crate::wiring::detect(p, root, root);
-        if w.state != crate::wiring::State::Wired {
-            lines.push((
-                "missing".to_owned(),
-                format!(
-                    "{label}: not wired — {}; {}",
-                    crate::wiring::said(&w.detail),
-                    crate::wiring::said(&w.fix)
-                ),
-            ));
-        }
-    }
-    for (status, label) in lines {
-        if WIRED_NOTES.contains(&status.as_str()) {
-            run.info(format!("  {label}"));
-        } else {
-            run.warn(format!("  {label}"));
         }
     }
 }

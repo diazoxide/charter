@@ -1,0 +1,4 @@
+{
+  "name": "charter-app",
+  "description": "charter's hooks, guard and skills for the chats the charter app starts. Loaded by the app for each chat it starts; never installed."
+}

@@ -4,9 +4,9 @@
 //! **charter-app#134, and the shape of test the suite was missing.** macOS gives a
 //! Finder-launched `.app` `PATH=/usr/bin:/bin:/usr/sbin:/sbin`: `launchd` starts a GUI
 //! process and no login shell is involved. The operator's `claude` is in `~/.local/bin`,
-//! where Claude Code's own installer puts it, so the probe's spawn failed, `wiring` answered
-//! `State::Unknown`, and a double-clicked charter refused every chat with *"an unknown is not
-//! a pass — nothing was started"*.
+//! where Claude Code's own installer puts it, so the harness could not be found, `wiring`
+//! answered `State::Unknown`, and a double-clicked charter refused every chat with *"an
+//! unknown is not a pass — nothing was started"*.
 //!
 //! Nothing in this repository had ever launched charter that way. CI runs it from a shell,
 //! the scenario tests run it from a shell, and every agent runs it from a shell — and a shell
@@ -62,19 +62,11 @@ impl Machine {
         }
     }
 
-    /// A `claude` in `$HOME/<dir>`, answering the wiring probe as a wired one does — and
-    /// **nowhere on `PATH`**, which is the whole point.
+    /// A `claude` in `$HOME/<dir>` — and **nowhere on `PATH`**, which is the whole point.
     fn harness_in(&self, dir: &str) -> PathBuf {
         let at = self.home.join(dir);
         std::fs::create_dir_all(&at).unwrap();
-        stand_in::program(
-            &at,
-            "claude",
-            "#!/bin/sh\n\
-             cat <<'JSON'\n\
-             [{\"id\":\"charter@charter\",\"scope\":\"user\",\"enabled\":true}]\n\
-             JSON\n",
-        )
+        stand_in::program(&at, "claude", "#!/bin/sh\n")
     }
 
     /// `charter doctor --json`, started the way Finder starts an app.
@@ -127,14 +119,13 @@ fn a_harness_in_the_operators_own_bin_directory_is_found_with_no_path_to_find_it
     });
     assert_eq!(
         profile["status"], "ok",
-        "the harness answered the probe, so the profile is wired: {profile}"
+        "the harness was found, so a chat on it is armed by the app: {profile}"
     );
+    let detail = profile["detail"].as_str().unwrap();
+    assert!(detail.contains("charter-app"), "{profile}");
     assert!(
-        profile["detail"]
-            .as_str()
-            .unwrap()
-            .contains("charter@charter enabled"),
-        "{profile}"
+        detail.contains(&claude.display().to_string()),
+        "the row names the harness it found: {profile}"
     );
 }
 
@@ -174,7 +165,7 @@ fn a_harness_that_is_nowhere_is_a_refusal_that_says_so_and_carries_its_own_fix()
         "[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
     )
     .unwrap();
-    // Approved, so the row is a probe's answer and not the consent gate's.
+    // Approved, so the row is the search's answer and not the consent gate's.
     approve(&machine, "work");
 
     let out = machine.doctor_from_finder();
@@ -188,9 +179,8 @@ fn a_harness_that_is_nowhere_is_a_refusal_that_says_so_and_carries_its_own_fix()
     // **The fix survives the doctor's clip, and that is why it is written before the search.**
     // A doctor row is `DISPLAY_LIMIT` — 160 characters, Python's number — and a `$HOME`-shaped
     // directory list passes that on its own. The sentence is ordered so what is lost is the
-    // tail of the search rather than the action; the whole of it is in the app's refusal,
-    // which has a budget of 1024 (`wiring::SAID_LIMIT`), and in
-    // `charter-core/tests/a_harness_is_found_the_way_a_shell_finds_it.rs`.
+    // tail of the search rather than the action; the whole of it is in the app's refusal, and
+    // in `charter-core/tests/a_harness_is_found_the_way_a_shell_finds_it.rs`.
     assert!(
         detail.contains("name it by its absolute path in charter.local.toml"),
         "the fix has to survive the row's own clip: {profile}"

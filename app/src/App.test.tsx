@@ -128,7 +128,7 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "open_session") return ++opened;
     if (cmd === "start_options") return START_OPTIONS;
-    if (cmd === "start_chat") return { session: ++opened, wired: null };
+    if (cmd === "start_chat") return { session: ++opened };
     return null;
   });
   return { asked };
@@ -523,9 +523,9 @@ describe("App", () => {
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd === "start_options") return START_OPTIONS;
       if (cmd !== "start_chat") return null;
-      if (++opened === 1) return { session: 1, wired: null };
+      if (++opened === 1) return { session: 1 };
       await new Promise<void>((starts) => (letTheSecondSessionStart = starts));
-      return { session: 2, wired: null };
+      return { session: 2 };
     });
     render(<App />);
     await openAChat();
@@ -565,13 +565,13 @@ describe("App", () => {
       // The panels ask the core too, and this test is about the picker: a refusal from them
       // is a second alert, which is not the one being asserted on.
       if (cmd === "workspace_panels" || cmd === "workspace_repos") return null;
-      throw new Error("profile 'claude' is not wired — charter@charter is not installed");
+      throw new Error("profile 'work' is new, and nobody has approved it — nothing was started.");
     });
     render(<App />);
 
     await openAChat();
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("is not wired");
+    expect(await screen.findByRole("alert")).toHaveTextContent("nobody has approved it");
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     // Still open, so the operator can pick another row without starting over.
     expect(screen.getByRole("dialog")).toBeInTheDocument();

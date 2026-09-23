@@ -192,12 +192,14 @@ impl Harness {
 /// What a harness can tell charter about its own state, and how it is asked to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StateHooks {
-    /// Armed on this session alone, by the arguments given.
+    /// Armed on this session alone, by the arguments and the environment given.
     ///
-    /// Nothing outside this session is changed, and the harness's own configuration — the
-    /// charter plugin's guard included — is untouched.
+    /// Nothing outside this session is changed: no config folder is written, and a harness
+    /// the operator runs in a terminal is untouched.
     ThisSessionOnly {
         args: Vec<String>,
+        /// Variables the session's own process needs, beside the ones the app always sets.
+        env: Vec<(String, String)>,
         /// Events it cannot report, by the word `charter hook` takes. Empty is the whole set.
         cannot_report: Vec<&'static str>,
     },
@@ -205,30 +207,55 @@ pub enum StateHooks {
     None,
 }
 
+/// What the app ships that a chat is armed with: its own `charter`, and its own plugin.
+#[derive(Debug, Clone, Copy)]
+pub struct Kit<'a> {
+    /// The `charter` every hook runs.
+    pub binary: &'a std::path::Path,
+    /// The bundled Claude Code plugin ([`crate::plugin`]), where the app found it.
+    pub plugin: Option<&'a std::path::Path>,
+}
+
 impl Harness {
-    /// How this harness is asked to report its state, with `charter` at `binary`, for a chat
-    /// that will run in `cwd`.
+    /// How this harness is asked to report its state and run charter's guard, with what the
+    /// app ships in `kit`, for a chat that will run in `cwd`.
     ///
     /// `cwd` decides one thing only: whether charter may also fill Claude Code's status line
     /// for this chat ([`crate::footerclaim`]). It is the chat's own directory because project
     /// settings are read from the session's own directory and the host does not walk up.
-    pub fn state_hooks(
-        self,
-        binary: &std::path::Path,
-        cwd: Option<&std::path::Path>,
-    ) -> StateHooks {
+    pub fn state_hooks(self, kit: Kit<'_>, cwd: Option<&std::path::Path>) -> StateHooks {
         match self {
-            // `--settings` MERGES with the settings files already in force rather than
-            // replacing them — measured on claude 2.1.276 by planting a project hook beside
-            // one of these and watching both fire. That is what makes this safe: the charter
-            // plugin's guard hooks keep running exactly as they were.
-            Self::ClaudeCode => StateHooks::ThisSessionOnly {
-                args: words([
-                    "--settings",
-                    &claude_code_settings(binary, crate::footerclaim::status_line(cwd).free()),
-                ]),
-                cannot_report: Vec::new(),
-            },
+            // **The bundled plugin, loaded for this session alone** (`crate::plugin` has the
+            // measurements). Its `hooks.json` holds every hook — the six that report state and
+            // the Bash guard — and names the binary by `$CHARTER_HOOK_BINARY`, so that is
+            // handed over in the environment. Without the plugin there is nothing to arm: a
+            // chat reads `unknown`, rather than being half-armed from a second place.
+            //
+            // `--settings` MERGES with the settings already in force rather than replacing
+            // them (measured on claude 2.1.276), and a key it names wins over the project's
+            // (measured on 2.1.280). It carries two keys: the Python charter's plugin turned
+            // off for this session, and the status line where charter may fill it.
+            Self::ClaudeCode => {
+                let Some(plugin) = kit.plugin else {
+                    return StateHooks::None;
+                };
+                StateHooks::ThisSessionOnly {
+                    args: words([
+                        "--plugin-dir",
+                        &plugin.display().to_string(),
+                        "--settings",
+                        &claude_code_settings(
+                            kit.binary,
+                            crate::footerclaim::status_line(cwd).free(),
+                        ),
+                    ]),
+                    env: vec![(
+                        crate::plugin::BINARY_ENV.to_owned(),
+                        kit.binary.display().to_string(),
+                    )],
+                    cannot_report: Vec::new(),
+                }
+            }
             // **Measured on codex-cli 0.147.0, and it refutes what this arm used to say** —
             // that Codex could only be armed in `~/.codex/config.toml` and could never say it
             // was waiting. Every fact here was taken from the real binary driving a real turn
@@ -245,8 +272,8 @@ impl Harness {
             // * There is no `Notification`. Codex tells a hook it is asking for approval only
             //   through `PermissionRequest` — which fired exactly when the prompt appeared,
             //   and not for a command that needed none — but that is a hook that DECIDES a
-            //   permission, and the app arms no such hook (see the guard test below). So a
-            //   Codex chat that stops mid-turn for approval cannot say so.
+            //   permission, and the app arms no such hook. So a Codex chat that stops
+            //   mid-turn for approval cannot say so.
             // * **And there is no second way round it** (charter-app#52, read out of the same
             //   0.147.0 binary the measurements above were taken on). The binary carries
             //   eleven hook events and no more — `PreToolUse`, `PermissionRequest`,
@@ -267,8 +294,13 @@ impl Harness {
             //   `[hooks.state]`, keyed by event, position and a hash of the hook. The same
             //   binary path arms the same hooks, so the operator is asked once and not once a
             //   chat. Untrusted, they do not run and nothing says so (`codex exec`).
+            //
+            // Codex has no plugin here: the guard used to reach a Codex chat through the
+            // Python charter's Codex plugin, and now rides on the same `-c` flags as the state
+            // hooks, from the same registry ([`crate::plugin::HOOKS`]).
             Self::Codex => StateHooks::ThisSessionOnly {
-                args: codex_session_flags(binary),
+                args: codex_session_flags(kit.binary),
+                env: Vec::new(),
                 cannot_report: vec!["notification"],
             },
         }
@@ -293,33 +325,23 @@ impl Harness {
     }
 }
 
-/// The settings that arm Claude Code's state hooks on one session, as JSON on the argument.
+/// The settings a Claude Code chat is started with, as JSON on the argument.
 ///
 /// On the argument and not in a file: a file would have to be written somewhere, cleaned up
 /// when the chat ends, and cleaned up again after an app that crashed. What is in it is a
-/// path and six event names — nothing secret, so `ps` showing it costs nothing.
+/// plugin id and a path — nothing secret, so `ps` showing it costs nothing.
+///
+/// **No hooks.** They are the bundled plugin's (`hooks/hooks.json`), so a chat has one place
+/// its hooks are declared and a hook is never armed twice.
 fn claude_code_settings(binary: &std::path::Path, may_fill_the_footer: bool) -> String {
-    let hooks: serde_json::Map<String, serde_json::Value> = CLAUDE_CODE_STATE_EVENTS
-        .iter()
-        .map(|(event, word)| {
-            (
-                (*event).to_owned(),
-                serde_json::json!([{
-                    "hooks": [{
-                        "type": "command",
-                        "command": hook_command(binary, word),
-                        // Far more than the 1.8 ms this call was measured at, and far less
-                        // than a turn. A hook that somehow hung must not hold the turn open.
-                        "timeout": HOOK_TIMEOUT_SECONDS,
-                    }],
-                }]),
-            )
-        })
-        .collect();
-    let mut settings: serde_json::Map<String, serde_json::Value> =
-        [("hooks".to_owned(), serde_json::Value::Object(hooks))]
-            .into_iter()
-            .collect();
+    let mut settings = serde_json::Map::new();
+    // The operator's ruling of 2026-09-23: a chat the app starts turns the Python charter's
+    // plugin off for itself, so the project files that enable it for the operator's own
+    // terminal sessions do not give an app chat two sets of hooks and two `handoff` skills.
+    settings.insert(
+        "enabledPlugins".to_owned(),
+        serde_json::json!({ crate::plugin::SUPERSEDED: false }),
+    );
     // **Only where nothing else fills it.** The key is one value and the flag is the last
     // writer, so arming it where the operator has their own would stop theirs running
     // ([`crate::footerclaim`], measured on 2.1.280). Where charter does not arm it, the chat
@@ -364,99 +386,59 @@ fn claude_code_settings(binary: &std::path::Path, may_fill_the_footer: bool) -> 
 fn claude_code_status_line(binary: &std::path::Path) -> serde_json::Value {
     serde_json::json!({
         "type": "command",
-        "command": format!("{} statusline", shell_quoted(&binary.display().to_string())),
+        "command": format!(
+            "{} statusline",
+            crate::plugin::shell_quoted(&binary.display().to_string())
+        ),
     })
 }
 
-/// The `-c` pairs that arm Codex's state hooks on one session.
+/// The `-c` pairs that arm Codex's hooks on one session, out of [`crate::plugin::HOOKS`].
 ///
 /// On the argument for the reason Claude Code's are: nothing is written, so nothing is left
 /// behind. Each value is TOML, because that is how Codex parses a `-c` value — and it is
 /// SERIALISED rather than formatted, since a value that fails to parse is not an error to
 /// Codex but a literal string, which it then rejects as the wrong type and refuses to start.
+///
+/// The command names the binary by its absolute path: Codex has no plugin root and no
+/// variable of charter's to expand, and a Codex hook runs through a shell just the same —
+/// measured, a single-quoted argument holding spaces arrived as one word.
 fn codex_session_flags(binary: &std::path::Path) -> Vec<String> {
-    CODEX_STATE_EVENTS
-        .iter()
-        .flat_map(|(event, word)| {
-            let hook: toml::Table = [
-                ("type".to_owned(), toml::Value::from("command")),
-                (
-                    "command".to_owned(),
-                    toml::Value::from(hook_command(binary, word)),
-                ),
-                // Codex's own default is 600 seconds (its hook review screen says so).
-                (
-                    "timeout".to_owned(),
-                    toml::Value::from(HOOK_TIMEOUT_SECONDS),
-                ),
-            ]
-            .into_iter()
-            .collect();
-            let group: toml::Table = [(
-                "hooks".to_owned(),
-                toml::Value::Array(vec![toml::Value::Table(hook)]),
-            )]
-            .into_iter()
-            .collect();
-            let value = toml::Value::Array(vec![toml::Value::Table(group)]);
+    crate::plugin::grouped(crate::plugin::HOOKS.iter().filter(|hook| hook.codex))
+        .into_iter()
+        .flat_map(|(event, groups)| {
+            let groups: Vec<toml::Value> = groups
+                .into_iter()
+                .map(|(matcher, hooks)| {
+                    let hooks: Vec<toml::Value> = hooks
+                        .iter()
+                        .map(|hook| {
+                            let table: toml::Table = [
+                                ("type".to_owned(), toml::Value::from("command")),
+                                (
+                                    "command".to_owned(),
+                                    toml::Value::from(crate::plugin::command_at(binary, hook.word)),
+                                ),
+                                // Codex's own default is 600 seconds (its review screen says so).
+                                ("timeout".to_owned(), toml::Value::from(hook.timeout)),
+                            ]
+                            .into_iter()
+                            .collect();
+                            toml::Value::Table(table)
+                        })
+                        .collect();
+                    let mut group = toml::Table::new();
+                    if let Some(matcher) = matcher {
+                        group.insert("matcher".to_owned(), toml::Value::from(matcher));
+                    }
+                    group.insert("hooks".to_owned(), toml::Value::Array(hooks));
+                    toml::Value::Table(group)
+                })
+                .collect();
+            let value = toml::Value::Array(groups);
             ["-c".to_owned(), format!("hooks.{event}={value}")]
         })
         .collect()
-}
-
-/// The command a hook runs: charter's own binary and one event word.
-///
-/// Two words, no composition: the command is a path charter knows and a word from one of
-/// the lists below. Nothing here is built from anything a harness, a plane or an operator
-/// wrote. Both harnesses run it through a shell — Claude Code through `/bin/sh -c` (ADR
-/// 0024), and Codex measured the same way, a single-quoted argument holding spaces arriving
-/// as one word.
-fn hook_command(binary: &std::path::Path, word: &str) -> String {
-    format!(
-        "{} hook {word}",
-        shell_quoted(&binary.display().to_string())
-    )
-}
-
-/// How long a state hook may take, in seconds, on every harness.
-const HOOK_TIMEOUT_SECONDS: i64 = 5;
-
-/// Codex's state-carrying events, and the word `charter hook` takes for each.
-///
-/// Each was seen to fire on codex-cli 0.147.0 (see [`Harness::state_hooks`]). Not
-/// `SubagentStop`, which Codex has and the board ignores: every hook armed here is one more
-/// the operator is asked to trust, and this one would change nothing they can see.
-const CODEX_STATE_EVENTS: &[(&str, &str)] = &[
-    ("SessionStart", "sessionstart"),
-    ("UserPromptSubmit", "userpromptsubmit"),
-    ("Stop", "stop"),
-    ("SessionEnd", "sessionend"),
-];
-
-/// Claude Code's state-carrying events, and the word `charter hook` takes for each.
-///
-/// Measured live on claude 2.1.276 rather than read from documentation: `SessionStart`,
-/// `UserPromptSubmit`, `Stop` and `SessionEnd` were each seen to fire with a `session_id`
-/// matching `$CLAUDE_CODE_SESSION_ID`. `Notification` and `SubagentStop` did not fire in a
-/// one-turn `-p` run — nothing asked for a human, and nothing dispatched a sub-agent — and
-/// are armed on the harness's documented names.
-const CLAUDE_CODE_STATE_EVENTS: &[(&str, &str)] = &[
-    ("SessionStart", "sessionstart"),
-    ("UserPromptSubmit", "userpromptsubmit"),
-    ("Notification", "notification"),
-    ("SubagentStop", "subagentstop"),
-    ("Stop", "stop"),
-    ("SessionEnd", "sessionend"),
-];
-
-/// A path as one word a shell cannot take apart.
-///
-/// Both harnesses run a hook's `command` through a shell (ADR 0024 measured the shells in
-/// between for Claude Code), so the path to the binary goes in single quotes. It is
-/// charter's own executable path and not anything a plane wrote, but a person with a quote
-/// in their home directory name is not a security model.
-fn shell_quoted(path: &str) -> String {
-    format!("'{}'", path.replace('\'', r"'\''"))
 }
 
 fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
@@ -629,55 +611,85 @@ mod tests {
         assert!(SessionId::new("a".repeat(129)).is_err());
     }
 
-    #[test]
-    fn claude_code_state_hooks_are_armed_on_this_session_and_change_nothing_else() {
-        // `--settings` MERGES rather than replaces (measured on claude 2.1.276), which is the
-        // whole reason this is safe: the charter plugin's guard hooks keep running. If this
-        // ever became a replacement, arming state here would silently disarm the guard.
-        let empty = tempfile::tempdir().expect("a directory with no settings in it");
-        let hooks = Harness::ClaudeCode.state_hooks(
-            std::path::Path::new("/usr/local/bin/charter"),
-            Some(empty.path()),
-        );
-
-        let StateHooks::ThisSessionOnly {
-            args,
-            cannot_report,
-        } = hooks
-        else {
-            panic!("Claude Code's hooks are armed per session");
-        };
-        assert_eq!(args[0], "--settings");
-        assert!(cannot_report.is_empty(), "{cannot_report:?}");
-
-        let settings: serde_json::Value =
-            serde_json::from_str(&args[1]).expect("the settings are JSON");
-        let armed = settings["hooks"].as_object().expect("an object");
-        assert_eq!(armed.len(), 6);
-        for event in [
-            "SessionStart",
-            "UserPromptSubmit",
-            "Notification",
-            "SubagentStop",
-            "Stop",
-            "SessionEnd",
-        ] {
-            assert_eq!(
-                armed[event][0]["hooks"][0]["command"],
-                serde_json::json!(format!(
-                    "'/usr/local/bin/charter' hook {}",
-                    event.to_lowercase()
-                )),
-                "{event} is not armed"
-            );
-            // Far more than the 1.8 ms this call was measured at, and far less than a turn:
-            // a hook that somehow hung must not be able to hold the turn open behind it.
-            assert_eq!(
-                armed[event][0]["hooks"][0]["timeout"],
-                serde_json::json!(5),
-                "{event}'s hook is armed with no short deadline"
-            );
+    /// The app's kit, with the plugin at `/app/plugin` and the binary at `binary`.
+    fn kit(binary: &str) -> Kit<'_> {
+        Kit {
+            binary: std::path::Path::new(binary),
+            plugin: Some(std::path::Path::new("/app/plugin")),
         }
+    }
+
+    /// Claude Code's arguments and environment for a chat in `cwd`.
+    fn claude(binary: &str, cwd: &std::path::Path) -> (Vec<String>, Vec<(String, String)>) {
+        match Harness::ClaudeCode.state_hooks(kit(binary), Some(cwd)) {
+            StateHooks::ThisSessionOnly {
+                args,
+                env,
+                cannot_report,
+            } => {
+                assert!(cannot_report.is_empty(), "{cannot_report:?}");
+                (args, env)
+            }
+            StateHooks::None => panic!("Claude Code is armed per session"),
+        }
+    }
+
+    #[test]
+    fn a_claude_code_chat_loads_the_bundled_plugin_for_this_session_alone() {
+        // `--plugin-dir` loads a plugin for one session with no marketplace and no install
+        // record (measured on 2.1.280), and its hooks name the binary by the variable handed
+        // over here — so the plugin's `hooks.json` is the one place the hooks are declared.
+        let empty = tempfile::tempdir().expect("a directory with no settings in it");
+        let (args, env) = claude("/usr/local/bin/charter", empty.path());
+
+        assert_eq!(args[0], "--plugin-dir");
+        assert_eq!(args[1], "/app/plugin");
+        assert_eq!(args[2], "--settings");
+        assert_eq!(
+            env,
+            [(
+                "CHARTER_HOOK_BINARY".to_owned(),
+                "/usr/local/bin/charter".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_claude_code_chat_turns_the_python_charters_plugin_off_for_itself() {
+        // The operator's ruling: app chats disable it. A session `enabledPlugins` wins over a
+        // project file that enables it (measured on 2.1.280), and only for this session.
+        let empty = tempfile::tempdir().expect("a directory");
+        let (args, _) = claude("/bin/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+
+        assert_eq!(
+            settings["enabledPlugins"],
+            serde_json::json!({"charter@charter": false})
+        );
+    }
+
+    #[test]
+    fn the_settings_arm_no_hook_so_no_hook_is_armed_twice() {
+        // Every hook is the plugin's. A hook in `--settings` as well would fire beside it and
+        // report every event twice.
+        let empty = tempfile::tempdir().expect("a directory");
+        let (args, _) = claude("/bin/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+
+        assert!(settings.get("hooks").is_none(), "{settings}");
+    }
+
+    #[test]
+    fn without_the_bundled_plugin_a_claude_code_chat_is_armed_with_nothing() {
+        // Nothing is half-armed from a second place: the chat reads `unknown`.
+        let hooks = Harness::ClaudeCode.state_hooks(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: None,
+            },
+            None,
+        );
+        assert_eq!(hooks, StateHooks::None);
     }
 
     #[test]
@@ -687,14 +699,8 @@ mod tests {
         // gauge has nothing to draw. Quoted as a hook command is, because Claude Code runs it
         // through `/bin/sh -c` too.
         let empty = tempfile::tempdir().expect("a directory with no settings in it");
-        let hooks = Harness::ClaudeCode.state_hooks(
-            std::path::Path::new("/home/o'brien/charter"),
-            Some(empty.path()),
-        );
-        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
-            panic!("armed per session");
-        };
-        let settings: serde_json::Value = serde_json::from_str(&args[1]).expect("JSON");
+        let (args, _) = claude("/home/o'brien/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
 
         assert_eq!(
             settings["statusLine"],
@@ -706,9 +712,9 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_whose_directory_already_fills_the_footer_is_armed_with_hooks_alone() {
+    fn a_chat_whose_directory_already_fills_the_footer_keeps_its_own() {
         // The operator's ruling: charter never replaces a `statusLine` somebody else wrote.
-        // The hooks are armed exactly as before — only the footer key is left off.
+        // The plugin is loaded exactly as before — only the footer key is left off.
         let dir = tempfile::tempdir().expect("a directory");
         std::fs::create_dir_all(dir.path().join(".claude")).expect(".claude");
         std::fs::write(
@@ -717,90 +723,24 @@ mod tests {
         )
         .expect("their settings");
 
-        let hooks =
-            Harness::ClaudeCode.state_hooks(std::path::Path::new("/bin/charter"), Some(dir.path()));
-
-        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
-            panic!("armed per session");
-        };
-        let settings: serde_json::Value = serde_json::from_str(&args[1]).expect("JSON");
+        let (args, _) = claude("/bin/charter", dir.path());
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
         assert!(
             settings.get("statusLine").is_none(),
             "charter armed a statusLine over the operator's: {}",
-            args[1]
+            args[3]
         );
-        assert_eq!(
-            settings["hooks"].as_object().expect("an object").len(),
-            6,
-            "the state hooks are not armed for a chat that keeps its own footer"
-        );
-    }
-
-    #[test]
-    fn no_guard_hook_is_ever_armed_by_the_app() {
-        // **Still true after M3.1, and for a different reason than before.** It used to be
-        // that the guard was not this milestone's to answer; the Bash guard is now ported
-        // (`charter_core::toolgate`). Arming it here would be a second, different thing:
-        //
-        // - a chat that ALSO has the Python charter's plugin would then meet two guards on
-        //   one Bash call, one of which decides less — two denials, or one denial and one
-        //   allow, for the same command;
-        // - the app opens chats in repositories that are not planes, and the arms that are
-        //   about a plane are silent there by design (charter#852), so an armed guard would
-        //   be mostly an unarmed one;
-        // - and `PermissionRequest` can ALLOW, which is authority the app has no business
-        //   taking from a file a chat can write.
-        //
-        // The guard reaches a chat the way it always has: the plugin's `hooks.json` names
-        // `charter` by the bare word, and `programs::chat_path` decides which one that is.
-        // The cwd is where `footerclaim` looks for a status line already in force; an
-        // empty directory is a chat with none, which is what this test is about.
-        let empty = tempfile::tempdir().expect("a directory with no settings in it");
-        let hooks = Harness::ClaudeCode
-            .state_hooks(std::path::Path::new("/bin/charter"), Some(empty.path()));
-        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
-            panic!("armed per session");
-        };
-
-        for guarded in [
-            "PreToolUse",
-            "PostToolUse",
-            "PermissionRequest",
-            "pretooluse",
-        ] {
-            assert!(
-                !args[1].contains(guarded),
-                "{guarded} appears in the settings the app arms"
-            );
-        }
-    }
-
-    #[test]
-    fn a_path_with_a_quote_in_it_cannot_break_out_of_the_hook_command() {
-        // Claude Code runs the command through `/bin/sh -c`.
-        let empty = tempfile::tempdir().expect("a directory with no settings in it");
-        let hooks = Harness::ClaudeCode.state_hooks(
-            std::path::Path::new("/home/o'brien/charter"),
-            Some(empty.path()),
-        );
-        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
-            panic!("armed per session");
-        };
-        let settings: serde_json::Value = serde_json::from_str(&args[1]).expect("JSON");
-
-        assert_eq!(
-            settings["hooks"]["Stop"][0]["hooks"][0]["command"],
-            serde_json::json!(r"'/home/o'\''brien/charter' hook stop")
-        );
+        assert_eq!(args[0], "--plugin-dir");
     }
 
     /// Codex's `-c` pairs as (dotted key, parsed TOML value), failing on anything else.
     fn codex_flags(binary: &str) -> Vec<(String, toml::Value)> {
-        let StateHooks::ThisSessionOnly { args, .. } =
-            Harness::Codex.state_hooks(std::path::Path::new(binary), None)
+        let StateHooks::ThisSessionOnly { args, env, .. } =
+            Harness::Codex.state_hooks(kit(binary), None)
         else {
             panic!("Codex's hooks are armed per session");
         };
+        assert!(env.is_empty(), "Codex's commands carry the path: {env:?}");
         args.chunks(2)
             .map(|pair| {
                 assert_eq!(pair[0], "-c", "not a -c pair: {pair:?}");
@@ -815,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_state_hooks_are_armed_on_this_session_by_its_own_flag() {
+    fn codex_hooks_are_armed_on_this_session_by_its_own_flag() {
         // Measured on codex-cli 0.147.0 (#27): `-c hooks.<Event>=[…]` arms a hook for one
         // session, listed by Codex as "Session flags", and it runs BESIDE the operator's own
         // hook for the same event rather than replacing it. Nothing is written anywhere.
@@ -827,14 +767,19 @@ mod tests {
             [
                 "hooks.SessionStart",
                 "hooks.UserPromptSubmit",
+                "hooks.PreToolUse",
                 "hooks.Stop",
                 "hooks.SessionEnd"
             ]
         );
         for (key, value) in &flags {
-            let word = key.trim_start_matches("hooks.").to_lowercase();
             let hook = &value[0]["hooks"][0];
             assert_eq!(hook["type"].as_str(), Some("command"), "{key}");
+            let word = crate::plugin::HOOKS
+                .iter()
+                .find(|h| format!("hooks.{}", h.event) == *key)
+                .expect("from the registry")
+                .word;
             assert_eq!(
                 hook["command"].as_str(),
                 Some(format!("'/usr/local/bin/charter' hook {word}").as_str()),
@@ -842,16 +787,34 @@ mod tests {
             );
             // Codex's default is 600 seconds. A hook that somehow hung must not be able to
             // hold a turn open behind it for ten minutes.
-            assert_eq!(hook["timeout"].as_integer(), Some(5), "{key}");
+            assert!(
+                hook["timeout"].as_integer().is_some_and(|t| t <= 10),
+                "{key}"
+            );
         }
+    }
+
+    #[test]
+    fn codex_gets_the_bash_guard_under_its_matcher() {
+        // The guard used to reach a Codex chat through the Python charter's Codex plugin. It
+        // rides on the session's own flags now, under the matcher the plugin gave it.
+        let flags = codex_flags("/bin/charter");
+        let (_, guard) = flags
+            .iter()
+            .find(|(key, _)| key == "hooks.PreToolUse")
+            .expect("the guard is armed");
+        assert_eq!(guard[0]["matcher"].as_str(), Some("Bash"));
+        assert_eq!(
+            guard[0]["hooks"][0]["command"].as_str(),
+            Some("'/bin/charter' hook pretooluse")
+        );
     }
 
     #[test]
     fn a_codex_chat_says_it_cannot_report_a_question_asked_mid_turn() {
         // Codex has no `Notification`. It fires `PermissionRequest` when it asks for an
-        // approval — measured — but that hook decides a permission, and the app arms none
-        // (the guard test below). So the one event missing is named, not hidden.
-        let hooks = Harness::Codex.state_hooks(std::path::Path::new("/bin/charter"), None);
+        // approval — measured — but that hook decides a permission, and nothing arms it.
+        let hooks = Harness::Codex.state_hooks(kit("/bin/charter"), None);
 
         let StateHooks::ThisSessionOnly { cannot_report, .. } = hooks else {
             panic!("armed per session");
@@ -873,26 +836,29 @@ mod tests {
     }
 
     #[test]
-    fn no_guard_hook_is_ever_armed_on_codex_either() {
+    fn no_permission_hook_is_ever_armed_on_codex() {
         // `PermissionRequest` is where Codex would say it is asking for approval, and it
-        // is armed nowhere: a hook there can ALLOW or DENY. That is the guard's question,
-        // not a state board's, whatever the hook happens to answer.
+        // is armed nowhere: a hook there can ALLOW or DENY a permission.
         for (key, _) in codex_flags("/bin/charter") {
-            for guarded in ["PreToolUse", "PostToolUse", "PermissionRequest"] {
+            for guarded in ["PostToolUse", "PermissionRequest"] {
                 assert!(!key.contains(guarded), "{key} is armed by the app");
             }
         }
     }
 
     #[test]
-    fn a_path_with_a_quote_in_it_cannot_break_out_of_a_codex_hook_either() {
+    fn a_path_with_a_quote_in_it_cannot_break_out_of_a_codex_hook() {
         // Codex runs a hook's command through a shell too — measured: a single-quoted
         // argument holding spaces arrived as one word. And the TOML around it must survive
         // the quote, which is why the value is serialised and not formatted.
         let flags = codex_flags("/home/o'brien/char\"ter");
+        let (_, stop) = flags
+            .iter()
+            .find(|(key, _)| key == "hooks.Stop")
+            .expect("stop");
 
         assert_eq!(
-            flags[2].1[0]["hooks"][0]["command"].as_str(),
+            stop[0]["hooks"][0]["command"].as_str(),
             Some(r#"'/home/o'\''brien/char"ter' hook stop"#)
         );
     }

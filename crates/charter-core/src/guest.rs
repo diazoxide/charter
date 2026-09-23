@@ -19,11 +19,9 @@
 //!
 //! # Write, rather than refuse
 //!
-//! [`crate::wiring`] refuses a chat whose harness config folder charter cannot finish wiring,
-//! and that is right *there*: a Codex home needs a person to approve hooks inside a session,
-//! so charter cannot finish it alone and a pass would be a lie. Here charter **can** finish
-//! alone — it cut the tree, and the layer is files in a directory charter owns. So charter
-//! writes it, and keeps the refusal for the cases where the write does not land. What an
+//! A refusal is right where charter cannot finish something alone and a pass would be a lie.
+//! Here charter **can** finish alone — it cut the tree, and the layer is files in a directory
+//! charter owns. So charter writes it, and keeps the refusal for the cases where the write does not land. What an
 //! operator loses under a pure refusal is every worktree the app cuts, until they go and run
 //! the Python; what they lose under a silent write is nothing, because a write that cannot
 //! be hidden is not performed at all.
@@ -440,7 +438,7 @@ pub fn tracked(tree: &Path, rel: &str) -> bool {
 ///
 /// — charter's own files showing in somebody else's repository, which is the noise the block
 /// exists to prevent. This writes nothing, reports the checkout blocked, and
-/// [`crate::wiring`] refuses the chat, so nothing runs without the plane's rules and nothing
+/// [`crate::start::layered_or_refusal`] refuses the chat, so nothing runs without the plane's rules and nothing
 /// is left showing.
 ///
 /// Both are coherent, in opposite directions, and the trade — a usable worktree with noise

@@ -307,15 +307,13 @@ mod tests {
             std::fs::create_dir_all(root.join("workspaces").join("alpha")).expect("alpha");
             std::fs::write(root.join(charter_core::plane::MANIFEST), "").expect("charter.toml");
             let argv = root.join("argv");
-            // Answers the wiring probe as a wired Claude Code, and writes down every argument
-            // of every run, one to a line, so the chat's own run can be read back.
+            // Writes down every argument of every run, one to a line, so the chat's own run can
+            // be read back.
             let program = stand_in::program(
                 &root,
                 "claude-stand-in",
                 &format!(
-                    "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> {argv:?}\n\
-                     cat <<'JSON'\n[{{\"id\":\"charter@charter\",\"scope\":\"user\",\
-                     \"enabled\":true}}]\nJSON\n"
+                    "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> {argv:?}\n"
                 ),
             );
             std::fs::write(
@@ -343,7 +341,7 @@ mod tests {
     }
 
     fn planes() -> Planes {
-        Planes::telling(Arc::new(|_| {}), None, None)
+        Planes::telling(Arc::new(|_| {}), crate::Shipped::default(), None)
     }
 
     /// A chat on the `work` profile, started the way the picker starts one.

@@ -80,7 +80,7 @@ function core(
     if (cmd === "opened_chats") return [];
     if (cmd === "start_chat") {
       chats.push(chat(++next, String(a.name), a.cwd as string | null));
-      return { session: next, wired: null };
+      return { session: next };
     }
     if (cmd === "plane_sidebar")
       return {

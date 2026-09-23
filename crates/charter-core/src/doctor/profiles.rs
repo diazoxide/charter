@@ -150,11 +150,10 @@ fn not_probed(root: &Path, p: &Profile, ignored: &IgnoreCheck) -> Option<(String
     })
 }
 
-/// One row per listed profile: does charter's guard run in the folder that profile names?
+/// One row per listed profile: can the app start its harness, and so guard its chats?
 ///
-/// **Never on a hook path** (ruling 11): a probe runs the harness, costs hundreds of
-/// milliseconds and can write into the profile's config folder. Only a `charter doctor` a
-/// person types probes. The probes run side by side; each keeps its own deadline.
+/// **Never on a hook path** (ruling 11): only a `charter doctor` a person types asks. The
+/// questions run side by side.
 ///
 /// The probe is this binary's own ([`wiring::detect`]), so what a probed row SAYS is this
 /// charter's sentence about what it asked, not Python's.
@@ -175,7 +174,7 @@ pub(super) fn profile_rows(d: &Doctor) -> Vec<Row> {
             .iter()
             .map(|p| match not_probed(&d.root, p, &ignored) {
                 Some(held) => Err(held),
-                None => Ok(scope.spawn(move || wiring::detect(p, &d.root, &d.root))),
+                None => Ok(scope.spawn(move || wiring::detect(p, &d.root))),
             })
             .collect();
         rows.iter()
@@ -205,8 +204,10 @@ pub(super) fn profile_rows(d: &Doctor) -> Vec<Row> {
                 let detail = counted(&w.detail, DISPLAY_LIMIT);
                 match w.state {
                     State::Wired => Row::ok(&name, detail),
-                    State::Unwired => Row::warn(&name, detail, counted(&w.fix, DISPLAY_LIMIT)),
-                    State::Unknown => Row::warn(&name, detail, NOT_CHECKED_HINT),
+                    State::Unknown if w.fix.is_empty() => {
+                        Row::warn(&name, detail, NOT_CHECKED_HINT)
+                    }
+                    State::Unknown => Row::warn(&name, detail, counted(&w.fix, DISPLAY_LIMIT)),
                 }
             })
             .collect()
