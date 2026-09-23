@@ -31,6 +31,26 @@
 //!
 //! Hence both halves below, and both are load-bearing: the child writes it (so exec never
 //! races a descriptor), and a rename puts it in place (so the write never races an exec).
+//!
+//! # What Darwin answers now (charter-app#184, measured on macOS 26.2 / Darwin 25.2)
+//!
+//! **Darwin no longer answers `ETXTBSY` in either direction.** A `#!` script whose inode
+//! another process holds open for writing execs and runs; a running program can be opened for
+//! writing and truncated. Both were checked with the setup verified first rather than the
+//! kernel blamed first — `lsof` on the holding child shows it open `1w` on the same inode the
+//! exec resolves to — because this repo has been wrong about exactly this before, and a
+//! rename-based fix for charter-app#81 was disproven on CI at round 20 of 250.
+//!
+//! **It has not become safe; the refusal has changed shape and lost its errno.** A Mach-O that
+//! the kernel has already validated once is `SIGKILL`ed when it is exec'd again while somebody
+//! holds it open for writing: the writable open invalidates the cached code signature for that
+//! vnode. One that has never been exec'd runs. So on Darwin the hazard has moved off
+//! [`program`], whose stand-ins are scripts, and onto [`copy_of`], whose stand-ins are
+//! binaries that charter runs, rewrites and runs again — and where the failure is now a kill
+//! a caller cannot read an error out of.
+//!
+//! Neither half below is therefore relaxed. Linux still answers `ETXTBSY` and is what CI gates
+//! on, and on Darwin the discipline is what keeps [`copy_of`] out of the kill.
 
 use std::path::{Path, PathBuf};
 
