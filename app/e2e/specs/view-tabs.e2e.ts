@@ -97,6 +97,15 @@ async function theView(persona: string, saying: string) {
   return view;
 }
 
+/** The view tabs a plane's record names, read off the disk. */
+function viewsIn(record: string): { view: string; key: string; active?: boolean }[] {
+  try {
+    return (JSON.parse(readFileSync(record, "utf8")) as { views?: [] }).views ?? [];
+  } catch {
+    return [];
+  }
+}
+
 /** Closes the view tab called `name`, which asks nothing because it ends nothing. */
 async function closeTheTab(name: string): Promise<void> {
   await $(`${TABS} button[aria-label="Close ${name}"]`).click();
@@ -148,8 +157,12 @@ describe("view tabs", function () {
 
     it("is brought forward, not opened twice, when its row is pressed again", async () => {
       await untilThePersonasAreListed();
-      const before = (await tabNames()).filter((name) => name === "devops").length;
-      expect(before).toBe(1);
+      const record = join(
+        (await ask<string[]>("open_planes"))[0],
+        ".charter",
+        "app",
+        "reopen.json",
+      );
 
       await (await personaRow("devops")).click();
 
@@ -157,27 +170,26 @@ describe("view tabs", function () {
         timeout: 20_000,
         timeoutMsg: "pressing devops again did not bring its tab forward",
       });
-      expect((await tabNames()).filter((name) => name === "devops")).toHaveLength(1);
+      // **Counted in the record, not on the strip.** The strip draws what fits and the tab in
+      // front (`fits.ts`), so a second devops tab could be hidden past its edge; the core is told
+      // every view tab the window has, drawn or not.
+      await browser.waitUntil(
+        async () => viewsIn(record).find((one) => one.key === "devops")?.active === true,
+        {
+          timeout: 20_000,
+          timeoutMsg: "the record never said the devops tab was in front",
+        },
+      );
+      expect(viewsIn(record).filter((one) => one.key === "devops")).toHaveLength(1);
     });
 
     it("is written into the plane's record, so the next launch can put it back", async () => {
       const plane = (await ask<string[]>("open_planes"))[0];
       const record = join(plane, ".charter", "app", "reopen.json");
 
-      let views: { view: string; key: string; active?: boolean }[] = [];
-      await browser.waitUntil(
-        async () => {
-          views =
-            (JSON.parse(readFileSync(record, "utf8")) as { views?: typeof views }).views ?? [];
-          return views.some((one) => one.key === "devops");
-        },
-        { timeout: 20_000, timeoutMsg: "the record never named the devops tab" },
-      );
-
-      expect(views.map((one) => `${one.view}/${one.key}`)).toEqual(
+      expect(viewsIn(record).map((one) => `${one.view}/${one.key}`)).toEqual(
         expect.arrayContaining(["persona/devops", "persona/steward"]),
       );
-      expect(views.find((one) => one.key === "devops")?.active).toBe(true);
     });
   });
 
@@ -211,8 +223,20 @@ describe("view tabs", function () {
     })();
 
     after(async () => {
-      if ((await ask<string[]>("open_planes")).includes(other))
-        await ask("close_plane", { plane: other });
+      // **Let go of through the window, not behind its back.** `close_plane` asked directly
+      // leaves the window drawing a project the core no longer holds, in front — and the next
+      // spec file shares this app process (it cost `workspace-explorer.e2e.ts` its clones).
+      const closer = await $(`${PROJECTS} button[aria-label="Close project views-back"]`);
+      if (!(await closer.isExisting())) return;
+      await closer.click();
+      await browser.waitUntil(async () => !(await ask<string[]>("open_planes")).includes(other), {
+        timeout: 20_000,
+        timeoutMsg: "the views-back project was not let go of",
+      });
+      await browser.waitUntil(async () => !(await closer.isExisting()), {
+        timeout: 20_000,
+        timeoutMsg: "the views-back project's tab stayed on the strip",
+      });
     });
 
     it("come back in front when their project is opened, and read the plane again", async () => {
