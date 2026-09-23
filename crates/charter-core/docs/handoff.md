@@ -160,9 +160,8 @@ the two numbers are both on screen. Name long material by its path instead of pa
   `token: op://Eng/deploy/token` or `token: vault://secret/data/app#TOKEN` — which is not
   refused while its names add up to at most 32 characters, not counting the `/`, `#` or single
   spaces that separate them, and none starts with a known token prefix. A token typed into one
-  of those names is refused like any other, unless it is that short and unprefixed. (The
-  `charter secret` command is not in this version yet; the spelling is recognised all the
-  same — see [hooks.md](hooks.md), *A line that looks like a secret*.)
+  of those names is refused like any other, unless it is that short and unprefixed. (See
+  [hooks.md](hooks.md), *A line that looks like a secret*.)
 - **12,288 bytes for the stamped message**, above.
 
 ## How a chat learns any of this exists

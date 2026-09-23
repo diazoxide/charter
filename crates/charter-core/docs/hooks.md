@@ -63,8 +63,9 @@ rule while one who reads a bare refusal files an issue.
   `git show HEAD:<path>`), or a shell string (`sh -c 'cat .charter/vaults/db.json'`, which
   is one argument here and is not re-parsed) is not covered. Widening the list is not the
   fix — the missing name is always the next one, and false positives arrive immediately.
-  "Argv" now means the real one. A wrapper (`env`, `sudo`, `command`, `xargs`, a `{ … }`
-  group, a `then` branch) does not change what the program is — and where a wrapper opens a
+  "Argv" now means the real one. A wrapper (`env`, `sudo`, `command`, `xargs`,
+  `charter secret exec … --`, a `{ … }` group, a `then` branch) does not change what the
+  program is — and where a wrapper opens a
   file *itself* (`xargs -a <file>`) that file counts as read, even though the program named
   on the line is something else. A **redirection** is neither the program nor an operand: it
   may sit in front of the command (`< <vault> cat`), and the target of an input redirection
@@ -529,8 +530,8 @@ it, is not winnable in a tokeniser, so the honest move is to say what is open:
 There is no second line of defence behind it: nothing scans Bash *output*. What actually
 makes a vault not worth reading is keeping the value in a system built for custody and
 resolving it on demand, so there is no plaintext on disk for any of the above to print. That
-is the control; the hook is the guard rail. The `charter vault` and `charter secret` commands
-that manage vaults are not in this version yet ([secrets.md](secrets.md)).
+is the control; the hook is the guard rail. `charter secret exec` hands a value to a command
+without anyone reading it ([secrets.md](secrets.md)).
 
 ## A line that looks like a secret, in memory or a brief
 
@@ -548,9 +549,7 @@ you to do exactly that, and the rule used to refuse the answer whenever it was o
 refused as credentials. A value in
 one of the four spellings charter uses is now let through, with at most a quote or backtick
 on each side: `vault:<vault>/<key>`, `charter secret get <vault> <key>`, and the two URIs a
-`reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`. (The
-`charter secret` command is not in this version yet; its spelling is recognised all the same,
-because a plane's text already uses it.) Because that happens in the one classifier, every
+`reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`. Because that happens in the one classifier, every
 place gives the same answer. **The
 whole value, to the end of its line, has to be the reference, and its names have to look
 like names**. No name may start with a prefix a credential issuer puts on its tokens (`ghp_`,
