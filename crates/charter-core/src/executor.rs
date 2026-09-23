@@ -117,6 +117,7 @@ pub const MOST_STDERR_BYTES: usize = 2 << 10;
 /// long enough for the last words of one that crashed to be read out of the socket, bounded
 /// because a process that escaped the group can keep writing to it for ever
 /// ([`Executor::converse`]).
+#[cfg_attr(not(unix), allow(dead_code))]
 const STDERR_AFTER_STOP: Duration = Duration::from_millis(100);
 
 /// What charter says on a platform where it will not start an extension's program.
@@ -259,6 +260,7 @@ impl Executor {
     }
 
     /// Record the process group a running program is in, so [`Self::stop_all`] can reach it.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn started(&self, extension: &str, group: i32) {
         let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = running.get_mut(extension) {
@@ -268,6 +270,7 @@ impl Executor {
 
     /// Take the process group out of the table, before it is killed and reaped. See
     /// [`Self::stop_all`] for why the order is load-bearing.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn finished(&self, extension: &str) {
         let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = running.get_mut(extension) {

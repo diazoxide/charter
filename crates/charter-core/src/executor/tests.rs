@@ -85,6 +85,23 @@ fn marking(marker: &Path) -> String {
     )
 }
 
+/// Whether `pid` is gone, waiting a little for it to be.
+///
+/// **Not one `kill(pid, 0)`**: a killed helper whose parent died with it is a zombie until init
+/// reaps it, and a zombie answers the null signal. On a Linux runner that reaping is a few
+/// milliseconds after the kill — long enough for an immediate check to read "alive" and a test
+/// to go red for a process that is in fact dead.
+fn gone(pid: u32) -> bool {
+    let until = Instant::now() + Duration::from_secs(5);
+    while crate::process::alive(pid) {
+        if Instant::now() > until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
 fn alive_from(marker: &Path) -> Option<u32> {
     std::fs::read_to_string(marker)
         .ok()
@@ -346,10 +363,7 @@ fn a_program_that_never_answers_is_stopped_at_the_deadline() {
         "the caller waited {took:?}, past the deadline"
     );
     let pid = alive_from(&pid).expect("its pid");
-    assert!(
-        !crate::process::alive(pid),
-        "a program that timed out is still running"
-    );
+    assert!(gone(pid), "a program that timed out is still running");
 }
 
 #[test]
@@ -421,7 +435,7 @@ fn a_helper_the_program_started_is_stopped_with_it() {
 
     let helper = alive_from(&helper).expect("the helper's pid");
     assert!(
-        !crate::process::alive(helper),
+        gone(helper),
         "a helper outlived the question it was started for"
     );
 }
@@ -475,7 +489,7 @@ fn stopping_everything_kills_a_program_that_is_still_answering() {
         "stopping everything waited out the deadline ({took:?})"
     );
     let pid = alive_from(&pid).expect("its pid");
-    assert!(!crate::process::alive(pid), "the program outlived stop_all");
+    assert!(gone(pid), "the program outlived stop_all");
     assert!(executor.running().is_empty(), "the slot was never released");
 }
 
