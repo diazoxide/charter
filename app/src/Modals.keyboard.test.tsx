@@ -537,7 +537,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
                 title: "End chat 1 steward",
                 available: true,
                 reason: "",
-                does: { verb: "closeTab", tab: 1 },
+                does: { verb: "closeTab", tab: 1, ends: true },
                 note: ENDS_IT,
               }}
               onEnd={() => {}}

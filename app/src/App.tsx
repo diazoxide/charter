@@ -27,6 +27,7 @@ import { ApprovePlane } from "./ApprovePlane";
 import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { useContributedPanels } from "./Panels";
+import { useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
 import { fitting, LEAST, useRoom } from "./fits";
@@ -165,6 +166,9 @@ function App() {
    * empty list and charter's own two panels, which is every window until one is installed.
    */
   const contributedPanels = useContributedPanels();
+  /** The views approved extensions offer — the persona statistics button is one — asked once
+   *  per window for the same reason as the panels above. */
+  const extensionViews = useExtensionViews();
 
   /** The projects, as the strip and the palette name them. */
   const projects = useMemo<Project[]>(
@@ -586,9 +590,9 @@ function App() {
       createWorkspace: () => undefined,
       removeWorkspace: () => undefined,
       showChat: () => undefined,
-      // A persona belongs to a plane, and there is no plane here. The row it would open does
-      // not exist without one, for the same reason the workspace rows above do not.
-      showPersona: () => undefined,
+      // A view is shown in a project's tab, and there is no project here. The rows that open one
+      // do not exist without a plane, for the same reason the workspace rows above do not.
+      openView: () => undefined,
       pinTab: async () => nowhere(),
       pinWorkspace: async () => nowhere(),
       pinProject: windowDoes.pinProject,
@@ -897,6 +901,7 @@ function App() {
           onReport={onReport}
           alerts={alerts}
           contributed={contributedPanels}
+          views={extensionViews}
         />
       ))}
 

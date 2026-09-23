@@ -14,7 +14,16 @@ import {
   type Now,
   type Offer,
 } from "./actions";
-import { noTabs, openTab, selectTab, splitFocusedPane, type Tabs } from "./tabs";
+import {
+  noTabs,
+  openTab,
+  openView,
+  selectTab,
+  splitFocusedPane,
+  viewKey,
+  type Tabs,
+  type ViewRef,
+} from "./tabs";
 
 /** Nothing happens unless a test says it does, and each call is counted. */
 function doing(): Doing & { calls: string[] } {
@@ -47,7 +56,9 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`pinProject:${plane},${pinned}`);
       return { ok: true as const };
     }),
-    showPersona: note("showPersona"),
+    openView: vi.fn((view: ViewRef, title: string) => {
+      calls.push(`openView:${viewKey(view)},${title}`);
+    }),
     // The piece is part of what was called, because "which worktree did that row mean" is the
     // whole of what charter-app#174 changed here.
     removeWorktree: vi.fn(async (cut: Cut, force: boolean) => {
@@ -362,8 +373,90 @@ describe("the one list of actions", () => {
     expect(by(offers, "persona.show:steward")?.title).toBe("Show what steward is");
     expect(by(offers, "persona.show:steward")?.name).toBe("steward");
     expect(by(offers, "persona.show:release")?.does).toEqual({
-      verb: "showPersona",
-      persona: "release",
+      verb: "openView",
+      view: { from: null, view: "persona", key: "release" },
+      title: "release",
+    });
+  });
+
+  it("offers every view an approved extension offers, by the same verb a persona's tab is opened by", () => {
+    const offers = catalogue(
+      now({
+        views: [
+          {
+            extension: "persona-statistics",
+            id: "statistics",
+            title: "Statistics",
+            about: "personas",
+          },
+        ],
+      }),
+    );
+
+    const row = by(offers, "view.open:persona-statistics/statistics");
+    // Whose it is is in the words: what is in force is shown after approval (ADR 0041 item 5).
+    expect(row?.title).toBe("Open Statistics from persona-statistics");
+    expect(row?.does).toEqual({
+      verb: "openView",
+      view: { from: "persona-statistics", view: "statistics", key: "" },
+      title: "Statistics",
+    });
+  });
+
+  describe("on a tab that shows a view", () => {
+    const STEWARD: ViewRef = { from: null, view: "persona", key: "steward" };
+    const withView = () => openView(openTab(noTabs(), 7, "one"), STEWARD, "steward", "alpha");
+
+    it("closes the tab and ends nothing, so it is neither worded nor asked about as an ending", () => {
+      const tabs = withView();
+      const row = by(catalogue(now({ tabs })), `tab.close:${tabs.inFront}`);
+
+      expect(row?.title).toBe("Close steward");
+      expect(row?.does).toEqual({ verb: "closeTab", tab: tabs.inFront, ends: false });
+      expect(row?.note).toBeUndefined();
+    });
+
+    it("closes the view's pane with words that say so, and ends nothing", () => {
+      const row = by(catalogue(now({ tabs: withView() })), "pane.close");
+
+      expect(row?.title).toBe("Close this view");
+      expect(row?.does).toEqual({ verb: "closePane", ends: false });
+    });
+
+    it("sends the palette's key nowhere, because a view pane has no chat to send it to", () => {
+      const row = by(catalogue(now({ tabs: withView() })), "pane.sendkey");
+
+      expect(row?.available).toBe(false);
+      expect(row?.reason).toMatch(/shows a view, not a chat/);
+    });
+
+    it("still splits, so a chat can be started beside the view", () => {
+      expect(by(catalogue(now({ tabs: withView() })), "pane.split.right")?.available).toBe(true);
+    });
+
+    it("pins the tab as the view it shows, since it has no chat to pin", () => {
+      const tabs = withView();
+      const id = tabs.inFront as number;
+
+      expect(by(catalogue(now({ tabs })), `tab.pin:${id}`)?.title).toBe("Pin tab steward");
+      expect(
+        by(
+          catalogue(
+            now({
+              tabs,
+              pinned: { chats: [], views: [viewKey(STEWARD)], workspaces: [], projects: [] },
+            }),
+          ),
+          `tab.pin:${id}`,
+        )?.title,
+      ).toBe("Unpin tab steward");
+    });
+
+    it("still ends a chat's tab beside it, and asks about that", () => {
+      const tabs = withView();
+      const row = by(catalogue(now({ tabs })), `tab.close:${tabs.order[0]}`);
+
+      expect(row?.does).toEqual({ verb: "closeTab", tab: tabs.order[0], ends: true });
     });
   });
 
@@ -562,7 +655,7 @@ describe("carrying out a row", () => {
         "removeWorktree:svc/fix-it,false",
         "removeWorktree:svc/fix-it,true",
         "mergeWorktree:svc/fix-it",
-        "showPersona:steward",
+        "openView:charter/persona/steward,steward",
         "sendKey:F2",
         "openProject",
         "createProject",

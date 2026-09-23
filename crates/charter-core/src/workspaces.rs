@@ -573,28 +573,48 @@ pub(crate) fn read_store(plane_root: &Path, dir: &Path) -> io::Result<Vec<Entry>
 }
 
 /// A memory file's three parts: `# <title>`, `_<stamp> · <kind>_`, then the body.
+///
+/// **The stamp is taken from where the store writes it and nowhere else**: the first line that
+/// is not blank after the title (after the start of the file when there is no title), and only
+/// when that line has a stamp's shape — `memstore.body`'s `^_.*·.*_$`. It used to be the first
+/// line anywhere that began with `_`, so in a memory written by hand, with no stamp line, the
+/// first `_emphasis_` or `__init__.py` of the body was read as its stamp — and drawn as the
+/// memory's date, and handed to an extension as one (charter-app#212's review).
+///
+/// Python has no reader to agree with here: its store parses a memory's DATE
+/// (`memstore.memory_date`, [`crate::memstore::memory_date`]), which wants a date after the
+/// underscore and never takes a body line's words, and no command prints a stamp string.
 fn parse_entry(slug: &str, text: &str) -> Entry {
-    let mut title = String::new();
-    let mut stamp = String::new();
-    let mut body_from = 0usize;
-    for (i, line) in crate::mdsection::split_lines(text).into_iter().enumerate() {
-        // The first `# ` line anywhere, and `[2..]` ONCE — a stored title of `# Hello`
-        // reads as `# Hello`, not `Hello`, because charter takes `ln[2:].strip()`.
-        if title.is_empty()
-            && let Some(rest) = line.strip_prefix("# ")
-        {
-            title = crate::memstore::py_strip(rest).to_string();
-        } else if stamp.is_empty() && line.starts_with('_') {
-            stamp = line
-                .trim_matches('_')
+    let lines = crate::mdsection::split_lines(text);
+    // The first `# ` line anywhere, and `[2..]` ONCE — a stored title of `# Hello` reads as
+    // `# Hello`, not `Hello`, because charter takes `ln[2:].strip()`.
+    let heading = lines
+        .iter()
+        .enumerate()
+        .find_map(|(i, line)| line.strip_prefix("# ").map(|rest| (i, rest)));
+    let title = heading
+        .map(|(_, rest)| crate::memstore::py_strip(rest).to_string())
+        .unwrap_or_default();
+    let after_heading = heading.map_or(0, |(i, _)| i + 1);
+    let stamped = lines
+        .iter()
+        .enumerate()
+        .skip(after_heading)
+        .find(|(_, line)| !crate::memstore::py_strip(line).is_empty())
+        .map(|(i, line)| (i, crate::memstore::py_strip(line)))
+        .filter(|(_, line)| crate::memstore::is_stamp_line(line));
+    let (stamp, body_from) = match stamped {
+        Some((i, line)) => (
+            line.trim_matches('_')
                 .split(" · ")
                 .next()
                 .unwrap_or_default()
-                .to_string();
-            body_from = i + 1;
-        }
-    }
-    let body = crate::mdsection::split_lines(text)
+                .to_string(),
+            i + 1,
+        ),
+        None => (String::new(), 0),
+    };
+    let body = lines
         .into_iter()
         .skip(body_from)
         .collect::<Vec<_>>()
@@ -680,4 +700,51 @@ fn replace_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// A containment refusal as an IO error, so every caller handles one kind of failure.
 fn refusal(refused: crate::contain::Refused) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string())
+}
+
+#[cfg(test)]
+mod entry_tests {
+    use super::*;
+
+    #[test]
+    fn a_memory_the_store_wrote_has_its_stamp_and_its_body() {
+        let entry = parse_entry(
+            "fact",
+            "# A fact\n\n_2026-09-22 10:00 · persistent_\n\nThe body.\n",
+        );
+        assert_eq!(entry.title, "A fact");
+        assert_eq!(entry.stamp, "2026-09-22 10:00");
+        assert_eq!(entry.body, "The body.");
+    }
+
+    #[test]
+    fn a_body_line_that_starts_with_an_underscore_is_never_read_as_the_stamp() {
+        // No stamp line: the first `_` line is the body's, and it stays the body's.
+        let entry = parse_entry(
+            "db",
+            "---\nname: db\n---\n# prod db\n\nnotes\n\n_the prod password is hunter2_\n",
+        );
+        assert_eq!(entry.stamp, "");
+        assert!(entry.body.contains("hunter2"), "{entry:?}");
+
+        let entry = parse_entry("py", "# layout\n\n__init__.py re-exports the loader\n");
+        assert_eq!(entry.stamp, "", "{entry:?}");
+    }
+
+    #[test]
+    fn a_stamp_shaped_line_further_down_the_body_is_not_the_stamp() {
+        let entry = parse_entry(
+            "late",
+            "# late\n\nfirst words\n\n_2026-09-22 10:00 · persistent_\n",
+        );
+        assert_eq!(entry.stamp, "");
+    }
+
+    #[test]
+    fn a_memory_with_no_heading_is_stamped_from_its_first_line() {
+        let entry = parse_entry("bare", "_2026-09-22 10:00 · persistent_\n\nbody\n");
+        assert_eq!(entry.title, "bare");
+        assert_eq!(entry.stamp, "2026-09-22 10:00");
+        assert_eq!(entry.body, "body");
+    }
 }

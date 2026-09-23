@@ -5,9 +5,12 @@
 //! ([`pick_extension`]), read one and ask about it ([`install_extension`]), and record the
 //! yes ([`approve_extension`]).
 //!
-//! **There is no executor here and there is no fifth command that would need one.** charter
-//! ADR 0041 stages this deliberately — the registry first, the subprocess afterwards — so that
-//! the first extension runtime is not also the thing that invents the list it runs against.
+//! **There is no executor here, and that is still deliberate.** charter ADR 0041 staged it —
+//! the registry first, the subprocess afterwards — so that the first extension runtime was not
+//! also the thing that invented the list it runs against. The runtime now exists
+//! (`charter_core::executor`, drawn by `crate::views`) and it was built against this list: it
+//! re-reads the record and re-takes the fingerprint at every press, and nothing in this file
+//! starts anything.
 //!
 //! **Installing is two clicks, and it has to be**, for the reason `approve_plane` is two: the
 //! button that chooses a directory and the button that says yes to what was found in it are
