@@ -6,7 +6,7 @@ members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "
 default-members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/release-manifest", "crates/changelog", "crates/stand-in"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"

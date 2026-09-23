@@ -254,7 +254,12 @@ mod tests {
         let notes = about
             .notes
             .expect("the shipped changelog has notes for this build");
-        assert!(!notes.markdown.is_empty(), "{notes:?}");
+        // Right after a release the next version's `[Unreleased]` is empty by design — About
+        // says nothing is recorded yet — so emptiness is allowed there and nowhere else.
+        assert!(
+            !notes.markdown.is_empty() || notes.version == "Unreleased",
+            "{notes:?}"
+        );
         assert!(!notes.version.starts_with("0.62"), "{notes:?}");
     }
 }
