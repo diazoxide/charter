@@ -536,7 +536,7 @@ pub struct TrendTurn {
 
 /// The session's recorded turns, oldest first — the TREND, where [`gauge`] is the last turn.
 ///
-/// charter ADR 0038 names it separately from the gauge — *"the trend over a session's turns
+/// ADR 0038 names it separately from the gauge — *"the trend over a session's turns
 /// rather than this turn's percentage"* — and Python never drew it as a picture; it used it
 /// for the cold-streak hint and the rebuild count. This is the same rows, handed over whole.
 /// A row too short to be a turn (`len(p) < 3`, which every Python reader skips) is not one.

@@ -372,7 +372,7 @@ export const commands = {
 	 *  and that one opens the operator's shell.
 	 * 
 	 *  `show_footer` is the picker's footer checkbox, and it is a property of THIS chat
-	 *  (charter ADR 0029). It reaches the harness as an environment variable set at the exec, so
+	 *  (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
 	 *  environment its harness was started with, and no later click can change it.
 	 */
@@ -847,7 +847,7 @@ export type ExtensionView = {
 export type GaugeTone = "ok" | "warn" | "bad";
 
 /**
- *  What has contributed what to this window — charter ADR 0041's item 2, and the thing every
+ *  What has contributed what to this window — ADR 0041's item 2, and the thing every
  *  later decision about extensions is read off.
  */
 export type InstalledExtensions = {
@@ -987,7 +987,7 @@ export type OpenChat = {
 	/**  What its harness cannot tell charter, said on the chat — none where it tells all. */
 	unreported: string | null,
 	/**
-	 *  Whether the operator pinned it (charter ADR 0039). It rides the plane's own app
+	 *  Whether the operator pinned it (ADR 0039). It rides the plane's own app
 	 *  record, so a pinned chat comes back pinned at the next launch.
 	 */
 	pinned: boolean,
@@ -1222,7 +1222,7 @@ export type PinReport = {
 };
 
 /**
- *  What the operator has pinned in one project (charter ADR 0039, stored per ADR 0040).
+ *  What the operator has pinned in one project (ADR 0039, stored per ADR 0040).
  * 
  *  The project's own pin and its pinned workspaces come from the machine store; a pinned
  *  CHAT is not here, because a chat pin rides that chat's own record and reaches the window

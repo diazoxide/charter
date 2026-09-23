@@ -111,7 +111,7 @@ export type Does =
   | { verb: "closePane"; ends: boolean }
   | { verb: "closeTab"; tab: number; ends: boolean }
   | { verb: "selectTab"; tab: number }
-  /** Pins or unpins a chat, a workspace or a project (charter ADR 0039).
+  /** Pins or unpins a chat, a workspace or a project (ADR 0039).
    *
    *  Three verbs and not one, because they are three stores: a project's pin and a
    *  workspace's go in the machine store and a chat's goes in the plane's own app record
@@ -160,7 +160,7 @@ export type Does =
    *  first open of it raises the same trust dialog any other project's would. */
   | { verb: "createProject" }
   /** Shows what has contributed what to this window: charter's own themes, and every
-   *  extension this machine has, with what each is contributing right now (charter ADR 0041).
+   *  extension this machine has, with what each is contributing right now (ADR 0041).
    *  It puts nothing in force by itself — an extension contributes only once it is approved,
    *  and the approval is the dialog's. */
   | { verb: "showExtensions" }
@@ -272,7 +272,7 @@ export type Now = {
   /** The chats asking for you, oldest first. */
   needsYou: readonly number[];
   /**
-   * What this operator has pinned (charter ADR 0039).
+   * What this operator has pinned (ADR 0039).
    *
    * Three lists rather than a flag on each thing, because a pin is not a property of the
    * chat, the workspace or the plane — it is the operator's arrangement of them, held
@@ -517,7 +517,7 @@ export function catalogue(now: Now): Offer[] {
   // opens that question; it never answers it.
   offers.push(can("chat.new", "New tab", { verb: "chat.new" }));
 
-  // **Always available, and available with nothing open.** charter ADR 0041 item 5: ADR 0035
+  // **Always available, and available with nothing open.** ADR 0041 item 5: ADR 0035
   // shows what a project contributes in the dialog and nothing shows it afterwards, so the
   // surface every later trust decision is read on is the one that lists what is in force NOW.
   // It is about the machine and not about a project, which is why it does not wait for one.
@@ -682,7 +682,7 @@ export function catalogue(now: Now): Offer[] {
   // **And every view an approved extension offers, one row each.** The personas panel's heading
   // draws the same views as buttons for a pointer; this is how a keyboard reaches them, and it
   // is the same verb. The extension's id is in the words, because what is in force is shown
-  // after approval and not only at it (charter ADR 0041 item 5). The whole plane's view, never
+  // after approval and not only at it (ADR 0041 item 5). The whole plane's view, never
   // one persona's — a persona's is opened from that persona's own tab.
   for (const view of now.views ?? []) {
     offers.push(

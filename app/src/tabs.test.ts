@@ -532,7 +532,7 @@ describe("a tab a handoff opened (charter-app#204)", () => {
   });
 });
 
-describe("a tab that shows a view (charter ADR 0043, as amended 2026-09-23)", () => {
+describe("a tab that shows a view (ADR 0043, as amended 2026-09-23)", () => {
   const STEWARD: ViewRef = { from: null, view: "persona", key: "steward" };
   const STATISTICS: ViewRef = { from: "persona-statistics", view: "statistics", key: "" };
   const filed = () => "alpha";

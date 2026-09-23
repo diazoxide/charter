@@ -14,7 +14,7 @@ import App from "./App";
 import type { ViewTab } from "./bindings";
 
 /**
- * **A tab that holds something other than a chat**, against the whole window (charter ADR 0043,
+ * **A tab that holds something other than a chat**, against the whole window (ADR 0043,
  * as amended 2026-09-23 — the operator: *"that in tabs we can have what we want - not only
  * harnesses"*).
  *

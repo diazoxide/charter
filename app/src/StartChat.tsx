@@ -31,7 +31,7 @@ const NO_PERSONA = "";
  * stops a chat editing plane config — which is why the ask is about the words that are
  * about to run and not about the profile's name.
  *
- * **The footer checkbox is asked here and nowhere else** (charter ADR 0029). Inside a pane
+ * **The footer checkbox is asked here and nowhere else** (ADR 0029). Inside a pane
  * charter prints an empty line where its own footer would go, because the app's panels
  * already draw the plane — and this is where an operator says "not this chat". The choice is
  * between charter's footer and nothing: `charter statusline` IS Claude Code's `statusLine`
@@ -91,7 +91,7 @@ export function StartChat({
     options.persona !== null && options.personas.includes(options.persona) ? options.persona : null,
   );
   // Off, which is the app as it has always behaved: a pane's footer is blank unless
-  // this chat asks for it (charter ADR 0029). Not remembered between chats on purpose —
+  // this chat asks for it (ADR 0029). Not remembered between chats on purpose —
   // there is no plane-wide or machine-wide setting for it, and a box that silently stayed
   // ticked would be one.
   const [showFooter, setShowFooter] = useState(false);

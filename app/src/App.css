@@ -497,7 +497,7 @@ body {
   min-width: 0;
 }
 
-/* The mark on something the operator pinned (charter ADR 0039). A dot and not a `📌`: an
+/* The mark on something the operator pinned (ADR 0039). A dot and not a `📌`: an
    emoji is drawn by the operating system at a size and a colour this window does not
    choose, and next to a state dot of charter's own it reads as a second, louder thing. What
    pinning DOES is draw the thing first on its strip; the mark is only how you tell that a
@@ -888,7 +888,7 @@ button.show-more:focus-visible {
   min-height: 0;
 }
 
-/* **The four regions** (charter ADR 0038). The outer group stacks the upper half over the
+/* **The four regions** (ADR 0038). The outer group stacks the upper half over the
    bottom bar; the inner one puts the explorer, the panes and the right-hand side in a row.
    Every boundary is a `[data-separator]`, which is the same handle the pane splits use. */
 .regions {
@@ -930,7 +930,7 @@ button.show-more:focus-visible {
    what makes them look like part of it rather than like the bar's controls moved down. */
 
 /* The left region: the repo and worktree explorer, which is the selector WITHIN a workspace
-   (charter ADR 0038). */
+   (ADR 0038). */
 /* **A row names one thing, and a name is never broken across two lines.** The operator's
    own words: *"all trees components texts should not be breakable to new line — it should be
    horizontal scrollable."* In a narrow left region `alpha` and `the workspace itself` came
@@ -1564,7 +1564,7 @@ button.show-more:focus-visible {
   white-space: nowrap;
 }
 
-/* What a new chat is asked: the harness, the persona, the footer (ADR 0022, charter ADR 0029).
+/* What a new chat is asked: the harness, the persona, the footer (ADR 0022, ADR 0029).
 
    **This is the rule that was missing.** The rows were five bare `<span>`s in one `<label>`
    with nothing laying them out, so they ran together — `claudeclaudeclaudebuilt-indefault` on
@@ -1782,7 +1782,7 @@ button.show-more:focus-visible {
   border-radius: 2px;
 }
 
-/* The needs-you queue, now in the right region rather than on the bar (charter ADR 0038).
+/* The needs-you queue, now in the right region rather than on the bar (ADR 0038).
    A column, because it has a side to itself and a queue that has to work at fifty chats was
    sharing one line with six other things. */
 .needs-you {
@@ -1905,7 +1905,7 @@ button.show-more:focus-visible {
   padding-inline-start: 1.1rem;
 }
 
-/* The right region: what is asking for you (charter ADR 0038) — the needs-you queue, the
+/* The right region: what is asking for you (ADR 0038) — the needs-you queue, the
    alerts sentence, the workspace's todos and the plane's personas. */
 .panels {
   height: 100%;
@@ -2302,7 +2302,7 @@ button.show-more:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-/* **Which regions are drawn, at the right-hand corner of the line** (charter ADR 0038,
+/* **Which regions are drawn, at the right-hand corner of the line** (ADR 0038,
    charter-app#193). They were labelled buttons on `header.bar`; the operator asked twice for
    them down here — *"show hide buttons can be movet to bottom status bar — again like ZED"* —
    and then *"let make them without labels, just small icons without texts, texts only with
@@ -2670,7 +2670,7 @@ button.show-more:focus-visible {
   font-size: 0.8rem;
 }
 
-/* The extension list (charter ADR 0041 item 5: what is in force, after approval and not only
+/* The extension list (ADR 0041 item 5: what is in force, after approval and not only
    at it). It is a `.warning` as well, so the dialog chrome is the one every other consent
    surface in this window uses rather than a second look nobody maintains. Only the row shape
    is here. */
@@ -3085,7 +3085,7 @@ button.show-more:focus-visible {
    No colour is written here. Every value is a semantic token out of `app/src/theme/`
    (`docs/design-system.md`), and a test fails the build on a literal. */
 
-/* Whose panel this is, beside its heading — charter ADR 0041 item 5: what is in force is
+/* Whose panel this is, beside its heading — ADR 0041 item 5: what is in force is
    shown after approval and not only at it. Quiet, because it is provenance and not content:
    an operator reads it when he is asking where a panel came from. */
 .panels .panel-from {
@@ -3330,7 +3330,7 @@ button.show-more:focus-visible {
 }
 
 /* =====================================================================================
-   THE PERSONAS PLUGIN, END TO END — view tabs and the chart (charter ADR 0041 stage 2, and
+   THE PERSONAS PLUGIN, END TO END — view tabs and the chart (ADR 0041 stage 2, and
    ADR 0043 as amended 2026-09-23)
    =====================================================================================
    A view in a tab's pane — the persona view, an extension's statistics — and the chart block
@@ -3345,7 +3345,7 @@ button.show-more:focus-visible {
    says nothing its numbers do not (charter-app#209). */
 
 /* **A view in a pane** (`Views.ViewPane`) — a tab that holds something other than a chat
-   (charter ADR 0043, as amended 2026-09-23). The pane is the same `.pane` a terminal is drawn
+   (ADR 0043, as amended 2026-09-23). The pane is the same `.pane` a terminal is drawn
    in, with the same focus rule, so a view and a chat split side by side read as two panes of
    one tab and not as a chat with something laid over it.
 

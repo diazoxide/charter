@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Measures the app against the spec's limits (charter repo,
-// docs/superpowers/specs/2026-09-17-charter-app.md, "Limits"), with tmux re-measured beside it
+// Measures the app against the spec's limits (docs/spec.md, "Limits"), with tmux
+// re-measured beside it
 // as a reference. Run from the repository root:
 //
 //   node tools/bench.mjs                 # build, then measure everything, both renderer arms

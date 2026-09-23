@@ -329,7 +329,7 @@ pub fn version_move_refusal(verb: &str) -> Report {
 }
 
 // ------------------------------------------------------------------------------------------
-// `charter update --channel` (charter ADR 0042)
+// `charter update --channel` (ADR 0042)
 // ------------------------------------------------------------------------------------------
 
 /// Which stream the app takes its next version from, said beside [`THE_APP_MOVES_IT`].
@@ -707,7 +707,7 @@ mod tests {
         assert!(version.contains(THE_APP_MOVES_IT), "{version}");
     }
 
-    // `charter update --channel` (charter ADR 0042)
+    // `charter update --channel` (ADR 0042)
 
     #[test]
     fn update_says_which_channel_the_app_takes_charter_from_right_under_the_refusal() {

@@ -18,7 +18,7 @@
  * **Values are numbers, never text.** A duration is a count of milliseconds and an easing is
  * the four numbers of a cubic Bézier. `motionVariables` writes the CSS from those numbers, so
  * nothing a theme file says is ever copied into a declaration — the parse-and-re-emit rule
- * (charter ADR 0041, property 4) that makes a theme safe to take from an extension. `hex and
+ * (ADR 0041, property 4) that makes a theme safe to take from an extension. `hex and
  * only hex` is the same boundary for colour; `"150ms; } body { display: none"` has nowhere to
  * go when the only thing read is a number.
  *

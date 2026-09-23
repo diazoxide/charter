@@ -89,7 +89,7 @@ async function closeButtons(): Promise<WebdriverIO.Element[]> {
   ];
 }
 
-/** The workspaces on the strip above the tabs (charter ADR 0036). */
+/** The workspaces on the strip above the tabs (ADR 0036). */
 async function workspaceTabs(): Promise<WebdriverIO.Element[]> {
   return [...(await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements())];
 }
@@ -120,7 +120,7 @@ async function hiddenTabs(): Promise<number> {
  * (ADR 0036), and one app process serves the whole run — so a chat another spec left in
  * another workspace is a live harness this spec would otherwise count as a leak.
  *
- * **The strip collapses rather than scrolling** (charter ADR 0039, as amended), so at fifty
+ * **The strip collapses rather than scrolling** (ADR 0039, as amended), so at fifty
  * chats it draws a handful and the rest are behind the show-more button. This loop still
  * terminates, and the reason is worth writing down because it is the whole of the
  * reachability argument: closing a drawn tab gives the strip room for a hidden one, so the

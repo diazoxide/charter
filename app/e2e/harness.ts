@@ -335,7 +335,7 @@ function theProfilesProgram(program: string): string {
     '  echo \'[{"id":"charter@charter","scope":"user","enabled":true}]\'',
     "  exit 0",
     "fi",
-    "# What the chat's environment says about charter's footer (charter ADR 0029), written",
+    "# What the chat's environment says about charter's footer (ADR 0029), written",
     "# down where a scenario can read it. `charter statusline` is Claude Code's `statusLine`",
     "# command and inherits this environment; the fake harness runs no such command, so this",
     "# file is how a scenario sees what a real one would have been started with. The chat's",
@@ -524,7 +524,7 @@ export function anEmptyRecord(plane: string): void {
  * A config home of this run's own, so charter's machine store is empty when the app starts.
  *
  * The store holds which projects this machine remembers and which the operator has approved
- * (charter ADR 0034), and it lives under `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`,
+ * (ADR 0034), and it lives under `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`,
  * else `~/.config`. Left alone, a scenario run would read and WRITE the runner's own — so
  * "charter asks about a project nobody has approved" would pass on a fresh runner and fail on
  * the second run of the same one, which is the worst kind of green.

@@ -1,7 +1,7 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
 
 /**
- * The right region and the bottom one (charter ADR 0038), against the real app started in a
+ * The right region and the bottom one (ADR 0038), against the real app started in a
  * copy of the `daily` fixture plane — with real clones in it, one real piece cut off `svc`,
  * and the forge cache a refresher would have left.
  *
@@ -29,7 +29,7 @@ async function untilSays(testid: string, want: string | RegExp): Promise<void> {
   }
 }
 
-/** Focuses a workspace from the strip, which is the axis (charter ADR 0036).
+/** Focuses a workspace from the strip, which is the axis (ADR 0036).
  *
  *  By the tab's own `.workspace-name`: a strip tab carries counts beside its name, and a
  *  `button=<name>` match across the window would pick whichever came first. */
@@ -247,7 +247,7 @@ describe("the bottom bar", () => {
   });
 
   it("has nothing in it to press, because the bottom is what is true and not what you do", async () => {
-    // charter ADR 0038's reading — *"the bottom is where you read what is true and do not
+    // ADR 0038's reading — *"the bottom is where you read what is true and do not
     // touch it"* — as far as a test can hold it.
     await onAlpha();
     await untilSays("repo-svc", "main");
@@ -279,7 +279,7 @@ describe("the right-hand region", () => {
    * disk; **neither can say that the two meet through a real command, across specta's generated
    * bindings, in a Vite build.** That is this.
    *
-   * `data-panel-from` is the attribute the claim rides on, and it is deliberately one charter
+   * `data-panel-from` is the attribute the claim rides on, and it is deliberately one
    * ADR 0041 item 5 already wanted on screen — *show what is in force, after approval and not
    * only at it*. If the production build dropped it, an operator would have no way to tell a
    * panel his own charter draws from one an extension contributed, and this goes red.
@@ -388,7 +388,7 @@ describe("the layout as data", () => {
     await untilTheStripIsRead();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
-    // The default arrangement (charter ADR 0038), read off the real DOM rather than off the
+    // The default arrangement (ADR 0038), read off the real DOM rather than off the
     // JSX: the explorer in the left slot, what is asking for you in the right, the repo state
     // along the bottom.
     await expect(await $('[data-panel][id="region-left"] [data-testid="explorer"]')).toBeExisting();

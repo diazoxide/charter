@@ -213,7 +213,7 @@ describe("the title bar", () => {
     expect(await update.getAttribute("aria-label")).toContain("nothing new known");
 
     // And it is not drawn twice. The status line still carries the plane's PIN, which is a
-    // different question about a different thing (charter ADR 0030).
+    // different question about a different thing (ADR 0030).
     expect(await $('[data-testid="status-line"] [data-testid="status-update"]').isExisting()).toBe(
       false,
     );

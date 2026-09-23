@@ -13,7 +13,7 @@ import {
 import { viewKey, type ViewRef } from "./tabs";
 
 /**
- * **Views: what a tab shows when it does not show a chat** — charter ADR 0043 as amended
+ * **Views: what a tab shows when it does not show a chat** — ADR 0043 as amended
  * 2026-09-23, and ADR 0041 stage 2's window half.
  *
  * A tab is a layout of panes and a pane holds a session or a view (`tabs.ts`). A view is named

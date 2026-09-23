@@ -112,7 +112,7 @@ describe("starting a chat", () => {
     // the program's name — the program here is `claude-stand-in`, a wrapper, and
     // `Harness::of_command` answers `None` for one exactly as it does for a shell.
     //
-    // In the explorer since charter ADR 0038: the chats are listed under the spot each one
+    // In the explorer since ADR 0038: the chats are listed under the spot each one
     // works in, and the left region is `nav[aria-label="Explorer"]`.
     const explorer = await $('nav[aria-label="Explorer"]');
     await explorer.waitForDisplayed({ timeout: 20_000 });

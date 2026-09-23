@@ -1,4 +1,4 @@
-//! `charter doctor`, as the window can reach it (charter ADR 0038's last named gap).
+//! `charter doctor`, as the window can reach it (ADR 0038's last named gap).
 //!
 //! **Why this exists, in one incident.** On 2026-09-21 a charter launched from Finder could not
 //! find `claude`: macOS starts a GUI app from `launchd` with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`

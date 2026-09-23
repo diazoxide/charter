@@ -112,7 +112,7 @@ impl Plane {
             cwd: Some(self.root().to_path_buf()),
             resume: None,
             // The default every chat starts under, so the tests below describe the app as
-            // it ships (charter ADR 0029).
+            // it ships (ADR 0029).
             show_footer: false,
         }
     }

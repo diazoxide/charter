@@ -12,7 +12,7 @@ import { ReleaseNotes } from "./ReleaseNotes";
  *
  * # The update offer
  *
- * The updater (#158, charter ADR 0042) checks on its own and installs only on a click, and its
+ * The updater (#158, ADR 0042) checks on its own and installs only on a click, and its
  * author named this file's job: listen for `update://checked`, show the offer, call
  * `installUpdate()` from it, and show `updateChannel()` / `setUpdateChannel()` beside it.
  *

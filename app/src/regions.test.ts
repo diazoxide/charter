@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe("the arrangement a window has never been told about", () => {
-  it("is charter ADR 0038's four regions: explorer left, attention right, state along the bottom", () => {
+  it("is ADR 0038's four regions: explorer left, attention right, state along the bottom", () => {
     expect(remembered()).toEqual([
       { id: "explorer", side: "left", order: 0, collapsed: false },
       { id: "aside", side: "right", order: 0, collapsed: false },

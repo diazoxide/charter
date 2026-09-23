@@ -1,6 +1,6 @@
 //! What charter hands an extension's program, per subject, and the one sentence that says so.
 //!
-//! **One module, so that what leaves charter is one file to audit.** charter ADR 0041's
+//! **One module, so that what leaves charter is one file to audit.** ADR 0041's
 //! capability table says of the plane on disk: *"A plugin gets what the protocol hands it.
 //! 'Read the plane' is not a capability, it is the absence of one."* So a view does not get a
 //! path to the plane, a directory to walk or a handle to read with. It gets a value, built here,

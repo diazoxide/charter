@@ -2,7 +2,7 @@ import { browser, expect, $, $$ } from "@wdio/globals";
 import { pressAndStart } from "../opening.js";
 
 /**
- * The left region — the repo and worktree **explorer** (charter ADR 0038) — against the real
+ * The left region — the repo and worktree **explorer** (ADR 0038) — against the real
  * app started in a copy of the `daily` fixture plane, with real clones in it and one real
  * piece cut off `svc`. Nothing here is stubbed: the app reads the files and runs git.
  *
@@ -19,7 +19,7 @@ import { pressAndStart } from "../opening.js";
  * lifecycle's "2 sessions" into 4, measured on both platforms. The name keeps the position.
  */
 
-/** The workspaces the strip is listing, in order (charter ADR 0036).
+/** The workspaces the strip is listing, in order (ADR 0036).
  *
  *  The names alone: a strip tab also says how many chats are in a workspace that is not on
  *  screen, and WebdriverIO's Tauri service keeps ONE app process for the whole run, so a
@@ -166,7 +166,7 @@ describe("the explorer", () => {
   });
 
   it("does not list every workspace, because the strip above already answers that", async () => {
-    // charter ADR 0038, and the reason this region was rewritten: the old sidebar drew every
+    // ADR 0038, and the reason this region was rewritten: the old sidebar drew every
     // workspace with its vision text under the strip that had just been made the axis.
     await onAlpha();
     await $('[data-testid="clone-svc"]').waitForExist({ timeout: 20_000 });
@@ -218,7 +218,7 @@ describe("the explorer", () => {
   });
 
   it("shows one workspace's chats on the strip, and keeps the others running", async () => {
-    // The axis the tmux frame had and the port lost (charter ADR 0036): the chat strip shows
+    // The axis the tmux frame had and the port lost (ADR 0036): the chat strip shows
     // the focused workspace's chats — and a glance at another workspace ends nothing, which
     // is the same guarantee a project behind another one has (#125).
     await untilListed(["alpha", "beta"]);

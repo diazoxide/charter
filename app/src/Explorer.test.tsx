@@ -106,7 +106,7 @@ describe("the explorer", () => {
   });
 
   it("does not list every workspace, because the strip above already answers that", () => {
-    // charter ADR 0038: the sidebar used to draw every workspace with its vision text, under
+    // ADR 0038: the sidebar used to draw every workspace with its vision text, under
     // the strip that had just been made the axis. That duplication is what this region
     // replaced, and a test is the only thing that keeps it replaced.
     draw({});

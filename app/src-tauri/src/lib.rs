@@ -322,7 +322,7 @@ struct OpenChat {
     persona: Option<String>,
     /// What its harness cannot tell charter, said on the chat — none where it tells all.
     unreported: Option<String>,
-    /// Whether the operator pinned it (charter ADR 0039). It rides the plane's own app
+    /// Whether the operator pinned it (ADR 0039). It rides the plane's own app
     /// record, so a pinned chat comes back pinned at the next launch.
     pinned: bool,
 }
@@ -644,7 +644,7 @@ fn approve_profile(
 /// and that one opens the operator's shell.
 ///
 /// `show_footer` is the picker's footer checkbox, and it is a property of THIS chat
-/// (charter ADR 0029). It reaches the harness as an environment variable set at the exec, so
+/// (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 /// it is decided here and nowhere later: Claude Code's footer command inherits the
 /// environment its harness was started with, and no later click can change it.
 // One over clippy's threshold, and it is a command's argument list: every one of these is a
@@ -811,7 +811,7 @@ fn chat_in_front(
     Ok(())
 }
 
-/// What the operator has pinned in one project (charter ADR 0039, stored per ADR 0040).
+/// What the operator has pinned in one project (ADR 0039, stored per ADR 0040).
 ///
 /// The project's own pin and its pinned workspaces come from the machine store; a pinned
 /// CHAT is not here, because a chat pin rides that chat's own record and reaches the window
@@ -1266,7 +1266,7 @@ pub fn run() {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
-            // The extension executor (charter ADR 0041 stage 2). Managed for the table of
+            // The extension executor (ADR 0041 stage 2). Managed for the table of
             // programs it is running, which `Exit` below empties.
             app.manage(views::Views::default());
             // What each window is holding, and which of its projects it has in front. Empty

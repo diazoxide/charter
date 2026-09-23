@@ -290,7 +290,7 @@ function Row({
             className="row-card"
             data-testid={`row-detail-${row.key}`}
             /* `side="left"` is where it opens from in the default arrangement and no more than
-               that: a region MOVES (charter ADR 0038), and Radix flips to the other side when
+               that: a region MOVES (ADR 0038), and Radix flips to the other side when
                there is no room, which is what makes naming a side safe. */
             side="left"
             align="start"

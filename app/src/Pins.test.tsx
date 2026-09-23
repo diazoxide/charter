@@ -6,7 +6,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 
 /**
- * Pinning, against the whole window (charter ADR 0039, stored per ADR 0040).
+ * Pinning, against the whole window (ADR 0039, stored per ADR 0040).
  *
  * **Three levels and three stores, which is the thing these are here to keep true.** A
  * project's pin and a workspace's go in the machine store; a chat's goes in the plane's own

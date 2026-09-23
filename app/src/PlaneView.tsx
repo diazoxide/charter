@@ -164,9 +164,9 @@ export function PlaneView({
   alerts?: Alerts;
   /** What approved extensions contribute to the side region. The window's, for the same reason
    *  the alerts are: an extension is installed per machine and never travels in a plane
-   *  (charter ADR 0041), so one survey serves every project this window holds. */
+   *  (ADR 0041), so one survey serves every project this window holds. */
   contributed?: readonly PanelView[];
-  /** The views approved extensions offer (charter ADR 0041 stage 2), the window's for the
+  /** The views approved extensions offer (ADR 0041 stage 2), the window's for the
    *  same reason: one survey per window, not one per project. */
   views?: readonly ExtensionView[];
 }) {
@@ -295,7 +295,7 @@ export function PlaneView({
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
   /**
-   * What this operator has pinned in this project (charter ADR 0039).
+   * What this operator has pinned in this project (ADR 0039).
    *
    * **Two states and not one, because they are two stores** (ADR 0040). The workspaces come
    * from the machine store, which is where an arrangement of things the store already names
@@ -452,7 +452,7 @@ export function PlaneView({
 
   /**
    * The window's view tabs, told to the core whenever they change — so the record brings them
-   * back at the next launch, as it brings back chats (charter ADR 0043, as amended).
+   * back at the next launch, as it brings back chats (ADR 0043, as amended).
    *
    * **The whole list, and only when it differs from what was last said.** The core writes the
    * record when what it holds changes and not otherwise (`Chats::hold_views`), and this keeps a
@@ -647,7 +647,7 @@ export function PlaneView({
    * drawn once, on the title bar, which is the window's own chrome.
    *
    * The pin stays, because it is the opposite kind of fact: `charter version`'s verdict about
-   * THIS plane's `[charter] version` (charter ADR 0030). It belongs beside the project it is
+   * THIS plane's `[charter] version` (ADR 0030). It belongs beside the project it is
    * about, and two open projects can honestly disagree about it.
    */
   const pin = usePin(plane);
@@ -845,7 +845,7 @@ export function PlaneView({
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
 
   /** A row was picked: the chat starts on that profile, with that persona, and either
-   *  drawing charter's footer in its pane or leaving it blank (charter ADR 0029). */
+   *  drawing charter's footer in its pane or leaving it blank (ADR 0029). */
   const startPicked = useCallback(
     async (profile: string, persona: string | null, showFooter: boolean) => {
       const where = picking?.where;
@@ -1894,7 +1894,7 @@ export function PlaneView({
         </p>
       ))}
 
-      {/* **The four regions** (charter ADR 0038): by default the explorer on the left, the
+      {/* **The four regions** (ADR 0038): by default the explorer on the left, the
           panes in the middle, what is asking for you on the right, and what the repos are
           doing along the bottom. Every one of them resizes, and each of the three around the
           centre can be put away — the centre cannot, because the terminal panes are the
@@ -2118,12 +2118,12 @@ export type WindowDoing = {
    *  is another project tab, and the open it ends in is the gated one (ADR 0035). */
   createProject: () => void;
   /** Shows what has contributed what to this window. The window's and not a project's: an
-   *  extension is machine state (charter ADR 0041), so it is the same list behind every tab. */
+   *  extension is machine state (ADR 0041), so it is the same list behind every tab. */
   showExtensions: () => void;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
-   *  in front draws nothing, and its pin still has to be on that strip (charter ADR 0039). */
+   *  in front draws nothing, and its pin still has to be on that strip (ADR 0039). */
   pinProject: (plane: string, pinned: boolean) => Promise<Ran>;
   quit: () => void;
 };
@@ -2456,7 +2456,7 @@ export type Hidden = {
 };
 
 /**
- * The mark on something the operator pinned (charter ADR 0039).
+ * The mark on something the operator pinned (ADR 0039).
  *
  * **A mark and not a button, and that is the whole of pinning's surface on a strip.** A `📌`
  * control on every tab is fifty more controls on the one strip that already broke at fifty

@@ -10,7 +10,7 @@
 //! the filesystem would make a traversal succeed exactly when the attacker's target happens
 //! to exist, which is the one case where the answer must not change.
 //!
-//! # What this does not defend against, on purpose (charter ADR 0028)
+//! # What this does not defend against, on purpose (ADR 0028)
 //!
 //! **A gate here answers about a path, and it does not hold it.** Every check below is a
 //! `stat` walk; the caller then hands the same path, by name, to `fs::write`, `File::open`,

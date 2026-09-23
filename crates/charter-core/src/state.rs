@@ -537,7 +537,7 @@ impl Board {
     /// When this chat last moved, as a count of moves on this board — bigger is more recent.
     ///
     /// **A count and not a clock, deliberately.** The only thing anything asks of it is an
-    /// order: charter ADR 0039 puts the chat strip's overflow menu in last-activity order,
+    /// order: ADR 0039 puts the chat strip's overflow menu in last-activity order,
     /// and an order is all that needs. Three things follow from choosing the weaker fact:
     ///
     /// * There is no clock to disagree with. Two chats that moved in the same millisecond
@@ -1428,7 +1428,7 @@ mod tests {
         assert!(board.needs_you().is_empty());
     }
 
-    // ----- when a chat last moved (charter ADR 0039) -----
+    // ----- when a chat last moved (ADR 0039) -----
 
     #[test]
     fn the_chat_that_moved_last_has_the_highest_count() {

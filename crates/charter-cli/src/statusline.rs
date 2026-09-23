@@ -28,7 +28,7 @@
 //! it"*, and that property holds in the app exactly as it held in the frame. If it is wrong,
 //! it is wrong at the rung level and the rungs are separable.
 //!
-//! # The transposition is a DEFAULT now, not a law (charter ADR 0029)
+//! # The transposition is a DEFAULT now, not a law (ADR 0029)
 //!
 //! That judgement was made by a port and never decided for the app, and one thing about the
 //! app breaks the ADR's premise rather than carrying it over. **A frame held one harness, and
@@ -100,7 +100,7 @@ pub struct Ambient {
     pub socket: Option<PathBuf>,
     pub chat: Option<String>,
     pub harness: Option<String>,
-    /// `$CHARTER_FOOTER`: what THIS chat was started asking for (charter ADR 0029).
+    /// `$CHARTER_FOOTER`: what THIS chat was started asking for (ADR 0029).
     pub footer: Option<String>,
 }
 

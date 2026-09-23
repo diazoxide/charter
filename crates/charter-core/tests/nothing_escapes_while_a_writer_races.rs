@@ -1,7 +1,7 @@
 //! The record, with a thread planting a link at it while charter reads and writes it.
 //!
 //! `nothing_escapes.rs` asks whether a link that is **already there** is refused. This asks
-//! the other half, which charter ADR 0028 measured and decided: a link planted in the window
+//! the other half, which ADR 0028 measured and decided: a link planted in the window
 //! between the gate answering and the caller opening. Before `contain::open_no_link` and
 //! `contain::create_no_link`, that window put the whole record outside the plane 7600 times
 //! per 20,000 writes, and gave a launch a command line from outside the plane 1881 times per
@@ -88,7 +88,7 @@ fn one_chat() -> Record {
     }
 }
 
-/// The measurement charter ADR 0028 decided on, re-runnable:
+/// The measurement ADR 0028 decided on, re-runnable:
 ///
 /// ```console
 /// cargo test -p charter-core --test nothing_escapes_while_a_writer_races -- \

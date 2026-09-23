@@ -29,7 +29,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 
 // The theme an approved extension contributes, if one does — **after the render above, never
 // before it.** This is a disk read and a fingerprint of every file each installed extension
-// declares (charter ADR 0041's named cost), so it must not sit between the process starting
+// declares (ADR 0041's named cost), so it must not sit between the process starting
 // and the first frame. An operator who installed a theme pays one repaint; everybody else pays
 // nothing. A machine with no extensions answers with an empty list and nothing is drawn again.
 void drawWhatIsInForce();

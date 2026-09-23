@@ -1,5 +1,5 @@
 //! The executor: how charter starts an approved extension's program, what it hands it, what it
-//! will take back, and how it stops it. **charter ADR 0041, stage 2.**
+//! will take back, and how it stops it. **ADR 0041, stage 2.**
 //!
 //! This is the first place charter runs code a stranger wrote, with the operator's authority.
 //! Everything below is built around one sentence the consent dialog already says —
@@ -160,7 +160,7 @@ const WRITTEN_AT_ONCE: usize = 64 << 10;
 pub const REFUSED_HERE: &str = "charter does not start an extension's program on this platform: \
      it talks to one over a unix socket, and this platform has none charter can use without \
      writing unsafe code. A guard that cannot be expressed refuses rather than degrades \
-     (charter ADR 0031).";
+     (ADR 0031).";
 
 /// What charter tells the operator it does with a program, in the consent dialog.
 ///

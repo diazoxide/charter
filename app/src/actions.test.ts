@@ -663,7 +663,7 @@ describe("carrying out a row", () => {
         "createWorkspace",
         "removeWorkspace:alpha",
         "removeWorkspace:beta",
-        // Three pin verbs and not one, because they are three stores (charter ADR 0040).
+        // Three pin verbs and not one, because they are three stores (ADR 0040).
         "pinTab:1,true",
         "pinTab:2,true",
         "pinWorkspace:alpha,true",
@@ -901,7 +901,7 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("tab.select:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("tab.close:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("workspace.focus:"))).toHaveLength(6);
-    // And one pin row per chat and per workspace (charter ADR 0039). **This is the cost of
+    // And one pin row per chat and per workspace (ADR 0039). **This is the cost of
     // pinning through the palette rather than through a control on every tab**, and it is
     // the number that decides whether that was the right trade: the catalogue is half as
     // long again. It buys back fifty controls on the one strip that broke at fifty
@@ -923,7 +923,7 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
     // 291 rows: 50 chats three times over, 6 workspaces THREE times, 50 pieces TWICE, 8
     // personas, 2 in the queue, and the fourteen verbs. It was 118 before the pins, 174 before
-    // the extension list (charter ADR 0041), 175 before a workspace could be made and deleted
+    // the extension list (ADR 0041), 175 before a workspace could be made and deleted
     // from the window, and 183 before the explorer's rows had anything to offer. What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.

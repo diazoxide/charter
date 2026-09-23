@@ -9,7 +9,7 @@ import { atCreation } from "./windowprefs";
  * What has contributed what to this window, and the question charter asks before anything new
  * contributes at all.
  *
- * **This is charter ADR 0041's item 2, and there is no runtime behind it.** An extension is a
+ * **This is ADR 0041's item 2, and there is no runtime behind it.** An extension is a
  * directory the operator points at; charter reads its manifest, hashes it and everything it
  * declares, lists what it says it brings, and puts none of it in force until it is approved.
  * Today the only thing it can bring that charter acts on is a theme, which is declarative data

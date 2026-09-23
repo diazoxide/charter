@@ -38,7 +38,7 @@ pub struct Open {
     /// that could not be resumed — the difference is only interesting at a relaunch, which
     /// is where the UI says it.
     pub how: Reopened,
-    /// Whether the operator pinned it (charter ADR 0039). It rides the record, so a pinned
+    /// Whether the operator pinned it (ADR 0039). It rides the record, so a pinned
     /// chat comes back pinned; see [`charter_core::reopen::Chat::pinned`].
     pub pinned: bool,
 }
@@ -370,7 +370,7 @@ impl Chats {
     ///
     /// **A chat charter does not have open cannot be pinned**, and the answer says so rather
     /// than inventing an entry: a pin is an arrangement of what is there, and the record is
-    /// the only thing that says a chat exists at all (charter ADR 0040). It follows that a
+    /// the only thing that says a chat exists at all (ADR 0040). It follows that a
     /// pinned chat that does not come back at a launch takes its pin with it, which is the
     /// dangling-pin question answered by there being nowhere for one to dangle.
     ///
@@ -1741,7 +1741,7 @@ mod tests {
         assert_eq!(again.chats[0].resume, Some(SessionId::new(ID).unwrap()));
     }
 
-    // ----- a pinned chat (charter ADR 0039, stored per ADR 0040) -----
+    // ----- a pinned chat (ADR 0039, stored per ADR 0040) -----
 
     #[test]
     fn a_pin_is_written_into_the_record_so_it_outlives_the_app() {
@@ -1833,7 +1833,7 @@ mod tests {
         // that added `profile: None` beside the spread would do it: the record would still
         // be written, still be read, and every chat would come back as a shell.
         //
-        // The footer choice (charter ADR 0029) rides the same spread and fails the same way:
+        // The footer choice (ADR 0029) rides the same spread and fails the same way:
         // it would be dropped at the quit and the chat would come back blanked.
         let chats = Chats::new();
         let chat = Chat {

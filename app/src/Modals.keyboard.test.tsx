@@ -57,7 +57,7 @@ import { PinItem, UpdateItem } from "./Updates";
  * That is why Radix's radio rows were always reachable — roving focus writes one on them — and
  * why nothing else was. Every button in a modal now says `tabIndex={0}`, which is the
  * platform's answer rather than charter's, and leaves the primitives' own behaviour untouched
- * (charter ADR 0037). `docs/ui-primitives.md` holds the reasoning.
+ * (ADR 0037). `docs/ui-primitives.md` holds the reasoning.
  *
  * **Why this is measured here and not in a scenario — which was tried, in a real window, and
  * cannot be done.** The obvious objection to this whole file is that jsdom is not WebKit, so a
@@ -257,7 +257,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // reached `Start`**, five presses backwards through the whole form and out the far side by
     // Radix's first edge. So the ticket's `Start` was reachable in the strict sense and
     // unreachable in every sense that matters: not by the key an operator presses, and only
-    // by walking a dialog backwards. The footer checkbox (charter ADR 0029's one choice) was
+    // by walking a dialog backwards. The footer checkbox (ADR 0029's one choice) was
     // reachable by neither. What this test pins is the plain thing: **Tab, forwards, reaches
     // all six.**
     picker();
@@ -354,7 +354,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // **The worst of them, and the one nobody had looked at.** `Add an extension…` is the
     // scope's first edge and `Done` is its last, which left every installed row's two buttons
     // in the middle. Reviewing or removing an extension was a mouse-only act on the one
-    // surface in the window that exists to be a consent decision (charter ADR 0041).
+    // surface in the window that exists to be a consent decision (ADR 0041).
     mockIPC((cmd) => {
       if (cmd === "installed_extensions")
         return {

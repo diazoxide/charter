@@ -1,7 +1,7 @@
 # How charter updates itself, and the steps only the operator can take
 
 charter-app updates itself with Tauri's updater, from GitHub Releases, on one of two channels.
-The reasons are charter ADR 0042. This page is the part a person has to do by hand: generate
+The reasons are ADR 0042. This page is the part a person has to do by hand: generate
 one keypair, store two secrets, create one release. Until they are done, nothing is published
 and the app offers no updates. Every error the release workflow prints points back to one of
 these steps.

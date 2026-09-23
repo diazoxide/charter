@@ -1,7 +1,7 @@
 //! Views — what a tab holds when it does not hold a chat — as the window asks for them: which
 //! are offered, and what one answers when the operator opens it.
 //!
-//! **A tab is a layout of panes, and a pane holds a session or a view** (charter ADR 0043, as
+//! **A tab is a layout of panes, and a pane holds a session or a view** (ADR 0043, as
 //! amended 2026-09-23). A view is named by data — who draws it, which of theirs, and what it is
 //! about — and **charter's own views and an approved extension's come through the one command**
 //! ([`open_view`]) and answer in the one vocabulary (`charter_core::panel`). The persona view

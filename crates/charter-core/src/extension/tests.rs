@@ -1,6 +1,6 @@
 //! The registry's guards, each with a test that has been seen to go red without it.
 //!
-//! charter ADR 0041's gate item 6 is *"every unreadable state asks, and each of those states
+//! ADR 0041's gate item 6 is *"every unreadable state asks, and each of those states
 //! has a test that has been seen to go red with the guard removed — this repository's own
 //! standard, and the one it keeps missing."* The mutation run that measured these is in the
 //! PR that landed them.
@@ -1224,7 +1224,7 @@ fn re_installing_something_that_changed_drops_its_approval() {
 
 #[test]
 fn the_record_is_a_file_beside_the_machine_store_and_not_a_key_inside_it() {
-    // charter ADR 0034 is "four things, and nothing else", argued to five by ADR 0040. A sixth
+    // ADR 0034 is "four things, and nothing else", argued to five by ADR 0040. A sixth
     // key appended without an argument would spend the limit; a separate file in the same
     // directory leaves `machine.json` holding exactly what those records say it holds.
     let made = Made::new();

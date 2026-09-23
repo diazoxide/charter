@@ -50,7 +50,7 @@ import { noTabs } from "./tabs";
 /**
  * The window, which holds projects.
  *
- * **A project is a plane and a window may hold several** (charter ADR 0033, spec decision 23).
+ * **A project is a plane and a window may hold several** (ADR 0033, spec decision 23).
  * The operator asked for Zed's shape by name and gave the reason Zed has it: eight projects is
  * eight things to arrange, and the thing an operating system gives you to arrange is a window.
  * So the top-level tabs here are projects; everything inside one is `PlaneView`'s, which is
@@ -157,7 +157,7 @@ function App() {
    * The panels approved extensions contribute to every project's side region.
    *
    * **Here and not in each `PlaneView`, for the reason the alerts are here**: this is about the
-   * MACHINE and not about a project. An extension is installed per machine (charter ADR 0041 —
+   * MACHINE and not about a project. An extension is installed per machine (ADR 0041 —
    * *an extension never travels in a plane*), so a window holding eight projects would
    * otherwise take the same survey eight times — and a survey re-hashes every installed
    * extension's whole directory, which is 0041's named cost of fingerprinting code.
@@ -177,7 +177,7 @@ function App() {
   );
 
   /**
-   * The projects this operator has pinned, by root (charter ADR 0039).
+   * The projects this operator has pinned, by root (ADR 0039).
    *
    * **The window's and not a project's**, because the project strip is the window's: a
    * project that is not in front draws nothing, and its own pin still has to be on the strip.
@@ -937,7 +937,7 @@ function App() {
         </div>
       )}
 
-      {/* What opening a project puts in force, and the question about it (charter ADR 0035).
+      {/* What opening a project puts in force, and the question about it (ADR 0035).
           Nothing has been attached and nothing has been started while this is up: cancelling
           leaves the window exactly as it was. One at a time, oldest first. */}
       {approving[0] && (
@@ -951,7 +951,7 @@ function App() {
       )}
 
       {/* Making a project: a plane charter scaffolds, opened through the gate like any other
-          (charter ADR 0035, spec decision 27). The window's, like the opener — what it ends in
+          (ADR 0035, spec decision 27). The window's, like the opener — what it ends in
           is a project this window holds — and mounted only while it is up. */}
       {creating && (
         <NewProject
@@ -984,7 +984,7 @@ function App() {
         onOpened={setPaletteOpen}
       />
 
-      {/* What has contributed what to this window (charter ADR 0041 item 5). Mounted only
+      {/* What has contributed what to this window (ADR 0041 item 5). Mounted only
           while it is asked for: it reads every installed extension's files to re-take its
           fingerprint, and a launch does not pay for that unless somebody looked. */}
       {extensions && <Extensions onClose={() => setExtensions(false)} />}

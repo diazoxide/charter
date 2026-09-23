@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 /**
  * Making a workspace, asked where the answer is given.
  *
- * **The prompt IS the prompt** (charter ADR 0035, and `ApprovePlane` says the same thing about
+ * **The prompt IS the prompt** (ADR 0035, and `ApprovePlane` says the same thing about
  * the trust ask). The CLI's shape here is `charter workspace create <name> --vision "…"`; the
  * window has a person looking at it, so it asks for the two things that command takes and
  * nothing is copied from the printed-command shape.
