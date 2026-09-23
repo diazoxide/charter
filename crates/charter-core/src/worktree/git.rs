@@ -139,8 +139,14 @@ pub struct GitUnavailable(#[from] std::io::Error);
 /// PATH. So the inherited `PATH` is searched here, in the parent, and what the child gets is
 /// the absolute path that search found plus the directory holding it.
 fn git_binary() -> (PathBuf, String) {
-    let mut dirs: Vec<String> = GIT_DIRS.iter().map(|d| (*d).to_string()).collect();
-    for dir in GIT_DIRS {
+    git_binary_in(&GIT_DIRS, std::env::var_os("PATH").as_deref())
+}
+
+/// [`git_binary`] against `fixed` and an inherited `path`, so the search can be tested
+/// without the process's own environment.
+fn git_binary_in(fixed: &[&str], path: Option<&std::ffi::OsStr>) -> (PathBuf, String) {
+    let mut dirs: Vec<String> = fixed.iter().map(|d| (*d).to_string()).collect();
+    for dir in fixed {
         let candidate = Path::new(dir).join("git");
         if candidate.is_file() {
             return (candidate, path_value(&dirs));
@@ -150,8 +156,15 @@ fn git_binary() -> (PathBuf, String) {
     // path before the child is built. An attacker who controls the parent's `PATH` still
     // chooses here — but they control charter's own binary lookup too, so this adds no
     // surface that was not already there.
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
+    //
+    // **Absolute entries only** ([`crate::programs::searchable`]). A `.` or an empty entry is
+    // the working directory, and charter's working directory is routinely a repository: with
+    // no git in the fixed directories, a binary called `git` committed to that repository
+    // was the one this function chose — and the one handed a forge credential. That is not
+    // the operator's `PATH` choosing, which the paragraph above accepts; it is whoever wrote
+    // the repository choosing.
+    if let Some(path) = path {
+        for dir in crate::programs::searchable(path) {
             let candidate = dir.join("git");
             if candidate.is_file() {
                 dirs.insert(0, dir.display().to_string());
@@ -772,6 +785,46 @@ mod tests {
                 !env.iter().any(|(k, _)| *k == name),
                 "{name} is repository-local and must not be given to the child"
             );
+        }
+    }
+
+    /// A `git` planted where only a relative `PATH` entry reaches it, with no git in the
+    /// fixed directories — the one arrangement in which the fallback search decides.
+    ///
+    /// **Reached through a relative path to a temporary directory, not through `.`.** `.`
+    /// and an empty entry are both the working directory, and a test cannot move the
+    /// process's working directory without moving it under every other test running beside
+    /// it. A relative entry is a relative entry to the search — it is resolved against the
+    /// same working directory — so this plants where one reaches and puts `.` and an empty
+    /// entry in front of it as well.
+    #[cfg(unix)]
+    #[test]
+    fn a_git_that_only_a_relative_path_entry_reaches_is_never_the_one_charter_runs() {
+        let fixed = tempfile::tempdir().unwrap();
+        let planted = tempfile::tempdir().unwrap();
+        stand_in::program(planted.path(), "git", "#!/bin/sh\nexit 0\n");
+        let here = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let up = "../".repeat(here.components().count() - 1);
+        let relative = format!(
+            "{up}{}",
+            planted.path().display().to_string().trim_start_matches('/')
+        );
+        assert!(
+            Path::new(&relative).join("git").is_file(),
+            "the planted git is reachable through {relative}"
+        );
+
+        let fixed_dir = fixed.path().display().to_string();
+        let path = format!(".::{relative}");
+        let (binary, child_path) =
+            git_binary_in(&[fixed_dir.as_str()], Some(std::ffi::OsStr::new(&path)));
+        assert_eq!(
+            binary,
+            PathBuf::from("git"),
+            "a relative PATH entry chose the binary charter hands credentials to"
+        );
+        for dir in std::env::split_paths(&child_path) {
+            assert!(dir.is_absolute(), "{} in {child_path}", dir.display());
         }
     }
 

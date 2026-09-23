@@ -231,15 +231,25 @@ fn is_a_path(program: &str) -> bool {
         .is_some_and(|dir| !dir.as_os_str().is_empty())
 }
 
+/// The entries of a `PATH` value that charter will search, in order: the absolute ones.
+///
+/// **One copy of this rule, for every lookup that reads an inherited `PATH`.** A relative
+/// entry — `.`, an empty one, `bin` — resolves against the working directory, which for a
+/// chat or a hook is a repository someone else can write, so "the program is whatever
+/// `./git` is in the directory you happen to be in" is not a lookup charter performs.
+/// [`search_dirs_from`] and `worktree::git`'s fallback both ask this; they used to hold a
+/// copy each, and the copy in `worktree::git` was the one missing the rule.
+pub fn searchable(path: &OsStr) -> impl Iterator<Item = PathBuf> + '_ {
+    std::env::split_paths(path).filter(|dir| dir.is_absolute())
+}
+
 /// Every directory charter searches for a bare program name, in order and without repeats.
 ///
 /// Pure, so the list can be tested without touching the process's own environment — which
 /// `unsafe_code = "forbid"` puts out of reach anyway. [`search_dirs`] is the one caller that
 /// reads the environment.
 ///
-/// A relative entry in `PATH` is dropped. It resolves against the working directory, which
-/// for a chat is a repository a chat can write, and "the harness is whatever `./claude` is in
-/// the directory you happen to be in" is not a lookup charter performs.
+/// A relative entry in `PATH` is dropped, by [`searchable`], which says why.
 pub fn search_dirs_from(path: Option<&OsStr>, home: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut push = |dir: PathBuf| {
@@ -248,7 +258,7 @@ pub fn search_dirs_from(path: Option<&OsStr>, home: Option<&Path>) -> Vec<PathBu
         }
     };
     if let Some(path) = path {
-        for dir in std::env::split_paths(path) {
+        for dir in searchable(path) {
             push(dir);
         }
     }
