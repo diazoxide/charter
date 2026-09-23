@@ -2143,4 +2143,109 @@ mod tests {
             GITIGNORE_BASELINE
         );
     }
+
+    /// A plane with one declared, APPROVED profile of `kind` whose command is nowhere on
+    /// this machine — so neither the probe nor an install can run anything.
+    fn plane_with_a_profile(kind: &str) -> (tempfile::TempDir, PathBuf, crate::profiles::Profile) {
+        let (dir, root) = empty_plane();
+        std::fs::write(root.join("charter.toml"), "schema = 1\n").expect("charter.toml");
+        let missing = dir.path().join("nowhere").join(kind);
+        std::fs::write(
+            root.join("charter.local.toml"),
+            format!(
+                "[harness.work]\nkind = {kind:?}\ncommand = [{:?}]\n",
+                missing.display().to_string()
+            ),
+        )
+        .expect("charter.local.toml");
+        let profile = crate::profiles::current(&root)
+            .get("work")
+            .cloned()
+            .expect("the profile is declared");
+        crate::profiletrust::record_launched(
+            &root,
+            "work",
+            &crate::profiletrust::fingerprint(&profile),
+        )
+        .expect("approved");
+        (dir, root, profile)
+    }
+
+    fn line_about_work(outcome: &Outcome) -> Vec<&Say> {
+        outcome
+            .said
+            .iter()
+            .filter(
+                |s| matches!(s, Say::Info(l) | Say::Warn(l) if l.starts_with("  profile 'work'")),
+            )
+            .collect()
+    }
+
+    /// `commands._wire_profiles(root, install=True)` for a Claude Code profile: `init` is a
+    /// door an install comes through, so its line is `wiring.install`'s step, said by
+    /// `_say_profile_wiring` — a warning, because `failed` is not one of `_WIRED_NOTES`.
+    #[test]
+    fn init_installs_for_a_declared_claude_profile_and_says_each_step() {
+        let (_dir, root, profile) = plane_with_a_profile("claude");
+        let steps = crate::wiring::install(&profile, &root);
+        assert_eq!(
+            steps.len(),
+            1,
+            "the command is nowhere, so the install stops at once"
+        );
+
+        let outcome = init(&at(&root, true), &plain());
+
+        assert_eq!(
+            line_about_work(&outcome),
+            vec![&Say::Warn(format!("  profile 'work': {}", steps[0].detail))]
+        );
+    }
+
+    /// `_wire_profiles(root, install=False)`: `reinit` installs no software (ruling 9), so a
+    /// Claude Code profile that is not wired is REPORTED — `not wired — <detail>; <fix>`.
+    #[test]
+    fn reinit_reports_a_claude_profile_that_is_not_wired_and_installs_nothing() {
+        let (_dir, root, profile) = plane_with_a_profile("claude");
+        let w = crate::wiring::detect(&profile, &root, &root);
+        assert_ne!(w.state, crate::wiring::State::Wired);
+
+        let outcome = reinit(&at(&root, true));
+
+        assert_eq!(
+            line_about_work(&outcome),
+            vec![&Say::Warn(format!(
+                "  profile 'work': not wired — {}; {}",
+                crate::wiring::said(&w.detail),
+                crate::wiring::said(&w.fix)
+            ))]
+        );
+    }
+
+    /// `_wire_profiles`' other branch under `reinit`: opencode is a file-only kind, so it is
+    /// wired (here: said it cannot be, in `wiring::install`'s words) rather than probed.
+    #[test]
+    fn reinit_wires_an_opencode_profile_rather_than_probing_it() {
+        let (_dir, root, profile) = plane_with_a_profile("opencode");
+        let steps = crate::wiring::install(&profile, &root);
+
+        let outcome = reinit(&at(&root, true));
+
+        let expected: Vec<Say> = steps
+            .iter()
+            .map(|s| {
+                let line = format!("  profile 'work': {}", s.detail);
+                if WIRED_NOTES.contains(&s.status.as_str()) {
+                    Say::Info(line)
+                } else {
+                    Say::Warn(line)
+                }
+            })
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(
+            line_about_work(&outcome),
+            expected.iter().collect::<Vec<_>>()
+        );
+    }
 }
