@@ -30,6 +30,7 @@
     "layer.workspace": "#171717",
     "layer.chat": "#1b1b1b",
     "layer.selected": "#262626",
+    "layer.divider": "#2e2e2e",
 
     "needs-you.base": "#b85050",
     "needs-you.text": "#ffffff",

@@ -106,6 +106,12 @@ export const TOKENS = [
   "layer.workspace",
   "layer.chat",
   "layer.selected",
+  // The hairline between two tabs of one strip — the operator: *"for tabs lets add very very
+  // light visible border - just for little bit highlight separation"*. Its own token rather
+  // than `border.subtle`, which sat so close to the layer shades that the dividers it drew were
+  // invisible, and a theme should be able to lift the tabs apart without lifting every other
+  // subtle rule in the window.
+  "layer.divider",
 
   // The one signal this whole app exists for: a chat that has stopped and is waiting.
   "needs-you.base",

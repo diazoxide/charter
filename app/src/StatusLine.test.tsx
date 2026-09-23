@@ -233,3 +233,26 @@ describe("the alerts button", () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("the region toggles", () => {
+  // The operator asked four times, with a screenshot of Zed: the buttons that show and hide the
+  // regions are at the status line's LEFT edge. #207 put them at the right-hand end; this is
+  // what keeps them from going back there.
+  it("are the first thing on the line, at its left edge", () => {
+    const onToggle = vi.fn();
+    draw({
+      regions: {
+        placed: [
+          { id: "explorer", side: "left", order: 0, collapsed: false },
+          { id: "aside", side: "right", order: 0, collapsed: true },
+        ],
+        onToggle,
+      },
+    });
+    const line = screen.getByTestId("status-line");
+    const first = line.firstElementChild;
+    expect(first?.className).toBe("regions-doing");
+    const buttons = within(first as HTMLElement).getAllByRole("button");
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Explorer", "Attention"]);
+  });
+});
