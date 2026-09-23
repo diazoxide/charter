@@ -52,8 +52,11 @@ the keys and the command — never a value.
 ### Providers
 
 - **`plain-file`** — a JSON object of key → value at 0600, `.charter/vaults/<vault>.json` by
-  default. It is **plaintext on disk**; charter refuses to point one at a path inside the plane
-  that git would commit.
+  default. It is **plaintext on disk**. Inside a plane that is a git repository, `vault add`
+  refuses a `--file` git would commit, and `secret set` checks again before it writes, because
+  the registry can be edited by hand or arrive in a commit. A file git already ignores, and
+  one outside the plane, is accepted. `vault add` also refuses a file another registered vault
+  already uses.
 - **`reference`** — the file holds URIs, not values, resolved at read time:
   `op://<vault>/<item>/<field>` through `op read`, `vault://<path>#<FIELD>` through
   `vault kv get`. A reference file is safe to commit. `browser://` references are recognised
@@ -73,6 +76,35 @@ identity variables to a command run for another.
 committed half; `vault add --share` writes the committed one. They are merged field by field,
 this machine's winning, and a 1Password `--account` pin always stays local. A registration
 holds names and paths, never a value.
+
+A vault name is letters, digits, `.`, `_` and `-`, starts with a letter or digit, and never
+holds `..`; a name that is not one is refused when it is registered and ignored when a
+registry is read. A 1Password vault, item or account that starts with `-` is refused, since
+`op` would read it as an option.
+
+### The limits, said plainly
+
+- **`--reveal` "to a terminal" means any terminal, including one the agent reads.** A
+  pseudo-terminal wrapper (`script`, `unbuffer`, a `pty` module) is a terminal to charter, and
+  whatever it relays reaches the conversation. The Bash guard refuses the flag behind `script`
+  and `unbuffer` when charter is named in the same command; it cannot see every way to make a
+  pty.
+- **Output masking is best effort.** It replaces the exact text of each value this call
+  resolved, and nothing else. A short value — a four-digit PIN, `true` — also matches ordinary
+  output and is masked there, while the same value transformed by the command, split across
+  writes that the command reorders, or printed in another encoding passes through.
+- **A `--dotenv` file is written for dotenv parsers**, the `dotenv` package's rules. It is not
+  shell syntax: do not `source` it, where a value's quoting would be read by the shell.
+- **A persona is a label, not an access boundary.** `persona secret` picks a vault by the
+  active persona's `vault:` field, but any chat can name any vault with `secret` directly, or
+  pass `--persona`. Personas decide which vault is the default, not who may read it.
+- **An identity token lives in the environment.** A vault read through
+  `OP_SERVICE_ACCOUNT_TOKEN` (or any `--env` binding) needs that variable set in the shell
+  charter runs in, which is the shell the agent's commands run in too; `secret exec` keeps it
+  away from the command it starts for another vault, but `echo`, `env` or `printenv` in that
+  shell prints it. Where such a token should live instead is an open design question.
+- **Errors never repeat a stored entry.** A reference that does not resolve is named by its
+  key, not by what the file holds under it, because that may be a value.
 
 `charter doctor`'s vaults row does not check vaults yet.
 

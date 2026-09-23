@@ -146,3 +146,26 @@ fn the_local_half_overrides_the_shared_one_field_by_field() {
     );
     assert_eq!(registry::scope_of(&ctx, "team"), "both");
 }
+
+#[test]
+fn nothing_that_holds_a_value_prints_it_in_debug() {
+    let env = Env::of(&[("TOKEN", "debug-leak-value")]);
+    let ctx = Ctx::new(std::path::Path::new("/p"), env.clone());
+    let ran = run::Ran {
+        code: 0,
+        stdout: "debug-leak-value".into(),
+        stderr: "debug-leak-value".into(),
+    };
+    let from = cmd::SetFrom {
+        value: Some("debug-leak-value".into()),
+        ..Default::default()
+    };
+    for shown in [
+        format!("{env:?}"),
+        format!("{ctx:?}"),
+        format!("{ran:?}"),
+        format!("{from:?}"),
+    ] {
+        assert!(!shown.contains("debug-leak-value"), "{shown}");
+    }
+}
