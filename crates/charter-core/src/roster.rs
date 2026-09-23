@@ -144,7 +144,7 @@ pub fn block(rows: &[Row], generic: u64, total: u64) -> String {
         None => {
             out.push(
                 "_No dispatches recorded yet._ The tally fills as sub-agents are dispatched; \
-                 seed it from past sessions with `charter persona dispatch-backfill`."
+                 seeding it from past sessions is not in this version yet."
                     .to_string(),
             );
             out.push(String::new());
@@ -205,11 +205,7 @@ pub fn block(rows: &[Row], generic: u64, total: u64) -> String {
         );
         out.push(String::new());
     }
-    out.push(
-        "Regenerate with `make docs` (also refreshed once per session). Detail: `charter persona \
-         stats` · `docs/personas.md`."
-            .to_string(),
-    );
+    out.push("Regenerate with `charter docs generate`. Detail: `docs/personas.md`.".to_string());
     out.push(String::new());
     out.push(END.to_string());
     out.join("\n")

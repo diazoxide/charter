@@ -420,11 +420,24 @@ pub fn handoff_segment(toks: &[Tok]) -> (Option<Vec<Tok>>, bool) {
 /// The `in_a_shells_body` flag is the FIRST row's, not the joined tail's: a continuation that
 /// starts outside a body is one command, and the shell that would run it is the one that
 /// opened the line.
+///
+/// **A line a quoted string began on an earlier line starts inside that string** (M8.2), and
+/// the part of it the string still holds is data: `git commit -m 'fix\n\ncharter handoff …'`
+/// is a message, not a handoff. [`quoted_row_prefixes`] reads where each row's quoted head
+/// ends off the WHOLE text, and only what follows it is looked at. A row that the string
+/// covers entirely is skipped; a row where the string closes is judged from the close on.
 pub fn handoff_line(cmd: &str) -> Option<(String, bool)> {
     let rows = leakguard::lines_a_command_could_run(cmd);
+    let heads = quoted_row_prefixes(&rows);
     let mut i = 0usize;
     while i < rows.len() {
-        let (mut line, in_a_shells_body) = rows[i].clone();
+        let (row, in_a_shells_body) = rows[i].clone();
+        let head = heads[i];
+        let mut line: String = row.chars().skip(head).collect();
+        if head > 0 && line.is_empty() {
+            i += 1;
+            continue;
+        }
         // `len(line) - len(line.rstrip("\\"))` — trailing backslashes, in CHARACTERS.
         while trailing_backslashes(&line) % 2 == 1 && i + 1 < rows.len() {
             i += 1;
@@ -437,6 +450,51 @@ pub fn handoff_line(cmd: &str) -> Option<(String, bool)> {
         i += 1;
     }
     None
+}
+
+/// For each row, how many of its leading CHARACTERS still sit inside a quoted string that an
+/// earlier row opened — 0 for a row that starts as a command.
+///
+/// Read off the rows joined back together, which is the text a shell reads once the reader
+/// bodies are gone, by the two readers that already know it: the lexer, whose one token spans
+/// the newline in front of the row (and which knows a `#` comment opens no quote), and
+/// [`shellseg::quote_map`], which says that newline is QUOTED. Both are asked because each is
+/// wrong alone in a direction that would hide a real handoff:
+///
+/// - a backslash-newline outside quotes is folded into the next word by the lexer, but is a
+///   continuation, not a string — `quote_map` reads it unquoted;
+/// - inside `"$( … )"` the lexer holds everything as one word, but the substitution RUNS its
+///   lines — `quote_map` opens a command context there and reads them unquoted;
+/// - an apostrophe in a comment opens a quote to `quote_map`, and no token to the lexer.
+///
+/// **Text the lexer cannot read gives no row a head**, which is the reading this guard had
+/// before, so an unbalanced call is judged exactly as it was.
+fn quoted_row_prefixes(rows: &[(String, bool)]) -> Vec<usize> {
+    let mut heads = vec![0usize; rows.len()];
+    let text = rows
+        .iter()
+        .map(|(r, _)| r.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Ok(toks) = shellseg::lex(&text) else {
+        return heads;
+    };
+    let quoted = shellseg::quote_map(&text);
+    let mut start = 0usize;
+    for (i, (row, _)) in rows.iter().enumerate() {
+        let len = row.chars().count();
+        if i > 0 && quoted.get(start - 1).copied().unwrap_or(false) {
+            let at = start as isize;
+            if let Some(t) = toks
+                .iter()
+                .find(|t| !t.bare && t.start >= 0 && t.start < at && t.end >= at)
+            {
+                heads[i] = ((t.end - at) as usize).min(len);
+            }
+        }
+        start += len + 1;
+    }
+    heads
 }
 
 /// How many `\` a line ends with — `len(line) - len(line.rstrip("\\"))`.
@@ -737,6 +795,64 @@ mod tests {
         ] {
             assert_eq!(reason(cmd), Some(REASON_SHELL_STRING), "{cmd:?}");
         }
+    }
+
+    #[test]
+    fn text_that_only_mentions_a_handoff_is_data_wherever_it_sits() {
+        // M8.2: a chat writing a test, a commit message or a doc holds the words `charter
+        // handoff` as TEXT. A heredoc body a reader takes, a quoted argument and an `echo`'s
+        // words are none of them a command, and neither is a line that a quoted string began
+        // on an earlier line — the shell is still inside that string when the line starts.
+        for cmd in [
+            "cat > f.txt <<'EOF'\ncharter handoff beta\nEOF",
+            "cat > f.txt <<EOF\ncharter handoff beta\nEOF",
+            "cat > t.rs <<'EOF'\n    let hand = \"charter handoff beta\";\nEOF",
+            "cat > t.sh <<'EOF'\ncharter handoff beta <<'BRIEF'\nship\nBRIEF\nEOF",
+            "echo charter handoff beta > f.txt",
+            "echo \"charter handoff beta\"",
+            "printf '%s\\n' 'charter handoff beta' > f",
+            "git commit -m \"$(cat <<'EOF'\nfix the guard\n\ncharter handoff beta now asks\nEOF\n)\"",
+            // A quoted string that spans lines: its second line starts inside the quote.
+            "echo \"x\ncharter handoff beta\"",
+            "git commit -m 'fix the guard\n\ncharter handoff beta now asks first'",
+            "python3 -c \"\nimport sys\ncharter handoff beta\n\"",
+            "cat > f <<'EOF'\nx\nEOF\necho 'one\ncharter handoff beta'",
+        ] {
+            assert_eq!(refusal(cmd), None, "{cmd:?} is text, not a handoff");
+        }
+    }
+
+    #[test]
+    fn a_handoff_after_a_quoted_string_closes_is_still_judged() {
+        // The other side of the one above: a quote that CLOSES on a line leaves the rest of
+        // that line a command, and the lines after it are commands too.
+        for (cmd, want) in [
+            ("echo \"a\nb\"; charter handoff beta", REASON_BRIEF_SOURCE),
+            ("echo \"a\nb\"\ncharter handoff beta", REASON_BRIEF_SOURCE),
+            (
+                "echo 'a\nb' && charter 'handoff' beta <<'BRIEF'\nx\nBRIEF",
+                REASON_SPELLING,
+            ),
+            // An apostrophe in a COMMENT opens no quote, so the next line is a command.
+            ("# don't forget\ncharter handoff beta", REASON_BRIEF_SOURCE),
+            // A substitution inside double quotes RUNS its lines; the lexer holds them in one
+            // word, and `quote_map` is what says they are not a string.
+            ("echo \"$(\ncharter handoff beta\n)\"", REASON_BRIEF_SOURCE),
+            // A backslash-newline is a continuation, not a quote, though the lexer folds it.
+            ("true \\\n&& charter 'handoff' beta", REASON_SPELLING),
+            ("bash -c \"\ncharter handoff beta\n\"", REASON_SHELL_STRING),
+            (
+                "echo \"a\nb\"\nbash <<'EOF'\ncharter handoff beta <<'BRIEF'\nx\nBRIEF\nEOF",
+                REASON_SHELL_STRING,
+            ),
+        ] {
+            assert_eq!(reason(cmd), Some(want), "{cmd:?}");
+        }
+        // ...and the canonical handoff after a closed multi-line quote still passes.
+        assert_eq!(
+            refusal("echo \"a\nb\"\ncharter handoff beta <<'BRIEF'\nship it\nBRIEF"),
+            None
+        );
     }
 
     #[test]

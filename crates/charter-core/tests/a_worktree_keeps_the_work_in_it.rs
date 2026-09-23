@@ -226,13 +226,15 @@ fn a_piece_cut_from_a_detached_head_records_the_commit_rather_than_nothing() {
 }
 
 #[test]
-fn a_branch_that_already_exists_is_refused_and_the_reuse_is_named() {
+fn a_branch_that_already_exists_is_refused_and_named() {
     let f = support::plane_with_clone("thing");
     support::git(&f.clone, &["branch", "taken"]);
 
     let refusal = worktree::add(&f.plane, &f.ws, &f.repo, "taken", None).unwrap_err();
 
-    assert!(format!("{refusal}").contains("--branch taken"), "{refusal}");
+    let said = format!("{refusal}");
+    assert!(said.contains("branch 'taken' already exists"), "{said}");
+    assert!(said.contains("Pick another piece name"), "{said}");
 }
 
 #[test]

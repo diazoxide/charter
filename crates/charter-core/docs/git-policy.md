@@ -15,7 +15,8 @@ transports over HTTPS. `charter clone` applies it automatically to everything it
 
 A directory charter cannot read — `workspaces/` itself, one workspace, or a clone's `.git` —
 is named rather than skipped. `charter git-policy` warns about each one with what clears it,
-`charter doctor`'s `git auth` row says the same, and neither counts a repo it never reached.
+and does not count a repo it never reached. `charter doctor` has a `git auth` row, and in
+this version it says the policy is not checked there yet: run `charter git-policy`.
 
 ## Why it is a rule and not a preference
 
@@ -31,7 +32,7 @@ system that would need its own rotation story.
 
 ## The guard
 
-The Claude Code plugin's `PreToolUse` guard **denies** a command that would route around
+charter's `PreToolUse` guard — the Bash guard every chat the app starts runs — **denies** a command that would route around
 the rule:
 
 - a raw SSH GitLab/GitHub URL handed to git
@@ -50,11 +51,10 @@ refuses — see [hooks.md](hooks.md) → *When a guard is wrong*. Short version:
 your own terminal. If the guard is wrong about you *every time*, that is charter holding a
 policy your organisation does not, and it belongs in an issue rather than a local switch.
 
-The same guard covers the vault: it refuses `--reveal` on a non-interactive stdout and
-refuses file-reading tools pointed at a vault file, so an accidental `cat` cannot put a
-secret in the transcript. Those are the accidental roads, and they are the only ones a
-name-based guard can close — a command you chose to run is not one of them. See
-[secrets.md](secrets.md) and [SECURITY.md](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/SECURITY.md).
+The same guard covers the vault files under `.charter/vaults/`: it refuses reading one
+directly, so an accidental `cat` cannot put a secret in the transcript. That is an
+accidental road, and the kind a name-based guard can close — a command you chose to run is
+not one of them. See [secrets.md](secrets.md) and [hooks.md](hooks.md).
 
 ## Submodules are outside the rule, and charter says so rather than reaching past it
 
@@ -70,8 +70,9 @@ It is yours to run, and that is a decision rather than an omission.
 
 **A submodule URL is not a URL charter built.** It comes out of `.gitmodules`, a file
 inside the repo that was just cloned, and it can name any host, recursively.
-`commands._https_url` already refuses to hand `git clone` a string charter did not
-build — `ext::sh -c '…'` is a transport that runs a command — and fetching whatever
+`charter clone` already refuses to hand `git clone` a URL charter did not build from the
+forge's host and the repo's path — `ext::sh -c '…'` is a transport that runs a command —
+and fetching whatever
 `.gitmodules` names would put that string back one layer down, where the allowlist above
 it cannot see it.
 

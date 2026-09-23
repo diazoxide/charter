@@ -516,6 +516,34 @@ fn an_ordinary_command_is_answered_with_nothing_at_all() {
 }
 
 #[test]
+fn text_that_mentions_a_handoff_is_not_one_and_a_real_one_is_still_refused() {
+    // M8.2: a chat writing a test was refused because the TEXT it wrote held the words
+    // `charter handoff`. A heredoc body a reader takes, a quoted argument, an `echo`'s words and
+    // the later lines of a quoted string are data; a handoff with no brief is still refused.
+    let plane = a_plane();
+    for command in [
+        "cat > tests/t.rs <<'EOF'\nlet c = \"charter handoff beta\";\ncharter handoff beta\nEOF",
+        "echo charter handoff beta",
+        "grep -rn \"charter handoff\" docs",
+        "git commit -m 'fix the guard\n\ncharter handoff beta now asks first'",
+    ] {
+        let (code, out, err) = guard(plane.path(), &bash(command), &[]);
+        assert_eq!(code, 0, "{command:?}");
+        assert_eq!(out, "", "{command:?} was refused: {out}");
+        assert_eq!(err, "", "{command:?}");
+    }
+    for command in [
+        "charter handoff beta",
+        "echo 'a\nb'\ncharter handoff beta",
+        "bash -c 'charter handoff beta'",
+    ] {
+        let (code, out, _) = guard(plane.path(), &bash(command), &[]);
+        assert_eq!(code, 0, "{command:?}");
+        assert!(decision(&out).is_some(), "{command:?} was allowed");
+    }
+}
+
+#[test]
 fn the_guard_survives_every_payload_a_harness_could_send() {
     // A hook that crashed on one of these would take the tool call with it, and a non-zero
     // exit that is not 2 is a NON-blocking error — so the failure would be silent. `""` is

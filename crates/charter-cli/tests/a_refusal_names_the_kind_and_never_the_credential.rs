@@ -64,6 +64,10 @@ fn handoff(root: &Path, brief: &str) -> Output {
         "CHARTER_WORKSPACE",
         "CHARTER_PERSONA",
         "CHARTER_HARNESS",
+        // The app's socket and this chat's number: inherited, they would send the handoff
+        // to whichever charter app is running the test, and the test is about this binary.
+        "CHARTER_HOOK_SOCKET",
+        "CHARTER_CHAT",
         "TERM_SESSION_ID",
         "TMUX_PANE",
         "STY",
@@ -176,10 +180,10 @@ fn a_brief_that_names_where_a_credential_lives_is_not_refused_as_one() {
         !told.contains("looks like it carries a secret"),
         "a vault reference was refused as a credential: {told}"
     );
-    // It still stops, at the frame check this binary always reaches — so the assertion
-    // above cannot be satisfied by a handoff that failed earlier for some other reason.
+    // It still stops, where no app answers — so the assertion above cannot be satisfied by
+    // a handoff that failed earlier for some other reason.
     assert!(
-        told.contains("Run this in a new terminal instead:"),
-        "the brief was not read through to the frame check: {told}"
+        told.contains("no charter app answered this call"),
+        "the brief was not read through to the app check: {told}"
     );
 }

@@ -61,6 +61,16 @@ fn index_refusal(root: &Path, mem_dir: &Path) -> Option<String> {
 
 /// Which kind of base a label is, for the command that repairs it — `charter persona
 /// optimize` never touches a workspace, so a hint naming it for one fixes nothing.
+/// The curation command for one kind of base, where this version has one: `workspace
+/// optimize` does, and a persona's is not in this version yet.
+fn optimize_hint(kind: &str, args: &str) -> String {
+    if kind == "workspace" {
+        format!("  → charter workspace optimize {args}")
+    } else {
+        "  → curating a persona's memory from the CLI is not in this version yet".to_owned()
+    }
+}
+
 fn kind(label: &str) -> &'static str {
     if label.starts_with("ws:") {
         "workspace"
@@ -210,9 +220,7 @@ pub(super) fn memory_indexes(d: &Doctor) -> Row {
     let mut hint = first(&worst, 4, ", ");
     if unindexed > 0 {
         for k in &unindexed_kinds {
-            hint.push_str(&format!(
-                "  → charter {k} optimize --all --apply  (links unindexed files)"
-            ));
+            hint.push_str(&optimize_hint(k, "--all --apply  (links unindexed files)"));
         }
     }
     if dangling > 0 {
@@ -227,7 +235,7 @@ pub(super) fn memory_indexes(d: &Doctor) -> Row {
         hint.push_str("large: ");
         hint.push_str(&first(&large, 4, ", "));
         for k in &large_kinds {
-            hint.push_str(&format!("  → charter {k} optimize <name>"));
+            hint.push_str(&optimize_hint(k, "<name>"));
         }
         hint.push_str("  (curate; growth is not a defect)");
     }

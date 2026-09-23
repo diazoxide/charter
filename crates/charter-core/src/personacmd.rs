@@ -124,7 +124,7 @@ pub fn default_command(root: &Path, name: Option<&str>, clear: bool, say: Sink) 
             )));
         }
         say(Say::Info(
-            "Overridden per-developer by `charter persona use` / $CHARTER_PERSONA / --persona."
+            "Overridden per chat by the persona the app's picker pins, or by $CHARTER_PERSONA."
                 .to_string(),
         ));
         return 0;
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(code, 1);
         assert_eq!(
             said,
-            vec!["✗ no persona 'nope' (create it: charter persona create nope)"]
+            vec!["✗ no persona 'nope' (add it: write personas/nope/persona.md)"]
         );
         assert_eq!(manifest(dir.path()), "# the plane\n");
     }

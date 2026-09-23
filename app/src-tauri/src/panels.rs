@@ -527,7 +527,7 @@ fn charters_own(
                 .collect(),
             empty: panel::Empty {
                 headline: "No personas on this plane".into(),
-                body: Some("`charter persona create` is how one arrives.".into()),
+                body: Some("A persona arrives as a directory: personas/<name>/persona.md.".into()),
                 offer: None,
             },
         }],

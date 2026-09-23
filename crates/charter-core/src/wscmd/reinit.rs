@@ -410,7 +410,7 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
         say(Say::Done(format!("Reinitialized '{name}' → added {what}.")));
         if plane.is_live(name) && before.missing.iter().any(|rel| LIVE_SHARED.contains(rel)) {
             say(Say::Info(format!(
-                "  '{name}' is LIVE — commit the restored files: charter workspace save {name}"
+                "  '{name}' is LIVE — commit the restored files: charter save"
             )));
         }
     }

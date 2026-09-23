@@ -507,7 +507,7 @@ pub fn workspace_remember(
              shareable: charter workspace live {name}"
         ));
     } else if no_sync {
-        voice::info("  (--no-sync) recorded locally; share later with: charter workspace save.");
+        voice::info("  (--no-sync) recorded locally; share it later with: charter save");
     } else {
         reactive(plane);
     }
@@ -923,9 +923,7 @@ fn persona_remember(
         return Ok(0);
     }
     if no_sync {
-        voice::info(
-            "  (--no-sync) recorded locally; share later with: charter persona memory-sync.",
-        );
+        voice::info("  (--no-sync) recorded locally; share it later with: charter save");
         return Ok(0);
     }
     reactive(plane);

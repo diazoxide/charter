@@ -102,8 +102,8 @@ prompt that shows a path is an approval of a path.
 
 **What happens next.** Inside the charter app, the app opens the new chat as a tab in that
 workspace, already started on the brief, and says so. Anywhere else there is no app to open
-it, so charter prints the command to run in a new terminal and exits 1 — relay that command
-to the operator rather than running it yourself.
+it, so nothing is opened: charter says to open the charter app and exits 1 — tell the
+operator that, rather than trying to start a chat yourself.
 
 ## What charter refuses, and why
 
