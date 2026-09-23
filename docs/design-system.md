@@ -185,6 +185,16 @@ shape this page describes for the theme.
 > put `vendor` before `charter` in the layer list — and it is deliberately not taken here,
 > because it changes which rules win in the terminal and that cannot be checked without running
 > the app.
+>
+> **One declaration DID collide, and it was measured** (charter-app#193): `xterm.css` line 93,
+> `.xterm .xterm-viewport { background-color: #000 }`. A terminal is whole rows in a box that is
+> not, so every pane has up to a row of slack at its bottom, and that strip was pure black under
+> a terminal drawn in `#181818` — the operator's *"harness bottom seems overflowed - you can see
+> black space"*. It is fixed on the element (`SessionPane.tsx` puts `terminal.background` on the
+> viewport inline, which beats an unlayered rule) rather than by the layer move, which is the
+> bigger change and was not proven either way here. `pane-fill.e2e.ts` holds the pixel. **The
+> general half**: `literals.test.ts` reads charter's own sources, so a colour a dependency ships
+> is invisible to it — and this one was on screen in every pane.
 
 **shadcn/ui: the conventions, and components when something needs one.** `cn` is at
 `app/src/lib/utils.ts`, at shadcn's address with shadcn's two dependencies, so a component
