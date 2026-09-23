@@ -260,6 +260,8 @@ pub fn record(forge: &Forge, project: &Value, stack: &str) -> Value {
     };
     let description = match project.get("description") {
         Some(Value::String(s)) => py_strip(s).to_string(),
+        // Not Python's answer: its `.strip()` raises on a truthy non-string and `discover`
+        // dies there. This writes `str()` of it instead.
         Some(v) if truthy(v) => py_str(v),
         _ => String::new(),
     };
@@ -518,6 +520,283 @@ mod tests {
     #[test]
     fn a_description_is_stripped_the_way_python_strips_it() {
         assert_eq!(py_strip("\u{1f} padded \u{a0}\n"), "padded");
+    }
+
+    /// git, for a test's own fixtures — never through the hardened runner, which is part of
+    /// what is under test. Its own `HOME`, so no operator config (a signing key, an
+    /// `init.defaultBranch`) reaches the fixture.
+    fn git(dir: &Path, args: &[&str]) {
+        let mut command = std::process::Command::new("git");
+        command
+            .args(args)
+            .current_dir(dir)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")
+            .env("HOME", dir)
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+        let out = crate::forklock::output(&mut command).expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A plane root that is a checkout of `https://github.com/acme/plane.git`, on `trunk`.
+    /// github.com is a forge every plane knows without declaring it, so `plane_repo` answers.
+    fn plane_checkout() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        git(&root, &["init", "-q", "-b", "trunk", "."]);
+        git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/plane.git",
+            ],
+        );
+        (dir, root)
+    }
+
+    fn names(records: &[Value]) -> Vec<&str> {
+        records.iter().map(|r| text(r, "name")).collect()
+    }
+
+    #[test]
+    fn every_suffix_a_kind_is_read_from_counts_on_its_own() {
+        // Each `or` in Python's `classify_kind` is a separate way in: `-frontend`, `-ui-` and
+        // `-ui` are three spellings of one role, and `-service`, `-services` and `-engine`
+        // three of another. An `and` in their place would need a name to carry all of them.
+        for (name, kind) in [
+            ("shop-frontend", "frontend"),
+            ("shop-ui-kit", "frontend"),
+            ("shop-ui", "frontend"),
+            ("billing-service", "service"),
+            ("billing-services", "service"),
+            ("render-engine", "service"),
+            ("billing-api", "api"),
+            ("edge-gateway-v2", "api"),
+            ("ledger-core", "core"),
+            ("team-workspace", "workspace"),
+            ("team-docs", "docs"),
+        ] {
+            assert_eq!(classify_kind(name), kind, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_maven_wrapper_alone_is_a_maven_repo() {
+        // `"pom.xml" in fs or ".mvn" in fs`, as Python's `classify_stack` reads it: a repo
+        // whose pom sits below the root still carries the wrapper directory at the top.
+        let files = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(classify_stack(&files(&[".mvn"])), "java-maven");
+        assert_eq!(classify_stack(&files(&["pom.xml"])), "java-maven");
+    }
+
+    #[test]
+    fn a_scheme_is_lowercase_letters_and_plus_and_nothing_else() {
+        // Python's `^[a-z+]+://[^/]+/`: `git+ssh` is a scheme and is taken off, while an
+        // uppercase one does not match the class at all and the URL is left as it was.
+        assert_eq!(
+            namespace("git+ssh://git.example.com/acme/widget.git").as_deref(),
+            Some("acme/widget")
+        );
+        assert_eq!(
+            namespace("HTTPS://github.com/acme/widget.git").as_deref(),
+            Some("HTTPS://github.com/acme/widget")
+        );
+    }
+
+    #[test]
+    fn the_plane_repo_carries_the_branch_its_origin_names_as_head() {
+        // `_root_default_branch`: `refs/remotes/origin/HEAD` is the remote's own answer and
+        // wins over the checked-out branch, with its `origin/` taken off.
+        let (_dir, root) = plane_checkout();
+        git(
+            &root,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/develop",
+            ],
+        );
+
+        assert_eq!(root_default_branch(&root), "develop");
+        let own = plane_repo(&root).expect("a github origin is a plane repo");
+        assert_eq!(own["default_branch"], json!("develop"));
+    }
+
+    #[test]
+    fn a_plane_with_no_origin_head_falls_back_to_the_branch_it_is_on() {
+        // A plane `git init`-ed and given a remote by hand never has `origin/HEAD`, so the
+        // checked-out branch stands in — `_root_default_branch`'s second question.
+        let (_dir, root) = plane_checkout();
+
+        assert_eq!(root_default_branch(&root), "trunk");
+    }
+
+    #[test]
+    fn the_plane_repo_is_listed_first_unless_the_inventory_already_has_it() {
+        // Python's `repos`: the derived record is prepended, and a discovered one with the same
+        // `path_with_namespace` always wins — matched on the path, never the bare name.
+        let (_dir, root) = plane_checkout();
+        let other = json!({"repos": [rec("widget", "github", "acme/widget")]});
+
+        let all = repos(&root, &other, &[]);
+        assert_eq!(names(&all), ["plane", "widget"]);
+        assert_eq!(all[0]["source"], json!(PLANE_SOURCE));
+        assert_eq!(all[0]["path_with_namespace"], json!("acme/plane"));
+
+        let discovered = json!({"repos": [rec("plane", "github", "acme/plane")]});
+        let all = repos(&root, &discovered, &[]);
+        assert_eq!(all.len(), 1);
+        assert_eq!(
+            all[0].get("source"),
+            None,
+            "the discovered record, not the derived"
+        );
+
+        // Same bare name, different owner: a different repo, so the plane's is still added.
+        let namesake = json!({"repos": [rec("plane", "github", "someone/plane")]});
+        assert_eq!(repos(&root, &namesake, &[]).len(), 2);
+    }
+
+    #[test]
+    fn an_exclude_naming_the_plane_repo_by_either_name_keeps_it_out() {
+        // `own["name"] in EXCLUDE or own["path_with_namespace"] in EXCLUDE`: each spelling
+        // is enough on its own.
+        let (_dir, root) = plane_checkout();
+        let doc = json!({"repos": [rec("widget", "github", "acme/widget")]});
+
+        for exclude in ["plane", "acme/plane"] {
+            let all = repos(&root, &doc, &[exclude.to_string()]);
+            assert_eq!(names(&all), ["widget"], "exclude = {exclude}");
+        }
+        let all = repos(&root, &doc, &["unrelated".to_string()]);
+        assert_eq!(names(&all), ["plane", "widget"]);
+    }
+
+    #[test]
+    fn a_forge_project_becomes_the_record_discover_writes() {
+        // `commands._build_repo`: every field as the forge gave it when it is truthy.
+        let forge = Forge::default_of(Kind::GitHub);
+        let project = json!({
+            "name": "shop-frontend",
+            "path_with_namespace": "acme/shop-frontend",
+            "ssh_url": "git@github.com:acme/shop-frontend.git",
+            "default_branch": "trunk",
+            "description": "\u{1f}  The shop \n",
+            "topics": ["web"],
+            "web_url": "https://github.com/acme/shop-frontend",
+            "forge": "gitlab",
+        });
+
+        let made = record(&forge, &project, "node");
+
+        assert_eq!(
+            made,
+            json!({
+                "name": "shop-frontend",
+                "path_with_namespace": "acme/shop-frontend",
+                "ssh_url": "git@github.com:acme/shop-frontend.git",
+                "default_branch": "trunk",
+                "kind": "frontend",
+                "stack": "node",
+                "description": "The shop",
+                "topics": ["web"],
+                "web_url": "https://github.com/acme/shop-frontend",
+                "forge": "gitlab",
+            })
+        );
+        let keys: Vec<&str> = made
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "name",
+                "path_with_namespace",
+                "ssh_url",
+                "default_branch",
+                "kind",
+                "stack",
+                "description",
+                "topics",
+                "web_url",
+                "forge"
+            ],
+            "Python's key order is the file's"
+        );
+    }
+
+    #[test]
+    fn a_forge_project_with_empty_fields_gets_pythons_or_defaults() {
+        // `p.get("default_branch") or "main"`, `(p.get("description") or "").strip()`,
+        // `p.get("topics") or []`, `p.get("forge") or forge.kind`: a null and an empty value
+        // are both falsy, and neither is written through.
+        let forge = Forge::default_of(Kind::GitHub);
+        for empty in [Value::Null, json!("")] {
+            let project = json!({
+                "name": "legacy",
+                "path_with_namespace": "acme/legacy",
+                "ssh_url": "git@github.com:acme/legacy.git",
+                "default_branch": empty,
+                "description": Value::Null,
+                "topics": Value::Null,
+                "forge": empty,
+            });
+
+            let made = record(&forge, &project, "unknown");
+
+            assert_eq!(made["default_branch"], json!("main"), "{empty}");
+            assert_eq!(made["description"], json!(""), "{empty}");
+            assert_eq!(made["topics"], json!([]), "{empty}");
+            assert_eq!(made["forge"], json!("github"), "{empty}");
+            assert_eq!(made["web_url"], json!(""), "a missing web_url is `\"\"`");
+        }
+    }
+
+    #[test]
+    fn a_description_that_is_not_text_is_written_as_python_would_print_it() {
+        // Stricter-than-a-crash rather than a port: Python's `(… or "").strip()` raises
+        // AttributeError on a truthy non-string and takes `discover` down with it. The Rust
+        // writes `str()` of it instead, which is what this pins — and a falsy one is `""`.
+        let forge = Forge::default_of(Kind::GitHub);
+        let project = |description: Value| json!({"name": "x", "path_with_namespace": "acme/x", "description": description});
+
+        assert_eq!(
+            record(&forge, &project(json!(5)), "unknown")["description"],
+            json!("5")
+        );
+        assert_eq!(
+            record(&forge, &project(json!(0)), "unknown")["description"],
+            json!("")
+        );
+    }
+
+    #[test]
+    fn a_name_seen_again_is_checked_against_its_own_owner_and_no_other() {
+        // Python's `owner_of_name[name] = identity` keys on the name: registering `b` must not
+        // move `a`'s owner, or `a` seen a second time from the same place reads as a collision.
+        let merged = merge(&[
+            vec![rec("a", "github", "acme/a"), rec("b", "github", "acme/b")],
+            vec![rec("a", "github", "acme/a")],
+        ])
+        .unwrap();
+        assert_eq!(names(&merged), ["a", "b"]);
+
+        // And `b` is registered at all, so a second `b` from elsewhere is the collision it is.
+        let clash = merge(&[vec![
+            rec("a", "github", "acme/a"),
+            rec("b", "github", "acme/b"),
+            rec("b", "github", "other/b"),
+        ]]);
+        assert!(clash.is_err(), "{clash:?}");
     }
 
     #[test]
