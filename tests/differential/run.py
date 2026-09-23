@@ -186,7 +186,7 @@ class Scenario:
     #: charter-app's, so a note cannot outlive the difference it records. It is `stdout_differs`
     #: turned inside out — that one says "not yet" about the whole render and passes the day
     #: the two agree; this one says what the difference IS and fails the day it stops being
-    #: that. `DOCS_DIVERGE` is what fills it (charter-app#119).
+    #: that. Nothing fills it today; the docs pages that did are charter-app's own now (ADR 0044).
     stdout_rewrite: list = field(default_factory=list)
     #: Whether the Rust side takes `--now`. A read command does not.
     pins_the_clock: bool = True
@@ -4601,29 +4601,11 @@ M28_SCENARIOS = [
 # M2.21: charter's own documentation, printed by the install that implements it
 # --------------------------------------------------------------------------------------------
 #
-# `docs list` and `docs show` were clap usage errors. They are ported rather than refused,
-# which means charter-app carries a SECOND copy of charter's `docs/*.md` — vendored from the
-# wheel's `charter/_docs` at the oracle's pinned commit and compiled in by `build.rs`, exactly
-# as `news/` is, and for the reason `charter/docsrc.py` gives: the page a user reads must come
-# from the same install as the behaviour.
-#
-# Two copies need a tie, and it is the same pair `news` uses: one generated scenario per topic
-# renders `docs show <topic>` on both sides byte for byte, and `check_docs_corpus` compares the
-# two corpora as digests before any of them run — because a generated scenario cannot see a
-# page DELETED from the directory it was generated from.
-
-DOCS_DIR = REPO / "crates" / "charter-core" / "docs"
-
-#: Ask the ORACLE what it serves, as a subprocess under the interpreter the scenarios use.
-#: `docsrc.topics()` and not a glob of the directory: what is compared is what `docs show`
-#: would print, and the topic list is the thing that decides that.
-_DOCS_DIGEST = (
-    "import hashlib\n"
-    "from charter import docsrc\n"
-    "root = docsrc.source()\n"
-    "for topic in (docsrc.topics() if root else []):\n"
-    "    print(topic, hashlib.sha256((root / (topic + '.md')).read_bytes()).hexdigest())\n"
-)
+# `docs list` and `docs show` are ported rather than refused. The PAGES they print are
+# charter-app's own (ADR 0044): they describe this app, and are no longer a copy of the Python
+# charter's `docs/*.md`, so no page is compared with the oracle's. What is still compared is
+# the COMMAND: the listing's topic names and framing, and the two refusals — a topic that is not
+# one, and a topic that is a path out of the pages. The page texts are `docsrc.rs`'s tests'.
 
 #: The one thing in `docs list` that cannot match: Python names the DIRECTORY it read the
 #: pages out of, and charter-app names the binary they are compiled into. The sentence around
@@ -4636,359 +4618,9 @@ DOCS_SOURCE_MASK = [
 ]
 
 
-@dataclass(frozen=True)
-class PageDiverges:
-    """A vendored page charter-app deliberately holds a DIFFERENT version of.
-
-    `Divergence` for the docs corpus rather than for a command, and the same refusal to be a
-    waiver (charter-app#119). `check_docs_corpus` holds the two copies of every page byte for
-    byte, which is exactly what it is for; a page describing behaviour ADR 0035 reversed
-    cannot pass that and cannot be corrected where it lives, because spec decision 17 freezes
-    the Python charter and a frozen oracle documenting behaviour it does not have would be
-    worse than the drift.
-
-    Skipping the page would have been the cheap answer and the wrong one: a skipped page is
-    one nothing compares, so the NEXT drift in it — anywhere in it, for any reason — lands in
-    silence. So this does not skip. It states what charter's copy says and what charter-app's
-    says instead, the run rewrites the oracle's page with those pairs, and the result is
-    compared byte for byte. Everything the divergence does not name is held to the bar it
-    always was.
-
-    It fails loudly in both directions, which is the point:
-
-    - **`why` must cite the record** — an ADR and a spec decision — because in six months the
-      only thing between this and two copies nobody can explain is a sentence with a number
-      in it.
-    - **charter must still say its half.** A `theirs` that has left the oracle's page is a
-      divergence FROM something that is gone: the direction a reviewer forgets, and the one
-      that rots first.
-    - **charter-app must say its half**, so a declaration cannot outlive the edit it records.
-    - **the two copies must still differ.** If the pages ever match again the divergence is
-      over, and the run says so instead of passing quietly.
-
-    `docs show` prints the page's bytes, so the same pairs drive the per-topic scenario's
-    stdout through `Scenario.stdout_rewrite`. One table, both comparisons — the alternative is
-    a corpus check and a render check that can disagree about which page is the right one.
-    """
-
-    #: Prose naming the records that decided it. Must cite an ADR and a spec decision.
-    why: str
-    #: `(charter's words, charter-app's words)`, applied in order, once each.
-    rewrites: tuple[tuple[str, str], ...]
-
-
-#: Why both diverged pages diverge. One string, because it is one decision and a second copy
-#: of it would be a second thing to keep true.
-DOCS_DIVERGE_WHY = (
-    "ADR 0035 reversed `charter init`'s default at the top of an existing git repository: the "
-    "plane goes in a directory of its own and the repo becomes its first clone, with "
-    "`--plane-is-this-repo` as the opt-in. charter-app spec decision 27 carries it, and "
-    "`INIT_IN_A_REPO_DIVERGES` is the same decision holding the BEHAVIOUR apart — this is its "
-    "documentation. Each page says in its own text which implementation it describes, which is "
-    "the condition charter-app#119 puts on holding a different copy at all."
-)
-
-#: The pages charter-app holds its own version of, and exactly what differs in each.
-#:
-#: Read `PageDiverges` before changing anything here, and ADR 0035 before deciding it should
-#: not exist. Adding a page to this table is a decision with a record behind it, never a way
-#: to make a red `docs-corpus` green.
-DOCS_DIVERGE: dict[str, PageDiverges] = {
-    "control-plane": PageDiverges(
-        why=DOCS_DIVERGE_WHY,
-        rewrites=(
-            (
-                """\
-
-`charter init` therefore produces the same plane wherever it runs. Being inside a git repo
-no longer changes what you get; it changes only what init *offers*, which is to clone that
-repo into your first workspace:
-
-""",
-                """\
-
-`charter init` therefore produces the same plane wherever it runs. Being at the top of a git
-repo no longer changes what you get; it changes whether init writes anything at all. It
-writes nothing, and says what the two ways on are:
-
-""",
-            ),
-            (
-                """\
-$ charter init --forge github --owner acme
-✓ Initialized control plane (schema 1) → charter.toml, personas/, …
-• You are standing in the git repo 'myapp'. Work happens in a workspace, not in the plane
-  root — clone it into the first one:
-      charter init --clone-this-repo
-```
-
-That is an offer, not a prompt: charter never reads stdin (it runs inside hooks, where
-blocking would hang the turn), so the second command *is* the acceptance — the same shape
-`charter report` uses for consent. Run it and you get `workspaces/default/myapp/`, cloned
-from the repo you are standing in and pointed at the same `origin` it has; ignore it and
-the plane is complete as it stands. Either way the control plane itself is identical, and
-nothing is written to your repo's git state.
-
-""",
-                """\
-$ charter init --forge github --owner acme
-✗ this is the git repo 'myapp', and `charter init` does not make a repository into a
-  control plane unless you ask it to. Nothing was written.
-• A plane is a directory of its own, and this repo is the first clone in it:
-      mkdir ../myapp-plane && cd ../myapp-plane
-      charter init --forge github --owner acme --adopt ../myapp
-• To make THIS repo the plane instead, ask for it by name:
-      charter init --plane-is-this-repo --forge github --owner acme
-```
-
-That is a refusal, not a prompt: charter never reads stdin (it runs inside hooks, where
-blocking would hang the turn), so naming the option *is* the acceptance — the same shape
-`charter report` uses for consent. Take the first way and you get
-`workspaces/default/myapp/`, cloned from the repo you were standing in and pointed at the
-same `origin` it has; take the second and this repo becomes the plane. Either way the
-control plane itself is identical, and until you choose, nothing is written to your repo at
-all.
-
-**This page describes charter-app**, whose default here is the opposite of the Python
-charter's, which scaffolds a plane into the repo and *offers* to clone it into the first
-workspace. See [ADR 0035](adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md) and
-charter-app spec decision 27 for why it was reversed. `charter init` anywhere that is not the
-top of a git repo is unchanged.
-
-""",
-            ),
-            (
-                """\
-A solo user with one repo used to be able to `charter init` and carry on working in that
-repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is
-`charter init --clone-this-repo` — the offer above — and then work in
-`workspaces/default/<repo>/`.
-
-""",
-                """\
-A solo user with one repo used to be able to `charter init` and carry on working in that
-repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is a
-plane in a directory of its own and `charter init --adopt <repo>` — the first way out of the
-refusal above — and then work in `workspaces/default/<repo>/`.
-
-""",
-            ),
-        ),
-    ),
-    "install": PageDiverges(
-        why=DOCS_DIVERGE_WHY,
-        rewrites=(
-            (
-                """\
-`--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
-org/user whose repos this control plane tracks. Run inside an existing git repo, `init`
-also *offers* to clone that repo into your first workspace — accept with `charter init
---clone-this-repo`, because work happens in a workspace, never in the plane root.
-
-""",
-                """\
-`--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
-org/user whose repos this control plane tracks. Run at the top of an existing git repo,
-`init` writes nothing at all and says so: a plane is a directory of its own and that repo
-becomes its first clone — make the plane beside it and adopt the repo in one command
-(`charter init --adopt ../<repo>`), because work happens in a workspace, never in the plane
-root. To make that repo the plane instead, ask for it by name with `charter
-init --plane-is-this-repo`. That default is charter-app's and is the opposite of the Python
-charter's, which scaffolds the plane into the repo — ADR 0035, and charter-app spec
-decision 27.
-
-""",
-            ),
-        ),
-    ),
-    "handoff": PageDiverges(
-        why=(
-            "charter-app#204: a chat the desktop app started asks the app to open a handoff "
-            "instead of printing a command, because the app is this charter's frame (ADR 0025) "
-            "and 'the app has a window and a person looking at it' (ADR 0035). "
-            "`A_HANDOFF_OPENS_IN_THE_APP` holds the BEHAVIOUR apart and this is its "
-            "documentation; the Python charter is frozen (spec decision 17) and has no app. "
-            "The page says in its own text which implementation the added paragraphs describe."
-        ),
-        rewrites=(
-            (
-                """\
-starting the wrong tool with your brief already in its argv.
-
-## Isolation and continuation
-""",
-                """\
-starting the wrong tool with your brief already in its argv.
-
-**Inside charter-app, the app is the frame.** A chat the desktop app started carries the app's
-hook socket, and `charter handoff` from it asks the app to open the chat instead of printing a
-command. The chat opens as a new tab on the target workspace's strip, started on the stamped
-brief. It opens behind the tab you are reading and does not raise the window; it takes the front
-only in a window with no tab at all. Your yes to the prompt in front of `charter handoff` is the
-only one asked for, and the new chat runs the same harness profile as the chat that asked. If the
-app is not listening or does not answer, you get the command above, word for word. If it
-refuses, you get the command and one more line saying why. A handoff the app opened records no
-todo in the target workspace: the brief is the new chat's first message, and the tab is how you
-see it.
-
-The app opens one chat per `charter handoff`. The command asks the app for a single-use ticket
-and spends it on the same connection, so no single line on the socket opens a chat and no line
-can be replayed. The ticket cannot tell the command you approved from another process running
-inside the same chat, which could run `charter handoff` itself, just as it can already start a
-harness in the background with `claude -p`. That is why a handed-off chat always lands as a tab
-you can see, stamped with the chat it came from. This describes charter-app; the Python charter
-has no app, and opens the chat in a background tmux window.
-
-## Isolation and continuation
-""",
-            ),
-        ),
-    ),
-}
-
-#: Ask the ORACLE for one page's bytes, the way `_DOCS_DIGEST` asks it for its digests: what a
-#: divergence is measured against is the page `docs show` would print, not a file this
-#: repository happens to have a copy of.
-_DOCS_PAGE = (
-    "import sys\n"
-    "from charter import docsrc\n"
-    "root = docsrc.source()\n"
-    "sys.stdout.buffer.write((root / (sys.argv[1] + '.md')).read_bytes())\n"
-)
-
-
-def _oracle_page(topic: str) -> "str | None":
-    """What charter's own `docs/` holds for *topic*, or `None` if it could not be read."""
-    said = subprocess.run([sys.executable, "-c", _DOCS_PAGE, topic],
-                          capture_output=True, text=True)
-    return said.stdout if said.returncode == 0 else None
-
-
 def _opening(words: str) -> str:
     """The first non-empty line of a rewrite's half, for a problem line to quote."""
     return next((line for line in words.splitlines() if line.strip()), words)
-
-
-def _declared_page_problems(topic: str) -> list[str]:
-    """Check one `PageDiverges` in full — see its docstring for why each clause is here."""
-    declared = DOCS_DIVERGE[topic]
-    problems = []
-    if "ADR" not in declared.why or "decision" not in declared.why:
-        problems.append(
-            f"    {topic}.md: this divergence's `why` names no record — it must cite the ADR "
-            "and the spec decision that decided it"
-        )
-    theirs = _oracle_page(topic)
-    if theirs is None:
-        return problems + [f"    {topic}.md: the oracle could not print its own page"]
-    ours = (DOCS_DIR / f"{topic}.md").read_text()
-    if theirs == ours:
-        return problems + [
-            f"    {topic}.md: the two copies are identical again, so this divergence is over "
-            "— delete it and let the digest hold the page"
-        ]
-    rewritten = theirs
-    for was, now in declared.rewrites:
-        if was not in rewritten:
-            problems.append(
-                f"    {topic}.md: charter no longer says {_opening(was)!r}, so this divergence "
-                "is a divergence FROM something that is gone"
-            )
-            continue
-        if now not in ours:
-            problems.append(
-                f"    {topic}.md: charter-app does not say {_opening(now)!r}, which this "
-                "divergence declares it says instead"
-            )
-        rewritten = rewritten.replace(was, now, 1)
-    if rewritten != ours:
-        problems.append(f"    {topic}.md: differs BEYOND what this divergence declares:")
-        problems.extend(
-            f"      {line}" for line in difflib.unified_diff(
-                rewritten.splitlines(), ours.splitlines(),
-                "charter, rewritten as declared", "charter-app", lineterm="", n=1)
-        )
-    return problems
-
-
-def _docs_stdout_rewrite(topic: str) -> list:
-    """The same pairs, for the scenario that compares what `docs show <topic>` PRINTS.
-
-    Python's `docs show` prints the page's text, so a page's divergence is its render's — and
-    driving both off one table is what stops the corpus check and the scenario disagreeing
-    about which copy is the right one.
-    """
-    declared = DOCS_DIVERGE.get(topic)
-    if declared is None:
-        return []
-    return [(was, now, declared.why) for was, now in declared.rewrites]
-
-
-def check_docs_corpus() -> bool:
-    """The vendored `docs/` and the pages the oracle serves are the same pages, byte for byte.
-
-    `check_corpus`'s twin for M2.21, and it exists for the same reason: the per-topic scenarios
-    compare what each side PRINTS, so a page that drifts turns one of them red — but a page
-    that is missing from this repository is in no scenario at all, and a page charter dropped
-    would leave a scenario that still passes against a corpus nobody updated.
-
-    Python's `docs show` prints the file's text, so a digest of the file's bytes is a digest of
-    the whole answer. There is no frontmatter here that a rendered body leaves out, which is
-    what makes this simpler than `news`'s — the digest is belt to the scenarios' braces only
-    for the corpus's SHAPE, not for a part of the page nothing renders.
-
-    **A page in `DOCS_DIVERGE` is compared through its declaration instead of through its
-    digest** (charter-app#119) — not skipped: see `PageDiverges` for what is still held, and
-    for why skipping was the wrong answer.
-    """
-    said = subprocess.run([sys.executable, "-c", _DOCS_DIGEST], capture_output=True, text=True)
-    if said.returncode != 0:
-        print("DIFF docs-corpus: the oracle could not list its pages — " + said.stderr.strip())
-        return False
-    theirs = dict(line.split() for line in said.stdout.splitlines() if line.strip())
-    ours = {
-        p.stem: hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in sorted(DOCS_DIR.glob("*.md"))
-    }
-    if not theirs:
-        print("DIFF docs-corpus: the oracle ships no pages, so nothing was compared")
-        return False
-    problems = []
-    for topic in sorted(set(theirs) - set(ours)):
-        problems.append(f"    only charter has: docs/{topic}.md")
-    for topic in sorted(set(ours) - set(theirs)):
-        problems.append(f"    only charter-app has: crates/charter-core/docs/{topic}.md")
-    both = set(theirs) & set(ours)
-    for topic in sorted(both):
-        if topic in DOCS_DIVERGE:
-            problems.extend(_declared_page_problems(topic))
-        elif theirs[topic] != ours[topic]:
-            problems.append(f"    differs: {topic}.md")
-    for topic in sorted(set(DOCS_DIVERGE) - both):
-        # A declaration about a page one side does not carry is a declaration about nothing,
-        # and it would otherwise sit here reading as a check.
-        problems.append(
-            f"    a divergence is declared for {topic}.md, which is not a page both "
-            "implementations carry"
-        )
-    print(("ok   " if not problems else "DIFF ") + f"docs-corpus ({len(theirs)} pages)")
-    for line in problems:
-        print(line)
-    if problems:
-        print("    the two copies of charter's documentation have drifted; see "
-              "crates/charter-core/docs/SOURCE")
-    return not problems
-
-
-def _docs_topics() -> list[str]:
-    """Every topic the vendored corpus carries, in `docsrc.topics()`'s order.
-
-    From the DIRECTORY rather than from the oracle, exactly as `_news_versions` is, so this
-    file keeps working whether or not charter is importable in its own process. The
-    disagreement that leaves — a topic here that the oracle does not serve — is what
-    `check_docs_corpus` is for.
-    """
-    return sorted(p.stem for p in DOCS_DIR.glob("*.md"))
 
 
 #: `docs list` and `docs show`, which need no plane and no clock. The `daily` fixture is here
@@ -5001,22 +4633,6 @@ DOCS_SCENARIOS = [
         pins_the_clock=False,
         stderr_mask=DOCS_SOURCE_MASK,
     ),
-    *[
-        Scenario(
-            # One per topic. A single page would prove the mechanism; one per page is what
-            # notices a page whose bytes agree and whose LOOKUP does not — a key built from a
-            # filename rather than a stem, or a name with a `-` or a `.` in it that some
-            # generator mangled on the way in.
-            name=f"docs-show-{topic}",
-            plane="daily",
-            python=["docs", "show", topic],
-            pins_the_clock=False,
-            # Empty for every page but the two `DOCS_DIVERGE` names, so this reads as the
-            # byte-for-byte comparison it has always been everywhere else.
-            stdout_rewrite=_docs_stdout_rewrite(topic),
-        )
-        for topic in _docs_topics()
-    ],
     Scenario(
         name="docs-show-refuses-a-topic-that-is-not-one-and-names-the-real-ones",
         plane="daily",
@@ -7049,9 +6665,6 @@ def main() -> int:
     # Before the scenarios, and whichever of them were asked for: a corpus that has drifted makes
     # every `news --for` scenario report a difference in a rendered body, and this names the file.
     drifted = not check_corpus()
-    # The same, for the pages `docs show` prints: a scenario generated from the vendored
-    # directory cannot see a page that is no longer in it.
-    docs_drifted = not check_docs_corpus()
 
     failed = [
         s.name for s in wanted
@@ -7060,8 +6673,6 @@ def main() -> int:
     ]
     if drifted:
         failed.append("news-corpus")
-    if docs_drifted:
-        failed.append("docs-corpus")
     if args.time_preflight:
         print()
         doctor_scenarios.time_preflight(args.binary, args.time_preflight)

@@ -1,64 +1,45 @@
 # The hooks
 
-The CLI is one of charter's two artifacts. The other is a **Claude Code plugin**, and the
-plugin is almost entirely hooks: the things that have to happen without anyone remembering
-to ask for them.
+A hook is the harness calling charter at a moment nobody had to remember: a session
+starting, a prompt, a tool call about to run, a turn ending. Every one of them is a
+`charter hook <name>` call. What the app itself runs for a hook is its own binary, by its
+absolute path inside the app bundle (see [install.md](install.md)). A hook a plane declares in
+its own `.claude/settings.json` as a bare `charter hook …` is found on the chat's `PATH`, which
+the app extends with its bundle's directory.
 
-You install one of them. `uv tool install charter-cp` puts the CLI on your `PATH`, and
-`charter init` installs the plugin for the plane it creates — `charter doctor --fix` for a
-plane that already exists. A CLI with no plugin leaves every guard and every injection
-dead, while looking completely installed, which is why `charter doctor`'s `plugin install`
-row names the gap rather than leaving you to notice it. See [install.md](install.md).
+The app ships a Claude Code plugin in its bundle and loads it into each chat it starts, with
+`claude --plugin-dir`, so the hooks arrive with the chat and there is nothing to install per
+project or per machine. The bundled plugin is being built now; what it wires is recorded in
+[diazoxide/charter-app](https://github.com/diazoxide/charter-app).
 
-The plugin ships **no Python**. Every hook is a `charter hook <name>` call against the CLI
-on `PATH`, which is why a version skew between the two is worth shouting about and is the
-one thing a hook is allowed to shout about.
+## What this version answers
 
-## What fires, and when
+| Hook | What it does |
+| --- | --- |
+| `sessionstart`, `userpromptsubmit`, `notification`, `subagentstop`, `stop`, `sessionend` | reports what the session just did to the app that started it, which is how the window knows which chat needs you. Outside the app it has nobody to tell and does nothing, except that `sessionstart` starts a background forge refresh |
+| `pretooluse` on `Bash` | the guards below |
+| any other `pretooluse…` or `posttooluse…` word | **blocks** the tool call, with the reason on stderr |
+| any other word | exits 1 with the reason on stderr, and blocks nothing |
 
-| Event | Matcher | What it does |
-| --- | --- | --- |
-| `SessionStart` | — | reconcile workspace state, GC persona scratch, inject context, run `doctor`, refresh forge state and the newer-charter check |
-| `UserPromptSubmit` | — | the commitment gate (below) |
-| `PreToolUse` | `Bash` | every guard below except the vault read |
-| `PreToolUse` | `Read\|Grep` | keeps a vault file from being read into context |
-| `PreToolUse` | `Task\|Agent` | notes a dispatch about to happen |
-| `PostToolUse` | `Write\|Edit\|MultiEdit` | the record-memory nudge, and a warning when a memory file looks like it holds a secret (below) |
-| `PostToolUse` | `Skill` | tallies which skills a persona actually invokes |
-| `PostToolUse` | `Task\|Agent` | tallies the dispatch |
-| `Stop`, `SubagentStop` | — | autosave a LIVE workspace |
+**A reporting hook never blocks.** A harness reads exit 2 as "block", and on `Stop` that
+would make the session carry on instead of ending, so every failure on a reporting hook is a
+silent exit 0 and the window keeps the last state it was told.
 
-### Outside a control plane, none of that happens
-
-The plugin is enabled per user or per project, so these hooks fire in every repository you
-open, most of which are not control planes. In one of those, charter **writes nothing, says
-nothing and grants nothing** — every handler but the two below asks `hooks._in_a_plane` and
-returns on its first line. That matters because outside a plane `config.STATE_DIR` is
-`<cwd>/.charter`, so anything charter recorded — session pointers, the guard sighting, the
-dispatch and skill tallies — landed in somebody else's `git status`. A plane is somebody's
-repo; so is everything else.
-
-**The two exceptions are the refusals, and they are not silenced.** `PreToolUse:Read|Grep`
-carries nothing but a denial, so it has no gate at all; `PreToolUse:Bash` reads the gate
-rather than returning on it, because only half of what it does belongs to a plane. With no
-plane anywhere, the vault-leak guard still denies on Bash and on `Read`/`Grep`, and the
-live-substitution guards still deny on a forge command and on charter's own text-taking
-commands. Each of those refuses a fact about the shell or about a secret rather than a
-policy this plane holds — and `$CHARTER_HOME` puts a real vault directory within reach of a
-directory that
-holds no `charter.toml`. What does *not* fire out there is every guard whose subject is the
-plane itself: the single-credential rule, the two plane-root guards, the release floor, the
-handoff guard, the state-write guard, and the persona tool-gate's auto-approval. A denial about a control
-plane that does not exist explains nothing to the person reading it.
-
-One consequence worth stating plainly: a refusal outside a plane is **delivered without
-being tallied**. The denial goes out; `hooks._trace` records nothing, because a trace is
-read by `charter persona stats` against a plane and there is none here to read it.
+**A tool hook this version cannot answer blocks, and that is deliberate.** Refusing a tool
+call is the only safe thing a program that checked nothing can do; answering `allow` for a
+guard it has not got would be a hole that looks like a guard. That covers the guard on the
+`Read` and `Grep` tools, the guard on writes into charter's own state, and the `PostToolUse`
+handlers, none of which this version has yet.
 
 ## The guards
 
-Every one of them **denies**. None of them asks — charter holds no nudge on the Bash tool,
-and that is a deliberate position, not an accident (see *What charter stopped asking*).
+These are what `charter hook pretooluse` answers on a `Bash` call. Every one of them
+**denies**. None of them asks: charter holds no nudge on the Bash tool.
+
+The guards about the shell itself (the secret leak and the two substitution guards) run in
+any directory. The ones whose subject is a control plane (one credential, the two plane-root
+guards, the release floor and the handoff guard) run only inside one, because a denial about
+a control plane that does not exist explains nothing to the person reading it.
 
 A denial from these is **the rule working, not a bug** — the single most common thing
 mistaken for a defect. Each prints why, because a developer who reads the reason learns the
@@ -154,17 +135,10 @@ rule while one who reads a bare refusal files an issue.
   substitution, brace or tilde expansion. The hook runs on the command line, never on what
   `sh` turns it into, so each of those is `cat` on the same inode and allowed. **What it
   does not catch is written down** — see *Where the secret-leak guard stops*, below, and
-  [SECURITY.md](../SECURITY.md) for why that is the honest scope rather than a defect.
-- **Vault read.** The same invariant on the `Read`/`Grep` tools, which never reach the Bash
-  matcher at all. It calls the **same predicate on the same operand and adds no step of its
-  own**, so one operand gets one answer whichever route it arrives on — asserted directly, in
-  both directions, by `tests/test_vault_path_spellings.py::TestTheTwoGuardsCannotDisagree`.
-  That sentence used to read "same path pattern, so the same limits", which was false: this
-  route carried a private trailing-slash retry that the Bash route did not, so
-  `Grep(path=".charter/vaults")` was refused while `grep -rn TOKEN .charter/vaults` printed
-  plaintext. The retry is gone and the pattern anchors `vaults` to a path segment instead.
-  No shell is involved on this route, so of the limits above only the path ones apply — the
-  shell-expansion and wrapper families do not arise here.
+  [SECURITY.md](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/SECURITY.md) for why that is the honest scope rather than a defect.
+- **Vault read.** The same invariant on the `Read` and `Grep` tools, which never reach the
+  Bash matcher. This version does not answer that hook yet, so it blocks those calls rather
+  than judging them (see *What this version answers*).
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone. `--detach` counts — with an operand, without one, and
   with the plane's own default branch as the operand, which is the one spelling that used to
@@ -207,7 +181,7 @@ rule while one who reads a bare refusal files an issue.
   so `git checkout <branch>` typed in a workspace clone wrote into the plane root and the
   guard saw a plain checkout in a clone. The repository's config is read now — the one
   invocation-derived subject that costs a disk read, at 13–65 µs, stated in
-  `charter/gitconfig.py` along with the routes it declines: `git -c core.worktree=…` on the
+  charter's git-config reader along with the routes it declines: `git -c core.worktree=…` on the
   command line (git ignores it, so it reaches nothing), `include`/`includeIf`, and the
   global and system configs
   ([#504](https://github.com/diazoxide/charter/issues/504)). A `-C`
@@ -216,8 +190,7 @@ rule while one who reads a bare refusal files an issue.
   reads one in — so `git switch -C <branch>`, where `-C` is `switch`'s own `--force-create`,
   is the branch creation it is rather than a directory called `<branch>`
   ([#483](https://github.com/diazoxide/charter/issues/483)). Every one of those is a row in
-  the guard's corpus (`tests/test_plane_root_checkout_is_two_commands.py`), crossed with the
-  commands rather than listed beside them. The walk also carries the **environment a command
+  the guard's corpus, crossed with the commands rather than listed beside them. The walk also carries the **environment a command
   line establishes for its later segments**, so `export GIT_DIR=<plane>/.git && git checkout
   <branch>` reaches the same denial the attached `GIT_DIR=… git …` does
   ([#496](https://github.com/diazoxide/charter/issues/496)) — as do `declare -x`/`typeset
@@ -255,7 +228,7 @@ rule while one who reads a bare refusal files an issue.
   because that is the merge the standing rule already permits for a single repo. Every other
   `charter change` verb — `show`, `list`, `create`, `add`, `drop`, `push`, `revert` — is
   untouched in every mode. See [changes.md](changes.md) and
-  [ADR 0020](adr/0020-there-is-no-cross-repo-merge-loop.md).
+  [ADR 0020](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0020-there-is-no-cross-repo-merge-loop.md).
 
 - **Forge body substitution.** A `gh`/`glab` command that publishes prose — `issue
   create|comment|edit`, `pr create|comment|edit|review`, `release create|edit`, `gist
@@ -497,137 +470,12 @@ rule while one who reads a bare refusal files an issue.
   a Bash rule "isn't a security boundary around the program"
   ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
-- **A hand-written state file.** A `Write` or `Edit` whose path resolves inside charter's
-  state directory (`.charter/`, or `$CHARTER_HOME`): the vault files, the vault registry, the
-  active-persona pointer, the per-session pointers, the tool-gate's session ceiling. Three of
-  those decide what the persona tool-gate auto-approves, so a write there is a session
-  widening its own permissions — and asking the agent to approve that is no guard, which is
-  why this one denies where the routing nudge beside it only asks. Resolved with `realpath`,
-  so a symlink planted into the directory answers the same as naming it. The refusal names the
-  command that owns the file — `charter persona use`, `charter vault add`,
-  `charter secret set`. A persona's own `persona.md` is deliberately **not** covered: editing a
-  charter on request is ordinary work, and what made it dangerous was the tool-gate re-reading
-  it mid-session, which the session ceiling fixes at the reading end. Gated on a control plane.
+- **A hand-written state file.** A `Write` or `Edit` into charter's state directory
+  (`.charter/`, or `$CHARTER_HOME`). This version does not answer that hook yet, so it
+  blocks those calls rather than judging them.
 
-One more path is not a guard but an allowance: a program the **active persona** declares in
-`tools:` runs without a prompt while that persona is active, and only then. It approves the
-**program**, so every argument rides along — which is why seven things are not smoothed
-whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`,
-`charter change`, `git clean`, …), **an argument that is itself a program**, interpreters
-whose argument is the real command (`bash -c`, `python3 -c`, `env`, `xargs`, `npx`, …),
-any command whose arguments **reach** a vault or charter's own state, any tool added to that line after the
-session started — the gate answers within the set declared before this session could
-rewrite it, and `persona.md` is a file the model can write — any command carrying a
-character the shell would rewrite before the program sees it, and any command whose
-**command word is not the file the declared name refers to**. Each of those is a fall back
-to the normal prompt; this path never denies.
-
-Two of those seven are one class read from opposite ends, and the difference between them
-is the difference between a rule and a list. A command that runs a second program is not
-one program with its arguments, and only one of the two was declared. Where that second
-program is named as a **path**, charter asks the filesystem — is this a file this machine
-would execute? — and declines. That is what covers `caffeinate -s ./evil`,
-`arch -arm64 ./evil`, `flock /tmp/l ./evil`, `taskset 1 ./evil`, `runuser -u u -- ./evil`
-and the wrapper written after this sentence, none of which charter has to have heard of.
-Every one of those was an affirmative `allow` before, and for the first two the
-agent-written `./evil` was observed executing.
-
-The interpreter list is the other end, and **it is a list of names, and it is best-effort**.
-It exists for the programs that take their command as *text* — `bash -c hostname`,
-`awk 'BEGIN{system("id")}'`, `npx some-package` — where there is no file for the rule above
-to stat and nothing in `argv` that separates the string from an ordinary argument. Round
-four walked past it with `caffeinate`, which was simply not on it, while `nice`, `ionice`
-and `timeout` were. Adding names is not what closed that; asking about the file is. Read
-the list as a convenience over a residual, never as the boundary.
-
-The residual it sits on, stated: an argument that is a **bare name** is resolved by the
-program being run, through `PATH`, and charter does not treat it as a program. Doing so
-means treating every argument `shutil.which` answers as a program — and `log`, `pr`, `ps`,
-`top`, `apply` and `cp` are all binaries on an ordinary machine, so `git log`,
-`gh pr list`, `docker ps`, `kubectl top` and `kubectl apply` would each become a prompt.
-That is not one prompt; it is the end of the allowance. Exploiting it needs a program the
-agent can already reach through `PATH`, which is the same precondition as the command-word
-residual further down. `ssh host rm` is the same floor with the machine changed.
-
-The command-word rule is newer than the rest and is the same mistake as the first version
-of the one before it. `tools: gh` was matched against `os.path.basename`, so `./gh` — a shell
-script the agent wrote a moment earlier — inherited the approval, as did `/tmp/gh`,
-`bin/kubectl` and `PATH=<a directory the agent wrote> gh`. That is arbitrary unprompted
-execution under any `tools:` line at all. A command word spelled as a path is now smoothed
-only when it is, by inode, either the persona's own `personas/<n>/bin/<name>` script or
-whatever a bare invocation of that name resolves to right now — so `/usr/bin/gh` and a
-symlink to it are still `gh`, and a file of the agent's own is not. A **bare** name is
-smoothed as before: it is the declaration exactly as written, and there is nothing else to
-check it against. What that cannot see is whether the file `PATH` resolves to is the real
-`gh` — an agent that can write into a directory already on `PATH` puts its program where
-bash and charter both find it and both agree.
-
-A leading `VAR=value` is refused for the same reason, all of them, not a list of the
-variables that matter: `PATH=/tmp gh` picks the file as surely as a `/` does, and there is
-no honestly inert subset to carve out — `KUBECONFIG=… kubectl …` was the shape the old
-exemption existed for, and a kubeconfig may name an `exec` credential plugin, which is a
-kubeconfig naming a program for kubectl to run. `KUBECONFIG=… kubectl get pods` is one
-prompt now.
-
-Destructive subcommands are read as **words** of `argv`, not as whole arguments:
-`git -c alias.z=clean z -xfd` defines the alias and runs it in one command, and really does
-delete every untracked file. A word ends where a word ends, so `kubectl describe pod
-my-run-1` is not `kubectl run` and `port-forward` is still one verb — but
-`git commit -m "clean up the tests"` is a prompt now, and that is the price.
-
-*Reach* is decided about the file, not about the text of the command. Each argument is
-resolved and compared by inode to where `charter` actually keeps its state — so
-`@".charter"/vaults/x.json`, `.chart\er/…`, a symlink, a case-folded spelling, the bare
-directory name, and a directory that merely *contains* the state directory
-(`tar -cf /tmp/o.tar .` in the plane root) are all one answer. Because the question is asked
-of `charter.config` rather than of a hardcoded name, a plane with `$CHARTER_HOME` set, a
-plane still on the legacy `.edm/` directory, and a vault the registry points outside the
-plane are covered too.
-
-That comparison is only worth anything if the argument charter examines is the argument the
-program receives, and the step in between is the shell. **A command is smoothed only when
-every character in it is one the shell hands over unchanged** — letters, digits, and
-`_ - . / : , = + @ %`, plus quotes, a backslash, spaces and tabs, and any non-ASCII
-character. Anything else and the gate declines and you get the normal prompt. That is not a
-list of dangerous characters — two of those have been written here and both were bypassed
-by a character nobody had thought of. It is the inverse: a spelling this process cannot
-evaluate is refused by default.
-
-The concrete cost, so it is a decision rather than a surprise: `ls *`, `cat ~/notes.md`,
-`git commit -m "fix #12"`, `kubectl get -o jsonpath={.items}` and any command naming an
-executable file — `git add ./release.sh`, `cat ./deploy.sh` — are no longer smoothed —
-one prompt each. Brace expansion (`.charte{r..r}`), ANSI-C quoting (`$'\x2echarter'`),
-globs, `~`, `$VAR` and `$( )` all reach the same refusal, because each of them is the shell
-rewriting a word before `argv` exists: `charter secre*` is `charter secret` the moment
-something creates a file called `secret` beside it.
-
-**What it still cannot see**, stated rather than implied: this gate reads `argv` and nothing
-else. A program that takes its arguments from a *file* is outside it — `curl -K req.conf`
-runs whatever `req.conf` says, including `--upload-file .charter/vaults/devops.json`, and
-nothing charter owns appears in the command. That is not closed, and the reason is worth
-being explicit about: closing it means listing `curl -K`, `wget -i`, `tar -T`, `xargs -a`,
-`git -c include.path` and whatever comes next, and a list of the spellings somebody thought
-of is the shape that has already been bypassed three times here. There is no property in
-`argv` that separates a config file from any other argument. The same applies to a relative
-path hidden behind an unrecognised flag prefix on a plane whose state directory is named
-neither `.charter` nor `.edm`.
-
-Two more sit on that same floor, found in the fourth round and disclosed here for the same
-reason. A flag whose *value* is another program — `tar --use-compress-program=`,
-`git -c core.pager=` — runs it, and in `argv` it looks like any other `--flag=value`. Half
-of that one closed itself when the rule above arrived: where the value is a path to an
-executable file, charter stats it and declines, without knowing the flag. What is left is a
-value that is a bare name — `--use-compress-program=gzip` — on the residual described
-above. And a verb can reach the command from a file: the gate reads every word of `argv`, so
-`git -c alias.z=clean z` is seen, but a `z = clean` alias already in `.git/config` — which
-takes a plain Edit and no Bash at all — makes `git z -xfd` a command whose every word is
-innocent. Both fall back to a prompt the moment anything else in the command is unusual,
-and both are one prompt away from being seen if you would rather not have the allowance at
-all: take the tool off the `tools:` line.
-
-None of that is a denial being dodged. This path is an *allowance*: the fallback is the
-normal prompt, and every guard above — the Bash leak guard, the state-write guard — applies
-to those commands exactly as before.
+This version has no allowance path: a persona's declared `tools:` do not skip the harness's
+permission prompt. Every denial above applies, and nothing is smoothed.
 
 ## Where the secret-leak guard stops
 
@@ -648,7 +496,7 @@ echo "$(cat .charter/vaults/x.json)"    # ALLOWED — one pair of quotes, and it
 Four rounds of adversarial review have now been run against this guard, and each round's fix
 was defeated by the next spelling — `$( … )`, `env -C`, a quoted `)`, a bare `{`, a leading
 fd digit. That pattern is the finding. Deciding what a shell will execute, without executing
-it, is not winnable in a Python tokeniser, so the honest move is to say what is open:
+it, is not winnable in a tokeniser, so the honest move is to say what is open:
 
 - **a quoted command substitution** — the example above, and `` "`cat <vault>`" ``,
   `"$(<vault>)"`, `"$(charter secret get v k --reveal)"`. Two command families are the
@@ -677,10 +525,9 @@ any of the above to print. That is the control; the hook is the guard rail.
 
 ## A line that looks like a secret, in memory or a brief
 
-A second guard reads text rather than commands, and four places ask it the same question:
-the `PostToolUse` warning after a write to persona or workspace memory, `charter save` and
-`charter persona memory-sync` before they commit a memory file, and `charter handoff` before
-it sends a brief. Each answer is a **kind**, never the text it matched: an AgentMail key, a
+A second guard reads text rather than commands. In this version two places ask it the same
+question: `charter save` before it commits a file, and `charter handoff` before it sends a
+brief. Each answer is a **kind**, never the text it matched: an AgentMail key, a
 JWT, a PEM private key, an AWS access key, or a **credential assignment**, which is a
 `password`, `passwd`, `api_key`, `apikey`, `secret` or `token` followed by `:` or `=` and six
 non-blank characters.
@@ -692,11 +539,11 @@ refused as credentials ([#985](https://github.com/diazoxide/charter/issues/985))
 one of the four spellings charter uses is now let through, with at most a quote or backtick
 on each side: `vault:<vault>/<key>`, `charter secret get <vault> <key>`, and the two URIs a
 `reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`.
-Because that happens in the one classifier, all four places give the same answer. **The
+Because that happens in the one classifier, both places give the same answer. **The
 whole value, to the end of its line, has to be the reference, and its names have to look
 like names**. No name may start with a prefix a credential issuer puts on its tokens (`ghp_`,
 `github_pat_`, `glpat-`, `sk_live_`, `sk-`, `xoxb-`, `AIza`, `pypi-`, `npm_`, `hf_`, `AKIA`
-and the rest of `hooks._CREDENTIAL_PREFIXES`). And all the names together — every vault, key,
+and the rest of charter's list of credential prefixes). And all the names together — every vault, key,
 item, field and path segment, counted without the scheme or the `/`, `#` and space between
 them — come to **at most 32 characters**. The cap is on the total rather than on each name
 because a secret can hold a `/`: capped per name, AWS's documented example secret key
@@ -762,168 +609,39 @@ Some guards name a narrower move first, and it is usually the one you want:
   <<'BRIEF'`, from the chat the operator is talking to, attended. Three of its four refusals
   have that as the fix, and the fourth (a sub-agent's call) is answered by returning what the
   sub-agent found to the parent chat, which can propose the handoff itself. Your own terminal
-  is the override here too, and it does something different: outside a frame `charter handoff`
-  prints the `charter <harness> --workspace <ws> …` line to run rather than opening a chat
-  ([handoff.md](handoff.md)).
+  is the override here too, and it does something different: outside the app, the command
+  prints what to run rather than opening a chat ([handoff.md](handoff.md)).
 
 **If a guard is wrong about you *every time*, that is not an override problem.** It means
 charter is holding a policy your organisation does not — an org that mandates signed
 commits, say. Switching the guard off locally hides that; the fix belongs in the rule.
-[Open an issue](https://github.com/diazoxide/charter/issues).
+[Open an issue](https://github.com/diazoxide/charter-app/issues).
 
 **The thing that is not an override**, named here so nobody finds it by accident and
 believes they found the switch: removing charter's hooks from `.claude/settings.json`, or
 disabling the plugin. That takes out every guard, both injections and every tally together,
 because one of them was wrong once. It is an uninstall.
 
-## What charter stopped asking
+## What is not injected, and not counted
 
-charter used to nudge before a git write inside a workspace clone, suggesting a repo-rooted
-session. It is gone, and the measurement is why: in one plane it asked **471 times in two
-weeks and was approved 97 times out of 98** — while the persona tool-gate, the mechanism
-whose whole job is to *remove* prompts, fired 16 times over the same window. Its trigger was
-also charter's own prescribed workflow: `charter clone` puts every repo under `workspaces/`,
-and the `working-in-a-clone` skill says *commit to the repo you are in*. The advice the
-nudge carried still exists there, in prose, interrupting nobody.
-
-The rule that came out of it, and the one a new nudge has to pass:
-
-> **A prompt is worth its interruption only if it changes what happens.** If the evidence
-> that it does cannot be collected, the prompt cannot be justified — and a declined `ask`
-> produces no `PostToolUse`, so charter can never tell a decline from an interrupted turn.
-
-An approved ask *is* countable, and every nudge charter still has records both halves. See
-*What gets counted*.
-
-Policy that *can* be written as a command pattern belongs in Claude Code's own
-`permissions`, not here — `charter guard ask <pattern>` writes it there. Charter keeps only
-what needs context the host cannot see. That line is ADR 0014.
-
-The host reads the shared `.claude/settings.json` from the session's own directory and does
-not walk up, and a framed chat stands in `workspaces/<name>/`. So charter carries the
-**restrictive** half — `ask` and `deny`, never `allow` — into the file it generates for each
-workspace and each clone inside one, and `charter guard ask` refreshes those as it writes.
-Without that the rule was written, reported, and not in force where the guarded command gets
-typed (#942). A `--local` rule lives in `.claude/settings.local.json`, which the host reads
-at the git root, so it already reaches a workspace directory; a clone gets a generated copy
-of its restrictive half.
-`charter doctor`'s `workspace layer` row is what names a workspace whose copy has fallen
-behind, and it says what that costs rather than only which file is stale.
-
-## What gets injected
-
-`SessionStart` puts a bounded amount of context in front of the session: the active
-persona's role, a digest of memory (a digest, not the corpus — recall is a search, not a
-preload), the workspace to confirm, and a warning when the plane's config has moved on
-since the session began.
-
-A chat that was opened by a **handoff** and reopened with no conversation is also shown the
-brief it was started with — once, as a quoted block labelled data, never re-sent as a
-message. The brief travels in the reopen manifest because the chat directory holding it is
-reaped on a restart; it keeps the lines it was written with, and the fence around it carries
-a marker charter mints at the render — after the brief was written, so nothing inside it can
-close the quotation. Everything else with no glyph of its own is escaped there. opencode has
-no `SessionStart` at all, so an opencode chat that reopens empty is not shown it;
-`charter doctor` names that gap.
-
-The `UserPromptSubmit` gate is narrower than it sounds. It fires when a prompt asks for
-work *and* carries a real fork — open-ended, broad, destructive, or multi-part — and its
-effect is to say: scout first, then ask, before dispatching or editing.
-
-That message leads with **Where this could run**: the three places a request can go (a
-sub-agent, a new chat in this workspace, a new chat in another one), the two tests that
-pick between them, this workspace's vision quoted as data, and the `charter:handoff` skill
-that does it. It fires on the gate's own trigger and cooldown, whatever the acting persona
-declares — on an unattended run it says instead that `charter handoff` is refused there and
-names `charter ws todo`. When the acting persona declares `routing: advise` or `require`,
-the **roster** rows join it inside the same block — who else exists, what each advertises,
-when each was last dispatched. One message, not two: two blocks on one prompt is how a
-nudge becomes wallpaper. charter never says which persona owns the prompt, and never names
-a workspace (ADR 0016); see `docs show personas` and `docs show handoff`.
-
-At `routing: require` a second, quieter hook joins it: `PreToolUse` on `Write|Edit|MultiEdit`
-**asks** once when a turn edits after the roster fired and nothing was dispatched. It never
-denies, and a dispatch, a `charter handoff` — opening a chat in a workspace *is* routing — or
-the next prompt clears it. A handoff the Bash guard refused opened nothing, so that one leaves
-the mark where it is.
-
-## What gets counted
-
-Two tallies — tracked, not ignored, though charter never commits them for you (`[memory].share` defaults to `local`) — both counts-and-dates only, never prompt text, and both
-parallel-writer safe with the host in the filename so two engineers never conflict:
-
-- **Dispatches** (`personas/_dispatch/`) — was this persona ever actually used, or did its
-  work quietly route to a generic agent? Surfaces in `charter persona stats` as the
-  `⚑ never dispatched` flag and the persona-vs-generic ratio.
-- **Routing advice** (`personas/_dispatch/`, as `{"ts", "event": "advice"}` rows) — how
-  often the roster was shown. Paired with dispatches in `charter persona stats`, it is the
-  number that can say the block is not working.
-- **Handoffs** (`personas/_dispatch/`, as `{"ts", "event": "handoff", "placement", "created"}`
-  rows) — how often work went to a NEW CHAT rather than to a sub-agent, whether it went to this
-  workspace or another, and whether it made a workspace to go to. No workspace name, because a
-  LOCAL workspace's name must not reach a committed file; no persona; and no part of the brief.
-  It carries no agent, so it is not a dispatch and never moves a persona's counts.
-- **Skill invocations** (`personas/_skills/`) — a persona's declared `skills:` are preloaded
-  into every dispatch of it, so declaring one is cheap to write and expensive to keep. This
-  says whether the equipment was worth carrying.
-
-Neither has a secret surface to scan, by construction.
+This version's `SessionStart` injects no context: no persona role, no memory digest, no
+brief. `UserPromptSubmit` carries no commitment gate and no roster. And no hook keeps a
+tally of dispatches, routing advice, handoffs or skill invocations. Each of those is a
+feature this version does not have yet, not one that ran and found nothing.
 
 ## When a hook fails
 
-Hooks swallow their exceptions. A tally that breaks a turn is worse than a tally that
-misses a row, and none of this is load-bearing for the work itself.
+A reporting hook swallows its failures, for the reason above: nothing charter draws is worth
+wedging a session over.
 
 **A denial is the exception, and it is load-bearing.** A guard refuses by printing one JSON
-object on stdout, so a hook that cannot write has said nothing — and a `PreToolUse` hook
-that says nothing is an *allow*. Deciding is still allowed to fail: a payload charter cannot
-parse is an allow, as it always was. Refusing is not. When the verdict is deny and the write
-fails, the process exits **2** with the reason on stderr, which is the harness's other
-refusal channel — every other non-zero status is a non-blocking error and the tool call goes
-ahead. That is why the number is 2 and not "any failure": `charter … | head` legitimately
-exits 141, and 141 lets the call through (#438).
+object on stdout, so a hook that cannot write has said nothing, and a `PreToolUse` hook that
+says nothing is an *allow*. Deciding is still allowed to fail: a payload charter cannot parse
+is judged as an empty command, and no guard fires on that. Refusing is not allowed to fail.
+When the verdict is deny and the write fails, the process exits **2** with the reason on
+stderr, which is the harness's other refusal channel; every other non-zero status is a
+non-blocking error and the tool call goes ahead. The verdict is flushed inside the guard, so
+"the harness did not get this" can still become a refusal.
 
-A write into a buffer is not a delivery, and that distinction is the whole of the fix: a
-hook's stdout is a pipe, `print` to a pipe block-buffers, so a `print` into a *broken* pipe
-returns cleanly and the error only surfaces when the interpreter flushes at exit — where it
-is worth 120, another status that lets the call through. So the verdict is flushed inside
-the guard, while "the harness did not get this" can still become a refusal.
-
-The deliberate exception is version skew, in **both** directions — that is the failure shape
-this project keeps paying for, so it is the one thing a hook says out loud, once, at session
-start.
-
-**Out loud, and never fatal.** The two artifacts update through different channels (`uv
-tool upgrade`, `claude plugin update`), so skew is normal rather than exceptional and will
-happen mid-session. A hook that hard-failed on it would refuse every tool call in that
-session, turning a cosmetic mismatch into an outage — so the hooks warn and keep guarding,
-and it is `charter doctor` that refuses, on a row naming the exact command. Same fact, two
-surfaces, and only the one you can act on without losing the session is allowed to block.
-
-- **Plugin newer than the CLI** — the manifest dispatches `charter hook <name>` for a handler
-  this CLI does not have, so it errors. `doctor` FAILs, which is what makes the SessionStart
-  preflight print at all.
-- **Plugin older than the CLI** — the manifest never *names* the newer handlers, so they
-  simply do not run. Nothing errors; the tallies they would have written read as empty rather
-  than absent, which is the more expensive kind of wrong. charter compares what the installed
-  `hooks/hooks.json` invokes against what the CLI ships and names the handlers that are not
-  being dispatched.
-
-The second is measured by **handler sets, not version numbers**. A plugin one patch behind
-that adds no handler behaves identically, so it says nothing — a row that fires on every
-version lag is a row people learn to scroll past.
-
-Seeing what actually happened: `charter trace` reports guard denials, tool approvals, secret
-warnings, **credential hand-outs** and memory writes for the session.
-
-The hand-outs are the three ways a value leaves charter's own process, one event each —
-`secret-exec` (a child's environment or a temp file), `secret-cp` (a file on disk) and
-`secret-reveal` (`secret get --reveal`, a terminal). Each row carries the vault, the key
-**names**, and for `exec` the environment variable names and `argv[0]`. It never carries a
-value, and never the rest of the command line: charter does not substitute a secret into
-argv, but a caller may have typed one there. `secret get` without `--reveal` records
-nothing, because nothing left — it prints a length and a digest.
-
-So the question `charter trace` can now answer is *which command received the prod token*.
-The one it cannot is what that command then did with it; a credential delivered to a
-process is that process's from then on.
+**There is no version skew to report.** The plugin, the hooks it declares and the binary
+they call ship in one bundle and move together when the app updates.

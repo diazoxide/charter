@@ -1,5 +1,7 @@
 # Workspaces
 
+> Where it describes the tmux frame, read [frame.md](frame.md): this app has no frame, and its window takes the frame's place.
+
 A **workspace** is one task's worth of the world: a directory of repo clones, the notes
 made while working on them, and a written account of what the task is for.
 
@@ -280,7 +282,7 @@ Three stores, three jobs. Putting a thing in the wrong one is the common mistake
 | `workspace.json` | which repos, and which branches | membership when a repo is cloned; branches when you `snapshot` |
 
 Two more stores sit beside them with their own lifetimes: `todos/` (intent, which expires —
-[ADR 0004](adr/0004-intent-is-its-own-store.md)) and `changes/`, one file per cross-repo
+[ADR 0004](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0004-intent-is-its-own-store.md)) and `changes/`, one file per cross-repo
 change: which repositories are in it, which branch in each, which must land before which,
 and which were considered and left out. A change's name outlives the work — it is in a merge
 commit's trailer in five repositories forever — which is why it is not a todo. See
@@ -330,7 +332,7 @@ The most consequential per-workspace choice, and it is one flag.
 `changes/log/` is un-ignored by neither switch and is committed **never**, exactly as
 `pieces/` is not. It is the landing declaration — *charter merged this commit, for this
 change* — per host, describing merges made from one disk; a portable file describing a
-local reality is the mismatch [ADR 0010](adr/0010-the-manifest-is-a-snapshot-not-an-inventory.md)
+local reality is the mismatch [ADR 0010](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0010-the-manifest-is-a-snapshot-not-an-inventory.md)
 dissects.
 
 `charter workspace live <name> --off` puts it back. A `changes/` it cannot list stops it
@@ -350,7 +352,7 @@ the *same* repo without re-cloning it:
     workspaces/<ws>/.worktrees/<repo>/<piece>
 
 Each is a **piece** — one unit of work whose creation *is* the claim, because git already
-arbitrates who wins the path. See [adr/0011](adr/0011-the-record-holds-only-what-git-cannot-know.md).
+arbitrates who wins the path. See [adr/0011](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0011-the-record-holds-only-what-git-cannot-know.md).
 
 ### A session in a piece gets the layer a clone gets
 
@@ -534,4 +536,4 @@ committed value charter prints is — a newline in one would draw a row charter 
 - [handoff.md](handoff.md) — `charter handoff`: opening a chat in another workspace on a brief
   you approved, and why the consent is your harness's own prompt
 - [personas.md](personas.md) — the other memory base, and how a persona is dispatched
-- [adr/0010](adr/0010-the-manifest-is-a-snapshot-not-an-inventory.md) — why `workspace.json` is not an inventory
+- [adr/0010](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0010-the-manifest-is-a-snapshot-not-an-inventory.md) — why `workspace.json` is not an inventory

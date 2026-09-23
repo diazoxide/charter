@@ -7,11 +7,11 @@
 //! directions.* An app installed from a signed bundle has no checkout to fall back to, so
 //! there is no second source to drift from in the first place.
 //!
-//! `charter/docsrc.py` says the same thing about charter's own documentation pages, in its own
-//! words: *the page a user reads should come from the same install as the behaviour, so
-//! `charter docs show secrets` cannot describe a vault the running CLI does not have.* Python
-//! resolves them packaged-copy-first with a checkout fallback; this binary has one source and
-//! that is `docs/` beside this file (M2.21).
+//! The documentation pages follow the same rule: *the page a user reads should come from the
+//! same install as the behaviour, so `charter docs show secrets` cannot describe a vault the
+//! running CLI does not have.* This binary has one source and that is `docs/` beside this file
+//! (M2.21). The pages are this app's own, written here (ADR 0044); `news/` is the Python
+//! charter's frozen history (ADR 0045).
 //!
 //! **The file list is read from the directory rather than written down.** A checked-in list
 //! of 338 `include_str!` lines would be a second statement of what is in `news/`, free to
