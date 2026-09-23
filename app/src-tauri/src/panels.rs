@@ -36,10 +36,10 @@ use charter_core::workspaces::Plane;
 pub(crate) enum PanelDetail {
     /// The row's own words, in full. The only kind a contributed panel may use.
     Text { text: String },
-    /// What this plane says this persona is. **A name and not an answer**: the window asks
-    /// `persona_details` when the card opens, because a definition is a file an operator edits
-    /// while charter is running, and because folding it in here would read every persona's
-    /// definition on every workspace focus for something nobody has asked to see.
+    /// What this plane says this persona is — `panel::Detail::Persona`. **charter's own panel no
+    /// longer sets it**: a persona row runs `persona.show:<name>`, which opens the persona's view
+    /// tab, and a card beside the row would be a second surface for the same thing. The word
+    /// stays in the vocabulary until whoever owns `charter_core::panel` retires it.
     Persona { persona: String },
 }
 
@@ -418,8 +418,8 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
 ///    catalogue row the palette and a context menu already run (charter-app#174). A declared or
 ///    answered row may not (`panel::NO_VERB`): a row that ran a charter verb on an extension's
 ///    say-so would be charter acting with nothing in front of it.
-/// 2. **Their cards may name a consumer that reads the plane** — `Detail::Persona` costs a
-///    `persona_details` call. A declared card is `Detail::Text`, which reads nothing.
+/// 2. **What a persona row opens is a view charter itself draws** — the persona's view tab,
+///    which reads the plane. A stranger's row opens a card of its own words and nothing else.
 ///
 /// Neither is a privilege of being charter, and neither is permanent. The grant that lifts the
 /// first is *this extension may offer this catalogue row*, consented per extension per row —
@@ -496,7 +496,7 @@ fn charters_own(
                     //
                     // The count is `personas::memory_count`, which is a `read_dir` and no file
                     // opens — once per persona on the path that has 100 ms to draw. Reading
-                    // them is `persona_memories`, when a reader asks.
+                    // them is the persona's view (`persona_view`), when a reader opens it.
                     note: Some(note_for(root, name, Some(name.as_str()) == default)),
                     mark: panel::Mark::Persona,
                     tone: if Some(name.as_str()) == default {
@@ -504,7 +504,10 @@ fn charters_own(
                     } else {
                         panel::Tone::Plain
                     },
-                    detail: Some(panel::Detail::Persona(name.clone())),
+                    // **No card: the row opens the persona's view tab** (the operator's ruling of
+                    // 2026-09-23, *"Its own tab"*). `persona.show:<name>` is the catalogue row the
+                    // palette and a context menu run too, so the three are one verb.
+                    detail: None,
                     runs: Some(format!("persona.show:{name}")),
                 })
                 .collect(),
@@ -551,55 +554,132 @@ fn note_for(root: &Path, persona: &str, is_default: bool) -> String {
 
 /// One persona's memories, as rows of the same vocabulary a panel is drawn from.
 ///
-/// **It answers in `PanelRow`s, and that is the point rather than a convenience.** The window's
-/// list primitive shortens a row, opens its card, bounds the count, offers more and grows a
-/// search once there is more than a page of them — and it does all of that for these without
-/// knowing what a memory is, because they arrive as rows. A panel body and a row's detail
-/// surface are the same vocabulary drawn by the same code, which is the test of whether the
-/// contract was worth defining.
-///
-/// **Its own command, asked when a persona's card is opened.** `workspace_panels` carries the
-/// *count*, which is a `read_dir`; this reads every memory file, and folding it in would read
-/// every persona's whole store on every workspace focus for something nobody has asked to see —
-/// `persona_details`' reason, at a larger size.
-#[tauri::command]
-#[specta::specta]
-pub(crate) async fn persona_memories(
-    planes: tauri::State<'_, crate::planes::Planes>,
-    plane: crate::planes::PlaneId,
-    persona: String,
-) -> Result<Vec<PanelRow>, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
-    // On a blocking thread: a store is one file read per memory, and a plane's oldest persona
-    // can hold hundreds. The card draws "reading…" while it comes.
-    tauri::async_runtime::spawn_blocking(move || memories_of(&root, &persona))
-        .await
-        .map_err(|err| format!("reading that persona's memories did not finish: {err}"))?
-}
-
-/// [`persona_memories`] against a path, so it is a test's to drive.
-fn memories_of(root: &Path, persona: &str) -> Result<Vec<PanelRow>, String> {
+/// **Rows, and that is the point rather than a convenience.** The window's list primitive
+/// shortens a row, opens its card, bounds the count, offers more and grows a search once there
+/// is more than a page of them — and it does all of that for these without knowing what a
+/// memory is, because they arrive as rows. They are read when the persona's view is opened
+/// ([`persona_view`]) and never on a workspace focus: `workspace_panels` carries the *count*,
+/// which is a `read_dir`, and this reads every memory file.
+fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
     Ok(charter_core::personas::memories(root, persona)?
         .iter()
-        .map(|memory| {
-            PanelRow::from(&panel::Row {
-                key: memory.slug.clone(),
-                text: memory.title.clone(),
-                note: (!memory.stamp.is_empty()).then(|| memory.stamp.clone()),
-                mark: panel::Mark::Note,
-                tone: panel::Tone::Plain,
-                // The whole of it, which is what the operator asked for: *"user will be able to
-                // read all memories from ui"*. A memory's body is the durable fact; the title
-                // is the sentence it is filed under.
-                detail: Some(panel::Detail::Text(if memory.body.trim().is_empty() {
-                    memory.title.clone()
-                } else {
-                    memory.body.clone()
-                })),
-                runs: None,
-            })
+        .map(|memory| panel::Row {
+            key: memory.slug.clone(),
+            text: memory.title.clone(),
+            note: (!memory.stamp.is_empty()).then(|| memory.stamp.clone()),
+            mark: panel::Mark::Note,
+            tone: panel::Tone::Plain,
+            // The whole of it, which is what the operator asked for: *"user will be able to
+            // read all memories from ui"*. A memory's body is the durable fact; the title
+            // is the sentence it is filed under.
+            detail: Some(panel::Detail::Text(if memory.body.trim().is_empty() {
+                memory.title.clone()
+            } else {
+                memory.body.clone()
+            })),
+            runs: None,
         })
         .collect())
+}
+
+/// **The persona view: charter's own view, in the vocabulary a stranger's view answers in.**
+///
+/// A tab can hold a view (charter ADR 0043, as amended), and this is the first built-in one —
+/// what the persona card was, as a sheet over the centre, until the operator ruled on
+/// 2026-09-23 that it is a tab. It is produced HERE, in Rust, as `charter_core::panel` blocks,
+/// and the window draws it with exactly the code that draws persona statistics' answer
+/// (`app/src/Views.tsx`). That is the test the operator set — *"100% pluggable"*, with the
+/// personas as a pure example of a plugin: nothing the window does for this view is something
+/// an extension's view cannot also have done for it, because the window cannot tell them apart.
+///
+/// What it holds, in order: the role, what the definition says (one sentence per fact, the
+/// sentences the card used to draw), how many memories there are, and the memories themselves
+/// as a list — searched and paged by the list primitive, each row's card the whole memory.
+///
+/// `None` is a persona the plane does not have (any more): the window draws that as a view
+/// whose source has gone, not as a failure. A definition charter will not read is a trouble
+/// note, and the memories are still drawn under it.
+pub(crate) fn persona_view(root: &Path, name: &str) -> Result<Option<Vec<panel::Block>>, String> {
+    if !charter_core::personas::valid_name(name) {
+        return Err(format!("{name:?} is not a persona name charter would read"));
+    }
+    let on_plane = Plane::open(root)
+        .personas()
+        .map_err(|why| why.to_string())?;
+    if !on_plane.iter().any(|one| one == name) {
+        return Ok(None);
+    }
+    let note = |text: String| panel::Block::Note {
+        text,
+        tone: panel::Tone::Plain,
+    };
+    let mut blocks = Vec::new();
+    match persona(root, name) {
+        // charter's own sentence, which names the fix. Drawn rather than swallowed: a view that
+        // came up empty reads as a persona with nothing in it.
+        Err(why) => blocks.push(panel::Block::Note {
+            text: why,
+            tone: panel::Tone::Trouble,
+        }),
+        Ok(shown) => {
+            if let Some(role) = shown.role.filter(|role| !role.trim().is_empty()) {
+                blocks.push(panel::Block::Note {
+                    text: role,
+                    tone: panel::Tone::Default,
+                });
+            }
+            blocks.push(note(match shown.delegate_when {
+                Some(when) if !when.trim().is_empty() => format!("Delegate to it for: {when}"),
+                // `delegate-when` is what makes a persona findable — it becomes the description
+                // whoever is routing reads — so a definition without one is worth saying.
+                _ => "Delegate to it for: nothing declared, so nothing routes here by itself."
+                    .to_owned(),
+            }));
+            blocks.push(note(if shown.tools.is_empty() {
+                "Tools: none auto-approved.".to_owned()
+            } else {
+                format!("Tools: {}", shown.tools.join(", "))
+            }));
+            // **The vault's NAME, and never a thing inside it.** The three answers are three
+            // because "holds no credentials" and "nobody has said" are different facts — see
+            // `PersonaDetails::declares_no_vault`.
+            blocks.push(note(match (shown.vault, shown.declares_no_vault) {
+                (Some(vault), _) => {
+                    format!("Vault: {vault} — the name; what is in it is never shown here.")
+                }
+                (None, true) => "Vault: none. This persona holds no credentials of its own.".into(),
+                (None, false) => "Vault: not declared in its definition.".into(),
+            }));
+            if shown.lineage.len() > 1 {
+                blocks.push(note(format!("Inherits: {}", shown.lineage.join(" → "))));
+            }
+            blocks.push(note(format!("Defined in: {}", shown.file)));
+        }
+    }
+    match memory_rows(root, name) {
+        Err(why) => blocks.push(panel::Block::Note {
+            text: why,
+            tone: panel::Tone::Trouble,
+        }),
+        Ok(rows) => {
+            // Said rather than left to the list's length: `0 memories` is a persona nobody has
+            // taught anything, and that is a fact about it (`note_for`'s reason).
+            let held = rows.len();
+            blocks.push(note(format!(
+                "It remembers {held} {}.",
+                if held == 1 { "thing" } else { "things" }
+            )));
+            blocks.push(panel::Block::List {
+                rows,
+                empty: panel::Empty {
+                    headline: "Nothing remembered yet".into(),
+                    body: Some("`charter persona remember` is how a fact arrives.".into()),
+                    offer: None,
+                },
+            });
+        }
+    }
+    Ok(Some(blocks))
 }
 
 /// The panel that needs git. Call it off the thread that draws, for one project's workspace.
@@ -872,7 +952,7 @@ mod tests {
     #[test]
     fn a_persona_row_says_how_much_it_remembers_without_reading_a_memory() {
         // The count is a `read_dir` on the path that has 100 ms to draw; the memories
-        // themselves are `persona_memories`, when a reader asks. `0 memories` is said rather
+        // themselves are the persona's view, when a reader opens it. `0 memories` is said rather
         // than left off — a row that omits the count reads as one charter did not look at,
         // which is a different fact from a persona with none.
         let (_plane, root) = plane_with_a_todo_and_two_personas();
@@ -904,7 +984,7 @@ mod tests {
                 row.runs
                     .as_deref()
                     .is_some_and(|id| id.starts_with("persona.show:")),
-                "a persona row's verb is not the catalogue row that opens its card"
+                "a persona row's verb is not the catalogue row that opens its view"
             );
         }
     }
@@ -916,7 +996,11 @@ mod tests {
         // on these without anything in it knowing what a memory is.
         let (_plane, root) = plane_with_a_todo_and_two_personas();
 
-        let rows = memories_of(&root, "steward").expect("the memories read");
+        let rows: Vec<PanelRow> = memory_rows(&root, "steward")
+            .expect("the memories read")
+            .iter()
+            .map(PanelRow::from)
+            .collect();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text, "Charter defects go upstream");

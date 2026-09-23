@@ -1,5 +1,4 @@
 import { useMemo, useState, type ReactNode } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import * as Popover from "@radix-ui/react-popover";
 import clsx from "clsx";
 import {
@@ -12,7 +11,6 @@ import {
   Star,
   TriangleAlert,
   UserRound,
-  X,
 } from "lucide-react";
 import type { PanelEmpty, PanelRow } from "./bindings";
 import { EmptyState } from "./EmptyState";
@@ -38,8 +36,8 @@ import { EmptyState } from "./EmptyState";
  *
  * - **charter's todos panel** and **charter's personas panel**, which are contributions now
  *   (`Panels.tsx`);
- * - **a persona's memories**, which is a row's detail surface rather than a panel — a list
- *   inside a list, searched and paged by this same code, fed by `persona_memories`;
+ * - **a persona's memories**, in the persona's own tab — a list in a view rather than in a
+ *   panel, searched and paged by this same code, answered by `open_view` like any view;
  * - **a contributed panel**, whose rows an extension declared in its manifest and which gets
  *   every one of the four properties for free.
  *
@@ -103,8 +101,6 @@ export function PanelList({
   detailOf,
   onRun,
   wrap,
-  sheet,
-  sheetIn,
   page = PAGE,
   testid,
 }: {
@@ -123,14 +119,6 @@ export function PanelList({
   onRun?: (id: string) => void;
   /** A context menu around each row, where the panel can name what the row is about. */
   wrap?: RowMenu;
-  /**
-   * Whether a row's card is a **sheet over the centre region** rather than a popover beside the
-   * row. The persona card is (`Panels.tsx` has the argument); every other card is still the
-   * popover #173 chose, because six short rows are what a popover is for.
-   */
-  sheet?: (row: PanelRow) => boolean;
-  /** The element a sheet is drawn into — the centre region (`Views.centreOf`). */
-  sheetIn?: HTMLElement | null;
   page?: number;
   testid?: string;
 }) {
@@ -202,8 +190,6 @@ export function PanelList({
               detail={detailOf?.(row) ?? defaultDetail(row)}
               onRun={onRun}
               wrap={wrap}
-              asSheet={sheet?.(row) ?? false}
-              sheetIn={sheetIn}
             />
           ))}
         </ul>
@@ -249,8 +235,6 @@ function Row({
   detail,
   onRun,
   wrap,
-  asSheet,
-  sheetIn,
 }: {
   row: PanelRow;
   open: boolean;
@@ -258,8 +242,6 @@ function Row({
   detail: ReactNode;
   onRun?: (id: string) => void;
   wrap?: RowMenu;
-  asSheet: boolean;
-  sheetIn?: HTMLElement | null;
 }) {
   const Mark = MARKS[row.mark] ?? Circle;
   const shortened = shorten(row.text);
@@ -286,36 +268,20 @@ function Row({
   const inner =
     detail === null && row.runs === null ? (
       <span className="row">{body}</span>
-    ) : asSheet ? (
-      /* **A sheet: Radix `Dialog`, NOT modal, drawn over the centre region.** Not modal is the
-         whole of #173's argument kept: a modal dialog marks everything outside it
-         `aria-hidden`, and the needs-you queue in this region is the one surface ADR 0038 says
-         must never be competed with. So there is no overlay, no focus trap and no hidden
-         siblings — the queue stays on screen and in reach, to the pointer and to a screen
-         reader — and a click outside or Escape closes it, as the popover did. */
-      <Dialog.Root modal={false} open={open} onOpenChange={opened}>
-        <Dialog.Trigger asChild>
-          <button type="button" className="row" tabIndex={0}>
-            {body}
-          </button>
-        </Dialog.Trigger>
-        <Dialog.Portal container={sheetIn ?? undefined}>
-          <Dialog.Content
-            className="sheet"
-            data-testid={`row-detail-${row.key}`}
-            aria-describedby={undefined}
-          >
-            <header className="sheet-head">
-              <Dialog.Title>{row.text}</Dialog.Title>
-              {/* #190: WebKit leaves a button out of the tab sequence without this. */}
-              <Dialog.Close className="drawer-close" tabIndex={0}>
-                <X aria-hidden="true" /> Close
-              </Dialog.Close>
-            </header>
-            {detail}
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+    ) : detail === null && row.runs !== null ? (
+      /* **A row that does something and opens nothing is a plain button that does it.** A
+         persona's row opens that persona's tab (`persona.show:<name>`, the operator's ruling of
+         2026-09-23): a card beside the row as well would be two surfaces for one persona. */
+      <button
+        type="button"
+        className="row"
+        tabIndex={0}
+        onClick={() => {
+          if (row.runs !== null) onRun?.(row.runs);
+        }}
+      >
+        {body}
+      </button>
     ) : (
       <Popover.Root open={open} onOpenChange={opened}>
         <Popover.Trigger asChild>

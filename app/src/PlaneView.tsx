@@ -33,6 +33,7 @@ import {
   type Refused,
   type Sidebar as SidebarModel,
   type StartOptions,
+  type ViewTab,
 } from "./bindings";
 import {
   catalogue,
@@ -68,12 +69,20 @@ import {
   closeTab,
   focusPane,
   noTabs,
+  chatNameOf,
+  chatOf,
+  contentsOf,
   openTab,
   openTabBehind,
+  openView,
   panesOf,
+  putViewBack,
+  refileViews,
+  viewKey,
   selectTab,
   showWorkspace,
   splitFocusedPane,
+  stopWaiting,
   tabsIn,
   workspaceOf,
   type Direction,
@@ -82,10 +91,12 @@ import {
   type Layout,
   type Pinned,
   type Tabs,
+  type ViewRef,
 } from "./tabs";
 import { ChatState } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
+import { ViewMark, ViewPane } from "./Views";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
@@ -299,6 +310,18 @@ export function PlaneView({
    *  back, and kept current by the one handler that writes it. */
   const [pinnedChats, setPinnedChats] = useState<number[]>([]);
   /**
+   * The view tabs this operator has pinned, by `tabs.viewKey`. A tab with no chat is pinned as
+   * the view it opened on, and the pin rides that view tab's line of the plane's record — the
+   * same file and the same reason as a chat's pin (ADR 0040).
+   */
+  const [pinnedViews, setPinnedViews] = useState<string[]>([]);
+  /**
+   * Whether the core has said which view tabs the record put back. Until it has, the window
+   * says nothing about its own: an empty list sent first would be written over the record
+   * before it was read.
+   */
+  const [viewsHeard, setViewsHeard] = useState(false);
+  /**
    * The spot the explorer has picked, and the workspace it was picked in.
    *
    * Both together, so that moving to another workspace goes back to that workspace's own
@@ -312,11 +335,10 @@ export function PlaneView({
    * `<panel key>/<row key>` — `charter/personas/steward`, `charter/todos/<slug>`,
    * `ext/acme/reviews/<key>`.
    *
-   * **Held here rather than in the row that draws it**, because opening a persona's card is a
-   * catalogue row (`persona.show:<name>`, charter-app#174) and a catalogue row is carried out
-   * by `perform` against `Doing` — which is assembled here. One state, so the menu, the palette
-   * and the row's own click are three ways to do the same thing rather than three things that
-   * look the same.
+   * **Held here rather than in the row that draws it**, for charter-app#174's reason: a persona's
+   * card was a catalogue row the palette ran. A persona opens its own TAB now (`showView`,
+   * the operator's ruling of 2026-09-23), so what this still holds is the popover card of a row
+   * that has one — a todo's, a contributed row's.
    *
    * **It was `shownPersona` and is a row key now**, because the panels are contributions and
    * every contributed panel's rows open the same way. A second piece of window state per panel
@@ -344,9 +366,10 @@ export function PlaneView({
       // only then, rather than on every split and every keystroke. The plane travels with it:
       // "chat 3 is in front" belongs to a plane, and every plane numbers its chats from one.
       if (next.inFront !== wasInFront) {
-        const front = next.inFront === undefined ? undefined : next.byId[next.inFront];
-        const pane = front && panesOf(next, front.id)[0];
-        void commands.chatInFront(plane, pane ? pane.session : null).catch(() => undefined);
+        // A tab showing a view has no chat of its own, so nothing is in front as far as the
+        // record of chats is concerned; the view tab says it is in front itself (`windowViews`).
+        const chat = next.inFront === undefined ? undefined : chatOf(next, next.inFront);
+        void commands.chatInFront(plane, chat ?? null).catch(() => undefined);
       }
       return next;
     },
@@ -365,33 +388,85 @@ export function PlaneView({
   useEffect(() => {
     if (adopted.current) return;
     adopted.current = true;
-    void commands
-      .openedChats(plane)
-      .then((answer) => {
+    void Promise.all([
+      commands.openedChats(plane).catch(() => undefined),
+      // The view tabs the record put back, beside the chats. **Asked for, never started**: a
+      // view has no program of charter's, and an extension's view is not asked anything until
+      // the operator presses for it (`Views.tsx`), so this is a list of tabs and nothing else.
+      commands.reopenedViews(plane).catch(() => undefined),
+    ])
+      .then(([answer, viewAnswer]) => {
         setSettled(true);
         void commands
           // A window that cannot ask, or is answered with nothing, simply says nothing.
           .chatsThatWouldNotStart(plane)
           .then((trouble) => setWouldNotStart(trouble.status === "ok" ? (trouble.data ?? []) : []))
           .catch(() => undefined);
-        const open = answer.status === "ok" ? (answer.data ?? []) : [];
-        if (open.length === 0) return;
-        setReopened(open);
-        // A pinned chat comes back pinned: the pin rides the record it came back from.
-        setPinnedChats(open.filter((chat) => chat.pinned).map((chat) => chat.session));
+        const open = answer?.status === "ok" ? (answer.data ?? []) : [];
+        const back = viewAnswer?.status === "ok" ? (viewAnswer.data ?? []) : [];
+        if (open.length > 0) {
+          setReopened(open);
+          // A pinned chat comes back pinned: the pin rides the record it came back from.
+          setPinnedChats(open.filter((chat) => chat.pinned).map((chat) => chat.session));
+        }
+        setPinnedViews(back.filter((view) => view.pinned).map((view) => viewKey(refOf(view))));
         // The persona comes with the chat, so a tab put back reads `3 steward` from its first
         // frame rather than reading `3` until the sidebar has been read (charter-app#130).
-        const drawn = open.reduce(
+        const chats = open.reduce(
           (tabs, chat) => openTab(tabs, chat.session, chat.name, chat.persona),
           noTabs(),
         );
-        const front = open.findIndex((chat) => chat.in_front);
-        change(() => (front < 0 ? drawn : selectTab(drawn, drawn.order[front])));
+        // Each view at the place it had, in the order of those places, so a view recorded at 2
+        // lands at 2 after the one at 1 is already in.
+        const drawn = [...back]
+          .sort((one, other) => one.at - other.at)
+          .reduce(
+            (tabs, view) =>
+              putViewBack(tabs, refOf(view), view.title, view.workspace ?? OUTSIDE, view.at),
+            chats,
+          );
+        const front = open.find((chat) => chat.in_front);
+        const frontView = back.find((view) => view.active);
+        const inFront =
+          front !== undefined
+            ? drawn.order.find((id) => chatOf(drawn, id) === front.session)
+            : frontView !== undefined
+              ? drawn.order.find((id) => {
+                  const lead = contentsOf(drawn, id)[0]?.content;
+                  return lead?.kind === "view" && viewKey(lead.view) === viewKey(refOf(frontView));
+                })
+              : undefined;
+        if (drawn.order.length > 0)
+          change(() => (inFront === undefined ? drawn : selectTab(drawn, inFront)));
+        // Only now may the window say what view tabs it has: saying it before this point would
+        // write an empty list over the record it is about to read.
+        setViewsHeard(true);
       })
       // Nothing open is the ordinary first launch, and a window that cannot ask is still
       // a window the operator can open a chat in.
-      .catch(() => setSettled(true));
+      .catch(() => {
+        setSettled(true);
+        setViewsHeard(true);
+      });
   }, [change, plane]);
+
+  /**
+   * The window's view tabs, told to the core whenever they change — so the record brings them
+   * back at the next launch, as it brings back chats (charter ADR 0043, as amended).
+   *
+   * **The whole list, and only when it differs from what was last said.** The core writes the
+   * record when what it holds changes and not otherwise (`Chats::hold_views`), and this keeps a
+   * chat's keystrokes and splits from being a command each.
+   */
+  const lastViewsSaid = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!viewsHeard) return;
+    const said = viewTabsOf(tabs, pinnedViews);
+    const text = JSON.stringify(said);
+    if (text === lastViewsSaid.current) return;
+    lastViewsSaid.current = text;
+    void commands.windowViews(plane, said).catch(() => undefined);
+  }, [pinnedViews, plane, tabs, viewsHeard]);
 
   // A chat a handoff opened (charter-app#204): the core has started it, and this puts it on
   // its workspace's strip. **Behind whatever is in front** (`openTabBehind`), and the window is
@@ -439,8 +514,13 @@ export function PlaneView({
             ? OUTSIDE
             : (startedIn[session] ?? OUTSIDE));
         const front = now.current.inFront;
-        const session = front === undefined ? undefined : panesOf(now.current, front)[0]?.session;
-        const ofFront = session === undefined ? undefined : here(session);
+        const lead = front === undefined ? undefined : contentsOf(now.current, front)[0]?.content;
+        const ofFront =
+          lead === undefined
+            ? undefined
+            : lead.kind === "session"
+              ? here(lead.session)
+              : lead.workspace;
         const stands = (name: string) =>
           name === OUTSIDE
             ? next.unfiled.length > 0 || ofFront === OUTSIDE
@@ -450,10 +530,16 @@ export function PlaneView({
             ? current
             : (ofFront ?? next.workspaces[0]?.name),
         );
+        // A view tab is on the strip it was opened from, which it carries; when the plane stops
+        // having that workspace nothing else would move it, and it would be on a strip that is
+        // never drawn. It goes where a chat working in no workspace goes.
+        change((tabs) =>
+          refileViews(tabs, (name) => next.workspaces.some((ws) => ws.name === name), OUTSIDE),
+        );
       })
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
-  }, [plane, replan, startedIn, tabs]);
+  }, [change, plane, replan, startedIn, tabs]);
 
   /**
    * What the machine store says this operator has pinned here, and what it says is gone.
@@ -512,10 +598,13 @@ export function PlaneView({
   /** Whether a tab is pinned: its own chat is, which is its first pane's. */
   const isPinned = useCallback<Pinned>(
     (id) => {
-      const session = panesOf(tabs, id)[0]?.session;
-      return session !== undefined && pinnedChats.includes(session);
+      const lead = contentsOf(tabs, id)[0]?.content;
+      if (lead === undefined) return false;
+      return lead.kind === "session"
+        ? pinnedChats.includes(lead.session)
+        : pinnedViews.includes(viewKey(lead.view));
     },
-    [pinnedChats, tabs],
+    [pinnedChats, pinnedViews, tabs],
   );
 
   /**
@@ -765,10 +854,13 @@ export function PlaneView({
       // The tab's CHAT name, not the sentence the tab bar draws: the core is being told what
       // this chat is called, and a split's chat is called what the tab's chat is called. The
       // persona the tab also shows is the operator's, not part of the chat's name.
+      //
+      // A tab that opened on a view has no chat to share a name with, so a chat started beside
+      // it is named as a new tab's would be.
       const name =
-        "split" in where && inFrontTab !== undefined
-          ? now.current.byId[inFrontTab].chat
-          : String(now.current.named.tabs + 1);
+        ("split" in where && inFrontTab !== undefined
+          ? chatNameOf(now.current, inFrontTab)
+          : undefined) ?? String(now.current.named.tabs + 1);
       const started = await commands
         .startChat(
           plane,
@@ -804,7 +896,7 @@ export function PlaneView({
       const before = now.current;
       // The tab that was to be split can have closed while the picker was open. Nothing
       // would show that session, so it is ended rather than left running unseen.
-      if (change((tabs) => splitFocusedPane(tabs, where.split, session)) === before) {
+      if (change((tabs) => splitFocusedPane(tabs, where.split, session, name)) === before) {
         void commands.closeSession(plane, session);
       }
     },
@@ -882,6 +974,27 @@ export function PlaneView({
       if (tab !== undefined) bringToFront(tab);
     },
     [bringToFront],
+  );
+
+  /**
+   * Opens a view in a tab of its own, **on the strip in front** — or brings forward the tab
+   * already showing it, wherever that is, and its strip with it.
+   *
+   * The strip in front is where the operator opened it from: a persona row on the panel beside
+   * this workspace, a palette row pressed while looking at it. A view has no directory to be
+   * filed by, so it is filed there, explicitly (`tabs.Content`).
+   *
+   * **Opening one runs nothing.** An extension's view asks its program when its tab draws it,
+   * which is a separate, visible step (`Views.tsx`); the persona view reads the plane.
+   */
+  const showView = useCallback(
+    (view: ViewRef, title: string) => {
+      const next = change((tabs) => openView(tabs, view, title, focused ?? OUTSIDE));
+      const workspace =
+        next.inFront === undefined ? undefined : workspaceOf(next, next.inFront, filedIn);
+      if (workspace !== undefined) setPicked(workspace);
+    },
+    [change, filedIn, focused],
   );
 
   /**
@@ -1159,7 +1272,18 @@ export function PlaneView({
    */
   const pinTab = useCallback(
     async (id: number, pinned: boolean): Promise<Ran> => {
-      const session = panesOf(now.current, id)[0]?.session;
+      const lead = contentsOf(now.current, id)[0]?.content;
+      if (lead?.kind === "view") {
+        // **Its own record line, written by the one effect that tells the core the view tabs**
+        // — so the pin lands with the tab it pins, in the same write, and there is nothing
+        // here for the core to refuse.
+        const key = viewKey(lead.view);
+        setPinnedViews((was) =>
+          pinned ? (was.includes(key) ? was : [...was, key]) : was.filter((one) => one !== key),
+        );
+        return { ok: true };
+      }
+      const session = chatOf(now.current, id);
       if (session === undefined) return { ok: false, refused: "That tab has no chat to pin." };
       const said = await commands
         .pinChat(plane, session, pinned)
@@ -1211,7 +1335,7 @@ export function PlaneView({
       // window turns it into the row it opens. `charter/personas` is charter's own panel's
       // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
       // is not a reader of the panel list.
-      showPersona: (persona: string) => setShownRow(`charter/personas/${persona}`),
+      openView: showView,
       removeWorktree,
       mergeWorktree,
       sendKey,
@@ -1236,6 +1360,7 @@ export function PlaneView({
       removeWorktree,
       sendKey,
       showChat,
+      showView,
       split,
       windowDoes,
     ],
@@ -1328,7 +1453,13 @@ export function PlaneView({
             nameOf,
             // The projects' pins are the WINDOW's, and travel down with the projects: a
             // project that is not in front draws nothing, so its pin cannot be held here.
-            pinned: { chats: pinnedChats, workspaces: pinnedWorkspaces, projects: pinnedProjects },
+            pinned: {
+              chats: pinnedChats,
+              views: pinnedViews,
+              workspaces: pinnedWorkspaces,
+              projects: pinnedProjects,
+            },
+            views,
           }),
     [
       focused,
@@ -1338,6 +1469,7 @@ export function PlaneView({
       pieces,
       pinnedChats,
       pinnedProjects,
+      pinnedViews,
       pinnedWorkspaces,
       plane,
       projects,
@@ -1346,6 +1478,7 @@ export function PlaneView({
       states.needsYou,
       strips,
       tabs,
+      views,
       worktree,
     ],
   );
@@ -1409,7 +1542,7 @@ export function PlaneView({
    */
   const run = useCallback(
     async (offer: Offer): Promise<Ran> => {
-      if (offer.available && ENDS_A_CHAT.has(offer.does.verb)) {
+      if (offer.available && endsAChat(offer.does)) {
         setEndingChat(offer);
         return { ok: true };
       }
@@ -1509,8 +1642,7 @@ export function PlaneView({
     onReport(plane, mine);
   }, [mine, onReport, plane]);
 
-  const frontChat =
-    frontTab && reopened.find((chat) => chat.session === panesOf(tabs, frontTab.id)[0]?.session);
+  const frontChat = frontTab && reopened.find((chat) => chat.session === chatOf(tabs, frontTab.id));
 
   // A project the operator is not looking at keeps every piece of state above and draws none
   // of it. See this module's own docstring for why it is `null` and not `hidden`.
@@ -1633,12 +1765,17 @@ export function PlaneView({
                     if (offer?.available) press(offer);
                   }}
                 >
-                  <span className="tab-name">{tabs.byId[id].name}</span>
-                  <Pin held={isPinned(id)} what="chat" />
-                  {/* The first pane's session is the tab's own chat. Its own element, so what
-                    a tab IS stays separate from what it is DOING — a tab whose text changed
-                    every time a turn began would be unreadable, and untestable. */}
-                  <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
+                  <TabMarks
+                    tabs={tabs}
+                    id={id}
+                    states={states}
+                    pin={
+                      <Pin
+                        held={isPinned(id)}
+                        what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
+                      />
+                    }
+                  />
                 </button>
                 <Closer offer={by(`tab.close:${id}`)} onPress={press} />
               </span>
@@ -1660,12 +1797,7 @@ export function PlaneView({
             hidden={notShowing.map((id) => ({
               key: String(id),
               offer: by(`tab.select:${id}`),
-              children: (
-                <>
-                  <span className="tab-name">{tabs.byId[id].name}</span>
-                  <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
-                </>
-              ),
+              children: <TabMarks tabs={tabs} id={id} states={states} />,
             }))}
             onPress={press}
           />
@@ -1793,7 +1925,6 @@ export function PlaneView({
           ),
           aside: (
             <Panels
-              plane={plane}
               workspace={ofWorkspace}
               state={workspaceState}
               queue={states.needsYou}
@@ -1826,6 +1957,10 @@ export function PlaneView({
                   offerFor={by}
                   onPaneDoes={onPaneDoes}
                   states={states}
+                  name={frontTab.name}
+                  offered={views}
+                  onOpenView={showView}
+                  onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
                 />
               ) : tabs.order.length > 0 ? (
                 // Chats are running — just not in the workspace being looked at. Saying
@@ -2011,14 +2146,61 @@ function alreadyShows(tabs: Tabs, session: number): boolean {
 }
 
 /**
- * The verbs that end a chat, and therefore the ones that are asked about first.
+ * Whether carrying a row out ends a chat, and therefore whether it is asked about first.
  *
- * **By verb and not by row id**, so a row added to the catalogue that ends a chat is asked
- * about without anybody remembering to add it here — the same rule the region toggles follow.
- * `closeProject` is deliberately not one of them: it ends every chat in a project and has its
- * own sentence on its own row, and the window is where that question belongs.
+ * **By what the row does and not by its id**, so a row added to the catalogue that ends a chat
+ * is asked about without anybody remembering to add it here — the same rule the region toggles
+ * follow. A close says whether it ends one (`Does.ends`): a pane or a tab showing only a view
+ * closes, kills nothing, and is not asked about. `closeProject` is deliberately not one of
+ * them: it ends every chat in a project and has its own sentence on its own row, and the window
+ * is where that question belongs.
  */
-const ENDS_A_CHAT = new Set(["closeTab", "closePane"]);
+function endsAChat(does: Offer["does"]): boolean {
+  return (does.verb === "closeTab" || does.verb === "closePane") && does.ends;
+}
+
+/**
+ * Whether a row is a close that says it ends nothing — a pane or a tab showing only a view.
+ *
+ * Asked the other way round from {@link endsAChat} on purpose: the danger look stays on every
+ * close that has not said it is harmless, including a row the catalogue cannot run right now,
+ * because a look that goes quiet when a row is merely unavailable would teach the operator the
+ * wrong thing about the day it is available.
+ */
+function closesOnly(does: Offer["does"]): boolean {
+  return (does.verb === "closeTab" || does.verb === "closePane") && !does.ends;
+}
+
+/** A view tab the core put back, as the view it names. */
+function refOf(view: ViewTab): ViewRef {
+  return { from: view.from, view: view.view, key: view.key };
+}
+
+/**
+ * The view tabs, as the record keeps them: every tab whose first pane is a view.
+ *
+ * A view on the far side of a split is not a tab of its own and is not recorded — a chat's
+ * split is not recorded either, and both come back as what they are: the chat as its own tab,
+ * the view as nothing, to be opened again.
+ */
+function viewTabsOf(tabs: Tabs, pinnedViews: readonly string[]): ViewTab[] {
+  return tabs.order.flatMap((id, at) => {
+    const lead = contentsOf(tabs, id)[0]?.content;
+    if (lead?.kind !== "view") return [];
+    return [
+      {
+        from: lead.view.from,
+        view: lead.view.view,
+        key: lead.view.key,
+        title: tabs.byId[id].name,
+        workspace: lead.workspace === OUTSIDE ? null : lead.workspace,
+        at,
+        active: tabs.inFront === id,
+        pinned: pinnedViews.includes(viewKey(lead.view)),
+      },
+    ];
+  });
+}
 
 /**
  * One pane's frame: the terminal, and what charter draws over it in the pane's two corners —
@@ -2115,7 +2297,10 @@ export function Doer({
   const bare = iconOnly && Mark !== undefined;
   return (
     <button
-      className={clsx(offer.id === "pane.close" && "ends-a-chat", bare && "bare")}
+      className={clsx(
+        offer.id === "pane.close" && !closesOnly(offer.does) && "ends-a-chat",
+        bare && "bare",
+      )}
       disabled={!offer.available}
       aria-label={bare ? (words ?? offer.title) : undefined}
       title={offer.reason || offer.note || (bare ? offer.title : undefined)}
@@ -2318,13 +2503,57 @@ export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
   if (!offer) return null;
   return (
     <button
-      className="closer"
+      // A tab showing only a view closes and ends nothing, so its `×` does not wear the danger
+      // hover a chat's does — the look may not say more than the act does, either way.
+      className={clsx("closer", closesOnly(offer.does) && "keeps")}
       aria-label={offer.title}
       title={offer.note ? `${offer.title} — ${offer.note}` : offer.title}
       onClick={() => onPress(offer)}
     >
       <X />
     </button>
+  );
+}
+
+/**
+ * What a tab says about itself, on the strip and in the menu of what the strip has no room for.
+ *
+ * **A chat's tab is its name and what it is doing; a view's tab is a mark and its name**, with
+ * no state — a view is not doing anything, and a dot beside it would be a claim about a chat
+ * the tab does not have. The mark says what kind of thing the tab holds before the name is
+ * read: a person for a persona, a puzzle piece for a view an extension offers.
+ */
+function TabMarks({
+  tabs,
+  id,
+  states,
+  pin,
+}: {
+  tabs: Tabs;
+  id: number;
+  states: ChatStates;
+  /** The pin mark, on the strip; the menu of hidden tabs draws none. */
+  pin?: ReactNode;
+}) {
+  const lead = contentsOf(tabs, id)[0]?.content;
+  if (lead?.kind === "view") {
+    return (
+      <>
+        <ViewMark view={lead.view} />
+        <span className="tab-name">{tabs.byId[id].name}</span>
+        {pin}
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="tab-name">{tabs.byId[id].name}</span>
+      {pin}
+      {/* The first pane's session is the tab's own chat. Its own element, so what a tab IS
+          stays separate from what it is DOING — a tab whose text changed every time a turn
+          began would be unreadable, and untestable. */}
+      <ChatState state={stateOf(states, chatOf(tabs, id) ?? -1)} />
+    </>
   );
 }
 
@@ -2337,6 +2566,10 @@ function LayoutPanes({
   offerFor,
   onPaneDoes,
   states,
+  name,
+  offered,
+  onOpenView,
+  onAsk,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
@@ -2350,19 +2583,53 @@ function LayoutPanes({
   /** What every chat is doing, for the gauge in each pane's corner: it reads its record
    *  again when its chat moves, and keeps reading while the chat is mid-turn. */
   states: ChatStates;
+  /** The tab's name, which is the title of the view it opened on. */
+  name: string;
+  /** The views approved extensions offer, for the buttons a view draws beside itself. */
+  offered: readonly ExtensionView[];
+  onOpenView: (view: ViewRef, title: string) => void;
+  /** The operator pressed to have a waiting view in this pane asked. */
+  onAsk: (pane: number) => void;
 }) {
   if (layout.kind === "pane") {
+    const content = layout.content;
+    if (content.kind === "view") {
+      // **A view in a pane, with the pane's own corner** — split and close are the same rows a
+      // chat's pane has, so a view can be split to start a chat beside it and closed from where
+      // it is. Clicking anywhere in it focuses it, which is what a terminal's click does.
+      return (
+        <div className="pane-frame" onPointerDown={() => onFocus(layout.pane)}>
+          <div
+            className={layout.pane === focused ? "pane view focused" : "pane view"}
+            onFocus={() => onFocus(layout.pane)}
+          >
+            <ViewPane
+              plane={plane}
+              view={content.view}
+              title={name}
+              waits={content.waits === true}
+              offered={offered}
+              onOpenView={onOpenView}
+              onAsk={() => onAsk(layout.pane)}
+            />
+          </div>
+          <div className="pane-corner at-end">
+            <PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />
+          </div>
+        </div>
+      );
+    }
     return (
       <PaneFrame
         plane={plane}
-        session={layout.session}
-        moved={movedAt(states, layout.session)}
-        running={stateOf(states, layout.session) === "running"}
+        session={content.session}
+        moved={movedAt(states, content.session)}
+        running={stateOf(states, content.session) === "running"}
         doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
       >
         <SessionPane
           plane={plane}
-          session={layout.session}
+          session={content.session}
           focused={layout.pane === focused}
           onFocus={() => onFocus(layout.pane)}
         />
@@ -2399,6 +2666,10 @@ function LayoutPanes({
               offerFor={offerFor}
               onPaneDoes={onPaneDoes}
               states={states}
+              name={name}
+              offered={offered}
+              onOpenView={onOpenView}
+              onAsk={onAsk}
             />
           </Panel>
         </Fragment>
@@ -2451,7 +2722,9 @@ function PaneDoing({
         return (
           <button
             key={id}
-            className={offer.id === "pane.close" ? "ends-a-chat" : undefined}
+            className={
+              offer.id === "pane.close" && !closesOnly(offer.does) ? "ends-a-chat" : undefined
+            }
             disabled={!offer.available}
             aria-label={offer.title}
             title={offer.reason || (offer.note ? `${offer.title} — ${offer.note}` : offer.title)}

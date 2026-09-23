@@ -585,9 +585,9 @@ function App() {
       createWorkspace: () => undefined,
       removeWorkspace: () => undefined,
       showChat: () => undefined,
-      // A persona belongs to a plane, and there is no plane here. The row it would open does
-      // not exist without one, for the same reason the workspace rows above do not.
-      showPersona: () => undefined,
+      // A view is shown in a project's tab, and there is no project here. The rows that open one
+      // do not exist without a plane, for the same reason the workspace rows above do not.
+      openView: () => undefined,
       pinTab: async () => nowhere(),
       pinWorkspace: async () => nowhere(),
       pinProject: windowDoes.pinProject,

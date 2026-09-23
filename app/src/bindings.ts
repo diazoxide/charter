@@ -285,22 +285,6 @@ export const commands = {
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
-	 *  One persona's memories, as rows of the same vocabulary a panel is drawn from.
-	 * 
-	 *  **It answers in `PanelRow`s, and that is the point rather than a convenience.** The window's
-	 *  list primitive shortens a row, opens its card, bounds the count, offers more and grows a
-	 *  search once there is more than a page of them — and it does all of that for these without
-	 *  knowing what a memory is, because they arrive as rows. A panel body and a row's detail
-	 *  surface are the same vocabulary drawn by the same code, which is the test of whether the
-	 *  contract was worth defining.
-	 * 
-	 *  **Its own command, asked when a persona's card is opened.** `workspace_panels` carries the
-	 *  *count*, which is a `read_dir`; this reads every memory file, and folding it in would read
-	 *  every persona's whole store on every workspace focus for something nobody has asked to see —
-	 *  `persona_details`' reason, at a larger size.
-	 */
-	personaMemories: (plane: PlaneId, persona: string) => typedError<PanelRow[], string>(__TAURI_INVOKE("persona_memories", { plane, persona })),
-	/**
 	 *  Make a workspace: `charter workspace create <name>`, with the vision when one was typed.
 	 * 
 	 *  **The name is checked by the core and by nothing in the window.** `wscmd::create` runs
@@ -333,23 +317,6 @@ export const commands = {
 	 *  the window asks for it only after showing them the refusal the core gave.
 	 */
 	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], Refused>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
-	/**
-	 *  What one persona's definition says about it: its role, when to delegate to it, its tools,
-	 *  the vault it names and what it extends.
-	 * 
-	 *  **Its own command, asked when a row is clicked, and not part of `workspace_panels`.** The
-	 *  panels are the hot path of focusing a workspace — the spec gives that 100 ms — and folding
-	 *  this in would read every persona's definition, and every definition up every `extends:`
-	 *  chain, on every focus, for something nobody has asked to see. A plane with twenty personas
-	 *  would pay for twenty file reads per click on the workspace strip.
-	 * 
-	 *  **It names its plane**, like every other command here: a persona belongs to a plane, and a
-	 *  window holds several.
-	 * 
-	 *  It answers with `charter_core::personas::name_refusal`'s own sentence where it will not
-	 *  answer — the same words the CLI gives for the same name.
-	 */
-	personaDetails: (plane: PlaneId, persona: string) => typedError<PersonaDetails, string>(__TAURI_INVOKE("persona_details", { plane, persona })),
 	/**
 	 *  What git says about each of the focused workspace's clones, and what the forge cache
 	 *  last recorded for the branch each is on.
@@ -522,15 +489,24 @@ export const commands = {
 	 */
 	extensionViews: () => typedError<ExtensionView[], string>(__TAURI_INVOKE("extension_views")),
 	/**
-	 *  Ask `extension`'s program what `view` shows for this plane, now.
+	 *  What one view shows for this plane, now.
 	 * 
-	 *  `focus` is the persona whose card it was opened from, when it was — a name charter's own
-	 *  panel put on screen, checked here as a persona name before it is handed to anybody.
+	 *  `from` is `None` for a view charter draws itself and an extension's id for one it offers;
+	 *  `view` is which of theirs; `key` is what it is about inside that — a persona's name, or
+	 *  empty for the whole plane. For an extension's view a non-empty key is handed to its program
+	 *  as the persona it was opened from, and is checked as a persona name before it is.
 	 * 
-	 *  **Every refusal comes back as the core's sentence**, which names the extension and says what
+	 *  **Every refusal comes back as the core's sentence**, which names what refused and says what
 	 *  to do. The window draws it where the answer would have been.
 	 */
-	openView: (plane: PlaneId, extension: string, view: string, focus: string | null) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, extension, view, focus })),
+	openView: (plane: PlaneId, from: string | null, view: string, key: string) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, from, view, key })),
+	/**
+	 *  The view tabs this plane had open when it was last recorded — at a launch, the ones the
+	 *  record put back. The window opens a tab for each; nothing in one is asked until it is drawn.
+	 */
+	reopenedViews: (plane: PlaneId) => typedError<ViewTab[], string>(__TAURI_INVOKE("reopened_views", { plane })),
+	/**  What view tabs the window has open now, so the record brings them back at the next launch. */
+	windowViews: (plane: PlaneId, views: ViewTab[]) => typedError<null, string>(__TAURI_INVOKE("window_views", { plane, views })),
 	/**
 	 *  Every row `charter doctor` would print for this plane, run inside the app.
 	 * 
@@ -1026,10 +1002,10 @@ export type PanelDetail =
 /**  The row's own words, in full. The only kind a contributed panel may use. */
 { kind: "text"; text: string } | 
 /**
- *  What this plane says this persona is. **A name and not an answer**: the window asks
- *  `persona_details` when the card opens, because a definition is a file an operator edits
- *  while charter is running, and because folding it in here would read every persona's
- *  definition on every workspace focus for something nobody has asked to see.
+ *  What this plane says this persona is — `panel::Detail::Persona`. **charter's own panel no
+ *  longer sets it**: a persona row runs `persona.show:<name>`, which opens the persona's view
+ *  tab, and a card beside the row would be a second surface for the same thing. The word
+ *  stays in the vocabulary until whoever owns `charter_core::panel` retires it.
  */
 { kind: "persona"; persona: string };
 
@@ -1177,43 +1153,6 @@ export type Percent = {
 	 */
 	value: number,
 	tone: GaugeTone,
-};
-
-/**
- *  What one persona says about itself, for the row a reader clicked.
- * 
- *  **The vault is a NAME and nothing else.** charter refuses a secret by kind and never
- *  echoes one, and a panel is the last place that rule should get a special case: this struct
- *  carries the word `vault: <name>` puts in the definition, so the window can say which vault
- *  a chat as this persona would open. Nothing here ever reads the vault.
- */
-export type PersonaDetails = {
-	name: string,
-	/**  `role:`, inherited-inclusive. */
-	role: string | null,
-	/**
-	 *  `delegate-when:` — the work that should come to this persona, which is what makes it
-	 *  findable and what a router reads.
-	 */
-	delegate_when: string | null,
-	/**  `tools:`, the union down the `extends:` chain. */
-	tools: string[],
-	/**  The vault's name, where the definition declares one. */
-	vault: string | null,
-	/**
-	 *  Whether the definition declares `vault: none` — that it holds no credentials at all.
-	 * 
-	 *  **Separate from `vault` being absent, and the window must keep them apart.** charter's
-	 *  own `vault_of` falls back to a vault tagged with this persona in the registry, and
-	 *  nothing in Rust reads that registry yet — so "no `vault:` line" means charter-app has
-	 *  not looked, not that there is nothing. Drawing the two the same way would have the
-	 *  window claim a persona holds no credentials on the strength of a file nobody read.
-	 */
-	declares_no_vault: boolean,
-	/**  The `extends:` chain, child first. One name long for a persona that extends nothing. */
-	lineage: string[],
-	/**  The definition file, relative to the plane. */
-	file: string,
 };
 
 /**  One piece, as the window shows it. */
@@ -1588,16 +1527,48 @@ export type UsageTurn = {
 	written: string | null,
 };
 
-/**  What a view answered. */
-export type ViewAnswer = {
-	/**  The blocks, in the panel vocabulary, parsed and re-emitted by the core. */
-	blocks: PanelBlock[],
-	/**
-	 *  How long it took, gate and round trip together, in milliseconds. Drawn quietly under
-	 *  the answer, because a producer that has become slow is worth noticing before it becomes
-	 *  one that times out.
-	 */
-	took_ms: number,
+/**
+ *  What a view answered.
+ * 
+ *  **`Gone` is not a refusal, and the window must keep them apart.** A tab that came back at a
+ *  launch can name a persona that has since been deleted, or an extension that has since been
+ *  uninstalled; that tab is drawn as a view whose source has gone — a sentence in the middle of
+ *  the tab, with nothing to repair — and not as an error. A refusal (`Err`) is something the
+ *  operator can act on: approve the extension again, make its program runnable.
+ */
+export type ViewAnswer = { kind: "answered"; 
+/**  The blocks, in the panel vocabulary, parsed and re-emitted by the core. */
+blocks: PanelBlock[]; 
+/**
+ *  How long it took, gate and round trip together, in milliseconds. Drawn quietly
+ *  under the answer, because a producer that has become slow is worth noticing before
+ *  it becomes one that times out.
+ */
+took_ms: number } | 
+/**  What the view was about is not there any more, and why, in one sentence. */
+{ kind: "gone"; why: string };
+
+/**
+ *  A tab that holds a view, as the window and the record both know it (`reopen::View`).
+ * 
+ *  **The window says these and the record keeps them**; nothing in the core decides one. They
+ *  travel as a whole list every time it changes, because a tab strip is small and a list that
+ *  is the window's arrangement is easier to keep true than a stream of edits to one.
+ */
+export type ViewTab = {
+	/**  The extension's id, or `null` for charter's own view. */
+	from: string | null,
+	view: string,
+	/**  A persona's name, or empty for the whole plane. */
+	key: string,
+	/**  What the tab says. */
+	title: string,
+	/**  The strip it is on, or `null` for the strip of chats outside every workspace. */
+	workspace: string | null,
+	/**  Where it is on the strip, counted over chats and views together from the left. */
+	at: number,
+	active: boolean,
+	pinned: boolean,
 };
 
 /**
