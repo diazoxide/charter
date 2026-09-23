@@ -26,6 +26,10 @@
     "focus.ring": "#2d6d85",
     "tab.active": "#cbe0e9",
 
+    "layer.project": "#2d6d85",
+    "layer.workspace": "#6b4fa0",
+    "layer.chat": "#a03d72",
+
     "needs-you.base": "#a83232",
     "needs-you.text": "#ffffff",
 

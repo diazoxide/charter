@@ -34,7 +34,7 @@ Zed's, and it is the only one that can colour the terminal at all.
 ## The vocabulary
 
 `TOKENS` in `app/src/theme/theme.ts` is the list, with a comment on each group saying what it
-means. Fifty-four names in eleven groups:
+means. Fifty-seven names in twelve groups:
 
 | group | tokens | what it is |
 | --- | --- | --- |
@@ -43,6 +43,7 @@ means. Fifty-four names in eleven groups:
 | `text.*` | `primary` `secondary` `muted` | |
 | `border.*` | `subtle` `strong` | |
 | `accent.*`, `focus.ring`, `tab.active` | `base` `surface` | what charter is drawing attention to |
+| `layer.*` | `project` `workspace` `chat` | which of the three strips of the axis a row is |
 | `needs-you.*` | `base` `text` | the one signal this app exists for |
 | `danger.*` | `base` `surface` `text` `wash` | an answer that cannot be taken back |
 | `state.*` | `running` `waiting` `waiting-glow` `failed` `success` `unreadable` | what a chat, or a check on a branch, is doing |
@@ -64,6 +65,16 @@ made by inverting a dark one passes every other test in the directory while bein
 The one exemption is `terminal.ansi.black`, held to 1.5:1 — ANSI black on a dark terminal is dim
 in every theme there has ever been, because it is the colour a program picks when it means
 *recede*; it still has to be visible, and charter-dark measures 2.14:1.
+
+**The three `layer.*` tokens are a colour that means _depth_, and they are deliberately not
+`state.*` ones.** charter-app#171 said which of the three strips you were looking at with an
+indent; charter-app#193 took the indent away, on the operator's reading of it, and this group is
+what says it instead — one 2px rule along the bottom of each strip, blue-grey for a project,
+violet for a workspace, rose for a chat. The hue **warms as the window goes in**, so the three
+read as one progression rather than as three unrelated marks. None of them is a running, waiting,
+failed or succeeded colour: an operator scanning this window for a chat that needs them may never
+have to ask whether a rule under a row of tabs meant something was wrong. They are held to 3:1
+against the surface each sits on, which is the floor for a graphic rather than for text.
 
 **The chat states and the CI states share a group on purpose.** `.ci-pending` is
 `var(--state-waiting)` because amber means "not finished" in both, and a theme author who wants

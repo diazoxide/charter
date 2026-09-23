@@ -76,6 +76,12 @@ const PAIRS: [Token, Token, number][] = [
   ["state.waiting", "control.base", 3],
   ["accent.base", "surface.base", 3],
   ["focus.ring", "surface.base", 3],
+  // The rule along the bottom of each strip, on the surface that strip sits on. A 2px band is
+  // a non-text graphic and is held to 3, and it has to clear it in both themes or the one
+  // signal that says which row is which disappears into the row.
+  ["layer.project", "surface.deep", 3],
+  ["layer.workspace", "surface.raised", 3],
+  ["layer.chat", "surface.base", 3],
   ["border.subtle", "surface.base", 1.2],
   ["border.strong", "surface.base", 1.5],
 ];

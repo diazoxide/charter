@@ -93,10 +93,31 @@ body {
    inside the selected one, and the nesting is legible from the shape before a word is read.
    Three rows of identically sized cells said nothing about which held which.
 
-   So the three differ in three ways and no more, each one meaning depth rather than identity:
-   **height** (a project's row is the tallest), **inset** (each strip starts further in than
-   the one above, so a child row begins under its parent's first tab) and **surface** (deep,
-   raised, then the bar itself). The tab CELL is still one shape.
+   #171 answered that with three signals — **height**, **inset** and **surface**. Two of them
+   stand. **The inset is gone** (charter-app#193), and it went because the operator read it
+   back off the running app as a defect rather than as a signal: *"workspaces tabs and sessions
+   tabs have some padding from left, they should be like project tabs without padding."* An
+   indent is ambiguous by construction — a row that begins 1.1rem in looks exactly like a row
+   somebody padded — and it cost the two inner strips a whole tab's worth of room at ADR 0026's
+   widths for a fact it never managed to state. All three rows now begin at the same x.
+
+   **What carries the depth in its place is colour, which is what he asked for in the same
+   breath**: *"lets make some different styles/collor for each layer (project,workspace,
+   sessions) — now style of 3 tabs layers are same."* Each strip draws a 2px rule along its own
+   bottom in its own token — `--layer-project`, `--layer-workspace`, `--layer-chat` — and the
+   hue warms as the window goes in. A colour cannot be mistaken for padding, it is legible
+   across the whole width of the row rather than only at its left-hand end, and it costs no
+   room at all. `app/src/theme/theme.ts` holds why those three hues and not the `state.*` ones.
+
+   So the three still differ in three ways and no more, each one meaning depth rather than
+   identity: **height** (a project's row is the tallest), **surface** (deep, raised, then the
+   bar itself) and **layer colour**. The tab CELL is still one shape.
+
+   **And a tab's label is centred in its cell**, on all three — the operator's *"lets make tabs
+   labels center aligned"*. It is a property of the cell and not of the strip, so it is written
+   once beside the rest of what a tab is. A chat tab's `×` sits outside the button, so a chat's
+   name is centred in the room the `×` leaves rather than in the whole cell; that is the same
+   rule, not an exception to it.
 
    **And every strip lays its tabs out the way a browser does**: each takes an equal share of
    the row, floored at `--least` and capped, and what no longer fits collapses into that
@@ -116,31 +137,24 @@ body {
 .projects {
   min-height: 2.3rem;
   background: var(--surface-deep);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 2px solid var(--layer-project);
 }
 
-/* The workspaces of the project in front: the middle of the three strips (ADR 0036). Inset,
-   so the row visibly begins inside the project row above it rather than beside it. */
+/* The workspaces of the project in front: the middle of the three strips (ADR 0036). It begins
+   at the same x as the project row above it — the inset #171 put here is gone (charter-app
+   #193) and the rule below is what says which row this is. */
 .workspaces {
   display: flex;
   align-items: stretch;
   min-height: 2rem;
-  padding-inline-start: var(--nested);
   background: var(--surface-raised);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 2px solid var(--layer-workspace);
 }
 
 .workspaces-strip {
   min-height: 2rem;
   flex: 1 1 auto;
   min-width: 0;
-}
-
-/* How far each row begins inside the one above it. One value, used twice, because the two
-   insets are the same fact — a level of nesting — and two numbers that have to look equal is
-   how they come to differ. */
-:root {
-  --nested: 1.1rem;
 }
 
 /* One tab: the cell, and the hairline that parts it from the next. `.project` and `.tab` are
@@ -215,6 +229,11 @@ body {
   display: flex;
   align-items: center;
   align-self: stretch;
+  /* **The label is centred in its cell** — the operator's *"lets make tabs labels center
+     aligned"*, and one of the two halves of charter-app#193's first item. It is on the button
+     rather than on the strip because the button IS the cell on the workspace strip and is the
+     cell less its `×` on the other two, which is where a centred name belongs in both. */
+  justify-content: center;
   gap: 0.35rem;
   padding: 0.1rem 0.6rem;
   border: 0;
@@ -382,15 +401,17 @@ body {
   background: var(--surface-hover);
 }
 
-/* The innermost of the three rows: the chats of the workspace above. Inset twice, so it
-   begins inside the workspace row exactly as that one begins inside the project row. */
+/* The innermost of the three rows: the chats of the workspace above. It begins at the same x
+   as the two rows above it — the double inset #171 put here is gone (charter-app#193) — and
+   it is the shortest of the three and carries the innermost of the three layer colours. The
+   0.6rem that is left is the end of the row, where its own controls sit. */
 .bar {
   display: flex;
   gap: 0.5rem;
   align-items: stretch;
   min-height: 1.85rem;
-  padding: 0 0.6rem 0 calc(var(--nested) * 2);
-  border-bottom: 1px solid var(--border-subtle);
+  padding-inline: 0 0.6rem;
+  border-bottom: 2px solid var(--layer-chat);
 }
 
 .adding,

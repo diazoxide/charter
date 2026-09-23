@@ -55,6 +55,9 @@
   --color-accent-surface: var(--accent-surface);
   --color-focus-ring: var(--focus-ring);
   --color-tab-active: var(--tab-active);
+  --color-layer-project: var(--layer-project);
+  --color-layer-workspace: var(--layer-workspace);
+  --color-layer-chat: var(--layer-chat);
   --color-needs-you-base: var(--needs-you-base);
   --color-needs-you-text: var(--needs-you-text);
   --color-danger-base: var(--danger-base);

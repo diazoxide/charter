@@ -78,6 +78,20 @@ export const TOKENS = [
   "focus.ring",
   "tab.active",
 
+  // **The three strips of the axis, one colour each** (charter ADR 0036, charter-app#193).
+  // A project holds workspaces and a workspace holds chats, and #171 drew that nesting by
+  // indenting each row under the one above it. The operator read the indent as stray padding
+  // and asked for the depth to be carried by colour instead, so it is: one rule along the
+  // bottom of each strip, in that strip's own colour.
+  //
+  // **The hue warms as the window goes in** — blue-grey, violet, rose — so the three read as
+  // one progression rather than as three unrelated marks, and none of them is a `state.*`
+  // colour: an operator scanning this window for a chat that failed or is waiting may never
+  // have to ask whether a 2px rule meant something.
+  "layer.project",
+  "layer.workspace",
+  "layer.chat",
+
   // The one signal this whole app exists for: a chat that has stopped and is waiting.
   "needs-you.base",
   "needs-you.text",

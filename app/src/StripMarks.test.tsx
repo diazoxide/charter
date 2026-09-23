@@ -165,4 +165,85 @@ describe("the three strips share one tab shape", () => {
       }
     }
   });
+
+  it("centres a tab's label in its cell, on all three", () => {
+    // The operator's *"lets make tabs labels center aligned"* (charter-app#193). One rule over
+    // the three strips, because it is a property of a tab and not of a strip — three rules
+    // would be three places for the next person to centre two of them.
+    const centred = [...css.matchAll(/([^{}]*)\{([^{}]*justify-content:\s*center;[^{}]*)\}/g)]
+      .map((hit) => hit[1])
+      .join(",");
+    for (const strip of ['.projects [role="tab"]', '.workspaces-strip [role="tab"]']) {
+      expect(centred).toContain(strip);
+    }
+    expect(centred).toContain('.tabs [role="tab"]');
+  });
+});
+
+/**
+ * **What says which of the three strips you are looking at** (charter-app#193).
+ *
+ * charter-app#171 drew the nesting with three signals — height, inset and surface — and the
+ * operator read the inset back off the running app as stray padding: *"workspaces tabs and
+ * sessions tabs have some padding from left, they should be like project tabs without
+ * padding."* So the inset is gone and a colour carries the depth instead, one token per strip.
+ *
+ * jsdom lays nothing out and computes no stylesheet, so what can be held here is the rule as it
+ * is written — which is enough for both halves of the claim: that each strip names its own
+ * layer token, and that nothing indents a strip any more.
+ */
+describe("each strip says which layer it is, in colour rather than in indent", () => {
+  const raw = readFileSync(join(process.cwd(), "src/App.css"), "utf8");
+  const css = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  /** One rule's declarations, by the selector that opens it. */
+  const block = (selector: string): string => {
+    const found = new RegExp(`(^|[},])\\s*${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`).exec(
+      css,
+    );
+    expect(found, `no ${selector} rule in App.css`).not.toBeNull();
+    return found?.[2] ?? "";
+  };
+
+  /** What a rule sets as its inline-start padding, in whichever of the three spellings. */
+  const beginsAt = (declarations: string): string => {
+    const start = /padding-inline-start:\s*([^;]+)/.exec(declarations)?.[1];
+    if (start) return start.trim();
+    const inline = /padding-inline:\s*([^;]+)/.exec(declarations)?.[1];
+    if (inline) return inline.trim().split(/\s+/)[0];
+    const all = /(?:^|[;{\s])padding:\s*([^;]+)/.exec(declarations)?.[1];
+    if (all === undefined) return "0";
+    // top | top right | top right bottom | top right bottom left
+    const parts = all.trim().split(/\s+/);
+    return parts.length === 4 ? parts[3] : parts.length === 1 ? parts[0] : parts[1];
+  };
+
+  it.each([
+    [".projects", "--layer-project"],
+    [".workspaces", "--layer-workspace"],
+    [".bar", "--layer-chat"],
+  ])("%s draws its own layer colour along its bottom", (selector, token) => {
+    expect(block(selector)).toContain(`border-bottom: 2px solid var(${token})`);
+  });
+
+  it("gives the three of them three different tokens", () => {
+    // One token used twice would pass every case above and draw two rows the same colour,
+    // which is the whole of what the operator asked to be able to tell apart.
+    const drawn = [".projects", ".workspaces", ".bar"].map(
+      (selector) => /border-bottom:\s*2px solid var\((--layer-\w+)\)/.exec(block(selector))?.[1],
+    );
+    expect(new Set(drawn).size).toBe(3);
+  });
+
+  it("indents none of the three, so all three begin at the same x", () => {
+    // `--nested` was #171's one value used twice. A strip that starts further in than the one
+    // above it is the thing the operator asked to have taken away, and the property is that
+    // there is no such number left to reach for.
+    expect(raw).not.toContain("--nested");
+    for (const selector of [".projects", ".workspaces", ".bar"]) {
+      expect(beginsAt(block(selector)), `${selector} begins further in than the strip above`).toBe(
+        "0",
+      );
+    }
+  });
 });
