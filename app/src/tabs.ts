@@ -107,6 +107,28 @@ export function openTab(
 }
 
 /**
+ * Opens a tab for a chat the operator did not open from this window: one a handoff opened
+ * (charter-app#204). **It does not take the front.**
+ *
+ * A handoff is work the operator sent away from the chat they are reading, and the chat it
+ * opened is often on another workspace's strip. Taking the front would interrupt the chat on
+ * screen or move the window to a workspace nobody asked to look at. The tab is on its strip,
+ * and that is the whole of how it is seen.
+ *
+ * The one exception is a window with nothing in front: there is nothing to interrupt, and a
+ * tab on a strip with nothing in front of it is a blank pane.
+ */
+export function openTabBehind(
+  tabs: Tabs,
+  session: number,
+  chat = "",
+  persona: string | null = null,
+): Tabs {
+  const opened = openTab(tabs, session, chat, persona);
+  return tabs.inFront === undefined ? opened : { ...opened, inFront: tabs.inFront };
+}
+
+/**
  * Closes a tab. **The tab beside it IN ITS OWN WORKSPACE** comes to the front if it was the
  * one in front, and nothing is in front when its workspace held nothing else.
  *

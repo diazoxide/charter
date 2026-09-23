@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import clsx from "clsx";
+import { listen } from "@tauri-apps/api/event";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
@@ -56,9 +57,9 @@ import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
 import { inSlots, SIDES, useArrangement } from "./regions";
-import { RegionFrame, RegionToggle } from "./RegionFrame";
+import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
-import { PaneGauge } from "./ChatGauge";
+import { ChatGauge, useChatUsage } from "./ChatGauge";
 import { usePin } from "./Updates";
 import { StatusLine, type Alerts } from "./StatusLine";
 import {
@@ -68,6 +69,7 @@ import {
   focusPane,
   noTabs,
   openTab,
+  openTabBehind,
   panesOf,
   selectTab,
   showWorkspace,
@@ -88,6 +90,7 @@ import { EmptyState } from "./EmptyState";
 import type { PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
+import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
 
 /**
@@ -384,6 +387,22 @@ export function PlaneView({
       // Nothing open is the ordinary first launch, and a window that cannot ask is still
       // a window the operator can open a chat in.
       .catch(() => setSettled(true));
+  }, [change, plane]);
+
+  // A chat a handoff opened (charter-app#204): the core has started it, and this puts it on
+  // its workspace's strip. **Behind whatever is in front** (`openTabBehind`), and the window is
+  // not raised: the handoff was work sent away from the chat on screen, and the tab on the
+  // strip, whose first message says which chat it came from, is how it is seen.
+  useEffect(() => {
+    const listening = listen<Arrived>("handoff-arrived", (event) => {
+      const arrived = event.payload;
+      if (arrived.plane !== plane) return;
+      // Already drawn: the adoption above can race the event and draw it first.
+      if (alreadyShows(now.current, arrived.session)) return;
+      setStartedIn((was) => ({ ...was, [arrived.session]: arrived.workspace }));
+      change((tabs) => openTabBehind(tabs, arrived.session, arrived.name, arrived.persona));
+    }).catch(() => undefined);
+    return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, [change, plane]);
 
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
@@ -1542,11 +1561,29 @@ export function PlaneView({
               );
             })}
           </div>
-          {/* And what it had no room for. One affordance per strip, with the strip's own
-              noun in it: "workspaces" and not "tabs", because a window drawing three of
-              these owes an operator — and a scenario spec — an answer to WHICH strip is
-              not showing everything. */}
-          <div className="more">
+          {/* This strip's own controls, in the shape the project strip above already has
+              (`App.tsx`): the `+` that makes one more of what the strip lists, then what the
+              strip had no room for. `.strip-doing` and not a `.more` of its own, because the
+              two strips now hold the same two things and a second class name would be a
+              second place to dress them.
+
+              **The `+` is the operator's, and it is drawing a control over a row that was
+              already there** — *"also no new workspace button in workspaces tab — it should
+              be like projects tabs buttons"* (charter-app#193). `workspace.create` has been in
+              the catalogue since #172, with the dialog behind it; the palette runs it and the
+              tab's own menu lists it, and the one strip that is entirely about workspaces had
+              no way to make one. Nothing here knows what it does: it is one `Doer` over that
+              row, so its words, its availability and its refusal are the catalogue's, exactly
+              as they are in the other two surfaces that offer it.
+
+              **`Plus`, which is the chat strip's glyph and not the project strip's pair.**
+              charter-app#178 split `project.open` and `project.create` into `FolderOpen` and
+              `FolderPlus` because that strip draws two of them an inch apart and one glyph on
+              both is a strip aimed at by memory. There is one control here, and the rule it
+              falls under is the older one: the `+` at the end of a strip makes one more of
+              what the strip lists, which an operator learns once for all three. */}
+          <div className="strip-doing">
+            <Doer offer={by("workspace.create")} onPress={press} iconOnly />
             <ShowMore
               noun="workspace"
               hidden={workspacesShown.hidden.map((workspace) => ({
@@ -1661,25 +1698,13 @@ export function PlaneView({
             They are still catalogue rows and still in the palette, which is what a keyboard
             without a pointer uses: the palette acts on the focused pane, and a pane's own
             button focuses that pane before it runs the same row. */}
-        {/* Which regions are drawn (ADR 0038). Here rather than in each region, because a
-            region that is not drawn has nowhere to put its own way back.
+        {/* **The region toggles are NOT here any more.** They are on the status line at the
+            bottom of the window, icon-only (`StatusLine.tsx`, `RegionFrame`'s `RegionToggle`),
+            where the operator asked for them twice — *"show hide buttons can be movet to
+            bottom status bar — again like ZED"*. The rule is unchanged and travels with them:
+            one button per region in the arrangement, in the order the window draws them.
 
-            **One button per region in the arrangement**, in the order the window draws them —
-            so a region added to the catalogue gets its own way back without anybody
-            remembering to add one, which is the half of this that a list written out by hand
-            kept getting wrong. */}
-        <div className="regions-doing">
-          {SIDES.flatMap((side) => slots[side]).map((placed) => (
-            <RegionToggle
-              key={placed.id}
-              id={placed.id}
-              shown={!placed.collapsed}
-              onToggle={toggleRegion}
-            />
-          ))}
-        </div>
-        {/* The project's path is NOT here any more. It is on the status line at the very
-            bottom of the window (`StatusLine.tsx`), where the operator asked for it. */}
+            The project's path is not here either, for the same reason and since #172. */}
       </header>
 
       {trouble && (
@@ -1853,6 +1878,14 @@ export function PlaneView({
         doctor={doctor}
         pin={pin}
         alerts={alerts}
+        /* Which regions are drawn (ADR 0038), handed over as the arrangement already reads
+           them. **The slots are flattened here and not there**: the arrangement is this
+           project's, `inSlots` is the module that knows what order a side's regions come in,
+           and a status line that sorted regions would be a second place that decides. */
+        regions={{
+          placed: SIDES.flatMap((side) => slots[side]),
+          onToggle: toggleRegion,
+        }}
       />
 
       {/* Making a workspace, and deleting one. Mounted only while they are up, and drawn
@@ -1958,6 +1991,20 @@ export type WindowDoing = {
 /** The size a session starts at. The pane it lands in tells it the real one at once. */
 const STARTING_SIZE = { columns: 80, rows: 24 };
 
+/** What the core says when a handoff has opened a chat — `handoff::Arrived` in the app. */
+type Arrived = {
+  plane: string;
+  session: number;
+  name: string;
+  workspace: string;
+  persona: string | null;
+};
+
+/** Whether any tab already shows `session`, in any of its panes. */
+function alreadyShows(tabs: Tabs, session: number): boolean {
+  return tabs.order.some((id) => panesOf(tabs, id).some((pane) => pane.session === session));
+}
+
 /**
  * The verbs that end a chat, and therefore the ones that are asked about first.
  *
@@ -1967,6 +2014,53 @@ const STARTING_SIZE = { columns: 80, rows: 24 };
  * own sentence on its own row, and the window is where that question belongs.
  */
 const ENDS_A_CHAT = new Set(["closeTab", "closePane"]);
+
+/**
+ * One pane's frame: the terminal, and what charter draws over it in the pane's two corners —
+ * side by side with the terminal, so neither is ever a child of the element xterm draws into.
+ *
+ * **Two corners, and neither thing in them places itself** (charter-app#193). The gauge is
+ * top-left and the controls top-right — the operator: *"context status indicator in pane right
+ * corner can be moved to left corner. to not make split and close buttons uggly"*. They shared
+ * one row in the right corner before that, because each had been written as the thing in the
+ * pane's top-right. A corner positions; its contents do not, so a third thing arriving here
+ * collides in review rather than at runtime. The controls keep their hover rule; the gauge,
+ * always drawn, is outside it.
+ *
+ * **The frame knows whether there is a gauge, and says so with a class** (`gauged`). At
+ * top-left the gauge would sit on the start of the terminal's first line at every pane size —
+ * a terminal's text begins at column 0 — so the pane gives it a row (`App.css`, which also
+ * records the margin-collapse that cost a first attempt). A class the component writes rather
+ * than a `:has(.chat-gauge)` selector, because the frame already knows: it reads the usage to
+ * draw the gauge, and a fact the component holds is plainer as a class than re-derived from
+ * the DOM by the stylesheet.
+ */
+function PaneFrame({
+  plane,
+  session,
+  moved,
+  running,
+  doing,
+  children,
+}: {
+  plane: PlaneId;
+  session: number;
+  moved: number;
+  running: boolean;
+  doing: ReactNode;
+  children: ReactNode;
+}) {
+  const usage = useChatUsage(plane, session, moved, running);
+  return (
+    <div className={clsx("pane-frame", usage !== undefined && "gauged")}>
+      {children}
+      <div className="pane-corner at-start">
+        <ChatGauge usage={usage} />
+      </div>
+      <div className="pane-corner at-end">{doing}</div>
+    </div>
+  );
+}
 
 /** A button that IS a row of the catalogue: its words, its availability and its reason.
  *
@@ -2048,9 +2142,16 @@ export function Doer({
  * `project.open` wore `FolderPlus` only because it was the strip's one control when #171 drew
  * it — two icon-only buttons an inch apart carrying one glyph is a strip an operator has to
  * aim at by memory.
+ *
+ * **`workspace.create` and `chat.new` share `Plus`, and that is the rule rather than an
+ * oversight of the one above** (charter-app#193). Each is the ONE control at the end of its
+ * own strip, a whole row apart from the other, and what both mean is the same thing: make one
+ * more of what this strip lists. #178's rule is about two controls side by side; this is the
+ * `+` an operator learns once and then reads on every strip in the window.
  */
 export const MARKS: Record<string, typeof Plus> = {
   "chat.new": Plus,
+  "workspace.create": Plus,
   "pane.split.right": SquareSplitHorizontal,
   "pane.split.down": SquareSplitVertical,
   "pane.close": X,
@@ -2110,6 +2211,10 @@ export function ShowMore({
    * own handler once the event is prevented — and the click is what toggles it.
    */
   const [open, setOpen] = useState(false);
+  // The strip has just started hiding tabs, as opposed to having been hiding them when this
+  // strip was drawn: only the first is a change worth drawing (`useArrived`, and the motion
+  // section of `App.css`).
+  const arrived = useArrived(hidden.length > 0);
   // Nothing is hidden, so there is nothing to say there is more OF.
   if (hidden.length === 0) return null;
   const many = hidden.length === 1 ? `1 ${noun}` : `${hidden.length} ${noun}s`;
@@ -2122,7 +2227,7 @@ export function ShowMore({
     <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       <Menu.Trigger asChild>
         <button
-          className="show-more"
+          className={arrived ? "show-more arrived" : "show-more"}
           aria-label={`Show ${many} the strip is not showing`}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => setOpen((up) => !up)}
@@ -2243,30 +2348,20 @@ function LayoutPanes({
 }) {
   if (layout.kind === "pane") {
     return (
-      // The frame holds the terminal and what charter draws over it side by side, so neither
-      // is ever a child of the element xterm draws into.
-      <div className="pane-frame">
+      <PaneFrame
+        plane={plane}
+        session={layout.session}
+        moved={movedAt(states, layout.session)}
+        running={stateOf(states, layout.session) === "running"}
+        doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
+      >
         <SessionPane
           plane={plane}
           session={layout.session}
           focused={layout.pane === focused}
           onFocus={() => onFocus(layout.pane)}
         />
-        {/* **One corner, one row, because two changes landed in it at once.** The gauge
-            (M6.10) and these controls were each written as the thing in the pane's top-right,
-            and absolutely positioned there they would sit on top of each other. A row lays
-            them out side by side without either having to know the other's width — and the
-            gauge keeps the corner, because it is always drawn and the controls are not. */}
-        <div className="pane-corner">
-          <PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />
-          <PaneGauge
-            plane={plane}
-            session={layout.session}
-            moved={movedAt(states, layout.session)}
-            running={stateOf(states, layout.session) === "running"}
-          />
-        </div>
-      </div>
+      </PaneFrame>
     );
   }
   return (

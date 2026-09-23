@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
@@ -195,5 +198,56 @@ describe("useChatUsage", () => {
 
     // Before chat 4's answer lands, chat 3's numbers are already gone.
     expect(result.current).toBeUndefined();
+  });
+});
+
+/**
+ * **Where the gauge sits in a pane, held over the stylesheet** (charter-app#193).
+ *
+ * The operator: *"context status indicator in pane right corner can be moved to left corner. to
+ * not make split and close buttons uggly"*. jsdom lays nothing out, so what can be held here is
+ * the rule as written — and the three properties the move had to keep are all rules:
+ *
+ * - **neither thing positions itself**; a corner does, so a third thing in a pane's corner
+ *   collides in review and not at runtime;
+ * - **the gauge is always drawn**, so the controls' hover rule may not reach it;
+ * - **it never sits on the terminal's first line**, which at top-left it would at every size,
+ *   because a terminal's text starts at column 0 — so the pane gives up a row, and only when
+ *   there is a gauge to put in it.
+ */
+describe("the gauge's corner", () => {
+  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+  const rule = (selector: string) =>
+    new RegExp(`(^|[},])\\s*${selector}\\s*\\{([^}]*)\\}`).exec(css)?.[2] ?? "";
+
+  it("is the top-left corner, and the controls' is the top-right", () => {
+    expect(rule("\\.pane-corner\\.at-start")).toMatch(/left:/);
+    expect(rule("\\.pane-corner\\.at-end")).toMatch(/right:/);
+  });
+
+  it("leaves the positioning to the corner, for the gauge and the controls alike", () => {
+    for (const own of [rule("\\.chat-gauge"), rule("\\.pane-doing")]) {
+      expect(own).not.toBe("");
+      expect(own).not.toMatch(/position:|top:|left:|right:/);
+    }
+  });
+
+  it("never takes the controls' hover-only rule", () => {
+    const hidden = [...css.matchAll(/([^{}]*)\{[^{}]*visibility:\s*hidden[^{}]*\}/g)]
+      .map((hit) => hit[1])
+      .join(",");
+    expect(hidden).toContain(".pane-doing");
+    expect(hidden).not.toContain("gauge");
+  });
+
+  it("takes its row from the pane's box, and only when there is a gauge", () => {
+    // The pane's box and not `.xterm`'s padding: `SessionPane` refits on a change to the pane's
+    // size, and the gauge arrives after the first fit. And PADDING on the frame, never a margin
+    // on the pane — measured: the margin collapsed through the frame and took the gauge with it.
+    expect(rule("\\.pane-frame\\.gauged")).toMatch(/padding-top:\s*var\(--gauge-room\)/);
+    expect(css).not.toMatch(/\.pane-frame[^{]*>\s*\.pane\s*\{[^}]*margin-top/);
   });
 });

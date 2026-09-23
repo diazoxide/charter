@@ -270,6 +270,8 @@ pub struct Planes {
     /// Where this machine's store lives, or none on a machine with no config home at all.
     config: Option<PathBuf>,
     open: Mutex<HashMap<PlaneId, Arc<Held>>>,
+    /// Told when a handoff has opened a chat in any plane (charter-app#204).
+    arrivals: crate::handoff::Arrivals,
 }
 
 impl Planes {
@@ -281,7 +283,16 @@ impl Planes {
             binary,
             config,
             open: Mutex::new(HashMap::new()),
+            // Nobody to tell yet. A registry with no window still opens a handed-off chat;
+            // it simply has no strip to put it on until one asks what is open.
+            arrivals: Arc::new(|_| {}),
         }
+    }
+
+    /// Tells `arrivals` whenever a handoff opens a chat, so the window can put it on a strip.
+    pub fn telling_arrivals(mut self, arrivals: crate::handoff::Arrivals) -> Self {
+        self.arrivals = arrivals;
+        self
     }
 
     /// Opens `root`: binds its hook socket and arms its board. Answers with the id every
@@ -323,6 +334,23 @@ impl Planes {
             return already.id.clone();
         }
         let held = Arc::new(self.hold(id.clone(), root));
+        // A handoff from one of this plane's chats is answered by this plane, which is the
+        // only one holding the asking chat's record. A `Weak`, because the plane holds the
+        // socket that holds this answer: a strong handle would keep a closed plane alive.
+        held.hooks().answer_with({
+            let held = Arc::downgrade(&held);
+            let plane = id.clone();
+            let tickets = charter_core::hookwire::Tickets::default();
+            let arrivals = Arc::clone(&self.arrivals);
+            Arc::new(move |connection, ask| match held.upgrade() {
+                Some(held) => {
+                    crate::handoff::answer(&held, &plane, &tickets, connection, ask, &*arrivals)
+                }
+                None => charter_core::hookwire::Answer::No {
+                    why: "this project has been closed".to_owned(),
+                },
+            })
+        });
         open.insert(id.clone(), Arc::clone(&held));
         id
     }

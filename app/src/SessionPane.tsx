@@ -62,6 +62,24 @@ export function SessionPane({
     const fit = new FitAddon();
     pane.loadAddon(fit);
     pane.open(where);
+    // **The strip under the last row is the terminal's colour, not xterm's black**
+    // (charter-app#193). `FitAddon` fits whole rows into a box that is not a multiple of one, so
+    // every pane has up to a row of slack at the bottom — 14 px measured at 768 px — and
+    // `xterm.css` paints the viewport behind it `#000`. The operator read it off the running app
+    // as *"harness bottom seems overflowed - you can see black space"*; `elementFromPoint`
+    // inside that strip answered `rgb(0, 0, 0)` from `DIV.xterm-viewport`.
+    //
+    // **Inline, because no rule in `App.css` can win.** xterm's stylesheet is imported from
+    // this module and lands unlayered, and unlayered CSS beats `App.css`'s layer at any
+    // specificity. Moving the import into a `vendor` layer — `docs/design-system.md`'s own
+    // suggested fix — is the larger change: it reorders every one of xterm's rules against every
+    // one of charter's, to fix one declaration. It was tried; the scenario runs it was tried in
+    // were red on the terminal's own specs, but those specs were red here without it too, so
+    // that is NOT evidence against it — only no evidence for it. The colour therefore goes on
+    // the element, read from the same theme object xterm was handed one line up, and the layer
+    // move stays the open question the design-system note already records.
+    const viewport = where.querySelector<HTMLElement>(".xterm-viewport");
+    if (viewport) viewport.style.backgroundColor = inForce().values["terminal.background"];
     terminal.current = pane;
     bench.paneOpened(session, pane);
 

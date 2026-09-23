@@ -209,77 +209,6 @@ jobs:
             *) echo "::error::a differential piece did not pass — open the job above that is red"; exit 1 ;;
           esac
 
-  stress:
-    # Evidence for charter-app#16, not a gate: fifty tabs on a shared runner is timing-bound,
-    # and a flaky REQUIRED check blocks every merge — including the fix for the bug it watches.
-    # It runs on every PR, it reports, and it is allowed to fail.
-    #
-    # It was red on five of its last six runs on `main` (2026-09-20) and that was NOT the
-    # timing this comment allows for: the spec asked for a 900 s budget in the first line of
-    # its body, where WebdriverIO has already read the old one, so it silently ran under
-    # `mochaOpts.timeout` — 180 s — against a macOS runner that needs 170–218 s. The budget
-    # decided the result and the app never did. `stress.e2e.ts` carries the measurement and
-    # `e2e/budget.test.ts` keeps the budget where WebdriverIO reads it.
-    #
-    # A job red five times in six is not evidence of anything; it teaches the repo to ignore
-    # a red X. If this one goes red again, read `logs/stress.jsonl` in the artifact below
-    # before assuming the runner: it now records the app's memory, threads and session count
-    # every ten tabs, so a run that stops says which tab it stopped on.
-    name: fifty tabs (${{ matrix.os }}, evidence only)
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Tauri's Linux build dependencies, and a display to run in
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: app/package-lock.json
-      - run: npm ci
-        working-directory: app
-      - name: The harness the scenario tests run in every pane, and the binary its hooks run
-        run: cargo build -p fake-harness -p charter-cli
-      # The `e2e` feature puts WebdriverIO's embedded WebDriver server inside the app, which is
-      # what drives it on macOS as well as Linux. It is in no build anyone is given.
-      - name: Build the app for the scenario tests
-        run: npx tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json
-        working-directory: app
-      - run: npm run e2e
-        if: runner.os == 'macOS'
-        working-directory: app
-        env:
-          STRESS: "1"
-          # The app says how far its launch got (#23). A stress run that loses the app has to
-          # be able to tell a launch that never finished from one that did and then died.
-          CHARTER_LAUNCH_LOG: "1"
-      - run: xvfb-run -a npm run e2e
-        if: runner.os == 'Linux'
-        working-directory: app
-        env:
-          CHARTER_LAUNCH_LOG: "1"
-          STRESS: "1"
-      # `always()`, not `failure()`: this job's whole output is the numbers, and the run that
-      # SUCCEEDED is the one that says what healthy costs. The comment at the top of this job
-      # claimed the logs were kept either way and nothing kept them — the console scrollback
-      # was all there was, and it does not survive a log rotation.
-      - if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: stress-logs-${{ matrix.os }}
-          path: app/logs
-          if-no-files-found: warn
-
   scenario:
     name: scenario tests (${{ matrix.os }})
     strategy:
@@ -367,9 +296,9 @@ jobs:
     # pass.
     #
     # **Not a gate, and not one of the nine required checks.** The same reasoning `fifty
-    # tabs` gives above, and more of it: a required check on a platform with no port would
-    # block every merge in the repo — including the ports that would make it green. It runs
-    # on every PR, it reports, and it is allowed to fail.
+    # tabs` gives in `stress.yml`, and more of it: a required check on a platform with no
+    # port would block every merge in the repo — including the ports that would make it
+    # green. It runs on every PR, it reports, and it is allowed to fail.
     name: windows (build, test, evidence only)
     continue-on-error: true
     runs-on: windows-latest

@@ -17,6 +17,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { MOTION_TOKENS, motionProperty } from "./motion";
 import { TOKENS, property, type Token } from "./theme";
 
 /**
@@ -127,6 +128,82 @@ describe("no colour is written outside a theme file", () => {
   });
 });
 
+/**
+ * **The same rule for motion (M7.2): no time and no easing is written outside a theme file.**
+ *
+ * Colour rotted into thirty literals because each one was one somebody needed once; motion rots
+ * the same way, faster, because `transition: 150ms ease` is the first thing anybody types. The
+ * window had two before the motion layer and each carried its own reduced-motion block — so
+ * this refuses both halves: a timing written by hand, and a second place that decides what
+ * reduced motion means. `src/theme/motion.ts` is the one place for each.
+ */
+describe("no motion is written outside a theme file", () => {
+  /** A CSS time: `150ms`, `.2s`, `1s`. Not preceded by a word character, a dot or a dash, so
+   *  `h2s` in a class name and `1.5rem` are not read as one. */
+  const TIME = /(?<![\w.-])(?:\d+\.?\d*|\.\d+)m?s\b/g;
+  /** A timing function written out: CSS's keywords and its two functions. `linear-gradient(`
+   *  is a colour matter and not this, hence the lookahead. */
+  const EASING =
+    /(?<![\w-])(?:ease|ease-in|ease-out|ease-in-out|linear|step-start|step-end)(?![\w(-])|\b(?:cubic-bezier|steps)\s*\(/g;
+
+  it.each(sources(".css", ".html"))("%s holds no time and no easing literal", (path, raw) => {
+    const text = withoutComments(raw, "css");
+    const complaints: string[] = [];
+    for (const [what, pattern] of [
+      ["a time", TIME],
+      ["an easing", EASING],
+    ] as const) {
+      for (const hit of text.matchAll(pattern)) {
+        complaints.push(`${at(path, text, hit.index)} has ${what}: ${hit[0]}`);
+      }
+    }
+    expect(complaints, "use var(--motion-duration-*) and var(--motion-easing-*)").toEqual([]);
+  });
+
+  it.each(sources(".ts", ".tsx"))("%s holds no time and no easing literal", (path, raw) => {
+    const text = withoutComments(raw, "ts");
+    const complaints: string[] = [];
+    const say = (index: number, what: string) =>
+      complaints.push(`${at(path, text, index)} has ${what}`);
+    // A string that is a CSS time, or that carries an easing: what an inline `style` or a
+    // `setProperty` would hand the DOM.
+    for (const hit of text.matchAll(/(["'`])(?:\d+\.?\d*|\.\d+)m?s\1/g)) {
+      say(hit.index, `a time: ${hit[0]}`);
+    }
+    for (const hit of text.matchAll(/(["'`])[^"'`\n]*\b(?:cubic-bezier|steps)\s*\(/g)) {
+      say(hit.index, `an easing: ${hit[0]}`);
+    }
+    // An inline style that sets motion from anything but a custom property.
+    for (const hit of text.matchAll(
+      /\b(?:transition|animation)(?:Duration|Delay|TimingFunction)?\s*:\s*(?!["'`]?var\()["'`\d]/g,
+    )) {
+      say(hit.index, `an inline motion: ${hit[0]}`);
+    }
+    // The Web Animations API takes its timing as numbers in script, where no theme reaches.
+    for (const hit of text.matchAll(/\.animate\s*\(/g)) say(hit.index, "a scripted animation");
+    // Tailwind makes `duration-150` and `delay-75` from any integer, and no `@theme` entry can
+    // switch that off (`styles.css`).
+    for (const hit of text.matchAll(/(?<![\w-])(?:duration|delay)-\d+\b/g)) {
+      say(hit.index, `a Tailwind time: ${hit[0]}`);
+    }
+    expect(complaints, "read motion from a --motion-* token").toEqual([]);
+  });
+
+  it.each(sources(".css", ".html", ".ts", ".tsx"))(
+    "%s leaves reduced motion to the motion layer",
+    (path, raw) => {
+      // One place decides what reduced motion means, so no component can forget it or mean
+      // something else by it. A second place is how the layer becomes a suggestion.
+      const kind = path.endsWith(".ts") || path.endsWith(".tsx") ? "ts" : "css";
+      const text = withoutComments(raw, kind);
+      const hits = [...text.matchAll(/prefers-reduced-motion/g)].map((hit) =>
+        at(path, text, hit.index),
+      );
+      expect(hits, "src/theme/motion.ts collapses every duration; do not add a second").toEqual([]);
+    },
+  );
+});
+
 describe("a Tailwind class cannot reach past the tokens", () => {
   /** Tailwind v4's escape hatch: `text-[13px]`, `bg-[#fff]`, `w-[calc(100%-2rem)]`. Every one
    *  of them is a value a theme cannot change, which is the same defect as a hex literal with
@@ -147,7 +224,7 @@ describe("the stylesheet and the vocabulary agree", () => {
   const css = nonEmpty("src/App.css");
   const bridge = nonEmpty("src/styles.css");
   const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((hit) => hit[1]));
-  const declared = new Set(TOKENS.map(property));
+  const declared = new Set([...TOKENS.map(property), ...MOTION_TOKENS.map(motionProperty)]);
   /** Custom properties the stylesheet declares for itself. A colour may not be one of these —
    *  the tests above fail on a literal — so what is left is a length or a count. */
   const ownProperties = new Set([...css.matchAll(/^\s+(--[a-z0-9-]+):/gm)].map((hit) => hit[1]));
@@ -191,6 +268,22 @@ describe("the stylesheet and the vocabulary agree", () => {
     const terminal = (token: Token) => token.startsWith("terminal.");
     const unread = TOKENS.filter((token) => !terminal(token) && !used.has(property(token)));
     expect(unread).toEqual([]);
+  });
+
+  it("every motion token the window has is moved with", () => {
+    // The same promise as above, for timing: a duration nothing reads is one a theme author
+    // would set and see nothing change.
+    const unread = MOTION_TOKENS.map(motionProperty).filter((name) => !used.has(name));
+    expect(unread).toEqual([]);
+  });
+
+  it("every motion token Tailwind offers is a motion token, and every one is offered", () => {
+    const offered = new Set(
+      [
+        ...bridge.matchAll(/--(?:transition-duration|ease)-([a-z0-9-]+):\s*var\((--[a-z0-9-]+)\)/g),
+      ].map((hit) => hit[2]),
+    );
+    expect([...offered].sort()).toEqual(MOTION_TOKENS.map(motionProperty).sort());
   });
 
   it("every token Tailwind offers as a colour is a token, and every token is offered", () => {

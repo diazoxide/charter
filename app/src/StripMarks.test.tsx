@@ -34,6 +34,11 @@ describe("the bar's buttons carry a mark beside their words", () => {
     // Two icon-only buttons an inch apart carrying one icon is a strip aimed at by memory.
     ["project.create", "New project…", "lucide-folder-plus"],
     ["project.open", "Open a project…", "lucide-folder-open"],
+    // And the workspace strip's own `+` (charter-app#193), which shares `chat.new`'s glyph
+    // rather than taking a third folder icon: each is the one control at the end of its own
+    // strip, a whole row apart from the other, and both mean *make one more of what this
+    // strip lists*. #178's rule above is about two controls drawn side by side.
+    ["workspace.create", "New workspace…", "lucide-plus"],
   ])("%s is named %s and draws its mark", (id, title, mark) => {
     render(<Doer offer={offer(id, title)} onPress={() => {}} />);
 
@@ -65,20 +70,41 @@ describe("the bar's buttons carry a mark beside their words", () => {
         "pane.split.right",
         "project.create",
         "project.open",
+        "workspace.create",
       ].sort(),
     );
   });
 
   /**
-   * **Icon-only is only legible while the icons differ** (charter-app#178). The project
-   * strip's controls carry no words at all — `aria-label` is their whole name — so two of
-   * them drawing one glyph would leave a pointer with nothing to tell them apart, and the
-   * operator pressing *New project…* when they meant *Open a project…* is a folder-picker
-   * they did not ask for at best. Held here because it is a property of the set, which
-   * neither row's own test can see.
+   * **Icon-only is only legible while the icons drawn TOGETHER differ** (charter-app#178,
+   * narrowed in charter-app#193 to what its own argument supports).
+   *
+   * The argument was about the project strip: its controls carry no words at all —
+   * `aria-label` is their whole name — so two of them an inch apart drawing one glyph leaves
+   * a pointer with nothing to tell them apart, and the operator pressing *New project…* when
+   * they meant *Open a project…* gets a folder-picker they did not ask for at best. That is a
+   * claim about **adjacency**, and it was written down as a claim about the whole set because
+   * at the time the whole set was one group.
+   *
+   * It is not any more. `workspace.create` is the one control at the end of the workspace
+   * strip and `chat.new` is the one control on the bar, a whole row apart, and they share
+   * `Plus` on purpose: the `+` at the end of a strip makes one more of what the strip lists,
+   * which is the thing an operator learns once and then reads on every strip in the window.
+   * Holding the whole set to be distinct would forbid exactly that, so the groups are written
+   * down instead and each is held to the original rule.
    */
-  it("never gives two rows the same mark", () => {
-    const marks = Object.values(MARKS);
+  const SIDE_BY_SIDE: Record<string, string[]> = {
+    // `App.tsx`'s `.strip-doing`, the only place two icon-only rows are drawn together.
+    "the project strip": ["project.open", "project.create"],
+    // One each, so these cannot collide with anything — listed so that a second control
+    // arriving on either strip has somewhere to be added and something to fail against.
+    "the workspace strip": ["workspace.create"],
+    "the chat strip": ["chat.new"],
+  };
+
+  it.each(Object.keys(SIDE_BY_SIDE))("never gives %s two rows with the same mark", (strip) => {
+    const marks = SIDE_BY_SIDE[strip].map((id) => MARKS[id]);
+    expect(marks.filter(Boolean)).toHaveLength(SIDE_BY_SIDE[strip].length);
     expect(new Set(marks).size).toBe(marks.length);
   });
 });
@@ -128,18 +154,38 @@ describe("a region toggle", () => {
   ] as const)("%s is named %s exactly, and marked by what it is", (id, name, mark) => {
     render(<RegionToggle id={id} shown onToggle={() => {}} />);
 
-    // `regions.e2e.ts` presses `button[aria-pressed="true"]=Explorer`, which is a match on
-    // the whole text: one extra character in the button and that spec cannot find it.
+    // **The name survived losing the words** (charter-app#193). These are icon-only on the
+    // status line now — *"just small icons without texts, texts only with tooltips"* — and
+    // the whole risk in that sentence is the name going with the text. `regions.e2e.ts`
+    // presses `button[aria-label="Explorer"]` and a screen reader reads the same string, so
+    // this asks for the button BY the name and then holds that there is no text under it.
     const button = screen.getByRole("button", { name });
-    expect(button.textContent).toBe(name);
+    expect(button.getAttribute("aria-label")).toBe(name);
+    expect(button.textContent).toBe("");
     expect(button.querySelector(`svg.${mark}`)).not.toBeNull();
+  });
+
+  it("says what pressing it does in the tooltip, which the name cannot", () => {
+    // The name has to be the name of the thing, because that is what a person looks for. What
+    // the press DOES is the `title`, and with the words gone it is the only prose left.
+    const { rerender } = render(<RegionToggle id="explorer" shown onToggle={() => {}} />);
+    expect(screen.getByRole("button", { name: "Explorer" })).toHaveAttribute(
+      "title",
+      "Put the Explorer region away",
+    );
+
+    rerender(<RegionToggle id="explorer" shown={false} onToggle={() => {}} />);
+    expect(screen.getByRole("button", { name: "Explorer" })).toHaveAttribute(
+      "title",
+      "Bring the Explorer region back",
+    );
   });
 });
 
 /**
- * **A strip's tabs are cells, and the selected one is lit — by a rule, not by a border colour
- * on a pill.** jsdom lays nothing out, so what can be held here is the stylesheet's claim: all
- * three strips share the lit edge, and hovering never repaints the tab that is selected.
+ * **A strip's tabs are cells, and the selected one is a step lighter — nothing more.** jsdom
+ * lays nothing out, so what can be held here is the stylesheet's claim: all three strips draw
+ * the selected tab from one token, and hovering never repaints the tab that is selected.
  */
 describe("the three strips share one tab shape", () => {
   // Comments out first: a selector read with the prose above it splits on the prose's commas.
@@ -148,12 +194,25 @@ describe("the three strips share one tab shape", () => {
     "",
   );
 
-  it("lights the selected tab's edge on every strip", () => {
-    const lit = /([^{}]*)\{\s*background:\s*var\(--accent-base\);\s*\}/g;
+  it("draws the selected tab a step lighter, from one token, on every strip", () => {
+    // The operator: *"little lighter for selected tab"* (charter-app#193). One token for all
+    // three, so the tab you are on reads the same way on every row.
+    const lit = /([^{}]*)\{\s*background:\s*var\(--layer-selected\);\s*\}/g;
     const selectors = [...css.matchAll(lit)].map((hit) => hit[1]).join(",");
-    expect(selectors).toContain('.projects .project:has([aria-selected="true"])::after');
-    expect(selectors).toContain('.workspaces-strip [role="tab"][aria-selected="true"]::after');
-    expect(selectors).toContain('.tabs .tab:has([aria-selected="true"])::after');
+    expect(selectors).toContain('.projects .project:has([aria-selected="true"])');
+    expect(selectors).toContain('.workspaces-strip [role="tab"][aria-selected="true"]');
+    expect(selectors).toContain('.tabs .tab:has([aria-selected="true"])');
+  });
+
+  it("lights no edge under a tab, because a lighter background is the whole signal", () => {
+    // #171 lit the selected tab's bottom edge in the accent colour. The operator turned down
+    // the coloured lines — *"borders are not feeling well"* — and the edge was one of them. A
+    // pseudo-element on a strip's tab is how it was drawn, so none may come back quietly.
+    const edges = [...css.matchAll(/([^{}]*::after[^{}]*)\{/g)]
+      .flatMap((hit) => hit[1].split(","))
+      .map((one) => one.trim())
+      .filter((one) => /\.projects|\.workspaces-strip|\.tabs/.test(one));
+    expect(edges).toEqual([]);
   });
 
   it("never lets hover repaint the selected tab", () => {
@@ -163,6 +222,142 @@ describe("the three strips share one tab shape", () => {
       for (const one of selector.split(",")) {
         expect(one).toContain(':not([aria-selected="true"])');
       }
+    }
+  });
+
+  it("centres a tab's label in its cell, on all three", () => {
+    // The operator's *"lets make tabs labels center aligned"* (charter-app#193). One rule over
+    // the three strips, because it is a property of a tab and not of a strip — three rules
+    // would be three places for the next person to centre two of them.
+    const centred = [...css.matchAll(/([^{}]*)\{([^{}]*justify-content:\s*center;[^{}]*)\}/g)]
+      .map((hit) => hit[1])
+      .join(",");
+    for (const strip of ['.projects [role="tab"]', '.workspaces-strip [role="tab"]']) {
+      expect(centred).toContain(strip);
+    }
+    expect(centred).toContain('.tabs [role="tab"]');
+  });
+});
+
+/**
+ * **`N more` is one button, not one per strip** (charter-app#193).
+ *
+ * The operator: *"lets make 'N more' button looks like that buttons, to have all buttons in
+ * same style."* It was drawn three ways — a bordered box on the chat strip from `.bar button`,
+ * a borderless one on the project strip from `.projects button`, and a rule of its own on the
+ * workspace strip with a third padding — and none of those differences was about the control.
+ * Each was whichever ancestor's rule happened to reach it, which is a look that changes when
+ * somebody moves the markup.
+ *
+ * jsdom computes no cascade, so the property is held over the stylesheet's text: nothing
+ * dresses this per strip, and what does dress it is the family the `+` beside it is in.
+ */
+describe("the show-more button", () => {
+  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+
+  /** Every selector in the stylesheet that opens a rule and mentions `.show-more`. */
+  const selectors = [...css.matchAll(/([^{}]*)\{/g)]
+    .flatMap((hit) => hit[1].split(","))
+    .map((one) => one.trim())
+    .filter((one) => one.includes(".show-more"));
+
+  it("is dressed by nothing that names a strip", () => {
+    expect(selectors.length).toBeGreaterThan(0);
+    const perStrip = selectors.filter((one) =>
+      [".projects", ".workspaces", ".bar", ".tabs"].some((strip) => one.includes(strip)),
+    );
+    expect(perStrip, "one control, one rule — a strip may not redress it").toEqual([]);
+  });
+
+  it("wears the same family as the `+` beside it: no border, no fill, muted until hovered", () => {
+    const rule = (selector: string) =>
+      new RegExp(`(^|[},])\\s*${selector}\\s*\\{([^}]*)\\}`).exec(css)?.[2] ?? "";
+    const drawn = rule("button\\.show-more");
+    // Read against `button.bare`, which is what the strip's `+` wears, so the claim is that
+    // the two match rather than that this one happens to say some words.
+    const bare = rule("button\\.bare");
+    expect(bare).not.toBe("");
+    for (const declaration of ["border: 0", "background: none", "color: var(--text-muted)"]) {
+      expect(bare, `button.bare no longer says ${declaration}`).toContain(declaration);
+      expect(drawn, `button.show-more does not say ${declaration}`).toContain(declaration);
+    }
+    expect(rule("button\\.show-more:hover:not\\(:disabled\\)")).toContain(
+      "background: var(--surface-hover)",
+    );
+  });
+});
+
+/**
+ * **What says which of the three strips you are looking at** (charter-app#193).
+ *
+ * charter-app#171 drew the nesting with three signals — height, inset and surface — and the
+ * operator read the inset back off the running app as stray padding: *"workspaces tabs and
+ * sessions tabs have some padding from left, they should be like project tabs without
+ * padding."* The inset is gone, and so are the coloured rules that first replaced it — *"this is
+ * not looks professional, it should be minimalistic, and i prefer to change little bit
+ * backgrounds of tabs"*. A quiet shade per strip carries the depth, one token each.
+ *
+ * jsdom lays nothing out and computes no stylesheet, so what can be held here is the rule as it
+ * is written — which is enough for the claim: each strip names its own shade, no strip draws a
+ * line under itself, and nothing indents a strip any more.
+ */
+describe("each strip says which layer it is, by shade rather than by indent or line", () => {
+  const raw = readFileSync(join(process.cwd(), "src/App.css"), "utf8");
+  const css = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  /** One rule's declarations, by the selector that opens it. */
+  const block = (selector: string): string => {
+    const found = new RegExp(`(^|[},])\\s*${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`).exec(
+      css,
+    );
+    expect(found, `no ${selector} rule in App.css`).not.toBeNull();
+    return found?.[2] ?? "";
+  };
+
+  /** What a rule sets as its inline-start padding, in whichever of the three spellings. */
+  const beginsAt = (declarations: string): string => {
+    const start = /padding-inline-start:\s*([^;]+)/.exec(declarations)?.[1];
+    if (start) return start.trim();
+    const inline = /padding-inline:\s*([^;]+)/.exec(declarations)?.[1];
+    if (inline) return inline.trim().split(/\s+/)[0];
+    const all = /(?:^|[;{\s])padding:\s*([^;]+)/.exec(declarations)?.[1];
+    if (all === undefined) return "0";
+    // top | top right | top right bottom | top right bottom left
+    const parts = all.trim().split(/\s+/);
+    return parts.length === 4 ? parts[3] : parts.length === 1 ? parts[0] : parts[1];
+  };
+
+  it.each([
+    [".projects", "--layer-project"],
+    [".workspaces", "--layer-workspace"],
+    [".bar", "--layer-chat"],
+  ])("%s is drawn on its own shade, with no line under it", (selector, token) => {
+    const rule = block(selector);
+    expect(rule).toContain(`background: var(${token})`);
+    expect(rule, `${selector} draws a border`).not.toMatch(/border/);
+  });
+
+  it("gives the three of them three different tokens", () => {
+    // One token used twice would pass every case above and draw two rows the same shade,
+    // which is the whole of what the operator asked to be able to tell apart.
+    const drawn = [".projects", ".workspaces", ".bar"].map(
+      (selector) => /background:\s*var\((--layer-\w+)\)/.exec(block(selector))?.[1],
+    );
+    expect(new Set(drawn).size).toBe(3);
+  });
+
+  it("indents none of the three, so all three begin at the same x", () => {
+    // `--nested` was #171's one value used twice. A strip that starts further in than the one
+    // above it is the thing the operator asked to have taken away, and the property is that
+    // there is no such number left to reach for.
+    expect(raw).not.toContain("--nested");
+    for (const selector of [".projects", ".workspaces", ".bar"]) {
+      expect(beginsAt(block(selector)), `${selector} begins further in than the strip above`).toBe(
+        "0",
+      );
     }
   });
 });

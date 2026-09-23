@@ -407,6 +407,51 @@ different question (where should Tab go between four regions?), so #186 stopped 
 where a focus scope makes the boundary obvious and the surfaces are countable. charter-app#189
 carries the rest.
 
+## The three strips say their depth in shade, and that took no primitive either
+
+charter ADR 0036 makes the window an axis — a project holds workspaces, a workspace holds chats —
+and charter-app#171 drew that with three signals so the nesting would be legible before a word
+was read: **height** (a project's row is the tallest), **inset** (each row began under its
+parent's first tab) and **surface** (deep, raised, then the bar). charter-app#193 keeps
+**height**, drops the **inset**, and turns **surface** into a quiet shade per strip in tokens of
+its own — and drops the accent edge under the selected tab too, on the operator's reading of
+the running app.
+
+**The inset went because it could not be told apart from padding.** His words, unprompted:
+*"workspaces tabs and sessions tabs have some padding from left, they should be like project
+tabs without padding."* That is the signal failing at the only test that matters — the person
+it was drawn for read it as slop. It was not free either: 1.1rem off the workspace strip and
+2.2rem off the chat strip is a tab's worth of room at ADR 0026's widths, taken from the two
+strips that collapse first (`fits.ts`).
+
+**What replaces it is a shade, and it is a theme token rather than a look.** The operator asked
+for the layers to differ — *"lets make some different styles/collor for each layer"* — and then
+turned down coloured rules under each strip, the first answer to that, as not minimal enough:
+*"i prefer to change little bit backgrounds of tabs and little lighter for selected tab, borders
+are not feeling well."* So each strip is one quiet step of neutral grey — `layer.project`,
+`layer.workspace`, `layer.chat`, outermost deepest — and nothing is drawn under or between the
+rows. Three properties of that answer are decisions rather than details:
+
+- **It is a token, so a theme owns it.** `docs/design-system.md` has the group and the contrast
+  floor each shade is held to in both built-in themes.
+- **The selected tab is a step lighter, and that is the whole selection signal.** #171 also lit
+  the selected tab's bottom edge in `accent.base`; it went with the coloured rules, on the same
+  instruction. `layer.selected` is one token for all three strips, so the tab you are on reads
+  the same way on every row.
+- **No primitive, and no component.** This is four declarations in `App.css` and four values per
+  theme file. A "strip" component parameterised by depth would be exactly the charter API in
+  front of nothing that the rule at the top of this file refuses.
+
+**And a tab's label is centred in its cell** — *"also lets make tabs labels center aligned"* —
+which is one `justify-content` on the rule that already says what a tab is. A chat tab's `×` is
+outside the button, so a chat's name is centred in the room the `×` leaves rather than in the
+whole cell: the same rule, not an exception to it.
+
+`src/StripMarks.test.tsx` is the guard on both halves, and it is a stylesheet test on purpose —
+jsdom computes no layout and no cascade, so what can be held there is the rule as written: each
+strip names its own shade and draws no line, the three shades are three different tokens, no
+strip's tab carries an edge, and there is no `--nested` left to indent anything with.
+
 ## The four regions added no primitive, which is the rule working
 
 charter ADR 0038 split the window into four regions, and the whole layout came out of what was
@@ -450,7 +495,26 @@ component library gets added on.
   belongs to the three tablists that are the axis (ADR 0036); this is the current item of a
   list. Radix has no tree or listbox primitive, and native buttons are not hand-rolled markup.
 - **The region buttons are `aria-pressed` toggles**, which is what the platform has for a
-  control that is on or off.
+  control that is on or off. They are **on the status line and icon-only** since charter-app
+  #193, which the operator asked for twice — *"show hide buttons can be movet to bottom status
+  bar — again like ZED"*, and then *"let make them without labels, just small icons without
+  texts, texts only with tooltips"*. Three things about that are decisions:
+  - **The name did not go with the words.** `aria-label` carries it, which is the one condition
+    `docs/design-system.md` puts on an icon with no text beside it — and not a formality here:
+    `pressOnly("Explorer")` is how the palette and the specs reach a control, and a screen
+    reader reads the same string. An icon-only button whose accessible name is an icon is a
+    button nobody can find, by either route.
+  - **The `title` says what pressing does, not what the thing is.** *"Put the Explorer region
+    away"* is where prose belongs once there is no visible text; a tooltip repeating the label
+    is a tooltip nobody reads twice.
+  - **The status line hosts every region's way back and has none of its own**, which is not a
+    contradiction of `StatusLine.tsx`'s argument for not being a region but the sharpest form
+    of it: it is the frame. `FourRegions.test.tsx`'s *"cannot be put away, because it is not a
+    region"* is the guard, and it presses all three toggles to get there.
+  - **A scenario reaches them by `[aria-label="Explorer"]` and no longer by `=Explorer`.**
+    WebdriverIO's `=` is a whole-text match, and there is no text. `regions.e2e.ts`,
+    `pane-fill.e2e.ts` and `status-line.e2e.ts` all moved; `StripMarks.test.tsx` is what holds
+    the name they match against.
 
 ## The title bar added no primitive either, and inherited a rule from Tauri
 

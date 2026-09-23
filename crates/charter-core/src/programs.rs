@@ -148,10 +148,73 @@ pub fn runnable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// See the unix arm: nothing is runnable here until charter-app#100 reads `PATHEXT`.
+/// See the unix arm. [`file_names`] already reads `PATHEXT`, so [`find`] asks this about
+/// `git.EXE` rather than `git`; answering `true` for such a file is what charter-app#100 has
+/// left, and it waits for a Windows machine to prove it on — it is the line at which `gh`
+/// lands in a credential helper, and nothing here can check what happens after that.
 #[cfg(not(unix))]
 pub fn runnable(_path: &Path) -> bool {
     false
+}
+
+/// `PATHEXT` when the variable is unset or empty: Python's `shutil._WIN_DEFAULT_PATHEXT`,
+/// so an unset variable means what it means to the oracle.
+const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.MSC";
+
+/// The names `program` may have on disk, in the order they are tried.
+///
+/// `pathext` is `None` where the platform has no such thing, and then the name is exactly the
+/// one asked for. Given a `PATHEXT` it is Windows's rule (charter-app#100): a name that
+/// already ends in one of the listed extensions, compared without case, is tried as it is and
+/// nothing else; any other name is tried with each extension appended, in `PATHEXT`'s order.
+///
+/// **Never bare, and that is stricter than Python on purpose.** `shutil.which` in 3.12 tries
+/// the bare name last, and in 3.11 an empty `PATHEXT` entry matched every name and so tried
+/// it bare first. A bare name with no listed extension is exactly the file [`runnable`]
+/// refuses to call a program off unix — any file on `PATH` would do — so offering it as a
+/// candidate would reopen the hole that arm is there to close. An unset or empty `PATHEXT`,
+/// and empty entries in one, are read the way 3.12 reads them: its default, empties dropped.
+///
+/// **Split on `;`, never the host's separator.** `PATHEXT` is a Windows variable whose
+/// separator is fixed; `std::env::split_paths` would split it on `:` here, and a test on this
+/// machine would then pass for the wrong reason.
+///
+/// Pure, so the Windows rule is checked on every platform charter's tests run on — which is
+/// the half of charter-app#100 that can be checked anywhere at all.
+pub fn file_names(program: &str, pathext: Option<&OsStr>) -> Vec<String> {
+    let Some(pathext) = pathext else {
+        return vec![program.to_owned()];
+    };
+    let listed = pathext.to_string_lossy();
+    let listed = if listed.is_empty() {
+        DEFAULT_PATHEXT
+    } else {
+        &listed
+    };
+    let extensions: Vec<&str> = listed.split(';').filter(|ext| !ext.is_empty()).collect();
+    let carries_one = Path::new(program).extension().is_some_and(|have| {
+        let have = format!(".{}", have.to_string_lossy());
+        extensions.iter().any(|ext| ext.eq_ignore_ascii_case(&have))
+    });
+    if carries_one {
+        return vec![program.to_owned()];
+    }
+    extensions
+        .iter()
+        .map(|ext| format!("{program}{ext}"))
+        .collect()
+}
+
+/// This process's `PATHEXT` for [`file_names`]: none on unix, where a name is only itself.
+#[cfg(unix)]
+fn host_pathext() -> Option<std::ffi::OsString> {
+    None
+}
+
+/// This process's `PATHEXT` for [`file_names`], unset read as empty so the default applies.
+#[cfg(not(unix))]
+fn host_pathext() -> Option<std::ffi::OsString> {
+    Some(std::env::var_os("PATHEXT").unwrap_or_default())
 }
 
 /// Does `program` name a place rather than a program — `./x`, `bin/x`, `/usr/bin/x`?
@@ -168,15 +231,25 @@ fn is_a_path(program: &str) -> bool {
         .is_some_and(|dir| !dir.as_os_str().is_empty())
 }
 
+/// The entries of a `PATH` value that charter will search, in order: the absolute ones.
+///
+/// **One copy of this rule, for every lookup that reads an inherited `PATH`.** A relative
+/// entry — `.`, an empty one, `bin` — resolves against the working directory, which for a
+/// chat or a hook is a repository someone else can write, so "the program is whatever
+/// `./git` is in the directory you happen to be in" is not a lookup charter performs.
+/// [`search_dirs_from`] and `worktree::git`'s fallback both ask this; they used to hold a
+/// copy each, and the copy in `worktree::git` was the one missing the rule.
+pub fn searchable(path: &OsStr) -> impl Iterator<Item = PathBuf> + '_ {
+    std::env::split_paths(path).filter(|dir| dir.is_absolute())
+}
+
 /// Every directory charter searches for a bare program name, in order and without repeats.
 ///
 /// Pure, so the list can be tested without touching the process's own environment — which
 /// `unsafe_code = "forbid"` puts out of reach anyway. [`search_dirs`] is the one caller that
 /// reads the environment.
 ///
-/// A relative entry in `PATH` is dropped. It resolves against the working directory, which
-/// for a chat is a repository a chat can write, and "the harness is whatever `./claude` is in
-/// the directory you happen to be in" is not a lookup charter performs.
+/// A relative entry in `PATH` is dropped, by [`searchable`], which says why.
 pub fn search_dirs_from(path: Option<&OsStr>, home: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut push = |dir: PathBuf| {
@@ -185,7 +258,7 @@ pub fn search_dirs_from(path: Option<&OsStr>, home: Option<&Path>) -> Vec<PathBu
         }
     };
     if let Some(path) = path {
-        for dir in std::env::split_paths(path) {
+        for dir in searchable(path) {
             push(dir);
         }
     }
@@ -301,10 +374,13 @@ pub fn chat_path(charter: Option<&Path>) -> Option<String> {
     )
 }
 
-/// `program` as an absolute path, found in `dirs`.
+/// `program` as an absolute path, found in `dirs`: every name [`file_names`] gives it in the
+/// first directory, then the next directory — the order a Windows shell and `shutil.which`
+/// search in. On unix that is the one name, so nothing here changed there.
 pub fn find(program: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let names = file_names(program, host_pathext().as_deref());
     dirs.iter()
-        .map(|dir| dir.join(program))
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|candidate| runnable(candidate))
 }
 
@@ -327,11 +403,12 @@ pub fn on_path(program: &str) -> bool {
 /// reason an app launched from Finder can start a chat at all.
 ///
 /// **Off unix a bare word is handed back unresolved**, which leaves Windows exactly where it
-/// was. [`runnable`] answers `false` there until charter-app#100 reads `PATHEXT`, so a search
-/// would find nothing and this would refuse every built-in profile — where today the spawn
-/// itself resolves `claude` to `claude.exe` and works. A port that has never been compiled for
-/// a platform must not start refusing on it: #100 is where the search learns about extensions,
-/// and until then the operating system keeps the lookup it already does.
+/// was. [`runnable`] answers `false` there until charter-app#100's Windows half lands — the
+/// search knows the extensions now ([`file_names`]) but not yet which file is a program — so
+/// a search would find nothing and this would refuse every built-in profile, where today the
+/// spawn itself resolves `claude` to `claude.exe` and works. A port that has never been run on
+/// a platform must not start refusing on it, and until it has, the operating system keeps the
+/// lookup it already does.
 pub fn resolve(program: &str) -> Result<String, NotFound> {
     if is_a_path(program) || cfg!(not(unix)) {
         return Ok(program.to_owned());
@@ -603,5 +680,64 @@ mod tests {
         stand_in::program(&second, "claude", "#!/bin/sh\nexit 0\n");
         let dirs = vec![first.clone(), second];
         assert_eq!(find("claude", &dirs), Some(first.join("claude")));
+    }
+
+    // charter-app#100: the names a program may have on disk. Windows's rule, asserted here
+    // because it is a rule about strings and this is where the tests run.
+
+    #[test]
+    fn with_no_pathext_a_program_is_looked_for_by_exactly_the_name_it_was_given() {
+        assert_eq!(file_names("claude", None), vec!["claude"]);
+        assert_eq!(file_names("claude.exe", None), vec!["claude.exe"]);
+    }
+
+    #[test]
+    fn with_pathext_a_bare_name_is_tried_with_each_extension_in_order_and_never_bare() {
+        let names = file_names("git", Some(OsStr::new(".COM;.EXE;.CMD")));
+        assert_eq!(names, vec!["git.COM", "git.EXE", "git.CMD"]);
+        assert!(
+            !names.iter().any(|n| n == "git"),
+            "a file with no extension is any file on PATH, not a program: {names:?}"
+        );
+    }
+
+    #[test]
+    fn a_name_that_already_ends_in_a_listed_extension_is_tried_as_it_is_whatever_its_case() {
+        assert_eq!(
+            file_names("git.exe", Some(OsStr::new(".COM;.EXE"))),
+            vec!["git.exe"]
+        );
+        assert_eq!(
+            file_names("npx.Cmd", Some(OsStr::new(".EXE;.CMD"))),
+            vec!["npx.Cmd"]
+        );
+    }
+
+    #[test]
+    fn an_extension_pathext_does_not_list_is_part_of_the_name() {
+        assert_eq!(
+            file_names("node.1", Some(OsStr::new(".EXE"))),
+            vec!["node.1.EXE"]
+        );
+    }
+
+    #[test]
+    fn pathext_is_split_on_semicolons_whatever_this_host_separates_paths_with() {
+        // `split_paths` would split on `:` on this machine and give ONE extension here.
+        assert_eq!(
+            file_names("gh", Some(OsStr::new(";.EXE;;.BAT;"))),
+            vec!["gh.EXE", "gh.BAT"],
+            "empty entries dropped, as Python 3.12 drops them — in 3.11 one matched every name"
+        );
+    }
+
+    #[test]
+    fn an_empty_pathext_means_the_default_python_uses() {
+        let names = file_names("claude", Some(OsStr::new("")));
+        assert_eq!(names.len(), DEFAULT_PATHEXT.split(';').count());
+        assert_eq!(
+            names[..4],
+            ["claude.COM", "claude.EXE", "claude.BAT", "claude.CMD"]
+        );
     }
 }

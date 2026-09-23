@@ -21,7 +21,7 @@
 //! | a brief from a closed stdin, from a terminal, not UTF-8, or empty | the command's | yes |
 //! | a brief shaped like a credential | the command's ([`crate::secretshape`]) | yes |
 //! | a first message that is empty, starts with `-`, is a single word, carries a NUL, or is past the byte bound | the command's (`commands_frame.background_refusal`) | yes |
-//! | there is no frame to open a chat in the background of | the command's | yes, and it is the one this charter always reaches — see below |
+//! | there is no frame to open a chat in the background of | the command's | yes: every chat the desktop app did not start, or whose app does not answer — see below |
 //! | a spelling the host's rule does not match (`python3 -m charter handoff`, `charter 'handoff'`, a path) | the **hook's** (`hooks.pretooluse` A7) | no |
 //! | a brief from a pipe, a file, a here-string, or a heredoc a shell runs | the **hook's** (A7) | no |
 //! | a call from a sub-agent, or an unattended run (`bypassPermissions`) | the **hook's** (A7) | no |
@@ -38,20 +38,22 @@
 //! not get from this binary is the hook's ALLOW half — the persona tool-gate — which
 //! [`crate::toolgate`]'s header records as a declared gap.
 //!
-//! # The frame, and why this charter refuses every handoff
+//! # The frame: the desktop app, or the printed command
 //!
 //! Python's handoff opens a chat in a background window of charter's own tmux server. This
-//! charter has no tmux: the desktop app replaces that frame, and there is no channel from
-//! this binary into the app that opens a chat (`hookwire` carries reports *to* the app and
-//! nothing back). So the frame check that Python reaches after every other refusal is the
-//! one this binary always reaches, and it answers the way Python answers a shell that is not
-//! a chat: it prints the command to run in a new terminal, and refuses.
+//! charter has no tmux: the desktop app is its frame. A chat the app started asks the app to
+//! open the handoff over the hook socket, on a single-use ticket (charter-app#204; what the
+//! ticket is worth, and what it is not, is on [`crate::hookwire::OpenChat`]). Every other
+//! chat, and every chat whose app does not answer, reaches the frame check and gets Python's
+//! answer to a shell that is not a chat: the command to run in a new terminal, and a refusal.
 //!
-//! That is the honest port rather than a stub. The command still does every check in front
-//! of the open — which is where a handoff's whole value is, because charter fails toward no
-//! change — and it never claims to have opened a chat it did not. It also writes nothing:
-//! Python's writes (the workspace, its vision, the todo) all come *after* the frame check,
-//! so a handoff that cannot open a chat has never created anything, in either implementation.
+//! Either way the command does every check in front of the open, which is where a handoff's
+//! whole value is, because charter fails toward no change, and it never claims to have opened
+//! a chat it did not. The printed-command path writes nothing: Python's writes (the workspace,
+//! its vision, the todo) all come *after* the frame check. The app path writes only the
+//! workspace, when the call creates one; the todo, the dispatch tally and the arrival mark
+//! Python writes after its open have no counterpart here, and the differential declares that
+//! (`tests/differential/run.py`, `HANDOFF_WRITES_NOTHING_AFTER_THE_OPEN`).
 
 use std::fmt::Write as _;
 
@@ -178,6 +180,27 @@ pub fn stamp(chat: &str, workspace: &str, when: chrono::NaiveDateTime) -> String
         .replace("{chat}", chat)
         .replace("{workspace}", workspace)
         .replace("{when}", &when.format("%Y-%m-%d %H:%M").to_string())
+}
+
+/// Whether `msg` opens with the stamp of a handoff leaving `chat`, followed by the blank line
+/// [`first_message`] puts after it.
+///
+/// **The app asks this before it opens anything** (charter-app#204). In the app the control
+/// on a handed-off chat is that the operator can see it and where it came from, and the
+/// stamp is the half of that the chat itself carries. `charter handoff` always writes one,
+/// so this refuses only a message that did not come through it: a process writing to the
+/// socket directly cannot open an unmarked chat, nor one marked as another chat's.
+pub fn is_stamped_from(msg: &str, chat: &str) -> bool {
+    let Some((head, _)) = STAMP.split_once("{chat}") else {
+        return false;
+    };
+    let Some((line, rest)) = msg.split_once('\n') else {
+        return false;
+    };
+    line.starts_with(&format!("{head}{chat} · workspace "))
+        && line.ends_with('⟩')
+        && !line[..line.len() - '⟩'.len_utf8()].contains('⟩')
+        && rest.starts_with('\n')
 }
 
 /// The whole of what the new chat is sent: the stamp, a blank line, the brief verbatim.
@@ -444,6 +467,30 @@ mod tests {
             stamp("c1", "beta", at("2026-05-04T11:32:17")),
             "⟨handoff from chat c1 · workspace beta · 2026-05-04 11:32⟩",
             "minutes, not seconds"
+        );
+    }
+
+    #[test]
+    fn a_message_is_stamped_from_the_chat_its_stamp_names_and_no_other() {
+        let msg = first_message(
+            &stamp("7", "default", at("2026-05-04T11:32:17")),
+            "# Goal\nbody",
+        );
+
+        assert!(is_stamped_from(&msg, "7"));
+        assert!(
+            !is_stamped_from(&msg, "70"),
+            "a prefix of another chat's number"
+        );
+        assert!(!is_stamped_from(&msg, "3"), "another chat's stamp");
+        assert!(!is_stamped_from("# Goal\nbody", "7"), "no stamp at all");
+        assert!(
+            !is_stamped_from(&msg.replacen("\n\n", "\n", 1), "7"),
+            "the blank line is part of the shape"
+        );
+        assert!(
+            !is_stamped_from("⟨handoff from chat 7 · workspace x", "7"),
+            "one line"
         );
     }
 

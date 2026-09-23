@@ -216,6 +216,25 @@ included. If nothing says which harness this is — no `$CHARTER_HARNESS`, no `[
 — charter prints `<harness>` where the word goes and says it could not name one, rather than
 starting the wrong tool with your brief already in its argv.
 
+**Inside charter-app, the app is the frame.** A chat the desktop app started carries the app's
+hook socket, and `charter handoff` from it asks the app to open the chat instead of printing a
+command. The chat opens as a new tab on the target workspace's strip, started on the stamped
+brief. It opens behind the tab you are reading and does not raise the window; it takes the front
+only in a window with no tab at all. Your yes to the prompt in front of `charter handoff` is the
+only one asked for, and the new chat runs the same harness profile as the chat that asked. If the
+app is not listening or does not answer, you get the command above, word for word. If it
+refuses, you get the command and one more line saying why. A handoff the app opened records no
+todo in the target workspace: the brief is the new chat's first message, and the tab is how you
+see it.
+
+The app opens one chat per `charter handoff`. The command asks the app for a single-use ticket
+and spends it on the same connection, so no single line on the socket opens a chat and no line
+can be replayed. The ticket cannot tell the command you approved from another process running
+inside the same chat, which could run `charter handoff` itself, just as it can already start a
+harness in the background with `claude -p`. That is why a handed-off chat always lands as a tab
+you can see, stamped with the chat it came from. This describes charter-app; the Python charter
+has no app, and opens the chat in a background tmux window.
+
 ## Isolation and continuation
 
 - **The brief is the whole context.** No pointer to the parent's transcript, no forked

@@ -374,6 +374,35 @@ describe("making a workspace", () => {
     return await screen.findByRole("dialog");
   }
 
+  it("is reached from the strip's own `+`, in the shape the project strip has", async () => {
+    // charter-app#193, the operator: *"also no new workspace button in workspaces tab — it
+    // should be like projects tabs buttons"*. `workspace.create` has been a catalogue row
+    // since #172, with the dialog behind it — the palette runs it and the tab's menu lists
+    // it — and the one strip that is entirely about workspaces had no way to run it.
+    const { calls } = core();
+    render(<App />);
+    await settled();
+
+    // Beside the tabs and not among them: the strip's controls are a sibling of the tablist,
+    // so a `role="tab"` query never picks this up and the collapse never hides it.
+    const row = screen.getByRole("tablist", { name: "Workspaces" }).parentElement as HTMLElement;
+    const plus = within(row).getByRole("button", { name: "New workspace…" });
+    // Icon-only, like the project strip's two: the catalogue's words are its `aria-label`,
+    // which is what a screen reader reads and what this test just found it by.
+    expect(plus.textContent).toBe("");
+    expect(plus.querySelector("svg.lucide-plus")).not.toBeNull();
+
+    await userEvent.click(plus);
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "gamma");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+
+    // The same command the menu's row sends, because it is the same row.
+    expect(calls("workspace_create").map((one) => one.args)).toEqual([
+      { plane: PLANE, name: "gamma", vision: null },
+    ]);
+  });
+
   it("is reached from the same menu, and asks for the name and the vision", async () => {
     const { calls } = core();
     render(<App />);
