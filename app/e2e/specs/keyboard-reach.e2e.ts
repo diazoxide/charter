@@ -128,18 +128,20 @@ describe("the window's keyboard reach", () => {
         ".pane-frame:has(.pane.focused) .pane-doing",
       );
       if (!doing) return { away: "(no focused pane)", on: "", focusable: false };
-      const look = () => {
-        const style = getComputedStyle(doing);
-        return `${style.visibility}/${style.opacity}`;
-      };
+      // No named helpers inside `execute`: the spec's bundler wraps them in a `__name` the page
+      // does not have. So the style is read twice, written out twice.
+      //
       // The terminal has the keyboard: the operator is typing, and the corner stays clear.
       document.querySelector<HTMLElement>('[data-testid="pane"] textarea')?.focus();
-      const away = look();
+      const before = getComputedStyle(doing);
+      const away = `${before.visibility}/${before.opacity}`;
       // Tab from the strip lands on the first control. It can only do that if the control is
       // still in the sequence — visible to the engine, if not to the eye.
       const first = doing.querySelector<HTMLElement>("button:not([disabled])");
       first?.focus();
-      return { away, on: look(), focusable: document.activeElement === first };
+      const after = getComputedStyle(doing);
+      const on = `${after.visibility}/${after.opacity}`;
+      return { away, on, focusable: document.activeElement === first };
     });
     expect(seen).toEqual({ away: "visible/0", on: "visible/1", focusable: true });
   });
@@ -148,12 +150,14 @@ describe("the window's keyboard reach", () => {
     const moved = await browser.execute(() => {
       const terminal = document.querySelector<HTMLTextAreaElement>('[data-testid="pane"] textarea');
       if (!terminal) return { tab: "(no terminal)", ctrlTab: "(no terminal)" };
-      const where = () =>
-        document.activeElement?.closest('[data-testid="pane"]') ? "terminal" : "outside";
+      // No named helpers inside `execute`: the spec's bundler wraps them in a `__name` the page
+      // does not have. So where the keyboard is gets asked twice, written out twice.
       terminal.focus();
       const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
       terminal.dispatchEvent(tab);
-      const afterTab = where();
+      const afterTab = document.activeElement?.closest('[data-testid="pane"]')
+        ? "terminal"
+        : "outside";
       terminal.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Tab",
@@ -162,7 +166,10 @@ describe("the window's keyboard reach", () => {
           cancelable: true,
         }),
       );
-      return { tab: afterTab, ctrlTab: where() };
+      const afterCtrlTab = document.activeElement?.closest('[data-testid="pane"]')
+        ? "terminal"
+        : "outside";
+      return { tab: afterTab, ctrlTab: afterCtrlTab };
     });
     expect(moved).toEqual({ tab: "terminal", ctrlTab: "outside" });
   });
