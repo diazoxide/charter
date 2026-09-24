@@ -15,8 +15,15 @@
   -webkit-text-size-adjust: 100%;
 }
 
+/* **Nothing in the window rubber-bands** — the operator: *"our charter app scroll now bouncing -
+   lets disable scroll bouncing"*. macOS's WebView overscrolls the page and every scroll
+   container with an elastic bounce, which in an app shell pulls the whole window's chrome down
+   and off its edges. `none` on every element stops the bounce and stops a scroll chaining out
+   of a panel into the page, which a desktop app wants too: a region scrolls, the window never
+   does. */
 * {
   box-sizing: border-box;
+  overscroll-behavior: none;
 }
 
 body {
