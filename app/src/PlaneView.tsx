@@ -98,7 +98,7 @@ import { ChatState } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { ViewMark, ViewPane } from "./Views";
-import { useTabStop } from "./roving";
+import { closeOnDelete, useTabStop } from "./roving";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
@@ -1778,6 +1778,7 @@ export function PlaneView({
                     <button
                       role="tab"
                       aria-selected={id === tabs.inFront}
+                      onKeyDown={(event) => closeOnDelete(event, by(`tab.close:${id}`), press)}
                       // The catalogue's row, not a second copy of it. The tab already in front
                       // has a row that says so and cannot run — a tab is never disabled, because
                       // the selected tab is the one a keyboard has to be able to land on.
@@ -2530,7 +2531,8 @@ export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
       // **Not a Tab stop, and deliberately** (charter-app#189). The strip it sits on is ONE
       // stop, the WAI-ARIA "Tabs" pattern; a `×` per tab in the sequence would be fifty stops
       // again. A keyboard ends a chat from the palette's row for it, or from the tab's own menu
-      // (the context-menu key), both of which read the same catalogue row this does.
+      // (the context-menu key), both of which read the same catalogue row this does — and
+      // Delete on the focused tab (charter-app#239, `closeOnDelete`), which a Mac needs.
       tabIndex={-1}
       aria-label={offer.title}
       title={offer.note ? `${offer.title} — ${offer.note}` : offer.title}

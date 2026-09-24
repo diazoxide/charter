@@ -254,6 +254,23 @@ describe("a persona's own tab", () => {
     expect(asked.some((one) => one.cmd === "close_session")).toBe(false);
   });
 
+  it("closes on Delete from the keyboard, as its × does: without ending or asking", async () => {
+    // charter-app#239: the key runs the row the `×` runs, so a view tab is still not asked about.
+    const { asked } = core();
+    render(<App />);
+    await openFromTheRow();
+    within(strip()).getByRole("tab", { selected: true }).focus();
+
+    await userEvent.keyboard("{Delete}");
+
+    await waitFor(() => expect(tabNames()).toEqual(["1 steward"]));
+    await waitFor(() =>
+      expect(within(strip()).getByRole("tab", { name: /1 steward/ })).toHaveFocus(),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(asked.some((one) => one.cmd === "close_session")).toBe(false);
+  });
+
   it("is told to the core, so the record brings it back at the next launch", async () => {
     const { asked } = core();
     render(<App />);

@@ -28,7 +28,7 @@ import { ApprovePlane } from "./ApprovePlane";
 import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { useContributedPanels } from "./Panels";
-import { useTabStop } from "./roving";
+import { closeOnDelete, useTabStop } from "./roving";
 import { useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
@@ -827,6 +827,7 @@ function App() {
                       <button
                         role="tab"
                         aria-selected={project.plane === inFront}
+                        onKeyDown={(event) => closeOnDelete(event, strip.close[at], press)}
                         // The path, because two projects can share a directory name and the name is
                         // all the tab has room for.
                         title={project.plane}

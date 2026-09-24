@@ -73,8 +73,11 @@ function chat(session: number, name: string, inFront = false) {
 /** A plane with two workspaces, three chats in the first and one worktree cut there. */
 function core({ waiting = [] as number[] } = {}) {
   const chats = [chat(1, "one"), chat(2, "two", true), chat(3, "three")];
+  /** Every command the window sent, by name. */
+  const asked: string[] = [];
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
+    asked.push(cmd);
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "opened_chats") return chats;
     if (cmd === "plane_sidebar")
@@ -112,6 +115,7 @@ function core({ waiting = [] as number[] } = {}) {
     if (cmd === "alerts_everywhere") return [{ plane: PLANE, alerts: [], stopped: null }];
     return null;
   });
+  return { asked };
 }
 
 beforeEach(() => {
@@ -430,5 +434,134 @@ describe("a pane's controls", () => {
     expect(focused?.body).toMatch(/visibility:\s*visible/);
     expect(focused?.body).toMatch(/opacity:\s*0\s*;/);
     expect(focused?.body).toMatch(/pointer-events:\s*none/);
+  });
+});
+
+/**
+ * **Delete closes the focused tab** (charter-app#239) — the optional key of the WAI-ARIA "Tabs"
+ * pattern, and on a Mac the only keyboard way to close a tab short of the palette: a tab's `×`
+ * is not a stop, and a Mac keyboard has no context-menu key to open the tab's menu with.
+ *
+ * It runs the row the `×` runs, so it asks what the `×` asks: ending a chat asks first, and a
+ * view tab closes without asking (`ViewTabs.test.tsx`).
+ */
+describe("Delete on a focused tab", () => {
+  /** Pretends the window runs on a Mac, or not, for the length of one test. */
+  const onA = (platform: string) =>
+    vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  afterEach(() => vi.restoreAllMocks());
+
+  it("asks before it ends the chat on the tab the keyboard is on, and Cancel keeps it", async () => {
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    const [, two] = tabsOf("Tabs");
+    two.focus();
+    await userEvent.keyboard("{ArrowLeft}");
+
+    await userEvent.keyboard("{Delete}");
+
+    // The tab the keyboard is on, not the one in front.
+    const asking = await screen.findByRole("alertdialog");
+    expect(asking).toHaveTextContent("End chat one");
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(tabsOf("Tabs")).toHaveLength(3);
+  });
+
+  it("ends it once the question is answered", async () => {
+    const { asked } = core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{Delete}");
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: /End/ }));
+
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(2));
+    expect(asked).toContain("close_session");
+    // The keyboard is not dropped on the page with the tab it was on: it is on the strip's stop,
+    // so the next Delete or arrow works.
+    await waitFor(() => expect(tabsOf("Tabs").find((tab) => tab.tabIndex === 0)).toHaveFocus());
+  });
+
+  it("closes a project from its tab, through the row its × runs", async () => {
+    const { asked } = core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Projects")).toHaveLength(1));
+    tabsOf("Projects")[0].focus();
+
+    await userEvent.keyboard("{Delete}");
+
+    await waitFor(() => expect(asked).toContain("close_plane"));
+  });
+
+  it("closes nothing on a workspace tab, which has no × and whose menu deletes it on disk", async () => {
+    const { asked } = core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Workspaces")).toHaveLength(2));
+    const [alpha] = tabsOf("Workspaces");
+    alpha.focus();
+
+    const del = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
+    alpha.dispatchEvent(del);
+
+    expect(del.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(tabsOf("Workspaces")).toHaveLength(2);
+    expect(asked.filter((cmd) => cmd.startsWith("delete"))).toEqual([]);
+  });
+
+  it("is also Backspace on a Mac, whose key marked delete sends it", async () => {
+    onA("MacIntel");
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{Backspace}");
+
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("End chat two");
+  });
+
+  it("is not Backspace anywhere else, where Backspace on a tab means nothing", async () => {
+    onA("Linux x86_64");
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{Backspace}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("is left alone with a modifier held", async () => {
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{Shift>}{Delete}{/Shift}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("never fires in a terminal: Delete and Backspace there are the shell's", async () => {
+    onA("MacIntel");
+    const { asked } = core();
+    render(<App />);
+    const terminal = await screen.findByLabelText("Terminal 2");
+    terminal.focus();
+
+    for (const key of ["Delete", "Backspace"]) {
+      const press = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      terminal.dispatchEvent(press);
+      expect(press.defaultPrevented).toBe(false);
+    }
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(tabsOf("Tabs")).toHaveLength(3);
+    expect(asked).not.toContain("close_session");
   });
 });

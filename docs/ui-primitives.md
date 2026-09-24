@@ -448,7 +448,12 @@ model and a select-on-`mousedown` this window's strips do not have:
   why the levels are written down and not left to the DOM. A tree's rows are `treeitem`s and
   no longer `button`s to a role query, so a test reaches them by that role.
 - **Every other control says `tabIndex={0}`**, and a tab's `×` says `-1`: fifty closers would be
-  fifty stops again, and the palette and the tab's own menu both end a chat by the same row (a Delete key on the tab is charter-app#239).
+  fifty stops again. **Delete on a focused project or chat tab presses the row its `×` presses**
+  (charter-app#239, `closeOnDelete` in `app/src/roving.ts`), and so does Backspace on a Mac,
+  whose key marked "delete" sends it: ending a chat still asks first, a view tab still closes
+  without asking, and the keyboard lands on the strip's stop afterwards. A new strip with a `×`
+  (a vault tab's) calls it from its tab's `onKeyDown` with that `×`'s row. The palette and the
+  tab's own menu reach the same row.
 - **The order is the document's, which is the order the window is drawn in**: the title bar,
   the three strips, then the regions as the arrangement places them (ADR 0038 — a region moves,
   and its stops move with it; a fixed order would contradict the layout on screen), each
