@@ -84,8 +84,11 @@ pub mod state;
 pub(crate) mod steer;
 #[cfg(test)]
 mod testgit;
-#[cfg(test)]
-mod testrun;
+// Public, and not `cfg(test)`, for one reason: charter-core's integration tests are separate
+// crates, and they re-run themselves through it (charter-app#267). Nothing in the product
+// calls it.
+#[doc(hidden)]
+pub mod testrun;
 pub mod toolgate;
 pub mod toolhooks;
 pub mod trace;

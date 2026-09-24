@@ -146,6 +146,7 @@ fn strings(v: &Value) -> Vec<String> {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
+    charter_core::unsteered!();
     let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
         .into_iter()
         .map(|r| (r.at, r.row))

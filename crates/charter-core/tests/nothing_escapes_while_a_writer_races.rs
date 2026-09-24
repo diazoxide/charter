@@ -113,6 +113,7 @@ fn one_chat() -> Record {
 #[test]
 #[ignore = "a measurement, not a check: prints the window each gate leaves"]
 fn the_window_each_gate_leaves() {
+    charter_core::unsteered!();
     const ROUNDS: usize = 20_000;
 
     // `contain::readable`, then the caller's own open — personas, workspaces, memory, and the
@@ -203,6 +204,7 @@ fn the_window_each_gate_leaves() {
 
 #[test]
 fn a_racer_at_the_temp_file_never_gets_the_record_written_outside_the_plane() {
+    charter_core::unsteered!();
     let (plane, outside) = a_plane_and_somewhere_outside();
     let beside = plane.path().join(".charter/app/reopen.json.writing");
     let captured = outside.path().join("captured");
@@ -231,6 +233,7 @@ fn a_racer_at_the_temp_file_never_gets_the_record_written_outside_the_plane() {
 
 #[test]
 fn a_racer_at_the_settings_never_gets_an_approval_to_show_a_grant_from_outside() {
+    charter_core::unsteered!();
     // charter-app#112, the half a link that is *already there* cannot show. `layer` used to
     // ask `contain::within_plane` about the NAME and then `read_to_string` the name again —
     // two resolutions of one path, with a window between them — on the file
@@ -276,6 +279,7 @@ fn a_racer_at_the_settings_never_gets_an_approval_to_show_a_grant_from_outside()
 
 #[test]
 fn a_racer_at_the_record_never_gets_a_launch_to_read_a_command_line_from_outside() {
+    charter_core::unsteered!();
     let (plane, outside) = a_plane_and_somewhere_outside();
     // What the racer wants the launch to run. It is a record charter would ACCEPT, so that a
     // read through the link succeeds rather than failing on the parse and hiding the escape.

@@ -51,6 +51,7 @@ fn rust_files(dir: &Path, into: &mut Vec<PathBuf>) {
 
 #[test]
 fn unsafe_code_appears_only_in_the_one_audited_function() {
+    charter_core::unsteered!();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut files = Vec::new();
     rust_files(&root.join("crates"), &mut files);

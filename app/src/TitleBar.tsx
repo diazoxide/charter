@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { commands, type TitleBarRoom } from "./bindings";
 import { AboutCharter } from "./About";
+import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
 
 /**
@@ -61,6 +62,7 @@ export function TitleBar({
   crumbs,
   updates,
   room,
+  chats,
 }: {
   /** Where the window is, for the left-hand side. */
   crumbs: Crumbs;
@@ -83,6 +85,12 @@ export function TitleBar({
    * and is corrected within a frame of the first paint on that one.
    */
   room?: TitleBarRoom;
+  /**
+   * Every chat the window holds, with its state — the list the quit warning is given. Restart
+   * to update ends them all, so it names the ones that are mid-turn before it does
+   * (charter-app#251).
+   */
+  chats?: readonly Ending[];
 }) {
   return (
     <header
@@ -98,7 +106,7 @@ export function TitleBar({
           the status line: this bar is the window's. */}
       <span className="title-bar-doing">
         <AboutCharter />
-        {updates && <UpdateItem updates={updates} />}
+        {updates && <UpdateItem updates={updates} chats={chats} />}
       </span>
     </header>
   );

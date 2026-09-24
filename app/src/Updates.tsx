@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowUpCircle, LoaderCircle, Pin } from "lucide-react";
 import { commands, type Offer, type PinReport, type PlaneId } from "./bindings";
+import { EndingList, MidTurnSaid, mightBeMidTurn, type Ending } from "./QuitWarning";
 import { ReleaseNotes } from "./ReleaseNotes";
 
 /**
@@ -19,10 +21,15 @@ import { ReleaseNotes } from "./ReleaseNotes";
  * **What installing costs is said before the click, never after it.** Every session is a child
  * of this process (ADR 0025). On Windows the installer ends charter at once; on macOS and Linux
  * the new version is put in place and runs from the next start — and starting it again means
- * quitting this one. Either way the running chats end, and the offer says so in the words a
- * chat tab's close uses about one chat. When it is installed, the line says so and offers the
- * one way to finish: Quit, which goes through the quit warning that lists every chat it is
- * about to end. Nothing here restarts charter behind the operator's back.
+ * ending this one. Either way the running chats end, and the offer says so.
+ *
+ * **Once it is installed the line says Restart to update** (charter-app#251), and that is the
+ * way to finish. The core writes every project's record, saying a restart to update wrote it,
+ * ends the chats and restarts; the launch after it asks #250's question — reopen every session
+ * or start fresh — with "charter restarted to install an update." in it and Reopen all in
+ * front. **A chat that is mid-turn is named first**, in the words the quit warning uses, with
+ * Wait as the answer a stray Return finds. Nothing here restarts charter behind the
+ * operator's back.
  *
  * **A check that failed on its own is not drawn.** The timer runs every few hours whether or
  * not the laptop is on a train, and a line that turned amber every time Wi-Fi dropped would be
@@ -42,7 +49,8 @@ export type UpdateState =
   | { kind: "quiet" }
   | { kind: "offered"; offer: Offer }
   | { kind: "installing"; offer: Offer }
-  | { kind: "installed"; version: string }
+  /** `refused` is the core's sentence when a restart to update did not go ahead. */
+  | { kind: "installed"; version: string; refused?: string }
   | { kind: "failed"; why: string };
 
 /** What the window knows about updates, and what it can ask for. */
@@ -53,6 +61,8 @@ export type Updates = {
   check: () => void;
   install: () => void;
   choose: (channel: string) => void;
+  /** Restart into the installed update — once the operator has heard what is mid-turn. */
+  restart: () => void;
 };
 
 /**
@@ -167,7 +177,20 @@ export function useUpdates(): Updates {
     });
   }, []);
 
-  return { state, channel, check, install, choose };
+  const restart = useCallback(() => {
+    void commands
+      .restartToUpdate()
+      .then((done) => (done.status === "error" ? done.error : undefined))
+      // A command that never reached the core is a refusal too, and says so in the same place.
+      .catch((why: unknown) => `charter could not ask to restart: ${String(why)}`)
+      .then((refused) => {
+        // On success nothing comes back: the process is on its way out.
+        if (refused !== undefined)
+          setState((was) => (was.kind === "installed" ? { ...was, refused } : was));
+      });
+  }, []);
+
+  return { state, channel, check, install, choose, restart };
 }
 
 /** The words on the line for each state, or none — a quiet updater is an icon and no words. */
@@ -178,7 +201,7 @@ function said(state: UpdateState): string | undefined {
     case "installing":
       return `installing ${state.offer.version}`;
     case "installed":
-      return `quit to finish ${state.version}`;
+      return "Restart to update";
     case "failed":
       return "update failed";
     case "quiet":
@@ -189,122 +212,225 @@ function said(state: UpdateState): string | undefined {
 /** The sentence that has to be read before Install is pressed. */
 export const INSTALL_ENDS_SESSIONS =
   "Installing ends every running chat. On Windows charter closes at once to install; on macOS " +
-  "and Linux the new version is put in place and runs when charter starts again, and quitting " +
-  "to start it ends every chat.";
+  "and Linux the new version is put in place, and Restart to update ends every chat and offers " +
+  "to reopen them all when charter starts again.";
 
-/** The status line's update button, and the dialog it opens. */
-export function UpdateItem({ updates }: { updates: Updates }) {
+/**
+ * The status line's update button, and the dialog it opens.
+ *
+ * `chats` is every chat the window holds, each with its state, as the quit warning is given
+ * them — the restart ends them all, so it asks about the ones that are mid-turn across every
+ * project, not only the one in front.
+ */
+export function UpdateItem({
+  updates,
+  chats = [],
+}: {
+  updates: Updates;
+  chats?: readonly Ending[];
+}) {
   const [open, setOpen] = useState(false);
-  const { state, channel, check, install, choose } = updates;
+  /** Whether the dialog is asking about the chats a restart would interrupt. */
+  const [asking, setAsking] = useState(false);
+  const { state, channel, check, install, choose, restart } = updates;
+  // Live, so a chat that finishes its turn while the ask is up leaves it.
+  const midTurn = chats.filter(mightBeMidTurn);
   const words = said(state);
+  const toRestart = () => {
+    if (midTurn.length === 0) return restart();
+    setOpen(false);
+    setAsking(true);
+  };
   const label = words
     ? `Updates: ${words}`
     : `Updates — ${channel ?? "…"} channel, nothing new known`;
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>
-        <button
-          type="button"
-          className={`status-update update-${state.kind}`}
-          // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
-          // down (`docs/ui-primitives.md`, charter-app#189).
-          tabIndex={0}
-          data-testid="status-update"
-          aria-label={label}
-          title={label}
-        >
-          {state.kind === "installing" ? (
-            <LoaderCircle aria-hidden="true" className="spinning" />
-          ) : (
-            <ArrowUpCircle aria-hidden="true" />
-          )}
-          {words && <span> {words}</span>}
-        </button>
-      </Dialog.Trigger>
-      <Dialog.Portal>
-        <Dialog.Overlay className="asking" />
-        <Dialog.Content className="warning update" aria-describedby="update-what">
-          <Dialog.Title>Updates</Dialog.Title>
-          <div id="update-what">
-            {state.kind === "offered" || state.kind === "installing" ? (
-              <>
-                <p>
-                  charter <strong>{state.offer.version}</strong> is available on the{" "}
-                  {state.offer.channel} channel. This is {state.offer.current}.
-                </p>
-                {/* A stable release's notes are its CHANGELOG.md section, in Markdown. */}
-                {state.offer.notes && (
-                  <div className="update-notes">
-                    <ReleaseNotes markdown={state.offer.notes} />
-                  </div>
-                )}
-                <p className="honest mid-turn" role="alert" data-testid="update-ends-sessions">
-                  {INSTALL_ENDS_SESSIONS}
-                </p>
-              </>
-            ) : state.kind === "installed" ? (
-              <p className="honest">
-                charter {state.version} is installed and runs from the next start. Quit to finish —
-                the quit warning lists every chat that will end before anything does.
-              </p>
-            ) : state.kind === "failed" ? (
-              <p className="honest doctor-trouble" role="alert">
-                {state.why}
-              </p>
-            ) : (
-              <p className="honest">
-                No newer charter is known. charter checks on its own every few hours.
-              </p>
-            )}
-          </div>
-          <h3 id="update-channel">Channel</h3>
-          <RadioGroup.Root
-            className="choices"
-            aria-labelledby="update-channel"
-            value={channel ?? ""}
-            onValueChange={choose}
+    <>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Trigger asChild>
+          <button
+            type="button"
+            className={`status-update update-${state.kind}`}
+            // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+            // down (`docs/ui-primitives.md`, charter-app#189).
+            tabIndex={0}
+            data-testid="status-update"
+            aria-label={label}
+            title={label}
           >
-            {["stable", "dev"].map((name) => (
-              <div className="choice" key={name}>
-                <RadioGroup.Item className="dot" value={name} id={`update-channel-${name}`}>
-                  <RadioGroup.Indicator className="dot-mark" />
-                </RadioGroup.Item>
-                <label className="who" htmlFor={`update-channel-${name}`}>
-                  {name}
-                </label>
-              </div>
-            ))}
-          </RadioGroup.Root>
-          {/* `tabIndex={0}` on every one, per `docs/ui-primitives.md` (charter-app#186). The
-              channel radios above are the scope's first edge and `Close` is its last, which
-              left `Install`, `Quit charter…` and `Check now` in the middle — where Radix's
-              focus scope does nothing and WebKit will not tab to a `<button>` whose `tabindex`
-              is not written down. Installing an update was a mouse-only act. */}
+            {state.kind === "installing" ? (
+              <LoaderCircle aria-hidden="true" className="spinning" />
+            ) : (
+              <ArrowUpCircle aria-hidden="true" />
+            )}
+            {words && <span> {words}</span>}
+          </button>
+        </Dialog.Trigger>
+        <Dialog.Portal>
+          <Dialog.Overlay className="asking" />
+          <Dialog.Content className="warning update" aria-describedby="update-what">
+            <Dialog.Title>Updates</Dialog.Title>
+            <div id="update-what">
+              {state.kind === "offered" || state.kind === "installing" ? (
+                <>
+                  <p>
+                    charter <strong>{state.offer.version}</strong> is available on the{" "}
+                    {state.offer.channel} channel. This is {state.offer.current}.
+                  </p>
+                  {/* A stable release's notes are its CHANGELOG.md section, in Markdown. */}
+                  {state.offer.notes && (
+                    <div className="update-notes">
+                      <ReleaseNotes markdown={state.offer.notes} />
+                    </div>
+                  )}
+                  <p className="honest mid-turn" role="alert" data-testid="update-ends-sessions">
+                    {INSTALL_ENDS_SESSIONS}
+                  </p>
+                </>
+              ) : state.kind === "installed" ? (
+                <>
+                  <p className="honest">
+                    charter {state.version} is installed. Restart to update ends every chat, starts
+                    charter {state.version}, and asks whether to reopen them — Reopen all puts each
+                    one back, resuming its conversation where its harness can.
+                  </p>
+                  {state.refused && (
+                    <p className="honest doctor-trouble" role="alert">
+                      {state.refused}
+                    </p>
+                  )}
+                </>
+              ) : state.kind === "failed" ? (
+                <p className="honest doctor-trouble" role="alert">
+                  {state.why}
+                </p>
+              ) : (
+                <p className="honest">
+                  No newer charter is known. charter checks on its own every few hours.
+                </p>
+              )}
+            </div>
+            <h3 id="update-channel">Channel</h3>
+            <RadioGroup.Root
+              className="choices"
+              aria-labelledby="update-channel"
+              value={channel ?? ""}
+              onValueChange={choose}
+            >
+              {["stable", "dev"].map((name) => (
+                <div className="choice" key={name}>
+                  <RadioGroup.Item className="dot" value={name} id={`update-channel-${name}`}>
+                    <RadioGroup.Indicator className="dot-mark" />
+                  </RadioGroup.Item>
+                  <label className="who" htmlFor={`update-channel-${name}`}>
+                    {name}
+                  </label>
+                </div>
+              ))}
+            </RadioGroup.Root>
+            {/* `tabIndex={0}` on every one, per `docs/ui-primitives.md` (charter-app#186). The
+                channel radios above are the scope's first edge and `Close` is its last, which
+                left `Install`, `Restart to update` and `Check now` in the middle — where Radix's
+                focus scope does nothing and WebKit will not tab to a `<button>` whose
+                `tabindex` is not written down. Installing an update was a mouse-only act. */}
+            <div className="answer">
+              {state.kind === "offered" && (
+                <button type="button" tabIndex={0} onClick={install}>
+                  Install {state.offer.version}
+                </button>
+              )}
+              {state.kind === "installed" && (
+                <button type="button" tabIndex={0} onClick={toRestart}>
+                  Restart to update
+                </button>
+              )}
+              {state.kind !== "installing" && state.kind !== "installed" && (
+                <button type="button" tabIndex={0} onClick={check}>
+                  Check now
+                </button>
+              )}
+              <Dialog.Close asChild>
+                <button type="button" tabIndex={0}>
+                  Close
+                </button>
+              </Dialog.Close>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+      {asking && (
+        <MidTurn
+          chats={midTurn}
+          onWait={() => setAsking(false)}
+          onRestart={() => {
+            setAsking(false);
+            restart();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * What Restart to update asks when a chat could be mid-turn: restart now, or wait.
+ *
+ * The quit warning's rows and sentences (`QuitWarning.tsx`), because it is the same act for
+ * those chats — they are ended — with one difference the words carry: the restart offers them
+ * back. A chat that reports no state is asked about too, for the quit warning's reason: it could
+ * be mid-turn and charter would never know.
+ *
+ * **Radix's `AlertDialog`**, per `docs/ui-primitives.md`: it arrives because of what the
+ * operator pressed, a click outside answers nothing, and its `Cancel` — **Wait** — is first and
+ * has the keyboard, so the answer a stray Return or Escape finds interrupts nothing. **Restart
+ * now is a plain button, not the primitive's `Action`**, for `RelaunchAsk`'s reason: an `Action`
+ * also closes the dialog, and closing is this dialog's Wait. The list is live: a chat that
+ * finishes its turn while this is up leaves it.
+ */
+function MidTurn({
+  chats,
+  onWait,
+  onRestart,
+}: {
+  chats: readonly Ending[];
+  onWait: () => void;
+  onRestart: () => void;
+}) {
+  return (
+    <AlertDialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onWait();
+      }}
+    >
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay className="asking" />
+        <AlertDialog.Content className="warning" aria-describedby="restart-mid-turn-said">
+          <AlertDialog.Title>Restart to update</AlertDialog.Title>
+          <EndingList chats={chats} />
+          <AlertDialog.Description asChild>
+            <div id="restart-mid-turn-said">
+              <MidTurnSaid chats={chats} />
+              <p className="honest">
+                Every chat is offered back when charter starts again. Wait to let a turn finish, or
+                restart now.
+              </p>
+            </div>
+          </AlertDialog.Description>
+          {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
           <div className="answer">
-            {state.kind === "offered" && (
-              <button type="button" tabIndex={0} onClick={install}>
-                Install {state.offer.version}
-              </button>
-            )}
-            {state.kind === "installed" && (
-              <button type="button" tabIndex={0} onClick={() => void commands.askToQuit()}>
-                Quit charter…
-              </button>
-            )}
-            {state.kind !== "installing" && state.kind !== "installed" && (
-              <button type="button" tabIndex={0} onClick={check}>
-                Check now
-              </button>
-            )}
-            <Dialog.Close asChild>
+            <AlertDialog.Cancel asChild>
               <button type="button" tabIndex={0}>
-                Close
+                Wait
               </button>
-            </Dialog.Close>
+            </AlertDialog.Cancel>
+            <button type="button" className="ends-it" tabIndex={0} onClick={onRestart}>
+              Restart now
+            </button>
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   );
 }
 

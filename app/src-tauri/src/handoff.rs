@@ -469,6 +469,14 @@ mod tests {
 
     /// A plane with a workspace `alpha`, a profile `work` running a stand-in `claude` that
     /// writes down the arguments it was started with, and the operator's approval of it.
+    ///
+    /// **One file per run, and it appears whole** (charter-app#268). Two runs of the stand-in
+    /// are alive at once in a handoff — the asking chat's and the one it opens — and when both
+    /// appended to one file, one `printf` to a line, their lines interleaved: the brief came
+    /// back split around the other run's `--session-id`, and the test failed about one run in
+    /// twenty (one in two under load). So each run writes its arguments, NUL-separated since an
+    /// argument can hold a newline, to a temporary file of its own and renames it into `runs/`
+    /// when it is done: a file there is a run's complete argv, never part of one.
     struct Plane {
         _dir: tempfile::TempDir,
         root: PathBuf,
@@ -480,16 +488,17 @@ mod tests {
             let root = dir.path().join("plane");
             std::fs::create_dir_all(root.join("workspaces").join("alpha")).expect("alpha");
             std::fs::write(root.join(charter_core::plane::MANIFEST), "").expect("charter.toml");
-            let argv = root.join("argv");
-            // Writes down every argument of every run, one to a line, so the chat's own run can
-            // be read back.
+            let runs = root.join("runs");
+            std::fs::create_dir_all(&runs).expect("runs");
             let program = stand_in::program(
                 &root,
                 "claude-stand-in",
                 // And then stays running, as a harness does: a chat whose program has ended is
                 // one a report cannot reach, and the tests below are about one that is there.
                 &format!(
-                    "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> {argv:?}\n\
+                    "#!/bin/sh\nat=$(mktemp {runs:?}/.writing.XXXXXX) || exit 1\n\
+                     for a in \"$@\"; do printf '%s\\0' \"$a\"; done > \"$at\"\n\
+                     mv \"$at\" {runs:?}/run.$$\n\
                      sleep 10\n"
                 ),
             );
@@ -512,8 +521,19 @@ mod tests {
             Self { _dir: dir, root }
         }
 
-        fn argv(&self) -> String {
-            std::fs::read_to_string(self.root.join("argv")).unwrap_or_default()
+        /// The argv of every run of the stand-in that has finished writing it.
+        fn runs(&self) -> Vec<Vec<String>> {
+            let Ok(entries) = std::fs::read_dir(self.root.join("runs")) else {
+                return Vec::new();
+            };
+            entries
+                .flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with("run."))
+                .map(|entry| {
+                    let written = std::fs::read_to_string(entry.path()).unwrap_or_default();
+                    written.split_terminator('\0').map(str::to_owned).collect()
+                })
+                .collect()
         }
     }
 
@@ -650,10 +670,9 @@ mod tests {
         // The harness is handed the stamped brief as its last argument, which is Claude
         // Code's positional first message. The program runs on its own, so it is waited for.
         let told = first_message_of(&plane);
-        assert!(
-            told.contains(
-                "⟨handoff from claude 1 · workspace default · 2026-05-04 11:32⟩\n\n# Ship it\nnow"
-            ),
+        assert_eq!(
+            told,
+            "⟨handoff from claude 1 · workspace default · 2026-05-04 11:32⟩\n\n# Ship it\nnow",
             "the brief was not the chat's first message, stamped with its parent's name: {told:?}"
         );
         assert!(
@@ -662,13 +681,21 @@ mod tests {
         );
     }
 
-    /// Everything the stand-in harness was started with, once a handoff has reached it.
+    /// The first message a handed-off chat was started on — the last argument of the stand-in's
+    /// run that got one — once that run has written its argv whole. Empty if none came.
     fn first_message_of(plane: &Plane) -> String {
-        let deadline = Instant::now() + std::time::Duration::from_secs(10);
-        while !plane.argv().contains("⟨handoff from") && Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        let handed = |plane: &Plane| {
+            plane
+                .runs()
+                .into_iter()
+                .filter_map(|argv| argv.last().cloned())
+                .find(|last| last.starts_with("⟨handoff from"))
+        };
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        while handed(plane).is_none() && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        plane.argv()
+        handed(plane).unwrap_or_default()
     }
 
     /// Opens a handoff from `asking` and answers the new chat's number.
@@ -838,7 +865,7 @@ mod tests {
         assert!(
             first_message_of(&plane).contains(handoff_report_ask()),
             "{:?}",
-            plane.argv()
+            plane.runs()
         );
     }
 

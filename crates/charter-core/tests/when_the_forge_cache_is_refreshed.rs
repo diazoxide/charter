@@ -123,6 +123,7 @@ fn decide_with(
 
 #[test]
 fn a_plane_nothing_has_ever_fetched_is_due_a_refresh() {
+    charter_core::unsteered!();
     // The state the issue is about: the column says "nothing has fetched this checkout", and
     // on a plane where nobody typed `charter gl-refresh` it said it for ever.
     let rig = Rig::new();
@@ -133,6 +134,7 @@ fn a_plane_nothing_has_ever_fetched_is_due_a_refresh() {
 
 #[test]
 fn a_cache_inside_the_refresh_window_is_not_fetched_again() {
+    charter_core::unsteered!();
     let rig = Rig::new();
     let tree = rig.tree("svc");
     rig.cached(&[(&tree, now() - 10.0)]);
@@ -142,6 +144,7 @@ fn a_cache_inside_the_refresh_window_is_not_fetched_again() {
 
 #[test]
 fn an_entry_older_than_the_refresh_window_is_due() {
+    charter_core::unsteered!();
     let rig = Rig::new();
     let tree = rig.tree("svc");
     rig.cached(&[(&tree, now() - REFRESH_TTL.as_secs_f64() - 1.0)]);
@@ -151,6 +154,7 @@ fn an_entry_older_than_the_refresh_window_is_due() {
 
 #[test]
 fn one_stale_tree_out_of_many_is_enough_to_refresh_them_all() {
+    charter_core::unsteered!();
     // Python refreshes the whole workspace or none of it, and the reason is `workspace.
     // repo_trees`: "a repo can never be drawn without its forge state having been fetched".
     let rig = Rig::new();
@@ -165,6 +169,7 @@ fn one_stale_tree_out_of_many_is_enough_to_refresh_them_all() {
 
 #[test]
 fn a_tree_the_cache_has_never_heard_of_is_stale_however_fresh_its_neighbours_are() {
+    charter_core::unsteered!();
     let rig = Rig::new();
     let (known, added) = (rig.tree("svc"), rig.tree("just-cloned"));
     rig.cached(&[(&known, now() - 10.0)]);
@@ -174,6 +179,7 @@ fn a_tree_the_cache_has_never_heard_of_is_stale_however_fresh_its_neighbours_are
 
 #[test]
 fn a_workspace_with_no_trees_refreshes_nothing() {
+    charter_core::unsteered!();
     // `any([])` is false in Python too. A workspace with no clone has nothing a forge could
     // be asked about, and spawning there would be a forge process per focus for ever.
     let rig = Rig::new();
@@ -185,6 +191,7 @@ fn a_workspace_with_no_trees_refreshes_nothing() {
 
 #[test]
 fn two_triggers_in_quick_succession_do_not_start_two_refreshes() {
+    charter_core::unsteered!();
     // The cooldown, and the thing it is for: the operator clicking between two workspaces, or
     // a panel asked twice, is one refresh and not two forge processes holding a credential.
     let rig = Rig::new();
@@ -196,6 +203,7 @@ fn two_triggers_in_quick_succession_do_not_start_two_refreshes() {
 
 #[test]
 fn the_cooldown_runs_from_the_last_completion_as_well_as_the_last_spawn() {
+    charter_core::unsteered!();
     // charter#324: the mtime alone said "a refresh was STARTED 120 s ago", which is not a
     // reason to skip another. `refresh` rewrites the lock when the work is OVER, and that is
     // what arms the cooldown — so a refresh that has just finished suppresses the next
@@ -224,6 +232,7 @@ fn the_cooldown_runs_from_the_last_completion_as_well_as_the_last_spawn() {
 
 #[test]
 fn past_the_cooldown_a_refresh_that_is_still_running_suppresses_a_second() {
+    charter_core::unsteered!();
     // What suppresses a refresh is that the first is STILL RUNNING — not that one was started
     // two minutes ago. Without this arm a wedged refresh invited a replacement every 120 s for
     // as long as the app stayed open, each one holding the forge credential.
@@ -241,6 +250,7 @@ fn past_the_cooldown_a_refresh_that_is_still_running_suppresses_a_second() {
 
 #[test]
 fn a_refresh_whose_process_is_gone_does_not_suppress_the_next_one() {
+    charter_core::unsteered!();
     // The pid in the lock is how "still running" is asked. A refresh that crashed leaves its
     // pid behind, and the answer has to be the process, not the file.
     let rig = Rig::new();
@@ -255,6 +265,7 @@ fn a_refresh_whose_process_is_gone_does_not_suppress_the_next_one() {
 
 #[test]
 fn a_refresh_wedged_past_the_stuck_window_is_replaced_although_it_is_alive() {
+    charter_core::unsteered!();
     // Three times the refresh window: a refresh still running after this would land data that
     // was already stale several times over. It is also what stops a RECYCLED pid suppressing
     // refreshes for ever — which is the failure the window bounds.
@@ -270,6 +281,7 @@ fn a_refresh_wedged_past_the_stuck_window_is_replaced_although_it_is_alive() {
 
 #[test]
 fn a_lock_naming_no_pid_is_the_plain_cooldown_and_nothing_more() {
+    charter_core::unsteered!();
     // A truncated write, a hand edit, or a pid from another machine all read as "no pid",
     // which degrades to the cooldown rather than to a refusal.
     let rig = Rig::new();
@@ -291,6 +303,7 @@ fn a_lock_naming_no_pid_is_the_plain_cooldown_and_nothing_more() {
 
 #[test]
 fn a_lock_whose_content_is_not_a_pid_charter_wrote_names_no_process() {
+    charter_core::unsteered!();
     let rig = Rig::new();
     let path = rig.root().join(charter_core::glrefresh::LOCK);
     for content in ["not-a-pid", "+5", "0", "", "  ", "12 34"] {
@@ -318,6 +331,7 @@ fn a_lock_whose_content_is_not_a_pid_charter_wrote_names_no_process() {
 
 #[test]
 fn a_clock_that_moved_backwards_does_not_suppress_every_refresh_after_it() {
+    charter_core::unsteered!();
     // A lock stamped in the FUTURE would otherwise read as an age of minus something, which is
     // inside every window there is, for as long as the clock stays behind.
     let rig = Rig::new();
@@ -338,6 +352,7 @@ fn a_clock_that_moved_backwards_does_not_suppress_every_refresh_after_it() {
 
 #[test]
 fn the_operators_own_brake_stops_it_before_the_lock_or_the_cache_is_read() {
+    charter_core::unsteered!();
     // `$CHARTER_NO_BACKGROUND_CHECKS` is a request not to phone home, and it is answered
     // FIRST: on a plane that has never been refreshed, where every other brake is off.
     let rig = Rig::new();
@@ -357,6 +372,7 @@ fn the_operators_own_brake_stops_it_before_the_lock_or_the_cache_is_read() {
 #[cfg(unix)]
 #[test]
 fn a_lock_reached_through_a_link_suppresses_rather_than_spawns() {
+    charter_core::unsteered!();
     // charter's own path under `.charter/` may not be a link — `cistate` keeps the same gate
     // on the file beside this one. Suppress and not spawn: the cost of skipping a refresh is
     // a stale column, and the cost of getting this wrong is the pile-up the lock prevents.
@@ -400,6 +416,7 @@ fn stand_in(at: &Path) -> PathBuf {
 #[cfg(unix)]
 #[test]
 fn a_refresh_is_spawned_once_and_the_next_trigger_finds_it_in_flight() {
+    charter_core::unsteered!();
     // **The whole feature, end to end.** Focus a workspace whose cache is empty and a refresh
     // starts, keyed to that workspace and to this plane; focus it again and nothing else does.
     let rig = Rig::new();
@@ -447,6 +464,7 @@ fn a_refresh_is_spawned_once_and_the_next_trigger_finds_it_in_flight() {
 #[cfg(unix)]
 #[test]
 fn a_spawn_that_fails_does_not_arm_the_cooldown() {
+    charter_core::unsteered!();
     // A transient failure must not suppress the next trigger's retry — Python returns before
     // `_write_lock` for exactly this. Without it, a `charter` binary that went missing for one
     // moment would leave the column empty for two minutes at a time.
