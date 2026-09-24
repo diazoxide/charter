@@ -1868,21 +1868,11 @@ button.show-more:focus-visible {
   text-align: center;
 }
 
-/* The list: the show-more menu's surface, one row per chat. */
+/* The list: the show-more menu's surface and rows (`.more-menu`, `.more-tab`), wider, one row
+   per chat. */
 .needs-you-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
   min-width: 16rem;
   max-width: 28rem;
-  max-height: 60vh;
-  overflow-y: auto;
-  padding: 0.3rem;
-  background: var(--surface-overlay);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  box-shadow: 0 0.5rem 1.5rem var(--overlay-shadow);
-  z-index: 10;
 }
 /* A chat asking, its Go, and its Ignore beside it. */
 .needs-you-row {
@@ -1890,20 +1880,16 @@ button.show-more:focus-visible {
   align-items: stretch;
 }
 .needs-you-go {
-  display: flex;
   flex: 1;
   min-width: 0;
   gap: 0.5rem;
   align-items: baseline;
-  padding: 0.25rem 0.45rem;
-  border-radius: 4px;
-  color: var(--text-primary);
-  cursor: pointer;
-  /* Radix gives a menu item its own roving focus and no outline of its own. */
-  outline: none;
 }
-.needs-you-go[data-highlighted] {
-  background: var(--tab-active);
+/* A chat with no tab here: still in the list, so Delete reaches its Ignore, and dimmed as a
+   row that cannot run is. */
+.needs-you-go[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
 }
 .needs-you-name {
   flex: none;
@@ -1946,12 +1932,6 @@ button.show-more:focus-visible {
   width: 0.9em;
   height: 0.9em;
 }
-/* The half of the answer the app cannot vouch for (#27, #52). */
-.needs-you-quiet {
-  margin: 0.2rem 0.45rem 0.1rem;
-  font-style: italic;
-  color: var(--text-secondary);
-}
 .mid-turn {
   font-weight: 600;
 }
@@ -1989,8 +1969,8 @@ button.show-more:focus-visible {
   padding-inline-start: 1.1rem;
 }
 
-/* The right region: what is asking for you (ADR 0038) — the needs-you queue, the
-   alerts sentence, the workspace's todos and the plane's personas. */
+/* The right region (ADR 0038): the workspace's todos, the plane's personas and whatever an
+   extension contributes. The needs-you queue is the title bar's (charter-app#249). */
 .panels {
   height: 100%;
   overflow: auto;

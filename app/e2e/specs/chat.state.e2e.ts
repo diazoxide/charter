@@ -11,6 +11,12 @@ import { READY } from "../harness.js";
  * opened, into the board — and the window was told rather than asked.
  */
 
+/**
+ * The title bar's needs-you button (charter-app#249), by what it is to the operator: the
+ * control in the bar that opens a menu and is named for chats needing you.
+ */
+const HAND = '[data-testid="title-bar"] [aria-haspopup="menu"][aria-label*="need"]';
+
 /** What a tab says its chat is doing, by the accessible name on its state mark. */
 async function doing(tab: WebdriverIO.Element): Promise<string> {
   const mark = await tab.$(".state");
@@ -62,7 +68,7 @@ describe("what a chat is doing", () => {
   it("shows the chat waiting on you once the harness's turn ends, and queues it", async () => {
     // Nothing has ASKED for the operator while the turn is running, so the title bar has no
     // needs-you button at all: hidden at zero (charter-app#249), never a "0".
-    expect(await $('[data-testid="needs-you-button"]').isExisting()).toBe(false);
+    expect(await $(HAND).isExisting()).toBe(false);
 
     // Releasing the output is what lets the harness get to its `stop` hook.
     //
@@ -81,14 +87,14 @@ describe("what a chat is doing", () => {
     await until("waiting on you");
 
     // Queued, in the title bar: a hand and a count (charter-app#249).
-    const hand = await $('[data-testid="title-bar"] [data-testid="needs-you-button"]');
+    const hand = await $('[data-testid="title-bar"] [aria-label="1 chat needs you"]');
     await hand.waitForExist({ timeout: 20_000 });
     await expect(hand).toHaveAttribute("aria-label", "1 chat needs you");
     await expect(hand).toHaveAttribute("tabindex", "0");
   });
 
   it("lists the chat in the title bar's dropdown, and Go brings it forward", async () => {
-    const hand = await $('[data-testid="needs-you-button"]');
+    const hand = await $(HAND);
     await hand.click();
 
     const item = await $('[role="menu"] [role="menuitem"]');
@@ -97,7 +103,7 @@ describe("what a chat is doing", () => {
     await expect(item).toHaveAttribute("aria-label", expect.stringMatching(/^Go to .+ · .+ · .+$/));
     await expect(item).toHaveText(expect.stringContaining("Go"));
     // And the Ignore beside it, named for what it does and out of the arrows' way.
-    const ignore = await $('[role="menu"] .needs-you-ignore');
+    const ignore = await $('[role="menu"] [aria-label^="Ignore "]');
     await expect(ignore).toHaveAttribute(
       "aria-label",
       expect.stringMatching(/^Ignore .+ until it asks again$/),
@@ -114,18 +120,19 @@ describe("what a chat is doing", () => {
   });
 
   it("ignores the chat from the dropdown, and the button goes with it", async () => {
-    await $('[data-testid="needs-you-button"]').click();
-    const ignore = await $('[role="menu"] .needs-you-ignore');
+    await $(HAND).click();
+    const ignore = await $('[role="menu"] [aria-label^="Ignore "]');
     await ignore.waitForDisplayed({ timeout: 10_000 });
 
     await ignore.click();
 
     // The core holds the ignore and answers with a queue without the chat; the chat itself
     // is still waiting, which is what an ignore is (charter-app#248).
-    await browser.waitUntil(
-      async () => !(await $('[data-testid="needs-you-button"]').isExisting()),
-      { timeout: 20_000, interval: 200, timeoutMsg: "the needs-you button outlived its last item" },
-    );
+    await browser.waitUntil(async () => !(await $(HAND).isExisting()), {
+      timeout: 20_000,
+      interval: 200,
+      timeoutMsg: "the needs-you button outlived its last item",
+    });
     expect(await doing(await theTab())).toBe("waiting on you");
   });
 });

@@ -92,7 +92,6 @@ export function TitleBar({
    */
   needing?: {
     items: readonly Needing[];
-    quiet: readonly string[];
     onPress: (plane: string, offer: Offer) => void;
   };
 }) {

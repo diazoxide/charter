@@ -1632,14 +1632,6 @@ export function PlaneView({
     [filedIn, plane, reopened, states, tabs],
   );
 
-  // What this project has open, told to the window: the quit warning lists every project's
-  // chats, and this project's own tab says when one of them needs you.
-  //
-  // **Its catalogue travels with it, and that is what keeps the palette one palette.** The
-  // palette is mounted on the WINDOW — always, so `F2` reaches it before the core has said
-  // which project this launch opened, and once, so a project that is not in front is not a
-  // second capturing listener for the same key. What it lists has to be the project in
-  // front's, and this is how it gets there.
   // **This project's chats asking, for the title bar's list** (charter-app#249), which is the
   // window's and holds every project's. Their rows are the catalogue's own (`needsYouRows`),
   // asked on their own because the catalogue is built only for the project in front.
@@ -1657,12 +1649,18 @@ export function PlaneView({
     });
   }, [filedIn, nameOf, states.needsYou, tabs]);
 
+  // What this project has open, told to the window: the quit warning lists every project's
+  // chats, and this project's own tab says when one of them needs you.
+  //
+  // **Its catalogue travels with it, and that is what keeps the palette one palette.** The
+  // palette is mounted on the WINDOW — always, so `F2` reaches it before the core has said
+  // which project this launch opened, and once, so a project that is not in front is not a
+  // second capturing listener for the same key. What it lists has to be the project in
+  // front's, and this is how it gets there.
   const mine = useMemo<PlaneReport>(
     () => ({
       ending,
-      needsYou: states.needsYou.length,
       asking,
-      quiet,
       settled,
       offers,
       run,
@@ -1674,7 +1672,7 @@ export function PlaneView({
       read: sidebar !== undefined,
       where: focused === OUTSIDE ? OUTSIDE_TITLE : focused,
     }),
-    [asking, ending, focused, offers, quiet, report, run, settled, sidebar, states.needsYou.length],
+    [asking, ending, focused, offers, report, run, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2155,12 +2153,9 @@ export type PlaneReport = {
   run: (offer: Offer) => Promise<Ran>;
   /** What its last action answered, drawn by the window beside the palette. */
   said?: { from: string; refused: boolean; words: string };
-  /** How many of its chats are asking for the operator, for its own tab to say so. */
-  needsYou: number;
-  /** Those chats, for the title bar's list (charter-app#249). */
+  /** Its chats asking for the operator: for its own tab to count, and for the title bar's
+   *  list (charter-app#249). */
   asking: Asking[];
-  /** The chats that can be waiting on the operator without saying so, by name (#52). */
-  quiet: readonly string[];
   /** Whether the core has answered what it already had open. Until it has, "no tabs" is
    *  "not yet", and a quit that read it as "nothing is running" would end the lot. */
   settled: boolean;

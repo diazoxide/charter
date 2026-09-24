@@ -39,7 +39,7 @@ function needing(plane: string, session: number, workspace: string, project: str
 
 describe("the title bar's needs-you button (charter-app#249)", () => {
   it("draws nothing when nothing needs you", () => {
-    const { container } = render(<NeedsYouMenu items={[]} quiet={[]} onPress={() => {}} />);
+    const { container } = render(<NeedsYouMenu items={[]} onPress={() => {}} />);
 
     expect(screen.queryByRole("button")).toBeNull();
     expect(container).toHaveTextContent("");
@@ -49,7 +49,7 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
     render(
       <NeedsYouMenu
         items={[needing("/a", 1, "ide", "charter"), needing("/b", 2, "easydmarc", "devops")]}
-        quiet={[]}
+
         onPress={() => {}}
       />,
     );
@@ -60,12 +60,11 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
   });
 
   /** Two chats in two projects, as the operator's own preview has them, and what was pressed. */
-  function two(quiet: string[] = []) {
+  function two() {
     const pressed: string[] = [];
     render(
       <NeedsYouMenu
         items={[needing("/a", 1, "ide", "steward"), needing("/b", 2, "easydmarc", "devops")]}
-        quiet={quiet}
         onPress={(plane: string, offer: Offer) => pressed.push(`${plane} ${offer.id}`)}
       />,
     );
@@ -147,14 +146,31 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
     );
   });
 
-  it("names the chats that can be waiting on you without saying so", async () => {
-    two(["ide.7"]);
-
+  it("keeps a chat it cannot go to in the list, saying so, so Delete still reaches it", async () => {
+    const pressed: string[] = [];
+    const stray = needing("/a", 1, "ide", "steward");
+    stray.go = {
+      id: "needs.show:1",
+      title: "Show ide.1, which needs you",
+      available: false,
+      reason: "That chat has no tab in this window.",
+      does: { verb: "nothing" },
+      name: "ide.1",
+    };
+    render(
+      <NeedsYouMenu
+        items={[stray]}
+        onPress={(plane, offer) => pressed.push(`${plane} ${offer.id}`)}
+      />,
+    );
     await userEvent.click(button());
 
-    expect(await screen.findByRole("menu")).toHaveTextContent(
-      "ide.7 can be waiting on you without saying so.",
-    );
+    const item = await screen.findByRole("menuitem", { name: /^Go to ide\.1/ });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveAttribute("title", "That chat has no tab in this window.");
+    await userEvent.click(item);
+    expect(pressed).toEqual([]);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   it("leaves the keyboard on the one before when the last chat is ignored", async () => {
@@ -188,8 +204,10 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
     const one = [needing("/a", 1, "ide", "steward")];
     const bar = (items: Needing[]) => (
       <header>
-        <NeedsYouMenu items={items} quiet={[]} onPress={() => {}} />
-        <button type="button">About</button>
+        <NeedsYouMenu items={items} onPress={() => {}} />
+        <button type="button" tabIndex={0}>
+          About
+        </button>
       </header>
     );
     const { rerender } = render(bar(one));
@@ -205,12 +223,12 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
 
   it("does not spring open again when a chat asks after the list emptied", async () => {
     const one = [needing("/a", 1, "ide", "steward")];
-    const { rerender } = render(<NeedsYouMenu items={one} quiet={[]} onPress={() => {}} />);
+    const { rerender } = render(<NeedsYouMenu items={one} onPress={() => {}} />);
     await userEvent.click(button());
     await screen.findByRole("menu");
 
-    rerender(<NeedsYouMenu items={[]} quiet={[]} onPress={() => {}} />);
-    rerender(<NeedsYouMenu items={one} quiet={[]} onPress={() => {}} />);
+    rerender(<NeedsYouMenu items={[]} onPress={() => {}} />);
+    rerender(<NeedsYouMenu items={one} onPress={() => {}} />);
 
     expect(button()).toBeInTheDocument();
     expect(screen.queryByRole("menu")).toBeNull();

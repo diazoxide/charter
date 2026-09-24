@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Offer } from "./actions";
 import { type State } from "./chatState";
 import { useArrived } from "./lib/arrived";
+import { moveAlong } from "./tabSequence";
 import { deletes } from "./tabKeys";
 
 /** The word beside a chat's name. */
@@ -56,6 +57,9 @@ export function Ignore({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
       tabIndex={-1}
       aria-label={offer.title}
       title={offer.title}
+      // A press does not take the keyboard: the ✕ leaves with its item, and focus on an
+      // element that goes is focus on the page. It stays in the list, where the arrows work.
+      onPointerDown={(event) => event.preventDefault()}
       onClick={() => onPress(offer)}
     >
       <X />
@@ -123,15 +127,16 @@ export type Needing = Asking & {
  * Each chat is ONE menu item, which is its Go; the `✕` beside it is [`Ignore`], out of the
  * arrows' way as it is out of Tab's in the queue it came from, and Delete on the item is the
  * keyboard's way to it ([`ignoreOnDelete`]).
+ *
+ * **Nothing at zero, as the operator asked** (charter-app#244) — and so no hedge at zero
+ * either. The queue's old home said "Nothing has said it needs you" while a chat that cannot
+ * report was open (charter-app#52); that sentence is now the palette's `needs.next` row alone.
  */
 export function NeedsYouMenu({
   items,
-  quiet,
   onPress,
 }: {
   items: readonly Needing[];
-  /** The chats that can be waiting on you without saying so, by name (charter-app#52). */
-  quiet: readonly string[];
   /** Carries a row out in the project it belongs to. */
   onPress: (plane: string, offer: Offer) => void;
 }) {
@@ -147,7 +152,8 @@ export function NeedsYouMenu({
    * **The keyboard, when the last chat leaves.** The button goes with it, and focus on an
    * element that goes is focus on the page, where the next key does nothing — the reason
    * [`ignoreOnDelete`] moves it before the item leaves. With no item left to move to, it goes
-   * to the next control in the bar. `held` is whether the keyboard was on the button or in the
+   * to the next Tab stop after where the button was, as Tab would (`tabSequence.moveAlong`).
+   * `held` is whether the keyboard was on the button or in the
    * list (React's focus events travel out of the portal the list is drawn in); a blur towards
    * somewhere else clears it, and the element being taken away is no such blur.
    */
@@ -164,8 +170,8 @@ export function NeedsYouMenu({
   useLayoutEffect(() => {
     if (!none || !held.current) return;
     held.current = false;
-    if (document.activeElement === null || document.activeElement === document.body)
-      (anchor.current?.nextElementSibling as HTMLElement | null)?.focus();
+    const lost = document.activeElement === null || document.activeElement === document.body;
+    if (lost && anchor.current) moveAlong(anchor.current, false);
   }, [none]);
   const said = `${items.length} ${items.length === 1 ? "chat needs" : "chats need"} you`;
   return (
@@ -202,7 +208,7 @@ export function NeedsYouMenu({
           </Menu.Trigger>
           <Menu.Portal>
             <Menu.Content
-              className="needs-you-menu"
+              className="more-menu needs-you-menu"
               align="end"
               sideOffset={4}
               collisionPadding={8}
@@ -220,10 +226,17 @@ export function NeedsYouMenu({
                 const press = (offer: Offer) => onPress(item.plane, offer);
                 const where = `${item.name} · ${item.workspace} · ${item.project}`;
                 return (
-                  <Menu.Group key={`${item.plane}#${item.session}`} className="needs-you-row">
+                  <Menu.Group
+                    key={`${item.plane}#${item.session}`}
+                    className="needs-you-row"
+                    aria-label={item.name}
+                  >
                     <Menu.Item
-                      className="needs-you-go"
+                      className="more-tab needs-you-go"
                       aria-label={`Go to ${where}`}
+                      // Not `disabled`: a disabled item is skipped by the arrows, and Delete on
+                      // it is still the keyboard's way to its Ignore. It says it cannot go.
+                      aria-disabled={item.go?.available === false || undefined}
                       aria-keyshortcuts="Delete"
                       title={item.go?.available === false ? item.go.reason : `Go to ${where}`}
                       onSelect={(event) => {
@@ -246,13 +259,6 @@ export function NeedsYouMenu({
                   </Menu.Group>
                 );
               })}
-              {quiet.length > 0 && (
-                <p className="needs-you-quiet">
-                  {quiet.length === 1
-                    ? `${quiet[0]} can be waiting on you without saying so.`
-                    : `${quiet.length} chats can be waiting on you without saying so.`}
-                </p>
-              )}
             </Menu.Content>
           </Menu.Portal>
         </Menu.Root>

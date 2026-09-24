@@ -734,13 +734,13 @@ function App() {
       <Pin held={pinnedProjects.includes(project.plane)} what="project" />
       {/* What is waiting for you over there. It is the reason a project behind the one on
           screen goes on listening rather than being torn down. */}
-      {(reports[project.plane]?.needsYou ?? 0) > 0 && (
+      {(reports[project.plane]?.asking.length ?? 0) > 0 && (
         <span
           className="project-needs"
-          data-needs={reports[project.plane]?.needsYou}
-          aria-label={`${reports[project.plane]?.needsYou} chats need you in ${project.name}`}
+          data-needs={reports[project.plane]?.asking.length}
+          aria-label={`${reports[project.plane]?.asking.length} chats need you in ${project.name}`}
         >
-          {reports[project.plane]?.needsYou}
+          {reports[project.plane]?.asking.length}
         </span>
       )}
     </>
@@ -834,10 +834,6 @@ function App() {
       ),
     [planes, reports],
   );
-  const quiet = useMemo(
-    () => planes.flatMap((plane) => reports[plane]?.quiet ?? []),
-    [planes, reports],
-  );
 
   /**
    * A row off that list, carried out by the project it is about — through that project's own
@@ -862,7 +858,7 @@ function App() {
         crumbs={crumbs}
         updates={updates}
         room={titleBarRoom}
-        needing={{ items: needing, quiet, onPress: pressNeeding }}
+        needing={{ items: needing, onPress: pressNeeding }}
       />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
           holds any — including one, because `+` is how it gets a second and `×` is the way
