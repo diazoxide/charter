@@ -133,9 +133,10 @@ pub fn private_mkdir(dir: &Path) -> std::io::Result<()> {
     let mut at = dir;
     while !at.exists() {
         missing.push(at.to_path_buf());
+        // `Path::parent` never answers the path itself, so no guard against a loop is needed.
         match at.parent() {
-            Some(parent) if parent != at => at = parent,
-            _ => break,
+            Some(parent) => at = parent,
+            None => break,
         }
     }
     for level in missing.into_iter().rev() {
@@ -184,15 +185,12 @@ pub fn for_persona(
             })
             .filter(|map| map.get("persona").and_then(|v| v.as_str()) == Some(persona))
             .collect();
-    if n == 0 {
-        return events;
-    }
     // `evs[-n:]`: the last n, and for a negative n everything after the first |n|.
     let len = events.len() as i64;
-    let from = if n > 0 {
-        (len - n).max(0)
-    } else {
-        (-n).min(len)
+    let from = match n.cmp(&0) {
+        std::cmp::Ordering::Equal => return events,
+        std::cmp::Ordering::Greater => (len - n).max(0),
+        std::cmp::Ordering::Less => (-n).min(len),
     };
     events.into_iter().skip(from as usize).collect()
 }
@@ -253,6 +251,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_record_of_values_keeps_their_types_and_leaves_out_a_null() {
+        // `trace.record(event, **fields)` with a list, a bool and a number, and a `None` that
+        // Python's record leaves out rather than writing `null`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+
+        record_values(
+            dir.path(),
+            "s1",
+            "persona-use",
+            &[
+                ("persona", serde_json::json!("devops")),
+                ("tools", serde_json::json!(["gh", "kubectl"])),
+                ("gone", serde_json::Value::Null),
+                ("frozen", serde_json::json!(true)),
+                ("count", serde_json::json!(2)),
+            ],
+            "2026-05-04T11:32:17".parse().unwrap(),
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(file(dir.path(), "s1")).unwrap(),
+            "{\"ts\": \"2026-05-04T11:32:17\", \"event\": \"persona-use\", \"persona\": \"devops\", \"tools\": [\"gh\", \"kubectl\"], \"frozen\": true, \"count\": 2}\n"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn every_directory_the_trace_makes_is_private() {
@@ -284,6 +309,28 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o700, "{level}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_level_already_there_is_left_and_one_that_cannot_be_made_is_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // A dangling link does not `exist()`, so it is a level to make — and making it answers
+        // "already exists", which is somebody else's level and not a failure.
+        let dangling = dir.path().join("dangling");
+        std::os::unix::fs::symlink(dir.path().join("nowhere"), &dangling).unwrap();
+        assert!(private_mkdir(&dangling).is_ok());
+        assert!(std::fs::symlink_metadata(&dangling).unwrap().is_symlink());
+
+        // A parent nobody may write into: the error is the answer, not swallowed.
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let refused = private_mkdir(&locked.join("a/b"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(refused.is_err());
+        assert!(!locked.join("a").exists());
     }
 
     #[cfg(unix)]

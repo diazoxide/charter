@@ -254,6 +254,69 @@ fn a_persona_seen_within_the_hour_stays_present_and_an_older_one_drops() {
     assert!(!by.contains_key("stale"));
 }
 
+/// The names `by` holds after `ops` is seen over a record whose `by` is `prev`.
+fn present_after(prev: serde_json::Value) -> Vec<String> {
+    let (_d, root) = a_canonical_plane();
+    let p = seen_path(&root, "alpha", "svc", Some("p1"));
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, prev.to_string()).unwrap();
+    seen(&root, "alpha", "svc", Some("p1"), None, Some("ops"), now()).unwrap();
+    let got: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    got["by"].as_object().unwrap().keys().cloned().collect()
+}
+
+#[test]
+fn a_heartbeat_keeps_the_newest_eight_personas_and_drops_the_oldest() {
+    // Seven already present, the oldest first; `ops` makes eight, which is all kept.
+    let seven: serde_json::Map<String, Value> = (1..=7)
+        .map(|n| (format!("p{n}"), Value::String(at(100 * (8 - n)))))
+        .collect();
+    let mut kept = present_after(serde_json::json!({"ts": at(10), "by": seven.clone()}));
+    kept.sort();
+    assert_eq!(kept, ["ops", "p1", "p2", "p3", "p4", "p5", "p6", "p7"]);
+
+    // An eighth makes nine, one past the bound: the oldest, `p0`, is the one dropped.
+    let mut eight = seven;
+    eight.insert("p0".into(), Value::String(at(900)));
+    let mut kept = present_after(serde_json::json!({"ts": at(10), "by": eight}));
+    kept.sort();
+    assert_eq!(kept, ["ops", "p1", "p2", "p3", "p4", "p5", "p6", "p7"]);
+}
+
+#[test]
+fn a_presence_stamp_with_no_offset_drops_the_whole_touch() {
+    // Python's subtraction raises on a naive stamp, and the touch is dropped rather than half
+    // done: nothing is written, and the record is left as it was.
+    let (_d, root) = a_canonical_plane();
+    let p = seen_path(&root, "alpha", "svc", Some("p1"));
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let before =
+        serde_json::json!({"ts": at(10), "by": {"old": "2026-01-01T00:00:00"}}).to_string();
+    std::fs::write(&p, &before).unwrap();
+
+    assert_eq!(
+        seen(&root, "alpha", "svc", Some("p1"), None, Some("ops"), now()),
+        None
+    );
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), before);
+}
+
+#[test]
+fn a_previous_record_with_no_stamp_is_not_read_for_who_was_present() {
+    // A record without a `ts` is not a heartbeat — Python's `_seen_record` returns None for it —
+    // so the personas it lists are not carried forward.
+    for prev in [
+        serde_json::json!({"by": {"recent": at(60)}}),
+        serde_json::json!({"ts": "", "by": {"recent": at(60)}}),
+    ] {
+        assert_eq!(present_after(prev), ["ops"]);
+    }
+    assert_eq!(
+        present_after(serde_json::json!({"ts": at(10), "by": {"recent": at(60)}})),
+        ["ops", "recent"]
+    );
+}
+
 #[test]
 fn a_touch_marks_the_piece_or_the_clone_the_cwd_stands_in_and_nothing_else() {
     let (_d, root) = a_canonical_plane();

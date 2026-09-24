@@ -895,4 +895,73 @@ mod tests {
         // and the empty argv, which Python's `args[1:]` clamps rather than raising
         assert_eq!(git_globals(&[]), (Vec::new(), Vec::new()));
     }
+
+    fn split(line: &str) -> Invocation {
+        let toks: Vec<String> = line.split_whitespace().map(str::to_owned).collect();
+        split_env_chdir(&toks)
+    }
+
+    /// `charter secret exec <vault> … -- <command>` runs `<command>` with a credential in its
+    /// environment, so the guard has to see `<command>` as the program: seeing `charter` is how
+    /// `cat <vault>` behind it would print the vault the redaction does not know.
+    #[test]
+    fn charter_secret_exec_is_a_wrapper_and_its_command_is_the_program() {
+        for line in [
+            "charter secret exec devops -- cat .charter/vaults/devops.json",
+            "/usr/local/bin/charter secret exec devops -- cat .charter/vaults/devops.json",
+            "charter secret exec devops --only TOKEN -- cat .charter/vaults/devops.json",
+            "charter persona secret exec devops -- cat .charter/vaults/devops.json",
+            "charter persona secret exec devops --only A -- cat .charter/vaults/devops.json",
+            // `secret exec` drops one more leading `--`, so the guard does too.
+            "charter secret exec devops -- -- cat .charter/vaults/devops.json",
+            "charter secret exec devops --only A -- -- cat .charter/vaults/devops.json",
+        ] {
+            let it = split(line);
+            assert_eq!(it.prog, "cat", "{line}");
+            assert_eq!(it.argv, ["cat", ".charter/vaults/devops.json"], "{line}");
+            assert!(it.reads.is_empty(), "{line}: {:?}", it.reads);
+        }
+    }
+
+    /// Without a `--` the command's first word is not reliably placed, so everything after the
+    /// verb is reported as a file the command may open — the fail-safe direction.
+    #[test]
+    fn charter_secret_exec_without_a_separator_reports_the_rest_as_reads() {
+        let it = split("charter secret exec devops cat .charter/vaults/devops.json");
+        assert_eq!(it.prog, "charter");
+        assert_eq!(it.reads, ["devops", "cat", ".charter/vaults/devops.json"]);
+        let it = split("charter persona secret exec devops cat x");
+        assert_eq!(it.reads, ["devops", "cat", "x"]);
+    }
+
+    /// Only charter's own `secret exec` is a wrapper: another charter verb, and another program
+    /// that happens to be followed by the words `secret exec`, are what they say.
+    #[test]
+    fn only_charters_secret_exec_unwraps() {
+        let it = split("charter secret list devops -- cat x");
+        assert_eq!(it.prog, "charter");
+        assert!(it.reads.is_empty(), "{:?}", it.reads);
+
+        let it = split("tool secret exec devops -- cat x");
+        assert_eq!(it.prog, "tool");
+        assert_eq!(it.argv.len(), 7);
+        assert!(it.reads.is_empty(), "{:?}", it.reads);
+
+        assert_eq!(
+            secret_exec_verb(&["charter", "secret", "exec"].map(String::from).into()),
+            Some(3)
+        );
+        assert_eq!(
+            secret_exec_verb(
+                &["charter", "persona", "secret", "exec"]
+                    .map(String::from)
+                    .into()
+            ),
+            Some(4)
+        );
+        assert_eq!(
+            secret_exec_verb(&["charter", "secret"].map(String::from).into()),
+            None
+        );
+    }
 }

@@ -610,11 +610,12 @@ pub fn walks_directories(prog: &str, args: &[String]) -> bool {
     };
     let stops: &str = table(&CLUSTER_STOPS, &base).unwrap_or("");
     for (i, a) in argv.iter().enumerate() {
-        // The `-` and `--` exceptions are **inert**, here and in the Python: a bare `-` has no
-        // cluster letters to scan and `--` is skipped by the `starts_with("--")` arm below
-        // anyway. Mutated away and measured against the oracle: zero answers changed, over the
-        // fuzz and over the recording. Kept because it says what the two tokens ARE.
-        if !a.starts_with('-') || a == "-" || a == "--" {
+        // The Python also skips `-` and `--` here, and both exceptions are **inert**: a bare
+        // `-` names no option and has no cluster letters to scan, and `--` is skipped by the
+        // `starts_with("--")` arm below. Mutated away and measured against the oracle: zero
+        // answers changed, over the fuzz and over the recording. So they are not spelled here,
+        // where they were two mutants no input could tell apart (#311).
+        if !a.starts_with('-') {
             continue;
         }
         let (name, attached) = match a.split_once('=') {
@@ -920,11 +921,11 @@ pub fn leak_reason(cmd: &str, cwd: &str, state_dir: &Path) -> Option<String> {
                 a.split_whitespace()
                     .any(|w| CHARTER_PROGS.contains(&base_lower(w).as_str()))
             })
-            && it
-                .argv
-                .iter()
-                .skip(1)
-                .any(|a| a == "--reveal" || a.starts_with("--reveal=") || reveal_re().is_match(a))
+            // `_REVEAL_RE` alone. Python also asks `a == "--reveal" or a.startswith("--reveal=")`
+            // first, and both are spellings the pattern already matches (`^--reveal$`,
+            // `^--reveal=`), so the two extra tests could never change the answer — which is
+            // what made them mutants no test could catch (#311).
+            && it.argv.iter().skip(1).any(|a| reveal_re().is_match(a))
         {
             return Some(REVEAL_REASON.to_string());
         }
@@ -1049,6 +1050,214 @@ mod tests {
         assert!(reveal_re().is_match("echo --reveal\n"));
         assert!(!reveal_re().is_match("echo --revealed"));
         assert!(!reveal_re().is_match("echo x--reveal"));
+    }
+
+    fn words(line: &str) -> Vec<String> {
+        line.split_whitespace().map(str::to_owned).collect()
+    }
+
+    /// `leak_reason` against a state directory that is not there, so only the text arms answer.
+    fn reason(cmd: &str) -> Option<String> {
+        leak_reason(cmd, "", Path::new("/nonexistent-plane-state"))
+    }
+
+    #[test]
+    fn the_vault_path_pattern_is_asked_as_written() {
+        assert!(vault_path_matches(".charter/vaults/db.json"));
+        assert!(vault_path_matches("/p/.charter/vaults"));
+        assert!(vault_path_matches(".edm/active-persona"));
+        assert!(!vault_path_matches(".charter/vaults.json"));
+        assert!(!vault_path_matches("README.md"));
+        // As written: the spelling `names_a_vault_path` would normalise is not this one's.
+        assert!(!vault_path_matches(".charter//vaults/db.json"));
+        assert!(names_a_vault_path(".charter//vaults/db.json"));
+    }
+
+    #[test]
+    fn charter_reveals_only_with_the_flag_and_only_when_charter_is_the_program() {
+        for cmd in [
+            "charter secret get db --reveal",
+            "charter secret get db --reveal=yes",
+            "edm secret get db --reveal",
+            "cd /tmp && charter secret get db --reveal",
+        ] {
+            assert_eq!(reason(cmd).as_deref(), Some(REVEAL_REASON), "{cmd}");
+        }
+        for cmd in [
+            "charter secret get db",
+            "charter secret list",
+            "charter status",
+            "echo --reveal",
+            "git commit -m --reveal",
+            "charter secret get db --revealed",
+        ] {
+            assert_eq!(reason(cmd), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn script_reveals_only_when_its_command_is_charter_with_the_flag() {
+        for cmd in [
+            "script -q -c 'charter secret get db --reveal' /dev/null",
+            "script -q -c 'charter secret get db --reveal=1' /dev/null",
+            "script -q /dev/null charter secret get db --reveal",
+            "script -q /dev/null edm secret get db --reveal=1",
+        ] {
+            assert_eq!(reason(cmd).as_deref(), Some(REVEAL_REASON), "{cmd}");
+        }
+        for cmd in [
+            // charter, and no flag
+            "script -q -c 'charter secret list' /dev/null",
+            // the flag, and no charter
+            "script -q -c 'echo --reveal' /dev/null",
+            // both, but the program is not script
+            "nohup sh -c 'charter secret get db --reveal'",
+            "tee -a 'charter secret get db --reveal'",
+        ] {
+            assert_eq!(reason(cmd), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn only_gh_uploads_the_file_its_body_flag_names() {
+        for cmd in [
+            "gh pr create -F .charter/vaults/db.json",
+            "gh release create v1 --notes-file .charter/vaults/db.json",
+            "gh api repos/o/r/issues --input .charter/vaults/db.json",
+        ] {
+            assert_eq!(reason(cmd).as_deref(), Some(READ_REASON), "{cmd}");
+        }
+        for cmd in [
+            "gh pr create -F notes.md",
+            "gh pr create -F -",
+            // Not gh, so its `-F` is not gh's: `tee` is no reader and writes rather than reads.
+            "tee -F .charter/vaults/db.json",
+            "curl --body-file .charter/vaults/db.json",
+        ] {
+            assert_eq!(reason(cmd), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn a_readers_operand_is_asked_about_and_a_non_readers_is_not() {
+        assert_eq!(
+            reason("cat .charter/vaults/db.json").as_deref(),
+            Some(READ_REASON)
+        );
+        assert_eq!(
+            reason("cd .charter && cat vaults/db.json").as_deref(),
+            Some(READ_REASON)
+        );
+        assert_eq!(reason("touch .charter/vaults/db.json"), None);
+        assert_eq!(reason("cat README.md"), None);
+    }
+
+    #[test]
+    fn gh_file_operands_reads_values_after_and_attached_to_each_flag() {
+        let ops = |line: &str| gh_file_operands(&words(line));
+        assert_eq!(
+            ops("gh api x -F a=@one.md --input two.json -Fb=@three.md --field=c=@four.md"),
+            ["one.md", "two.json", "three.md", "four.md"]
+        );
+        // The subcommand is the first word that is not a flag, read past any flag before it.
+        assert_eq!(ops("gh --verbose api --input=y.json"), ["y.json"]);
+        // A flag with nothing after it, first or last, takes nothing and walks off no end.
+        assert!(ops("gh api -F").is_empty());
+        assert!(ops("gh api x y --input").is_empty());
+        assert!(ops("gh pr create --body-file").is_empty());
+        assert!(ops("gh pr create -t x -F").is_empty());
+        assert_eq!(
+            ops("gh pr create -F body.md -T tpl.md --notes-file=n.md -Fattached.md"),
+            ["body.md", "tpl.md", "n.md", "attached.md"]
+        );
+        assert_eq!(ops("gh pr create -F one.md -- -F two.md"), ["one.md"]);
+        assert!(ops("gh pr create -F -").is_empty());
+    }
+
+    #[test]
+    fn exclusions_and_recursion_are_read_with_or_without_the_program_in_front() {
+        assert_eq!(
+            excluded_names("grep", &words("grep -r x --exclude-dir=.charter .")),
+            [".charter"]
+        );
+        assert_eq!(
+            excluded_names("grep", &words("--exclude-dir .charter -r x .")),
+            [".charter"]
+        );
+        assert!(walks_directories("grep", &words("grep -r x .")));
+        assert!(walks_directories("grep", &words("-r x .")));
+        assert!(walks_directories("grep", &words("-d recurse x .")));
+        assert!(walks_directories("grep", &words("--directories=recurse x")));
+        assert!(walks_directories("grep", &words("-ir x")));
+        // A word that is not an option is never read as a cluster, whatever letters it holds.
+        assert!(!walks_directories("grep", &words("grep xr file")));
+        assert!(!walks_directories("grep", &words("grep -eR file")));
+        assert!(!walks_directories("grep", &words("grep - --")));
+        assert!(!walks_directories("grep", &words("grep -d skip x")));
+        assert!(!walks_directories("cat", &words("cat -r x")));
+        assert!(walks_directories("rg", &words("rg x")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_link_is_a_guarded_entry_and_one_that_cannot_be_asked_about_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path();
+        // `vaults` pointing nowhere: `is_dir()` answers False for it, so it is kept as a file.
+        std::os::unix::fs::symlink(state.join("gone"), state.join("vaults")).unwrap();
+        // `browser-x` pointing at itself: asking raises, so it is skipped.
+        std::os::unix::fs::symlink(state.join("browser-x"), state.join("browser-x")).unwrap();
+        // `active-empty` an empty directory: nothing to leak, so skipped.
+        std::fs::create_dir(state.join("active-empty")).unwrap();
+        // `fingerprint` a directory with a file in it: kept.
+        std::fs::create_dir(state.join("fingerprint")).unwrap();
+        std::fs::write(state.join("fingerprint/f"), "x").unwrap();
+        // not a guarded name at all
+        std::fs::create_dir(state.join("state")).unwrap();
+        std::fs::write(state.join("state/x"), "x").unwrap();
+
+        let mut got = guarded_state_entries(state);
+        got.sort();
+        assert_eq!(got, [state.join("fingerprint"), state.join("vaults")]);
+    }
+
+    #[test]
+    fn a_glob_over_more_files_than_the_bound_fails_closed_and_at_the_bound_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("b.json"), "{}").unwrap();
+        assert!(!glob_selects_inside(dir.path(), "*.py", 2));
+        assert!(glob_selects_inside(dir.path(), "*.py", 1));
+        assert!(glob_selects_inside(dir.path(), "*.json", 2));
+        assert!(glob_selects_inside(dir.path(), "src/a.*", 2));
+        assert!(!glob_selects_inside(&dir.path().join("a.json"), "*.py", 0));
+        assert!(glob_selects_inside(&dir.path().join("a.json"), "*.json", 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_glob_is_asked_of_every_real_subdirectory_and_of_no_linked_one() {
+        // `os.walk(followlinks=False)`: a directory is descended into, a link to one is not.
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("entry");
+        std::fs::create_dir_all(entry.join("deep/deeper")).unwrap();
+        std::fs::write(entry.join("deep/deeper/key.pem"), "x").unwrap();
+        assert!(glob_selects_inside(&entry, "*.pem", 100));
+
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("cert.crt"), "x").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, entry.join("linked")).unwrap();
+        assert!(!glob_selects_inside(&entry, "*.crt", 100));
+    }
+
+    #[test]
+    fn only_an_exclude_option_names_an_exclusion() {
+        assert!(excluded_names("grep", &words("grep -r --color=auto x .")).is_empty());
+        assert_eq!(
+            excluded_names("rg", &words("rg --glob=!vaults -g !browser* x")),
+            ["vaults", "browser*"]
+        );
     }
 
     proptest! {

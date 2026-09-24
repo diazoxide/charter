@@ -498,3 +498,146 @@ fn a_control_character_in_a_label_is_refused() {
             .expect_err("a bell in a label");
     assert!(refused.contains("control character"), "{refused}");
 }
+
+// -------------------------------------------------------------------------------------
+// The edges of each rule: exactly at a bound is drawn, one past it is not (#311)
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn a_panel_id_may_hold_dashes_and_underscores_after_its_first_letter() {
+    for id in ["a-b_c", "9lives", "x_", "y-"] {
+        let panels = declaring(&format!(r#"[{{ "id": "{id}", "title": "P" }}]"#))
+            .unwrap_or_else(|why| panic!("{id:?} is an id charter draws: {why}"));
+        assert_eq!(panels[0].id, id);
+    }
+    // Each of these is one path segment, so only the charset or the first-character rule
+    // refuses it: a '.' or a space is outside the charset, and '_' may not lead.
+    for id in ["a.b", "a b", "_under", "é"] {
+        let why = declaring(&format!(r#"[{{ "id": "{id}", "title": "P" }}]"#))
+            .expect_err(&format!("{id:?} is refused"));
+        assert!(why.contains("letters, digits"), "{id:?}: {why}");
+    }
+}
+
+#[test]
+fn a_rows_key_is_held_to_the_text_bound_and_may_not_be_empty_or_undrawable() {
+    let panel = |key: &str| {
+        declaring(
+            &serde_json::json!([{ "id": "p", "title": "P",
+                                  "rows": [{ "key": key, "text": "t" }] }])
+            .to_string(),
+        )
+    };
+    let longest = "k".repeat(MOST_TEXT);
+    let drawn = panel(&longest).expect("a key exactly at the bound is held");
+    assert_eq!(rows(&drawn[0])[0].key, longest);
+
+    for key in [
+        String::new(),
+        "k".repeat(MOST_TEXT + 1),
+        "k".repeat(MOST_TEXT + 7),
+        "a\u{7}b".to_owned(),
+        "a\u{202E}b".to_owned(),
+    ] {
+        let why = panel(&key).expect_err("a key charter will not hold a row by");
+        assert!(
+            why.contains("which charter will not hold it by"),
+            "{key:?}: {why}"
+        );
+    }
+}
+
+#[test]
+fn exactly_the_most_panels_rows_blocks_and_facts_are_drawn() {
+    let panels: Vec<_> = (0..MOST_PANELS)
+        .map(|n| serde_json::json!({ "id": format!("p{n}"), "title": "P" }))
+        .collect();
+    assert_eq!(
+        declaring(&serde_json::Value::Array(panels).to_string())
+            .expect("exactly the most panels an extension may declare")
+            .len(),
+        MOST_PANELS
+    );
+
+    let rows_json: Vec<_> = (0..MOST_ROWS)
+        .map(|n| serde_json::json!({ "key": format!("k{n}"), "text": "t" }))
+        .collect();
+    let panels =
+        declaring(&serde_json::json!([{ "id": "p", "title": "P", "rows": rows_json }]).to_string())
+            .expect("exactly the most rows a panel holds");
+    assert_eq!(rows(&panels[0]).len(), MOST_ROWS);
+
+    let blocks = format!(
+        "[{}]",
+        vec![r#"{"kind":"note","text":"x"}"#; MOST_BLOCKS].join(",")
+    );
+    assert_eq!(
+        answering(&blocks)
+            .expect("exactly the most blocks a view holds")
+            .len(),
+        MOST_BLOCKS
+    );
+
+    let facts: Vec<_> = (0..MOST_FACTS)
+        .map(|n| serde_json::json!({ "label": format!("f{n}"), "value": "v" }))
+        .collect();
+    let answer = answered(&serde_json::json!([{ "kind": "facts", "facts": facts }]))
+        .expect("exactly the most facts a block holds");
+    let [Block::Facts(facts)] = &answer[..] else {
+        panic!("one facts block, {answer:?}")
+    };
+    assert_eq!(facts.len(), MOST_FACTS);
+
+    let points: Vec<_> = (0..MOST_POINTS)
+        .map(|n| serde_json::json!({ "label": format!("p{n}"), "value": n }))
+        .collect();
+    let answer =
+        answered(&serde_json::json!([{ "kind": "chart", "title": "c", "points": points }]))
+            .expect("exactly the most points a chart holds");
+    let [Block::Chart(chart)] = &answer[..] else {
+        panic!("one chart, {answer:?}")
+    };
+    assert_eq!(chart.points.len(), MOST_POINTS);
+}
+
+#[test]
+fn words_exactly_at_their_bound_are_drawn_and_one_byte_more_is_not() {
+    let title =
+        |text: &str| declaring(&serde_json::json!([{ "id": "p", "title": text }]).to_string());
+    let longest = "t".repeat(MOST_TEXT);
+    assert_eq!(
+        title(&longest).expect("a title at the bound")[0].title,
+        longest
+    );
+    let why = title(&"t".repeat(MOST_TEXT + 1)).expect_err("one byte more");
+    assert!(why.contains(&format!("at most {MOST_TEXT}")), "{why}");
+}
+
+#[test]
+fn a_tone_and_a_subject_are_published_as_their_own_words() {
+    assert_eq!(Tone::Plain.as_str(), "plain");
+    assert_eq!(Tone::Default.as_str(), "default");
+    assert_eq!(Tone::Trouble.as_str(), "trouble");
+    for word in ["plain", "default", "trouble"] {
+        assert_eq!(Tone::parse(word).map(Tone::as_str), Some(word));
+    }
+    assert_eq!(Tone::parse(""), None);
+    assert_eq!(Tone::parse("xyzzy"), None);
+
+    assert_eq!(Subject::Personas.as_str(), "personas");
+    assert_eq!(Subject::parse("personas"), Some(Subject::Personas));
+    assert_eq!(Subject::parse("persona"), None);
+    assert_eq!(Subject::parse(""), None);
+
+    let blocks = answering(r#"[{"kind":"note","text":"x","tone":"trouble"}]"#).expect("a note");
+    assert!(
+        matches!(
+            blocks[..],
+            [Block::Note {
+                tone: Tone::Trouble,
+                ..
+            }]
+        ),
+        "{blocks:?}"
+    );
+}

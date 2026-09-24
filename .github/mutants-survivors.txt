@@ -10,8 +10,9 @@
 # turns the nightly red.
 #
 # **It is a backlog and not an absolution.** Every line is a change to charter-core that no
-# test notices, including fourteen in `leakguard.rs`, which is the guard that stops a
-# credential reaching a model. Deleting a line by writing the test is the point of the file.
+# test notices. There were fourteen in `leakguard.rs`, the guard that stops a credential
+# reaching a model, until #311 wrote their tests. Deleting a line by writing the test is the
+# point of the file.
 #
 # Three rules:
 #
@@ -35,9 +36,12 @@
 # active, worktree/mod and wiring — and each one is now caught by a test or excluded as
 # equivalent in `.cargo/mutants.toml`, with the proof at its site. No line for those files is
 # left here, and one that comes back is news.
+#
+# #311 (2026-09-25) did the same for adopt, hookwire and leakguard: their lines here are
+# caught by a test, gone with the code they named (`adopt::build_version`), or were the
+# `cfg(not(unix))` refusals no unix build compiles, which now live in `hookwire/off_unix.rs`
+# and are excluded as a file in `.cargo/mutants.toml`.
 
-crates/charter-core/src/adopt.rs: replace build_version -> &'static str with ""
-crates/charter-core/src/adopt.rs: replace build_version -> &'static str with "xyzzy"
 crates/charter-core/src/cistate.rs: replace && with || in Cache::age_of
 crates/charter-core/src/cistate.rs: replace > with == in read
 crates/charter-core/src/cistate.rs: replace > with >= in Cache::about
@@ -47,31 +51,11 @@ crates/charter-core/src/contain.rs: replace nofollow -> &mut std::fs::OpenOption
 crates/charter-core/src/contain.rs: replace | with ^ in nofollow
 crates/charter-core/src/dispatch.rs: delete ! in truthy
 crates/charter-core/src/docsrc.rs: replace source -> String with String::new()
-crates/charter-core/src/hookwire.rs: replace * with +
-crates/charter-core/src/hookwire.rs: replace Listener::bind -> io::Result<Self> with Ok(Default::default())
-crates/charter-core/src/hookwire.rs: replace Listener::each -> Reading with Default::default()
-crates/charter-core/src/hookwire.rs: replace Listener::path -> &std::path::Path with Box::leak(Box::new(Default::default()))
-crates/charter-core/src/hookwire.rs: replace match guard err.kind() == io::ErrorKind::AlreadyExists with true in private_directory
-crates/charter-core/src/hookwire.rs: replace match guard err.kind() == io::ErrorKind::NotFound with true in Listener::bind
-crates/charter-core/src/hookwire.rs: replace no_channel -> io::Error with Default::default()
-crates/charter-core/src/hookwire.rs: replace send -> io::Result<()> with Ok(())
 crates/charter-core/src/layer.rs: replace == with != in publish_io
 crates/charter-core/src/layer.rs: replace Record::names -> bool with false
 crates/charter-core/src/layer.rs: replace Record::names -> bool with true
 crates/charter-core/src/layer.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in publish_io
 crates/charter-core/src/layer.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in publish_io
-crates/charter-core/src/leakguard.rs: replace + with * in gh_file_operands
-crates/charter-core/src/leakguard.rs: replace + with - in gh_file_operands
-crates/charter-core/src/leakguard.rs: replace += with *= in gh_file_operands
-crates/charter-core/src/leakguard.rs: replace += with -= in gh_file_operands
-crates/charter-core/src/leakguard.rs: replace < with <= in gh_file_operands
-crates/charter-core/src/leakguard.rs: replace == with != in excluded_names
-crates/charter-core/src/leakguard.rs: replace == with != in guarded_state_entries
-crates/charter-core/src/leakguard.rs: replace == with != in walks_directories
-crates/charter-core/src/leakguard.rs: replace > with >= in glob_selects_inside
-crates/charter-core/src/leakguard.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in guarded_state_entries
-crates/charter-core/src/leakguard.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in guarded_state_entries
-crates/charter-core/src/leakguard.rs: replace || with && in walks_directories
 crates/charter-core/src/workspaces.rs: delete ! in Plane::is_live
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::remember_titled
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::scaffold_memory

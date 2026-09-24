@@ -46,6 +46,18 @@ exclude_re = [
     # build compiles: the one mutant, `Ok(())`, is the unix function itself and a change to
     # code this platform does not build.
     'src/machine\.rs:\d+:\d+: replace supported -> io::Result<\(\)> with Ok\(\(\)\)$',
+    # `extension::supported`, for the same reason and in the same shape: `Ok(())` on unix, a
+    # refusal only in the `cfg(not(unix))` twin no unix build compiles. The site says so.
+    'src/extension\.rs:\d+:\d+: replace supported -> io::Result<\(\)> with Ok\(\(\)\)$',
+    # `programs::host_pathext` is `None` on unix (`cfg!(unix)`), so its `None` mutant is the
+    # function this platform runs and changes only the `PATHEXT` half no unix build takes. Its
+    # `Some(Default::default())` mutant is NOT excluded: a unix test sees it. The site says so.
+    'src/programs\.rs:\d+:\d+: replace host_pathext -> Option<std::ffi::OsString> with None$',
+    # `hookwire/off_unix.rs` is the hook channel's refusals where there is no unix socket, and
+    # it is `#[cfg(not(unix))] mod off_unix;` — no unix build compiles one line of it, so no test
+    # on the Linux nightly or a Mac can observe a change to it. Moved into a file of its own
+    # (#311) so this is one entry that cannot reach the unix half. The file's header says so.
+    'src/hookwire/off_unix\.rs:',
     # `worktree::head_of`'s `!sha.ok() || sha.line().is_empty()` against `&&`: a failed
     # `git rev-parse --short HEAD` writes nothing on stdout and a successful one always writes
     # a sha (measured, null-sha HEAD included), so the halves never differ. Equivalent over
