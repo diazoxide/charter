@@ -79,6 +79,8 @@ import {
   panesOf,
   putViewBack,
   refileViews,
+  SETTINGS_TITLE,
+  SETTINGS_VIEW,
   viewKey,
   selectTab,
   showWorkspace,
@@ -149,6 +151,7 @@ export function PlaneView({
   alerts,
   contributed = [],
   views = [],
+  settingsAsked,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -174,6 +177,9 @@ export function PlaneView({
   /** The views approved extensions offer (ADR 0041 stage 2), the window's for the
    *  same reason: one survey per window, not one per project. */
   views?: readonly ExtensionView[];
+  /** A count that goes up each time the window is asked for THIS project's settings tab
+   *  (`WindowDoing.openSettings`); `undefined` until it is. */
+  settingsAsked?: number;
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
@@ -1012,6 +1018,20 @@ export function PlaneView({
   );
 
   /**
+   * The Project settings tab, opened when the window asks for it (charter-app#252). Asked
+   * through the window even from this project's own palette, so there is one way in: the
+   * window brings the project forward and this opens its tab. `handled` keeps a rebuilt
+   * `showView` — it changes with the focused workspace — from opening it a second time for
+   * the same ask.
+   */
+  const handled = useRef(settingsAsked);
+  useEffect(() => {
+    if (settingsAsked === undefined || handled.current === settingsAsked) return;
+    handled.current = settingsAsked;
+    showView(SETTINGS_VIEW, SETTINGS_TITLE);
+  }, [settingsAsked, showView]);
+
+  /**
    * Focuses a workspace: the strip below it shows that workspace's chats, and one of them
    * comes to the front — the one that was in front there last, or its first.
    *
@@ -1393,6 +1413,7 @@ export function PlaneView({
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
+      openSettings: windowDoes.openSettings,
       quit: windowDoes.quit,
     }),
     [
@@ -2220,6 +2241,10 @@ export type WindowDoing = {
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
+  /** Brings a project to the front and opens its Project settings tab (charter-app#252). The
+   *  window's, because the project may not be the one in front, and only the window can bring
+   *  it there. */
+  openSettings: (plane: string) => void;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
    *  in front draws nothing, and its pin still has to be on that strip (ADR 0039). */
   pinProject: (plane: string, pinned: boolean) => Promise<Ran>;

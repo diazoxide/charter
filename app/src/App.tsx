@@ -124,6 +124,12 @@ function App() {
   /** Whether the extension list is up. The window's, not a project's: an extension is machine
    *  state, so it is the same list whichever project is in front. */
   const [extensions, setExtensions] = useState(false);
+  /**
+   * The last ask for a project's settings tab (charter-app#252): which project, and a count so
+   * that asking twice opens it twice — the second ask brings forward a tab the operator may
+   * have left behind. The project's own `PlaneView` opens it, because its tabs are its own.
+   */
+  const [settingsAsk, setSettingsAsk] = useState<{ plane: PlaneId; at: number }>();
   /** Why this launch took longer than the limit, when it did — and nothing when it did not
    *  (charter-app#24). The core decides that; the window only draws it. */
   const [slowStart, setSlowStart] = useState<string>();
@@ -423,6 +429,10 @@ function App() {
       selectProject: (plane: string) => setShowing({ at: "plane", plane }),
       closeProject,
       pinProject,
+      openSettings: (plane: string) => {
+        setShowing({ at: "plane", plane });
+        setSettingsAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
+      },
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
     [closeProject, pinProject],
@@ -658,6 +668,7 @@ function App() {
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
+      openSettings: windowDoes.openSettings,
       quit: windowDoes.quit,
     }),
     [windowDoes],
@@ -694,7 +705,14 @@ function App() {
    * does not react, and neither fact is written twice.
    */
   const stripOffers = useMemo(
-    () => [strip.open, strip.create, ...strip.switchTo, ...strip.pin, ...strip.close],
+    () => [
+      strip.open,
+      strip.create,
+      ...strip.switchTo,
+      ...strip.pin,
+      ...strip.settings,
+      ...strip.close,
+    ],
     [strip],
   );
 
@@ -976,6 +994,7 @@ function App() {
           alerts={alerts}
           contributed={contributedPanels}
           views={extensionViews}
+          settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
         />
       ))}
 
