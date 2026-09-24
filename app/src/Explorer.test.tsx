@@ -91,7 +91,7 @@ function draw(on: {
 /** The spot marked as the one the next chat would start in. */
 const picked = () =>
   screen
-    .getAllByRole("button")
+    .getAllByRole("treeitem")
     .filter((one) => one.getAttribute("aria-current") === "true")
     .map((one) => one.textContent);
 
@@ -100,8 +100,8 @@ describe("the explorer", () => {
     draw({});
 
     const svc = screen.getByTestId("clone-svc");
-    expect(within(svc).getByRole("button", { name: /one/ })).toBeInTheDocument();
-    expect(within(svc).getByRole("button", { name: /two/ })).toBeInTheDocument();
+    expect(within(svc).getByRole("treeitem", { name: /one/ })).toBeInTheDocument();
+    expect(within(svc).getByRole("treeitem", { name: /two/ })).toBeInTheDocument();
     expect(screen.getByTestId("clone-tool")).toHaveTextContent("No worktrees cut here");
   });
 
@@ -127,7 +127,7 @@ describe("the explorer", () => {
     const onPick = vi.fn();
     draw({ onPick });
 
-    await userEvent.click(screen.getByRole("button", { name: /^one/ }));
+    await userEvent.click(screen.getByRole("treeitem", { name: /^one/ }));
 
     expect(onPick).toHaveBeenCalledWith({ repo: "svc", piece: "one", path: `${CUT}/one` });
   });
@@ -142,7 +142,7 @@ describe("the explorer", () => {
     const onPick = vi.fn();
     draw({ spot: { repo: "svc", piece: "two", path: `${CUT}/two` }, onPick });
 
-    await userEvent.click(screen.getByRole("button", { name: /the workspace itself/ }));
+    await userEvent.click(screen.getByRole("treeitem", { name: /the workspace itself/ }));
 
     expect(onPick).toHaveBeenCalledWith(undefined);
   });
@@ -216,7 +216,7 @@ describe("the explorer", () => {
     const onShowChat = vi.fn();
     draw({ chats: [chat(1, "ide.1", `${CUT}/one`)], onShowChat });
 
-    await userEvent.click(screen.getByRole("button", { name: /ide\.1/ }));
+    await userEvent.click(screen.getByRole("treeitem", { name: /ide\.1/ }));
 
     expect(onShowChat).toHaveBeenCalledWith(1);
   });
@@ -302,7 +302,7 @@ describe("a piece row's menu", () => {
   it("opens on a right-click with the catalogue's own rows for that piece", async () => {
     draw({ offers: offers() });
 
-    const row = within(screen.getByTestId("piece-svc-one")).getByRole("button", { name: "one" });
+    const row = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", { name: "one" });
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 
     const menu = await screen.findByRole("menu");
@@ -317,7 +317,7 @@ describe("a piece row's menu", () => {
     const pressed: string[] = [];
     draw({ offers: offers(), onPress: (offer) => pressed.push(offer.id) });
 
-    const row = within(screen.getByTestId("piece-svc-one")).getByRole("button", { name: "one" });
+    const row = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", { name: "one" });
     row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await screen.findByRole("menu");
     await userEvent.click(screen.getByRole("menuitem", { name: "Remove worktree one in svc" }));
@@ -360,7 +360,7 @@ describe("the explorer is drawn as a tree", () => {
 
     // The names the rest of this file and the scenario specs press by. An icon that joined
     // an accessible name would rename every row it was put on.
-    expect(screen.getByRole("button", { name: /^one$/ })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /^one$/ })).toBeInTheDocument();
     for (const svg of screen.getByTestId("explorer").querySelectorAll("svg")) {
       expect(svg.getAttribute("aria-hidden")).toBe("true");
     }
@@ -398,5 +398,151 @@ describe("the explorer's tree guides", () => {
       .filter(([, , body]) => /(?:^|[;\s])background(?:-color)?\s*:/.test(body))
       .map(([, selector]) => selector.trim());
     expect(painted).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// A WAI-ARIA tree (charter-app#238)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * **The explorer is a tree for the keyboard and for a screen reader**, the WAI-ARIA "Tree
+ * View" pattern: `role="tree"` and `treeitem`, each row's level and place among its siblings,
+ * `aria-expanded` on the rows that fold, and the keys that open, close and climb.
+ *
+ * The tree drawn here is `alpha` → `svc` (→ `one` → the chat `seven`; `two`) and `tool`, which
+ * has no worktrees.
+ */
+describe("the explorer is a WAI-ARIA tree", () => {
+  const withAChat = () => draw({ chats: [chat(7, "seven", `${CUT}/one`)] });
+  const tree = () => screen.getByRole("tree", { name: "Explorer" });
+  const item = (name: RegExp) => within(tree()).getByRole("treeitem", { name });
+  /** A treeitem as its first word, its level and its place among its siblings. */
+  const shape = (row: HTMLElement) =>
+    [
+      row.querySelector(".spot-name, .repo, .session")?.textContent,
+      row.getAttribute("aria-level"),
+      `${row.getAttribute("aria-posinset")}/${row.getAttribute("aria-setsize")}`,
+    ].join(" ");
+
+  it("draws every row as a treeitem with its level and its place among its siblings", () => {
+    withAChat();
+
+    expect(within(tree()).getAllByRole("treeitem").map(shape)).toEqual([
+      "alpha 1 1/1",
+      "svc 2 1/2",
+      "one 3 1/2",
+      "seven 4 1/1",
+      "two 3 2/2",
+      "tool 2 2/2",
+    ]);
+  });
+
+  it("says on a clone whether it is open, and on nothing that cannot fold", async () => {
+    withAChat();
+
+    expect(item(/^svc/)).toHaveAttribute("aria-expanded", "true");
+    expect(item(/^tool/)).toHaveAttribute("aria-expanded", "true");
+    for (const leaf of [/^alpha/, /^one/, /^seven/, /^two/]) {
+      expect(item(leaf)).not.toHaveAttribute("aria-expanded");
+    }
+
+    await userEvent.click(item(/^svc/));
+    expect(item(/^svc/)).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("Right opens a closed clone, then moves to its first child, and stops at a leaf", async () => {
+    withAChat();
+    await userEvent.click(item(/^svc/));
+    expect(item(/^svc/)).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(item(/^svc/)).toHaveAttribute("aria-expanded", "true");
+    expect(item(/^svc/)).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(item(/^one/)).toHaveFocus();
+    // A worktree with a chat in it is a parent that is always open: Right goes in.
+    await userEvent.keyboard("{ArrowRight}");
+    expect(item(/^seven/)).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(item(/^seven/)).toHaveFocus();
+  });
+
+  it("Right on the workspace row moves to its first child", async () => {
+    withAChat();
+    item(/^alpha/).focus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(item(/^svc/)).toHaveFocus();
+  });
+
+  it("Left moves to the parent, closes an open clone, and stops at the workspace row", async () => {
+    withAChat();
+    item(/^seven/).focus();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(item(/^one/)).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(item(/^svc/)).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(item(/^svc/)).toHaveAttribute("aria-expanded", "false");
+    expect(item(/^svc/)).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(item(/^alpha/)).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(item(/^alpha/)).toHaveFocus();
+  });
+
+  it("Up and Down skip what a folded clone holds, and Home and End reach the ends", async () => {
+    withAChat();
+    item(/^svc/).focus();
+    await userEvent.keyboard("{ArrowLeft}");
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(item(/^tool/)).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(item(/^alpha/)).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(item(/^tool/)).toHaveFocus();
+  });
+
+  it("a typed letter moves to the next row whose name starts with it, and wraps", async () => {
+    withAChat();
+    item(/^alpha/).focus();
+
+    await userEvent.keyboard("t");
+    expect(item(/^two/)).toHaveFocus();
+    await userEvent.keyboard("T");
+    expect(item(/^tool/)).toHaveFocus();
+    await userEvent.keyboard("t");
+    expect(item(/^two/)).toHaveFocus();
+    // A letter nothing starts with moves nothing.
+    await userEvent.keyboard("z");
+    expect(item(/^two/)).toHaveFocus();
+  });
+
+  it("Enter does what a click does: a worktree is picked and a chat brought forward", async () => {
+    const onPick = vi.fn();
+    const onShowChat = vi.fn();
+    draw({ chats: [chat(7, "seven", `${CUT}/one`)], onPick, onShowChat });
+
+    item(/^one/).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(onPick).toHaveBeenCalledWith({ repo: "svc", piece: "one", path: `${CUT}/one` });
+
+    item(/^seven/).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(onShowChat).toHaveBeenCalledWith(7);
+  });
+
+  it("leaves a key with a modifier alone", async () => {
+    withAChat();
+    item(/^svc/).focus();
+
+    await userEvent.keyboard("{Meta>}{ArrowLeft}{/Meta}");
+    expect(item(/^svc/)).toHaveAttribute("aria-expanded", "true");
+    await userEvent.keyboard("{Control>}t{/Control}");
+    expect(item(/^svc/)).toHaveFocus();
   });
 });

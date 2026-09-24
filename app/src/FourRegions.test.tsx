@@ -210,7 +210,7 @@ describe("the four regions", () => {
     render(<App />);
     await screen.findByTestId("clone-svc");
 
-    await userEvent.click(await screen.findByRole("button", { name: /^two/ }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^two/ }));
     await openAChat();
 
     expect(startedIn(asked)).toEqual([`${CUT}/two`]);
@@ -222,7 +222,7 @@ describe("the four regions", () => {
     const { asked } = core();
     render(<App />);
     await screen.findByTestId("clone-svc");
-    await userEvent.click(await screen.findByRole("button", { name: /^two/ }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^two/ }));
 
     await focus("beta");
     await openAChat();
@@ -236,7 +236,7 @@ describe("the four regions", () => {
     const { asked } = core();
     render(<App />);
     await screen.findByTestId("clone-svc");
-    await userEvent.click(await screen.findByRole("button", { name: /^two/ }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^two/ }));
 
     await focus("beta");
     await focus("alpha");
@@ -253,7 +253,7 @@ describe("the four regions", () => {
 
     render(<App />);
     await screen.findByTestId("clone-svc");
-    await userEvent.click(await screen.findByRole("button", { name: /^two/ }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^two/ }));
 
     cut = [piece("one")];
     await focus("beta");
@@ -330,7 +330,7 @@ describe("the four regions", () => {
     await screen.findByTestId("clone-svc");
     await openAChat();
 
-    await userEvent.click(await screen.findByRole("button", { name: /^one/ }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^one/ }));
     await focus("beta");
     await focus("alpha");
 

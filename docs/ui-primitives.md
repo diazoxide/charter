@@ -440,9 +440,13 @@ model and a select-on-`mousedown` this window's strips do not have:
   selects, which is the button's own click. Moving is not selecting ("Tabs", manual activation):
   arrowing past a chat must not swap the panes under the operator.
 - **Each list is ONE Tab stop** — the explorer, the needs-you queue, every panel's rows
-  (`PanelList`, so a contributed panel gets it for nothing). Up, Down, Home and End move. The
-  explorer takes the half of "Tree View" that needs no tree semantics and not Left and Right,
-  for the reason `Explorer.tsx` gives: it does not say it is a tree.
+  (`PanelList`, so a contributed panel gets it for nothing). Up, Down, Home and End move.
+- **The explorer is a tree** (charter-app#238), the whole "Tree View" pattern on top of the
+  same roving focus: `role="tree"`, each row a `treeitem` with its level and its place among
+  its siblings, `aria-expanded` on the clones (the rows that fold), Right to open or go in,
+  Left to close or climb, and a typed letter to the next row it starts. `Explorer.tsx` says
+  why the levels are written down and not left to the DOM. A tree's rows are `treeitem`s and
+  no longer `button`s to a role query, so a test reaches them by that role.
 - **Every other control says `tabIndex={0}`**, and a tab's `×` says `-1`: fifty closers would be
   fifty stops again, and the palette and the tab's own menu both end a chat by the same row (a Delete key on the tab is charter-app#239).
 - **The order is the document's, which is the order the window is drawn in**: the title bar,

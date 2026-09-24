@@ -284,7 +284,7 @@ describe("the window's tab order", () => {
       "tab two steward",
       "button New tab",
       // The explorer, on the left by default: ONE stop, its current row.
-      "button alphathe workspace itself",
+      "treeitem alphathe workspace itself",
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.
       "separator",
       // The focused pane's own controls, drawn in its top corner, then its terminal. From
@@ -328,12 +328,12 @@ describe("a list is one Tab stop", () => {
     const rows = rowsIn(explorer);
     // The workspace row, three chats working in it, the clone, its one worktree.
     expect(rows.map(said)).toEqual([
-      expect.stringMatching(/^button alpha/),
-      expect.stringMatching(/^button one/),
-      expect.stringMatching(/^button two/),
-      expect.stringMatching(/^button three/),
-      "summary svc1",
-      "button one",
+      expect.stringMatching(/^treeitem alpha/),
+      expect.stringMatching(/^treeitem one/),
+      expect.stringMatching(/^treeitem two/),
+      expect.stringMatching(/^treeitem three/),
+      "treeitem svc1",
+      "treeitem one",
     ]);
     expect(rows.map((row) => row.getAttribute("tabindex"))).toEqual([
       "0",
@@ -353,14 +353,19 @@ describe("a list is one Tab stop", () => {
     await waitFor(() => expect(rows[4]).toHaveFocus());
     await userEvent.keyboard("{Home}");
     await waitFor(() => expect(rows[0]).toHaveFocus());
-    // Left and Right are not the explorer's: it is a list and not a tree (`Explorer.tsx`).
+    // And it is a tree (#238): Right goes into the workspace row, Left climbs back out. The
+    // rest of the tree's keys are `Explorer.test.tsx`'s.
     await userEvent.keyboard("{ArrowRight}");
-    expect(rows[0]).toHaveFocus();
+    await waitFor(() => expect(rows[1]).toHaveFocus());
+    await userEvent.keyboard("{ArrowLeft}");
+    await waitFor(() => expect(rows[0]).toHaveFocus());
   });
 
   it("the explorer: a picked worktree is where the keyboard comes back in", async () => {
     await theWholeWindow();
-    const piece = within(screen.getByTestId("piece-svc-one")).getByRole("button", { name: "one" });
+    const piece = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", {
+      name: "one",
+    });
     await userEvent.click(piece);
     await waitFor(() => expect(piece).toHaveAttribute("tabindex", "0"));
   });
