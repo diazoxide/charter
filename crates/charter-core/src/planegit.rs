@@ -979,6 +979,18 @@ pub fn save_as(request: &Request, trigger: Trigger, say: Sink) -> u8 {
     let started = std::time::Instant::now();
     let plane = crate::planesave::Settings::read(request.root).plane;
     let mut attempt = Attempt::default();
+    // The first thing the save refused with, in its own words, for a journal line that would
+    // otherwise say only "failed".
+    let mut refused: Option<String> = None;
+    let mut heard = |line: Say| {
+        if let Say::Fail(text) = &line
+            && refused.is_none()
+        {
+            refused = Some(text.clone());
+        }
+        say(line);
+    };
+    let say: Sink = &mut heard;
     let code = if plane.mode.value == Some(crate::planesave::Mode::Off) {
         say(Say::Info(format!(
             "[plane] mode is off ({}), so charter commits nothing here — commit with git \
@@ -990,6 +1002,11 @@ pub fn save_as(request: &Request, trigger: Trigger, say: Sink) -> u8 {
     } else {
         commit_push(request, &plane, &["add", "-A"], &mut attempt, say)
     };
+    if attempt.detail.is_empty()
+        && let Some(refused) = refused
+    {
+        attempt.detail = refused;
+    }
     let mode = match (request.no_push, plane.mode.value) {
         (true, Some(crate::planesave::Mode::Off)) | (false, _) => plane.mode.value,
         (true, _) => Some(crate::planesave::Mode::Commit),
@@ -1055,6 +1072,10 @@ pub fn journal(root: &Path) -> Vec<serde_json::Value> {
 
 /// Add `entry` to the journal, keeping the newest [`JOURNAL_LINES`]. Never fails loudly: a save
 /// that cannot write its note must still have saved.
+///
+/// Read, then renamed over, with no lock: two saves finishing at the same instant — the app's
+/// auto-save and a `charter save` — can lose one line between them. The file is never torn,
+/// because the rename is atomic, and a lost line costs one row of the Saving view's history.
 fn journal_append(root: &Path, entry: &serde_json::Value) {
     let path = journal_path(root);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -1495,20 +1516,33 @@ fn commit_push(
     // command-line value wins.
     let mut commit: Vec<&str> = vec!["-c", gpgsign(sign)];
     commit.extend(["commit", "-q", "-m", msg.as_str()]);
-    let _ = git::run(root, &commit, WRITE);
+    let committed = git::run(root, &commit, WRITE);
     let still_staged = |root: &Path| {
         git::run(root, &["diff", "--cached", "--quiet"], git::READ).is_ok_and(|r| !r.ok())
     };
-    if still_staged(root) {
-        // A signed commit that failed: retry without the signature rather than leaving the
-        // work staged and the operator guessing.
-        let _ = git::run(
-            root,
-            &["commit", "--no-gpg-sign", "-q", "-m", msg.as_str()],
-            WRITE,
-        );
+    if sign && still_staged(root) {
+        // Asked to sign — `--sign`, or `[plane] sign` — and the signer refused. There is no
+        // unsigned retry: an unsigned commit is exactly what the operator asked charter not to
+        // make, and the next push would carry it to the remote (ADR 0051).
+        let signer = committed
+            .map(|run| signer_said(&run.err))
+            .unwrap_or_default();
+        let why = if signer.is_empty() {
+            "charter could not sign the commit".to_string()
+        } else {
+            format!("charter could not sign the commit: {signer}")
+        };
+        say(Say::Fail(format!(
+            "{why} — {} file(s) are staged but not committed.",
+            staged.len()
+        )));
+        say(Say::Info(
+            "  Fix the signer, or set sign = false under [plane], then save again.".into(),
+        ));
+        attempt.detail = why;
+        return 1;
     }
-    // Still staged after both attempts = nothing was committed. Reporting success here is how a
+    // Still staged = nothing was committed. Reporting success here is how a
     // failed commit became `✓ Committed :` with an empty sha — the sha was empty precisely
     // BECAUSE there was no commit, and that was the only visible symptom.
     if still_staged(root) {
@@ -1544,18 +1578,21 @@ fn commit_push(
         return 0;
     }
     let file = plane.mode.source.file().unwrap_or("default");
+    let key = if plane.from_share {
+        "[memory] share"
+    } else {
+        "[plane] mode"
+    };
     match plane.mode.value {
         Some(crate::planesave::Mode::Commit) => {
-            say(Say::Info(format!(
-                "Not pushed: [plane] mode is commit ({file})."
-            )));
+            say(Say::Info(format!("Not pushed: {key} is commit ({file}).")));
             return 0;
         }
         Some(mode @ (crate::planesave::Mode::Pr | crate::planesave::Mode::PrMerge)) => {
             // charter-app#298 builds the save branch and the pull request. Until then, the
             // one push a PR mode must never make is to the target branch.
             say(Say::Info(format!(
-                "Not pushed: [plane] mode is {} ({file}), and this charter cannot open the pull \
+                "Not pushed: {key} is {} ({file}), and this charter cannot open the pull \
                  request yet.",
                 mode.as_str()
             )));
@@ -1575,6 +1612,28 @@ fn commit_push(
     // ordinary push failure has been reported and stays rc 0: `charter save` having committed
     // successfully is not a failed command.
     let target = plane.branch.value.as_deref();
+    if let Some(target) = target {
+        // Pushing HEAD to a branch it is not on would rebase THIS branch onto that one the
+        // moment the remote moved — replaying its history there and rewriting it here. Nothing
+        // rewrites anyone's history (ADR 0051): the commit stays, and the operator says which
+        // branch they meant.
+        let here = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
+            .map(|r| r.line().trim().to_string())
+            .unwrap_or_default();
+        if here != target {
+            let why = format!("this plane is on {here}, and [plane] branch is {target}");
+            say(Say::Warn(format!(
+                "Not pushed: {why} ({}).",
+                plane.branch.source.file().unwrap_or("default")
+            )));
+            say(Say::Info(format!(
+                "  Check out {target}, or change [plane] branch, then save again."
+            )));
+            attempt.outcome = "blocked";
+            attempt.detail = why;
+            return 0;
+        }
+    }
     let pushed = push_head(root, target, sign, say);
     // The push may have rebased: the commit that landed is HEAD now.
     attempt.commit = git::run(root, &["rev-parse", "HEAD"], git::READ)

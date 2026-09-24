@@ -1481,9 +1481,10 @@ fn a_pr_mode_never_pushes_to_the_target_branch_before_charter_can_open_the_pr() 
 }
 
 #[test]
-fn a_push_lands_on_the_target_branch_the_settings_name_not_the_one_checked_out() {
+fn a_push_lands_on_the_target_branch_the_settings_name() {
     let fixture = Fixture::plane();
     let bare = fixture.with_a_remote();
+    run(&fixture.root, &["checkout", "-q", "-b", "trunk"]);
     fixture.with_settings("[plane]\nmode = \"push\"\nbranch = \"trunk\"\n");
     std::fs::write(fixture.root.join("work.md"), "work").unwrap();
 
@@ -1670,4 +1671,131 @@ fn the_journal_keeps_its_newest_five_hundred_lines() {
     assert_eq!(lines.len(), 500);
     assert_eq!(lines[0]["n"], 1, "the oldest went");
     assert_eq!(lines[499]["outcome"], "skipped", "the newest came");
+}
+
+// --------------------------------------------------------------------------------------- //
+// review of #331                                                                            //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn a_target_branch_that_is_not_the_one_checked_out_is_never_pushed_to_or_rebased_onto() {
+    // Rebasing `main` onto a `trunk` that moved would replay main's history onto trunk and
+    // rewrite the local main: nothing rewrites anyone's history (ADR 0051).
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote_that_moved();
+    run(&bare, &["branch", "trunk", "main"]);
+    let remote_trunk = ask(&bare, &["rev-parse", "trunk"]);
+    fixture.with_settings("[plane]\nmode = \"push\"\nbranch = \"trunk\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        fixture.head_subject(),
+        "a save",
+        "committed on main: {said}"
+    );
+    assert!(
+        said.contains(
+            "Not pushed: this plane is on main, and [plane] branch is trunk (charter.toml)."
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("remote moved"), "it rebased: {said}");
+    assert_eq!(ask(&bare, &["rev-parse", "trunk"]), remote_trunk);
+    let line = &journal(&fixture.root)[0];
+    assert_eq!(line["outcome"], "blocked");
+    assert_eq!(
+        line["detail"],
+        "this plane is on main, and [plane] branch is trunk"
+    );
+}
+
+#[test]
+fn the_alias_is_named_as_itself_when_it_decided_the_mode() {
+    let fixture = Fixture::plane();
+    fixture.with_settings("[memory]\nshare = \"commit\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let (_, said) = fixture.just_save();
+    assert!(
+        said.contains("Not pushed: [memory] share is commit (charter.toml)."),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_refusal_is_journalled_in_its_own_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join("charter.toml"), "").unwrap();
+    let mut said = String::new();
+    let mut say = |line: Say| said.push_str(&format!("{line}\n"));
+    let code = save(
+        &Request {
+            root: &root,
+            message: None,
+            sign: false,
+            no_push: false,
+            cwd: &root,
+        },
+        &mut say,
+    );
+    assert_eq!(code, 1);
+    let line = &journal(&root)[0];
+    assert_eq!(line["outcome"], "failed");
+    assert!(
+        line["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("is not a git repository"),
+        "{line}"
+    );
+}
+
+const REFUSED_SIGN_CHILD: &str = "CHARTER_TEST_REFUSED_SIGN_MARK";
+
+#[test]
+fn a_save_asked_to_sign_whose_signer_refuses_commits_nothing_unsigned() {
+    // Run in a child whose HOME's signer FAILS (`testgit::signing_home`), never the
+    // developer's own. A save asked to sign — here by `[plane] sign` — that cannot sign stops:
+    // an unsigned commit is exactly what the operator asked not to make.
+    if std::env::var_os(REFUSED_SIGN_CHILD).is_some() {
+        let fixture = Fixture::plane();
+        fixture.with_a_remote();
+        run(&fixture.root, &["config", "commit.gpgsign", "false"]);
+        fixture.with_settings("[plane]\nsign = true\n");
+        std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+        let before = fixture.commits();
+
+        let (code, said) = fixture.just_save();
+
+        assert_eq!(code, 1, "{said}");
+        assert_eq!(
+            fixture.commits(),
+            before,
+            "an unsigned commit was made: {said}"
+        );
+        assert!(said.contains("could not sign the commit"), "{said}");
+        let line = &journal(&fixture.root)[0];
+        assert_eq!(line["outcome"], "failed");
+        assert!(
+            line["detail"]
+                .as_str()
+                .unwrap_or("")
+                .contains("could not sign"),
+            "{line}"
+        );
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let top = dir.path().canonicalize().unwrap();
+    let (home, ran) = crate::testgit::signing_home(&top);
+    crate::testrun::rerun(
+        &["planegit::tests::a_save_asked_to_sign_whose_signer_refuses_commits_nothing_unsigned"],
+        &[
+            (REFUSED_SIGN_CHILD, ran.as_os_str()),
+            ("HOME", home.as_os_str()),
+        ],
+    );
 }
