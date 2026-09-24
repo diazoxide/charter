@@ -3643,17 +3643,30 @@ button.show-more:focus-visible {
   margin: 0;
 }
 
-/* Where the vault's identity token is, and the offer to move it into the Keychain (#237): the
-   note's size and colour, the button beside the sentence rather than under it. */
+/* Where the vault's identity token is, and how to put it into the Keychain (#237, hardened after
+   the #271 review): the note's size and colour, and a paste box with its buttons below the
+   sentence. */
 .vault-identity {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
   max-width: 60rem;
   margin: 0 0 0.4rem;
   color: var(--text-muted);
   font-size: 0.8rem;
+}
+
+.vault-identity p {
+  margin: 0 0 0.4rem;
+}
+
+.vault-identity-put {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.vault-identity-put input {
+  flex: 1 1 16rem;
+  min-width: 12rem;
 }
 
 /* A list in a view has the pane's height to use, not a side region's. */

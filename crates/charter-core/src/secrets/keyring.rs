@@ -296,11 +296,13 @@ pub fn load_index(ctx: &Ctx, vault: &Vault) -> Result<Index, VaultError> {
         serde_json::from_str(&text).map_err(|e| corrupt(&super::registry::py_json_error(&e)))?;
     let service = match doc.get("service") {
         None | Some(Value::Null) => None,
-        Some(Value::String(s)) if service_ok(s) => Some(s.clone()),
+        Some(Value::String(s)) if service_ok_for(s, &vault.name) => Some(s.clone()),
         Some(_) => {
             return Err(corrupt(&format!(
-                "its service is not one charter writes (they start '{SERVICE_PREFIX}'), and \
-                 charter will not read another program's keyring items"
+                "its service is not one charter writes for vault '{}' (they are \
+                 '{SERVICE_PREFIX}{}/<id>'), and charter will not read a keyring item this vault \
+                 does not own",
+                vault.name, vault.name
             )));
         }
     };
@@ -345,11 +347,19 @@ fn save_index(ctx: &Ctx, vault: &Vault, index: &Index) -> Result<(), VaultError>
     super::plain_file::write_private(&index_path(ctx, vault), &Value::Object(doc))
 }
 
-/// Whether `service` is one charter wrote: `charter/` and printable text after it.
-pub fn service_ok(service: &str) -> bool {
-    service.starts_with(SERVICE_PREFIX)
-        && service.len() > SERVICE_PREFIX.len()
-        && !service.chars().any(char::is_control)
+/// Whether `service` is one charter wrote for THIS vault: `charter/<vault>/<id>`, and nothing
+/// else. Scoped to the vault on purpose — a prefix-only check let an index name
+/// `charter/identity` or another vault's `charter/<other>/<hex>`, so a keyring vault could be
+/// pointed at an item it must never read as a secret (#271 review, U4). The `<id>` is the
+/// random tail [`new_service`] makes: one path segment, no control character.
+pub fn service_ok_for(service: &str, vault: &str) -> bool {
+    let want = format!("{SERVICE_PREFIX}{vault}/");
+    match service.strip_prefix(&want) {
+        Some(tail) => {
+            !tail.is_empty() && !tail.contains('/') && !tail.chars().any(char::is_control)
+        }
+        None => false,
+    }
 }
 
 /// Whether `key` can name a keyring item: not empty, and no control character.

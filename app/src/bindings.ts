@@ -511,10 +511,18 @@ export const commands = {
 	 */
 	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
 	/**
-	 *  Move a vault's identity token into the keyring ([`move_identity`]). No value crosses: the
-	 *  token is read from the app's own environment, and the answer is the vault's names.
+	 *  Move a vault's identity token from the app's OWN environment into the keyring
+	 *  ([`move_identity`]). No value crosses to the window. Kept beside the paste path for an app
+	 *  launched from a shell that exports the token; the answer's `identity_in_app_env` then warns to
+	 *  relaunch, because the app's process still carries the export (#271 review, U3).
 	 */
 	vaultIdentityMove: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_move", { plane, vault })),
+	/**
+	 *  Put a token the operator pasted into the keyring for a vault's identity ([`put_identity`]).
+	 *  The token comes in here and goes straight to the keyring — never the app's environment, never
+	 *  the window, never an error. The preferred path (#271 review, U3).
+	 */
+	vaultIdentityPut: (plane: PlaneId, vault: string, token: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_put", { plane, vault, token })),
 	/**
 	 *  Every view an approved extension offers this window.
 	 * 
@@ -1699,6 +1707,13 @@ export type VaultContents = {
 	 *  from the registry's mark and the environment, never by reading the keyring.
 	 */
 	identity: VaultIdentity[],
+	/**
+	 *  Identity variables charter's OWN process environment still carries. A same-user process
+	 *  can read another's environment block, so while this is non-empty a chat could read the
+	 *  token however it was moved — the tab warns to relaunch charter without the export
+	 *  (#271 review, U3). Names only.
+	 */
+	identity_in_app_env: string[],
 };
 
 /**  Whether a vault can be read, and the provider's own sentence about it. Never a value. */

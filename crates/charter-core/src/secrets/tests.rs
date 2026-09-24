@@ -399,3 +399,115 @@ fn no_refusal_or_debug_of_an_identity_move_carries_the_token() {
     }
     assert_eq!(held_at(&carrying, &v)[0].1, identity::Held::Environment);
 }
+
+// Regression tests for the #271 adversarial review (U5, U6). Fabricated values only. Each began
+// as a proof that the exploit worked; the assertion is now that it does not.
+
+#[test]
+fn a_committed_env_binding_cannot_redirect_a_locally_marked_vault_to_another_token() {
+    // #271 review U5. The operator moved two tokens; `team` is committed with its binding in the
+    // shared half and only the local mark beside it. A teammate's commit that rewrites team's
+    // committed source to prod's variable must not make team hand out prod's token.
+    let (tmp, team) = team_plane();
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Prod"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_PROD_TOKEN"}),
+    );
+    registry::add_vault(
+        &Ctx::new(tmp.path(), Env::of(&[])),
+        "prod",
+        "1password",
+        config,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let prod = registry::vault(&Ctx::new(tmp.path(), Env::of(&[])), "prod").unwrap();
+    let carrying = Ctx::new(
+        tmp.path(),
+        Env::of(&[
+            ("OP_TEAM_TOKEN", "ops_fixture-team-1"),
+            ("OP_PROD_TOKEN", "ops_fixture-prod-2"),
+        ]),
+    );
+    identity::move_to_keyring(&carrying, &team).unwrap();
+    identity::move_to_keyring(&carrying, &prod).unwrap();
+
+    // Put team's binding in the committed half and leave only its (full) local record beside it,
+    // as a shared vault whose token was moved locally looks.
+    let mut local = registry::load_local(&carrying).unwrap();
+    let record = local["vaults"]["team"]["config"]["identity"].clone();
+    let mut shared_entry = local["vaults"]["team"].clone();
+    shared_entry["config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("identity");
+    local["vaults"]["team"] = serde_json::json!({"config": {"identity": record}});
+    registry::save_local(&carrying, &local).unwrap();
+    let mut shared = registry::load_shared(&carrying).unwrap();
+    shared
+        .entry("vaults")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .unwrap()
+        .insert("team".into(), shared_entry);
+    registry::save_shared(&carrying, &shared).unwrap();
+
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = registry::vault(&bare, "team").unwrap();
+    assert_eq!(env_overlay(&bare, &v).unwrap()[0].1, "ops_fixture-team-1");
+
+    // The hostile commit: team's committed source becomes prod's variable.
+    let mut shared = registry::load_shared(&bare).unwrap();
+    shared["vaults"]["team"]["config"]["env"] =
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_PROD_TOKEN"});
+    registry::save_shared(&bare, &shared).unwrap();
+
+    // The recorded binding no longer matches, so the mark is not honoured: team reads from the
+    // environment (empty here) and is refused, rather than handing out prod's moved token.
+    let v = registry::vault(&bare, "team").unwrap();
+    let err = env_overlay(&bare, &v).unwrap_err();
+    assert!(err.message.contains("$OP_PROD_TOKEN"), "{}", err.message);
+    assert!(
+        !err.message.contains("ops_fixture-prod-2"),
+        "{}",
+        err.message
+    );
+    assert_eq!(identity::held(&bare, &v)[0].held, identity::Held::Unset);
+}
+
+#[test]
+fn a_declared_identity_source_is_stripped_and_the_op_prefix_is_case_insensitive() {
+    // #271 review U6. `OP_` is matched case-insensitively, and a source of another spelling
+    // (`--token-env PROD_1P_TOKEN`) is caught by NAME through `identity_vars`, which the chat
+    // builder unions with the prefix strip.
+    use std::ffi::OsStr;
+    assert!(identity::kept_from_chats(OsStr::new("OP_TEAM_TOKEN")));
+    assert!(identity::kept_from_chats(OsStr::new("op_team_token")));
+    assert!(identity::kept_from_chats(OsStr::new("Op_Mixed")));
+    assert!(!identity::kept_from_chats(OsStr::new("PROD_1P_TOKEN")));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Prod"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "PROD_1P_TOKEN"}),
+    );
+    registry::add_vault(&ctx, "p", "1password", config, None, false, false).unwrap();
+    // The declared source is listed, so the chat builder strips it though it has no OP_ prefix.
+    let doc = registry::load_registry(&ctx).unwrap();
+    let names: Vec<String> = registry::identity_vars(&doc)
+        .into_iter()
+        .flat_map(|(_, v)| v)
+        .collect();
+    assert!(names.contains(&"PROD_1P_TOKEN".to_string()), "{names:?}");
+    assert!(
+        names.contains(&"OP_SERVICE_ACCOUNT_TOKEN".to_string()),
+        "{names:?}"
+    );
+}

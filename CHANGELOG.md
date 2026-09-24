@@ -41,13 +41,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   when it quits, but only if the clipboard still holds that value. Each reveal and copy writes
   the trace event `charter secret get --reveal` writes, `secret-reveal`, with a `to` field saying
   `window` or `clipboard`. ([#236](https://github.com/diazoxide/charter-app/issues/236))
-- **1Password tokens move out of your chats.** Where a vault is read through a token in charter's
-  environment (`$OP_TEAM_TOKEN`), its tab offers **Move this token into the Keychain**. After
-  the move, every `charter secret` command reads that token from the system keyring first and
-  the environment second, so it works in a chat, and in a terminal that no longer exports it.
-  No chat the app starts is given any `OP_*` variable, whether the app inherited it or a harness
-  profile declares it. Delete the `export` from your shell's startup files once the token is
-  moved, or each chat's shell exports it again.
+- **1Password tokens go into the Keychain, not your chats.** A 1Password vault's tab has a box
+  to paste its service-account token straight into the system keyring; the token never enters
+  charter's own environment. From then on every `charter secret` command reads it from the keyring,
+  so the vault works in a chat and in a terminal that exports nothing. charter runs only the `op`
+  it pinned when the token was stored, verified by path and code-signing team, so a chat cannot
+  redirect the token to an `op` of its own; the keyring item is random per vault and machine, and
+  the binding it was stored against is pinned locally, so a committed registry change cannot steer
+  it. No chat the app starts is given any `OP_*` variable (case insensitively) or any other
+  identity variable a vault declares. A tab can also move a token an app was launched with, and
+  then warns to relaunch charter so the export leaves its process.
   ([#237](https://github.com/diazoxide/charter-app/issues/237))
 
 ### Fixed

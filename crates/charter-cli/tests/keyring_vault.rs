@@ -497,9 +497,14 @@ fn a_moved_identity_lets_secret_exec_run_from_a_terminal_that_exports_no_token()
         said(&before)
     );
 
-    // The app's move, from a process that carried the variable. A test build keeps the keyring
+    // The app's move, from a process that carried the variable AND could resolve the real `op`
+    // on its own PATH — so the binary is pinned (#271 review, U1). A test build keeps the keyring
     // in the plane's stub, which is where the fenced binary below looks too.
-    let carrying = Ctx::new(&root, Env::of(&[("OP_TEAM_TOKEN", IDENTITY)]));
+    let path = format!("{}:/usr/bin:/bin", tmp.path().join("bin").display());
+    let carrying = Ctx::new(
+        &root,
+        Env::of(&[("OP_TEAM_TOKEN", IDENTITY), ("PATH", &path)]),
+    );
     let team = registry::vault(&carrying, "team").expect("registered");
     identity::move_to_keyring(&carrying, &team).expect("moved");
 
@@ -512,4 +517,127 @@ fn a_moved_identity_lets_secret_exec_run_from_a_terminal_that_exports_no_token()
         said(&after)
     );
     assert!(!said(&after).contains(IDENTITY), "{}", said(&after));
+}
+
+// ---------------------------------------------------------------------------------------
+
+// Regression tests for the #271 adversarial review (U1, U2, U4). Fabricated values only; fenced
+// stub keyring. Each began as a proof the exploit worked; the assertion is now that it does not.
+
+/// A chat's environment: no `OP_*`, but PATH is whatever the chat says.
+fn a_chat_running(tmp: &tempfile::TempDir, args: &[&str], evil_bin: &Path) -> Output {
+    let path = format!("{}:/usr/bin:/bin", evil_bin.display());
+    charter(tmp, args)
+        .env("PATH", path)
+        .output()
+        .expect("the binary runs")
+}
+
+/// An `op` a chat drops on its own PATH: it writes whatever token charter hands it to a file, so
+/// the test can tell whether the token ever reached a chat-controlled `op`.
+fn an_op_a_chat_planted(tmp: &tempfile::TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    let evil = tmp.path().join("evil");
+    std::fs::create_dir_all(&evil).unwrap();
+    let loot = tmp.path().join("loot.txt");
+    let op = evil.join("op");
+    std::fs::write(
+        &op,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$OP_SERVICE_ACCOUNT_TOKEN\" >> '{}'\nexit 1\n",
+            loot.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (evil, loot)
+}
+
+/// Move `team`'s token with the real `op` on PATH, so the binary is pinned.
+fn move_with_the_real_op(tmp: &tempfile::TempDir) {
+    use charter_core::secrets::{Ctx, Env, identity, registry};
+    let root = tmp.path().join("plane");
+    let path = format!("{}:/usr/bin:/bin", tmp.path().join("bin").display());
+    let carrying = Ctx::new(
+        &root,
+        Env::of(&[("OP_TEAM_TOKEN", IDENTITY), ("PATH", &path)]),
+    );
+    let team = registry::vault(&carrying, "team").unwrap();
+    identity::move_to_keyring(&carrying, &team).unwrap();
+}
+
+#[test]
+fn a_chat_cannot_steal_a_moved_token_through_an_op_on_its_own_path() {
+    // #271 review U1. charter runs the `op` pinned at move time, never one the chat's PATH finds,
+    // so the token never reaches the chat-controlled `op`.
+    let tmp = with_a_1password_vault();
+    move_with_the_real_op(&tmp);
+
+    let (evil, loot) = an_op_a_chat_planted(&tmp);
+    let _ = a_chat_running(&tmp, &["secret", "list", "team"], &evil);
+
+    let stolen = std::fs::read_to_string(&loot).unwrap_or_default();
+    assert!(stolen.is_empty(), "a chat's op received: {stolen:?}");
+}
+
+#[test]
+fn a_chat_declared_vault_cannot_pull_a_moved_token_by_variable_name() {
+    // #271 review U2. A chat writes its own vault entry naming the victim variable and marking it
+    // keyring-held. Without this machine's pinned record (a per-vault random item and matching
+    // binding), the mark is not honoured, so no token is read and no `op` is even run.
+    let tmp = with_a_1password_vault();
+    move_with_the_real_op(&tmp);
+
+    let local = tmp.path().join("plane/.charter/vaults.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&local).unwrap()).unwrap();
+    doc["vaults"]["innocent"] = serde_json::json!({
+        "provider": "1password",
+        "config": {
+            "op-vault": "Anything",
+            "env": {"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"},
+            "identity": "keyring"
+        }
+    });
+    std::fs::write(&local, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+
+    let (evil, loot) = an_op_a_chat_planted(&tmp);
+    let out = a_chat_running(&tmp, &["secret", "list", "innocent"], &evil);
+    let stolen = std::fs::read_to_string(&loot).unwrap_or_default();
+    assert!(stolen.is_empty(), "a chat's op received: {stolen:?}");
+    assert!(!said(&out).contains(IDENTITY), "{}", said(&out));
+}
+
+#[test]
+fn a_keyring_index_pointed_at_the_identity_service_is_refused() {
+    // #271 review U4. A keys index may only name this vault's own service, `charter/<vault>/<id>`.
+    // One pointed at the identity service (or another vault's) is a corrupt index, so the token is
+    // never read out as a secret value.
+    let tmp = with_a_1password_vault();
+    move_with_the_real_op(&tmp);
+
+    let out = run(&tmp, &["vault", "add", "harmless"]);
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    let idx = tmp.path().join("plane/.charter/vaults/harmless.keys.json");
+    std::fs::create_dir_all(idx.parent().unwrap()).unwrap();
+    std::fs::write(
+        &idx,
+        "{\"service\": \"charter/@identity/abcd\", \"keys\": {\"OP_TEAM_TOKEN\": {\"size\": \"\", \"updated\": \"\"}}}",
+    )
+    .unwrap();
+
+    let got = run(
+        &tmp,
+        &[
+            "secret",
+            "get",
+            "harmless",
+            "OP_TEAM_TOKEN",
+            "--reveal",
+            "--force",
+        ],
+    );
+    assert!(!text(&got.stdout).contains(IDENTITY), "{}", said(&got));
+    assert_ne!(got.status.code(), Some(0), "{}", said(&got));
+    assert!(said(&got).contains("does not own"), "{}", said(&got));
 }

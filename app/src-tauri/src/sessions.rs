@@ -31,6 +31,11 @@ pub struct Opening {
     pub size: Size,
     /// Set in the program's environment, on top of what the app itself was started with.
     pub env: Vec<(String, String)>,
+    /// Extra variable names kept out of this chat, beyond the `OP_*` prefix: every identity
+    /// source and target a vault of this plane declares (`registry::identity_vars`), so a vault
+    /// bound to a non-`OP_` variable (`--token-env PROD_1P_TOKEN`) leaks it to no chat either
+    /// (#271 review, U6). Removed from both the set env and the inherited one.
+    pub env_strip: Vec<String>,
 }
 
 /// Told how each session ended, as it ends. An `Arc` so a session can hold it for as long as
@@ -60,14 +65,19 @@ pub struct Reporting {
 ///
 /// - **A harness's identity**, whatever charter was launched from: only the harness this session
 ///   starts may say which conversation and which process a hook belongs to.
-/// - **Every `OP_*` variable** (#237). A 1Password service-account token in the app's
-///   environment would otherwise sit in every chat's shell, one `echo` from the model. A vault
-///   read through one reads it from the keyring once the vault's tab has moved it there.
-fn not_inherited(inherited: impl Iterator<Item = std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+/// - **Every `OP_*` variable, and every identity variable a vault declares** (#237, and #271
+///   review U6). A 1Password service-account token in the app's environment would otherwise sit
+///   in every chat's shell, one `echo` from the model. A vault read through one reads it from the
+///   keyring once the vault's token has been put there. `strip` is the whole test — `OP_`
+///   case-insensitively, plus the plane's declared identity names.
+fn not_inherited(
+    inherited: impl Iterator<Item = std::ffi::OsString>,
+    strip: &impl Fn(&std::ffi::OsStr) -> bool,
+) -> Vec<std::ffi::OsString> {
     charter_core::hookwire::NOT_INHERITED
         .iter()
         .map(Into::into)
-        .chain(inherited.filter(|name| kept_from_chats(name)))
+        .chain(inherited.filter(|name| strip(name)))
         .collect()
 }
 
@@ -151,14 +161,22 @@ impl Sessions {
         // to carry it: a chat that learned its number afterwards would have a first turn
         // nothing could attribute.
         let id = self.number_for(wanted);
-        // A profile's `OP_*` is dropped with the app's own (#237): a chat never carries one.
+        // A profile's `OP_*`, and any identity variable a vault declares, is dropped with the
+        // app's own (#237, and #271 review U6): a chat never carries one.
+        let strip = |name: &std::ffi::OsStr| {
+            kept_from_chats(name)
+                || opening
+                    .env_strip
+                    .iter()
+                    .any(|s| std::ffi::OsStr::new(s) == name)
+        };
         spec.env = opening
             .env
             .iter()
-            .filter(|(key, _)| !kept_from_chats(std::ffi::OsStr::new(key)))
+            .filter(|(key, _)| !strip(std::ffi::OsStr::new(key)))
             .map(|(key, value)| (key.into(), value.into()))
             .collect();
-        spec.env_without = not_inherited(std::env::vars_os().map(|(name, _)| name));
+        spec.env_without = not_inherited(std::env::vars_os().map(|(name, _)| name), &strip);
         // **The chat is what charter's per-session state is keyed on, and this is what says
         // so** — charter-app#63. Without it `active::session_id` falls to the harness's own
         // `$CLAUDE_CODE_SESSION_ID`, which names the CONVERSATION: `/clear` starts a new one
@@ -444,6 +462,7 @@ mod tests {
             cwd: None,
             size: SIZE,
             env: Vec::new(),
+            env_strip: Vec::new(),
         }
     }
 
@@ -759,6 +778,22 @@ mod tests {
         );
 
         assert_eq!(names, "");
+    }
+
+    #[test]
+    fn a_chat_is_not_given_a_declared_identity_variable_even_without_an_op_prefix() {
+        // #271 review U6. `env_strip` carries every identity source a vault declares, so a vault
+        // bound to `PROD_1P_TOKEN` (no `OP_` prefix) leaks it to no chat.
+        let sessions = Sessions::new();
+        let mut opening = opening("printf 'seen<%s>' \"$PROD_1P_TOKEN\"; sleep 600");
+        opening.env = vec![("PROD_1P_TOKEN".into(), "ops_fixture-declared-src".into())];
+        opening.env_strip = vec!["PROD_1P_TOKEN".into()];
+        let id = sessions
+            .open(None, &opening, &|_| {})
+            .expect("the session opens");
+        let (_view, seen) = watching(&sessions, id);
+        until_seen(&seen, "seen<>");
+        assert!(!lock(&seen).contains("ops_fixture-declared-src"));
     }
 
     /// Set in the child's environment only, so the parent knows it is the child.

@@ -147,6 +147,11 @@ pub(crate) struct VaultContents {
     /// The identity variables it is read through; empty for a vault that declares none. Said
     /// from the registry's mark and the environment, never by reading the keyring.
     pub identity: Vec<VaultIdentity>,
+    /// Identity variables charter's OWN process environment still carries. A same-user process
+    /// can read another's environment block, so while this is non-empty a chat could read the
+    /// token however it was moved — the tab warns to relaunch charter without the export
+    /// (#271 review, U3). Names only.
+    pub identity_in_app_env: Vec<String>,
 }
 
 /// Where each of the vault's identity variables is read from now.
@@ -192,6 +197,7 @@ pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
         count: counted(secrets.len()),
         health: health(ctx, &v),
         identity: identity_of(ctx, &v),
+        identity_in_app_env: identity::app_env_holds_a_token(ctx, &v),
         name: v.name,
         provider: v.provider,
         secrets,
@@ -453,9 +459,25 @@ pub(crate) fn clear_now(pasting: &std::sync::Mutex<Pasting>) -> Result<bool, Str
     locked(pasting).clear_copied(None)
 }
 
+/// Put a token the operator pasted into the keyring for the vault's identity
+/// ([`identity::put_in_keyring`]), and answer with the vault as it now is. The token comes in
+/// here and goes straight to the keyring: it never sits in the app's environment, so no chat can
+/// read it from there. The preferred path (#271 review, U3).
+pub(crate) fn put_identity(
+    ctx: &Ctx,
+    vault: &str,
+    token: &SecretValue,
+) -> Result<VaultContents, String> {
+    let v = cmd::provider(ctx, vault).map_err(message_of)?;
+    identity::put_in_keyring(ctx, &v, &token.0).map_err(message_of)?;
+    open(ctx, vault)
+}
+
 /// Move the vault's identity token from charter's environment into the keyring
 /// ([`identity::move_to_keyring`]), and answer with the vault as it now is. The token goes from
-/// this process's environment to the keyring and nowhere else: not the window, not an error.
+/// this process's environment to the keyring and nowhere else: not the window, not an error. The
+/// app's process keeps its environment block, so [`VaultContents::identity_in_app_env`] then warns
+/// the operator to relaunch (#271 review, U3).
 pub(crate) fn move_identity(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
     let v = cmd::provider(ctx, vault).map_err(message_of)?;
     identity::move_to_keyring(ctx, &v).map_err(message_of)?;
@@ -669,8 +691,27 @@ pub(crate) async fn vault_secret_reveal(
     .await
 }
 
-/// Move a vault's identity token into the keyring ([`move_identity`]). No value crosses: the
-/// token is read from the app's own environment, and the answer is the vault's names.
+/// Put a token the operator pasted into the keyring for a vault's identity ([`put_identity`]).
+/// The token comes in here and goes straight to the keyring — never the app's environment, never
+/// the window, never an error. The preferred path (#271 review, U3).
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_identity_put(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    vault: String,
+    token: SecretValue,
+) -> Result<VaultContents, String> {
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+        put_identity(ctx, &vault, &token)
+    })
+    .await
+}
+
+/// Move a vault's identity token from the app's OWN environment into the keyring
+/// ([`move_identity`]). No value crosses to the window. Kept beside the paste path for an app
+/// launched from a shell that exports the token; the answer's `identity_in_app_env` then warns to
+/// relaunch, because the app's process still carries the export (#271 review, U3).
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn vault_identity_move(
@@ -1358,6 +1399,38 @@ mod tests {
             [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
         );
         assert!(reopened.health.ok, "{reopened:?}");
+    }
+
+    #[test]
+    fn a_pasted_token_is_put_in_the_keyring_and_never_seen_in_the_app_environment() {
+        // #271 review U3. The token comes in through the command, not the app's environment, so
+        // `identity_in_app_env` stays empty: no chat can read it from charter's process.
+        let (dir, ctx) = team(&[]);
+
+        let put = put_identity(&ctx, "team", &SecretValue::from("ops_fixture-pasted-3f")).unwrap();
+
+        assert_eq!(
+            identity_of(&put),
+            [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
+        );
+        assert!(put.identity_in_app_env.is_empty(), "{put:?}");
+        let path = format!("{}:/usr/bin:/bin", dir.path().join("bin").display());
+        let bare = Ctx::new(dir.path(), Env::of(&[("PATH", path.as_str())]));
+        assert_eq!(
+            identity_of(&open(&bare, "team").unwrap()),
+            [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
+        );
+    }
+
+    #[test]
+    fn a_move_from_the_app_environment_warns_that_the_export_is_still_there() {
+        // #271 review U3. The move leaves the export in the app's process, so the answer names it
+        // in `identity_in_app_env` for the tab to warn about.
+        let (_dir, ctx) = team(&[("OP_TEAM_TOKEN", TOKEN)]);
+
+        let moved = move_identity(&ctx, "team").unwrap();
+
+        assert_eq!(moved.identity_in_app_env, ["OP_TEAM_TOKEN"]);
     }
 
     #[test]

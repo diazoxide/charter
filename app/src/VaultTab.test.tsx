@@ -29,6 +29,7 @@ function contents(secrets: VaultSecret[], over: Partial<VaultContents> = {}): Va
     health: { ok: true, detail: `${secrets.length} secret(s) in the system keyring` },
     secrets,
     identity: [],
+    identity_in_app_env: [],
     ...over,
   };
 }
@@ -507,34 +508,62 @@ describe("copying a value", () => {
 });
 
 describe("a 1Password vault's token", () => {
-  /** `team`, a 1Password vault read through `$OP_TEAM_TOKEN`, held `held`. */
-  function team(held: "environment" | "keyring"): VaultContents {
+  const PUT = "put-token-9f21ab";
+
+  /** `team`, a 1Password vault read through `$OP_TEAM_TOKEN`, held `held`, with `inAppEnv` the
+   *  variables charter's own environment still carries. */
+  function team(
+    held: "environment" | "keyring",
+    inAppEnv: string[] = held === "environment" ? ["OP_TEAM_TOKEN"] : [],
+  ): VaultContents {
     return contents([secret("DEPLOY", { size: null, updated: null })], {
       provider: "1password",
       identity: [{ variable: "OP_TEAM_TOKEN", held }],
+      identity_in_app_env: inAppEnv,
     });
   }
 
-  it("offers to move a token charter reads from its environment into the Keychain", async () => {
-    const asked = core(team("environment"), { vault_identity_move: team("keyring") });
+  it("puts a pasted token straight into the Keychain, and keeps it out of the page", async () => {
+    // The token the operator pastes goes to `vault_identity_put`; the app's environment never has
+    // it, so no chat can read it (#271 review, U3). The box is emptied at the press.
+    const asked = core(team("environment"), { vault_identity_put: team("keyring") });
     const onChanged = draw();
 
+    const box = await screen.findByLabelText("Token for $OP_TEAM_TOKEN");
+    await userEvent.type(box, PUT);
     await userEvent.click(
-      await screen.findByRole("button", { name: "Move this token into the Keychain" }),
+      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
+    );
+
+    expect(asked.at(-1)).toEqual({
+      cmd: "vault_identity_put",
+      args: { plane: PLANE, vault: "ops", token: PUT },
+    });
+    noValueAnywhere(PUT);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Stored $OP_TEAM_TOKEN in the Keychain",
+    );
+    expect(screen.getByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("offers to move the token charter's environment already has, and warns to relaunch", async () => {
+    // The move path leaves the export in the app's own process, so the note warns to relaunch
+    // (#271 review, U3): the honest wording, not "no chat is given it".
+    const asked = core(team("environment"), {
+      vault_identity_move: team("keyring", ["OP_TEAM_TOKEN"]),
+    });
+    draw();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Move the token from charter's environment" }),
     );
 
     expect(asked.at(-1)).toEqual({
       cmd: "vault_identity_move",
       args: { plane: PLANE, vault: "ops" },
     });
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Moved $OP_TEAM_TOKEN into the Keychain",
-    );
-    expect(
-      screen.queryByRole("button", { name: "Move this token into the Keychain" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
-    expect(onChanged).toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent("relaunch charter");
   });
 
   it("says where the token is, and offers nothing, once it is in the Keychain", async () => {
@@ -543,8 +572,18 @@ describe("a 1Password vault's token", () => {
 
     expect(await screen.findByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Move this token into the Keychain" }),
+      screen.queryByRole("button", { name: "Put this vault's token in the Keychain" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Move the token from charter's environment" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still warns to relaunch when the token is in the Keychain but the shell still exports it", async () => {
+    core(team("keyring", ["OP_TEAM_TOKEN"]));
+    draw();
+
+    expect(await screen.findByText(/relaunch charter without it/)).toBeInTheDocument();
   });
 
   it("offers nothing for a vault read through no token", async () => {
@@ -553,27 +592,28 @@ describe("a 1Password vault's token", () => {
 
     await screen.findByRole("table", { name: "Secrets in ops" });
     expect(
-      screen.queryByRole("button", { name: "Move this token into the Keychain" }),
+      screen.queryByRole("button", { name: "Put this vault's token in the Keychain" }),
     ).not.toBeInTheDocument();
   });
 
-  it("says why when the core refuses the move, and keeps offering it", async () => {
+  it("says why when the core refuses the put, and keeps offering it", async () => {
     core(team("environment"), {
-      vault_identity_move: new Error(
-        "charter could not write 'charter/identity' in the system keyring",
+      vault_identity_put: new Error(
+        "charter could not write 'charter/@identity/ab' in the system keyring",
       ),
     });
     draw();
 
+    const box = await screen.findByLabelText("Token for $OP_TEAM_TOKEN");
+    await userEvent.type(box, PUT);
     await userEvent.click(
-      await screen.findByRole("button", { name: "Move this token into the Keychain" }),
+      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "could not write 'charter/identity'",
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not write");
     expect(
-      screen.getByRole("button", { name: "Move this token into the Keychain" }),
+      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
     ).toBeInTheDocument();
+    noValueAnywhere(PUT);
   });
 });

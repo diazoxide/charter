@@ -121,20 +121,36 @@ export function VaultTab({
     });
   };
 
-  const moveToken = async () => {
+  /** Store a token the operator pasted, or move the one charter's environment already has. The
+   *  answer's `identity_in_app_env` decides the note: a paste keeps the token out of the app's
+   *  environment, so no chat can read it; a move leaves the export in the app's process, so the
+   *  note says to relaunch (#271 review, U3). */
+  const store = async (how: "put" | "move", token?: string) => {
     setMoving(true);
     setNote(undefined);
-    const answer = await settled(commands.vaultIdentityMove(plane, vault));
+    const answer = await settled(
+      how === "put"
+        ? commands.vaultIdentityPut(plane, vault, token ?? "")
+        : commands.vaultIdentityMove(plane, vault),
+    );
     setMoving(false);
     if (answer.status === "error") {
       setNote({ said: answer.error, trouble: true });
-      return;
+      return false;
     }
     setSaid({ contents: answer.data });
     onChanged();
+    const names = named(answer.data.identity);
+    const stillExported = answer.data.identity_in_app_env;
+    const relaunch =
+      stillExported.length > 0
+        ? ` Your shell still exports ${stillExported.map((v) => `$${v}`).join(", ")}, which a chat can still read from charter's own environment — quit and relaunch charter from a shell that does not, and remove the export from your shell's startup files.`
+        : "";
     setNote({
-      said: `Moved ${named(answer.data.identity)} into the Keychain. No chat is given it, and charter reads it from the Keychain first.`,
+      said: `Stored ${names} in the Keychain. charter reads it from there, and no chat is given the token.${relaunch}`,
+      trouble: relaunch !== "",
     });
+    return true;
   };
 
   useEffect(() => {
@@ -227,10 +243,12 @@ export function VaultTab({
                 {contents.health.detail}
               </p>
             )}
-            <IdentityLine
+            <IdentityPanel
               identity={contents.identity}
-              moving={moving}
-              onMove={() => void moveToken()}
+              inAppEnv={contents.identity_in_app_env}
+              busy={moving}
+              onPut={(token) => void store("put", token)}
+              onMove={() => void store("move")}
             />
             <div className="vault-tools">
               <div className="panel-search">
@@ -349,34 +367,94 @@ function named(identity: VaultIdentity[]): string {
 }
 
 /**
- * Where the vault's identity token is, under the header, and the offer to move it: shown for a
- * token charter's environment carries, and a plain sentence once it is in the Keychain. A vault
- * whose token is nowhere says so in its health line above, and a vault read through none shows
- * nothing here.
+ * Where the vault's identity token is, under the header, and how to put it in the Keychain
+ * (charter-app#237, hardened after the #271 review).
+ *
+ * **The primary way is a password box**: the operator pastes the token and it goes straight to
+ * the keyring, so it never sits in the app's environment where a same-user process could read it.
+ * The box is uncontrolled and read once at the press, so the value is not in the page's markup.
+ *
+ * **Moving the token charter's environment already has** stays as a second offer, for an app
+ * launched from a shell that exports it — but it leaves the export in the app's own process, so
+ * the note after a move (and this line, while `inAppEnv` is non-empty) says to relaunch.
+ *
+ * A vault whose token is nowhere says so in its health line above; a vault read through no
+ * identity variable shows nothing here.
  */
-function IdentityLine({
+function IdentityPanel({
   identity,
-  moving,
+  inAppEnv,
+  busy,
+  onPut,
   onMove,
 }: {
   identity: VaultIdentity[];
-  moving: boolean;
+  inAppEnv: string[];
+  busy: boolean;
+  onPut: (token: string) => void;
   onMove: () => void;
 }) {
+  const box = useRef<HTMLInputElement>(null);
   if (identity.length === 0) return null;
+
+  const stillExported =
+    inAppEnv.length > 0 ? (
+      <span className="trouble">
+        {` Your shell still exports ${inAppEnv.map((v) => `$${v}`).join(", ")}; quit and relaunch charter without it so no chat can read it from charter's environment.`}
+      </span>
+    ) : null;
+
   if (identity.every((one) => one.held === "keyring")) {
     return (
-      <p className="vault-identity">{`charter reads ${named(identity)} from the Keychain.`}</p>
+      <p className="vault-identity">
+        {`charter reads ${named(identity)} from the Keychain.`}
+        {stillExported}
+      </p>
     );
   }
-  if (!identity.some((one) => one.held === "environment")) return null;
+
+  const put = () => {
+    const token = box.current?.value ?? "";
+    if (box.current) box.current.value = "";
+    if (token !== "") onPut(token);
+  };
+
+  const inEnv = identity.some((one) => one.held === "environment");
   return (
-    <p className="vault-identity">
-      {`Read through ${named(identity)}, a token in charter's environment. `}
-      <button type="button" tabIndex={0} disabled={moving} onClick={onMove}>
-        Move this token into the Keychain
-      </button>
-    </p>
+    <div className="vault-identity">
+      <p>
+        {`Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and charter finds it for every command.`}
+        {stillExported}
+      </p>
+      <div className="vault-identity-put">
+        <input
+          ref={box}
+          type="password"
+          aria-label={`Token for ${named(identity)}`}
+          placeholder="Paste the token"
+          autoComplete="off"
+          spellCheck={false}
+          disabled={busy}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") put();
+          }}
+        />
+        <button type="button" tabIndex={0} disabled={busy} onClick={put}>
+          Put this vault's token in the Keychain
+        </button>
+        {inEnv && (
+          <button
+            type="button"
+            className="panel-view"
+            tabIndex={0}
+            disabled={busy}
+            onClick={onMove}
+          >
+            Move the token from charter's environment
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

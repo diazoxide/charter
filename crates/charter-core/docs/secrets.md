@@ -125,21 +125,37 @@ registry is read. A 1Password vault, item or account that starts with `-` is ref
 - **A persona is a label, not an access boundary.** `persona secret` picks a vault by the
   active persona's `vault:` field, but any chat can name any vault with `secret` directly, or
   pass `--persona`. Personas decide which vault is the default, not who may read it.
-- **A moved identity token is out of the chat's environment, not out of reach.** After the
-  move no chat the app starts is given an `OP_*` variable, so `echo $OP_TEAM_TOKEN` there prints
-  nothing. What is left: charter itself reads the token from the keyring for every `charter
-  secret` a chat runs, so an agent can still use the vault — it cannot print the token. Your
-  shell's own startup files are yours: a `.zshrc` that exports the token puts it back into every
-  shell the chat starts, so delete that line once the token is moved. A terminal outside the app
-  still carries whatever it exports. Only `OP_*` variables are kept from chats; a vault bound to
-  another variable (`VAULT_TOKEN`) can move it too, but a chat still inherits it unless the app
-  was started without it.
+- **Put the token in the Keychain, do not leave it in a shell.** The vault's tab has a box to
+  paste the token straight into the keyring; it never touches charter's own environment. After
+  that no chat the app starts is given the vault's identity variable (`OP_*` matched case
+  insensitively, and every source name a vault declares, `VAULT_TOKEN` included), so
+  `echo $OP_TEAM_TOKEN` there prints nothing. charter itself reads the token from the keyring for
+  every `charter secret` a chat runs, so an agent can still use the vault — it cannot print the
+  token.
+- **A move from charter's own environment leaves the token in the app's process.** The tab also
+  offers to move the token an app launched from an exporting shell already carries. That works,
+  but a same-user process can read another's environment block (`ps -Eww`, `/proc/<pid>/environ`),
+  so until you quit and relaunch charter from a shell that does not export it — and delete the
+  export from your shell's startup files — a chat can still read it from charter. The tab warns
+  while the app's environment still holds one. Pasting into the box avoids this; prefer it.
+- **charter only runs the `op` it pinned when the token was stored.** A keyring-held identity is
+  handed to the absolute `op` resolved from your PATH at store time, whose code-signing team is
+  pinned too; a chat that drops its own `op` on `$PATH` cannot receive the token, and charter
+  refuses rather than fall back to `$PATH`. Re-store the token if you move or reinstall `op`.
 - **On macOS the two charter programs are asked for separately.** The token item is written by
   the app, so the first `charter secret` in a chat that reads it makes the Keychain ask whether
   `charter` may, and "Always Allow" adds it (ADR 0047). On Linux any process in your session can
   read an unlocked Secret Service collection.
 - **Errors never repeat a stored entry.** A reference that does not resolve is named by its
   key, not by what the file holds under it, because that may be a value.
+- **The app's Copy puts a value on the system clipboard for up to a minute.** While it is there,
+  **any process running as you can read it** — that is what a clipboard is. charter marks the
+  copy so clipboard-history apps skip it and clears it after 60 seconds, but only if the clipboard
+  still holds that value; anything you copy in the meantime is left alone. The clear runs in the
+  app, so **an app that crashes or is force-quit within the minute leaves the value on the
+  clipboard** — it is cleared at a graceful quit, not a kill. And where Apple's **Universal
+  Clipboard** is on, macOS may sync the copy to your other Apple devices, which charter cannot
+  reach to clear; turn it off for a machine that copies secrets.
 
 `charter doctor`'s vaults row does not check vaults yet.
 

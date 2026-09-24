@@ -140,6 +140,7 @@ const vaultOf = (name: string): VaultContents => ({
       ? held.map((key) => ({ key, size: "16–31 bytes", updated: "2026-09-24T11:32:17Z" }))
       : [],
   identity: [],
+  identity_in_app_env: [],
 });
 const vaultList = () =>
   ["ops", ...made].map((name) => {
