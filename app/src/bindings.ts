@@ -500,6 +500,20 @@ export const commands = {
 	 */
 	extensionsOn: (plane: PlaneId) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane })),
 	/**
+	 *  This project's theme, with every theme it may pick. It takes a survey, as
+	 *  [`project_extensions`] does, so a pick the extension no longer contributes is said here.
+	 */
+	projectTheme: (plane: PlaneId) => typedError<ProjectTheme, string>(__TAURI_INVOKE("project_theme", { plane })),
+	/**
+	 *  What the window draws while this project is in front, as a file holds it: `null` leaves the
+	 *  window its own theme.
+	 * 
+	 *  **The record alone**, as [`extensions_on`] is, so it is cheap enough to ask for every project
+	 *  a window holds. A pick the extension does not contribute is left to the window, which only
+	 *  ever holds the themes a survey found, and draws the built-in when the pick is not among them.
+	 */
+	projectThemeDrawn: (plane: PlaneId) => typedError<string | null, string>(__TAURI_INVOKE("project_theme_drawn", { plane })),
+	/**
 	 *  Every view an approved extension offers this window.
 	 * 
 	 *  An extension that is new, changed or unreadable offers nothing — the registry's one job, as
@@ -1408,6 +1422,28 @@ export type ProjectSettings = {
 	local: SettingsFile,
 };
 
+/**
+ *  A project's theme, as the Project settings tab draws it —
+ *  `extension::project::theme::resolve`, shaped for the wire.
+ */
+export type ProjectTheme = {
+	/**
+	 *  charter's own themes, following the system, and every theme an extension this machine
+	 *  approved contributes — whether or not this project has that extension on.
+	 */
+	options: ThemeOption[],
+	/**  What the files pick, in force, as a file holds it; `null` when neither picks one. */
+	picked: string | null,
+	/**  `default`, `shared` or `local`: which file `picked` came from. */
+	source: string,
+	/**  What the window draws while this project is in front; `null` leaves it its own theme. */
+	draws: string | null,
+	/**  Why `draws` is not `picked`, when it is not. */
+	why: string | null,
+	/**  Each value a file set that charter did not use, and why. */
+	ignored: ProjectExtensionIgnored[],
+};
+
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
 export type Rebuilds = {
 	count: number,
@@ -1666,6 +1702,14 @@ export type StartOptions = {
 /**  A chat that started: its session. */
 export type Started = {
 	session: number,
+};
+
+/**  One theme a project may pick, as the Theme select lists it. */
+export type ThemeOption = {
+	/**  What the file holds: `charter-dark`, `charter-light`, `system`, or `<extension>/<theme>`. */
+	value: string,
+	/**  What the select shows. */
+	label: string,
 };
 
 /**  What the operating system has already spent of the window's own title bar. */

@@ -341,7 +341,8 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
         }
     }
 
-    // 2. The local file: only `[harness]` is read here (and `[extensions]` is let through).
+    // 2. The local file: only `[harness]` is read here (and `[extensions]` and `[theme]` are let
+    //    through).
     let local = match local {
         Ok(Some(text)) => match text.parse::<toml::Table>() {
             Ok(table) => Some(table),
@@ -386,13 +387,18 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
         // on, and what they are set to (charter-app#253, ADR 0048). It is read by
         // `extension::project`, not here, and it cannot reach past this machine's approval —
         // so it changes nothing a teammate's clone does, which is the reason for the rule below.
-        if key != "harness" && key != crate::extension::project::TABLE {
+        // `[theme]` is the same kind of choice (charter-app#273): which theme this machine draws
+        // the project in, read by `extension::project::theme`.
+        if key != "harness"
+            && key != crate::extension::project::TABLE
+            && key != crate::extension::project::theme::TABLE
+        {
             let name = shown::short(key);
             set.refused.push(Refused {
                 reason: format!(
                     "[{name}] in charter.local.toml is not read — that file carries \
-                     [harness] and [extensions] and nothing else, because an ignored file must \
-                     not change plane policy with no trace in git. Put [{name}] in charter.toml."
+                     [harness], [extensions] and [theme] and nothing else, because an ignored \
+                     file must not change plane policy with no trace in git. Put [{name}] in charter.toml."
                 ),
                 name,
                 source: LOCAL_FILE.to_owned(),

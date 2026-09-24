@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { forgetExtensionThemes } from "./Extensions";
 import { forgetExtensionsOn } from "./extensionsOn";
+import { forgetProjectThemes } from "./projectTheme";
 import App from "./App";
 
 /**
@@ -462,9 +463,11 @@ describe("one list, two surfaces", () => {
     cleanup();
     clearMocks();
     // A second window, as the first was: what the first learned about its project's extensions
-    // and themes is module state (`extensionsOn.ts`, `Extensions.tsx`) that a new window has not.
+    // and themes is module state (`extensionsOn.ts`, `Extensions.tsx`, `projectTheme.ts`) that a
+    // new window has not.
     forgetExtensionsOn();
     forgetExtensionThemes();
+    forgetProjectThemes();
 
     const fromThePalette = core();
     render(<App />);

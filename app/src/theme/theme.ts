@@ -208,6 +208,19 @@ export const BUILT_IN: Record<string, Theme> = {
 /** The theme the window comes up in when nothing has said otherwise. */
 export const DEFAULT_THEME: Theme = BUILT_IN["charter-dark"];
 
+/** The media query the operating system answers with its appearance: true when it is light. */
+export const PREFERS_LIGHT = "(prefers-color-scheme: light)";
+
+/**
+ * The built-in that matches the operating system's appearance right now — what a project that
+ * picked "follow the system" draws (charter-app#273). Dark where the platform cannot say, which
+ * is what the window comes up in.
+ */
+export function systemTheme(): Theme {
+  const light = typeof matchMedia === "function" && matchMedia(PREFERS_LIGHT).matches;
+  return light ? BUILT_IN["charter-light"] : BUILT_IN["charter-dark"];
+}
+
 /** The built-in a theme of this appearance falls back to, token by token. */
 function fallbackFor(appearance: Appearance): Theme {
   return appearance === "light" ? BUILT_IN["charter-light"] : BUILT_IN["charter-dark"];

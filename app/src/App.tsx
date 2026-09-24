@@ -28,6 +28,7 @@ import { ApprovePlane } from "./ApprovePlane";
 import { drawThemeFor, Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { useExtensionsOn } from "./extensionsOn";
+import { useProjectTheme } from "./projectTheme";
 import { useContributedPanels } from "./Panels";
 import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
@@ -518,13 +519,18 @@ function App() {
   /** What the project in front has on (charter-app#253), for the one thing that is the window's
    *  and not a project's to draw: the theme. */
   const onInFront = useExtensionsOn(inFront);
-  // The theme the project in front may have, drawn once it has said what it has on — and every
-  // approved extension's with no project in front, which is what the window drew before projects
-  // had a say (ADR 0048). After the first frame, like every extension theme (`Extensions.tsx`).
+  /** The theme the project in front picked (charter-app#273): `null` when it picked none. */
+  const pickInFront = useProjectTheme(inFront);
+  // The theme the project in front has, drawn once it has said what it has on and what it picked
+  // — and every approved extension's with no project in front, which is what the window drew
+  // before projects had a say (ADR 0048). After the first frame, like every extension theme
+  // (`Extensions.tsx`). A project switch redraws it, and `theme.onDrawn` hands it to every
+  // terminal on screen (#216).
   useEffect(() => {
     if (inFront === undefined) void drawThemeFor("every");
-    else if (onInFront !== undefined) void drawThemeFor(onInFront);
-  }, [inFront, onInFront]);
+    else if (onInFront !== undefined && pickInFront !== undefined)
+      void drawThemeFor(onInFront, pickInFront);
+  }, [inFront, onInFront, pickInFront]);
   /** What the project in front last said about itself, when it has said anything yet. The
    *  palette lists its catalogue and runs its rows, so a row reaches that project's live
    *  arrangement and no other's. */

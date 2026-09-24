@@ -4,14 +4,14 @@ import App from "./App";
 import { attach } from "./bench";
 import { settleLayout } from "./regions";
 import { DEFAULT_THEME, drawIn } from "./theme/theme";
-import { theirTheme } from "./windowprefs";
+import { theirThemeOnce } from "./windowprefs";
 
 // The window's colours, before anything is rendered and therefore before anything is painted:
 // the operator's own `theme.json` when there is one, else the built-in compiled into the bundle.
 // Neither is a read from disk on the way to the first frame — the file was read by the Rust side
 // before the window existed and handed to it with the window (`windowprefs.ts`) — which is the
 // only arrangement ADR 0026's 2 s cold start can afford.
-drawIn(theirTheme() ?? DEFAULT_THEME);
+drawIn(theirThemeOnce() ?? DEFAULT_THEME);
 
 // In a scenario-test build only, WebdriverIO's window-side plugin, which its Tauri service
 // looks for. `vite build --mode e2e` is the only build that sets this.
