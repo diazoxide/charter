@@ -490,6 +490,11 @@ export const commands = {
 	 *  a keyring vault, so a refresh never makes the Keychain ask anything. Never a value.
 	 */
 	vaultRefresh: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_refresh", { plane, vault })),
+	/**
+	 *  Make a new vault on this plane, kept by `provider` — the keyring when `null` — and answer
+	 *  with it opened. No value crosses.
+	 */
+	vaultCreate: (plane: PlaneId, vault: string, provider: string | null, opVault: string | null) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_create", { plane, vault, provider, opVault })),
 	/**  Store a new secret. The value comes in here and goes nowhere but the vault. */
 	vaultSecretAdd: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_add", { plane, vault, key, value })),
 	/**  Replace a held secret's value. The value comes in here and goes nowhere but the vault. */

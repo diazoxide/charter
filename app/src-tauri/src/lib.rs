@@ -1162,6 +1162,7 @@ fn commands() -> Builder<tauri::Wry> {
             vaults::vault_list,
             vaults::vault_open,
             vaults::vault_refresh,
+            vaults::vault_create,
             vaults::vault_secret_add,
             vaults::vault_secret_set,
             vaults::vault_secret_rename,

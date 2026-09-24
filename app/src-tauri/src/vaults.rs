@@ -1,7 +1,8 @@
 //! The plane's vaults, as the window reaches them.
 
-use charter_core::secrets::cmd;
+use charter_core::secrets::cmd::{self, Io, Say};
 use charter_core::secrets::keyring;
+use charter_core::secrets::vaultcmd;
 use charter_core::secrets::registry::{self, Vault};
 use charter_core::secrets::{Ctx, Env, VaultError, env_overlay};
 
@@ -260,6 +261,62 @@ pub(crate) fn delete(ctx: &Ctx, vault: &str, key: &str) -> Result<VaultContents,
     open(ctx, vault)
 }
 
+/// What a new vault is kept in when the window does not say: the system's own credential
+/// store (#232, decision 1).
+const DEFAULT_PROVIDER: &str = "keyring";
+
+/// `charter vault add`'s words, kept rather than printed, so a refusal reaches the window as the
+/// sentence a terminal would have shown. It is asked for names only, so there is no value here
+/// to keep, and it answers every question about a terminal with "no".
+#[derive(Default)]
+struct Kept {
+    lines: Vec<String>,
+}
+
+impl Io for Kept {
+    fn say(&mut self, line: Say) {
+        let (Say::Info(text) | Say::Ok(text) | Say::Warn(text) | Say::Err(text)) = line;
+        self.lines.push(text);
+    }
+    fn out(&mut self, _bytes: &[u8]) {}
+    fn err(&mut self, _bytes: &[u8]) {}
+    fn stdout_is_terminal(&self) -> bool {
+        false
+    }
+    fn stdin_is_terminal(&self) -> bool {
+        false
+    }
+    fn read_stdin(&mut self) -> String {
+        String::new()
+    }
+    fn read_hidden(&mut self, _prompt: &str) -> String {
+        String::new()
+    }
+}
+
+/// Register a new, local vault called `name`, kept by `provider` (the keyring when `None`), and
+/// answer with it opened. The path `charter vault add` takes, so the window and a terminal refuse
+/// the same names, the same taken name and the same unignored plaintext file, in the same words.
+/// A 1Password vault needs `op_vault`, the 1Password vault its items go in.
+pub(crate) fn create(
+    ctx: &Ctx,
+    name: &str,
+    provider: Option<&str>,
+    op_vault: Option<&str>,
+) -> Result<VaultContents, String> {
+    let req = vaultcmd::AddRequest {
+        name: name.to_owned(),
+        provider: provider.unwrap_or(DEFAULT_PROVIDER).to_owned(),
+        op_vault: op_vault.map(str::to_owned),
+        ..Default::default()
+    };
+    let mut kept = Kept::default();
+    if vaultcmd::add(ctx, &req, &mut kept) != 0 {
+        return Err(kept.lines.join("\n"));
+    }
+    open(ctx, name)
+}
+
 // ---------------------------------------------------------------------------------------
 // The commands. Each resolves its plane on the thread that asked and does the work on a
 // blocking one: a 1Password vault's health and keys run `op`, which can take seconds.
@@ -311,6 +368,23 @@ pub(crate) async fn vault_refresh(
     vault: String,
 ) -> Result<VaultContents, String> {
     blocking(ctx_of(&planes, &plane)?, move |ctx| open(ctx, &vault)).await
+}
+
+/// Make a new vault on this plane, kept by `provider` — the keyring when `null` — and answer
+/// with it opened. No value crosses.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_create(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    vault: String,
+    provider: Option<String>,
+    op_vault: Option<String>,
+) -> Result<VaultContents, String> {
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+        create(ctx, &vault, provider.as_deref(), op_vault.as_deref())
+    })
+    .await
 }
 
 /// Store a new secret. The value comes in here and goes nowhere but the vault.
@@ -645,6 +719,44 @@ mod tests {
     fn a_value_from_the_window_arrives_as_a_string_and_never_prints_in_debug() {
         let value: SecretValue = serde_json::from_str("\"debug-fixture-61c2\"").unwrap();
         assert_eq!(format!("{value:?}"), "SecretValue(***)");
+    }
+
+    #[test]
+    fn a_new_vault_is_a_keyring_vault_unless_another_provider_is_asked_for() {
+        let (_dir, ctx) = plane();
+
+        let made = create(&ctx, "fresh", None, None).unwrap();
+        let file = create(&ctx, "papers", Some("plain-file"), None).unwrap();
+
+        assert_eq!(
+            (made.name.as_str(), made.provider.as_str(), made.count),
+            ("fresh", "keyring", 0)
+        );
+        assert_eq!(file.provider, "plain-file");
+        let names: Vec<String> = list(&ctx).unwrap().into_iter().map(|v| v.name).collect();
+        assert_eq!(names, ["files", "fresh", "ops", "papers"]);
+    }
+
+    #[test]
+    fn a_vault_name_charter_would_not_accept_or_one_already_registered_is_refused() {
+        let (_dir, ctx) = plane();
+
+        let bad = create(&ctx, "../escape", None, None).unwrap_err();
+        let taken = create(&ctx, "ops", Some("plain-file"), None).unwrap_err();
+        let unknown = create(&ctx, "odd", Some("carrier-pigeon"), None).unwrap_err();
+
+        assert!(bad.contains("not a vault name"), "{bad}");
+        assert!(taken.contains("already registered"), "{taken}");
+        assert!(unknown.contains("unknown provider"), "{unknown}");
+        assert_eq!(open(&ctx, "ops").unwrap().provider, "keyring");
+    }
+
+    #[test]
+    fn a_1password_vault_needs_the_1password_vault_it_keeps_its_items_in() {
+        let (_dir, ctx) = plane();
+        let err = create(&ctx, "team", Some("1password"), None).unwrap_err();
+        assert!(err.contains("1Password vault"), "{err}");
+        assert!(open(&ctx, "team").is_err());
     }
 
     #[test]
