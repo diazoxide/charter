@@ -1695,7 +1695,10 @@ fn digest(parts: &[(&str, &[u8])]) -> String {
     framed.finish()
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// Lowercase hex, two digits a byte: how every sha256 charter records or prints is spelled.
+///
+/// One spelling for the crate, since `sha2` 0.11's digests no longer format as `{:x}`.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

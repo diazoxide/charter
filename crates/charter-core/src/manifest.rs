@@ -38,7 +38,7 @@ pub fn digest(doc: &serde_json::Value) -> String {
     };
     let mut hasher = sha2::Sha256::new();
     hasher.update(pyjson::dumps_sorted(&body).as_bytes());
-    format!("{:x}", hasher.finalize())
+    crate::extension::hex(&hasher.finalize())
 }
 
 /// Who owns the manifest whose text this is, or `Absent` for no file.
@@ -60,6 +60,18 @@ pub fn ownership(text: Option<&str>) -> Ownership {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The stamp is SHA-256 over `json.dumps(body, sort_keys=True)` without the stamp itself,
+    /// pinned to Python's `hashlib` over `'{"a": "x", "b": 1}'`: a manifest stamped before a
+    /// dependency bump must still read as charter's after it.
+    #[test]
+    fn a_stamp_is_the_known_sha256_of_the_sorted_body() {
+        let doc = serde_json::json!({"b": 1, "a": "x", KEY: "stale"});
+        assert_eq!(
+            digest(&doc),
+            "385820f0096fd558f4091319e7fa742cebf877dc3baca180981889f1c40eca84"
+        );
+    }
 
     #[test]
     fn a_stamp_that_no_longer_matches_the_body_makes_the_manifest_the_operators() {

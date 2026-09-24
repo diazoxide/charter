@@ -433,7 +433,7 @@ fn found(value: &toml::Value) -> Found {
                     .collect(),
             ))
         }
-        other => Found::Other(other.to_string()),
+        other => Found::Other(crate::pyrepr::toml_09_datetimes(other).to_string()),
     }
 }
 

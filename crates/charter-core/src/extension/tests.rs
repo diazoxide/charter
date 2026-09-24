@@ -377,6 +377,22 @@ fn a_program_is_hashed_like_any_other_declared_file() {
     );
 }
 
+/// An approval is recorded against this digest, so its spelling is pinned to one computed
+/// outside the crate: Python's `hashlib.sha256` over each part as a big-endian `u64` name
+/// length, the name, a `u64` byte length and the bytes. A bump of `sha2` that respelled it
+/// would ask the operator to approve every extension again.
+#[test]
+fn the_framed_digest_is_the_known_sha256_of_the_framing() {
+    let parts: [(&str, &[u8]); 2] = [
+        ("manifest.toml", b"name = \"x\"\n"),
+        ("bin/run", b"\x00\xff"),
+    ];
+    assert_eq!(
+        digest(&parts),
+        "f9a8b19e89b98cb531dc03dc6d52802449a9d6fd6720cb02c754c58b41a6496a"
+    );
+}
+
 #[test]
 fn a_name_and_its_contents_cannot_run_together() {
     // The length framing, driven through `digest` rather than through an extension.
