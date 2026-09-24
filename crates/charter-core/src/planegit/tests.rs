@@ -623,6 +623,63 @@ fn the_signer_is_never_asked_even_when_the_operator_signs_every_commit() {
     assert!(!ran.exists(), "the signer was run");
 }
 
+#[test]
+fn a_rebase_still_running_at_its_deadline_is_stopped_and_said_to_be_out_of_time() {
+    // charter-app#242: the rebase used to have no deadline at all. What holds it here is a
+    // smudge filter that sleeps — git runs it for every file the rebase checks out, and the
+    // runner turns off hooks and the fsmonitor but not filters — standing in for a signer
+    // prompt, a lock, anything that waits. The deadline is the helper's argument so the test
+    // does not wait out the real one.
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    run(
+        &fixture.root,
+        &[
+            "push",
+            "-q",
+            &bare.display().to_string(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    let theirs = fixture.root.parent().unwrap().join("theirs");
+    run(
+        fixture.root.parent().unwrap(),
+        &[
+            "clone",
+            "-q",
+            &bare.display().to_string(),
+            &theirs.display().to_string(),
+        ],
+    );
+    std::fs::write(theirs.join(".gitattributes"), "slow.md filter=slow\n").unwrap();
+    std::fs::write(theirs.join("slow.md"), "slow").unwrap();
+    run(&theirs, &["add", "-A"]);
+    run(&theirs, &["commit", "-q", "-m", "theirs"]);
+    run(&theirs, &["push", "-q", "origin", "main"]);
+    std::fs::write(fixture.root.join("mine.md"), "mine").unwrap();
+    run(&fixture.root, &["add", "-A"]);
+    run(&fixture.root, &["commit", "-q", "-m", "mine"]);
+    run(
+        &fixture.root,
+        &["config", "filter.slow.smudge", "sleep 20; cat"],
+    );
+    run(&fixture.root, &["config", "filter.slow.clean", "cat"]);
+    run(
+        &fixture.root,
+        &["fetch", "-q", &bare.display().to_string(), "main"],
+    );
+
+    let started = std::time::Instant::now();
+    let rebased = rebase_onto_fetched(&fixture.root, std::time::Duration::from_secs(1));
+
+    assert_eq!(rebased, Rebased::OutOfTime);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(15),
+        "it waited for the filter: {:?}",
+        started.elapsed()
+    );
+}
+
 /// Set on the re-executed test binary: the path the signer touches when it is asked.
 const SIGNING_CHILD: &str = "CHARTER_TEST_SIGNING_HOME_MARK";
 
@@ -632,8 +689,9 @@ fn a_save_that_has_to_rebase_never_asks_the_signer_the_operators_home_names() {
     // sends it through `git rebase FETCH_HEAD`, which replays that commit — and a replay is a
     // commit, so it read the operator's global `commit.gpgsign = true` and asked the signer:
     // a 1Password prompt that blocks, or a signer that fails and turns an ordinary moved
-    // remote into a reported conflict. The product's git keeps only `HOME` of the environment
-    // it runs in, so the signing HOME is given to a CHILD: this test re-runs itself.
+    // remote into a reported conflict. The product's git clears its environment and keeps
+    // `HOME`, which a test cannot set in its own process, so the signing HOME is given to a
+    // CHILD: this test re-runs itself ([`crate::testrun`]).
     if let Some(ran) = std::env::var_os(SIGNING_CHILD) {
         let ran = PathBuf::from(ran);
         let fixture = Fixture::plane();
@@ -684,25 +742,14 @@ fn a_save_that_has_to_rebase_never_asks_the_signer_the_operators_home_names() {
     let dir = tempfile::tempdir().unwrap();
     let top = dir.path().canonicalize().unwrap();
     let (home, ran) = crate::testgit::signing_home(&top);
-    let out = crate::forklock::output(
-        std::process::Command::new(std::env::current_exe().expect("the test binary"))
-            .args([
-                "--exact",
-                "planegit::tests::a_save_that_has_to_rebase_never_asks_the_signer_the_operators_home_names",
-                "--nocapture",
-            ])
-            .env(SIGNING_CHILD, &ran)
-            .env("HOME", &home),
-    )
-    .expect("the test binary re-runs");
-    let said = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+
+    crate::testrun::rerun(
+        &[
+            "planegit::tests::a_save_that_has_to_rebase_never_asks_the_signer_the_operators_home_names",
+        ],
+        &[(SIGNING_CHILD, ran.as_os_str()), ("HOME", home.as_os_str())],
     );
 
-    assert!(out.status.success(), "{said}");
-    assert!(said.contains("test result: ok. 1 passed"), "{said}");
     assert!(!ran.exists(), "the signer was asked");
 }
 

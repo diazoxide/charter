@@ -5,7 +5,7 @@
 //! harness — and `cargo test` run inside that chat inherits them. A unit test that builds a
 //! plane of its own and then asks the product which plane it is on was answered with the
 //! CHAT's plane, and a test that writes a push record wrote it into the operator's
-//! `$CHARTER_HOME`. So every read of a steering variable goes through [`var_os`], and under
+//! `$CHARTER_HOME`. So every read of one of [`STEERING`] goes through [`var_os`], and under
 //! `cfg(test)` — this crate's own unit tests, and nothing else — a steering variable reads as
 //! unset: the one environment such a test can control, since setting a variable in-process
 //! needs `unsafe` and would leak into every test running beside it.
@@ -13,6 +13,8 @@
 //! **Only the names read here.** `HOME`, `PATH` and the rest pass through untouched, and so
 //! does [`crate::fence::VAR`]: the fence is what stops a test acting on a plane it did not
 //! make, and hiding it would switch that guard off exactly where it matters.
+//! Nor is `CHARTER_CONFIG_HOME`: it is how a test or a launcher ISOLATES the machine store,
+//! and the fence holds a fenced build off the operator's store when it is missing.
 //! `CHARTER_PERSONA` and `CHARTER_SESSION_ID` are not here either: they reach the library as a
 //! named environment the caller hands in (`active::Ids::of`, the CLI's `workspace_env` and
 //! `persona_env`), which a test builds for itself, and `active`'s own test proves the real
@@ -28,7 +30,7 @@ use std::ffi::OsString;
 /// The variables the library reads straight from its own environment to decide what it acts
 /// on: the plane, its state directory, the workspace, the harness, and the worktree root —
 /// which, set in the operator's shell, turns every worktree verb into a refusal.
-pub const STEERING: [&str; 5] = [
+pub(crate) const STEERING: [&str; 5] = [
     "CHARTER_ROOT",
     "CHARTER_HOME",
     "CHARTER_WORKSPACE",
@@ -38,7 +40,7 @@ pub const STEERING: [&str; 5] = [
 
 /// `name` from this process's environment — except a [`STEERING`] name under `cfg(test)`,
 /// which reads as unset.
-pub fn var_os(name: &str) -> Option<OsString> {
+pub(crate) fn var_os(name: &str) -> Option<OsString> {
     if cfg!(test) && STEERING.contains(&name) {
         return None;
     }
@@ -47,14 +49,12 @@ pub fn var_os(name: &str) -> Option<OsString> {
 
 /// [`var_os`], as a `String`; a value that is not UTF-8 reads as unset, as `std::env::var`'s
 /// callers here already treated it.
-pub fn var(name: &str) -> Option<String> {
+pub(crate) fn var(name: &str) -> Option<String> {
     var_os(name).and_then(|v| v.into_string().ok())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
     /// Tests that build a plane, a state directory or a harness of their own and then ask the
     /// product which one it is acting on — each of them read one of the variables a charter
     /// chat exports.
@@ -68,9 +68,8 @@ mod tests {
 
     #[test]
     fn a_suite_run_inside_a_chat_acts_on_what_its_tests_built_and_not_on_the_chats_plane() {
-        // charter-app#243. The variables are set on a CHILD, the test binary re-run: setting
-        // them in this process would need `unsafe` and would leak into every test running
-        // beside this one. So the chat is simulated whether or not the suite runs in one.
+        // charter-app#243, simulated whether or not the suite runs in a chat: the chat's
+        // variables are set on a child ([`crate::testrun`]).
         let dir = tempfile::tempdir().unwrap();
         let top = dir.path().canonicalize().unwrap();
         let chats_plane = top.join("chats-plane");
@@ -78,40 +77,19 @@ mod tests {
         std::fs::write(chats_plane.join("charter.toml"), "[plane]\n").unwrap();
         let chats_state = top.join("chats-state");
 
-        let mut child = Command::new(std::env::current_exe().expect("the test binary"));
-        child.args(["--exact", "--test-threads=1"]);
-        child.args(ASKS_THE_ENVIRONMENT);
-        // The real chat's own variables, if this suite runs in one, are not the ones under test.
-        for (name, _) in std::env::vars_os() {
-            let name = name.to_string_lossy();
-            if name.starts_with("CHARTER_") && name != crate::fence::VAR {
-                child.env_remove(&*name);
-            }
-        }
-        child
-            .env("CHARTER_ROOT", &chats_plane)
-            .env("CHARTER_HOME", &chats_state)
-            .env("CHARTER_PERSONA", "steward")
-            .env("CHARTER_WORKSPACE", "ide")
-            .env("CHARTER_SESSION_ID", "3")
-            .env("CHARTER_HARNESS", "codex")
-            .env("CHARTER_HARNESS_PROFILE", "claude");
-        let out = crate::forklock::output(&mut child).expect("the test binary re-runs");
-        let said = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
+        crate::testrun::rerun(
+            &ASKS_THE_ENVIRONMENT,
+            &[
+                ("CHARTER_ROOT", chats_plane.as_os_str()),
+                ("CHARTER_HOME", chats_state.as_os_str()),
+                ("CHARTER_PERSONA", "steward".as_ref()),
+                ("CHARTER_WORKSPACE", "ide".as_ref()),
+                ("CHARTER_SESSION_ID", "3".as_ref()),
+                ("CHARTER_HARNESS", "codex".as_ref()),
+                ("CHARTER_HARNESS_PROFILE", "claude".as_ref()),
+            ],
         );
 
-        assert!(out.status.success(), "{said}");
-        // A filter that matched nothing passes too, so the count is the evidence they ran.
-        assert!(
-            said.contains(&format!(
-                "test result: ok. {} passed",
-                ASKS_THE_ENVIRONMENT.len()
-            )),
-            "{said}"
-        );
         assert!(
             !chats_state.exists(),
             "a test wrote into the chat's state directory"
