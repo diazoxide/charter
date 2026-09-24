@@ -68,6 +68,7 @@ fn seen(root: &Path, query: Option<&str>) -> Vec<String> {
 
 #[test]
 fn nothing_outside_the_plane_is_read_however_the_link_is_placed() {
+    charter_core::unsteered!();
     // (where the link goes, whether it points at the outside FILE or the outside STORE)
     let places: [(&str, bool); 8] = [
         ("workspaces/alpha/memory/leak.md", true),
@@ -110,6 +111,7 @@ fn nothing_outside_the_plane_is_read_however_the_link_is_placed() {
 
 #[test]
 fn the_plane_itself_is_still_read_when_nothing_is_linked_out() {
+    charter_core::unsteered!();
     // The guard against a gate so strict recall finds nothing at all.
     let (_dir, root) = plane();
 
@@ -125,6 +127,7 @@ fn the_plane_itself_is_still_read_when_nothing_is_linked_out() {
 
 #[test]
 fn a_link_that_lands_inside_the_plane_is_read_and_labelled_by_where_it_lands() {
+    charter_core::unsteered!();
     // charter follows a link that stays inside the plane's data; a search labels the hit
     // by the base it resolves into, a listing by the base it was listed from.
     let (_dir, root) = plane();
@@ -169,6 +172,7 @@ fn a_link_that_lands_inside_the_plane_is_read_and_labelled_by_where_it_lands() {
 
 #[test]
 fn a_fifo_or_an_oversized_file_is_not_a_memory() {
+    charter_core::unsteered!();
     // A FIFO blocks a reader for ever, which is why the gate asks `lstat`/`stat` and never
     // opens anything first. If this hangs, the gate opened it.
     let (_dir, root) = plane();
@@ -195,6 +199,7 @@ fn a_fifo_or_an_oversized_file_is_not_a_memory() {
 
 #[test]
 fn every_workspace_is_a_directory_that_is_not_a_clone_and_a_loop_is_named_not_dropped() {
+    charter_core::unsteered!();
     // `workspace.read_workspaces`: a name starting `.` is charter's own, a `.git` DIRECTORY
     // makes a clone and a `.git` FILE a worktree (`is_clone`), a plain file and a dangling
     // link are not workspaces (`_directory` answers False for a stat that finds nothing),
@@ -220,6 +225,7 @@ fn every_workspace_is_a_directory_that_is_not_a_clone_and_a_loop_is_named_not_dr
 
 #[test]
 fn a_workspaces_that_is_missing_or_a_file_has_none_and_one_that_cannot_be_listed_is_an_error() {
+    charter_core::unsteered!();
     // `workspace.read_directory`: a `workspaces/` that is not there, or is not a directory,
     // has no entries; one that is there and cannot be LISTED raises, as `Path.iterdir` does.
     let (_dir, root) = plane();
@@ -251,6 +257,7 @@ fn only(scopes: &[&str], persona: Option<&str>) -> Ask {
 
 #[test]
 fn a_scope_not_asked_for_is_not_searched() {
+    charter_core::unsteered!();
     // `recall.sources` offers a base only for a scope named in `scopes`.
     let (_dir, root) = plane();
 
@@ -268,6 +275,7 @@ fn a_scope_not_asked_for_is_not_searched() {
 
 #[test]
 fn refs_are_offered_directory_by_directory_depth_first_and_a_missing_refs_is_not_unread() {
+    charter_core::unsteered!();
     // `recall._ref_dirs`: the base and every directory under it, each its own source, walked
     // in sorted order and depth first (`walk` appends a subdirectory, then walks it). A
     // persona with no `refs/` offers none of its own and names nothing unread:
@@ -300,6 +308,7 @@ fn refs_are_offered_directory_by_directory_depth_first_and_a_missing_refs_is_not
 
 #[test]
 fn since_keeps_its_own_day_and_counts_the_undated_memories_and_refs_it_dropped() {
+    charter_core::unsteered!();
     // `recall.recall`, both paths: `since` drops what was recorded EARLIER (`d < since`), so
     // a memory of that very day stays. Of what it drops, a refs document counts toward
     // `undated_refs`, a memory with no date toward `undated`, and a memory that is merely

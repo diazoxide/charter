@@ -123,6 +123,7 @@ fn open_terminals_until(forking_is_over: &AtomicBool) -> Result<usize, String> {
 
 #[test]
 fn no_program_started_while_a_terminal_opens_can_hold_that_terminal_open() {
+    charter_core::unsteered!();
     let forking_is_over = Arc::new(AtomicBool::new(false));
     // Everything starts together, and the openers keep going until the forking is done, so
     // that every fork is made while terminals are being opened. A run whose forks all

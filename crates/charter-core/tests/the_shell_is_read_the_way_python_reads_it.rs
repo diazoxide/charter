@@ -92,6 +92,7 @@ fn said(err: LexError) -> &'static str {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_module_gives() {
+    charter_core::unsteered!();
     let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
         .into_iter()
         .map(|r| (r.at, r.row))
@@ -409,6 +410,7 @@ fn the_recorded_python_answer_is_the_answer_this_module_gives() {
 /// edit which drops them fails rather than silently narrows the evidence.
 #[test]
 fn the_four_bypasses_that_shipped_are_in_the_corpus_and_are_closed() {
+    charter_core::unsteered!();
     let vault = ".charter/vaults/x.json";
 
     // A quoted or escaped `)` is a WORD. Reading it as a subshell close gave `cat` no operand
@@ -494,6 +496,7 @@ fn the_four_bypasses_that_shipped_are_in_the_corpus_and_are_closed() {
 /// below — and an assertion here that names what it protects.
 #[test]
 fn a_quoted_group_word_and_a_line_of_separator_controls_are_the_two_thin_rules() {
+    charter_core::unsteered!();
     let vault = ".charter/vaults/x.json";
     let recorded: Vec<String> = corpus()
         .iter()
@@ -546,6 +549,7 @@ fn a_quoted_group_word_and_a_line_of_separator_controls_are_the_two_thin_rules()
 /// operand. Reading its parenthesis as a plain boundary took four guards from deny to allow.
 #[test]
 fn a_substitution_is_an_inner_segment_and_leaves_the_outer_one_whole() {
+    charter_core::unsteered!();
     let vault = ".charter/vaults/x.json";
 
     // Two readings from one pass: the INNER segment is what runs, and the OUTER one — which
@@ -607,6 +611,7 @@ fn a_substitution_is_an_inner_segment_and_leaves_the_outer_one_whole() {
 /// guard, because each of them reads token 0 as the program.
 #[test]
 fn a_broken_quote_blinds_the_guard_to_its_own_line_and_no_other() {
+    charter_core::unsteered!();
     let vault = ".charter/vaults/x.json";
     let (segments, parsed) =
         shellseg::segment_argv_parsed("cd .charter/vaults\ncat x.json\necho \"");
@@ -633,6 +638,7 @@ fn a_broken_quote_blinds_the_guard_to_its_own_line_and_no_other() {
 /// `commenters` exist for.
 #[test]
 fn a_comment_does_not_swallow_the_command_after_it() {
+    charter_core::unsteered!();
     let vault = ".charter/vaults/x.json";
     // bash runs the `cat`: the `#` is mid-word, so no comment starts.
     assert_eq!(
@@ -656,6 +662,7 @@ fn a_comment_does_not_swallow_the_command_after_it() {
 /// run after it is broken apart.
 #[test]
 fn a_token_carries_where_it_stood_in_the_source() {
+    charter_core::unsteered!();
     let toks = shellseg::lex("échø ');'").expect("this lexes");
     assert_eq!(toks[0].text, "échø");
     assert_eq!(
@@ -686,6 +693,7 @@ fn a_token_carries_where_it_stood_in_the_source() {
 /// `char::is_whitespace` counts none of them. Both are read on the unparseable path.
 #[test]
 fn the_fallbacks_blank_set_is_pythons() {
+    charter_core::unsteered!();
     // The `"` never closes, so nothing after it is a line boundary and the whole command is one
     // logical line that will not lex — `resegment(str.split())` is what reads it. Python's
     // `str.split()` drops the U+001C as a SEPARATOR; `str::split_whitespace` would hand it on as
@@ -712,6 +720,7 @@ fn the_fallbacks_blank_set_is_pythons() {
 /// character of difference away from a body the guard stops reading.
 #[test]
 fn a_body_comes_out_only_when_it_is_quoted_data_a_reader_holds() {
+    charter_core::unsteered!();
     let vault = ".charter/vaults/x.json";
     let recorded: Vec<String> = corpus()
         .iter()
@@ -792,6 +801,7 @@ fn a_body_comes_out_only_when_it_is_quoted_data_a_reader_holds() {
 /// read: an assignment, a redirection, and the wrapper run with its option grammar.
 #[test]
 fn the_wrapper_run_comes_off_before_the_program_is_named() {
+    charter_core::unsteered!();
     let vault = ".charter/vaults/x.json";
     let argv = |cmd: &str| {
         shellseg::segment_argv(cmd)

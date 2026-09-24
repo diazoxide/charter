@@ -41,6 +41,7 @@ fn names(set: &profiles::ProfileSet) -> Vec<&str> {
 
 #[test]
 fn a_plane_that_declares_nothing_still_has_one_profile_per_harness_charter_knows() {
+    charter_core::unsteered!();
     // `charter/profiles.py:218` — a built-in per registered kind, so a plane that has no
     // `charter.local.toml` sees no change. In REGISTRY order, which the oracle says is
     // claude, opencode, codex; not alphabetical, and the listing prints it.
@@ -55,6 +56,7 @@ fn a_plane_that_declares_nothing_still_has_one_profile_per_harness_charter_knows
 
 #[test]
 fn a_profile_in_the_committed_file_is_refused_with_a_pointer_to_the_local_one() {
+    charter_core::unsteered!();
     // ADR 0022's central rule. A command in the committed file could be changed by a merged
     // pull request and then run on every machine that pulls it.
     let dir = plane(
@@ -76,6 +78,7 @@ fn a_profile_in_the_committed_file_is_refused_with_a_pointer_to_the_local_one() 
 
 #[test]
 fn a_declared_profile_replaces_the_built_in_of_its_name_in_that_built_ins_place() {
+    charter_core::unsteered!();
     // The operator said how `claude` runs on this machine. Its POSITION is the built-in's,
     // because the listing is ordered and a replacement is not a new row at the end.
     let dir = plane(
@@ -94,6 +97,7 @@ fn a_declared_profile_replaces_the_built_in_of_its_name_in_that_built_ins_place(
 
 #[test]
 fn a_refused_replacement_takes_the_built_in_name_down_with_it() {
+    charter_core::unsteered!();
     // Ruling 37: the operator said how that name runs, and the built-in standing in would
     // run the command they replaced — review 13's `enviroment` typo launching the default
     // account is exactly that case.
@@ -111,6 +115,7 @@ fn a_refused_replacement_takes_the_built_in_name_down_with_it() {
 
 #[test]
 fn a_key_a_profile_does_not_have_refuses_that_profile_rather_than_being_ignored() {
+    charter_core::unsteered!();
     // Review 13. A typo such as `enviroment` would otherwise DROP `CLAUDE_CONFIG_DIR` and
     // launch the default account without a word — the failure the feature exists to prevent,
     // arrived at by spelling. The oracle raises two refusals for this one table, because
@@ -141,6 +146,7 @@ fn a_key_a_profile_does_not_have_refuses_that_profile_rather_than_being_ignored(
 
 #[test]
 fn a_parent_holding_only_sub_tables_declares_nothing_and_leaves_its_built_in_alone() {
+    charter_core::unsteered!();
     // F4: `[harness.claude.alt]` alone is a dotted name written without quotes. The parent
     // is a declaration only when it carries keys of its own.
     let dir = plane(
@@ -157,6 +163,7 @@ fn a_parent_holding_only_sub_tables_declares_nothing_and_leaves_its_built_in_alo
 
 #[test]
 fn a_kind_charter_cannot_launch_refuses_the_profile_and_names_every_kind_it_can() {
+    charter_core::unsteered!();
     let dir = plane("", "[harness.x]\nkind = \"opencodex\"\ncommand = [\"x\"]\n");
 
     let set = profiles::derive(dir.path());
@@ -170,6 +177,7 @@ fn a_kind_charter_cannot_launch_refuses_the_profile_and_names_every_kind_it_can(
 
 #[test]
 fn a_command_written_as_a_shell_string_is_refused_because_no_shell_runs_it() {
+    charter_core::unsteered!();
     let dir = plane(
         "",
         "[harness.x]\nkind = \"codex\"\ncommand = \"codex resume\"\n",
@@ -186,6 +194,7 @@ fn a_command_written_as_a_shell_string_is_refused_because_no_shell_runs_it() {
 
 #[test]
 fn an_env_name_that_looks_like_a_credential_is_refused_and_points_at_the_harnesss_own_login() {
+    charter_core::unsteered!();
     // Measured on Claude Code and Codex: a variable set on the harness process reaches the
     // shell the model runs. Charter declines to hold a credential in a profile.
     let dir = plane(
@@ -207,6 +216,7 @@ fn an_env_name_that_looks_like_a_credential_is_refused_and_points_at_the_harness
 
 #[test]
 fn a_profile_may_not_set_one_of_charters_own_variables() {
+    charter_core::unsteered!();
     // Ruling 14: a profile's `CHARTER_HARNESS` would tell every hook the wrong harness.
     let dir = plane(
         "",
@@ -226,6 +236,7 @@ fn a_profile_may_not_set_one_of_charters_own_variables() {
 
 #[test]
 fn a_name_with_a_dot_is_refused_because_the_plane_format_fixes_the_alphabet() {
+    charter_core::unsteered!();
     let dir = plane(
         "",
         "[harness.\"has.dot\"]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
@@ -243,6 +254,7 @@ fn a_name_with_a_dot_is_refused_because_the_plane_format_fixes_the_alphabet() {
 
 #[test]
 fn a_section_other_than_harness_in_the_local_file_is_refused_by_name() {
+    charter_core::unsteered!();
     // An ignored file must not change plane policy with no trace in git — `[[forge]]` hosts
     // steer the one-credential guard.
     let dir = plane("", "[frame]\ndensity = \"wide\"\n");
@@ -270,6 +282,7 @@ fn extensions_in_the_local_file_is_not_refused_by_the_profiles_loader() {
 
 #[test]
 fn a_local_file_that_does_not_parse_refuses_itself_and_leaves_the_built_ins_standing() {
+    charter_core::unsteered!();
     let dir = plane("", "this is not toml\n");
 
     let set = profiles::derive(dir.path());
@@ -284,6 +297,7 @@ fn a_local_file_that_does_not_parse_refuses_itself_and_leaves_the_built_ins_stan
 
 #[test]
 fn the_local_files_default_wins_over_the_committed_ones() {
+    charter_core::unsteered!();
     let dir = plane(
         "[harness]\ndefault = \"codex\"\n",
         "[harness]\ndefault = \"claude\"\n",
@@ -297,6 +311,7 @@ fn the_local_files_default_wins_over_the_committed_ones() {
 
 #[test]
 fn a_default_naming_no_profile_this_machine_has_marks_no_row_rather_than_refusing_a_launch() {
+    charter_core::unsteered!();
     let dir = plane("[harness]\ndefault = \"claude-work\"\n", "");
 
     let set = profiles::derive(dir.path());
@@ -307,6 +322,7 @@ fn a_default_naming_no_profile_this_machine_has_marks_no_row_rather_than_refusin
 
 #[test]
 fn a_profile_named_like_a_charter_command_is_refused_because_the_name_is_the_commands() {
+    charter_core::unsteered!();
     // `current`, not `derive`: this rule needs charter's own command words.
     let dir = plane(
         "",
@@ -325,6 +341,7 @@ fn a_profile_named_like_a_charter_command_is_refused_because_the_name_is_the_com
 
 #[test]
 fn a_profile_that_runs_charter_itself_is_refused() {
+    charter_core::unsteered!();
     // Ruling 14. A profile names the harness a chat runs, and charter is not a harness.
     let dir = plane(
         "",
@@ -342,6 +359,7 @@ fn a_profile_that_runs_charter_itself_is_refused() {
 
 #[test]
 fn charter_is_recognised_however_it_is_spelt_including_through_python() {
+    charter_core::unsteered!();
     // `charter/hooks.py:840` — `charter`, `edm`, and `python -m charter`, case-folded,
     // because on a case-insensitive filesystem `CHARTER` runs the same binary.
     for command in [
@@ -366,6 +384,7 @@ fn charter_is_recognised_however_it_is_spelt_including_through_python() {
 
 #[test]
 fn a_tilde_is_expanded_at_the_launch_and_never_in_the_file() {
+    charter_core::unsteered!();
     // The file is what an edit changes, and a home directory that moved would otherwise
     // make every profile read as CHANGED and ask again about a command nobody touched.
     let dir = plane(
@@ -390,6 +409,7 @@ fn a_tilde_is_expanded_at_the_launch_and_never_in_the_file() {
 
 #[test]
 fn a_profile_is_shown_as_its_environment_then_a_command_a_person_could_paste() {
+    charter_core::unsteered!();
     // `charter/profiles.py:486`, and every piece of it taken from the oracle.
     let dir = plane(
         "",
@@ -407,6 +427,7 @@ fn a_profile_is_shown_as_its_environment_then_a_command_a_person_could_paste() {
 
 #[test]
 fn a_leading_tilde_stays_bare_so_the_line_can_be_pasted_into_a_shell() {
+    charter_core::unsteered!();
     // #1004's proof run: `shlex.quote` puts a leading `~` INSIDE quotes, where a shell does
     // not expand it, so `'~/.local/bin/codex'` pasted into a terminal names a directory
     // called `~`. The `~/` stays bare and the rest is quoted.
@@ -421,6 +442,7 @@ fn a_leading_tilde_stays_bare_so_the_line_can_be_pasted_into_a_shell() {
 
 #[test]
 fn another_users_home_stays_quoted_whole_because_charter_does_not_guess_which_home() {
+    charter_core::unsteered!();
     let dir = plane(
         "",
         "[harness.x]\nkind = \"claude\"\ncommand = [\"~other/bin/claude\"]\n",
@@ -435,6 +457,7 @@ fn another_users_home_stays_quoted_whole_because_charter_does_not_guess_which_ho
 
 #[test]
 fn a_control_byte_in_a_command_is_shown_escaped_and_never_redraws_the_row() {
+    charter_core::unsteered!();
     // Ruling 35: `charter.local.toml` is a file a chat can write, and the selector draws
     // this line. The quoting happens first and the escaping second, as the oracle does it.
     let dir = plane(
@@ -454,6 +477,7 @@ fn a_control_byte_in_a_command_is_shown_escaped_and_never_redraws_the_row() {
 
 #[test]
 fn every_word_that_names_a_credential_is_refused_and_not_only_the_one_that_was_tested() {
+    charter_core::unsteered!();
     // The guard is four words and only `KEY` was ever exercised, through
     // `ANTHROPIC_API_KEY` — so dropping `PASSWORD` from the list reddened nothing.
     for (var, kind) in [
@@ -483,6 +507,7 @@ fn every_word_that_names_a_credential_is_refused_and_not_only_the_one_that_was_t
 
 #[test]
 fn a_credential_name_is_caught_whichever_case_it_is_written_in() {
+    charter_core::unsteered!();
     // The match is case-folded, and that folding is the guard's whole point: `my_api_token`
     // reaches the model's shell exactly as `MY_API_TOKEN` would.
     let dir = plane(
@@ -503,6 +528,7 @@ fn a_credential_name_is_caught_whichever_case_it_is_written_in() {
 
 #[test]
 fn a_command_holding_an_empty_word_has_no_usable_command() {
+    charter_core::unsteered!();
     let dir = plane(
         "",
         "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\", \"\"]\n",
@@ -513,6 +539,7 @@ fn a_command_holding_an_empty_word_has_no_usable_command() {
 
 #[test]
 fn an_empty_command_list_has_no_usable_command() {
+    charter_core::unsteered!();
     // And this rule is the only thing standing between `charter harness list` and a profile
     // with no program to show. Both halves are pinned: the refusal, and that showing such a
     // profile answers rather than ending the process.
@@ -535,6 +562,7 @@ fn an_empty_command_list_has_no_usable_command() {
 
 #[test]
 fn a_kind_that_is_not_text_is_quoted_back_the_way_the_oracle_quotes_it() {
+    charter_core::unsteered!();
     // A refusal that quotes a value back differently is the second answer this port exists
     // to prevent, however wrong the value being quoted is.
     for (declared, shown) in [
@@ -561,6 +589,7 @@ fn a_kind_that_is_not_text_is_quoted_back_the_way_the_oracle_quotes_it() {
 
 #[test]
 fn a_control_byte_in_an_environment_value_is_shown_escaped_too() {
+    charter_core::unsteered!();
     // The command piece was contained and checked; the `NAME=value` pieces were contained
     // and not checked, so the containment could have been dropped from them unnoticed.
     let dir = plane(
@@ -578,6 +607,7 @@ fn a_control_byte_in_an_environment_value_is_shown_escaped_too() {
 
 #[test]
 fn charter_is_recognised_through_python_whatever_case_the_module_is_written_in() {
+    charter_core::unsteered!();
     // The program's casing was pinned and the MODULE's was not, so folding it could have
     // been dropped and `python3 -m CHARTER` would have become a profile charter launches.
     let dir = plane(
@@ -590,6 +620,7 @@ fn charter_is_recognised_through_python_whatever_case_the_module_is_written_in()
 
 #[test]
 fn a_default_that_stands_leaves_no_refused_default_beside_it() {
+    charter_core::unsteered!();
     // The two are mutually exclusive. A `default` refused in the committed file used to
     // survive beside a good one from the local file, and the first surface to print it
     // would have told an operator their working default named nothing.
@@ -612,6 +643,7 @@ fn a_default_that_stands_leaves_no_refused_default_beside_it() {
 
 #[test]
 fn a_default_the_committed_file_names_stands_when_this_machine_has_that_profile() {
+    charter_core::unsteered!();
     // Every committed default tested so far was either overruled by the local file or named
     // a profile nobody has — and both of those end with no default at all, so deleting the
     // `!` that keeps a TEXT default (profiles.rs, `if !value.is_str()`) passed everything.
@@ -626,6 +658,7 @@ fn a_default_the_committed_file_names_stands_when_this_machine_has_that_profile(
 
 #[test]
 fn a_default_in_the_committed_file_that_is_not_text_is_refused_by_value() {
+    charter_core::unsteered!();
     // The other half of the same guard. A `default = 7` names nothing, and a surface must be
     // able to say what it named — `7`, quoted back the way the oracle quotes it.
     let dir = plane("[harness]\ndefault = 7\n", "");
@@ -638,6 +671,7 @@ fn a_default_in_the_committed_file_that_is_not_text_is_refused_by_value() {
 
 #[test]
 fn a_local_file_that_is_there_and_cannot_be_read_is_refused_rather_than_taken_as_absent() {
+    charter_core::unsteered!();
     // Only an ABSENT file declares nothing. Anything else that stops the read is a refusal,
     // because a file that is there and says nothing looks exactly like one nobody wrote —
     // and the operator's `claude-work` profile would silently not exist. Widening the
@@ -674,6 +708,7 @@ fn a_local_file_that_is_there_and_cannot_be_read_is_refused_rather_than_taken_as
 
 #[test]
 fn a_table_named_default_is_refused_as_a_profile_and_is_not_read_as_the_default() {
+    charter_core::unsteered!();
     // `default` is a key only while it is not a table. `[harness.default]` is a PROFILE
     // declaration under the one name a profile cannot take, and it is refused as one —
     // rather than swallowed as a default that names a table. Turning the guard's `&&` into
@@ -697,6 +732,7 @@ fn a_table_named_default_is_refused_as_a_profile_and_is_not_read_as_the_default(
 
 #[test]
 fn a_bare_value_under_harness_is_refused_as_not_a_table_and_never_becomes_the_default() {
+    charter_core::unsteered!();
     // The same `&&`, from the other side: with `||`, ANY non-table key under [harness] was
     // read as `default`, so `work = "claude"` — a half-written profile — silently made
     // `claude` the row every new chat starts on, and the operator was told nothing.
@@ -715,6 +751,7 @@ fn a_bare_value_under_harness_is_refused_as_not_a_table_and_never_becomes_the_de
 
 #[test]
 fn a_profiles_own_env_table_is_not_mistaken_for_a_nested_profile() {
+    charter_core::unsteered!();
     // `env` is the one key a profile has whose value IS a table, and the nested-table check
     // must leave it alone. Every test declaring an `env` looked the profile up by name and
     // never asked what else was refused — so an `||` that flagged `env` as a dotted name
@@ -737,6 +774,7 @@ fn a_profiles_own_env_table_is_not_mistaken_for_a_nested_profile() {
 
 #[test]
 fn an_env_holding_a_value_that_is_not_text_refuses_the_profile() {
+    charter_core::unsteered!();
     // Same run, the same file. `env = { A = 1 }` was let through as `A=""` once the guard
     // on every value being text was widened to `true` — the operator's value replaced by
     // nothing, and the chat started anyway.
@@ -757,6 +795,7 @@ fn an_env_holding_a_value_that_is_not_text_refuses_the_profile() {
 
 #[test]
 fn a_quoted_back_value_holding_an_apostrophe_is_quoted_the_way_python_quotes_it() {
+    charter_core::unsteered!();
     // Python's `repr` switches to double quotes for a string holding a `'` and no `"` —
     // `["it's"]`, not `['it\'s']`. Only strings with neither were ever quoted back, so the
     // switch could be deleted unnoticed and the two implementations would give two answers
@@ -775,6 +814,7 @@ fn a_quoted_back_value_holding_an_apostrophe_is_quoted_the_way_python_quotes_it(
 
 #[test]
 fn the_launch_read_is_the_one_that_has_already_asked_git() {
+    charter_core::unsteered!();
     // `current` is the unchecked read; pairing it with the git check by hand is a pairing
     // one caller will forget, and what that lets through is a command out of a file every
     // clone of this plane carries.

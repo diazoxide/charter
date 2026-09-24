@@ -901,7 +901,7 @@ function App() {
           macOS it IS the title bar — the system's traffic lights float over it — and on every
           other platform it is the window's first row under the system's own bar.
           `TitleBar.tsx` argues the shape, the drag region and what moved here. */}
-      <TitleBar crumbs={crumbs} updates={updates} room={titleBarRoom} />
+      <TitleBar crumbs={crumbs} updates={updates} room={titleBarRoom} chats={ending} />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
           holds any — including one, because `+` is how it gets a second and `×` is the way
           back to the opener. Named, because the chat tabs and the workspaces are tablists

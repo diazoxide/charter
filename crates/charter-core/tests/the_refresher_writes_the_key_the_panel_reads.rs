@@ -67,6 +67,7 @@ fn refresh_alpha(at: &Path) {
 
 #[test]
 fn what_the_refresher_wrote_is_what_the_panel_finds() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
 
     refresh_alpha(&at);
@@ -86,6 +87,7 @@ fn what_the_refresher_wrote_is_what_the_panel_finds() {
 
 #[test]
 fn a_real_checkout_is_read_the_same_way_by_git_status_and_by_head() {
+    charter_core::unsteered!();
     // The two sides read the branch out of two different places — the refresher out of `HEAD`
     // with no subprocess, the panel out of `git status --branch` — and `cistate` drops any
     // entry whose branch does not match what it was handed. So the agreement has to be
@@ -125,6 +127,7 @@ fn a_real_checkout_is_read_the_same_way_by_git_status_and_by_head() {
 
 #[test]
 fn the_branch_the_refresher_recorded_keeps_the_slashes_in_its_name() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
 
     refresh_alpha(&at);
@@ -143,6 +146,7 @@ fn the_branch_the_refresher_recorded_keeps_the_slashes_in_its_name() {
 
 #[test]
 fn a_plane_reached_under_another_spelling_still_finds_its_own_entries() {
+    charter_core::unsteered!();
     // `/tmp` is a link to `/private/tmp` on macOS and `$CHARTER_ROOT` may be set to either, so
     // the refresher and the app routinely spell one checkout two ways. This is the case
     // `cistate`'s `contain::resolved` fallback exists for, driven end to end: written under
@@ -164,6 +168,7 @@ fn a_plane_reached_under_another_spelling_still_finds_its_own_entries() {
 
 #[test]
 fn an_unreachable_forge_still_leaves_an_entry_that_names_the_branch_and_the_instant() {
+    charter_core::unsteered!();
     // The distinction `cistate` is built around: "nobody has looked" and "the last refresh
     // recorded no pipeline" are different answers, and only the second of them is an entry.
     // A refresh that could reach no forge must still write one, or every panel on a plane
@@ -184,6 +189,7 @@ fn an_unreachable_forge_still_leaves_an_entry_that_names_the_branch_and_the_inst
 
 #[test]
 fn a_second_refresh_keeps_the_entries_the_first_one_wrote() {
+    charter_core::unsteered!();
     // The cache is read and rewritten whole, so a workspace refreshed now must not blank the
     // rows of one refreshed a minute ago. Python's `refresh` loads before it writes for this
     // reason, and a writer that started from an empty document would pass every test above.
@@ -205,6 +211,7 @@ fn a_second_refresh_keeps_the_entries_the_first_one_wrote() {
 
 #[test]
 fn the_trees_refreshed_are_the_rows_the_panel_draws() {
+    charter_core::unsteered!();
     // Python's `workspace.repo_trees` is deliberately the one list both sides use: "a repo can
     // never be drawn without its forge state having been fetched, or fetched without being
     // drawn". This is that property, asked of the two functions the app actually calls.
@@ -225,6 +232,7 @@ fn the_trees_refreshed_are_the_rows_the_panel_draws() {
 
 #[test]
 fn a_directory_charter_will_not_run_git_in_is_named_rather_than_skipped() {
+    charter_core::unsteered!();
     // `repos::clones` refuses a `.git` that is a symlink, because the repository git would act
     // on is not the one inside the workspace. The refresh inherits that — and has to CARRY the
     // reason, because a tree that silently disappears from the refresh is a row whose CI cell
@@ -253,6 +261,7 @@ fn a_directory_charter_will_not_run_git_in_is_named_rather_than_skipped() {
 
 #[test]
 fn a_worktree_is_refreshed_beside_the_clone_it_was_cut_from() {
+    charter_core::unsteered!();
     // A worktree carries its own branch, so it carries its own pipeline and its own open
     // change. Python refreshes them for that reason, and a port that listed only the clones
     // would leave every worktree row's CI cell empty on a monorepo plane.
@@ -271,6 +280,7 @@ fn a_worktree_is_refreshed_beside_the_clone_it_was_cut_from() {
 
 #[test]
 fn a_worktree_that_leaves_the_workspace_is_named_and_never_run_git_in() {
+    charter_core::unsteered!();
     // A committed `workspaces/<ws>/.worktrees/<repo>/<piece> -> elsewhere` travels to every
     // machine that clones the plane. `git -C` through it reads ANOTHER repository's `origin`,
     // and the refresh then asks that forge about this branch — charter #964's shape, reached

@@ -229,6 +229,7 @@ fn with_link_out(link: &str, target_is_file: bool) -> Vec<String> {
 
 #[test]
 fn nothing_outside_the_plane_is_touched_however_the_link_is_placed() {
+    charter_core::unsteered!();
     // One case per path a public entry point opens. Each was a hole at some point, or is one
     // level away from one that was.
     let places: [(&str, bool); 18] = [
@@ -271,6 +272,7 @@ fn nothing_outside_the_plane_is_touched_however_the_link_is_placed() {
 
 #[test]
 fn a_dangling_link_creates_nothing_outside_the_plane() {
+    charter_core::unsteered!();
     // `canonicalize` fails for a dangling link, which is how one got judged by its own name.
     for place in [
         "workspaces/alpha/memory/MEMORY.md",
@@ -301,6 +303,7 @@ fn a_dangling_link_creates_nothing_outside_the_plane() {
 
 #[test]
 fn the_plane_itself_is_still_written_when_nothing_is_linked_out() {
+    charter_core::unsteered!();
     // The guard against a gate so strict it stops charter working at all.
     let (dir, plane) = plane();
 
@@ -347,6 +350,7 @@ fn two_hop(plane: &Path, at: &str, outside: &Path, lands_at: &str) {
 
 #[test]
 fn nothing_outside_the_plane_is_touched_through_two_hops() {
+    charter_core::unsteered!();
     // Only paths a writer opens PLAINLY are listed. An earlier version of this test also
     // covered `workspace.md`, `workspace.json`, `todos/MEMORY.md` and the persona index —
     // all four stayed green with the resolver reverted, because `create_new`/O_EXCL refuses
@@ -402,6 +406,7 @@ fn nothing_outside_the_plane_is_touched_through_two_hops() {
 
 #[test]
 fn a_parent_after_a_link_pops_where_the_link_landed_not_the_name_before_it() {
+    charter_core::unsteered!();
     // The rule the two-hop escape turned on, asked of `contain` directly.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();

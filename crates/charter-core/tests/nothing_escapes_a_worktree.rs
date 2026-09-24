@@ -19,6 +19,7 @@ use charter_core::worktree;
 
 #[test]
 fn a_repo_or_piece_name_that_walks_out_of_a_directory_never_builds_a_path() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
 
     for bad in [
@@ -51,6 +52,7 @@ fn a_repo_or_piece_name_that_walks_out_of_a_directory_never_builds_a_path() {
 
 #[test]
 fn a_name_the_gate_refuses_never_reaches_the_filesystem_at_all() {
+    charter_core::unsteered!();
     // Not the same test as above: this one pins that the refusal happens BEFORE any
     // directory is made. A guard that refuses after `create_dir_all` has already followed a
     // link is not a guard.
@@ -71,6 +73,7 @@ fn a_name_the_gate_refuses_never_reaches_the_filesystem_at_all() {
 
 #[test]
 fn a_piece_name_the_next_machine_reads_as_something_else_is_never_cut() {
+    charter_core::unsteered!();
     // charter-app#96. `piece_name_ok` is `contain::segment_ok` plus charter's alphabet, and
     // measured on macOS that pair says `true` to `nul` and to `alpha.` — a directory under
     // `.worktrees/<repo>/` and a branch name recorded in the clone's git config, both of
@@ -99,6 +102,7 @@ fn a_piece_name_the_next_machine_reads_as_something_else_is_never_cut() {
 
 #[test]
 fn a_branch_name_that_git_would_read_as_an_option_never_reaches_its_argv() {
+    charter_core::unsteered!();
     // `git check-ref-format --branch --upload-pack=…` is the injection, so delegating this
     // rule to git cannot prevent it. It is charter's.
     let f = support::plane_with_clone("thing");
@@ -115,6 +119,7 @@ fn a_branch_name_that_git_would_read_as_an_option_never_reaches_its_argv() {
 
 #[test]
 fn a_branch_name_carrying_dot_dot_is_refused() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
 
     for bad in [
@@ -135,6 +140,7 @@ fn a_branch_name_carrying_dot_dot_is_refused() {
 
 #[test]
 fn a_branch_named_at_is_never_merged_as_a_bare_name() {
+    charter_core::unsteered!();
     // `@` is a legal branch name, and `git merge --ff-only @` resolves HEAD rather than the
     // branch: measured on git 2.50.1 it prints "Already up to date", exits 0 and leaves HEAD
     // where it was. A bare name makes charter report a merge that landed nothing.
@@ -196,6 +202,7 @@ fn victim_worktree(f: &support::Fixture) -> std::path::PathBuf {
 
 #[test]
 fn a_removal_whose_path_resolves_into_another_workspace_is_refused() {
+    charter_core::unsteered!();
     // `contain::writable` says Ok here: the target IS under `workspaces/`. Measured, this is
     // a live deletion — `git worktree remove` resolves the link and takes workspace B's tree
     // at exit 0, with every tree-safety guard passing because it ran against B's clean tree.
@@ -220,6 +227,7 @@ fn a_removal_whose_path_resolves_into_another_workspace_is_refused() {
 
 #[test]
 fn a_worktrees_root_that_is_a_symlink_is_refused_rather_than_followed() {
+    charter_core::unsteered!();
     // The component whose corruption defeats every check below it. Resolving the root and
     // comparing paths against THAT is vacuous: the root resolves to wherever the link points,
     // so everything under it "starts with" it and passes.
@@ -244,6 +252,7 @@ fn a_worktrees_root_that_is_a_symlink_is_refused_rather_than_followed() {
 
 #[test]
 fn a_repo_directory_under_the_root_that_is_a_symlink_is_refused_rather_than_followed() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let victim = victim_worktree(&f);
     let root = f.workspace().join(".worktrees");
@@ -265,6 +274,7 @@ fn a_repo_directory_under_the_root_that_is_a_symlink_is_refused_rather_than_foll
 
 #[test]
 fn a_piece_replaced_by_a_symlink_after_it_was_cut_is_refused_at_removal() {
+    charter_core::unsteered!();
     // The gate is asked about the path NOW, not remembered from when it was created.
     let f = support::plane_with_clone("thing");
     let added = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
@@ -283,6 +293,7 @@ fn a_piece_replaced_by_a_symlink_after_it_was_cut_is_refused_at_removal() {
 
 #[test]
 fn a_worktrees_root_that_is_a_symlink_cuts_nothing_either() {
+    charter_core::unsteered!();
     // The removal side of this is covered above; `add` has its own confinement calls and
     // needs its own test, or a mutation that deletes them goes unnoticed.
     let f = support::plane_with_clone("thing");
@@ -301,6 +312,7 @@ fn a_worktrees_root_that_is_a_symlink_cuts_nothing_either() {
 
 #[test]
 fn a_repo_directory_that_is_a_symlink_cuts_nothing_either() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let outside = tempfile::tempdir().unwrap();
     let root = f.workspace().join(".worktrees");
@@ -318,6 +330,7 @@ fn a_repo_directory_that_is_a_symlink_cuts_nothing_either() {
 
 #[test]
 fn a_branch_name_that_resolves_to_another_branch_is_used_under_the_name_git_printed() {
+    charter_core::unsteered!();
     // `git check-ref-format --branch '@{-1}'` prints the PREVIOUS branch and exits 0. Using
     // the string the operator typed would record a base under a branch that does not exist.
     let f = support::plane_with_clone("thing");
@@ -348,6 +361,7 @@ fn a_branch_name_that_resolves_to_another_branch_is_used_under_the_name_git_prin
 
 #[test]
 fn a_tree_whose_head_cannot_be_read_is_not_called_detached() {
+    charter_core::unsteered!();
     // A failed `rev-parse` became `Detached("")`, which `merge` reported as "on a detached
     // HEAD at " — an empty sha and the wrong diagnosis.
     let f = support::plane_with_clone("thing");
@@ -371,6 +385,7 @@ fn a_tree_whose_head_cannot_be_read_is_not_called_detached() {
 
 #[test]
 fn a_merge_never_reads_a_tree_through_a_link_out_of_the_workspace() {
+    charter_core::unsteered!();
     // `merge` does not write to the piece, so it is easy to think it needs no confinement.
     // It reads HEAD there, and then merges THAT branch into this workspace's clone — so a
     // link makes another workspace's work land here under this piece's name.
@@ -403,6 +418,7 @@ fn a_merge_never_reads_a_tree_through_a_link_out_of_the_workspace() {
 
 #[test]
 fn an_ordinary_piece_is_still_created_and_removed() {
+    charter_core::unsteered!();
     // The guard against a containment rule so tight that the feature stops working. Every
     // test above is a refusal; without this one they would all pass on a function that
     // refuses everything.

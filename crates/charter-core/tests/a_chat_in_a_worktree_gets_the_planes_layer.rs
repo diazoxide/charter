@@ -34,6 +34,7 @@ fn exclude_of(tree: &Path) -> String {
 
 #[test]
 fn a_worktree_charter_cuts_carries_the_planes_rules_its_agents_and_charter_harness() {
+    charter_core::unsteered!();
     // The M1.4 todo, in one assertion each: "a chat in a charter-cut worktree has NO persona
     // agents, none of the plane's ask/deny rules, and no $CHARTER_HARNESS".
     let f = layered_plane("thing");
@@ -75,6 +76,7 @@ fn a_worktree_charter_cuts_carries_the_planes_rules_its_agents_and_charter_harne
 
 #[test]
 fn a_grant_in_the_plane_does_not_travel_into_somebody_elses_repository() {
+    charter_core::unsteered!();
     // `allow` is the one bucket that can make something run that would not have run anyway,
     // and it is deliberately left behind. The red light for a mutation that widens
     // RESTRICTIVE to every bucket, or drops the filter entirely.
@@ -95,6 +97,7 @@ fn a_grant_in_the_plane_does_not_travel_into_somebody_elses_repository() {
 
 #[test]
 fn the_row_stops_reading_unwired_once_the_layer_is_there() {
+    charter_core::unsteered!();
     // The bound ADR 0027 put on this gap. It reads the TREE, so it stops firing on its own —
     // this test is what proves that, rather than a label somebody has to remember to delete.
     let f = layered_plane("thing");
@@ -108,6 +111,7 @@ fn the_row_stops_reading_unwired_once_the_layer_is_there() {
 
 #[test]
 fn a_plane_with_nothing_to_carry_writes_nothing_and_refuses_nothing() {
+    charter_core::unsteered!();
     // Writing an empty `{}` would look like a layer. A plane with no settings and no agents
     // has none, and a chat there is not refused over it.
     let f = support::plane_with_clone("thing");
@@ -129,6 +133,7 @@ fn a_plane_with_nothing_to_carry_writes_nothing_and_refuses_nothing() {
 
 #[test]
 fn the_repos_own_git_status_is_unaffected_by_everything_charter_wrote() {
+    charter_core::unsteered!();
     // The guarantee the whole guest design exists for. The red light for a mutation that
     // drops the `block` call, or writes the files before it.
     let f = layered_plane("thing");
@@ -145,6 +150,7 @@ fn the_repos_own_git_status_is_unaffected_by_everything_charter_wrote() {
 
 #[test]
 fn the_block_goes_in_the_exclude_the_clone_reads_and_not_the_worktrees_own() {
+    charter_core::unsteered!();
     // Git treats `info/` as shared, so a pattern written to `.git/worktrees/<id>/info/exclude`
     // is read by NOBODY — the file stays listed as untracked while the identical pattern in
     // the common directory hides it. The red light for a mutation that drops the `commondir`
@@ -175,6 +181,7 @@ fn the_block_goes_in_the_exclude_the_clone_reads_and_not_the_worktrees_own() {
 
 #[test]
 fn a_line_a_sibling_needs_is_never_taken_away_by_the_next_piece() {
+    charter_core::unsteered!();
     // One exclude, several trees. A piece that rewrote the block to its own list alone dropped
     // the line for charter's `.claude/settings.json` — the plane's rules and `env` — into
     // somebody else's repository.
@@ -224,6 +231,7 @@ fn a_line_a_sibling_needs_is_never_taken_away_by_the_next_piece() {
 
 #[test]
 fn a_line_for_a_path_no_checkout_has_any_more_is_let_go() {
+    charter_core::unsteered!();
     // The other half of the same rule, and the one that stops a shared block growing for
     // ever. A file charter generated and the plane stopped declaring is removed from every
     // tree; its line then names a path nobody has, and charter proves that before dropping
@@ -255,6 +263,7 @@ fn a_line_for_a_path_no_checkout_has_any_more_is_let_go() {
 
 #[test]
 fn wiring_the_same_tree_again_changes_not_one_byte() {
+    charter_core::unsteered!();
     // A wire runs on every launch. Appending would duplicate every line on the second pass,
     // and the operator's `info/exclude` would grow without bound while their `git status`
     // stayed clean. The red light for a mutation that appends instead of replacing.
@@ -284,6 +293,7 @@ fn wiring_the_same_tree_again_changes_not_one_byte() {
 
 #[test]
 fn a_piece_carrying_the_layer_is_still_clean_enough_to_remove() {
+    charter_core::unsteered!();
     // The guards that decide whether work survives read `git status`. A layer that showed
     // there would make every piece read as dirty and refuse its own removal.
     let f = layered_plane("thing");
@@ -301,6 +311,7 @@ fn a_piece_carrying_the_layer_is_still_clean_enough_to_remove() {
 
 #[test]
 fn a_file_charter_did_not_write_is_never_overwritten_and_the_chat_is_refused() {
+    charter_core::unsteered!();
     // The M1.2b shape: a tree where the plane's rules are NOT in force does not quietly start
     // a chat. The red light for a mutation that drops the digest comparison in `planned` and
     // writes over whatever is there.
@@ -331,6 +342,7 @@ fn a_file_charter_did_not_write_is_never_overwritten_and_the_chat_is_refused() {
 
 #[test]
 fn the_harnesss_own_edit_of_the_local_file_is_kept_and_does_not_refuse_the_chat() {
+    charter_core::unsteered!();
     // `.claude/settings.local.json` is where "Yes, and don't ask again" lands. Its digest
     // moves without the file becoming anybody else's, so charter neither rewrites it nor
     // treats it as a reason to refuse. The red light for a mutation that empties COWRITTEN.
@@ -353,6 +365,7 @@ fn the_harnesss_own_edit_of_the_local_file_is_kept_and_does_not_refuse_the_chat(
 
 #[test]
 fn a_file_charter_wrote_and_nobody_touched_is_refreshed_when_the_plane_moves() {
+    charter_core::unsteered!();
     // The other half of the same rule. Without it charter's own stale copy of the plane's
     // ask/deny rules would sit in every piece for ever.
     let f = layered_plane("thing");
@@ -377,6 +390,7 @@ fn a_file_charter_wrote_and_nobody_touched_is_refreshed_when_the_plane_moves() {
 
 #[test]
 fn a_charter_generated_the_repository_commits_is_not_charters_record() {
+    charter_core::unsteered!();
     // Charter's marker is per-checkout and untracked. A tracked one is content somebody
     // committed, and writing over it would change a TRACKED file, which no exclude line can
     // hide. The red light for a mutation that drops the `tracked` check — without it, any
@@ -415,6 +429,7 @@ fn a_charter_generated_the_repository_commits_is_not_charters_record() {
 
 #[test]
 fn a_record_naming_a_path_outside_the_checkout_is_dropped_whole() {
+    charter_core::unsteered!();
     // A marker is a file inside a repository charter is a guest in. A key that walks up is
     // something a repository committed, and every path a record names gets a line in an
     // `info/exclude` charter writes — so a trusted `../../../outside.json` is charter putting
@@ -457,6 +472,7 @@ fn a_record_naming_a_path_outside_the_checkout_is_dropped_whole() {
 
 #[test]
 fn charter_does_not_write_through_a_committed_directory_symlink() {
+    charter_core::unsteered!();
     // A committed `.claude -> <somewhere else>` would send every write in this layer wherever
     // it points. The red light for a mutation that drops either `no_link_on_the_way` call in
     // `write_into`.
@@ -491,6 +507,7 @@ fn charter_does_not_write_through_a_committed_directory_symlink() {
 
 #[test]
 fn a_dangling_directory_link_is_refused_by_the_check_and_not_by_luck() {
+    charter_core::unsteered!();
     // The same link, pointing at nothing. `create_dir_all` happens to fail here — so this
     // case cannot tell whether the guard ran, and it is written down as such rather than
     // counted as coverage. What it does pin is that charter never CREATES the target: without
@@ -518,6 +535,7 @@ fn a_dangling_directory_link_is_refused_by_the_check_and_not_by_luck() {
 
 #[test]
 fn a_tree_with_no_git_directory_gets_no_files_at_all() {
+    charter_core::unsteered!();
     // The block first, then the files. A checkout whose exclude charter cannot find gets
     // nothing rather than untracked noise in somebody else's `git status`. The red light for
     // a mutation that moves the `block` call after the write loop, or ignores its error.
@@ -540,6 +558,7 @@ fn a_tree_with_no_git_directory_gets_no_files_at_all() {
 
 #[test]
 fn an_exclude_charter_cannot_write_stops_the_layer_rather_than_leaking_it() {
+    charter_core::unsteered!();
     // The same rule, reached the way an operator reaches it: a checkout whose git directory
     // is read-only.
     //
@@ -598,6 +617,7 @@ fn an_exclude_charter_cannot_write_stops_the_layer_rather_than_leaking_it() {
 
 #[test]
 fn a_worktree_somebody_else_cut_gets_the_layer_when_a_chat_starts_in_it() {
+    charter_core::unsteered!();
     // `charter workspace reinit` was the only repair for this, and it is the Python. The
     // repair is now the start itself.
     let f = layered_plane("thing");
@@ -628,6 +648,7 @@ fn a_worktree_somebody_else_cut_gets_the_layer_when_a_chat_starts_in_it() {
 
 #[test]
 fn a_chat_outside_every_worktree_is_left_alone() {
+    charter_core::unsteered!();
     // The one guard standing between this and charter writing a `.claude/` into whatever
     // directory a chat was pointed at. The red light for a mutation that drops the `locate`
     // check and wires every cwd.
@@ -646,6 +667,7 @@ fn a_chat_outside_every_worktree_is_left_alone() {
 
 #[test]
 fn a_directory_shaped_like_a_piece_is_still_asked_whether_charter_may_write_there() {
+    charter_core::unsteered!();
     // `locate` is path arithmetic over names anything can create under `.worktrees/`, and it
     // hands back three strings. Those strings are asked of the same gate `add`, `remove` and
     // `merge` use before charter writes a byte — never joined straight on. The red light for
@@ -681,6 +703,7 @@ fn a_directory_shaped_like_a_piece_is_still_asked_whether_charter_may_write_ther
 
 #[test]
 fn the_generated_settings_are_the_pythons_document_byte_for_byte() {
+    charter_core::unsteered!();
     // Both implementations wire the same plane until M4, and a byte of difference makes each
     // one read the other's file as the operator's own and stop maintaining it. The key order
     // is the Python's — `enabledPlugins`, `env`, then `permissions` last — and the rendering
@@ -723,6 +746,7 @@ fn the_generated_settings_are_the_pythons_document_byte_for_byte() {
 
 #[test]
 fn a_plane_file_that_is_a_link_out_of_the_plane_is_not_mirrored_into_a_repo() {
+    charter_core::unsteered!();
     // A persona agent symlinked out of the plane is content charter would otherwise copy into
     // somebody else's repository on the plane's authority — the Python reads through such a
     // link without asking. The red light for a mutation that drops the `contain::readable`
@@ -744,6 +768,7 @@ fn a_plane_file_that_is_a_link_out_of_the_plane_is_not_mirrored_into_a_repo() {
 
 #[test]
 fn a_plane_file_linked_from_inside_the_plane_is_still_mirrored() {
+    charter_core::unsteered!();
     // The other half, and the reason the walk hands a link over rather than dropping it: a
     // generator that links `personas/<who>/agent.md` into `.claude/agents/` is the ordinary
     // case, and a persona agent silently missing from every worktree is the failure this
@@ -764,6 +789,7 @@ fn a_plane_file_linked_from_inside_the_plane_is_still_mirrored() {
 
 #[test]
 fn a_plane_file_over_the_bound_is_dropped_rather_than_mirrored_half() {
+    charter_core::unsteered!();
     // charter-app#112's size bound, at the call site where the two halves of it can be told
     // apart. `readable_text` bounds twice — once by asking the open descriptor how big it is,
     // and again with a `take` on the way in — and the second alone would answer here by
@@ -802,6 +828,7 @@ fn a_plane_file_over_the_bound_is_dropped_rather_than_mirrored_half() {
 
 #[test]
 fn a_local_file_of_yours_in_the_clone_withholds_charters_and_keeps_its_line_out() {
+    charter_core::unsteered!();
     // The clone and its piece read one `info/exclude`. A line for the machine-local file
     // would hide the operator's own untracked copy in the clone, so the line is left out and
     // charter withholds its own copy in the piece rather than leave the plane's private
@@ -860,6 +887,7 @@ fn a_local_file_of_yours_in_the_clone_withholds_charters_and_keeps_its_line_out(
 
 #[test]
 fn a_rewire_with_nothing_to_change_says_present_and_one_charter_owns_nothing_in_says_untouched() {
+    charter_core::unsteered!();
     let f = layered_plane("thing");
     let added = cut(&f, "piece");
 
@@ -891,6 +919,7 @@ fn a_rewire_with_nothing_to_change_says_present_and_one_charter_owns_nothing_in_
 
 #[test]
 fn a_file_charter_recorded_but_somebody_rewrote_gets_no_line_back_once_it_is_gone() {
+    charter_core::unsteered!();
     // A line for a file of somebody else's is never ADDED. The record still names
     // `.claude/settings.json`, but its content is not charter's any more, so a wire that
     // finds the line missing does not put it back. The red light for a mutation that trusts
@@ -914,6 +943,7 @@ fn a_file_charter_recorded_but_somebody_rewrote_gets_no_line_back_once_it_is_gon
 
 #[test]
 fn the_record_read_back_is_what_charter_settled_and_nothing_else() {
+    charter_core::unsteered!();
     let f = layered_plane("thing");
     let added = cut(&f, "piece");
 
@@ -935,6 +965,7 @@ fn the_record_read_back_is_what_charter_settled_and_nothing_else() {
 #[cfg(unix)]
 #[test]
 fn an_exclude_charter_can_write_but_not_read_is_never_taken_for_an_empty_one() {
+    charter_core::unsteered!();
     // Write-only: the write would succeed, and it would replace every line of the
     // operator's with charter's block. The red light for a mutation that reads any failure to
     // read as "there is no file yet".
@@ -965,6 +996,7 @@ fn an_exclude_charter_can_write_but_not_read_is_never_taken_for_an_empty_one() {
 
 #[test]
 fn only_the_machine_local_file_is_reported_as_left_out_over_a_file_next_door() {
+    charter_core::unsteered!();
     // `unhidden` asks about charter's own files and the one the harness co-writes. The shared
     // settings are a file charter WRITES whatever a sibling holds, so a sibling's untracked
     // `.claude/settings.json` is not something `reinit` reports as withheld. The red light for
@@ -991,6 +1023,7 @@ fn only_the_machine_local_file_is_reported_as_left_out_over_a_file_next_door() {
 
 #[test]
 fn a_file_of_yours_in_a_wired_sibling_is_still_yours_and_keeps_its_line_out() {
+    charter_core::unsteered!();
     // The sibling holds charter's record, and charter's record does not name this path: the
     // file there is the operator's, so the line the next piece would add is left out. The red
     // light for a mutation that takes "the record vouches for something" for "it vouches for
@@ -1029,6 +1062,7 @@ fn a_file_of_yours_in_a_wired_sibling_is_still_yours_and_keeps_its_line_out() {
 
 #[test]
 fn charters_marker_line_is_added_even_beside_a_marker_charter_cannot_read() {
+    charter_core::unsteered!();
     // An untracked `.charter-generated` is charter's even where it cannot be read, so the
     // marker's own line is never withheld over one. The red light for a mutation that asks
     // the siblings about the marker too.
@@ -1043,6 +1077,7 @@ fn charters_marker_line_is_added_even_beside_a_marker_charter_cannot_read() {
 
 #[test]
 fn a_block_written_for_the_first_time_is_created_and_a_rewrite_of_it_refreshed() {
+    charter_core::unsteered!();
     // The word the operator reads to tell "your files just became hidden" from "they
     // already were". git's own template leaves comment lines in `info/exclude`, so a block
     // written beside them is still a new one.
