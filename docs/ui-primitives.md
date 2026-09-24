@@ -443,7 +443,8 @@ model and a select-on-`mousedown` this window's strips do not have:
   (`PanelList`, so a contributed panel gets it for nothing). Up, Down, Home and End move.
 - **The explorer is a tree** (charter-app#238), the whole "Tree View" pattern on top of the
   same roving focus: `role="tree"`, each row a `treeitem` with its level and its place among
-  its siblings, `aria-expanded` on the clones (the rows that fold), Right to open or go in,
+  its siblings, `aria-expanded` on every parent (a clone says whether it is open, a parent that
+  cannot fold says `true`), Right to open or go in,
   Left to close or climb, and a typed letter to the next row it starts. `Explorer.tsx` says
   why the levels are written down and not left to the DOM. A tree's rows are `treeitem`s and
   no longer `button`s to a role query, so a test reaches them by that role.
