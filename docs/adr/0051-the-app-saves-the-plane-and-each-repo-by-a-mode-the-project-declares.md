@@ -43,7 +43,7 @@ deprecated alias:
 
 | `[memory] share` | reads as `[plane] mode` |
 |---|---|
-| `local` | `off` |
+| `local` | *not set* (see below) |
 | `commit` | `commit` |
 | `push` | `push` |
 
@@ -118,8 +118,10 @@ Defaults:
 | The plane | on |
 | Repos | off |
 
-A plane that says nothing, whether by `[plane] mode` or by `share`, is asked once in the Saving
-view before pushing starts. A new plane starts at `push`.
+A plane with no `[plane] mode` whose `share` is absent or `local` is asked once in the Saving
+view before pushing starts, and the answer is written as `[plane] mode`. That covers every plane
+`charter init` ever made, since it always wrote `share = "local"`. Reading that as `off` would
+have kept auto-save off on every existing plane. A new plane starts at `push`.
 
 **Conflicts.** The plane format gains a `.gitattributes` with `merge=union` for the files that
 only grow: the `_dispatch` and `_skills` `*.jsonl` logs, the `pieces` and `changes/log` logs,
