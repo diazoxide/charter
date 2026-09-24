@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ChartColumn,
+  KeyRound,
   LoaderCircle,
   Puzzle,
   Settings2,
@@ -20,6 +21,7 @@ import {
   type ViewAnswer,
 } from "./bindings";
 import { PREFERENCES_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
+import { VaultTab } from "./VaultTab";
 
 /** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
 const WORKSPACE_SETTINGS = "workspace-settings";
@@ -111,15 +113,20 @@ export function aboutOf(view: ViewRef, offered: readonly ExtensionView[]): strin
   return offered.find((one) => one.extension === view.from && one.id === view.view)?.about;
 }
 
+/** charter's own views' glyphs, by view. */
+const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
+  persona: UserRound,
+  vault: KeyRound,
+  settings: Settings2,
+  [WORKSPACE_SETTINGS]: Settings2,
+  preferences: SlidersHorizontal,
+};
+
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
  *  extension offers — which says *a plugin's* before any word is read. */
 export function ViewMark({ view }: { view: ViewRef }) {
-  const props = { className: "tab-mark", "aria-hidden": true } as const;
-  if (view.from !== null) return <Puzzle {...props} />;
-  if (view.view === "persona") return <UserRound {...props} />;
-  if (isSettings(view) || isWorkspaceSettings(view)) return <Settings2 {...props} />;
-  if (isPreferences(view)) return <SlidersHorizontal {...props} />;
-  return <ChartColumn {...props} />;
+  const Mark = view.from !== null ? Puzzle : (OWN_MARKS[view.view] ?? ChartColumn);
+  return <Mark className="tab-mark" aria-hidden="true" />;
 }
 
 /**
@@ -141,6 +148,7 @@ export function ViewPane({
   offered,
   onOpenView,
   onAsk,
+  onVaultChanged,
 }: {
   plane: PlaneId;
   view: ViewRef;
@@ -156,7 +164,22 @@ export function ViewPane({
   onOpenView: (view: ViewRef, title: string) => void;
   /** The operator pressed to have a waiting view asked. */
   onAsk: () => void;
+  /** A vault's tab wrote to its vault. */
+  onVaultChanged: () => void;
 }) {
+  // **A vault is charter's own view, and the one a panel answer cannot draw**: a table the
+  // operator writes to (charter-app#235). Same tab, same path, same record — its own drawing.
+  // Keyed by the vault, so a pane that comes to show another vault starts from "opening".
+  if (view.from === null && view.view === "vault") {
+    return (
+      <VaultTab
+        key={`${plane}\u0000${view.key}`}
+        plane={plane}
+        vault={view.key}
+        onChanged={onVaultChanged}
+      />
+    );
+  }
   const about = aboutOf(view, offered);
   const beside = offered.filter(
     (one) =>

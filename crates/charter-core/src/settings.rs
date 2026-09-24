@@ -16,7 +16,8 @@
 //! schema refusals, and the settings it reads as absent) and [`crate::profiles`] for the
 //! Local one — asked of the text about to be written rather than of the file on disk
 //! ([`crate::profiles::derive_from`]) — and, in either file, `[extensions]` is asked of the one
-//! reader of it, [`crate::extension::project::refusals`]. Two more refusals are a writer's, because only a writer
+//! reader of it, [`crate::extension::project::refusals`], as `[harness_plugins]` is of
+//! [`crate::harness_plugin::refusals`]. Two more refusals are a writer's, because only a writer
 //! can cause them: a Local file git would commit ([`crate::profiles::ignore_check_before_writing`],
 //! whose sentences are the loader's too), and a secret-shaped value in either file
 //! ([`crate::secretshape::secret_kind`], the classifier the leak guard and `charter save` use).
@@ -140,6 +141,8 @@ fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
     // Either file may hold `[extensions]` (charter-app#253), and it is read by one reader in
     // both, so it is refused in that reader's words in both.
     out.extend(crate::extension::project::refusals(text, which.file()));
+    // And `[harness_plugins]` (charter-app#274), the same way.
+    out.extend(crate::harness_plugin::refusals(text, which.file()));
     // And `[theme]` (charter-app#273), read by one reader in both too.
     out.extend(crate::extension::project::theme::refusals(
         text,

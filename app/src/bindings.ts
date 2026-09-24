@@ -544,6 +544,49 @@ export const commands = {
 	 *  doing its one job, and a contributed panel rests on it entirely.
 	 */
 	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
+	/**  Every vault the plane registers: name, provider, secret count and health. Never a value. */
+	vaultList: (plane: PlaneId) => typedError<VaultSummary[], string>(__TAURI_INVOKE("vault_list", { plane })),
+	/**  One vault's secrets: names, size bands and when each was written. Never a value. */
+	vaultOpen: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_open", { plane, vault })),
+	/**
+	 *  One vault read again, after something outside the window may have changed it — a
+	 *  `charter secret set` in a terminal. The same reading as `vault_open`, from the keys index for
+	 *  a keyring vault, so a refresh never makes the Keychain ask anything. Never a value.
+	 */
+	vaultRefresh: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_refresh", { plane, vault })),
+	/**
+	 *  Make a new vault on this plane, kept by `provider` — the keyring when `null` — and answer
+	 *  with it opened. No value crosses.
+	 */
+	vaultCreate: (plane: PlaneId, vault: string, provider: string | null, opVault: string | null) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_create", { plane, vault, provider, opVault })),
+	/**  Store a new secret. The value comes in here and goes nowhere but the vault. */
+	vaultSecretAdd: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_add", { plane, vault, key, value })),
+	/**  Replace a held secret's value. The value comes in here and goes nowhere but the vault. */
+	vaultSecretSet: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_set", { plane, vault, key, value })),
+	/**  Move a secret to a new name. No value crosses. */
+	vaultSecretRename: (plane: PlaneId, vault: string, from: string, to: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_rename", { plane, vault, from, to })),
+	/**  Delete a secret. No value crosses. */
+	vaultSecretDelete: (plane: PlaneId, vault: string, key: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_delete", { plane, vault, key })),
+	/**  One secret's value, to show in the window for a while ([`reveal`]). */
+	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
+	/**
+	 *  Put one secret's value on the clipboard ([`copy`]) and clear it a minute later
+	 *  ([`clear_later`]). The answer is nothing: the value never comes back to the window.
+	 */
+	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
+	/**
+	 *  Move a vault's identity token from the app's OWN environment into the keyring
+	 *  ([`move_identity`]). No value crosses to the window. Kept beside the paste path for an app
+	 *  launched from a shell that exports the token; the answer's `identity_in_app_env` then warns to
+	 *  relaunch, because the app's process still carries the export (#271 review, U3).
+	 */
+	vaultIdentityMove: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_move", { plane, vault })),
+	/**
+	 *  Put a token the operator pasted into the keyring for a vault's identity ([`put_identity`]).
+	 *  The token comes in here and goes straight to the keyring — never the app's environment, never
+	 *  the window, never an error. The preferred path (#271 review, U3).
+	 */
+	vaultIdentityPut: (plane: PlaneId, vault: string, token: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_put", { plane, vault, token })),
 	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
@@ -566,6 +609,12 @@ export const commands = {
 	 *  at every press. The precedence is `extension::project::resolve`'s, as everywhere else.
 	 */
 	extensionsOn: (plane: PlaneId, workspace: string | null) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane, workspace })),
+	/**
+	 *  Every harness charter knows, with what it has installed on this machine and what this
+	 *  project has each plugin at. Read from the harness's own files, never written; asked when the
+	 *  tab opens and after it saves.
+	 */
+	projectHarnessPlugins: (plane: PlaneId) => typedError<HarnessPlugins[], string>(__TAURI_INVOKE("project_harness_plugins", { plane })),
 	/**
 	 *  This project's theme, with every theme it may pick. It takes a survey, as
 	 *  [`project_extensions`] does, so a pick the extension no longer contributes is said here.
@@ -978,6 +1027,61 @@ export type HandedFromNote = {
 	/**  The workspace it came from. */
 	workspace: string,
 };
+
+/**  One plugin, in one project. */
+export type HarnessPlugin = {
+	/**  The harness's own id for it. */
+	id: string,
+	name: string,
+	/**  Where charter found it installed; empty when this machine has not installed it. */
+	origin: string,
+	/**  `on`, `off` or `not-set`. */
+	state: string,
+	/**  `default`, `shared` or `local`: which file decided `state`. */
+	source: string,
+	installed: boolean,
+	/**
+	 *  Why charter fixes it whatever a file says, in the core's words ("<id> is always on: …"),
+	 *  or none for a plugin a project may choose. No control is drawn for a fixed one.
+	 */
+	pinned: string | null,
+	/**  Each value a file set that charter did not use, and why. */
+	ignored: ProjectExtensionIgnored[],
+};
+
+/**  One harness's plugins in one project. */
+export type HarnessPlugins = {
+	/**
+	 *  The plane's word for the harness (`claude`, `opencode`, `codex`): the key under
+	 *  `[harness_plugins]`.
+	 */
+	harness: string,
+	/**  What a person calls it. */
+	title: string,
+	/**
+	 *  "plugins for <harness> are not supported yet — <why>", or none where charter applies
+	 *  a project's choice to the chats it starts.
+	 */
+	unsupported: string | null,
+	/**
+	 *  Where charter read what it has installed: the file or directory, as this app's own
+	 *  environment names it. A profile that points the harness elsewhere is listed against its
+	 *  own directory when its chat starts.
+	 */
+	record: string | null,
+	/**  Why the harness's own record of what it installed could not be read, if it could not. */
+	trouble: string | null,
+	plugins: HarnessPlugin[],
+};
+
+/**  Where one of a vault's identity variables is read from now (#237). */
+export type IdentityHeld = 
+/**  Moved into the keyring, which is read first. */
+"keyring" | 
+/**  In charter's environment, and not moved: the tab offers to move it. */
+"environment" | 
+/**  Nowhere: the vault cannot be read. */
+"unset";
 
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
@@ -1736,6 +1840,12 @@ export type Restore = {
 	dropped: string[],
 };
 
+/**
+ *  A value the window hands over to be stored, and the one a reveal hands back
+ *  ([`vault_secret_reveal`], the only command whose answer holds one).
+ */
+export type SecretValue = string;
+
 /**  What a save is: the raw view's whole text, or a form's changes to the text it was read as. */
 export type SettingsChange = { kind: "raw"; text: string } | { kind: "edits"; edits: SettingsEdit[] };
 
@@ -1886,6 +1996,57 @@ export type UsageTurn = {
 	context: Percent | null,
 	/**  What that turn wrote to the cache, as charter spells tokens. */
 	written: string | null,
+};
+
+/**  One vault, opened. */
+export type VaultContents = {
+	name: string,
+	provider: string,
+	count: number,
+	health: VaultHealth,
+	secrets: VaultSecret[],
+	/**
+	 *  The identity variables it is read through; empty for a vault that declares none. Said
+	 *  from the registry's mark and the environment, never by reading the keyring.
+	 */
+	identity: VaultIdentity[],
+	/**
+	 *  Identity variables charter's OWN process environment still carries. A same-user process
+	 *  can read another's environment block, so while this is non-empty a chat could read the
+	 *  token however it was moved — the tab warns to relaunch charter without the export
+	 *  (#271 review, U3). Names only.
+	 */
+	identity_in_app_env: string[],
+};
+
+/**  Whether a vault can be read, and the provider's own sentence about it. Never a value. */
+export type VaultHealth = {
+	ok: boolean,
+	detail: string,
+};
+
+/**
+ *  One identity variable a vault is read through — `$OP_TEAM_TOKEN` — and where it is. Its
+ *  NAME, never its value.
+ */
+export type VaultIdentity = {
+	variable: string,
+	held: IdentityHeld,
+};
+
+/**  One secret, as a vault's table shows it: its name, and what the keys index knows. */
+export type VaultSecret = {
+	key: string,
+	size: string | null,
+	updated: string | null,
+};
+
+/**  One registered vault, as the Vaults panel lists it. */
+export type VaultSummary = {
+	name: string,
+	provider: string,
+	count: number | null,
+	health: VaultHealth,
 };
 
 /**

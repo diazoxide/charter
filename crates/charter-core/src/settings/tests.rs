@@ -278,6 +278,41 @@ fn an_extensions_table_charter_would_not_read_is_refused_in_either_file() {
 }
 
 #[test]
+fn a_local_file_may_hold_harness_plugins() {
+    // charter-app#274: a harness's own plugins are turned on or off for this machine's use of
+    // the project in the Local file, which overrides the Shared one plugin by plugin.
+    let dir = plane(COMMENTED);
+    let why = refusals(
+        dir.path(),
+        Which::Local,
+        "[harness_plugins.claude]\n\"figma@official\" = false\n",
+    );
+    assert_eq!(why, Vec::<String>::new());
+}
+
+#[test]
+fn neither_file_may_turn_charters_own_plugin_off() {
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        let why = refusals(
+            dir.path(),
+            which,
+            "[harness_plugins.claude]\n\"charter-app@inline\" = false\n",
+        );
+        assert_eq!(
+            why,
+            [format!(
+                "harness_plugins.claude.\"charter-app@inline\" in {} cannot be false: \
+                 charter-app@inline is always on: it is charter's own plugin, and it carries \
+                 charter's hooks and the Bash guard",
+                which.file()
+            )],
+            "{which:?}"
+        );
+    }
+}
+
+#[test]
 fn a_local_file_that_does_not_exist_is_created_on_the_first_save() {
     let dir = plane(COMMENTED);
     let body = "[harness]\ndefault = \"claude\"\n";

@@ -207,6 +207,7 @@ describe("the Workspace settings view", () => {
         offered={[]}
         onOpenView={() => undefined}
         onAsk={() => undefined}
+        onVaultChanged={() => undefined}
       />,
     );
 

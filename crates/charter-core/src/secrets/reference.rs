@@ -194,12 +194,29 @@ pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
         )));
     };
     let uri = super::py_str(&uri_value);
-    let (argv, cli) = argv(&uri, scheme)?;
-    if ctx.which(cli).is_none() {
-        return Err(VaultError::new(format!(
-            "'{key}' needs the '{cli}' CLI to resolve it — it is not on PATH. Install it and \
-             authenticate, then retry."
-        )));
+    let (mut argv, cli) = argv(&uri, scheme)?;
+    // A keyring-held identity runs only the CLI pinned when its token was stored, never one the
+    // caller's PATH resolves (#271 review, U1). charter pins `op`; a keyring-held reference vault
+    // that needs another CLI is refused rather than run under a PATH a chat controls.
+    match super::identity::pinned_op(ctx, vault)? {
+        Some(path) if cli == "op" => argv[0] = path.display().to_string(),
+        Some(_) => {
+            return Err(VaultError::new(format!(
+                "'{key}' in vault '{}' resolves through the '{cli}' CLI, but this vault's identity \
+                 was moved into {} and charter pins only `op`. Read this reference from a terminal \
+                 that authenticates {cli} itself, or store the identity in the environment instead.",
+                vault.name,
+                super::keyring::STORE_NAME
+            )));
+        }
+        None => {
+            if ctx.which(cli).is_none() {
+                return Err(VaultError::new(format!(
+                    "'{key}' needs the '{cli}' CLI to resolve it — it is not on PATH. Install it \
+                     and authenticate, then retry."
+                )));
+            }
+        }
     }
     let overlay = super::env_overlay(ctx, vault)?;
     let identity = super::identity_note(vault);
@@ -252,7 +269,7 @@ pub fn set(ctx: &Ctx, vault: &Vault, key: &str, value: &str) -> Result<(), Vault
              create one. To have charter own the item — creating it and storing the value, with \
              the value on stdin and never in argv:\n      charter vault add <name> --provider \
              1password --op-vault <VAULT>\n      charter secret set <name> {key} --from-file \
-             <path>\n  To keep the value on this machine instead: --provider plain-file.\n  To \
+             <path>\n  To keep the value on this machine instead: --provider keyring.\n  To \
              register an item you created elsewhere: pass its URI here.",
             schemes.join(", ")
         )));

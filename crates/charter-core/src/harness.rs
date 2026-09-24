@@ -223,7 +223,17 @@ impl Harness {
     /// `cwd` decides one thing only: whether charter may also fill Claude Code's status line
     /// for this chat ([`crate::footerclaim`]). It is the chat's own directory because project
     /// settings are read from the session's own directory and the host does not walk up.
-    pub fn state_hooks(self, kit: Kit<'_>, cwd: Option<&std::path::Path>) -> StateHooks {
+    ///
+    /// `plugins` is the harness's own plugins the project turned on or off for this chat
+    /// ([`crate::harness_plugin::chosen`], charter-app#274), by the harness's id. Only an
+    /// adapter that applies per chat hands it anything, so for Codex it is always empty; it is
+    /// taken here all the same, so no harness can be armed past it.
+    pub fn state_hooks(
+        self,
+        kit: Kit<'_>,
+        cwd: Option<&std::path::Path>,
+        plugins: &crate::harness_plugin::Chosen,
+    ) -> StateHooks {
         match self {
             // **The bundled plugin, loaded for this session alone** (`crate::plugin` has the
             // measurements). Its `hooks.json` holds every hook — the six that report state and
@@ -247,6 +257,7 @@ impl Harness {
                         &claude_code_settings(
                             kit.binary,
                             crate::footerclaim::status_line(cwd).free(),
+                            plugins,
                         ),
                     ]),
                     env: vec![(
@@ -298,6 +309,10 @@ impl Harness {
             // Codex has no plugin here: the guard used to reach a Codex chat through the
             // Python charter's Codex plugin, and now rides on the same `-c` flags as the state
             // hooks, from the same registry ([`crate::plugin::CODEX`] out of [`crate::hookreg`]).
+            //
+            // And no plugin: Codex 0.147.0 takes a plugin's `enabled` from its `config.toml`
+            // alone and ignores the same key given with `-c` (measured, charter-app#274), so
+            // `plugins` is empty for it and nothing here would carry it.
             Self::Codex => StateHooks::ThisSessionOnly {
                 args: codex_session_flags(kit.binary),
                 env: Vec::new(),
@@ -333,21 +348,33 @@ impl Harness {
 ///
 /// **No hooks.** They are the bundled plugin's (`hooks/hooks.json`), so a chat has one place
 /// its hooks are declared and a hook is never armed twice.
-fn claude_code_settings(binary: &std::path::Path, may_fill_the_footer: bool) -> String {
+fn claude_code_settings(
+    binary: &std::path::Path,
+    may_fill_the_footer: bool,
+    plugins: &crate::harness_plugin::Chosen,
+) -> String {
     let mut settings = serde_json::Map::new();
-    // The operator's ruling of 2026-09-23: a chat the app starts turns the Python charter's
-    // plugin off for itself, so the project files that enable it for the operator's own
-    // terminal sessions do not give an app chat two sets of hooks and two `handoff` skills.
-    //
-    // And the bundled plugin pinned on: a project file can turn a `--plugin-dir` plugin off by
-    // its id, a chat can write that file, and the plugin carries the Bash guard. Measured on
-    // 2.1.280: this `true` wins over a project's `false`.
+    // The project's own choice of Claude Code's plugins first (charter-app#274, ADR 0050): a
+    // session `enabledPlugins` wins over the project's and the user's for the keys it names,
+    // and leaves every other plugin to them.
+    let mut enabled: serde_json::Map<String, serde_json::Value> = plugins
+        .iter()
+        .map(|(id, on)| (id.clone(), (*on).into()))
+        .collect();
+    // Then the pins, written last so nothing above can move them
+    // ([`crate::harness_plugin::CLAUDE_CODE`] holds them and says why). The operator's ruling of
+    // 2026-09-23: a chat the app starts turns the Python charter's plugin off for itself, so the
+    // project files that enable it for the operator's own terminal sessions do not give an app
+    // chat two sets of hooks and two `handoff` skills. And the bundled plugin pinned on: a
+    // project file can turn a `--plugin-dir` plugin off by its id, a chat can write that file,
+    // and the plugin carries the Bash guard. Measured on 2.1.280: this `true` wins over a
+    // project's `false`.
+    for pin in crate::harness_plugin::Adapter::pinned(&crate::harness_plugin::CLAUDE_CODE) {
+        enabled.insert(pin.id.to_owned(), pin.on.into());
+    }
     settings.insert(
         "enabledPlugins".to_owned(),
-        serde_json::json!({
-            crate::plugin::SUPERSEDED: false,
-            crate::plugin::LOADED_AS: true,
-        }),
+        serde_json::Value::Object(enabled),
     );
     // **Only where nothing else fills it.** The key is one value and the flag is the last
     // writer, so arming it where the operator has their own would stop theirs running
@@ -458,6 +485,7 @@ fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn claude_code_is_started_under_the_id_charter_chose() {
@@ -631,7 +659,16 @@ mod tests {
 
     /// Claude Code's arguments and environment for a chat in `cwd`.
     fn claude(binary: &str, cwd: &std::path::Path) -> (Vec<String>, Vec<(String, String)>) {
-        match Harness::ClaudeCode.state_hooks(kit(binary), Some(cwd)) {
+        claude_with(binary, cwd, &BTreeMap::new())
+    }
+
+    /// The same, for a project that chose `plugins`.
+    fn claude_with(
+        binary: &str,
+        cwd: &std::path::Path,
+        plugins: &BTreeMap<String, bool>,
+    ) -> (Vec<String>, Vec<(String, String)>) {
+        match Harness::ClaudeCode.state_hooks(kit(binary), Some(cwd), plugins) {
             StateHooks::ThisSessionOnly {
                 args,
                 env,
@@ -681,6 +718,45 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_code_chat_is_handed_the_projects_plugins_and_the_pins_win() {
+        // charter-app#274: the set a project chose rides in the same `enabledPlugins` as the two
+        // values every chat has always carried, and those two are written last, so a set that
+        // somehow holds the opposite cannot move them.
+        let empty = tempfile::tempdir().expect("a directory");
+        let chosen = BTreeMap::from([
+            ("figma@claude-plugins-official".to_owned(), false),
+            ("serena@claude-plugins-official".to_owned(), true),
+            ("charter-app@inline".to_owned(), false),
+            ("charter@charter".to_owned(), true),
+        ]);
+        let (args, _) = claude_with("/bin/charter", empty.path(), &chosen);
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+
+        assert_eq!(
+            settings["enabledPlugins"],
+            serde_json::json!({
+                "charter-app@inline": true,
+                "charter@charter": false,
+                "figma@claude-plugins-official": false,
+                "serena@claude-plugins-official": true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_codex_chat_is_handed_no_plugin_flag_whatever_the_project_chose() {
+        // Codex 0.147.0 ignores a plugin's `enabled` given with `-c` (measured, charter-app#274),
+        // so nothing is added: its adapter says "not supported yet" instead.
+        let chosen = BTreeMap::from([("charter@charter".to_owned(), false)]);
+        let StateHooks::ThisSessionOnly { args, .. } =
+            Harness::Codex.state_hooks(kit("/bin/charter"), None, &chosen)
+        else {
+            panic!("armed per session");
+        };
+        assert!(args.iter().all(|arg| !arg.contains("plugins")), "{args:?}");
+    }
+
+    #[test]
     fn the_settings_arm_no_hook_so_no_hook_is_armed_twice() {
         // Every hook is the plugin's. A hook in `--settings` as well would fire beside it and
         // report every event twice.
@@ -700,6 +776,7 @@ mod tests {
                 plugin: None,
             },
             None,
+            &BTreeMap::new(),
         );
         assert_eq!(hooks, StateHooks::None);
     }
@@ -788,7 +865,7 @@ mod tests {
     /// Codex's `-c` pairs as (dotted key, parsed TOML value), failing on anything else.
     fn codex_flags(binary: &str) -> Vec<(String, toml::Value)> {
         let StateHooks::ThisSessionOnly { args, env, .. } =
-            Harness::Codex.state_hooks(kit(binary), None)
+            Harness::Codex.state_hooks(kit(binary), None, &BTreeMap::new())
         else {
             panic!("Codex's hooks are armed per session");
         };
@@ -865,7 +942,7 @@ mod tests {
     fn a_codex_chat_says_it_cannot_report_a_question_asked_mid_turn() {
         // Codex has no `Notification`. It fires `PermissionRequest` when it asks for an
         // approval — measured — but that hook decides a permission, and nothing arms it.
-        let hooks = Harness::Codex.state_hooks(kit("/bin/charter"), None);
+        let hooks = Harness::Codex.state_hooks(kit("/bin/charter"), None, &BTreeMap::new());
 
         let StateHooks::ThisSessionOnly { cannot_report, .. } = hooks else {
             panic!("armed per session");
