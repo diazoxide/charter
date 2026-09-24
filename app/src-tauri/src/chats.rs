@@ -208,10 +208,14 @@ impl Chats {
     /// `cwd` is the chat's own directory, which decides whether charter may also fill Claude
     /// Code's status line for it (`charter_core::footerclaim`): project settings are read from
     /// the session's own directory, so that is the directory the question is asked about.
+    ///
+    /// `plugins` is the harness's own plugins the project chose for this chat
+    /// (`charter_core::start::Ready::plugins`, charter-app#274); empty for a chat on no profile.
     fn state_hooks(
         &self,
         harness: Option<Harness>,
         cwd: Option<&std::path::Path>,
+        plugins: &charter_core::harness_plugin::Chosen,
     ) -> (Vec<String>, Vec<(String, String)>) {
         let (Some(harness), Some(binary)) = (harness, self.shipped.binary.as_deref()) else {
             return (Vec::new(), Vec::new());
@@ -220,7 +224,7 @@ impl Chats {
             binary,
             plugin: self.shipped.plugin.as_deref(),
         };
-        match harness.state_hooks(kit, cwd) {
+        match harness.state_hooks(kit, cwd, plugins) {
             StateHooks::ThisSessionOnly { args, env, .. } => (args, env),
             // Nothing is added to the command line, and nothing of the operator's is written
             // behind their back. The chat shows `unknown`.
@@ -248,6 +252,7 @@ impl Chats {
             ready.harness,
             ready.session.as_ref().map(ToString::to_string),
             ready.how.clone(),
+            &ready.plugins,
             size,
         )
     }
@@ -310,6 +315,9 @@ impl Chats {
             chat.harness(),
             launch.session.as_ref().map(ToString::to_string),
             launch.how,
+            // A chat on no profile has no project choice to carry: it runs as it always did,
+            // with the pins alone.
+            &std::collections::BTreeMap::new(),
             size,
         )
     }
@@ -330,13 +338,14 @@ impl Chats {
         harness: Option<Harness>,
         conversation: Option<String>,
         how: charter_core::reopen::Reopened,
+        plugins: &charter_core::harness_plugin::Chosen,
         size: Size,
     ) -> Result<u32, String> {
         // The profile's own command first — a wrapper reads its own words before it hands the
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
         // `charter_core::start::Ready::command_line` is the one place that order is decided.
-        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref());
+        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins);
         let all = charter_core::start::Ready::line(command, hooks, args);
         let mut env = env;
         env.extend(armed);
@@ -2177,6 +2186,7 @@ mod tests {
             how: charter_core::reopen::Reopened::Fresh(
                 charter_core::reopen::Fresh::NoConversationRecorded,
             ),
+            plugins: std::collections::BTreeMap::new(),
         };
 
         let session = chats
@@ -2245,6 +2255,7 @@ mod tests {
             how: charter_core::reopen::Reopened::Fresh(
                 charter_core::reopen::Fresh::NoConversationRecorded,
             ),
+            plugins: std::collections::BTreeMap::new(),
         };
 
         let session = chats.start_ready(&chat, &ready, SIZE).unwrap();
@@ -2262,10 +2273,20 @@ mod tests {
     /// profile's command is `command` (its first word replaced by a stand-in that writes its
     /// arguments down) and the app arms it with a plugin.
     fn argv_of_a_profile_chat(command: &[&str]) -> (Vec<String>, String) {
+        argv_of_a_chat_in(command, "", |_| String::new())
+    }
+
+    /// The same, in a plane whose `charter.toml` is `shared`, with `profile(root)` written
+    /// under the profile's table in `charter.local.toml`.
+    fn argv_of_a_chat_in(
+        command: &[&str],
+        shared: &str,
+        profile: impl Fn(&std::path::Path) -> String,
+    ) -> (Vec<String>, String) {
         let dir = tempfile::tempdir().expect("a directory");
         let root = dir.path().join("plane");
         std::fs::create_dir_all(&root).expect("the plane");
-        std::fs::write(root.join(charter_core::plane::MANIFEST), "").expect("charter.toml");
+        std::fs::write(root.join(charter_core::plane::MANIFEST), shared).expect("charter.toml");
         let argv = root.join("argv");
         let program = stand_in::program(
             &root,
@@ -2280,8 +2301,9 @@ mod tests {
         std::fs::write(
             root.join(charter_core::profiles::LOCAL_FILE),
             format!(
-                "[harness.work]\nkind = \"claude\"\ncommand = [{}]\n",
-                words.join(", ")
+                "[harness.work]\nkind = \"claude\"\ncommand = [{}]\n{}",
+                words.join(", "),
+                profile(&root)
             ),
         )
         .expect("the profile");
@@ -2351,6 +2373,41 @@ mod tests {
         // The app's own session words come after the flags, where they always were.
         assert_eq!(argv[5], "--session-id", "{argv:?}");
         assert_eq!(argv[7..], ["--name", "ide.7"], "{argv:?}");
+    }
+
+    #[test]
+    fn a_claude_code_chat_runs_with_the_plugins_its_project_chose() {
+        // charter-app#274: the words the program actually received. The project turns one of
+        // the account's installed plugins off; the other is left to Claude Code, and the two
+        // pins ride beside it as they always have.
+        let (argv, _) = argv_of_a_chat_in(
+            &["claude"],
+            "[harness_plugins.claude]\n\"figma@official\" = false\n",
+            |root| {
+                let config = root.join("claude-config");
+                std::fs::create_dir_all(config.join("plugins")).expect("the config dir");
+                std::fs::write(
+                    config.join("plugins/installed_plugins.json"),
+                    r#"{"version": 2, "plugins": {"figma@official": [{"scope": "user"}],
+                        "serena@official": [{"scope": "user"}]}}"#,
+                )
+                .expect("the install record");
+                format!(
+                    "env = {{ CLAUDE_CONFIG_DIR = {:?} }}\n",
+                    config.display().to_string()
+                )
+            },
+        );
+        let settings: serde_json::Value = serde_json::from_str(&argv[3]).expect("JSON");
+        assert_eq!(
+            settings["enabledPlugins"],
+            serde_json::json!({
+                "charter-app@inline": true,
+                "charter@charter": false,
+                "figma@official": false,
+            }),
+            "{argv:?}"
+        );
     }
 
     #[test]

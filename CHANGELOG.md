@@ -66,6 +66,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   off until you approve it in Extensions. A project that says nothing keeps every approved
   extension on, as before. Panels, views and themes follow the project in front, and a view
   refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter-app/issues/253))
+- **Harness plugins per project.** Project settings has a *Harness plugins* group for each
+  harness charter knows, in Shared and in Local. For Claude Code it lists the plugins installed
+  on this machine, and each one can be on, off or not set for the chats charter starts in the
+  project. Local wins plugin by plugin, and not set leaves the plugin to Claude Code's own
+  settings. charter's own plugin is always on and the old `charter@charter` always off. No file
+  can change either, and a save that tries is refused. Codex and opencode list what they have
+  installed and say their plugins are not supported yet, with the reason: Codex ignores a
+  plugin's on/off given for one session, and charter does not start opencode chats yet.
+  ([#274](https://github.com/diazoxide/charter-app/issues/274))
 - **A theme per project.** Project settings has a Theme select in Shared and in Local: charter's
   dark or light theme, *Follow the system*, or any theme an extension you approved contributes.
   Local wins over Shared. While that project is in front the window and every terminal draw its

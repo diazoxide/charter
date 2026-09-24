@@ -327,7 +327,9 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   (`Choices::read`) for the Project settings tab, the window's filter on extension panels,
   views and themes, and the executor's gate (charter-app#253); its `[theme]` table by
   `crates/charter-core/src/extension/project/theme.rs` (`Said::read`) for the Project settings
-  tab and the window's theme (charter-app#273).
+  tab and the window's theme (charter-app#273). Its `[harness_plugins]` table is
+  read by `crates/charter-core/src/harness_plugin.rs` (`Choices::read`) for the Project settings
+  tab and for every chat `start::ready` launches (charter-app#274).
 - **Git:** committed (nothing ignores it; `_GITIGNORE_BASELINE` ignores its *local* sibling
   only, `charter/commands.py:1104`).
 - **Encoding details for a byte-identical writer:**
@@ -395,6 +397,8 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one. `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[extensions.<id>.settings].<key>` | bool or str | optional; absent = the extension's declared default | **charter-app only.** A value for a setting the extension's manifest declares (`bool`, `text` of at most 200 bytes, or one of a `choice`'s words), handed to its program with each question as `settings`. A key it does not declare, or a value it would not accept, is ignored with a sentence and the next file down is used. Overridden key by key by `charter.local.toml`. | stable | `crates/charter-core/src/extension/project.rs` `resolve`, `crates/charter-core/src/extension.rs` `Setting::accepts` |
 | any other key in `[extensions.<id>]` | — | — | Refused by the Project settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/extension/project.rs` `refusals` |
+| `[harness_plugins.<harness>]."<plugin id>"` | bool | optional; absent = not set (the harness decides, from its own settings) | **charter-app only** (charter-app#274, ADR 0050). Whether the chats charter starts in this project have that harness plugin on (`true`) or off (`false`). `<harness>` is a profile `kind`: `claude`, `opencode` or `codex`. `<plugin id>` is the harness's own id (`<name>@<marketplace>` for Claude Code and Codex), one line of at most 200 bytes. Only a plugin this machine has installed is handed on. `charter.local.toml`'s value overrides this one plugin by plugin. For Claude Code the value goes into the chat's `--settings` `enabledPlugins`. For Codex and opencode it is read, shown as *not supported yet*, and handed to nothing. `charter-app@inline` cannot be `false` and `charter@charter` cannot be `true` under `claude`: a save that says so is refused, and the reader ignores it with a sentence. | stable | `crates/charter-core/src/harness_plugin.rs` `resolve`, `chosen` |
+| any other shape under `[harness_plugins]` | — | — | A harness charter does not know, a value that is not a bool, or a `[harness_plugins]` or `[harness_plugins.<harness>]` that is not a table is refused by the Project settings tab's save and ignored by the reader. | stable | `crates/charter-core/src/harness_plugin.rs` `refusals` |
 | `[theme].use` | str | optional; absent = the window's own theme (the operator's `theme.json`, else the first theme from an extension the project has on, else `charter-dark`) | **charter-app only** (charter-app#273, ADR 0048). The theme the window and its terminals draw while this project is in front: `charter-dark`, `charter-light`, `system` (the built-in matching the operating system's appearance, followed live), or `<extension-id>/<theme name>` — split at the first `/`. An extension's theme is drawn only while the extension is on in this project and approved on this machine, and contributes that theme; otherwise the built-in `charter-dark` is drawn and the Project settings tab says why. A value of none of those shapes is ignored with a sentence and the next file down is used. `charter.local.toml`'s value overrides this one. | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
 | any other key in `[theme]`, or `theme` that is not a table | — | — | Refused by the Project settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/extension/project/theme.rs` `refusals` |
 
@@ -465,7 +469,9 @@ key refuses.
   (`charter/doctor.py:755`), the launcher/selector (`charter/frame/launcher.py:478`,
   `charter/frame/selector.py:25`). In charter-app, its `[extensions]` table is read by
   `crates/charter-core/src/extension/project.rs` as `charter.toml`'s is (charter-app#253), and
-  its `[theme]` by `crates/charter-core/src/extension/project/theme.rs` (charter-app#273).
+  its `[theme]` by `crates/charter-core/src/extension/project/theme.rs` (charter-app#273), and
+  its `[harness_plugins]` table by `crates/charter-core/src/harness_plugin.rs` as
+  `charter.toml`'s is (charter-app#274).
 - **Git:** gitignored — the baseline writes `/charter.local.toml`
   (`charter/commands.py:1104`), and `reinit` backfills it
   (`charter/commands.py:1821`). If git *would* carry it (tracked, committable, or git cannot
@@ -473,9 +479,10 @@ key refuses.
   `charter/profiles.py:456` `with_ignore_check`).
 - **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
   since charter-app#253 — `[extensions]` by `extension::project` and, since charter-app#273,
-  `[theme]` by `extension::project::theme` (ADR 0048); any other
+  `[theme]` by `extension::project::theme` (ADR 0048), and, since charter-app#274,
+  `[harness_plugins]` by `harness_plugin` (ADR 0050); any other
   top-level key is refused with a sentence (`charter/profiles.py:325`, and in charter-app
-  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names all three tables). In charter-app, `[plane]` and `[repos.<name>]` are also read, and override `charter.toml`'s values **key by key** (ADR 0051, on ADR 0048's overlay); every surface that shows one names the file that decided it. A missing file declares nothing and is not a refusal
+  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names all four tables). In charter-app, `[plane]` and `[repos.<name>]` are also read, and override `charter.toml`'s values **key by key** (ADR 0051, on ADR 0048's overlay); every surface that shows one names the file that decided it. A missing file declares nothing and is not a refusal
   (`charter/profiles.py:241`). Profile `env` is stored **sorted by name**
   (`charter/profiles.py:363`), and `~` in `command[0]` and in every `env` value is expanded
   only at launch (`charter/profiles.py:474`, `charter/profiles.py:480`) — never in the file

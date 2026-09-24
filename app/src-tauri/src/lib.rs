@@ -8,6 +8,7 @@ mod clipath;
 mod doctor;
 mod extensions;
 mod handoff;
+mod harness_plugins;
 mod hooks;
 mod lifecycle;
 mod opener;
@@ -1249,6 +1250,7 @@ fn commands() -> Builder<tauri::Wry> {
             vaults::vault_identity_put,
             extensions::project_extensions,
             extensions::extensions_on,
+            harness_plugins::project_harness_plugins,
             extensions::project_theme,
             extensions::project_theme_drawn,
             views::extension_views,
