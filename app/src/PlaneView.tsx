@@ -58,6 +58,7 @@ import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
+import { usePlaneChanged } from "./planeChanged";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
@@ -234,6 +235,10 @@ export function PlaneView({
    * (charter-app#174).
    */
   const [rereadWorkspace, setRereadWorkspace] = useState(0);
+  /** Bumped when the core says this plane changed on disk (charter-app#264): a todo closed in
+   *  a terminal, a workspace another chat made. The sidebar and the focused workspace's panels
+   *  are read again on it. */
+  const changesOnDisk = usePlaneChanged([plane]);
   /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now. */
   const [makingWorkspace, setMakingWorkspace] = useState(false);
@@ -494,7 +499,8 @@ export function PlaneView({
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
   // directory the operator also edits by hand and another charter process writes, so there is
   // nothing to invalidate a cache of it. `tabs` is the dependency because opening or ending a
-  // chat is what this window can change about the answer.
+  // chat is what this window can change about the answer, and `changesOnDisk` because the core
+  // says when something else changed it (charter-app#264).
   useEffect(() => {
     void commands
       .planeSidebar(plane)
@@ -546,7 +552,7 @@ export function PlaneView({
       })
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
-  }, [change, plane, replan, startedIn, tabs]);
+  }, [change, changesOnDisk, plane, replan, startedIn, tabs]);
 
   /**
    * What the machine store says this operator has pinned here, and what it says is gone.
@@ -640,7 +646,7 @@ export function PlaneView({
    *  outside every workspace is not a workspace on the plane, so there is no directory to
    *  read and every region says so rather than drawing another workspace's answer. */
   const ofWorkspace = focused === OUTSIDE ? undefined : focused;
-  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace);
+  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
   const doctor = useDoctor(plane);

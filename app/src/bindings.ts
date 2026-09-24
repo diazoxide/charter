@@ -1297,6 +1297,14 @@ export type PlaneAlerts = {
 };
 
 /**
+ *  What `plane-changed` carries: which plane moved. Every window filters on it, as it filters
+ *  `chat-moved`, because the app holds several planes and emits on the app.
+ */
+export type PlaneChanged = {
+	plane: PlaneId,
+};
+
+/**
  *  What a plane would contribute, as the trust prompt draws it — **and the exact value the
  *  operator's approval is checked against.**
  * 
