@@ -470,9 +470,12 @@ and `FourRegions.test.tsx` found it by holding a `nav` that had been replaced.
 **A terminal keeps Tab.** xterm prevents Tab and Shift+Tab and sends them to the shell —
 completion, and Claude Code's mode cycling — and nothing in the window takes either. So a
 terminal is a stop you can reach and cannot Tab out of, which is why the pane's own controls are
-written *before* it in the document (they are absolutely positioned, so the look is unchanged),
-and why they are drawn for the focused pane even while the keyboard is still on the strip: a
-`visibility: hidden` control is not in the sequence at all.
+written *before* it in the document (they are absolutely positioned, so the look is unchanged).
+**They are shown on hover and while the keyboard is on them, and at no other time** — not
+because their pane is focused, which is the pane the operator is typing in and a corner he
+asked to keep clear. A `visibility: hidden` control is out of the sequence, so the focused
+pane's are hidden by `opacity` with `pointer-events: none` instead: Tab still lands on them, and
+`.pane-doing:focus-within` draws the group the moment it does.
 
 **The way out is Ctrl+Tab, and Ctrl+Shift+Tab backwards** (`SessionPane.leavesTheChat`). It is
 the platforms' own key for leaving a control that keeps Tab — GTK's text view, Windows'
@@ -488,7 +491,7 @@ walks this sequence in the real window with full keyboard access off; that `Ctrl
 the page on macOS and on GTK rather than being taken by the window system first; and that the
 focus ring is visible on each stop in both themes. `e2e/specs/keyboard-reach.e2e.ts` checks
 what can be checked in the shipped bundle — the attributes, the order, the focused pane's
-controls being drawn, and a dispatched Ctrl+Tab leaving xterm's real textarea.
+controls staying unseen until the keyboard is on them, and a dispatched Ctrl+Tab leaving xterm's real textarea.
 
 ## The three strips say their depth in shade, and that took no primitive either
 

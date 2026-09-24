@@ -791,17 +791,20 @@ button.show-more:focus-visible {
    accessibility tree — so a hidden control cannot be pressed by accident or found by a reader
    that cannot see it either.
 
-   **And they are drawn for the FOCUSED pane as well as the hovered one**, because hover-only
-   is a control that does not exist without a pointer. The focused pane is where a keyboard
-   is, so `:focus-within` is true there — including while the terminal itself has the keyboard,
-   which is the ordinary case. A pane the operator is not in shows nothing until the pointer
-   is over it.
+   **Drawn on hover, and while the keyboard is ON them — not while it is merely in the pane**
+   (charter-app#189). The operator asked for them *"visible when hovering harness only"* and
+   objected to that corner being cluttered; the focused pane is the one he is typing in, so a
+   rule that drew them for the focused pane, or whenever the terminal had the keyboard
+   (`.pane-frame:focus-within`, which is what was here before), drew them all day.
 
-   **And for the focused pane while the keyboard is on its way to it** (charter-app#189):
-   `:focus-within` is false while Tab is still on the strip above, and a hidden control is not
-   in the tab sequence — so the controls Tab is about to reach would not exist yet. The
-   focused pane is the one the palette and these buttons act on, so it is the one that
-   shows them whatever has the keyboard. */
+   **But a keyboard has to be able to reach them**, and `visibility: hidden` is out of the tab
+   sequence. So the FOCUSED pane's controls are hidden by `opacity` instead: still in the
+   sequence — they are written before the terminal, so Tab from the strip arrives at them — but
+   not seen and not clickable (`pointer-events: none`, so a stray press cannot end a chat it
+   cannot see). The moment one has the keyboard, `.pane-doing:focus-within` draws the group;
+   leave it and it goes again. Every other pane's controls stay `visibility: hidden`: the
+   palette and the buttons act on the focused pane, so those are the only ones a keyboard
+   needs. */
 .pane-doing {
   display: flex;
   gap: 0.15rem;
@@ -813,9 +816,14 @@ button.show-more:focus-visible {
 }
 
 .pane-frame:hover .pane-doing,
-.pane-frame:focus-within .pane-doing,
-.pane-frame:has(.pane.focused) .pane-doing {
+.pane-doing:focus-within {
   visibility: visible;
+}
+
+.pane-frame:has(.pane.focused):not(:hover) .pane-doing:not(:focus-within) {
+  visibility: visible;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .pane-doing button {

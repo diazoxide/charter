@@ -10,8 +10,8 @@ import { endEveryChat, pressAndStart } from "../opening.js";
  *
  * - **the attributes survive the build.** An operator gets a Vite bundle inside a WKWebView or
  *   WebKitGTK, and a `tabindex` a transform dropped would leave every unit test green;
- * - **the focused pane's controls are drawn while the keyboard is still on its way to them.**
- *   That is a stylesheet rule (`:has(.pane.focused)`), and jsdom computes no stylesheet — a
+ * - **the focused pane's controls stay reachable and unseen until the keyboard is on them.**
+ *   That is stylesheet rules (`App.css`, `.pane-doing`), and jsdom computes no stylesheet — a
  *   control that is `visibility: hidden` is not in the tab sequence at all;
  * - **Ctrl+Tab leaves a real terminal**, xterm's own textarea and not a stand-in.
  *
@@ -120,15 +120,28 @@ describe("the window's keyboard reach", () => {
     expect(controlsFirst).toBe(true);
   });
 
-  it("draws the focused pane's controls while the keyboard is somewhere else", async () => {
-    const drawn = await browser.execute(() => {
-      (
-        document.querySelector('[role="tablist"][aria-label="Tabs"] [tabindex="0"]') as HTMLElement
-      ).focus();
-      const doing = document.querySelector(".pane-frame:has(.pane.focused) .pane-doing");
-      return doing ? getComputedStyle(doing).visibility : "(no focused pane)";
+  it("shows the focused pane's controls only once the keyboard is on them", async () => {
+    // The pointer off the panes, so hover is not what answers.
+    await $(".status-line").moveTo();
+    const seen = await browser.execute(() => {
+      const doing = document.querySelector<HTMLElement>(
+        ".pane-frame:has(.pane.focused) .pane-doing",
+      );
+      if (!doing) return { away: "(no focused pane)", on: "", focusable: false };
+      const look = () => {
+        const style = getComputedStyle(doing);
+        return `${style.visibility}/${style.opacity}`;
+      };
+      // The terminal has the keyboard: the operator is typing, and the corner stays clear.
+      document.querySelector<HTMLElement>('[data-testid="pane"] textarea')?.focus();
+      const away = look();
+      // Tab from the strip lands on the first control. It can only do that if the control is
+      // still in the sequence — visible to the engine, if not to the eye.
+      const first = doing.querySelector<HTMLElement>("button:not([disabled])");
+      first?.focus();
+      return { away, on: look(), focusable: document.activeElement === first };
     });
-    expect(drawn).toBe("visible");
+    expect(seen).toEqual({ away: "visible/0", on: "visible/1", focusable: true });
   });
 
   it("leaves a terminal on Ctrl+Tab, and keeps a plain Tab in it", async () => {

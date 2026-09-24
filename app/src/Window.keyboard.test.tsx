@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
@@ -372,5 +374,56 @@ describe("a list is one Tab stop", () => {
     queue[0].focus();
     await userEvent.keyboard("{ArrowDown}");
     await waitFor(() => expect(queue[1]).toHaveFocus());
+  });
+});
+
+/**
+ * **A pane's controls show when the keyboard is on them, not whenever their pane is focused.**
+ *
+ * The focused pane is the one the operator types in, and he asked for that corner to stay
+ * clear (`App.css`, `.pane-doing`). jsdom computes no stylesheet, so the rules are read as
+ * text, the way `ChatGauge.test.tsx` reads its own; `keyboard-reach.e2e.ts` computes them in
+ * the real WebView.
+ */
+describe("a pane's controls", () => {
+  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+  /** Every rule as its selectors and its declarations. */
+  const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(([, selectors, body]) => ({
+    selectors: selectors.split(",").map((one) => one.trim()),
+    body,
+  }));
+  /** The selectors that DRAW the controls: visible, and not faded out. */
+  const drawing = rules
+    .filter(
+      (rule) => /visibility:\s*visible/.test(rule.body) && !/opacity:\s*0\s*;/.test(rule.body),
+    )
+    .flatMap((rule) => rule.selectors)
+    .filter((selector) => selector.endsWith(".pane-doing") || selector.includes(".pane-doing:"));
+
+  it("are drawn by hover and by the keyboard being on them, and by nothing else", () => {
+    expect(drawing.sort()).toEqual([".pane-doing:focus-within", ".pane-frame:hover .pane-doing"]);
+  });
+
+  it("are not drawn because their pane is focused, or because its terminal has the keyboard", () => {
+    for (const selector of drawing) {
+      expect(selector).not.toContain(".focused");
+      expect(selector).not.toContain(".pane-frame:focus-within");
+    }
+  });
+
+  it("stay in the tab sequence on the focused pane, unseen and unclickable until reached", () => {
+    const focused = rules.find((rule) =>
+      rule.selectors.some((one) => one.includes(":has(.pane.focused)")),
+    );
+    expect(focused?.selectors).toEqual([
+      ".pane-frame:has(.pane.focused):not(:hover) .pane-doing:not(:focus-within)",
+    ]);
+    // `visibility: visible` is what keeps them focusable; `opacity` is what hides them.
+    expect(focused?.body).toMatch(/visibility:\s*visible/);
+    expect(focused?.body).toMatch(/opacity:\s*0\s*;/);
+    expect(focused?.body).toMatch(/pointer-events:\s*none/);
   });
 });
