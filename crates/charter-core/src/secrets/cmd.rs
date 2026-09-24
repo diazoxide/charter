@@ -459,6 +459,8 @@ pub fn persona_vault(ctx: &Ctx, name: &str) -> Result<String, String> {
     let declared = declared_vault(&ctx.root, name);
     let vault = match declared.as_deref().map(crate::memstore::py_strip) {
         Some(NO_VAULT) => None,
+        // Never empty in practice: `declared_vault` skips an empty value and frontmatter is
+        // stripped already. Kept as Python's `or`; `.cargo/mutants.toml` records it.
         Some(v) if !v.is_empty() => Some(v.to_string()),
         _ => registry::load_registry(ctx)
             .ok()
@@ -501,6 +503,8 @@ pub fn persona_vault(ctx: &Ctx, name: &str) -> Result<String, String> {
 fn strerror(e: &std::io::Error) -> String {
     let text = e.to_string();
     match text.rfind(" (os error ") {
+        // An OS error's text always ENDS in its ` (os error N)`, so this guard only refuses a
+        // text charter never builds; `.cargo/mutants.toml` records that.
         Some(at) if text.ends_with(')') => text[..at].to_string(),
         _ => text,
     }
@@ -569,6 +573,19 @@ fn identify_dest(raw: &Path) -> Option<rustix::fs::Stat> {
     rustix::fs::fstat(&fd).ok()
 }
 
+/// Which of `streams` `dest` turns out to be once OPENED — the second look, for a name whose
+/// `lstat` hides what it is. On macOS `/dev/fd/1` `lstat`s as a regular file on the `fdesc`
+/// device, and only the descriptor it opens is charter's stdout. On Linux the same name is a
+/// symlink, refused before this runs, so there `None` from here changes nothing a test can
+/// see; `.cargo/mutants.toml` says so, and macOS CI is where this is pinned.
+#[cfg(unix)]
+fn stream_opened_as(dest: &Path, streams: &[((u64, u64), &'static str)]) -> Option<&'static str> {
+    let opened = identify_dest(dest)?;
+    #[allow(clippy::unnecessary_cast)] // `st_dev` is `i32` on macOS, `u64` on Linux
+    let id = (opened.st_dev as u64, opened.st_ino as u64);
+    streams.iter().find(|(k, _)| *k == id).map(|(_, n)| *n)
+}
+
 /// `_cp_dest_refusal`: why `dest` is not somewhere a secret may be materialised — or `None`.
 #[cfg(unix)]
 fn cp_dest_refusal(dest: &Path, force: bool) -> Option<String> {
@@ -602,12 +619,8 @@ fn cp_dest_refusal(dest: &Path, force: bool) -> Option<String> {
         .iter()
         .find(|(id, _)| *id == (st.dev(), st.ino()))
         .map(|(_, n)| *n);
-    if which.is_none()
-        && let Some(opened) = identify_dest(dest)
-    {
-        #[allow(clippy::unnecessary_cast)] // `st_dev` is `i32` on macOS, `u64` on Linux
-        let id = (opened.st_dev as u64, opened.st_ino as u64);
-        which = streams.iter().find(|(k, _)| *k == id).map(|(_, n)| *n);
+    if which.is_none() {
+        which = stream_opened_as(dest, &streams);
     }
     if let Some(which) = which {
         return Some(own_stream_refusal(&shown, which));
@@ -635,8 +648,23 @@ fn abspath(p: &Path) -> std::path::PathBuf {
 /// `cmd_secret_cp`: materialise a secret to a REAL file at 0600, printing the path only. The
 /// destination is checked — by path, then by the descriptor actually opened — BEFORE the value
 /// is resolved, so a refused destination never brings the plaintext into this process at all.
-#[cfg(unix)]
+///
+/// One `cp` for every platform, so that a mutation of its answer is one mutant, tested where
+/// it is built; the refusal off unix is `cp_off_unix`, which no unix build compiles.
 pub fn cp(ctx: &Ctx, vault: &str, key: &str, dest: &str, force: bool, io: &mut dyn Io) -> i32 {
+    #[cfg(unix)]
+    {
+        cp_unix(ctx, vault, key, dest, force, io)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (ctx, vault, key, dest, force);
+        cp_off_unix(io)
+    }
+}
+
+#[cfg(unix)]
+fn cp_unix(ctx: &Ctx, vault: &str, key: &str, dest: &str, force: bool, io: &mut dyn Io) -> i32 {
     use rustix::fs::{Mode, OFlags};
     use std::os::unix::fs::PermissionsExt;
 
@@ -680,6 +708,10 @@ pub fn cp(ctx: &Ctx, vault: &str, key: &str, dest: &str, force: bool, io: &mut d
             }
         }
     }
+    // `NOFOLLOW` and `NONBLOCK` are a second line behind `cp_dest_refusal`, which has already
+    // refused a symlink and anything that is not a regular file: only a swap between that
+    // `lstat` and this `open` can reach them, so dropping them (`| NONBLOCK` as `& NONBLOCK`)
+    // changes nothing a test can hold still. `.cargo/mutants.toml` excludes that mutant.
     let mut flags = OFlags::WRONLY | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK;
     if !force {
         flags |= OFlags::EXCL;
@@ -777,7 +809,7 @@ pub fn cp(ctx: &Ctx, vault: &str, key: &str, dest: &str, force: bool, io: &mut d
 /// Windows has no `O_NOFOLLOW`, no device files to refuse by identity, and no 0600: charter
 /// does not claim a guarantee it cannot keep, so `secret cp` is refused there.
 #[cfg(not(unix))]
-pub fn cp(_ctx: &Ctx, _vault: &str, _key: &str, _dest: &str, _force: bool, io: &mut dyn Io) -> i32 {
+fn cp_off_unix(io: &mut dyn Io) -> i32 {
     io.say(Say::Err(
         "Refusing to write a secret: `secret cp` needs a filesystem with unix modes, which this \
          platform does not have. Use `charter secret exec --file` instead."
@@ -785,3 +817,7 @@ pub fn cp(_ctx: &Ctx, _vault: &str, _key: &str, _dest: &str, _force: bool, io: &
     ));
     2
 }
+
+#[cfg(test)]
+#[path = "cmd_tests.rs"]
+pub(crate) mod tests;

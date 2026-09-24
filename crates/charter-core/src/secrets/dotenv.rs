@@ -73,6 +73,13 @@ mod tests {
     }
 
     #[test]
+    fn a_hash_a_quote_or_a_newline_alone_stays_single_quoted() {
+        assert_eq!(line("H", "a#b").unwrap(), "H='a#b'");
+        assert_eq!(line("S", "it's").unwrap(), "S='it's'");
+        assert_eq!(line("N", "a\nb").unwrap(), "N='a\nb'");
+    }
+
+    #[test]
     fn a_quote_beside_a_hash_takes_backticks() {
         assert_eq!(line("Q", "it's #x").unwrap(), "Q=`it's #x`");
     }
@@ -91,7 +98,33 @@ mod tests {
     }
 
     #[test]
+    fn a_newline_beside_a_quote_and_a_backtick_takes_double_quotes_escaped() {
+        assert_eq!(line("N", "x\n'`y").unwrap(), "N=\"x\\n'`y\"");
+    }
+
+    #[test]
+    fn a_literal_escape_beside_a_real_newline_is_refused_as_ambiguous() {
+        for value in ["x\n'`\\n", "x\n'`\\r"] {
+            let err = line("E", value).unwrap_err();
+            assert!(err.0.contains("literal '\\n'/'\\r' escape"), "{}", err.0);
+        }
+    }
+
+    #[test]
+    fn every_quote_style_at_once_is_refused_as_having_none_left() {
+        let err = line("Q", "'#`\"").unwrap_err();
+        assert!(err.0.contains("no usable quote style"), "{}", err.0);
+    }
+
+    #[test]
+    fn the_escaped_form_is_what_tier_three_writes() {
+        assert_eq!(escaped("a\r\nb"), "a\\r\\nb");
+        assert_eq!(escaped("plain"), "plain");
+    }
+
+    #[test]
     fn a_name_outside_the_alphabet_is_refused() {
+        assert!(line("_ok9", "v").is_ok());
         assert!(line("1A", "v").is_err());
         assert!(line("A-B", "v").is_err());
     }

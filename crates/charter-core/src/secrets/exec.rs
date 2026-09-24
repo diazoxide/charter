@@ -408,25 +408,25 @@ fn not_started(program: &str, e: &std::io::Error, io: &mut dyn Io) -> i32 {
 
 /// `--exec`: replace this process with the child, stdio untouched. Returns only when the
 /// replacement failed — `command not found`, 127, for every such failure, as Python's does.
-#[cfg(unix)]
+///
+/// Windows cannot replace a process; there the child runs with stdio inherited and its status
+/// is this one's, which is what `os.execvpe` does there.
+///
+/// One function with two platform arms rather than two functions of one name: cargo-mutants
+/// names a mutant by its function, and the arm this platform does not compile would otherwise
+/// carry the same three names as the one the tests catch, unkillable and unexcludable apart.
 fn replace_process(mut child: Command, program: &str, io: &mut dyn Io) -> i32 {
-    use std::os::unix::process::CommandExt;
-    let _ = child.exec();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let _ = child.exec();
+    }
+    #[cfg(not(unix))]
+    if let Ok(status) = crate::forklock::status(&mut child) {
+        return super::run::exit_code(&status);
+    }
     io.say(Say::Err(format!("command not found: {program}")));
     127
-}
-
-/// Windows cannot replace a process; the child runs with stdio inherited and its status is
-/// this one's, which is what `os.execvpe` does there.
-#[cfg(not(unix))]
-fn replace_process(mut child: Command, program: &str, io: &mut dyn Io) -> i32 {
-    match crate::forklock::status(&mut child) {
-        Ok(status) => super::run::exit_code(&status),
-        Err(_) => {
-            io.say(Say::Err(format!("command not found: {program}")));
-            127
-        }
-    }
 }
 
 /// Wait for `child`, and if a terminating signal arrives first, kill it and return `128+N`.
@@ -443,6 +443,8 @@ fn supervise(mut child: std::process::Child, signals: &Termination) -> i32 {
         if let Some(sig) = signals.caught() {
             if sig == Termination::SIGINT {
                 let deadline = std::time::Instant::now() + Duration::from_millis(250);
+                // `<` and `<=` differ only at the one instant equal to the deadline, which a
+                // 10 ms poll cannot land on (`.cargo/mutants.toml` excludes that mutant).
                 while std::time::Instant::now() < deadline {
                     if let Ok(Some(_)) = child.try_wait() {
                         return 128 + sig;
@@ -462,6 +464,8 @@ fn supervise(mut child: std::process::Child, signals: &Termination) -> i32 {
 /// signal `N` — what Python's `sys.exit(-N)` leaves, `256 - N`.
 fn exit_status(status: &std::process::ExitStatus) -> i32 {
     let code = super::run::exit_code(status);
+    // `code <= 0` would be the same function — it differs only at 0, where `(256 + 0) & 0xff`
+    // is 0 as well, and an exit code is never above 255 — so `.cargo/mutants.toml` excludes it.
     if code < 0 { (256 + code) & 0xff } else { code }
 }
 
@@ -542,3 +546,7 @@ impl Drop for Termination {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "exec_tests.rs"]
+mod tests;

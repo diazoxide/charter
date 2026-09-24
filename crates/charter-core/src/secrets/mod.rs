@@ -280,6 +280,9 @@ pub fn redact_str(text: &str, secrets: &[String]) -> String {
 }
 
 fn replace_all(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    // A fast path, not a guard: a needle longer than the haystack never matches below either,
+    // and an empty one never arrives — `redact` drops empty values first. So `&&` for `||`
+    // answers the same, and `.cargo/mutants.toml` says so.
     if from.is_empty() || data.len() < from.len() {
         return data.to_vec();
     }
@@ -375,11 +378,9 @@ pub fn loose_dirs(leaf: &Path, stop: &Path) -> Vec<(PathBuf, u32)> {
         chain.push(cur.clone());
         let Some(rp) = resolve(&cur) else { break };
         let parent = cur.parent().map(Path::to_path_buf);
-        if Some(&rp) == stop_rp.as_ref()
-            || seen.contains(&rp)
-            || parent.as_ref() == Some(&cur)
-            || parent.is_none()
-        {
+        // Python's root test is `p.parent == p`; here it is `parent.is_none()`, because
+        // `Path::parent` drops a component and so never answers the path itself.
+        if Some(&rp) == stop_rp.as_ref() || seen.contains(&rp) || parent.is_none() {
             break;
         }
         seen.push(rp);
@@ -532,3 +533,9 @@ pub fn make_private_dir(dir: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+// Unix only: its stand-in CLIs are shell scripts, and its vault files are judged by mode. Two
+// attributes rather than `all(test, unix)`, which cargo-mutants does not read as test code.
+#[cfg(test)]
+#[cfg(unix)]
+mod tests_store;
