@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { drawThemeFor, Extensions } from "./Extensions";
@@ -237,6 +237,19 @@ describe("the consent surface", () => {
 
     expect(await screen.findByText(/Midnight/)).toBeInTheDocument();
     expect(screen.getByText(/starts it only when you open/)).toBeInTheDocument();
+  });
+
+  it("names each capability the extension asks for, as the core words it", async () => {
+    // ADR 0053: every capability is visible where the operator says yes. The line is the
+    // core's (`Capability::asks`), listed first, and the dialog draws it as given.
+    const capability = "the capability “probe” — charter's test capability, which grants nothing";
+    const declares = [capability, "a theme, “Midnight”"];
+    core({ rows: [{ ...newRow, declares, ask: { ...ASK, declares } }] });
+    render(<Extensions onClose={() => undefined} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Review" }));
+
+    const listed = within(await screen.findByRole("dialog")).getAllByRole("listitem");
+    expect(listed.map((item) => item.textContent)).toEqual(declares);
   });
 
   it("carries back the fingerprint that was shown, and not one fetched again", async () => {

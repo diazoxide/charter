@@ -1,0 +1,118 @@
+# An extension is granted capabilities, one at a time
+
+**Accepted 2026-09-25**, from the operator's grill of the same day (charter-app#336). The first
+change under it is charter-app#338.
+
+charter has an extension runtime (ADR 0041, ADR 0043, ADR 0048). Today an extension can add a
+theme, a side panel, or a view. A view's program is asked one question per click and answers
+with blocks charter draws, and those blocks cannot be acted on. The operator chose to give
+extensions their full set of capabilities first, and to build the extensions after that. The
+other option was to start with read-only extensions. This record fixes how every capability is
+added, so each one reads like the last. It follows ADR 0041's threat model as its **2026-09-23
+amendment** states it: stage 2 exists and the gate items are met. **That amendment supersedes the
+2026-09-22 one** where the two disagree about which gate items are met.
+
+## The decision
+
+**A capability is something charter does for an extension that asked for it and was
+approved.** It describes charter's conduct. It is never a limit on what the extension can do.
+An extension still runs as the operator, and `RUNS_AS_YOU` stays true.
+
+**The manifest names its capabilities.** `charter-extension.json` has a top-level
+`capabilities` list of words, such as `["badges", "actions"]`. Each capability that needs a
+shape declares it in `contributes`, under the same word. All of it sits inside the manifest's
+bytes, so the fingerprint already covers it. Adding a capability to an approved extension
+therefore asks the operator again. The approval prompt names each capability first, one line
+each, in the core's words (`Capability::asks`). The dialog and the Extensions list both read
+that one list.
+
+**An unknown word refuses the whole manifest.** The refusal is a sentence naming the word.
+charter never loads the rest. If it did, the operator would have approved the extension for less
+than it asked for, and the same extension would behave differently on a charter that knows the
+word. A manifest with no `capabilities` asks for none, and loads exactly as it did before the
+list existed. Its fingerprint is unchanged.
+
+**`version` is the protocol the extension speaks.** Until now it was the manifest format's
+version. It was also the same number as the executor's request protocol (`"charter": 1`), and
+from here on that is the only thing it means. The protocol goes up once for each capability that
+changes what a request or an answer holds. charter keeps answering every version up to its own,
+and asks each extension in the version its manifest names. Today only protocol 1 exists, so the
+first capability that bumps it also makes the executor ask in the declared version. That same
+change hashes the declared version into the fingerprint in place of the executor's own. A
+capability that needs a later
+protocol is refused in a manifest that names an earlier one.
+
+**The vocabulary grows one capability per change.** Each change adds the capability to
+`crates/charter-core/src/extension/capability.rs`. The same change adds it to the
+`extension-probe` crate's manifest and proves it through the real registry and executor:
+declared, fingerprinted, approved, run, answered, and refused when asked for wrongly. It also
+writes the capability's own amendment to ADR 0041 in that change. Until the first real
+capability lands, the vocabulary holds one word, `probe`. It grants nothing, and only a build
+carrying the plane fence knows it, which means a test build. A release build knows no capability
+and refuses every word.
+
+### Process life
+
+**It stays one process per question.** The executor is unchanged: no long-running extension
+process, no timers, no push. An event is delivered as a question of its own, after the core
+action it reports has finished, with the normal deadline. A failed delivery becomes a note. It
+never changes the core action's result. Hot paths never start a process: the status badges and
+the repo cells read the facts file.
+
+### The facts file
+
+**The facts file is a JSON file in the extension's state directory, and charter reads it
+without starting the extension.** It has a size cap, and each field has a declared freshness.
+It supplies values only for fields the manifest declared. charter reports undeclared fields, and
+they contribute nothing. The extension rewrites the file whenever it is asked a question or sent
+an event. One reader in the core serves the status bar, the terminal footer and the repo table.
+
+### Write scope
+
+**An extension declares plane-relative globs it writes to**, such as `workspaces/*/todos/`.
+Each request carries the resolved absolute paths. After each question the core reads the plane's
+git status, and it reports any write outside the declared paths. That is detection, not
+confinement. ADR 0041 already ruled out a sandbox.
+
+### Naming
+
+**An extension's CLI commands run as `charter <extension-id> <command> …`**, and an extension's
+id may never be a core command word. The registry refuses one that is. A core word that forwards
+to an extension, such as `charter ws todo` once todos moves, is core code. Palette commands carry
+the extension's name. "Plugin" alone always means a harness's plugin, never charter's own
+extension (ADR 0041, `CONTEXT.md`).
+
+### What no capability grants
+
+No capability hands an extension a secret. No capability adds a permission, a hook or a
+harness setting. ADR 0041's table still holds: the machine store, `reopen.json`, harness
+profiles and vaults cannot be granted at any level.
+
+### The build order
+
+1. built-in extensions, bundled with the app and trusted through its signature
+2. the facts file (badges and repo cells)
+3. palette commands
+4. row actions and plane writes
+5. CLI commands
+6. events
+7. briefing sections
+8. Windows, separately
+
+### Nothing core-critical moves before Windows
+
+**Extensions don't run on Windows yet** (ADR 0031: refuse rather than degrade). So nothing that
+a plane's instructions or the session-start briefing depend on moves into an extension until the
+Windows executor exists. Personas and vaults stay core permanently. Todos moves only after the
+capabilities it needs exist, extensions run on Windows, and todos has had its own grill.
+
+## Considered options
+
+- **Read-only extensions first.** Rejected by the operator: the extensions worth building, todos
+  among them, need to write, act and brief.
+- **Capabilities inferred from `contributes`.** Rejected. The list is what the operator reads
+  and what a charter that lacks a capability refuses by name. An inferred list would load a
+  manifest with a `contributes` key an older charter ignores, which is the half-load this record
+  refuses.
+- **A separate manifest version and protocol version.** Rejected. Both numbers change for the
+  same reason, when a request or an answer gains a field, so two numbers would only drift apart.
