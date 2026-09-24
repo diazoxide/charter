@@ -197,6 +197,9 @@ export type Does =
    *  front first when it is not. It writes nothing by itself: a save is the tab's, through the
    *  core's own checks. */
   | { verb: "openSettings"; plane: string }
+  /** Opens the Preferences tab (charter-app#283) — this machine's text sizes — on the project
+   *  in front. It writes nothing by itself: a size is changed on the tab, or by its keys. */
+  | { verb: "openPreferences" }
   | { verb: "quit" }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
@@ -364,6 +367,8 @@ export type Doing = {
   closeProject: (plane: string) => Promise<Ran>;
   /** Brings that project to the front and opens its Project settings tab. */
   openSettings: (plane: string) => void;
+  /** Opens the Preferences tab, or brings forward the one already open. */
+  openPreferences: () => void;
   quit: () => void;
 };
 
@@ -718,6 +723,13 @@ export function catalogue(now: Now): Offer[] {
     ...projects.pin,
     ...projects.settings,
   );
+  // **This machine's preferences, beside the projects' settings** (charter-app#283): the text
+  // sizes are the machine's and not a project's, so the row is there with no project open too,
+  // as `extensions.show` is.
+  offers.push({
+    ...can("preferences.show", "Preferences…", { verb: "openPreferences" }),
+    note: "This machine's window and terminal text sizes.",
+  });
 
   // **The plane's personas, one row each** (charter-app#174). What the row opens is the
   // persona's view — its own tab — and this is the whole of what charter can do to a persona today:
@@ -1026,6 +1038,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.closeProject(does.plane);
     case "openSettings":
       doing.openSettings(does.plane);
+      return DID;
+    case "openPreferences":
+      doing.openPreferences();
       return DID;
     case "quit":
       doing.quit();

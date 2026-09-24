@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { SessionPane } from "./SessionPane";
+import { DEFAULT_TEXT, forgetTextSizes, setTextSize } from "./textSize";
 import { BUILT_IN, DEFAULT_THEME, drawIn, xtermTheme } from "./theme/theme";
 
 /**
@@ -45,6 +47,7 @@ const LIGHT = BUILT_IN["charter-light"];
 
 beforeEach(() => {
   made.length = 0;
+  forgetTextSizes();
   drawIn(DEFAULT_THEME);
   // The view never opens: the theme is decided before any output could arrive.
   mockIPC(() => new Promise(() => {}));
@@ -83,5 +86,43 @@ describe("a terminal and the theme in force", () => {
     // A disposed terminal handed a theme throws in xterm; this is the pane having let go.
     expect(() => drawIn(LIGHT)).not.toThrow();
     expect(was.options.theme).toEqual(xtermTheme(DEFAULT_THEME));
+  });
+});
+
+describe("a terminal and the terminal text size (charter-app#283)", () => {
+  it("is built at the terminal size in force, one step bigger than the 12 it was", () => {
+    pane();
+
+    expect(DEFAULT_TEXT.terminal).toBe(13);
+    expect(made[0].options.fontSize).toBe(13);
+  });
+
+  it("takes a new size while it is up, and refits its rows and columns to it", () => {
+    pane();
+    const fit = vi.spyOn(FitAddon.prototype, "fit");
+
+    act(() => setTextSize("terminal", 17));
+
+    expect(made[0].options.fontSize).toBe(17);
+    // After the size, not before: the grid is measured in the new cells.
+    expect(fit).toHaveBeenCalled();
+    fit.mockRestore();
+  });
+
+  it("is not told about the window's size", () => {
+    pane();
+
+    act(() => setTextSize("window", 20));
+
+    expect(made[0].options.fontSize).toBe(13);
+  });
+
+  it("stops following once the pane is gone", () => {
+    const { unmount } = pane();
+    const was = made[0];
+    unmount();
+
+    expect(() => setTextSize("terminal", 19)).not.toThrow();
+    expect(was.options.fontSize).toBe(13);
   });
 });

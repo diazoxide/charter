@@ -63,6 +63,17 @@ export const SETTINGS_VIEW: ViewRef = { from: null, view: "settings", key: "" };
 /** What the Project settings tab is called. */
 export const SETTINGS_TITLE = "Project settings";
 
+/**
+ * **The Preferences view** (charter-app#283): how this machine's window is drawn — the window
+ * and terminal text sizes — which is the machine's and not the plane's. A view tab all the
+ * same, opened on the project in front, because a tab is where the window puts a surface; what
+ * it edits is the machine's layout file (`textSize.ts`), never a file in the plane.
+ */
+export const PREFERENCES_VIEW: ViewRef = { from: null, view: "preferences", key: "" };
+
+/** What the Preferences tab is called. */
+export const PREFERENCES_TITLE = "Preferences";
+
 /** What a pane shows. */
 export type Content =
   /**

@@ -20,6 +20,10 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
 /// calling the `quit` command, or by not calling it.
 pub const QUIT_ASKED: &str = "quit-asked";
 
+/// The event the window is sent when the menu's Preferences… is chosen (charter-app#283). The
+/// window opens its Preferences tab, which is the palette row's verb too.
+pub const PREFERENCES_ASKED: &str = "preferences-asked";
+
 /// The window the app has. There is one (spec decision 1), and it is the one every part of
 /// this module means.
 pub const WINDOW: &str = "main";
@@ -28,6 +32,7 @@ pub const WINDOW: &str = "main";
 /// cannot drift apart.
 const QUIT: &str = "quit";
 const SHOW: &str = "show";
+const PREFERENCES: &str = "preferences";
 
 /// How long an unanswered ask keeps the next one armed to quit outright.
 ///
@@ -204,6 +209,9 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
 enum Item {
     /// charter's own Quit, with the accelerator it carries.
     Quit(&'static str),
+    /// Preferences… (charter-app#283), with the accelerator it carries: the window's text
+    /// sizes, which are this machine's.
+    Preferences(&'static str),
     Hide,
     Separator,
     Undo,
@@ -229,6 +237,11 @@ enum Item {
 /// left out rather than left on the chat's keys. A text field in the webview keeps its own
 /// `Ctrl+C` and `Ctrl+V`, which the webview handles without any menu.
 ///
+/// **Preferences… is on both, on `⌘,` and `Ctrl+,`** (charter-app#283) — the key every Mac app
+/// opens its settings on, and VS Code's everywhere else. Neither takes anything from a chat:
+/// xterm.js 6.0.0 sends nothing for a `⌘` chord but `⌘A`, and with `Ctrl` it encodes a letter,
+/// space, `3`–`8`, `[`, `\` and `]` — not `,`.
+///
 /// What leaving them out costs, **read from muda 0.19.3's source and not measured in a window**
 /// (nobody here has a Linux or Windows desktop to press the key in): on Windows the Edit items
 /// were real accelerators in the window's accelerator table, so there they really did take the
@@ -238,12 +251,25 @@ enum Item {
 /// are not drawn at all — so there the Edit menu did little but claim keys it did not use.
 fn layout(macos: bool) -> Vec<(&'static str, Vec<Item>)> {
     if !macos {
-        return vec![("charter", vec![Item::Quit("Ctrl+Shift+Q")])];
+        return vec![(
+            "charter",
+            vec![
+                Item::Preferences("Ctrl+,"),
+                Item::Separator,
+                Item::Quit("Ctrl+Shift+Q"),
+            ],
+        )];
     }
     vec![
         (
             "charter",
-            vec![Item::Hide, Item::Separator, Item::Quit("CmdOrCtrl+Q")],
+            vec![
+                Item::Preferences("CmdOrCtrl+,"),
+                Item::Separator,
+                Item::Hide,
+                Item::Separator,
+                Item::Quit("CmdOrCtrl+Q"),
+            ],
         ),
         // Copy, paste and select-all are the predefined items a text field needs to behave;
         // on macOS nothing works without an Edit menu carrying them.
@@ -280,6 +306,13 @@ pub fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                     true,
                     Some(accelerator),
                 )?),
+                Item::Preferences(accelerator) => Box::new(MenuItem::with_id(
+                    app,
+                    PREFERENCES,
+                    "Preferences…",
+                    true,
+                    Some(accelerator),
+                )?),
                 Item::Hide => Box::new(PredefinedMenuItem::hide(app, None)?),
                 Item::Separator => Box::new(PredefinedMenuItem::separator(app)?),
                 Item::Undo => Box::new(PredefinedMenuItem::undo(app, None)?),
@@ -305,6 +338,12 @@ pub fn clicked<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
         QUIT => ask_to_quit(app),
         SHOW => show(app),
+        // Shown first, for Quit's reason: the tab opens in the window, and a hidden window
+        // would put it where nobody is looking.
+        PREFERENCES => {
+            show(app);
+            let _ = app.emit_to(WINDOW, PREFERENCES_ASKED, ());
+        }
         _ => {}
     }
 }
@@ -340,7 +379,9 @@ mod tests {
     fn accelerator(item: Item, macos: bool) -> Option<String> {
         let chord = |key: &str| Some(format!("CmdOrCtrl+{key}"));
         match item {
-            Item::Quit(accelerator) => Some(accelerator.to_owned()),
+            Item::Quit(accelerator) | Item::Preferences(accelerator) => {
+                Some(accelerator.to_owned())
+            }
             Item::Separator => None,
             Item::Hide => chord("H"),
             Item::Undo => chord("Z"),
@@ -356,10 +397,11 @@ mod tests {
     /// Whether a pane's terminal turns `accelerator` into bytes for the shell, on a platform
     /// that is macOS or not — so a menu that claims it takes a key from the chat.
     ///
-    /// xterm (`@xterm/xterm` 6.0.0, `Keyboard.ts`) encodes `Ctrl` with a letter as a control
-    /// character only when neither `Shift`, `Alt` nor `Meta` is held; with `Shift` it sends
-    /// nothing, which is the room GNOME Terminal and Konsole put their own keys in. `CmdOrCtrl`
-    /// is `Ctrl` off macOS and `⌘` on it, and a `⌘` chord xterm sends nothing for either.
+    /// xterm (`@xterm/xterm` 6.0.0, `Keyboard.ts`) encodes `Ctrl` with a letter, space, `3`–`8`,
+    /// `[`, `\` or `]` as a control character only when neither `Shift`, `Alt` nor `Meta` is
+    /// held; with `Shift` it sends nothing, which is the room GNOME Terminal and Konsole put
+    /// their own keys in. `CmdOrCtrl` is `Ctrl` off macOS and `⌘` on it, and a `⌘` chord xterm
+    /// sends nothing for either.
     fn a_terminal_encodes(accelerator: &str, macos: bool) -> bool {
         let words: Vec<String> = accelerator.split('+').map(str::to_uppercase).collect();
         let (key, modifiers) = words.split_last().expect("an accelerator has a key");
@@ -371,7 +413,14 @@ mod tests {
         let other = modifiers
             .iter()
             .any(|m| m == "SHIFT" || m == "ALT" || m == "OPTION" || m == "SUPER" || m == "CMD");
-        ctrl && !other && key.len() == 1 && key.chars().all(|c| c.is_ascii_alphabetic())
+        let encoded = match key.as_str() {
+            "SPACE" | "[" | "\\" | "]" | "BRACKETLEFT" | "BRACKETRIGHT" | "BACKSLASH" => true,
+            one if one.len() == 1 => one
+                .chars()
+                .all(|c| c.is_ascii_alphabetic() || ('3'..='8').contains(&c)),
+            _ => false,
+        };
+        ctrl && !other && encoded
     }
 
     fn accelerators(macos: bool) -> Vec<(Item, String)> {
@@ -389,6 +438,12 @@ mod tests {
         assert!(!a_terminal_encodes("CmdOrCtrl+C", true));
         assert!(!a_terminal_encodes("Ctrl+Shift+Q", false));
         assert!(!a_terminal_encodes("Alt+F4", false));
+        // Not only letters: xterm sends `^[` for `Ctrl+[` and `^\` for `Ctrl+\`.
+        assert!(a_terminal_encodes("Ctrl+[", false));
+        assert!(a_terminal_encodes("Ctrl+5", false));
+        // And not a comma, which is why Preferences can be on `Ctrl+,` (charter-app#283).
+        assert!(!a_terminal_encodes("Ctrl+,", false));
+        assert!(!a_terminal_encodes("Ctrl+0", false));
     }
 
     #[test]
@@ -407,7 +462,10 @@ mod tests {
     fn off_macos_quit_is_ctrl_shift_q_as_it_is_in_a_terminal_app() {
         assert_eq!(
             accelerators(false),
-            vec![(Item::Quit("Ctrl+Shift+Q"), "Ctrl+Shift+Q".to_owned())]
+            vec![
+                (Item::Preferences("Ctrl+,"), "Ctrl+,".to_owned()),
+                (Item::Quit("Ctrl+Shift+Q"), "Ctrl+Shift+Q".to_owned())
+            ]
         );
     }
 
@@ -418,7 +476,13 @@ mod tests {
             vec![
                 (
                     "charter",
-                    vec![Item::Hide, Item::Separator, Item::Quit("CmdOrCtrl+Q")]
+                    vec![
+                        Item::Preferences("CmdOrCtrl+,"),
+                        Item::Separator,
+                        Item::Hide,
+                        Item::Separator,
+                        Item::Quit("CmdOrCtrl+Q")
+                    ]
                 ),
                 (
                     "Edit",
