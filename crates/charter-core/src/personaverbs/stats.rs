@@ -134,11 +134,10 @@ fn split_offset(raw: &str) -> (&str, Option<i64>) {
 
 fn naive(body: &str) -> Option<NaiveDateTime> {
     const DATES: [&str; 2] = ["%Y-%m-%d", "%Y%m%d"];
-    const TIMES: [&str; 8] = [
+    const TIMES: [&str; 7] = [
         "%H:%M:%S%.f",
         "%H:%M:%S",
         "%H:%M",
-        "%H",
         "%H%M%S%.f",
         "%H%M%S",
         "%H%M",
@@ -158,13 +157,20 @@ fn naive(body: &str) -> Option<NaiveDateTime> {
                     }
                 } else if let Ok(at) = NaiveDateTime::parse_from_str(body, &fmt) {
                     return Some(at);
-                } else if time == "%H"
-                    && let Some((d, h)) = body.split_once(sep)
-                    && h.len() == 2
-                    && let (Ok(d), Ok(h)) = (NaiveDate::parse_from_str(d, date), h.parse::<u32>())
-                {
-                    return d.and_hms_opt(h, 0, 0);
                 }
+            }
+        }
+    }
+    // An hour alone, which chrono will not make a date-time of without a minute: the date,
+    // the separator and exactly two digits. No format above reads such a stamp, so asking
+    // after all of them answers what asking in `%H`'s place among them did.
+    for date in DATES {
+        for sep in ["T", " "] {
+            if let Some((d, h)) = body.split_once(sep)
+                && h.len() == 2
+                && let (Ok(d), Ok(h)) = (NaiveDate::parse_from_str(d, date), h.parse::<u32>())
+            {
+                return d.and_hms_opt(h, 0, 0);
             }
         }
     }
@@ -565,3 +571,7 @@ mod tests {
         assert_eq!(row(dir.path(), "router", 14, today).status, "orchestrator");
     }
 }
+
+#[cfg(test)]
+#[path = "stats_tests.rs"]
+mod recorded;

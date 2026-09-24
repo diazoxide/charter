@@ -768,3 +768,7 @@ pub fn confirm_on_terminal() -> Option<Confirm> {
         }
     }))
 }
+
+#[cfg(test)]
+#[path = "agents_tests.rs"]
+mod recorded;
