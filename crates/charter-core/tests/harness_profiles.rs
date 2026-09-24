@@ -271,6 +271,7 @@ fn a_section_other_than_harness_in_the_local_file_is_refused_by_name() {
 
 #[test]
 fn extensions_in_the_local_file_is_not_refused_by_the_profiles_loader() {
+    charter_core::unsteered!();
     // charter-app#253 (ADR 0048): `[extensions]` is this machine's choice among the extensions
     // it approved, read by `extension::project`, and is not the loader's to refuse.
     let dir = plane("", "[extensions.stats]\nenabled = false\n");
