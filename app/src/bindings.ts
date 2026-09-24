@@ -522,6 +522,19 @@ export const commands = {
 	 */
 	planeDoctor: (plane: PlaneId, full: boolean) => typedError<DoctorReport, string>(__TAURI_INVOKE("plane_doctor", { plane, full })),
 	/**
+	 *  Both of this plane's settings files, and what charter says about each.
+	 * 
+	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
+	 */
+	projectSettings: (plane: PlaneId) => typedError<ProjectSettings, string>(__TAURI_INVOKE("project_settings", { plane })),
+	/**
+	 *  Write one file: checked with the core's rules, written with its `toml_edit` writer.
+	 * 
+	 *  `base` is the text the window read (`null`: the file was not there), so a file changed on
+	 *  disk since is refused rather than overwritten.
+	 */
+	saveProjectSettings: (plane: PlaneId, which: SettingsWhich, base: string | null, change: SettingsChange) => typedError<SettingsSaved, string>(__TAURI_INVOKE("save_project_settings", { plane, which, base, change })),
+	/**
 	 *  What one chat's recorded usage says, or nothing.
 	 * 
 	 *  **`None` is the ordinary answer and it draws nothing**: a chat on a harness with no
@@ -1333,6 +1346,12 @@ export type ProfileRow = {
 	approval: string | null,
 };
 
+/**  Both files. */
+export type ProjectSettings = {
+	shared: SettingsFile,
+	local: SettingsFile,
+};
+
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
 export type Rebuilds = {
 	count: number,
@@ -1478,6 +1497,65 @@ export type Restore = {
 	/**  One line per project charter would not take back. */
 	dropped: string[],
 };
+
+/**  What a save is: the raw view's whole text, or a form's changes to the text it was read as. */
+export type SettingsChange = { kind: "raw"; text: string } | { kind: "edits"; edits: SettingsEdit[] };
+
+/**  Set the key at `path` to `value`, or remove it when `value` is `null`. */
+export type SettingsEdit = {
+	path: SettingsStep[],
+	value: SettingsValue | null,
+};
+
+/**  One value in a file, and where it is. */
+export type SettingsField = {
+	path: SettingsStep[],
+	value: SettingsValue,
+};
+
+/**  One file, as the tab draws it. */
+export type SettingsFile = {
+	which: SettingsWhich,
+	/**  `charter.toml` or `charter.local.toml`. */
+	file: string,
+	/**  Whether it is there. A Local file that is not is created by the first save. */
+	exists: boolean,
+	/**
+	 *  Its text, for the raw view — and what a save is checked against, so an edit made
+	 *  elsewhere since is never written over.
+	 */
+	text: string,
+	/**  What charter refuses in it as it stands, in the core's words. */
+	refusals: string[],
+	/**  Whether it is TOML. When it is not, `fields` is empty and only the raw view can mend it. */
+	parsed: boolean,
+	/**  Every value in it, in file order. */
+	fields: SettingsField[],
+};
+
+/**  What a save answered: the file as it now stands, or every reason nothing was written. */
+export type SettingsSaved = { kind: "saved"; file: SettingsFile } | { kind: "refused"; reasons: string[] };
+
+/**  One step of the way to a key: a table's key, or a block's place in `[[forge]]`. */
+export type SettingsStep = ({ key: string }) & { index?: never } | ({ index: number }) & { key?: never };
+
+/**
+ *  A value, as a form reads and writes it. `other` is one no form writes — a float, a date, a
+ *  list that is not all text — shown as TOML and changed only in the raw view.
+ */
+export type SettingsValue = { kind: "text"; value: string } | 
+/**
+ *  Whole numbers only; TOML's range is `i64` and a form writes no more than a JS number
+ *  carries exactly, so it travels as one.
+ */
+{ kind: "integer"; value: number | null } | { kind: "bool"; value: boolean } | { kind: "list"; value: string[] } | { kind: "other"; value: string };
+
+/**  Which file: the committed one or this machine's. */
+export type SettingsWhich = 
+/**  `charter.toml` — committed; the team sees it. */
+"shared" | 
+/**  `charter.local.toml` — gitignored; this machine only. */
+"local";
 
 /**
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's

@@ -16,6 +16,7 @@ mod panics;
 mod pin;
 mod planes;
 mod sessions;
+mod settings;
 mod slowstart;
 mod updates;
 mod usage;
@@ -1159,6 +1160,8 @@ fn commands() -> Builder<tauri::Wry> {
             views::reopened_views,
             views::window_views,
             doctor::plane_doctor,
+            settings::project_settings,
+            settings::save_project_settings,
             usage::chat_usage,
             pin::plane_pin,
             about::about_charter,

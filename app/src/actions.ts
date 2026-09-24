@@ -176,6 +176,10 @@ export type Does =
   /** Lets go of one project, which ends its chats and takes its tab out. Nothing of the
    *  project on disk goes. */
   | { verb: "closeProject"; plane: string }
+  /** Opens that project's Project settings tab (charter-app#252) — bringing the project to the
+   *  front first when it is not. It writes nothing by itself: a save is the tab's, through the
+   *  core's own checks. */
+  | { verb: "openSettings"; plane: string }
   | { verb: "quit" }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
@@ -336,6 +340,8 @@ export type Doing = {
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
+  /** Brings that project to the front and opens its Project settings tab. */
+  openSettings: (plane: string) => void;
   quit: () => void;
 };
 
@@ -379,7 +385,14 @@ export function projectRows(
   front: string | undefined,
   /** The projects this operator has pinned, by root. */
   pinned: readonly string[] = [],
-): { open: Offer; create: Offer; switchTo: Offer[]; pin: Offer[]; close: Offer[] } {
+): {
+  open: Offer;
+  create: Offer;
+  switchTo: Offer[];
+  pin: Offer[];
+  settings: Offer[];
+  close: Offer[];
+} {
   return {
     // Always available, and available with no project open too: it is how a window with
     // nothing in it gets its first one, and how a window with eight gets a ninth.
@@ -419,6 +432,16 @@ export function projectRows(
         note: held ? UNPIN_NOTE : `${PIN_NOTE} Keeps it in the opener's list.`,
       };
     }),
+    // The words the operator asked for on the tab's menu, and the project's name in the note:
+    // in a menu the project is the one right-clicked, and in the palette the note is what tells
+    // eight of these rows apart.
+    settings: projects.map((project) => ({
+      ...can(`project.settings:${project.plane}`, "Project settings…", {
+        verb: "openSettings",
+        plane: project.plane,
+      }),
+      note: `${project.name}: charter.toml, for the team, and charter.local.toml, for this machine.`,
+    })),
     close: projects.map((project) => ({
       ...can(
         `project.close:${project.plane}`,
@@ -665,7 +688,13 @@ export function catalogue(now: Now): Offer[] {
   // with the tabs and the workspaces. Letting go of one is below the line, with the tab
   // closes it is the bigger version of.
   const projects = projectRows(now.projects ?? [], now.plane, pinned.projects);
-  offers.push(projects.open, projects.create, ...projects.switchTo, ...projects.pin);
+  offers.push(
+    projects.open,
+    projects.create,
+    ...projects.switchTo,
+    ...projects.pin,
+    ...projects.settings,
+  );
 
   // **The plane's personas, one row each** (charter-app#174). What the row opens is the
   // persona's view — its own tab — and this is the whole of what charter can do to a persona today:
@@ -967,6 +996,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "closeProject":
       return doing.closeProject(does.plane);
+    case "openSettings":
+      doing.openSettings(does.plane);
+      return DID;
     case "quit":
       doing.quit();
       return DID;
@@ -1196,6 +1228,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         above: [
           `project.select:${what.plane}`,
           `project.pin:${what.plane}`,
+          `project.settings:${what.plane}`,
           "project.create",
           "project.open",
         ],

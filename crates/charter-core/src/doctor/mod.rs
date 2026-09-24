@@ -36,6 +36,7 @@ pub(crate) mod session;
 
 /// Python's truthiness of a TOML value, for `crate::alerts`, which reads the same manifest
 /// sections through the same `(cfg.get(name) or {})` idiom.
+pub(crate) use config::findings as config_findings;
 pub(crate) use config::truthy as config_truthy;
 
 use std::path::{Path, PathBuf};
@@ -158,6 +159,12 @@ impl Config {
         let Ok(raw) = std::fs::read(&path) else {
             return Self::Read(toml::Table::new());
         };
+        Self::parse(&path, raw)
+    }
+
+    /// [`Config::load`] of bytes that are, or are about to be, the file at `path` — so a
+    /// writer can ask what the next read would say before it writes (charter-app#252).
+    pub(crate) fn parse(path: &Path, raw: Vec<u8>) -> Self {
         let text = match String::from_utf8(raw) {
             Ok(text) => text,
             Err(e) => {

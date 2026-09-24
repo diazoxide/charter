@@ -301,6 +301,17 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   (`charter/instance.py:331`), `declare_default_persona` (`:342`) and
   `clear_default_persona` (`:355`). `charter version bump` also commits it
   (`charter/commands.py:3842`).
+  **In charter-app, also the Project settings tab** (`charter_core::settings::save`,
+  charter-app#252): the whole file, whole or not at all (a temp file beside it, then one
+  rename), keeping the existing file's mode. A form's change is applied with `toml_edit`, so
+  every comment, blank line, key order and spacing it did not touch is kept, and a replaced
+  value keeps the decoration it had. It refuses to write text in which the next read would
+  refuse something the file on disk does not already have — a finding of `charter doctor`'s
+  `charter.toml` row, a `[harness.<name>]` table — in those readers' own words; it refuses a
+  value `secretshape` calls a credential whether or not the file already held it; and it
+  refuses to write over a file that changed on disk since the tab read it. (The file marks the
+  plane, so the tab is only ever open where it exists; were it deleted under the tab, a save
+  would create it at 0600.)
 - **Read by:** `charter/instance.py:105` `load` — and *only* there:
   `charter/config.py:719` (every command/hook, at import), plus direct re-reads in
   `charter/commands.py:211`, `charter/commands.py:3614`, `charter/hooks.py:7260`,
@@ -412,12 +423,18 @@ key refuses.
 
 ### `charter.local.toml`
 
-- **Format:** TOML. **Charter never writes this file** — it is hand-edited (or edited by a
-  chat) and read only.
+- **Format:** TOML. Hand-edited (or edited by a chat), and in charter-app written by the
+  Project settings tab and nothing else.
 - **Status:** **stable** — the operator edits it by hand, and two different processes read it
   (the CLI/`doctor`, and the frame launcher/selector on a launch).
-- **Written by:** nobody in charter. `charter init`/`reinit` only add the `.gitignore` line for
-  it (`charter/commands.py:1803`, `charter/commands.py:1806`).
+- **Written by:** nothing in the Python charter — `charter init`/`reinit` only add the
+  `.gitignore` line for it (`charter/commands.py:1803`, `charter/commands.py:1806`).
+  charter-app's Project settings tab (`charter_core::settings::save`, charter-app#252) writes it
+  as it writes `charter.toml` (above), and **creates it on the first save**, at mode 0600. It
+  refuses to create or write the file where git would commit it — asked before the file exists
+  with `git check-ignore -q -- charter.local.toml` (exit 1 is "would commit", and is also git's
+  answer for a tracked path), and afterwards with the loader's own `ignore_check` — in the
+  loader's own sentences, and refuses anything `profiles` would refuse in it.
 - **Read by:** `charter/profiles.py:240` `_read_local` (the only reader), through
   `charter/profiles.py:284` `derive` and `charter/profiles.py:404` `current` (memoized per
   process on `(root, local bytes, charter.toml bytes)`, `charter/profiles.py:428`). Surfaces:

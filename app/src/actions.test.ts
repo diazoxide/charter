@@ -5,6 +5,7 @@ import {
   ENDS_IT,
   KEEPS_THE_BRANCH,
   matches,
+  menuOn,
   menuRows,
   narrow,
   OUTSIDE,
@@ -84,6 +85,9 @@ function doing(): Doing & { calls: string[] } {
     closeProject: vi.fn(async (plane: string) => {
       calls.push(`closeProject:${plane}`);
       return { ok: true as const };
+    }),
+    openSettings: vi.fn((plane: string) => {
+      calls.push(`openSettings:${plane}`);
     }),
     quit: note("quit"),
   };
@@ -240,6 +244,27 @@ describe("the one list of actions", () => {
     expect(by(offers, "project.close:/p/one")?.note).toBe(
       "Ends every chat in it. Nothing of the project on disk goes.",
     );
+  });
+
+  it("offers every project's settings under the words its tab's menu uses, told apart by name", async () => {
+    const hands = doing();
+    const offers = catalogue(
+      now({
+        projects: [
+          { plane: "/p/one", name: "one" },
+          { plane: "/p/two", name: "two" },
+        ],
+      }),
+    );
+
+    expect(by(offers, "project.settings:/p/two")?.title).toBe("Project settings…");
+    expect(by(offers, "project.settings:/p/two")?.note).toBe(
+      "two: charter.toml, for the team, and charter.local.toml, for this machine.",
+    );
+    await run(offers, "project.settings:/p/two", hands);
+    expect(hands.calls).toEqual(["openSettings:/p/two"]);
+    // On the project tab's own menu, above the line: it opens a tab and ends nothing.
+    expect(menuOn({ on: "project", plane: "/p/two" }).above).toContain("project.settings:/p/two");
   });
 
   it("says nothing needs you rather than leaving the queue's row out", () => {
@@ -678,6 +703,8 @@ describe("carrying out a row", () => {
         "selectProject:/other",
         "closeProject:/plane",
         "closeProject:/other",
+        "openSettings:/plane",
+        "openSettings:/other",
         "quit",
       ]),
     );
