@@ -399,8 +399,31 @@ impl Executor {
         }
     }
 
-    #[cfg(unix)]
+    /// Start the program, ask it `request`, and read its one line — on unix. Off unix
+    /// [`supported`] refuses before this is reached, and this says the same.
+    ///
+    /// One function with a platform arm rather than a twin per platform, so that a mutant of
+    /// `converse` is a mutant of the code this build runs.
     fn converse(
+        &self,
+        extension: &str,
+        found: &Extension,
+        program: &Path,
+        request: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        #[cfg(unix)]
+        {
+            self.converse_on_unix(extension, found, program, request)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (extension, found, program, request);
+            Err(REFUSED_HERE.to_owned())
+        }
+    }
+
+    #[cfg(unix)]
+    fn converse_on_unix(
         &self,
         extension: &str,
         found: &Extension,
@@ -566,17 +589,6 @@ impl Executor {
                 last_words()
             )),
         }
-    }
-
-    #[cfg(not(unix))]
-    fn converse(
-        &self,
-        _extension: &str,
-        _found: &Extension,
-        _program: &Path,
-        _request: &[u8],
-    ) -> Result<Vec<u8>, String> {
-        Err(REFUSED_HERE.to_owned())
     }
 }
 

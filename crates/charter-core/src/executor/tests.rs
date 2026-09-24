@@ -644,6 +644,8 @@ fn one_extension_is_asked_one_thing_at_a_time() {
         })
     };
     wait_for(&pid);
+    // The extension is named as running for exactly as long as its question is in flight.
+    assert_eq!(executor.running(), ["probe"]);
 
     let second = rig.ask(&executor).expect_err("a second copy started");
     assert!(second.contains("still answering"), "{second}");
@@ -652,6 +654,7 @@ fn one_extension_is_asked_one_thing_at_a_time() {
         .join()
         .expect("the first thread")
         .expect("the first answer");
+    assert!(executor.running().is_empty());
     // And the slot comes back.
     rig.ask(&executor)
         .expect("asked again once the first was done");
