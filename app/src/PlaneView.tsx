@@ -97,6 +97,8 @@ import {
 import { ChatState } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
+import { NewVault } from "./NewVault";
+import { OpenVault, useVaults } from "./Vaults";
 import { ViewMark, ViewPane } from "./Views";
 import { useTabStop } from "./roving";
 import { EmptyState } from "./EmptyState";
@@ -232,6 +234,18 @@ export function PlaneView({
   const [makingWorkspace, setMakingWorkspace] = useState(false);
   const [workspaceTrouble, setWorkspaceTrouble] = useState<string>();
   const [busyMaking, setBusyMaking] = useState(false);
+  /** The plane's vaults (`vault_list`), read here because four surfaces answer from them: the
+   *  Vaults panel, the palette's `vault.open:<name>` rows, the picker, and — by asking for it
+   *  again after a write — a vault's own tab (charter-app#235). */
+  const vaults = useVaults(plane);
+  const vaultNames = useMemo(() => vaults.vaults?.map((one) => one.name), [vaults.vaults]);
+  /** Whether the vault picker is up. */
+  const [pickingVault, setPickingVault] = useState(false);
+  /** Whether the new-vault dialog is up, why the last attempt made nothing, and whether
+   *  charter is making one right now — `makingWorkspace`'s three, for a vault. */
+  const [makingVault, setMakingVault] = useState(false);
+  const [vaultTrouble, setVaultTrouble] = useState<string>();
+  const [busyVault, setBusyVault] = useState(false);
   /**
    * The workspace the operator is being asked about deleting, if any.
    *
@@ -1139,6 +1153,38 @@ export function PlaneView({
     [plane],
   );
 
+  /** Asks for a new vault. It makes nothing: the dialog asks, and `vault_create` makes one. */
+  const createVault = useCallback(() => {
+    setVaultTrouble(undefined);
+    setMakingVault(true);
+  }, []);
+
+  const pickVault = useCallback(() => setPickingVault(true), []);
+
+  /**
+   * Makes it, through `charter vault add`'s own path (`vault_create`), and opens its tab — a
+   * vault is made to have secrets put in it, and the tab is where that is done. A refusal stays
+   * in the dialog, in the core's words.
+   */
+  const makeVault = useCallback(
+    async (name: string, provider: string, opVault: string | null) => {
+      setBusyVault(true);
+      const answer = await commands
+        .vaultCreate(plane, name, provider, opVault)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      setBusyVault(false);
+      if (answer.status === "error") {
+        setVaultTrouble(answer.error);
+        return;
+      }
+      setMakingVault(false);
+      setVaultTrouble(undefined);
+      vaults.reload();
+      showView({ from: null, view: "vault", key: answer.data.name }, answer.data.name);
+    },
+    [plane, showView, vaults],
+  );
+
   /**
    * Asks about deleting one, and reads the core's guard so the dialog can show it first.
    *
@@ -1334,6 +1380,8 @@ export function PlaneView({
       // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
       // is not a reader of the panel list.
       openView: showView,
+      pickVault,
+      createVault,
       removeWorktree,
       mergeWorktree,
       sendKey,
@@ -1349,10 +1397,12 @@ export function PlaneView({
       bringToFront,
       close,
       closePane,
+      createVault,
       createWorkspace,
       focusWorkspace,
       mergeWorktree,
       newTab,
+      pickVault,
       pinTab,
       pinWorkspace,
       removeWorkspace,
@@ -1440,6 +1490,7 @@ export function PlaneView({
             worktree,
             pieces,
             personas,
+            vaults: vaultNames,
             plane,
             projects,
             // WHICH row was refused and is still on screen. The catalogue matches the ids it
@@ -1477,6 +1528,7 @@ export function PlaneView({
       states.needsYou,
       strips,
       tabs,
+      vaultNames,
       views,
       worktree,
     ],
@@ -1952,7 +2004,7 @@ export function PlaneView({
               views={views}
               shownRow={shownRow}
               onShowRow={setShownRow}
-              plane={plane}
+              vaults={vaults}
             />
           ),
           bottom: <BottomBar workspace={ofWorkspace} state={workspaceState} />,
@@ -1977,6 +2029,7 @@ export function PlaneView({
                   offered={views}
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
+                  onVaultChanged={vaults.reload}
                 />
               ) : tabs.order.length > 0 ? (
                 // Chats are running — just not in the workspace being looked at. Saying
@@ -2056,6 +2109,28 @@ export function PlaneView({
             setMakingWorkspace(false);
             setWorkspaceTrouble(undefined);
           }}
+        />
+      )}
+
+      {makingVault && (
+        <NewVault
+          plane={plane}
+          trouble={vaultTrouble}
+          making={busyVault}
+          onCreate={(name, provider, opVault) => void makeVault(name, provider, opVault)}
+          onCancel={() => {
+            setMakingVault(false);
+            setVaultTrouble(undefined);
+          }}
+        />
+      )}
+
+      {pickingVault && (
+        <OpenVault
+          vaults={vaults.vaults ?? []}
+          offers={found}
+          onPress={press}
+          onCancel={() => setPickingVault(false)}
         />
       )}
 
@@ -2597,6 +2672,7 @@ function LayoutPanes({
   offered,
   onOpenView,
   onAsk,
+  onVaultChanged,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
@@ -2617,6 +2693,8 @@ function LayoutPanes({
   onOpenView: (view: ViewRef, title: string) => void;
   /** The operator pressed to have a waiting view in this pane asked. */
   onAsk: (pane: number) => void;
+  /** A vault's tab wrote to its vault: the plane's vault list is read again. */
+  onVaultChanged: () => void;
 }) {
   if (layout.kind === "pane") {
     const content = layout.content;
@@ -2642,6 +2720,7 @@ function LayoutPanes({
               offered={offered}
               onOpenView={onOpenView}
               onAsk={() => onAsk(layout.pane)}
+              onVaultChanged={onVaultChanged}
             />
           </div>
         </div>
@@ -2698,6 +2777,7 @@ function LayoutPanes({
               offered={offered}
               onOpenView={onOpenView}
               onAsk={onAsk}
+              onVaultChanged={onVaultChanged}
             />
           </Panel>
         </Fragment>

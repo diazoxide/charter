@@ -1,9 +1,10 @@
-import { useState } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { Vaults } from "./Vaults";
+import { OpenVault, Vaults, useVaults } from "./Vaults";
+import { catalogue, catalogued, type Offer } from "./actions";
+import { noTabs } from "./tabs";
 import type { VaultSummary } from "./bindings";
 
 afterEach(() => {
@@ -23,13 +24,31 @@ function vault(name: string, over: Partial<VaultSummary> = {}): VaultSummary {
   };
 }
 
-/** The section, with the window's open-row state around it — which is where it lives. */
+/**
+ * The section as the window draws it: the window asks `vault_list` (`useVaults`), and the rows
+ * run the catalogue the window builds from the answer. Answers what was pressed, and a way to
+ * ask the list again.
+ */
 function draw() {
+  const pressed: Offer[] = [];
+  const reload = { now: () => {} };
   function Window() {
-    const [shownRow, setShownRow] = useState<string>();
-    return <Vaults plane={PLANE} shownRow={shownRow} onShowRow={setShownRow} />;
+    const said = useVaults(PLANE);
+    reload.now = said.reload;
+    const offers = catalogued(
+      catalogue({
+        tabs: noTabs(),
+        workspaces: [],
+        needsYou: [],
+        nameOf: String,
+        plane: PLANE,
+        vaults: said.vaults?.map((one) => one.name),
+      }),
+    );
+    return <Vaults said={said} offers={offers} onPress={(offer) => pressed.push(offer)} />;
   }
   render(<Window />);
+  return { pressed, reload: () => act(() => reload.now()) };
 }
 
 /** The core, answering `vault_list` with `answer` and recording what it was asked. */
@@ -73,10 +92,35 @@ describe("the Vaults section", () => {
     draw();
     const empty = await screen.findByTestId("list-vaults-empty");
     expect(empty).toHaveTextContent("No vaults on this plane");
-    expect(empty).toHaveTextContent("charter vault add <name>");
+    expect(empty).toHaveTextContent("New vault…");
   });
 
-  it("marks a vault charter cannot read, and says why in its card", async () => {
+  it("opens a vault's tab when its row is pressed, by the catalogue's own row", async () => {
+    core([vault("ops")]);
+    const { pressed } = draw();
+    const list = await screen.findByRole("list", { name: "Vaults" });
+
+    await userEvent.click(within(list).getByRole("button", { name: /ops/ }));
+
+    expect(pressed.map((offer) => offer.id)).toEqual(["vault.open:ops"]);
+    expect(pressed[0].does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "vault", key: "ops" },
+      title: "ops",
+    });
+  });
+
+  it("reads the list again when the window asks, after a tab wrote to a vault", async () => {
+    const asked = core([vault("ops")]);
+    const { reload } = draw();
+    await waitFor(() => expect(asked).toHaveLength(1));
+
+    await reload();
+
+    await waitFor(() => expect(asked).toHaveLength(2));
+  });
+
+  it("marks a vault charter cannot read, and leaves why to its tab", async () => {
     core([
       vault("team", {
         provider: "1password",
@@ -88,8 +132,8 @@ describe("the Vaults section", () => {
     const list = await screen.findByRole("list", { name: "Vaults" });
     const row = within(list).getByRole("listitem");
     expect(row).toHaveClass("is-trouble");
-    await userEvent.click(within(row).getByRole("button"));
-    expect(await screen.findByTestId("row-detail-team")).toHaveTextContent("op CLI not on PATH");
+    // No card: the tab says why, at the top, where the operator is looking when it matters.
+    expect(screen.queryByText("op CLI not on PATH")).not.toBeInTheDocument();
   });
 
   it("draws the core's refusal rather than an empty list", async () => {
@@ -124,5 +168,59 @@ describe("the Vaults section", () => {
     });
     expect(screen.queryByRole("list", { name: "Vaults" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("list-vaults-empty")).not.toBeInTheDocument();
+  });
+});
+
+describe("the vault picker", () => {
+  function pick(vaults: VaultSummary[]) {
+    const pressed: Offer[] = [];
+    const cancel = vi.fn();
+    const offers = catalogued(
+      catalogue({
+        tabs: noTabs(),
+        workspaces: [],
+        needsYou: [],
+        nameOf: String,
+        plane: PLANE,
+        vaults: vaults.map((one) => one.name),
+      }),
+    );
+    render(
+      <OpenVault
+        vaults={vaults}
+        offers={offers}
+        onPress={(offer) => pressed.push(offer)}
+        onCancel={cancel}
+      />,
+    );
+    return { pressed, cancel };
+  }
+
+  it("lists the plane's vaults, and opens the one picked", async () => {
+    const { pressed, cancel } = pick([vault("files", { provider: "plain-file" }), vault("ops")]);
+    const dialog = await screen.findByRole("dialog", { name: "Open vault" });
+
+    await userEvent.click(within(dialog).getByRole("button", { name: /ops/ }));
+
+    expect(pressed.map((offer) => offer.id)).toEqual(["vault.open:ops"]);
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it("puts the keyboard on the first vault, so Enter opens it", async () => {
+    const { pressed } = pick([vault("files"), vault("ops")]);
+    const first = await screen.findByRole("button", { name: /files/ });
+    await waitFor(() => expect(first).toHaveFocus());
+
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+
+    expect(pressed.map((offer) => offer.id)).toEqual(["vault.open:ops"]);
+  });
+
+  it("is closed by Escape and opens nothing", async () => {
+    const { pressed, cancel } = pick([vault("ops")]);
+    await screen.findByRole("dialog");
+    await userEvent.keyboard("{Escape}");
+    expect(cancel).toHaveBeenCalled();
+    expect(pressed).toEqual([]);
   });
 });

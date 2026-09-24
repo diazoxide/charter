@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChartColumn, LoaderCircle, Puzzle, UserRound } from "lucide-react";
+import { ChartColumn, KeyRound, LoaderCircle, Puzzle, UserRound } from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import { PanelList } from "./PanelList";
 import {
@@ -11,6 +11,7 @@ import {
   type ViewAnswer,
 } from "./bindings";
 import { viewKey, type ViewRef } from "./tabs";
+import { VaultTab } from "./VaultTab";
 
 /**
  * **Views: what a tab shows when it does not show a chat** — ADR 0043 as amended
@@ -98,7 +99,14 @@ export function aboutOf(view: ViewRef, offered: readonly ExtensionView[]): strin
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
  *  extension offers — which says *a plugin's* before any word is read. */
 export function ViewMark({ view }: { view: ViewRef }) {
-  const Mark = view.from === null ? (view.view === "persona" ? UserRound : ChartColumn) : Puzzle;
+  const Mark =
+    view.from !== null
+      ? Puzzle
+      : view.view === "persona"
+        ? UserRound
+        : view.view === "vault"
+          ? KeyRound
+          : ChartColumn;
   return <Mark className="tab-mark" aria-hidden="true" />;
 }
 
@@ -120,6 +128,7 @@ export function ViewPane({
   offered,
   onOpenView,
   onAsk,
+  onVaultChanged,
 }: {
   plane: PlaneId;
   view: ViewRef;
@@ -132,7 +141,22 @@ export function ViewPane({
   onOpenView: (view: ViewRef, title: string) => void;
   /** The operator pressed to have a waiting view asked. */
   onAsk: () => void;
+  /** A vault's tab wrote to its vault. */
+  onVaultChanged?: () => void;
 }) {
+  // **A vault is charter's own view, and the one a panel answer cannot draw**: a table the
+  // operator writes to (charter-app#235). Same tab, same path, same record — its own drawing.
+  // Keyed by the vault, so a pane that comes to show another vault starts from "opening".
+  if (view.from === null && view.view === "vault") {
+    return (
+      <VaultTab
+        key={`${plane}\u0000${view.key}`}
+        plane={plane}
+        vault={view.key}
+        onChanged={onVaultChanged ?? (() => undefined)}
+      />
+    );
+  }
   const about = aboutOf(view, offered);
   const beside = offered.filter(
     (one) =>

@@ -3476,6 +3476,107 @@ button.show-more:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* ---- A vault's tab (charter-app#235) ------------------------------------------------- */
+
+/* The search box and Add on one line above the table: the box takes the room, Add keeps its
+   own width. */
+.vault-tools {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  max-width: 60rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.vault-tools .panel-search {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+/* The secrets: names on the left, the size band and when each was written muted beside them.
+   Rows are divided by the one hairline the window divides its layers with, and never by a
+   coloured edge. */
+.vault-secrets {
+  width: 100%;
+  max-width: 60rem;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.vault-secrets th {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--layer-divider);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.vault-secrets td {
+  padding: 0.1rem 0.5rem;
+  border-bottom: 1px solid var(--layer-divider);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.vault-secrets td:first-child {
+  width: 100%;
+  padding-inline-start: 0;
+}
+
+.vault-secrets tbody tr {
+  transition: background-color var(--motion-duration-quick) var(--motion-easing-standard);
+}
+
+.vault-secrets tbody tr:hover,
+.vault-secrets tbody tr:focus-within {
+  background: var(--layer-selected);
+}
+
+/* A secret's name is the row's one control: pressing it opens the row's menu. The glyph says
+   there is one, and is quiet until the row is under the pointer or the keyboard. */
+.vault-secret {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.vault-secret:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.vault-secret-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vault-secret .node-icon {
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--motion-duration-quick) var(--motion-easing-standard);
+}
+
+.vault-secrets tr:hover .vault-secret .node-icon,
+.vault-secret:focus-visible .node-icon,
+.vault-secret[data-state="open"] .node-icon {
+  opacity: 1;
+}
+
 /* A list in a view has the pane's height to use, not a side region's. */
 .view-body .panel-list {
   margin-top: 0.6rem;

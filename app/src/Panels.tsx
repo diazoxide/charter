@@ -14,7 +14,7 @@ import {
 import { NeedsYou } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
-import { Vaults } from "./Vaults";
+import { Vaults, type VaultsSaid } from "./Vaults";
 import { Chart, Facts } from "./Views";
 import { commands, type ExtensionView, type PanelView } from "./bindings";
 import type { Catalogued, Offer } from "./actions";
@@ -65,7 +65,7 @@ export function Panels({
   views = [],
   shownRow,
   onShowRow,
-  plane,
+  vaults,
 }: {
   /** The focused workspace, whose todos these are. The queue is not its — it is every
    *  workspace's, because a chat asking for you in a workspace nobody is looking at is
@@ -97,9 +97,9 @@ export function Panels({
    */
   shownRow: string | undefined;
   onShowRow: (row: string | undefined) => void;
-  /** The project on screen, whose vaults are drawn under the workspace's panels. A vault is
-   *  the plane's, so they are drawn with no workspace focused too. */
-  plane?: string;
+  /** The plane's vaults, drawn under the workspace's panels (`useVaults`, which the window
+   *  holds). A vault is the plane's, so they are drawn with no workspace focused too. */
+  vaults?: Pick<VaultsSaid, "vaults" | "trouble">;
 }) {
   const { panels, trouble } = state;
 
@@ -154,7 +154,7 @@ export function Panels({
         </>
       )}
 
-      {plane !== undefined && <Vaults plane={plane} shownRow={shownRow} onShowRow={onShowRow} />}
+      {vaults !== undefined && <Vaults said={vaults} offers={offers} onPress={onPress} />}
     </aside>
   );
 }

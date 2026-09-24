@@ -5,11 +5,17 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks } from "@tauri-apps/api/mocks";
 import { Panels } from "./Panels";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
-import type { ExtensionView, PanelRow, PanelView, Panels as PanelsModel } from "./bindings";
+import type {
+  ExtensionView,
+  PanelRow,
+  PanelView,
+  Panels as PanelsModel,
+  VaultSummary,
+} from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
 afterEach(() => {
@@ -170,7 +176,7 @@ function draw(
     onPress?: (offer: Offer) => void;
     contributed?: PanelView[];
     views?: ExtensionView[];
-    plane?: string;
+    vaults?: VaultSummary[];
   } = {},
 ) {
   function Window() {
@@ -189,7 +195,7 @@ function draw(
         views={on.views ?? []}
         shownRow={shownRow}
         onShowRow={setShownRow}
-        plane={on.plane}
+        vaults={on.vaults === undefined ? undefined : { vaults: on.vaults }}
       />
     );
   }
@@ -239,12 +245,10 @@ describe("the right-hand region", () => {
     "draws the plane's vaults with workspace %s focused, since a vault is the plane's",
     async (workspace) => {
       // A vault is registered once per plane, so it is not one workspace's.
-      mockIPC((cmd) =>
-        cmd === "vault_list"
-          ? [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }]
-          : null,
-      );
-      draw({ workspace, plane: PLANE });
+      draw({
+        workspace,
+        vaults: [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }],
+      });
 
       const vaults = await screen.findByTestId("panel-vaults");
       expect(within(vaults).getByRole("heading")).toHaveTextContent("Vaults");

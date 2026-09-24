@@ -141,6 +141,12 @@ export type Does =
    *  here rather than only a click on the panel because a menu is a third reader of this list
    *  (`Menus.tsx`) and the persona rows had nothing in it to read (charter-app#174). */
   | { verb: "openView"; view: ViewRef; title: string }
+  /** Asks which of the plane's vaults to open (charter-app#235). It opens nothing by itself:
+   *  what the picker's row runs is that vault's own `vault.open:<name>`. */
+  | { verb: "pickVault" }
+  /** Asks for a new vault's name and provider. It makes nothing by itself: what may be called
+   *  what is `charter vault add`'s to say, through `vault_create`. */
+  | { verb: "createVault" }
   /** **Names the worktree it acts on**, and never "whichever one is in front".
    *
    *  It used to carry only `force`, which made `worktree.remove` a row about the chat in
@@ -251,6 +257,11 @@ export type Now = {
    */
   personas?: readonly string[];
   /**
+   * The plane's vaults, by name (`vault_list`), one row each: a vault opens its own tab. A
+   * vault is the plane's, so these rows are the same whichever workspace is focused.
+   */
+  vaults?: readonly string[];
+  /**
    * The views approved extensions offer this window (`extension_views`), one row each. The
    * palette is how a keyboard reaches them; the personas panel's heading is how a pointer does.
    */
@@ -323,6 +334,10 @@ export type Doing = {
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
+  /** Opens the vault picker. Nothing is opened until a vault in it is. */
+  pickVault: () => void;
+  /** Opens the new-vault dialog. Nothing is made until it is answered. */
+  createVault: () => void;
   /** Each takes the piece it acts on. The window no longer decides which worktree a removal
    *  meant by looking at what happens to be in front (charter-app#174). */
   removeWorktree: (cut: Cut, force: boolean) => Promise<Ran>;
@@ -686,6 +701,36 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // **The plane's vaults, one row each, and each opens that vault's own tab** (charter-app#235)
+  // — the row the Vaults panel runs when one of its rows is pressed, and the one the picker
+  // runs. Then the picker itself, which is how "open a vault" is found by those words when the
+  // name is not known, and the way to make one. Both need a plane; the picker needs a vault.
+  const vaults = now.vaults ?? [];
+  for (const vault of vaults) {
+    offers.push(
+      can(
+        `vault.open:${vault}`,
+        `Open vault ${vault}`,
+        { verb: "openView", view: { from: null, view: "vault", key: vault }, title: vault },
+        vault,
+      ),
+    );
+  }
+  const noVaultPlane = "charter found no plane, so there are no vaults to reach.";
+  offers.push(
+    now.plane === undefined
+      ? cannot("vault.pick", "Open vault…", noVaultPlane)
+      : vaults.length === 0
+        ? cannot("vault.pick", "Open vault…", "This plane has no vaults yet. New vault… makes one.")
+        : can("vault.pick", "Open vault…", { verb: "pickVault" }),
+    now.plane === undefined
+      ? cannot("vault.create", "New vault…", noVaultPlane)
+      : {
+          ...can("vault.create", "New vault…", { verb: "createVault" }),
+          note: "Kept in your system's credential store unless you choose another provider.",
+        },
+  );
+
   // **And every view an approved extension offers, one row each.** The personas panel's heading
   // draws the same views as buttons for a pointer; this is how a keyboard reaches them, and it
   // is the same verb. The extension's id is in the words, because what is in force is shown
@@ -944,6 +989,12 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "openView":
       doing.openView(does.view, does.title);
+      return DID;
+    case "pickVault":
+      doing.pickVault();
+      return DID;
+    case "createVault":
+      doing.createVault();
       return DID;
     case "removeWorktree":
       return doing.removeWorktree(does.cut, does.force);

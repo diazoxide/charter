@@ -610,6 +610,9 @@ function App() {
       // A view is shown in a project's tab, and there is no project here. The rows that open one
       // do not exist without a plane, for the same reason the workspace rows above do not.
       openView: () => undefined,
+      // No plane, no vaults: both rows are unavailable without one.
+      pickVault: () => undefined,
+      createVault: () => undefined,
       pinTab: async () => nowhere(),
       pinWorkspace: async () => nowhere(),
       pinProject: windowDoes.pinProject,

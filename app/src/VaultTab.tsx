@@ -1,0 +1,568 @@
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import * as Dialog from "@radix-ui/react-dialog";
+import * as Menu from "@radix-ui/react-dropdown-menu";
+import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
+import { Ellipsis, KeyRound, LoaderCircle, Plus, Search } from "lucide-react";
+import { EmptyState } from "./EmptyState";
+import { commands, type PlaneId, type VaultContents } from "./bindings";
+import { useTabStop } from "./roving";
+
+/**
+ * **One vault, in a tab of its own** (charter-app#235): its name, its provider and how many
+ * secrets it holds, a search box, **Add**, and a table of NAME / SIZE / UPDATED whose rows each
+ * have a menu — Edit value, Rename, Delete.
+ *
+ * A view like the persona's (`tabs.ts`: `{ from: null, view: "vault", key: <name> }`), opened
+ * by the one `open_view` path the palette, the Vaults panel and a relaunch all take — but drawn
+ * by this component rather than from panel blocks, because a table the operator writes to is
+ * not something the panel vocabulary has words for, and should not grow them.
+ *
+ * **No value is ever in the document.** Nothing this tab reads carries one: `vault_open` and
+ * every write answer with names, size bands and times, and `vaults.rs`'s test serializes every
+ * answer looking for the values it wrote. The one way a value enters is a box the operator types
+ * into, and that box is **uncontrolled**: React writes a controlled input's value into its
+ * `value` attribute, which is markup — a copy of the page, a devtools snapshot, an accessibility
+ * dump would all carry it. Read from the element once, at the press, and cleared once written.
+ *
+ * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
+ * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
+ * the secrets too.
+ */
+export function VaultTab({
+  plane,
+  vault,
+  onChanged,
+}: {
+  plane: PlaneId;
+  vault: string;
+  /** A write changed the vault: the window reads its vault list again. */
+  onChanged: () => void;
+}) {
+  const [said, setSaid] = useState<{ contents?: VaultContents; trouble?: string }>();
+  const [query, setQuery] = useState("");
+  const [asking, setAsking] = useState<Asking>();
+
+  useEffect(() => {
+    // No reset to "opening" here: the tab is keyed by plane and vault (`Views.tsx`), so a pane
+    // that comes to show another vault is a new tab from its first render.
+    let gone = false;
+    void commands
+      .vaultOpen(plane, vault)
+      .then((answer) => {
+        if (gone) return;
+        setSaid(answer.status === "error" ? { trouble: answer.error } : { contents: answer.data });
+      })
+      .catch((err: unknown) => {
+        if (!gone) setSaid({ trouble: String(err) });
+      });
+    return () => {
+      gone = true;
+    };
+  }, [plane, vault]);
+
+  /**
+   * One write, answered: the vault as it now is replaces the table and the dialog closes, or the
+   * core's sentence comes back for the dialog to show beside what the operator was doing.
+   */
+  const write = async (
+    asked: ReturnType<typeof commands.vaultOpen>,
+  ): Promise<string | undefined> => {
+    try {
+      const answer = await asked;
+      if (answer.status === "error") return answer.error;
+      setSaid({ contents: answer.data });
+      setAsking(undefined);
+      onChanged();
+      return undefined;
+    } catch (err) {
+      return String(err);
+    }
+  };
+
+  const contents = said?.contents;
+  const secrets = useMemo(() => {
+    const wanted = query.trim().toLowerCase();
+    const all = contents?.secrets ?? [];
+    return wanted === "" ? all : all.filter((one) => one.key.toLowerCase().includes(wanted));
+  }, [contents, query]);
+  const stop = useTabStop(
+    undefined,
+    secrets.map((one) => one.key),
+  );
+
+  const add = () => setAsking({ doing: "add" });
+
+  return (
+    <section
+      className="view-pane vault-tab"
+      data-testid={`vault-tab-${vault}`}
+      aria-label={`Vault ${vault}`}
+    >
+      <header className="view-head">
+        <h2>
+          <KeyRound className="tab-mark" aria-hidden="true" />
+          {vault}
+          {contents && (
+            <span className="panel-from">{` · ${contents.provider} · ${counted(contents.count)}`}</span>
+          )}
+        </h2>
+      </header>
+      <div className="view-body">
+        {said === undefined ? (
+          <p className="pending" aria-busy="true">
+            <LoaderCircle className="node-icon spinning" />
+            Opening the vault…
+          </p>
+        ) : contents === undefined ? (
+          // The core's sentence, which names the vault and what to do. An empty table here would
+          // read as a vault with nothing in it.
+          <p className="trouble" role="alert">
+            {said.trouble}
+          </p>
+        ) : (
+          <>
+            {!contents.health.ok && (
+              <p className="trouble" role="alert">
+                {contents.health.detail}
+              </p>
+            )}
+            <div className="vault-tools">
+              <div className="panel-search">
+                <Search className="node-icon" />
+                <input
+                  type="search"
+                  value={query}
+                  aria-label={`Search secrets in ${vault}`}
+                  placeholder={`Search ${counted(contents.count)}`}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+              <button type="button" className="panel-view" tabIndex={0} onClick={add}>
+                <Plus className="node-icon" aria-hidden="true" />
+                Add
+              </button>
+            </div>
+
+            {contents.secrets.length === 0 ? (
+              <EmptyState
+                mark={KeyRound}
+                headline={`${vault} holds no secrets yet`}
+                body="A secret's value goes into the vault and is never shown here."
+                action={
+                  <button type="button" tabIndex={0} onClick={add}>
+                    Add a secret
+                  </button>
+                }
+                testid="vault-empty"
+              />
+            ) : secrets.length === 0 ? (
+              // Not the empty state: the vault holds secrets, and the search found none of them.
+              <p className="none">
+                Nothing in {vault} matches “{query.trim()}”.
+              </p>
+            ) : (
+              <table className="vault-secrets" aria-label={`Secrets in ${vault}`}>
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">Updated</th>
+                  </tr>
+                </thead>
+                {/* The rows are ONE Tab stop, and Up and Down move along them (charter-app#189,
+                    `roving.ts`); Enter or Space opens the row's menu. */}
+                <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+                  <tbody>
+                    {secrets.map((one) => (
+                      <tr key={one.key}>
+                        <td>
+                          <SecretMenu secret={one.key} onAsk={setAsking} />
+                        </td>
+                        <td>{one.size ?? "—"}</td>
+                        <td>
+                          {one.updated === null ? (
+                            "—"
+                          ) : (
+                            <time dateTime={one.updated}>{shownAt(one.updated)}</time>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </RovingFocusGroup.Root>
+              </table>
+            )}
+          </>
+        )}
+      </div>
+
+      {asking?.doing === "add" && (
+        <ValueDialog
+          title={`Add a secret to ${vault}`}
+          doing="Add secret"
+          onWrite={(key, value) => write(commands.vaultSecretAdd(plane, vault, key, value))}
+          onCancel={() => setAsking(undefined)}
+        />
+      )}
+      {asking?.doing === "edit" && (
+        <ValueDialog
+          title={`Edit the value of ${asking.secret}`}
+          secret={asking.secret}
+          doing="Save value"
+          onWrite={(key, value) => write(commands.vaultSecretSet(plane, vault, key, value))}
+          onCancel={() => setAsking(undefined)}
+        />
+      )}
+      {asking?.doing === "rename" && (
+        <RenameDialog
+          secret={asking.secret}
+          onRename={(to) => write(commands.vaultSecretRename(plane, vault, asking.secret, to))}
+          onCancel={() => setAsking(undefined)}
+        />
+      )}
+      {asking?.doing === "delete" && (
+        <DeleteDialog
+          vault={vault}
+          secret={asking.secret}
+          onDelete={() => write(commands.vaultSecretDelete(plane, vault, asking.secret))}
+          onCancel={() => setAsking(undefined)}
+        />
+      )}
+    </section>
+  );
+}
+
+/** Which dialog the tab is asking in, and about which secret. */
+type Asking =
+  | { doing: "add" }
+  | { doing: "edit"; secret: string }
+  | { doing: "rename"; secret: string }
+  | { doing: "delete"; secret: string };
+
+function counted(n: number): string {
+  return `${n} ${n === 1 ? "secret" : "secrets"}`;
+}
+
+/**
+ * When a secret was written, as the keys index records it (`2026-09-24T11:32:17Z`), to the
+ * minute and in UTC — which is what it says, so two machines' tabs agree. Anything else is
+ * drawn as it came.
+ */
+function shownAt(updated: string): string {
+  const at = /^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)(:\d\d(\.\d+)?)?Z$/.exec(updated);
+  return at ? `${at[1]} ${at[2]} UTC` : updated;
+}
+
+/**
+ * A secret's name in its row, and the row's menu.
+ *
+ * **The roving item is outside the menu's trigger**, and the order is the point: the item's
+ * handler sees a key first and, for Up and Down, moves the focus and marks the event handled —
+ * so the trigger, which would otherwise open the menu on Down, leaves it alone. Enter and Space
+ * are not the item's, and open the menu.
+ */
+function SecretMenu({ secret, onAsk }: { secret: string; onAsk: (asking: Asking) => void }) {
+  return (
+    // **Not modal**, for the strip's show-more menu's reason (`PlaneView.tsx`): a menu is not a
+    // question. What an item opens is, and that dialog is modal.
+    <Menu.Root modal={false}>
+      <RovingFocusGroup.Item asChild tabStopId={secret}>
+        <Menu.Trigger asChild>
+          <button type="button" className="vault-secret">
+            <span className="vault-secret-name">{secret}</span>
+            <Ellipsis className="node-icon" aria-hidden="true" />
+          </button>
+        </Menu.Trigger>
+      </RovingFocusGroup.Item>
+      <Menu.Portal>
+        <Menu.Content className="more-menu" align="start" sideOffset={4} collisionPadding={8}>
+          <Menu.Item className="more-tab" onSelect={() => onAsk({ doing: "edit", secret })}>
+            Edit value
+          </Menu.Item>
+          <Menu.Item className="more-tab" onSelect={() => onAsk({ doing: "rename", secret })}>
+            Rename
+          </Menu.Item>
+          <Menu.Item className="more-tab" onSelect={() => onAsk({ doing: "delete", secret })}>
+            Delete
+          </Menu.Item>
+        </Menu.Content>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
+/**
+ * Asking for a value: a new secret's name and value, or a held secret's new value.
+ *
+ * **The value box is uncontrolled** — see `VaultTab`. What the component keeps is whether the
+ * box has anything in it, so the button knows; the value itself is read at the press, handed
+ * to the core, and the box is emptied once the core has written it.
+ */
+function ValueDialog({
+  title,
+  secret,
+  doing,
+  onWrite,
+  onCancel,
+}: {
+  title: string;
+  /** The secret whose value this replaces; a new secret's name is asked for when absent. */
+  secret?: string;
+  /** What the button says. */
+  doing: string;
+  /** Writes it: nothing when written, the core's sentence when refused. */
+  onWrite: (key: string, value: string) => Promise<string | undefined>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [filled, setFilled] = useState(false);
+  const [trouble, setTrouble] = useState<string>();
+  const [writing, setWriting] = useState(false);
+  const nameId = useId();
+  const valueId = useId();
+  const nameBox = useRef<HTMLInputElement>(null);
+  const valueBox = useRef<HTMLInputElement>(null);
+  const key = secret ?? name.trim();
+  const ready = key !== "" && filled && !writing;
+
+  const submit = async () => {
+    const box = valueBox.current;
+    if (!ready || box === null) return;
+    setWriting(true);
+    const refused = await onWrite(key, box.value);
+    if (refused === undefined) {
+      box.value = "";
+      return;
+    }
+    setTrouble(refused);
+    setWriting(false);
+  };
+
+  return (
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="asking" />
+        <Dialog.Content
+          className="warning"
+          aria-describedby={undefined}
+          // A click outside answers nothing (`docs/ui-primitives.md`). Escape is Cancel.
+          onInteractOutside={(e) => e.preventDefault()}
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            (secret === undefined ? nameBox : valueBox).current?.focus();
+          }}
+        >
+          <Dialog.Title>{title}</Dialog.Title>
+          <form
+            className="asks"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
+          >
+            {secret === undefined && (
+              <>
+                <label htmlFor={nameId}>Name</label>
+                <input
+                  id={nameId}
+                  ref={nameBox}
+                  value={name}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </>
+            )}
+            <label htmlFor={valueId}>{secret === undefined ? "Value" : "New value"}</label>
+            <input
+              id={valueId}
+              ref={valueBox}
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setFilled(event.target.value !== "")}
+            />
+            <p className="came-back">
+              It goes into the vault and nowhere else. charter never shows it here.
+            </p>
+            {trouble && (
+              <p className="trouble" role="alert">
+                {trouble}
+              </p>
+            )}
+            <div className="doing">
+              <button type="submit" tabIndex={0} disabled={!ready}>
+                {doing}
+              </button>
+              <button type="button" tabIndex={0} onClick={onCancel}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/** Asking for a secret's new name. A name is not a value, so this box is an ordinary one. */
+function RenameDialog({
+  secret,
+  onRename,
+  onCancel,
+}: {
+  secret: string;
+  onRename: (to: string) => Promise<string | undefined>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(secret);
+  const [trouble, setTrouble] = useState<string>();
+  const [writing, setWriting] = useState(false);
+  const nameId = useId();
+  const box = useRef<HTMLInputElement>(null);
+  const to = name.trim();
+  const ready = to !== "" && to !== secret && !writing;
+
+  const submit = async () => {
+    if (!ready) return;
+    setWriting(true);
+    const refused = await onRename(to);
+    if (refused === undefined) return;
+    setTrouble(refused);
+    setWriting(false);
+  };
+
+  return (
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="asking" />
+        <Dialog.Content
+          className="warning"
+          aria-describedby={undefined}
+          onInteractOutside={(e) => e.preventDefault()}
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            box.current?.select();
+          }}
+        >
+          <Dialog.Title>Rename {secret}</Dialog.Title>
+          <form
+            className="asks"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
+          >
+            <label htmlFor={nameId}>New name</label>
+            <input
+              id={nameId}
+              ref={box}
+              value={name}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setName(event.target.value)}
+            />
+            {trouble && (
+              <p className="trouble" role="alert">
+                {trouble}
+              </p>
+            )}
+            <div className="doing">
+              <button type="submit" tabIndex={0} disabled={!ready}>
+                Rename
+              </button>
+              <button type="button" tabIndex={0} onClick={onCancel}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/**
+ * Asking before a secret is deleted. **Cancel has the focus**, as it has in every dialog here
+ * that ends something: an Enter pressed out of habit keeps the secret.
+ */
+function DeleteDialog({
+  vault,
+  secret,
+  onDelete,
+  onCancel,
+}: {
+  vault: string;
+  secret: string;
+  onDelete: () => Promise<string | undefined>;
+  onCancel: () => void;
+}) {
+  const [trouble, setTrouble] = useState<string>();
+  const [deleting, setDeleting] = useState(false);
+  const cancel = useRef<HTMLButtonElement>(null);
+  return (
+    <AlertDialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay className="asking" />
+        <AlertDialog.Content
+          className="warning"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            cancel.current?.focus();
+          }}
+        >
+          <AlertDialog.Title>
+            Delete {secret} from {vault}?
+          </AlertDialog.Title>
+          <AlertDialog.Description className="came-back">
+            Its value is gone from the vault for good. There is no undo.
+          </AlertDialog.Description>
+          {trouble && (
+            <p className="trouble" role="alert">
+              {trouble}
+            </p>
+          )}
+          <div className="doing">
+            <button
+              type="button"
+              className="ends-it"
+              tabIndex={0}
+              disabled={deleting}
+              onClick={() => {
+                setDeleting(true);
+                void onDelete().then((refused) => {
+                  if (refused === undefined) return;
+                  setTrouble(refused);
+                  setDeleting(false);
+                });
+              }}
+            >
+              Delete
+            </button>
+            <AlertDialog.Cancel asChild>
+              <button type="button" tabIndex={0} ref={cancel}>
+                Cancel
+              </button>
+            </AlertDialog.Cancel>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  );
+}

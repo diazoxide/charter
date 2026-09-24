@@ -44,6 +44,8 @@ function doing(): Doing & { calls: string[] } {
     createWorkspace: note("createWorkspace"),
     removeWorkspace: note("removeWorkspace"),
     showChat: note("showChat"),
+    pickVault: note("pickVault"),
+    createVault: note("createVault"),
     pinTab: vi.fn(async (tab: number, pinned: boolean) => {
       calls.push(`pinTab:${tab},${pinned}`);
       return { ok: true as const };
@@ -383,6 +385,39 @@ describe("the one list of actions", () => {
     });
   });
 
+  it("offers a row per vault that opens its tab, a picker, and a way to make one", () => {
+    // charter-app#235. The panel's rows run `vault.open:<name>`, and so does the picker.
+    const offers = catalogue(now({ plane: "/plane", vaults: ["ops", "team"] }));
+
+    expect(by(offers, "vault.open:ops")?.title).toBe("Open vault ops");
+    expect(by(offers, "vault.open:ops")?.name).toBe("ops");
+    expect(by(offers, "vault.open:team")?.does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "vault", key: "team" },
+      title: "team",
+    });
+    expect(by(offers, "vault.pick")).toMatchObject({
+      title: "Open vault…",
+      available: true,
+      does: { verb: "pickVault" },
+    });
+    expect(by(offers, "vault.create")).toMatchObject({
+      title: "New vault…",
+      available: true,
+      does: { verb: "createVault" },
+    });
+  });
+
+  it("says why a vault cannot be opened on a plane that has none, and still offers to make one", () => {
+    const offers = catalogue(now({ plane: "/plane", vaults: [] }));
+    expect(by(offers, "vault.pick")?.available).toBe(false);
+    expect(by(offers, "vault.pick")?.reason).toMatch(/no vaults/);
+    expect(by(offers, "vault.create")?.available).toBe(true);
+
+    const nowhere = catalogue(now());
+    expect(by(nowhere, "vault.create")?.available).toBe(false);
+  });
+
   it("offers every view an approved extension offers, by the same verb a persona's tab is opened by", () => {
     const offers = catalogue(
       now({
@@ -636,6 +671,7 @@ describe("carrying out a row", () => {
         // charter-app#174 added are reached here too.
         pieces: [PIECE],
         personas: ["steward"],
+        vaults: ["ops"],
         needsYou: [8],
         nameOf: (s) => String(s),
       }),
@@ -660,6 +696,9 @@ describe("carrying out a row", () => {
         "removeWorktree:svc/fix-it,true",
         "mergeWorktree:svc/fix-it",
         "openView:charter/persona/steward,steward",
+        "openView:charter/vault/ops,ops",
+        "pickVault",
+        "createVault",
         "sendKey:F2",
         "openProject",
         "createProject",
@@ -801,6 +840,9 @@ describe("the palette at fifty chats", () => {
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",
+      // `vault.create` is charter's `create` too (charter-app#235), so it joins the rows that
+      // make things, in the catalogue's order.
+      "New vault…",
       // **Both of the chat in front's rows, then the pieces'.** `aboutWhatIsInFront` is the
       // second rule inside this group (charter-app#174): a row with no name in its id acts on
       // what the operator is looking at, and fifty rows about other worktrees do not get to
@@ -808,7 +850,6 @@ describe("the palette at fifty chats", () => {
       "Merge this chat's worktree into its clone",
       "Remove this chat's worktree",
       "Merge worktree piece-0 into repo-0",
-      "Merge worktree piece-1 into repo-0",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -868,8 +909,10 @@ describe("the palette at fifty chats", () => {
 
     it("is near the top of what was typed, and not fifty rows down it", () => {
       // The numbers themselves, so "unchanged" cannot be satisfied by both being bad.
-      expect(at("re", loaded())).toBe(4);
-      expect(at("r", loaded())).toBe(7);
+      // One further down than #174 left it under `re` and `r`: `New vault…` is a row that makes
+      // something, and those come first (charter-app#235).
+      expect(at("re", loaded())).toBe(5);
+      expect(at("r", loaded())).toBe(8);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -926,14 +969,15 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
-    // 292 rows: 50 chats three times over, 6 workspaces THREE times, 50 pieces TWICE, 8
-    // personas, 2 in the queue, and the fifteen verbs. It was 118 before the pins, 174 before
+    // 294 rows: 50 chats three times over, 6 workspaces THREE times, 50 pieces TWICE, 8
+    // personas, 2 in the queue, and the seventeen verbs. It was 292 before the vault picker
+    // and New vault… (charter-app#235; this plane has no vaults, so no `vault.open:` rows), 118 before the pins, 174 before
     // the extension list (ADR 0041), 175 before a workspace could be made and deleted
     // from the window, 183 before the explorer's rows had anything to offer, and 291 before
     // the row that puts `charter` on a terminal's PATH. What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(292);
+    expect(offers).toHaveLength(294);
   });
 
   /**
