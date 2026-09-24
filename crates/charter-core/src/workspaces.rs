@@ -323,6 +323,18 @@ impl Workspace {
         (doc, ownership)
     }
 
+    /// `workspace.json`'s text, `None` when it is not there — or why it could not be read,
+    /// a path that resolves out of the plane included.
+    pub fn manifest_text(&self) -> io::Result<Option<String>> {
+        let path = self.dir.join("workspace.json");
+        self.readable(&path)?;
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(Some(text)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Create `workspace.md` from the template when it is absent. An existing file is never
     /// overwritten — only its `## Vision` body is ever replaced.
     pub fn scaffold_charter(&self) -> io::Result<()> {
@@ -450,10 +462,19 @@ impl Workspace {
     /// document charter wrote keeps its key order and one a hand wrote keeps the position it
     /// chose — which is what Python's `dict` assignment does.
     pub fn write_manifest(&self, doc: &serde_json::Value) -> io::Result<()> {
+        self.write_manifest_as(doc, true)
+    }
+
+    /// [`Self::write_manifest`], stamping the digest only when `stamped`: a writer that must not
+    /// make a hand's manifest charter's — the Workspace settings tab's save — writes one it found
+    /// unstamped, unstamped (charter-app#280).
+    pub fn write_manifest_as(&self, doc: &serde_json::Value, stamped: bool) -> io::Result<()> {
         self.writable(&self.dir.join("workspace.json"))?;
         let mut doc = doc.clone();
         let digest = manifest::digest(&doc);
-        if let Some(map) = doc.as_object_mut() {
+        if let Some(map) = doc.as_object_mut()
+            && stamped
+        {
             map.insert(manifest::KEY.to_string(), serde_json::Value::String(digest));
         }
         std::fs::create_dir_all(&self.dir)?;
@@ -507,6 +528,16 @@ impl Workspace {
         if self.manifest().1 != manifest::Ownership::Absent {
             return Ok(());
         }
+        self.write_manifest(&self.birth_manifest(now, author))
+    }
+
+    /// The document [`Self::scaffold_manifest`] writes, unwritten: the clones already here,
+    /// and when and by whom.
+    pub fn birth_manifest(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        author: &str,
+    ) -> serde_json::Value {
         let members: Vec<serde_json::Value> = crate::repos::clones(&self.plane_root, &self.name)
             .map(|found| {
                 found
@@ -516,13 +547,13 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
-        self.write_manifest(&serde_json::json!({
+        serde_json::json!({
             "name": self.name,
             "description": "",
             "repos": members,
             "updated_at": now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
             "updated_by": author,
-        }))
+        })
     }
 
     /// The open todos. There is no state field: a closed todo is a deleted file.

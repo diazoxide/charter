@@ -8,6 +8,7 @@ import {
   GLOBAL,
   sayAboutThisMachine,
   theirTheme,
+  theirThemeOnce,
   type Reading,
 } from "./windowprefs";
 
@@ -105,7 +106,8 @@ describe("the operator's own theme", () => {
 
   it("is not repainted over by an extension's theme", async () => {
     handed({ document: { name: "Mine", appearance: "dark", tokens: {} } });
-    const theirs = theirTheme();
+    // As `main.tsx` draws it: once, so a later redraw of it is the same theme.
+    const theirs = theirThemeOnce();
     if (theirs === undefined) throw new Error("the operator's theme was not read");
     drawIn(theirs);
     mockIPC((cmd) =>

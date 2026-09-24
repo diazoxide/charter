@@ -79,6 +79,21 @@ impl Rig {
     }
 }
 
+/// The deadline of every executor here but the one test whose subject is [`DEADLINE`].
+///
+/// **Not the real five seconds, because this module's programs are strangers to the machine**
+/// (charter-app#303). macOS assesses a program file the first time it runs, and under a busy
+/// machine those assessments queue: at load 30 to 113, a dozen tests here were refused "did not
+/// answer within 5 seconds" by programs that had not started yet. None of them was about the
+/// deadline. A test that measures a bound measures it against [`Executor::with_deadline`]'s,
+/// so it stays a test of the same thing, and a regression it catches takes this long to fail.
+const PATIENT: Duration = Duration::from_secs(30);
+
+/// An executor that gives its programs [`PATIENT`].
+fn patient() -> Executor {
+    Executor::with_deadline(PATIENT)
+}
+
 /// A script that leaves a marker, then answers.
 fn marking(marker: &Path) -> String {
     format!(
@@ -113,9 +128,10 @@ fn alive_from(marker: &Path) -> Option<u32> {
 /// Wait for a program to write its pid, up to a bound, for a test that has to act while it
 /// runs. Until the file PARSES, not until it exists: `echo $$ > pid` creates the file before it
 /// writes to it, and a test that acted in between killed a program that had not said who it
-/// was yet.
+/// was yet. The bound is [`PATIENT`], the time a program here is given to start: it returns
+/// the moment the file parses, so the bound costs a passing test nothing.
 fn wait_for(marker: &Path) {
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + PATIENT;
     while alive_from(marker).is_none() {
         assert!(
             Instant::now() < until,
@@ -136,7 +152,7 @@ fn an_approved_program_is_asked_and_its_answer_is_drawn() {
     let marker = rig.marker("ran");
     rig.approved(&marking(&marker));
 
-    let answer = rig.ask(&Executor::default()).expect("an answer");
+    let answer = rig.ask(&patient()).expect("an answer");
 
     assert!(marker.exists(), "the program did not run");
     assert_eq!(
@@ -155,9 +171,7 @@ fn an_installed_program_the_operator_has_not_approved_never_starts() {
     rig.write(VIEW_MANIFEST, &marking(&marker));
     extension::install(&rig.config(), &rig.at()).expect("installed");
 
-    let refused = rig
-        .ask(&Executor::default())
-        .expect_err("it ran unapproved");
+    let refused = rig.ask(&patient()).expect_err("it ran unapproved");
 
     assert!(refused.contains("not approved"), "{refused}");
     assert!(!marker.exists(), "an unapproved program ran");
@@ -169,9 +183,7 @@ fn a_program_nobody_installed_never_starts() {
     let marker = rig.marker("ran");
     rig.write(VIEW_MANIFEST, &marking(&marker));
 
-    let refused = rig
-        .ask(&Executor::default())
-        .expect_err("it ran uninstalled");
+    let refused = rig.ask(&patient()).expect_err("it ran uninstalled");
 
     assert!(refused.contains("is installed"), "{refused}");
     assert!(!marker.exists());
@@ -193,7 +205,7 @@ fn a_program_whose_own_bytes_changed_after_approval_is_asked_about_again_rather_
         &format!("{}# and something new\n", marking(&marker)),
     );
 
-    let refused = rig.ask(&Executor::default()).expect_err("it ran changed");
+    let refused = rig.ask(&patient()).expect_err("it ran changed");
 
     assert!(
         refused.contains("changed since you approved it"),
@@ -214,7 +226,7 @@ fn an_undeclared_file_added_beside_the_program_stops_it_running() {
     rig.approved(&marking(&marker));
     std::fs::write(rig.at().join("bin/helper.sh"), "echo planted\n").expect("a sibling");
 
-    let refused = rig.ask(&Executor::default()).expect_err("it ran");
+    let refused = rig.ask(&patient()).expect_err("it ran");
 
     assert!(
         refused.contains("changed since you approved it"),
@@ -238,7 +250,7 @@ fn a_write_into_the_state_directory_does_not_stop_it_running() {
     std::fs::create_dir_all(rig.at().join("cache")).expect("the state directory");
     std::fs::write(rig.at().join("cache/seen.json"), "{}").expect("state");
 
-    rig.ask(&Executor::default()).expect("an answer");
+    rig.ask(&patient()).expect("an answer");
     assert!(marker.exists());
 }
 
@@ -251,7 +263,7 @@ fn an_approval_recorded_at_another_path_does_not_start_the_program_here() {
     std::fs::rename(rig.at(), &elsewhere).expect("moved");
     std::fs::create_dir_all(rig.at()).expect("an empty directory where it was");
 
-    let refused = rig.ask(&Executor::default()).expect_err("it ran");
+    let refused = rig.ask(&patient()).expect_err("it ran");
 
     assert!(refused.contains("could not re-read"), "{refused}");
     assert!(!marker.exists());
@@ -277,7 +289,7 @@ fn an_extension_is_started_under_its_own_approval_and_never_under_another_s() {
         .expect("other approved");
 
     let refused = rig
-        .ask(&Executor::default())
+        .ask(&patient())
         .expect_err("probe ran on other's approval");
 
     assert!(
@@ -297,7 +309,7 @@ fn a_record_charter_cannot_read_starts_nothing() {
     rig.approved(&marking(&marker));
     std::fs::write(extension::file(&rig.config()), "{ not json").expect("a broken record");
 
-    let refused = rig.ask(&Executor::default()).expect_err("it ran");
+    let refused = rig.ask(&patient()).expect_err("it ran");
 
     assert!(refused.contains("could not read its record"), "{refused}");
     assert!(!marker.exists());
@@ -319,7 +331,7 @@ fn a_program_that_is_not_executable_is_refused_with_what_to_do() {
     extension::approve(&rig.config(), found.id(), &found.path, &found.fingerprint)
         .expect("approved");
 
-    let refused = rig.ask(&Executor::default()).expect_err("it ran");
+    let refused = rig.ask(&patient()).expect_err("it ran");
 
     assert!(refused.contains("not executable"), "{refused}");
 }
@@ -330,7 +342,7 @@ fn a_view_the_extension_does_not_declare_starts_nothing() {
     let marker = rig.marker("ran");
     rig.approved(&marking(&marker));
 
-    let refused = Executor::default()
+    let refused = patient()
         .ask(
             &rig.config(),
             &project::Choices::default(),
@@ -351,6 +363,9 @@ fn a_view_the_extension_does_not_declare_starts_nothing() {
 
 #[test]
 fn a_program_that_never_answers_is_stopped_at_the_deadline() {
+    // **The one test on the real executor**, because its subject is the real [`DEADLINE`]:
+    // what every executor charter makes gives a program. It is the one test here a machine too
+    // busy to start a shell in five seconds can still fail (charter-app#303).
     let rig = Rig::new();
     let pid = rig.marker("pid");
     rig.approved(&format!(
@@ -378,9 +393,7 @@ fn a_program_that_answers_forever_is_cut_off_without_any_of_it_drawn() {
     let rig = Rig::new();
     rig.approved("#!/bin/sh\nexec yes x\n");
 
-    let refused = rig
-        .ask(&Executor::default())
-        .expect_err("a flood was drawn");
+    let refused = rig.ask(&patient()).expect_err("a flood was drawn");
 
     // `yes` writes newlines, so the first line is `x` and it is not an answer. The case this
     // pins is the one below; this one pins that a line that is not JSON is refused as such.
@@ -392,9 +405,7 @@ fn a_line_longer_than_charter_reads_is_refused_as_too_much() {
     let rig = Rig::new();
     rig.approved("#!/bin/sh\nexec tr '\\0' x < /dev/zero\n");
 
-    let refused = rig
-        .ask(&Executor::default())
-        .expect_err("a flood was drawn");
+    let refused = rig.ask(&patient()).expect_err("a flood was drawn");
 
     assert!(refused.contains("more than"), "{refused}");
 }
@@ -404,9 +415,7 @@ fn a_program_that_crashes_says_so_with_its_own_last_words() {
     let rig = Rig::new();
     rig.approved("#!/bin/sh\necho 'thread main panicked at src/main.rs' >&2\nexit 3\n");
 
-    let refused = rig
-        .ask(&Executor::default())
-        .expect_err("a crash was drawn");
+    let refused = rig.ask(&patient()).expect_err("a crash was drawn");
 
     assert!(refused.contains("exited with status 3"), "{refused}");
     assert!(refused.contains("panicked at"), "{refused}");
@@ -421,9 +430,7 @@ fn a_program_that_dies_without_reading_its_question_is_reported_as_ended_not_as_
     let rig = Rig::new();
     rig.approved("#!/bin/sh\nsleep 0.3\necho 'thread main panicked at src/main.rs' >&2\nexit 3\n");
 
-    let refused = rig
-        .ask(&Executor::default())
-        .expect_err("a crash was drawn");
+    let refused = rig.ask(&patient()).expect_err("a crash was drawn");
 
     assert!(refused.contains("exited with status 3"), "{refused}");
     assert!(refused.contains("panicked at"), "{refused}");
@@ -439,8 +446,7 @@ fn a_program_that_logs_more_than_a_socket_holds_is_not_mistaken_for_a_hung_one()
         "#!/bin/sh\nhead -c 262144 /dev/zero | tr '\\0' e >&2\nread line\nprintf '%s\\n' '{ANSWER}'\n"
     ));
 
-    rig.ask(&Executor::default())
-        .expect("the answer after the noise");
+    rig.ask(&patient()).expect("the answer after the noise");
 }
 
 // -------------------------------------------------------------------------------------
@@ -456,7 +462,7 @@ fn a_helper_the_program_started_is_stopped_with_it() {
         helper.display()
     ));
 
-    rig.ask(&Executor::default()).expect("an answer");
+    rig.ask(&patient()).expect("an answer");
 
     let helper = alive_from(&helper).expect("the helper's pid");
     assert!(
@@ -475,7 +481,7 @@ fn stopping_everything_kills_a_program_that_is_still_answering() {
         "#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n",
         pid.display()
     ));
-    let executor = std::sync::Arc::new(Executor::default());
+    let executor = std::sync::Arc::new(patient());
     let asking = {
         let executor = std::sync::Arc::clone(&executor);
         let config = rig.config();
@@ -499,9 +505,16 @@ fn stopping_everything_kills_a_program_that_is_still_answering() {
     executor.stop_all();
     let (said, took) = asking.join().expect("the asking thread");
 
-    assert!(said.is_err(), "a killed program answered: {said:?}");
+    // What ended it was `stop_all`, not the deadline: said by the refusal itself, which names
+    // the deadline only when the deadline is what stopped it, and by the clock against this
+    // executor's own deadline.
+    let said = said.expect_err("a killed program answered");
     assert!(
-        took < DEADLINE,
+        !said.contains("did not answer within"),
+        "stopping everything waited out the deadline: {said}"
+    );
+    assert!(
+        took < PATIENT,
         "stopping everything waited out the deadline ({took:?})"
     );
     let pid = alive_from(&pid).expect("its pid");
@@ -525,8 +538,9 @@ fn a_program_that_escapes_its_group_outlives_the_question_and_cannot_hold_charte
     // first-run assessments stretch without limit. So the helper now runs until the test lets
     // it go, and the question returning while it is still alive is the proof that charter did
     // not wait for it. The watchdog only turns a regression into a sentence instead of a run
-    // that never ends; it is generous because the question's own bound is one [`DEADLINE`]
-    // from the spawn plus [`STDERR_AFTER_STOP`], and a return past that is charter waiting.
+    // that never ends; it is twice [`PATIENT`] because the question's own bound is one
+    // deadline from the spawn plus [`STDERR_AFTER_STOP`], and a return past that is charter
+    // waiting.
     //
     // **The program answers only once the helper has left the group.** Otherwise, under load,
     // charter's group kill can land before perl reaches `setpgrp` and kill a helper that never
@@ -549,8 +563,8 @@ fn a_program_that_escapes_its_group_outlives_the_question_and_cannot_hold_charte
         escaped = escaped.display(),
         release = release.display(),
     ));
-    let executor = Executor::default();
-    let watchdog = DEADLINE * 4;
+    let executor = patient();
+    let watchdog = PATIENT * 2;
 
     let (returned, has_returned) = std::sync::mpsc::channel();
     let (answer, outlived) = std::thread::scope(|scope| {
@@ -614,7 +628,7 @@ fn one_extension_is_asked_one_thing_at_a_time() {
     let pid = rig.marker("pid");
     let go = rig.marker("go");
     rig.approved(&waiting(&pid, &go));
-    let executor = std::sync::Arc::new(Executor::default());
+    let executor = std::sync::Arc::new(patient());
     let first = {
         let executor = std::sync::Arc::clone(&executor);
         let config = rig.config();
@@ -668,9 +682,9 @@ fn a_busy_extension_does_not_hold_up_a_different_one() {
     extension::approve(&slow.config(), found.id(), &found.path, &found.fingerprint)
         .expect("approved");
 
-    let executor = std::sync::Arc::new(Executor::default());
-    // Asked once before the measurement, so what is timed below is the executor and not macOS
-    // assessing a program file it has never seen (see `waiting`).
+    let executor = std::sync::Arc::new(patient());
+    // Asked once first, so the quick one below is a program macOS has already assessed and its
+    // answer does not queue behind that (see `waiting`).
     executor
         .ask(
             &slow.config(),
@@ -696,8 +710,8 @@ fn a_busy_extension_does_not_hold_up_a_different_one() {
         })
     };
     wait_for(&pid);
+    let stalled_pid = alive_from(&pid).expect("the stalled one's pid");
 
-    let began = Instant::now();
     executor
         .ask(
             &slow.config(),
@@ -708,11 +722,13 @@ fn a_busy_extension_does_not_hold_up_a_different_one() {
             |_| serde_json::Value::Null,
         )
         .expect("the quick one answered");
-    assert!(
-        began.elapsed() < Duration::from_secs(2),
-        "one extension waited on another's stall"
-    );
+    // **Answered while the stall is still running**, which is the claim, and it needs no
+    // clock (charter-app#303). The stalled program sleeps a minute and ends only when its own
+    // deadline or `stop_all` below kills it, so a quick one that waited on it answers after it
+    // is gone. A two-second bound here was a bound on how fast a busy machine starts a shell.
+    let still_stalled = !stalled.is_finished() && crate::process::alive(stalled_pid);
     executor.stop_all();
+    assert!(still_stalled, "one extension waited on another's stall");
     let _ = stalled.join();
 }
 
@@ -729,7 +745,7 @@ fn the_program_is_asked_one_line_holding_what_was_handed_and_nothing_else() {
         asked.display()
     ));
 
-    Executor::default()
+    patient()
         .ask(
             &rig.config(),
             &project::Choices::default(),
@@ -772,7 +788,7 @@ fn an_approved_program_a_project_turned_off_never_starts_in_that_project() {
         Some("[extensions.probe]\nenabled = false\n"),
     );
 
-    let refused = Executor::default()
+    let refused = patient()
         .ask(&rig.config(), &off, "probe", "stats", None, |_| {
             serde_json::Value::Null
         })
@@ -786,6 +802,32 @@ fn an_approved_program_a_project_turned_off_never_starts_in_that_project() {
 }
 
 #[test]
+fn an_approved_program_a_workspace_turned_off_never_starts_in_that_workspace() {
+    // charter-app#280: the workspace layer is asked at the press, like the project's two files.
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.approved(&marking(&marker));
+    let off = project::Choices::from_text(Some("[extensions.probe]\nenabled = true\n"), None)
+        .in_workspace(
+            "alpha",
+            Some(r#"{"settings": {"extensions": {"probe": {"enabled": false}}}}"#),
+        );
+
+    let refused = patient()
+        .ask(&rig.config(), &off, "probe", "stats", None, |_| {
+            serde_json::Value::Null
+        })
+        .expect_err("it ran in a workspace that turned it off");
+
+    assert_eq!(
+        refused,
+        "'probe' is turned off in workspaces/alpha/workspace.json for this workspace, so charter \
+         will not start its program here. Turn it on in Workspace settings to use this view."
+    );
+    assert!(!marker.exists(), "a program the workspace turned off ran");
+}
+
+#[test]
 fn a_project_cannot_start_a_program_this_machine_has_not_approved() {
     let rig = Rig::new();
     let marker = rig.marker("ran");
@@ -793,7 +835,7 @@ fn a_project_cannot_start_a_program_this_machine_has_not_approved() {
     extension::install(&rig.config(), &rig.at()).expect("installed");
     let on = project::Choices::from_text(Some("[extensions.probe]\nenabled = true\n"), None);
 
-    let refused = Executor::default()
+    let refused = patient()
         .ask(&rig.config(), &on, "probe", "stats", None, |_| {
             serde_json::Value::Null
         })
@@ -826,7 +868,7 @@ fn the_settings_a_project_chose_are_handed_with_the_question() {
         Some("[extensions.probe.settings]\ncompact = true\n"),
     );
 
-    Executor::default()
+    patient()
         .ask(&rig.config(), &chose, "probe", "stats", None, |_| {
             serde_json::Value::Null
         })
@@ -850,7 +892,7 @@ fn the_program_gets_a_program_s_environment_and_not_charter_s() {
         seen.display()
     ));
 
-    rig.ask(&Executor::default()).expect("an answer");
+    rig.ask(&patient()).expect("an answer");
 
     let text = std::fs::read_to_string(&seen).expect("its environment");
     let names: Vec<&str> = text
@@ -879,7 +921,7 @@ fn the_program_runs_in_its_own_directory() {
         seen.display()
     ));
 
-    rig.ask(&Executor::default()).expect("an answer");
+    rig.ask(&patient()).expect("an answer");
 
     let cwd = std::fs::read_to_string(&seen).expect("its directory");
     assert_eq!(
@@ -896,7 +938,7 @@ fn nothing_is_handed_to_a_program_the_gate_refused() {
     extension::install(&rig.config(), &rig.at()).expect("installed");
 
     let mut handed = false;
-    let _ = Executor::default().ask(
+    let _ = patient().ask(
         &rig.config(),
         &project::Choices::default(),
         "probe",
@@ -920,7 +962,7 @@ fn nothing_is_handed_to_a_program_the_gate_refused() {
 fn answering(line: &str) -> Result<Answer, String> {
     let rig = Rig::new();
     rig.approved(&format!("#!/bin/sh\nread line\nprintf '%s\\n' '{line}'\n"));
-    rig.ask(&Executor::default())
+    rig.ask(&patient())
 }
 
 #[test]
@@ -993,7 +1035,7 @@ fn what_a_round_trip_costs() {
     rig.approved(&format!(
         "#!/bin/sh\nread line\nprintf '%s\\n' '{ANSWER}'\n"
     ));
-    let executor = Executor::default();
+    let executor = patient();
     rig.ask(&executor).expect("a warm-up");
     let rounds = 20u32;
     let (mut gate, mut trip, mut whole) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
@@ -1045,7 +1087,7 @@ fn a_descriptor_charter_holds_without_close_on_exec_does_not_reach_the_program()
     let number = std::os::fd::AsRawFd::as_raw_fd(&held);
     assert!(number >= 100, "held at {number}");
 
-    rig.ask(&Executor::default()).expect("an answer");
+    rig.ask(&patient()).expect("an answer");
 
     let listed = std::fs::read_to_string(&seen).expect("its descriptors");
     let fds: Vec<i32> = listed
@@ -1076,7 +1118,7 @@ fn a_socket_made_on_another_thread_as_the_program_starts_never_reaches_it() {
     let rig = Rig::new();
     let seen = rig.marker("fds");
     rig.approved(&listing_fds(&seen));
-    let executor = Executor::default();
+    let executor = patient();
     // What a program sees with nothing leaking: the shell's and `ls`'s own descriptors.
     rig.ask(&executor).expect("an answer");
     let baseline = inherited(&std::fs::read_to_string(&seen).expect("its descriptors"));
@@ -1154,7 +1196,7 @@ fn a_helper_that_holds_stdin_and_reads_slowly_cannot_hold_the_question_past_the_
          printf '%s\\n' '{ANSWER}'\n",
         escaped.display()
     ));
-    let executor = std::sync::Arc::new(Executor::default());
+    let executor = std::sync::Arc::new(patient());
     // On a thread of its own, so that a regression reads as a failure with a sentence on it
     // rather than as a test run that never ends.
     let (done, is_done) = std::sync::mpsc::channel();
@@ -1175,7 +1217,7 @@ fn a_helper_that_holds_stdin_and_reads_slowly_cannot_hold_the_question_past_the_
             said
         })
     };
-    let took = is_done.recv_timeout(DEADLINE + Duration::from_secs(5));
+    let took = is_done.recv_timeout(PATIENT + Duration::from_secs(5));
 
     wait_for(&escaped);
     // Killed by the pid this test itself caused to exist, never by name. That also ends the
@@ -1188,11 +1230,13 @@ fn a_helper_that_holds_stdin_and_reads_slowly_cannot_hold_the_question_past_the_
     let said = asking.join().expect("the asking thread");
     // Under the deadline, not merely near it: the program answered at once, and once it has
     // there is nothing left worth waiting for — charter's end is shut down, which ends the
-    // write the helper is still trickling through.
+    // write the helper is still trickling through. Against this executor's own deadline: the
+    // write that held it is bounded by what is left of the deadline, so a charter that waits
+    // for it waits past whichever deadline it was given.
     let took = took.expect("a slow reader of the question held it past the deadline");
     said.expect("the answer the program gave at once");
     assert!(
-        took < DEADLINE,
+        took < PATIENT,
         "a slow reader of the question held it for {took:?}"
     );
     assert!(executor.running().is_empty(), "the slot was never released");
@@ -1208,7 +1252,7 @@ fn a_change_made_while_the_question_is_built_is_seen_by_the_gate() {
     rig.approved(&marking(&marker));
     let planted = rig.at().join("bin/planted.sh");
 
-    let refused = Executor::default()
+    let refused = patient()
         .ask(
             &rig.config(),
             &project::Choices::default(),
@@ -1251,7 +1295,7 @@ fn a_started_program_is_stopped_and_reaped_however_the_question_ends() {
     // reap the program, exactly as the ordinary path does.
     let dir = tempfile::tempdir().expect("a directory");
     let helper = dir.path().join("helper");
-    let executor = Executor::default();
+    let executor = patient();
     let held = executor.hold("probe").expect("the slot");
     let child = with_a_helper(&helper);
     let pid = child.id();
@@ -1281,7 +1325,7 @@ fn a_program_started_as_charter_closes_is_killed_as_it_is_recorded() {
     // it on the spot.
     let dir = tempfile::tempdir().expect("a directory");
     let helper = dir.path().join("helper");
-    let executor = Executor::default();
+    let executor = patient();
     let _held = executor.hold("probe").expect("the slot");
     let child = with_a_helper(&helper);
 
@@ -1303,7 +1347,7 @@ fn nothing_is_started_once_charter_is_closing() {
     let rig = Rig::new();
     let marker = rig.marker("ran");
     rig.approved(&marking(&marker));
-    let executor = Executor::default();
+    let executor = patient();
     executor.stop_all();
 
     let refused = rig

@@ -116,6 +116,7 @@ row), and the status of that field where it differs from its file's.
   - [`.charter/persona-state/ephemeral/<session>/<name|_shared>/<slug>.md`](#charterpersona-stateephemeralsessionnamesharedslugmd)
   - [`.charter/persona-state/trace/<session>.jsonl`](#charterpersona-statetracesessionjsonl)
   - [`.charter/reports/<id>.json`](#charterreportsidjson)
+  - [`.charter/handbacks/` — reports back from handed-off chats](#charterhandbacks--reports-back-from-handed-off-chats)
   - [`~/.config/charter/reporting-consent` (outside the plane)](#configcharterreporting-consent-outside-the-plane)
   - [`.charter/sessions/<sid>.persona`, `.charter/terminals/<tid>.persona`, `.charter/active-persona`](#chartersessionssidpersona-charterterminalstidpersona-charteractive-persona)
   - [`.charter/mcp-approved.json`](#chartermcp-approvedjson)
@@ -126,6 +127,8 @@ row), and the status of that field where it differs from its file's.
   - [`.charter/vaults/` (directory)](#chartervaults-directory)
   - [`.charter/vaults/<name>.json` — plain-file vault](#chartervaultsnamejson--plain-file-vault)
   - [`.charter/vaults/<name>.meta.json` — rotation sidecar](#chartervaultsnamemetajson--rotation-sidecar)
+  - [`.charter/vaults/<name>.keys.json` — keyring vault's keys index](#chartervaultsnamekeysjson--keyring-vaults-keys-index)
+  - [`.charter/keyring-stub.json` — a test build's keyring](#charterkeyring-stubjson--a-test-builds-keyring)
   - [`.charter/vaults/<name>.json` — reference vault (same path, different content)](#chartervaultsnamejson--reference-vault-same-path-different-content)
   - [Secret reference syntax](#secret-reference-syntax)
   - [`.charter/fingerprint.key`](#charterfingerprintkey)
@@ -322,7 +325,11 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   `charter/forge/registry.py:140`, `charter/commands_update.py:604`. In charter-app, its
   `[extensions]` table is read by `crates/charter-core/src/extension/project.rs`
   (`Choices::read`) for the Project settings tab, the window's filter on extension panels,
-  views and themes, and the executor's gate (charter-app#253).
+  views and themes, and the executor's gate (charter-app#253); its `[theme]` table by
+  `crates/charter-core/src/extension/project/theme.rs` (`Said::read`) for the Project settings
+  tab and the window's theme (charter-app#273). Its `[harness_plugins]` table is
+  read by `crates/charter-core/src/harness_plugin.rs` (`Choices::read`) for the Project settings
+  tab and for every chat `start::ready` launches (charter-app#274).
 - **Git:** committed (nothing ignores it; `_GITIGNORE_BASELINE` ignores its *local* sibling
   only, `charter/commands.py:1104`).
 - **Encoding details for a byte-identical writer:**
@@ -382,14 +389,18 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051 (accepted, not built) |
 | `[plane].autosave_after` | str | optional; default `"30s"`; a whole number followed by `s` or `m` | **charter-app only.** The quiet period after the last change before an auto-save. | stable | ADR 0051 (accepted, not built) |
 | `[repos.<name>]` | table | optional, one per repo | **charter-app only.** How a workspace repo is saved. `<name>` is the repo's `name` in `inventory/repos.json`, so one table governs every workspace's clone of it. Takes the same keys as `[plane]` (`mode`, `branch`, `sign`, `autosave`, `autosave_after`) except `save_branch`, with the defaults `mode = "pr"` and `autosave = false`. A save commits on the branch the clone is on and `pr` opens its PR from that branch into `branch` (default: the repo's `default_branch`); on that default branch, a PR mode first creates `charter/<workspace>/<short-sha>`. It never runs while a session in that workspace is mid-turn. | stable | ADR 0051 (accepted, not built) |
-| any other key in `[plane]` or `[repos.<name>]` | — | — | Refused by the Project settings tab's save, ignored by readers. | stable | ADR 0051 (accepted, not built) |
+| any other key in `[plane]` or `[repos.<name>]` | — | — | Refused by the Project settings tab's save, ignored by readers. | stable | ADR 0051; `crates/charter-core/src/planesave.rs` `refusals` |
 | `[charter].version` | str | optional | The version lock. Reported **as written** (even if malformed); must match `^\d+\.\d+\.\d+$` before it is acted on. | stable | `charter/instance.py:321`, `charter/instance.py:290` |
 | `[update].channel` | str | default `"stable"`; closed set `stable`,`dev` | Which charter this plane tracks. Unknown → `stable`; the matched **constant** is stored, never the file's string. | stable | `charter/instance.py:2948`, `charter/instance.py:2936` |
 | `[harness].default` | str | default `None` | What bare `charter` launches. Matched against the harness registry's `cli_name`s; a non-match is recorded as `refused` (contained) rather than ignored. | stable | `charter/instance.py:3000`, `charter/instance.py:3088` |
 | `[harness.<name>]` | table | — | **Refused here**: profiles live in `charter.local.toml`. Reported by name. | stable | `charter/profiles.py:316`, `charter/profiles.py:132` |
-| `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one. `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
+| `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one, and in a workspace, that workspace's `settings.extensions.<id>.enabled` in `workspace.json` comes between the two (charter-app#280). `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[extensions.<id>.settings].<key>` | bool or str | optional; absent = the extension's declared default | **charter-app only.** A value for a setting the extension's manifest declares (`bool`, `text` of at most 200 bytes, or one of a `choice`'s words), handed to its program with each question as `settings`. A key it does not declare, or a value it would not accept, is ignored with a sentence and the next file down is used. Overridden key by key by `charter.local.toml`. | stable | `crates/charter-core/src/extension/project.rs` `resolve`, `crates/charter-core/src/extension.rs` `Setting::accepts` |
 | any other key in `[extensions.<id>]` | — | — | Refused by the Project settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/extension/project.rs` `refusals` |
+| `[harness_plugins.<harness>]."<plugin id>"` | bool | optional; absent = not set (the harness decides, from its own settings) | **charter-app only** (charter-app#274, ADR 0050). Whether the chats charter starts in this project have that harness plugin on (`true`) or off (`false`). `<harness>` is a profile `kind`: `claude`, `opencode` or `codex`. `<plugin id>` is the harness's own id (`<name>@<marketplace>` for Claude Code and Codex), one line of at most 200 bytes. Only a plugin this machine has installed is handed on. `charter.local.toml`'s value overrides this one plugin by plugin, and for a chat in a workspace, that workspace's `settings.harness_plugins.<harness>."<plugin id>"` in `workspace.json` comes between the two (charter-app#282). For Claude Code the value goes into the chat's `--settings` `enabledPlugins`. For Codex and opencode it is read, shown as *not supported yet*, and handed to nothing. `charter-app@inline` cannot be `false` and `charter@charter` cannot be `true` under `claude`: a save that says so is refused, and the reader ignores it with a sentence. | stable | `crates/charter-core/src/harness_plugin.rs` `resolve`, `chosen` |
+| any other shape under `[harness_plugins]` | — | — | A harness charter does not know, a value that is not a bool, or a `[harness_plugins]` or `[harness_plugins.<harness>]` that is not a table is refused by the Project settings tab's save and ignored by the reader. | stable | `crates/charter-core/src/harness_plugin.rs` `refusals` |
+| `[theme].use` | str | optional; absent = the window's own theme (the operator's `theme.json`, else the first theme from an extension the project has on, else `charter-dark`) | **charter-app only** (charter-app#273, ADR 0048). The theme the window and its terminals draw while this project is in front: `charter-dark`, `charter-light`, `system` (the built-in matching the operating system's appearance, followed live), or `<extension-id>/<theme name>` — split at the first `/`. An extension's theme is drawn only while the extension is on in this project and approved on this machine, and contributes that theme; otherwise the built-in `charter-dark` is drawn and the Project settings tab says why. A value of none of those shapes is ignored with a sentence and the next file down is used. `charter.local.toml`'s value overrides this one, and in a workspace, that workspace's `settings.theme.use` in `workspace.json` comes between the two (charter-app#281). | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
+| any other key in `[theme]`, or `theme` that is not a table | — | — | Refused by the Project settings tab's save, and ignored by the reader. `colour` included: a colour is a workspace's (`settings.theme.colour`, charter-app#281). | stable | `crates/charter-core/src/extension/project/theme.rs` `refusals` |
 
 #### `[frame]` — every key, via `FRAME_FIELDS` (`charter/instance.py:1652`)
 
@@ -457,16 +468,27 @@ key refuses.
   `charter harness list` (`charter/commands_harness.py:62`), `charter doctor`
   (`charter/doctor.py:755`), the launcher/selector (`charter/frame/launcher.py:478`,
   `charter/frame/selector.py:25`). In charter-app, its `[extensions]` table is read by
-  `crates/charter-core/src/extension/project.rs` as `charter.toml`'s is (charter-app#253).
+  `crates/charter-core/src/extension/project.rs` as `charter.toml`'s is (charter-app#253), and
+  its `[theme]` by `crates/charter-core/src/extension/project/theme.rs` (charter-app#273), and
+  its `[harness_plugins]` table by `crates/charter-core/src/harness_plugin.rs` as
+  `charter.toml`'s is (charter-app#274).
 - **Git:** gitignored — the baseline writes `/charter.local.toml`
   (`charter/commands.py:1104`), and `reinit` backfills it
   (`charter/commands.py:1821`). If git *would* carry it (tracked, committable, or git cannot
   say), **every profile in it is refused** (`charter/profiles.py:518` `ignore_check`,
-  `charter/profiles.py:456` `with_ignore_check`).
+  `charter/profiles.py:456` `with_ignore_check`). In charter-app, **nothing in it is read**
+  then: its `[extensions]`, `[theme]` and `[harness_plugins]` are left out too, and the other
+  layers decide (charter-app#308, ADR 0048). Every reader takes the file through
+  `crates/charter-core/src/settings.rs` `layer_text`, which applies the same check.
 - **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
-  since charter-app#253 — `[extensions]` by `extension::project` (ADR 0048); any other
-  top-level key is refused with a sentence (`charter/profiles.py:325`, and in charter-app
-  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names both tables). In charter-app, `[plane]` and `[repos.<name>]` are also read, and override `charter.toml`'s values **key by key** (ADR 0051, on ADR 0048's overlay); every surface that shows one names the file that decided it. A missing file declares nothing and is not a refusal
+  since charter-app#253 — `[extensions]` by `extension::project` and, since charter-app#273,
+  `[theme]` by `extension::project::theme` (ADR 0048), and, since charter-app#274,
+  `[harness_plugins]` by `harness_plugin` (ADR 0050), and, since charter-app#292, `[plane]`
+  and `[repos.<name>]` by `planesave` (ADR 0051), which override `charter.toml`'s values
+  **key by key** on ADR 0048's overlay, every surface that shows one naming the file that
+  decided it; any other top-level key is refused with a sentence (`charter/profiles.py:325`,
+  and in charter-app `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names
+  all six tables). A missing file declares nothing and is not a refusal
   (`charter/profiles.py:241`). Profile `env` is stored **sorted by name**
   (`charter/profiles.py:363`), and `~` in `command[0]` and in every `env` value is expanded
   only at launch (`charter/profiles.py:474`, `charter/profiles.py:480`) — never in the file
@@ -482,7 +504,8 @@ key refuses.
 | any other key in a profile table | — | — | Refuses that profile (e.g. `enviroment`). | stable | `charter/profiles.py:86`, `charter/profiles.py:278` |
 | `[extensions.<id>].enabled` | bool | optional | **charter-app only** (charter-app#253, ADR 0048). This machine's choice for this project, over `charter.toml`'s. Same shape and rules as there; still cannot reach past this machine's approval. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[extensions.<id>.settings].<key>` | bool or str | optional | **charter-app only.** Overrides `charter.toml`'s value for the same key, key by key; falls through to it (then to the declared default) when the extension would not accept this one. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
-| `[plane].<key>`, `[repos.<name>].<key>` | as in `charter.toml` | optional | **charter-app only.** This machine's value, over `charter.toml`'s, key by key. Same shapes and refusals. | stable | ADR 0051 (accepted, not built) |
+| `[theme].use` | str | optional | **charter-app only** (charter-app#273, ADR 0048). This machine's pick of the project's theme, over `charter.toml`'s and over a workspace's `settings.theme.use` (charter-app#281). Same values and rules as there; falls through to the next layer's pick when it is none of the shapes. | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
+| `[plane].<key>`, `[repos.<name>].<key>` | as in `charter.toml` | optional | **charter-app only.** This machine's value, over `charter.toml`'s, key by key. Same shapes and refusals. | stable | ADR 0051; `crates/charter-core/src/planesave.rs` `Settings::from_text` |
 
 ---
 
@@ -860,7 +883,15 @@ Two rules hold for the whole area and are not repeated per file:
 - **Read by:** `workspace.read_manifest` (`charter/workspace.py:1500`), `manifest_owner`
   (`charter/workspace.py:1556`), `restore` (`charter/commands_workspace.py:955`), `fork`
   (`charter/commands_workspace.py:1709`), `merge_repo_rows` (`charter/workspace.py:1739`),
-  `last_active` (`charter/workspace.py:4421`).
+  `last_active` (`charter/workspace.py:4421`). In charter-app, its `settings` are read by
+  `crates/charter-core/src/extension/project.rs` (`Choices::read_in`) for the Workspace
+  settings tab, the window's filter on extension panels and views for the focused workspace, and
+  the executor's gate for a view on that workspace's strip (charter-app#280); by
+  `crates/charter-core/src/harness_plugin.rs` (`Choices::read_in`) for the Workspace settings
+  tab and for every chat started in the workspace (charter-app#282); and its `settings.theme`
+  by `crates/charter-core/src/extension/project/theme.rs` (`Said::read_in`, `colour_of`) for
+  the Workspace settings tab, the theme the window draws while the workspace is in front, and
+  every workspace tab's colour (charter-app#281).
 - **Git:** gitignored unless LIVE (`!/workspaces/<ws>/workspace.json`,
   `charter/workspace.py:1397`); it is the first path of the managed block.
 - **Encoding details:**
@@ -887,6 +918,7 @@ Two rules hold for the whole area and are not repeated per file:
 | `updated_at` | string | required | UTC ISO-8601, `timespec="seconds"`, e.g. `2026-09-17T14:01:35+00:00` | stable | `charter/workspace.py:1616`, `charter/commands_workspace.py:940` |
 | `updated_by` | string | required | `$USER` or `"unknown"` for automatic writes (`charter/workspace.py:1633`); `git config user.name` for `snapshot`/`fork` (`charter/commands_workspace.py:860`) | stable | `charter/workspace.py:1679` |
 | `forked_from` | string | present only on a fork | the source workspace | stable | `charter/commands_workspace.py:1714` |
+| `settings` | object | **absent** in every manifest written before charter-app#280, and in one whose workspace sets nothing; absent = the project's answer | **charter-app only** (charter-app#280, ADR 0048). The workspace's layer of the project's settings, read between `charter.toml` and `charter.local.toml`. Its keys mirror those files' tables — see [`settings`](#settings--a-workspaces-layer) below. Every writer keeps it: `snapshot`, `fork` (which inherits it) and a clone's `record_members` mutate the document they read. | stable | `crates/charter-core/src/settings/workspace.rs` |
 | `charter_generated` | string | written on every charter write | sha256 of the rest of the document, canonically serialised | stable | `charter/workspace.py:1529`, `charter/workspace.py:1611` |
 
 **`charter_generated` computation** (a Rust writer must match it byte for byte):
@@ -897,6 +929,40 @@ while the file on disk is `indent=2` in insertion order. Ownership: a document w
 `charter_generated` matches is `"charter"`; anything else present is `"operator"` and the
 automatic writers leave it byte for byte alone; absent is `"absent"`
 (`charter/workspace.py:1556`–`1574`). A present-but-unparseable file is `"operator"`.
+
+#### `settings` — a workspace's layer
+
+**charter-app only** (charter-app#280, ADR 0048). A workspace refines its project for the team:
+for each key, the order is this machine's approval, then `charter.toml` (Shared), then this
+object, then `charter.local.toml` (Local). A workspace's settings are committed with the
+manifest when the workspace is LIVE, and stay on this machine when it is not. Old manifests
+have no `settings` and read exactly as before: the project's answer.
+
+The object mirrors the TOML files' tables, so one reader reads all three: JSON `true`/`false`
+is a TOML bool, a string is a string, an object is a table. **`null` reads as not set**, so the
+next layer down answers.
+
+| Key | Type | Meaning | Source |
+|---|---|---|---|
+| `settings.extensions.<id>.enabled` | bool | Whether this workspace has the extension on, over `charter.toml`'s `[extensions.<id>] enabled` and under `charter.local.toml`'s. It cannot reach past this machine's approval. | `crates/charter-core/src/extension/project.rs` `resolve` |
+| `settings.extensions.<id>.settings.<key>` | bool or str | A value for a setting the extension declares, over Shared's and under Local's, key by key. A value it would not accept is ignored with a sentence and the next layer down is used. | `crates/charter-core/src/extension/project.rs` `resolve` |
+| any other key in `settings.extensions.<id>` | — | Refused by the Workspace settings tab's save, and ignored by the reader, in the words it refuses `[extensions]` in a TOML file. | `crates/charter-core/src/extension/project.rs` `refusals_in` |
+| `settings.harness_plugins.<harness>."<plugin id>"` | bool | **charter-app#282, ADR 0050.** Whether the chats charter starts in this workspace have that harness plugin on or off, over `charter.toml`'s `[harness_plugins.<harness>]` and under `charter.local.toml`'s, plugin by plugin. A chat is in the workspace when its directory is under `workspaces/<ws>/`. Everything the TOML key says holds here: only a plugin this machine has installed is handed on, Codex and opencode show it as *not supported yet* and hand it to nothing, and `charter-app@inline` cannot be `false` nor `charter@charter` `true` under `claude`. | `crates/charter-core/src/harness_plugin.rs` `resolve`, `for_start` |
+| any other shape under `settings.harness_plugins` | — | Refused by the Workspace settings tab's save, and ignored by the reader, in the words it refuses `[harness_plugins]` in a TOML file, with the key named at `settings.harness_plugins…`. | `crates/charter-core/src/harness_plugin.rs` `refusals_in` |
+| `settings.theme.use` | str | The theme the window and its terminals draw while this workspace is in front (charter-app#281): the same values as `charter.toml`'s `[theme].use`, over it and under `charter.local.toml`'s. An extension's theme is drawn only while that extension is on in this workspace, so a workspace that turns it off draws the built-in `charter-dark` and says why. A value of none of the shapes is ignored with a sentence and the next layer down is used. | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
+| `settings.theme.colour` | str | The workspace's colour (charter-app#281): one of `red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`, or `#rrggbb`, whose hue is taken. **A workspace's alone**: the project's files cannot set one, and no other layer overrides it. It picks no theme; the window tints the accent, the focus ring and this workspace's tab and chat strip shades of the theme it draws with the hue, at the same luminance, and leaves text and the terminal as they are. Any other value is ignored with a sentence, and the workspace has no colour. | `crates/charter-core/src/extension/project/theme.rs` `resolve`, `colour_of`; the tint, `app/src/theme/tint.ts` |
+| any other key in `settings.theme`, or `settings.theme` that is not an object | — | Refused by the Workspace settings tab's save, and ignored by the reader: a workspace's theme holds `use` and `colour`. | `crates/charter-core/src/extension/project/theme.rs` `refusals_in_workspace` |
+| any other key in `settings`, or `settings` that is not an object | — | Refused by the save, and ignored by the reader: a workspace's settings hold `extensions`, `harness_plugins` and `theme` and nothing else. | `crates/charter-core/src/settings/workspace.rs` `refusals` |
+
+**Written by** the Workspace settings tab (`settings::workspace::save`), which changes only
+`settings`: every other key keeps its place and value, a key removed takes every object it
+leaves empty with it (so removing the last setting gives the manifest back as it was), and the
+`settings` key itself keeps its place. **It keeps the manifest's owner**: a manifest charter
+wrote is stamped again (`charter_generated`), one a hand wrote is written unstamped, so the
+automatic writers keep leaving it alone. A workspace with no manifest gets the one
+`scaffold_manifest` would write, with the settings in it. The save is refused when the file
+changed since the tab read it, for what the reader would refuse (what the file already held
+excepted), and for a secret-shaped value, named by its kind.
 
 ### `workspaces/<ws>/memory/` — the task journal
 
@@ -1968,6 +2034,37 @@ before it is stored.
 
 ---
 
+### `.charter/handbacks/` — reports back from handed-off chats
+
+- **Format:** one JSON object per file, compact, no trailing newline.
+- **Status:** **internal** — written by the app, taken by the `charter` binary's own hooks.
+  A report waits here from the moment a handed-off chat sends it (`charter handoff report`)
+  until the turn it is handed to.
+- **Written by:** `charter_core::handback::leave` (charter-app#259), from the app's answer to a
+  report, and from `handback::orphan` when a chat with reports waiting is closed.
+- **Read by:** `charter hook userpromptsubmit` (`chat-<n>/`, `<n>` from `$CHARTER_SESSION_ID`)
+  and `charter hook sessionstart` (`workspace-<ws>/`, the session's workspace), through
+  `handback::take`, which **removes each file it reads**: a report reaches one turn.
+- **Git:** gitignored (under `/.charter/`).
+- **Layout:** `chat-<n>/` for a report to a chat the app has open, `workspace-<ws>/` for one
+  whose chat has closed. Each file is `<nanoseconds since the epoch, 24 digits>-<uuid>.json`,
+  so a directory reads in arrival order; it is written as `.<name>` and renamed into place, and a
+  reader skips a name starting with `.`. An empty directory is removed by the reader.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `from` | str | the chat that reported, by the name it is shown under |
+| `from_workspace` | str | the workspace that chat works in |
+| `to` | str | the chat that asked, by the name it is shown under |
+| `to_workspace` | str | the workspace that chat handed off from — where the report goes when it is gone |
+| `summary` | str | the report: trimmed, at most 4,096 bytes, no control character but `\n` and no invisible one |
+
+**Held again on the way in.** A file whose `summary` breaks the report rule, whose names break
+the chat-name rule, whose workspaces cannot be one, or which is not JSON at all, is removed and
+handed to nobody. What is handed over is quoted as data: every line of the summary behind `> `.
+
+---
+
 ### `~/.config/charter/reporting-consent` (outside the plane)
 
 - **Format:** plain text, one sentence.
@@ -2098,7 +2195,7 @@ literal `fixture-not-a-secret`.
 |---|---|---|---|---|---|
 | `vaults` | object | defaulted to `{}` on read | name → entry | stable | `charter/secrets/registry.py:60` |
 | `vaults.<name>` | object | — | one vault. A non-object entry is dropped from the merged view and reported | stable | `charter/secrets/registry.py:92` |
-| `vaults.<name>.provider` | string | required | `plain-file` \| `reference` \| `1password` | stable | `charter/secrets/registry.py:39`, `:245` |
+| `vaults.<name>.provider` | string | required | `keyring` \| `plain-file` \| `reference` \| `1password`. `keyring` is charter-app's (ADR 0047), the default `vault add` writes; a Python charter reads it as an unknown provider | stable | `charter/secrets/registry.py:39`, `:245`; `crates/charter-core/src/secrets/registry.rs` (`PROVIDERS`) |
 | `vaults.<name>.persona` | string \| null | written always, `null` when no `--persona` | persona tag | stable | `charter/secrets/registry.py:299` |
 | `vaults.<name>.config` | object | written always (may be `{}`) | provider config, merged per key over the local half | stable | `charter/secrets/registry.py:113` |
 
@@ -2112,6 +2209,7 @@ literal `fixture-not-a-secret`.
 | `account` | string | `--account` | 1Password account pin — **LOCAL_ONLY, never written to the shared half** | stable | `charter/secrets/registry.py:50`, `:298`, `:317` |
 | `env` | object `{TARGET: SOURCE}` | `--env TARGET=SOURCE` / `--token-env X` | env var NAMES only (e.g. `{"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_TOKEN"}`); never a value | stable | `charter/commands_secrets.py:188`, `charter/commands_secrets.py:80`; read `charter/secrets/base.py:291` |
 | `version` | string | hand-written only | `browser://` resolver's npx package version | stable | `charter/secrets/reference.py:104` |
+| `identity` | object | the vault tab's token box / *Move…*, into the **local half only** | The moved-token record: `{"held":"keyring","bindings":{TARGET:SOURCE},"op_vault":…,"account":…,"op_cmd":…,"op_team":…,"ids":{SOURCE:<id>}}`. Each source is read from the keyring item `charter/@identity/<id>` (account the source name) first and the environment second, but **only while the vault's effective `env`/op-vault/account still equal `bindings`/`op_vault`/`account`** and the pinned `op_cmd`/`op_team` verify. **Read from `.charter/vaults.json` alone**; a committed one is ignored, so a commit cannot mark or redirect (#271 review, U2/U5). charter-app only (#237, ADR 0047 as amended); a Python charter ignores the key | stable | `crates/charter-core/src/secrets/identity.rs` (`MARK`, `record`, `record_matches`, `pinned_op`) |
 
 Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepassword.py:134`,
 `:149`) and never written.
@@ -2206,6 +2304,48 @@ Shape with placeholder values:
 ```json
 { "API_TOKEN": { "set_at": "2026-09-17" } }
 ```
+
+### `.charter/vaults/<name>.keys.json` — keyring vault's keys index
+
+charter-app only (ADR 0047); the Python charter has no keyring provider and never reads it.
+
+- **Format:** JSON object: `service` (string, or `null` before the vault's first write) and
+  `keys`, an object `key → {"size": <size band>, "updated": <RFC 3339 UTC, to the second>}`.
+  **Never a value.** `size` is `fingerprint::size_band` of the value (`1–15 bytes`,
+  `16–31 bytes`, … `1024+ bytes`), never its length.
+- **Status:** **stable** — it is the only record of which keys a keyring vault holds and of
+  the service its items live under: the keyring cannot be enumerated through the `keyring`
+  crate. Deleting it strands the vault's items in the keyring, still there and unnamed.
+- **Written by:** `crates/charter-core/src/secrets/keyring.rs` (`set_with`, `delete_with`),
+  after the keyring write succeeded, through the plain-file provider's `write_private` (0600,
+  settled on the descriptor first). Commands: `charter secret set`, `charter secret rm`.
+- **Read by:** the same module — `keys`, `listed`, `get`, `ages`, `health`. `secret list`,
+  `vault list` and `secret audit` read only this file and never the keyring.
+- **`service`:** `charter/<vault>/<8 lowercase hex>`, made randomly at the vault's first write
+  and written to this file BEFORE that first item is, so no item is ever under a service no
+  index records. A service that does not start `charter/` (or holds a control character) is refused
+  as corrupt: the file is on disk, and one pointing at another program's item would make
+  charter read it.
+- **Git / encoding:** under `.charter/`, so gitignored; indent 2, trailing newline, keys
+  sorted.
+
+```json
+{
+  "service": "charter/ops/3f9a2c1b",
+  "keys": {
+    "API_TOKEN": { "size": "16–31 bytes", "updated": "2026-09-24T11:32:17Z" }
+  }
+}
+```
+
+### `.charter/keyring-stub.json` — a test build's keyring
+
+In the state directory (`.charter/`, or `$CHARTER_HOME` when set). Written **only** by a fenced
+build (every `cargo test` build, and the app's `e2e` build — `crates/charter-core/src/fence.rs`),
+which keeps a keyring vault's values here instead of in the
+operating system's store, so no test can reach the operator's keychain. JSON object
+`"<service>\n<account>" → value`, 0600. **It holds values in plaintext**; a build anyone is
+given never writes it.
 
 ### `.charter/vaults/<name>.json` — reference vault (same path, different content)
 
@@ -3087,6 +3227,7 @@ down rather than read off the code.
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
 | `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
+| `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone; `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that cannot be one reads as the whole key absent — the note is not drawn and no report is owed |
 | `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251, **Restart to update**, the only writer of `true`), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. **It counts only at the launch that follows the restart**: the restart also leaves an empty `restarted-to-update` file beside the machine store (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), and the next launch removes it whatever it opens. A plane that launch did not open keeps the flag, and it says nothing at any later launch |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a

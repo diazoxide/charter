@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
-import { ChartColumn, LoaderCircle, Puzzle, Settings2, UserRound } from "lucide-react";
+import {
+  ChartColumn,
+  KeyRound,
+  LoaderCircle,
+  Puzzle,
+  Settings2,
+  SlidersHorizontal,
+  UserRound,
+} from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import { PanelList } from "./PanelList";
-import { ProjectSettings } from "./ProjectSettings";
+import { Preferences } from "./Preferences";
+import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
 import {
   commands,
   type ExtensionView,
@@ -11,7 +20,11 @@ import {
   type PlaneId,
   type ViewAnswer,
 } from "./bindings";
-import { SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
+import { PREFERENCES_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
+import { VaultTab } from "./VaultTab";
+
+/** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
+const WORKSPACE_SETTINGS = "workspace-settings";
 
 /**
  * **Views: what a tab shows when it does not show a chat** — ADR 0043 as amended
@@ -71,12 +84,16 @@ const inFlight = new Map<string, Promise<ViewAnswerOrRefusal>>();
 
 type ViewAnswerOrRefusal = { answer: ViewAnswer } | { refused: string };
 
-function ask(plane: PlaneId, view: ViewRef): Promise<ViewAnswerOrRefusal> {
-  const key = `${plane}\u0000${viewKey(view)}`;
+function ask(
+  plane: PlaneId,
+  view: ViewRef,
+  workspace: string | undefined,
+): Promise<ViewAnswerOrRefusal> {
+  const key = `${plane}\u0000${workspace ?? ""}\u0000${viewKey(view)}`;
   const out = inFlight.get(key);
   if (out) return out;
   const asking = commands
-    .openView(plane, view.from, view.view, view.key)
+    .openView(plane, view.from, view.view, view.key, workspace ?? null)
     .then((said): ViewAnswerOrRefusal =>
       said.status === "error" ? { refused: said.error } : { answer: said.data },
     )
@@ -96,14 +113,20 @@ export function aboutOf(view: ViewRef, offered: readonly ExtensionView[]): strin
   return offered.find((one) => one.extension === view.from && one.id === view.view)?.about;
 }
 
+/** charter's own views' glyphs, by view. */
+const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
+  persona: UserRound,
+  vault: KeyRound,
+  settings: Settings2,
+  [WORKSPACE_SETTINGS]: Settings2,
+  preferences: SlidersHorizontal,
+};
+
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
  *  extension offers — which says *a plugin's* before any word is read. */
 export function ViewMark({ view }: { view: ViewRef }) {
-  const props = { className: "tab-mark", "aria-hidden": true } as const;
-  if (view.from !== null) return <Puzzle {...props} />;
-  if (view.view === "persona") return <UserRound {...props} />;
-  if (isSettings(view)) return <Settings2 {...props} />;
-  return <ChartColumn {...props} />;
+  const Mark = view.from !== null ? Puzzle : (OWN_MARKS[view.view] ?? ChartColumn);
+  return <Mark className="tab-mark" aria-hidden="true" />;
 }
 
 /**
@@ -120,15 +143,20 @@ export function ViewPane({
   plane,
   view,
   title,
+  workspace,
   waits,
   offered,
   onOpenView,
   onAsk,
+  onVaultChanged,
 }: {
   plane: PlaneId;
   view: ViewRef;
   /** What the tab is called — the heading says the same. */
   title: string;
+  /** The workspace whose strip the view is on, or `undefined` outside every workspace: its
+   *  settings are a layer of what an extension's view is asked under (charter-app#280). */
+  workspace?: string;
   /** Put back by a launch and not asked yet (`tabs.Content.waits`). */
   waits: boolean;
   /** Every view approved extensions offer this window. */
@@ -136,7 +164,22 @@ export function ViewPane({
   onOpenView: (view: ViewRef, title: string) => void;
   /** The operator pressed to have a waiting view asked. */
   onAsk: () => void;
+  /** A vault's tab wrote to its vault. */
+  onVaultChanged: () => void;
 }) {
+  // **A vault is charter's own view, and the one a panel answer cannot draw**: a table the
+  // operator writes to (charter-app#235). Same tab, same path, same record — its own drawing.
+  // Keyed by the vault, so a pane that comes to show another vault starts from "opening".
+  if (view.from === null && view.view === "vault") {
+    return (
+      <VaultTab
+        key={`${plane}\u0000${view.key}`}
+        plane={plane}
+        vault={view.key}
+        onChanged={onVaultChanged}
+      />
+    );
+  }
   const about = aboutOf(view, offered);
   const beside = offered.filter(
     (one) =>
@@ -198,10 +241,24 @@ export function ViewPane({
              form writes, and the panel vocabulary is for reading. Keyed by the plane, so a pane
              that comes to show another project's settings starts from its own read. */
           <ProjectSettings key={plane} plane={plane} />
+        ) : isWorkspaceSettings(view) ? (
+          /* A workspace's settings (charter-app#280): Project settings' body, for the one file
+             a workspace holds. Keyed by both, for the same reason. */
+          <WorkspaceSettings key={`${plane}\u0000${view.key}`} plane={plane} workspace={view.key} />
+        ) : isPreferences(view) ? (
+          /* The machine's, not the plane's (charter-app#283): the same surface whichever
+             project's strip it was opened on. */
+          <Preferences />
         ) : (
           /* Keyed by the view, so a pane that comes to show another view starts from "asking"
              rather than drawing the last view's answer under the new one's title. */
-          <Answer key={`${plane}\u0000${viewKey(view)}`} plane={plane} view={view} title={title} />
+          <Answer
+            key={`${plane}\u0000${workspace ?? ""}\u0000${viewKey(view)}`}
+            plane={plane}
+            view={view}
+            title={title}
+            workspace={workspace}
+          />
         )}
       </div>
     </section>
@@ -213,20 +270,40 @@ function isSettings(view: ViewRef): boolean {
   return viewKey(view) === viewKey(SETTINGS_VIEW);
 }
 
+/** Whether `view` is a workspace's settings view (charter-app#280). */
+function isWorkspaceSettings(view: ViewRef): boolean {
+  return view.from === null && view.view === WORKSPACE_SETTINGS;
+}
+
+/** Whether `view` is the Preferences view (charter-app#283). */
+function isPreferences(view: ViewRef): boolean {
+  return viewKey(view) === viewKey(PREFERENCES_VIEW);
+}
+
 /** A view asked now, and its answer, its refusal, or the sentence saying its source has gone. */
-function Answer({ plane, view, title }: { plane: PlaneId; view: ViewRef; title: string }) {
+function Answer({
+  plane,
+  view,
+  title,
+  workspace,
+}: {
+  plane: PlaneId;
+  view: ViewRef;
+  title: string;
+  workspace: string | undefined;
+}) {
   const [said, setSaid] = useState<ViewAnswerOrRefusal>();
   const { from, view: id, key } = view;
 
   useEffect(() => {
     let gone = false;
-    void ask(plane, { from, view: id, key }).then((answered) => {
+    void ask(plane, { from, view: id, key }, workspace).then((answered) => {
       if (!gone) setSaid(answered);
     });
     return () => {
       gone = true;
     };
-  }, [plane, from, id, key]);
+  }, [plane, from, id, key, workspace]);
 
   if (said === undefined) {
     return (

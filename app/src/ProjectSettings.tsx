@@ -2,15 +2,23 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { LoaderCircle } from "lucide-react";
 import { extensionsChanged } from "./extensionsOn";
+import { projectThemeChanged, useProjectThemeAnswers } from "./projectTheme";
+import { BUILT_IN, DEFAULT_THEME, inForce, SYSTEM } from "./theme/theme";
+import { hueOf, PALETTE } from "./theme/tint";
 import {
   commands,
+  type HarnessPlugin,
+  type HarnessPlugins,
   type PlaneId,
   type ProjectExtension,
+  type ProjectTheme,
   type ProjectSettings as Both,
+  type SettingsChange,
   type SettingsEdit,
   type SettingsFile,
   type SettingsStep,
   type SettingsValue,
+  type WorkspaceSettings as OneWorkspace,
 } from "./bindings";
 
 /**
@@ -19,6 +27,9 @@ import {
  *
  * - **Shared** is `charter.toml`, committed: the team sees it.
  * - **Local** is `charter.local.toml`, gitignored: this machine only. Harness profiles live here.
+ *   While git would carry it (tracked, or not ignored) charter reads nothing in it
+ *   (charter-app#308, ADR 0048): the section still shows the file, and the reason and its fix
+ *   are among its standing refusals, in the words the profiles loader says them in.
  *
  * **Nothing here decides what a file may say.** A form sends its changes, the raw view sends its
  * text, and the core checks either with the rules it reads the file with and writes it with
@@ -30,14 +41,41 @@ import {
  * under it, each reading and writing keys by path. **Extensions** (charter-app#253, ADR 0048) is
  * one group in either section: each extension with what it is in this project and which file
  * decided it — the core's `extension::project::resolve`, asked with `project_extensions` — and
- * a control per key that writes `[extensions.<id>]` in the section it is in.
+ * a control per key that writes `[extensions.<id>]` in the section it is in. **Theme**
+ * (charter-app#273) is one too: `[theme] use`, from charter's own, the system's, or an approved
+ * extension's, with the core's sentence when the pick in force cannot be drawn
+ * (`extension::project::theme`, asked with `project_theme`).
+ *
+ * **Harness plugins** (charter-app#274, ADR 0050) is one group per harness charter knows, in
+ * either section: each plugin that harness has installed, on, off or not set, writing
+ * `[harness_plugins.<harness>]` — the core's `harness_plugin::survey`, asked with
+ * `project_harness_plugins`. A harness whose adapter cannot apply says so and has no control.
  */
 export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [both, setBoth] = useState<Both | { trouble: string }>();
   const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
+  const [theme, setTheme] = useState<ProjectTheme>();
   /** The newest read out: an answer to an older one — before a save, or for another plane — is
    *  dropped rather than drawn over what came after it. */
   const reading = useRef(0);
+
+  /** The newest theme read out, kept apart from {@link reading}: the theme is also read on its
+   *  own, when the window's answer for this project changes. */
+  const themeReading = useRef(0);
+  // The theme, as the files are; a refusal leaves the Theme group with charter's own picks only.
+  const readTheme = useCallback(() => {
+    const mine = ++themeReading.current;
+    const newest = () => themeReading.current === mine;
+    void commands
+      .projectTheme(plane, null)
+      .then((said) => {
+        if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
+      })
+      .catch(() => {
+        if (newest()) setTheme(undefined);
+      });
+  }, [plane]);
 
   const read = useCallback(() => {
     const mine = ++reading.current;
@@ -53,21 +91,39 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
     // What is in force is read with the files, so a save shows its effect. A refusal leaves the
     // list empty: the group then says there is nothing, and the files' forms still work.
     void commands
-      .projectExtensions(plane)
+      .projectExtensions(plane, null)
       .then((said) => {
         if (newest()) setExtensions(said.status === "ok" ? (said.data ?? []) : []);
       })
       .catch(() => {
         if (newest()) setExtensions([]);
       });
-  }, [plane]);
+    void commands
+      .projectHarnessPlugins(plane, null)
+      .then((said) => {
+        if (newest()) setHarnesses(said.status === "ok" ? (said.data ?? []) : []);
+      })
+      .catch(() => {
+        if (newest()) setHarnesses([]);
+      });
+    readTheme();
+  }, [plane, readTheme]);
 
   useEffect(read, [read]);
+  // What the window draws for this project was asked again — by this tab's save, or by an
+  // approval or a removal in the Extensions dialog, which tells the window and not this tab —
+  // so the tab's sentence about the theme is asked again with it, and the two never disagree.
+  const answers = useProjectThemeAnswers(plane);
+  useEffect(() => {
+    if (answers > 0) readTheme();
+  }, [answers, readTheme]);
 
   const saved = useCallback(() => {
     read();
     // The window keeps of its surveyed panels, views and themes what this project has on.
     extensionsChanged(plane);
+    // And the theme it draws while it is in front (charter-app#273).
+    projectThemeChanged(plane);
   }, [plane, read]);
 
   if (both === undefined) {
@@ -93,21 +149,166 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         credential.
       </p>
       <Section
-        plane={plane}
         file={both.shared}
+        testid="settings-shared"
         title="Shared"
         who="Committed; your team sees this."
-        groups={SHARED}
+        groups={[...SHARED, ...harnessPluginGroups(harnesses, "project")]}
         extensions={extensions}
+        theme={theme}
+        send={(base, change) => commands.saveProjectSettings(plane, "shared", base, change)}
         onSaved={saved}
       />
       <Section
-        plane={plane}
         file={both.local}
+        testid="settings-local"
         title="Local"
-        who="This machine only. Gitignored; charter will not write it anywhere git would commit it."
-        groups={LOCAL}
+        who="This machine only. Gitignored; charter neither reads nor writes it where git would commit it."
+        groups={[...LOCAL, ...harnessPluginGroups(harnesses, "project")]}
         extensions={extensions}
+        theme={theme}
+        send={(base, change) => commands.saveProjectSettings(plane, "local", base, change)}
+        onSaved={saved}
+      />
+    </div>
+  );
+}
+
+/**
+ * **Workspace settings** (charter-app#280, ADR 0048): the `settings` of one workspace's
+ * `workspace.json`, in a view tab of its own (`tabs.workspaceSettingsView`).
+ *
+ * The layer between the project's two files: `charter.toml`, then this workspace, then
+ * `charter.local.toml`. A workspace refines its project for the team, and this machine's Local
+ * file still has the last word; none of the three reaches past this machine's approval. It holds
+ * the groups a workspace can set: Extensions — the same group as Project settings', asked with
+ * `project_extensions` for this workspace — Harness plugins, one group per harness
+ * (charter-app#282), asked with `project_harness_plugins` for this workspace, and **Theme**
+ * (charter-app#281): the workspace's pick, read by the same resolver as the project's
+ * (`project_theme` for this workspace), and its **colour**. Each extension, each plugin and the
+ * theme says which layer decided it. A form only: the manifest holds more than settings, and
+ * charter keeps the rest.
+ */
+export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; workspace: string }) {
+  const [file, setFile] = useState<OneWorkspace | { trouble: string }>();
+  const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  const [theme, setTheme] = useState<ProjectTheme>();
+  const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
+  /** The newest read out, as in {@link ProjectSettings}. */
+  const reading = useRef(0);
+  /** And the newest theme read out, which is also read on its own, as there. */
+  const themeReading = useRef(0);
+  const readTheme = useCallback(() => {
+    const mine = ++themeReading.current;
+    const newest = () => themeReading.current === mine;
+    void commands
+      .projectTheme(plane, workspace)
+      .then((said) => {
+        if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
+      })
+      .catch(() => {
+        if (newest()) setTheme(undefined);
+      });
+  }, [plane, workspace]);
+
+  const read = useCallback(() => {
+    const mine = ++reading.current;
+    const newest = () => reading.current === mine;
+    void commands
+      .workspaceSettings(plane, workspace)
+      .then((said) => {
+        if (newest()) setFile(said.status === "ok" ? said.data : { trouble: said.error });
+      })
+      .catch((err: unknown) => {
+        if (newest()) setFile({ trouble: String(err) });
+      });
+    void commands
+      .projectExtensions(plane, workspace)
+      .then((said) => {
+        if (newest()) setExtensions(said.status === "ok" ? (said.data ?? []) : []);
+      })
+      .catch(() => {
+        if (newest()) setExtensions([]);
+      });
+    void commands
+      .projectHarnessPlugins(plane, workspace)
+      .then((said) => {
+        if (newest()) setHarnesses(said.status === "ok" ? (said.data ?? []) : []);
+      })
+      .catch(() => {
+        if (newest()) setHarnesses([]);
+      });
+    readTheme();
+  }, [plane, workspace, readTheme]);
+
+  useEffect(read, [read]);
+  // What the window draws here was asked again — by a save, or by an approval in the Extensions
+  // dialog — so the sentence about it is asked again with it, as Project settings' is.
+  const answers = useProjectThemeAnswers(plane, workspace);
+  useEffect(() => {
+    if (answers > 0) readTheme();
+  }, [answers, readTheme]);
+
+  const saved = useCallback(() => {
+    read();
+    // What the window keeps of its surveyed panels and views for this workspace.
+    extensionsChanged(plane);
+    // And the theme and colour it draws while this workspace is in front (charter-app#281).
+    projectThemeChanged(plane);
+  }, [plane, read]);
+
+  if (file === undefined) {
+    return (
+      <p className="pending" aria-busy="true">
+        <LoaderCircle className="node-icon spinning" />
+        Reading the settings…
+      </p>
+    );
+  }
+  if ("trouble" in file) {
+    return (
+      <p className="trouble" role="alert">
+        {file.trouble}
+      </p>
+    );
+  }
+  return (
+    <div className="settings">
+      <p className="note">
+        Read in this order: charter.toml, then this workspace, then charter.local.toml — the
+        workspace refines its project for the team, and this machine has the last word. Never put a
+        secret here: keep it in a vault and name it as <code>vault:&lt;vault&gt;/&lt;key&gt;</code>.
+      </p>
+      <Section
+        file={file}
+        testid="settings-workspace"
+        title="Workspace"
+        who={
+          file.live
+            ? "Committed with this LIVE workspace; your team sees this."
+            : "This workspace is not LIVE, so its workspace.json stays on this machine."
+        }
+        groups={[...WORKSPACE, ...harnessPluginGroups(harnesses, "workspace")]}
+        extensions={extensions}
+        theme={theme}
+        rawView={false}
+        send={(base, change) =>
+          commands
+            .saveWorkspaceSettings(
+              plane,
+              workspace,
+              base,
+              change.kind === "edits" ? change.edits : [],
+            )
+            .then((said) =>
+              said.status === "error"
+                ? said
+                : {
+                    status: "ok" as const,
+                    data: said.data.kind === "refused" ? said.data : { kind: "saved" as const },
+                  },
+            )
+        }
         onSaved={saved}
       />
     </div>
@@ -123,28 +324,42 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
  * new value makes. Every value a control holds is text while it is being typed; `edits` is where
  * it becomes a key.
  */
+/** What a section shows of a file: a project's settings file, or a workspace's manifest. */
+type Shown = Pick<SettingsFile, "file" | "exists" | "text" | "refusals" | "parsed" | "fields">;
+
 type Control = {
   id: string;
   label: string;
   hint?: string;
-  /** `text` is one line, `choice` a closed set, `lines` one entry per line. */
-  kind: "text" | "choice" | "lines";
+  /** `text` is one line, `choice` a closed set, `lines` one entry per line, and `colour` a
+   *  closed set whose `custom` pick is a `#rrggbb` of the operator's own (charter-app#281). */
+  kind: "text" | "choice" | "lines" | "colour";
   choices?: readonly string[];
   /** What a `choice`'s empty option says. */
   unset?: string;
-  read: (file: SettingsFile) => string;
+  /** What a `choice` shows for each of its values, when that is not the value itself. */
+  labels?: Readonly<Record<string, string>>;
+  read: (file: Shown) => string;
   /** The edits `draft` makes to `file`, the file it was typed over. */
-  edits: (draft: string, file: SettingsFile) => SettingsEdit[];
+  edits: (draft: string, file: Shown) => SettingsEdit[];
 };
 
 /** A heading and what is under it. `extensions` is what the core says is in force in this
- *  project, for the group that draws it. */
+ *  project, and `theme` what it says the project draws, for the groups that draw them. */
 type Group = {
   title: string;
   note?: string;
-  controls: (file: SettingsFile, extensions: readonly ProjectExtension[]) => Control[];
+  controls: (
+    file: Shown,
+    extensions: readonly ProjectExtension[],
+    theme: ProjectTheme | undefined,
+  ) => Control[];
   /** Sentences about this file the group says under its heading. */
-  notes?: (file: SettingsFile, extensions: readonly ProjectExtension[]) => string[];
+  notes?: (
+    file: Shown,
+    extensions: readonly ProjectExtension[],
+    theme: ProjectTheme | undefined,
+  ) => string[];
   /** What the group says when it has no controls; "None in this file." otherwise. */
   empty?: string;
 };
@@ -157,7 +372,7 @@ function same(a: readonly SettingsStep[], b: readonly SettingsStep[]): boolean {
   );
 }
 
-function valueAt(file: SettingsFile, path: readonly SettingsStep[]): SettingsValue | undefined {
+function valueAt(file: Shown, path: readonly SettingsStep[]): SettingsValue | undefined {
   return file.fields.find((field) => same(field.path, path))?.value;
 }
 
@@ -220,7 +435,7 @@ function entries(draft: string): string[] {
 }
 
 /** The places `[[forge]]` blocks are at, and the names `[harness.<name>]` tables have. */
-function forgeBlocks(file: SettingsFile): number[] {
+function forgeBlocks(file: Shown): number[] {
   const at = new Set<number>();
   for (const { path } of file.fields) {
     const [first, second] = path;
@@ -229,7 +444,7 @@ function forgeBlocks(file: SettingsFile): number[] {
   return [...at];
 }
 
-function profiles(file: SettingsFile): string[] {
+function profiles(file: Shown): string[] {
   const names = new Set<string>();
   for (const { path } of file.fields) {
     const [first, second] = path;
@@ -243,7 +458,7 @@ function profiles(file: SettingsFile): string[] {
  *  removed and the others are left exactly as they were written. */
 function envAt(name: string): Control {
   const env = key("harness", name, "env");
-  const pairs = (file: SettingsFile) =>
+  const pairs = (file: Shown) =>
     file.fields
       .filter((field) => field.path.length === 4 && same(field.path.slice(0, 3), env))
       .map((field) => [field.path[3].key ?? "", shown(field.value)] as const);
@@ -275,9 +490,16 @@ function envAt(name: string): Control {
   };
 }
 
+/** Where a source is, as the end of a sentence: a file, or this workspace. */
+function where(source: string): string {
+  if (source === "local") return "charter.local.toml";
+  if (source === "workspace") return "this workspace";
+  return "charter.toml";
+}
+
 /** What an extension is in this project, and why, in a sentence after its name. */
 function standing(it: ProjectExtension): string {
-  const file = it.source === "local" ? "charter.local.toml" : "charter.toml";
+  const file = where(it.source);
   switch (it.state) {
     case "on":
       return it.source === "default"
@@ -317,9 +539,7 @@ function onOffAt(path: SettingsStep[], label: string, hint: string, unset: strin
 
 /** Where a resolved setting came from, as the end of a sentence. */
 function from(source: string): string {
-  if (source === "local") return "from charter.local.toml";
-  if (source === "shared") return "from charter.toml";
-  return "its default";
+  return source === "default" ? "its default" : `from ${where(source)}`;
 }
 
 /**
@@ -357,6 +577,131 @@ const EXTENSIONS: Group = {
       it.ignored.filter((one) => one.file === file.file).map((one) => one.why),
     ),
 };
+
+/** The file a harness plugin's source is, by its own name: the layer that decided it. */
+function pluginFile(source: string): string {
+  if (source === "local") return "charter.local.toml";
+  if (source === "workspace") return "workspace.json";
+  return "charter.toml";
+}
+
+/** What a harness plugin is in this project or workspace, and why, in a sentence under its
+ *  control. */
+function pluginStanding(it: HarnessPlugin, harness: string, scope: Scope): string {
+  const file = pluginFile(it.source);
+  if (!it.installed)
+    return `not installed on this machine — named in ${file}, so no chat is handed it`;
+  const where = it.origin === "" ? "" : ` Installed: ${it.origin}.`;
+  if (it.state === "not-set") return `not set — ${harness} decides, from its own settings.${where}`;
+  return `${it.state} in this ${scope} — from ${file}.${where}`;
+}
+
+/** Whose settings a section is: the project's two files, or one workspace's (charter-app#282). */
+type Scope = "project" | "workspace";
+
+/**
+ * **Harness plugins, one group per harness, in every section** (charter-app#274, #282, ADR 0050).
+ * Local overrides the workspace, which overrides Shared, plugin by plugin; not set leaves a
+ * plugin to the harness. A plugin charter fixes is a line and not a control, and a harness whose
+ * adapter cannot apply is its "not supported yet" sentence, with what it has installed listed
+ * under it. In a workspace's section a toggle writes `settings.harness_plugins.<harness>` of its
+ * `workspace.json` — the same path under `settings` as the files' table.
+ */
+function harnessPluginGroups(harnesses: readonly HarnessPlugins[], scope: Scope): Group[] {
+  return harnesses.map((harness) => {
+    const chosen = harness.unsupported === null ? harness.plugins.filter((it) => !it.pinned) : [];
+    return {
+      title: `Harness plugins: ${harness.title}`,
+      note: harness.unsupported ?? undefined,
+      empty:
+        harness.unsupported === null
+          ? `${harness.title} has no plugin installed on this machine.`
+          : "Nothing to choose here.",
+      controls: () =>
+        chosen.map((it) =>
+          onOffAt(
+            key("harness_plugins", harness.harness, it.id),
+            `${harness.title}: ${it.id}`,
+            pluginStanding(it, harness.title, scope),
+            "not set",
+          ),
+        ),
+      notes: (file) => [
+        ...(harness.record === null
+          ? []
+          : [
+              `Listed from ${harness.record}. A profile that points ${harness.title} at another directory is listed against that one when its chat starts.`,
+            ]),
+        ...(harness.trouble === null ? [] : [harness.trouble]),
+        ...harness.plugins.flatMap((it) => (it.pinned === null ? [] : [it.pinned])),
+        ...(harness.unsupported === null
+          ? []
+          : harness.plugins.map((it) => `Installed: ${it.id} (${it.origin})`)),
+        ...harness.plugins.flatMap((it) =>
+          it.ignored.filter((one) => one.file === file.file).map((one) => one.why),
+        ),
+      ],
+    };
+  });
+}
+
+/** charter's own picks, for when the core could not be asked what else there is. */
+const BUILT_IN_PICKS = [...Object.keys(BUILT_IN), SYSTEM];
+
+/**
+ * **Theme, in either section** (charter-app#273, ADR 0048): `[theme] use`. Local's pick wins over
+ * Shared's; an extension's theme is drawn only while the project has that extension on and this
+ * machine approved it, and the core's sentence says why when the pick in force is not drawn —
+ * under the section whose file made it.
+ */
+function themeGroup(unset: string, here: "project" | "workspace" = "project"): Group {
+  const path = key("theme", "use");
+  return {
+    title: "Theme",
+    controls: (_file, _extensions, theme) => {
+      const options = theme?.options ?? BUILT_IN_PICKS.map((value) => ({ value, label: value }));
+      const labels = Object.fromEntries(options.map((one) => [one.value, one.label]));
+      const drawn =
+        theme?.draws == null
+          ? `the window's own theme — your theme.json, else the first theme from an extension this ${here} has on, else charter-dark`
+          : (labels[theme.draws] ?? theme.draws);
+      // In a workspace, which of the three files picked the theme drawn here: its own, or the
+      // project's that it did not override (charter-app#281). Not when the pick fell back: the
+      // file picked something else, and the sentence under the group says what and why.
+      const from =
+        here === "workspace" && theme?.file != null && theme.why === null
+          ? `, picked in ${theme.file}`
+          : "";
+      return [
+        {
+          ...textAt(path, "Theme", {
+            kind: "choice",
+            choices: options.map((one) => one.value),
+            hint: `Drawn in this ${here}: ${drawn}${from}. The terminal follows the window.`,
+          }),
+          unset,
+          labels,
+        },
+        ...(here === "workspace" ? [COLOUR] : []),
+      ];
+    },
+    notes: (file, _extensions, theme) => {
+      if (theme === undefined) return [];
+      // A workspace's tab is one section, and what is drawn in the workspace is its answer
+      // whichever file made the pick; a project's says it under the file that made it.
+      const why = here === "workspace" || theme.file === file.file ? theme.why : null;
+      return [
+        ...(why === null ? [] : [why]),
+        ...theme.ignored.filter((one) => one.file === file.file).map((one) => one.why),
+        ...(here === "workspace" && theme.colour !== null && hueOf(theme.colour) === undefined
+          ? [
+              `${theme.colour} is a grey, which has no hue to tint with — so this workspace is drawn without a colour. Pick one of the eight, or a custom colour that is not grey.`,
+            ]
+          : []),
+      ];
+    },
+  };
+}
 
 /** The harness kinds a profile may name — `profiles::KINDS`, in the registry's order. */
 const KINDS = ["claude", "opencode", "codex"] as const;
@@ -417,9 +762,38 @@ const SHARED: Group[] = [
       }),
   },
   EXTENSIONS,
+  themeGroup("not set — the window's own theme"),
 ];
 
-/** `charter.local.toml`: `[harness]` and `[extensions]`, which is all its readers read there. */
+/** The pick that says a workspace's colour is its own `#rrggbb` rather than a palette name. */
+const CUSTOM = "custom";
+
+/**
+ * **A workspace's colour** (charter-app#281): `settings.theme.colour`, one of the eight the core
+ * reads (`theme/tint.ts`'s `PALETTE`, held to the core's by a test) or a custom `#rrggbb`, whose
+ * hue is taken. A select, and a colour well beside it while the pick is custom.
+ */
+const COLOUR: Control = {
+  ...textAt(key("theme", "colour"), "Colour", {
+    kind: "colour",
+    choices: [...Object.keys(PALETTE), CUSTOM],
+    hint: "Tints this workspace's tab, its chat strip, the title bar's mark and the accent while it is in front. Text and the terminal keep the theme's own colours.",
+  }),
+  unset: "none — the theme as it is",
+  labels: {
+    ...Object.fromEntries(
+      Object.keys(PALETTE).map((name) => [name, name[0].toUpperCase() + name.slice(1)]),
+    ),
+    [CUSTOM]: "Custom…",
+  },
+};
+
+/** A workspace's `settings` (charter-app#280): what a workspace can set — its extensions, and
+ *  its theme and colour (charter-app#281). */
+const WORKSPACE: Group[] = [EXTENSIONS, themeGroup("not set — the project's pick", "workspace")];
+
+/** `charter.local.toml`: `[harness]`, `[extensions]` and `[theme]`, which is all its readers read
+ *  there. */
 const LOCAL: Group[] = [
   {
     title: "Harness",
@@ -444,6 +818,7 @@ const LOCAL: Group[] = [
       ]),
   },
   EXTENSIONS,
+  themeGroup("not set — charter.toml's pick"),
 ];
 
 // ------------------------------------------------------------------------------------------
@@ -452,25 +827,38 @@ const LOCAL: Group[] = [
 
 type Mode = "form" | "raw";
 
+/** What a save answered, as a section reads it. */
+type Sent =
+  | { status: "ok"; data: { kind: "saved" } | { kind: "refused"; reasons: string[] } }
+  | { status: "error"; error: string };
+
 function Section({
-  plane,
   file,
+  testid,
   title,
   who,
   groups,
   extensions,
+  theme,
+  send,
   onSaved,
+  rawView = true,
 }: {
-  plane: PlaneId;
-  file: SettingsFile;
+  file: Shown;
+  testid: string;
   title: string;
   who: string;
   groups: readonly Group[];
   extensions: readonly ProjectExtension[];
+  theme: ProjectTheme | undefined;
+  /** Sends a change against the text it was typed over: `null` for a file not there yet. */
+  send: (base: string | null, change: SettingsChange) => Promise<Sent>;
   onSaved: () => void;
+  /** Whether the file is also offered as raw TOML. A workspace's manifest is not (#280). */
+  rawView?: boolean;
 }) {
   const heading = useId();
-  const [mode, setMode] = useState<Mode>(file.parsed ? "form" : "raw");
+  const [mode, setMode] = useState<Mode>(file.parsed || !rawView ? "form" : "raw");
   /** What the operator has typed into a control, by its id, until it is saved or discarded. */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [raw, setRaw] = useState(file.text);
@@ -486,17 +874,19 @@ function Section({
     setSeen(file.text);
     setDrafts({});
     setRaw(file.text);
-    if (!file.parsed) setMode("raw");
+    if (!file.parsed && rawView) setMode("raw");
   }
 
   const controls = groups.map((group) => ({
     group,
-    controls: group.controls(file, extensions),
-    notes: group.notes?.(file, extensions) ?? [],
+    controls: group.controls(file, extensions, theme),
+    notes: group.notes?.(file, extensions, theme) ?? [],
   }));
   const all = controls.flatMap((one) => one.controls);
   const changed = all.filter((one) => one.id in drafts && drafts[one.id] !== one.read(file));
   const dirty = mode === "form" ? changed.length > 0 : raw !== file.text;
+  /** The file's own name, which the save button says: `workspace.json`, not its path. */
+  const named = file.file.split("/").pop() ?? file.file;
 
   const discard = () => {
     setDrafts({});
@@ -506,16 +896,12 @@ function Section({
 
   const save = async () => {
     setSaving(true);
-    const said = await commands
-      .saveProjectSettings(
-        plane,
-        file.which,
-        file.exists ? file.text : null,
-        mode === "raw"
-          ? { kind: "raw", text: raw }
-          : { kind: "edits", edits: changed.flatMap((one) => one.edits(drafts[one.id], file)) },
-      )
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    const said = await send(
+      file.exists ? file.text : null,
+      mode === "raw"
+        ? { kind: "raw", text: raw }
+        : { kind: "edits", edits: changed.flatMap((one) => one.edits(drafts[one.id], file)) },
+    ).catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     setSaving(false);
     if (said.status === "error") {
       setRefused([said.error]);
@@ -528,11 +914,7 @@ function Section({
   };
 
   return (
-    <section
-      className="settings-file"
-      aria-labelledby={heading}
-      data-testid={`settings-${file.which}`}
-    >
+    <section className="settings-file" aria-labelledby={heading} data-testid={testid}>
       <header className="settings-head">
         <h3 id={heading}>{title}</h3>
         <p className="settings-who">
@@ -549,28 +931,33 @@ function Section({
         />
       )}
 
-      <RadioGroup.Root
-        className="settings-mode"
-        orientation="horizontal"
-        value={mode}
-        onValueChange={(to) => setMode(to as Mode)}
-        aria-label={`How to edit ${file.file}`}
-      >
-        <ModeItem
-          value="form"
-          disabled={(mode === "raw" && dirty) || !file.parsed}
-          onPick={setMode}
+      {rawView && (
+        <RadioGroup.Root
+          className="settings-mode"
+          orientation="horizontal"
+          value={mode}
+          onValueChange={(to) => setMode(to as Mode)}
+          aria-label={`How to edit ${file.file}`}
         >
-          Form
-        </ModeItem>
-        <ModeItem value="raw" disabled={mode === "form" && dirty} onPick={setMode}>
-          Raw TOML
-        </ModeItem>
-      </RadioGroup.Root>
-      {dirty && <p className="settings-hint">Save or discard these changes to switch views.</p>}
+          <ModeItem
+            value="form"
+            disabled={(mode === "raw" && dirty) || !file.parsed}
+            onPick={setMode}
+          >
+            Form
+          </ModeItem>
+          <ModeItem value="raw" disabled={mode === "form" && dirty} onPick={setMode}>
+            Raw TOML
+          </ModeItem>
+        </RadioGroup.Root>
+      )}
+      {rawView && dirty && (
+        <p className="settings-hint">Save or discard these changes to switch views.</p>
+      )}
 
       {mode === "form" ? (
-        controls.map(({ group, controls: under, notes }) => (
+        // A file no form can read, with no raw view to mend it in, shows only why (above).
+        (file.parsed ? controls : []).map(({ group, controls: under, notes }) => (
           <fieldset key={group.title} className="settings-group">
             <legend>{group.title}</legend>
             {group.note && <p className="settings-hint">{group.note}</p>}
@@ -607,7 +994,7 @@ function Section({
 
       <div className="settings-actions">
         <button type="button" tabIndex={0} disabled={!dirty || saving} onClick={() => void save()}>
-          {saving ? "Saving…" : `Save ${file.file}`}
+          {saving ? "Saving…" : `Save ${named}`}
         </button>
         <button type="button" tabIndex={0} disabled={!dirty || saving} onClick={discard}>
           Discard
@@ -696,7 +1083,15 @@ function SettingControl({
   return (
     <div className="settings-field">
       <label htmlFor={id}>{control.label}</label>
-      {control.kind === "choice" ? (
+      {control.kind === "colour" ? (
+        <ColourControl
+          id={id}
+          described={described}
+          value={value}
+          control={control}
+          onChange={onChange}
+        />
+      ) : control.kind === "choice" ? (
         <select
           id={id}
           // #190: WebKit leaves a control out of the Tab order without `tabIndex`.
@@ -714,7 +1109,7 @@ function SettingControl({
           )}
           {control.choices?.map((choice) => (
             <option key={choice} value={choice}>
-              {choice}
+              {control.labels?.[choice] ?? choice}
             </option>
           ))}
         </select>
@@ -743,5 +1138,73 @@ function SettingControl({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * A workspace's colour (charter-app#281): the palette as a select, and — while the pick is
+ * custom — the platform's own colour well beside it, labelled, whose value is the `#rrggbb` the
+ * file holds. `value` is what the file will hold: a palette name, a `#rrggbb`, or empty.
+ */
+function ColourControl({
+  id,
+  described,
+  value,
+  control,
+  onChange,
+}: {
+  id: string;
+  described: string | undefined;
+  value: string;
+  control: Control;
+  onChange: (to: string) => void;
+}) {
+  const well = useId();
+  // A `#rrggbb`: what the colour well can hold. Anything else the file holds that is not a
+  // palette name — `#fff`, say — is shown as held, below, rather than as a custom colour the
+  // well would silently turn black.
+  const custom = /^#[0-9a-fA-F]{6}$/.test(value);
+  /** Where a new custom colour starts: the accent the window is drawn in, as `#rrggbb`. */
+  const start = () =>
+    /^#[0-9a-fA-F]{6}/.exec(inForce().values["accent.base"])?.[0] ??
+    DEFAULT_THEME.values["accent.base"];
+  return (
+    <>
+      <select
+        id={id}
+        // #190: WebKit leaves a control out of the Tab order without `tabIndex`.
+        tabIndex={0}
+        value={custom ? "custom" : value}
+        aria-describedby={described}
+        onChange={(event) => {
+          const to = event.target.value;
+          onChange(to === "custom" ? (custom ? value : start()) : to);
+        }}
+      >
+        <option value="">{control.unset ?? "not set"}</option>
+        {/* A value the file holds that is neither a name nor a colour is still shown as held,
+            for the reason `SettingControl` gives. */}
+        {value !== "" && !custom && !control.choices?.includes(value) && (
+          <option value={value}>{value}</option>
+        )}
+        {control.choices?.map((choice) => (
+          <option key={choice} value={choice}>
+            {control.labels?.[choice] ?? choice}
+          </option>
+        ))}
+      </select>
+      {custom && (
+        <>
+          <label htmlFor={well}>Custom colour</label>
+          <input
+            id={well}
+            type="color"
+            tabIndex={0}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        </>
+      )}
+    </>
   );
 }

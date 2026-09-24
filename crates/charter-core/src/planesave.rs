@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-pub use crate::extension::project::Source;
+pub use crate::settings::Source;
 
 /// How far a save goes. Each mode includes the steps of the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,14 +112,15 @@ impl Settings {
         }
     }
 
-    /// The plane at `root`'s two files. A file that cannot be read says nothing, and nor does
-    /// a `charter.local.toml` git would commit: an ignored file must not change plane policy
-    /// with no trace in git, and a file git carries is not the ignored file.
+    /// The plane at `root`'s two files, each taken through [`crate::settings::layer_text`]: a
+    /// file that cannot be read says nothing, and nor does a `charter.local.toml` git would
+    /// commit, because an ignored file must not change plane policy with no trace in git.
     pub fn read(root: &std::path::Path) -> Self {
-        use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
-        let text = |name: &str| std::fs::read_to_string(root.join(name)).ok();
-        let local = text(LOCAL_FILE).filter(|_| crate::profiles::ignore_check(root).passes());
-        Self::from_text(text(COMMITTED_FILE).as_deref(), local.as_deref())
+        use crate::settings::{Which, layer_text};
+        Self::from_text(
+            layer_text(root, Which::Shared).as_deref(),
+            layer_text(root, Which::Local).as_deref(),
+        )
     }
 
     /// How the repo called `name` is saved.

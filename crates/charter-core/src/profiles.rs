@@ -341,7 +341,8 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
         }
     }
 
-    // 2. The local file: only `[harness]` is read here (and `[extensions]` is let through).
+    // 2. The local file: only `[harness]` is read here (`[extensions]`, `[theme]` and
+    //    `[harness_plugins]` are let through).
     let local = match local {
         Ok(Some(text)) => match text.parse::<toml::Table>() {
             Ok(table) => Some(table),
@@ -386,22 +387,29 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
         // on, and what they are set to (charter-app#253, ADR 0048). It is read by
         // `extension::project`, not here, and it cannot reach past this machine's approval —
         // so it changes nothing a teammate's clone does, which is the reason for the rule below.
+        //
+        // `[theme]` is the same kind of choice (charter-app#273): which theme this machine draws
+        // the project in, read by `extension::project::theme`.
+        //
+        // `[harness_plugins]` is the same kind of choice among what this machine's harnesses
+        // have installed (charter-app#274, ADR 0050), read by `harness_plugin`.
+        //
         // `[plane]` and `[repos]` are how far this machine's saves go (charter-app#292, ADR
         // 0051), read by `planesave`; every surface that shows one names this file.
-        if ![
-            "harness",
-            crate::extension::project::TABLE,
-            "plane",
-            "repos",
-        ]
-        .contains(&key.as_str())
+        if key != "harness"
+            && key != crate::extension::project::TABLE
+            && key != crate::extension::project::theme::TABLE
+            && key != crate::harness_plugin::TABLE
+            && key != "plane"
+            && key != "repos"
         {
             let name = shown::short(key);
             set.refused.push(Refused {
                 reason: format!(
                     "[{name}] in charter.local.toml is not read — that file carries \
-                     [harness], [extensions], [plane] and [repos] and nothing else, because an ignored file must \
-                     not change plane policy with no trace in git. Put [{name}] in charter.toml."
+                     [harness], [extensions], [theme], [harness_plugins], [plane] and [repos] \
+                     and nothing else, because an ignored file must not change plane policy \
+                     with no trace in git. Put [{name}] in charter.toml."
                 ),
                 name,
                 source: LOCAL_FILE.to_owned(),
@@ -570,7 +578,7 @@ pub fn current_of(derived: ProfileSet) -> ProfileSet {
 /// `set` with every profile the local file declares refused, when `check` says git would
 /// carry that file.
 ///
-/// Each of those three refusals says "the profiles in it are refused", so a surface that
+/// Each of those three refusals says "charter reads nothing in it", so a surface that
 /// asked must show them refused — not as ordinary rows with a warning under them. Takes the
 /// check rather than running it, so a caller that also prints the fix asks git once.
 pub fn with_ignore_check(mut set: ProfileSet, check: &IgnoreCheck) -> ProfileSet {
@@ -894,8 +902,9 @@ const TRACKED_STATUS: &str = " MTADRCU";
 /// Otherwise one of three refusals, each with its OWN fix — `charter reinit` adds the ignore
 /// line, and an ignore rule does not apply to a path git already tracks.
 ///
-/// The only function here that runs git, and never on a config read: one `git status` where
-/// a person asked.
+/// The only function here that runs git: one `git status` of one path. It is asked where a
+/// person asked, and — since charter-app#308 — by `crate::settings::layer_text` on every read of
+/// the Local layer, but only when the file exists; a plane with no local file runs no git.
 pub fn ignore_check(root: &Path) -> IgnoreCheck {
     ignore_check_with(root, Path::new("git"))
 }
@@ -946,8 +955,8 @@ pub fn ignore_check_before_writing_within(
 fn check_of(state: GitState) -> IgnoreCheck {
     match state {
         GitState::Tracked => IgnoreCheck {
-            reason: "git tracks charter.local.toml, so the profiles in it would reach every \
-                     clone of this plane — charter refuses them until it is untracked: git \
+            reason: "git tracks charter.local.toml, so what it says would reach every clone \
+                     of this plane — charter reads nothing in it until it is untracked: git \
                      rm --cached charter.local.toml, commit that removal, then charter \
                      reinit."
                 .to_owned(),
@@ -956,7 +965,7 @@ fn check_of(state: GitState) -> IgnoreCheck {
                 .to_owned(),
         },
         GitState::Committable => IgnoreCheck {
-            reason: "git would commit charter.local.toml, so the profiles in it are refused \
+            reason: "git would commit charter.local.toml, so charter reads nothing in it \
                      until it is ignored — charter reinit adds /charter.local.toml to \
                      .gitignore."
                 .to_owned(),
@@ -966,8 +975,8 @@ fn check_of(state: GitState) -> IgnoreCheck {
             let why = shown::short(&why);
             IgnoreCheck {
                 reason: format!(
-                    "git could not say whether charter.local.toml is ignored ({why}), so the \
-                     profiles in it are refused — an unknown is not a pass. Run git status \
+                    "git could not say whether charter.local.toml is ignored ({why}), so \
+                     charter reads nothing in it — an unknown is not a pass. Run git status \
                      --ignored -- charter.local.toml in the plane to see what git says."
                 ),
                 fix: format!(

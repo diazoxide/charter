@@ -153,6 +153,11 @@ pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
     parts
 }
 
+/// The workspace this session is in, by the ladder the briefing reads it with.
+pub fn workspace_of(ask: &Ask) -> String {
+    ask.workspace(&ask.ids())
+}
+
 /// `hooks._one_line`: whitespace runs to one space, clipped with `…`.
 pub fn one_line(text: &str, cap: usize) -> String {
     let flat = text

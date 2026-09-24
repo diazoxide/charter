@@ -96,6 +96,20 @@ export function useAboutThisMachine(): AlertRow[] {
   }, aboutThisMachine);
 }
 
+/** {@link theirTheme} of what the window was handed, read once: so drawing it again after a
+ *  project's own theme is the same object, and repaints nothing that is already drawn. */
+let theirs: { theme: Theme | undefined } | undefined;
+
+export function theirThemeOnce(): Theme | undefined {
+  theirs ??= { theme: theirTheme() };
+  return theirs.theme;
+}
+
+/** For tests: read the handed theme again. */
+export function forgetTheirTheme() {
+  theirs = undefined;
+}
+
 /**
  * **The operator's own theme, or none** (M6.7) — `charter/theme.json`, the address
  * `docs/design-system.md` gave it, and until now read by nothing.

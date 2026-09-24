@@ -7,13 +7,21 @@
 //! - **Local** is `charter.local.toml`: gitignored, this machine's alone. Harness profiles live
 //!   there (ADR 0022).
 //!
+//! A third holder of settings is each workspace's `workspace.json`, whose `settings` sit between
+//! the two (charter-app#280): [`workspace`], read and written by the same readers' rules.
+//!
+//! **Every reader of the two files' layers reads them through [`layer_text`]**, which leaves out
+//! a Local file git would carry (charter-app#308). This tab is the one place such a file is still
+//! shown, with the reason it is not read.
+//!
 //! **Nothing here has rules of its own about what a file may say.** A save is refused for
 //! exactly what the next read of that file would refuse, in the sentences that read uses:
 //! [`crate::doctor`]'s `charter.toml` row for the Shared file (the loader's own parse and
 //! schema refusals, and the settings it reads as absent) and [`crate::profiles`] for the
 //! Local one — asked of the text about to be written rather than of the file on disk
 //! ([`crate::profiles::derive_from`]) — and, in either file, `[extensions]` is asked of the one
-//! reader of it, [`crate::extension::project::refusals`]. Two more refusals are a writer's, because only a writer
+//! reader of it, [`crate::extension::project::refusals`], as `[harness_plugins]` is of
+//! [`crate::harness_plugin::refusals`]. Two more refusals are a writer's, because only a writer
 //! can cause them: a Local file git would commit ([`crate::profiles::ignore_check_before_writing`],
 //! whose sentences are the loader's too), and a secret-shaped value in either file
 //! ([`crate::secretshape::secret_kind`], the classifier the leak guard and `charter save` use).
@@ -25,6 +33,45 @@
 use std::path::{Path, PathBuf};
 
 use crate::profiles::{self, COMMITTED_FILE, LOCAL_FILE};
+
+pub mod workspace;
+
+/// Where an answer came from: which layer of the Shared/Workspace/Local overlay decided it
+/// (ADR 0048). Every reader of the overlay answers with it: [`crate::extension::project`],
+/// [`crate::planesave`] and the rest (charter-app#309).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// No file said: the machine's answer, or the setting's declared default.
+    Default,
+    /// `charter.toml`.
+    Shared,
+    /// The `settings` of the workspace's `workspace.json` (charter-app#280).
+    Workspace,
+    /// `charter.local.toml`.
+    Local,
+}
+
+impl Source {
+    /// The file this source is, or `None` for [`Source::Default`]. A workspace's is
+    /// `workspace.json`; which workspace's, [`crate::extension::project::Choices::workspace_file`] says.
+    pub fn file(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::Shared => Some(COMMITTED_FILE),
+            Self::Workspace => Some(crate::settings::workspace::FILE),
+            Self::Local => Some(LOCAL_FILE),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Shared => "shared",
+            Self::Workspace => "workspace",
+            Self::Local => "local",
+        }
+    }
+}
 
 /// Which of a plane's two settings files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +94,31 @@ impl Which {
     fn path(self, root: &Path) -> PathBuf {
         root.join(self.file())
     }
+}
+
+/// The text of `which` as every reader of its layer takes it: `None` when the file says nothing
+/// charter may use (charter-app#308, ADR 0048).
+///
+/// A file that is not there, or cannot be read, says nothing. **And so does a Local file git
+/// would carry** — tracked, or not ignored, or one git could not say about
+/// ([`profiles::ignore_check`]): the Local file is this machine's say only while git leaves it
+/// alone, and one that reaches every clone would change plane policy with no trace in git. The
+/// profiles loader has refused its profiles on that check since ADR 0022; this is the same check
+/// for every other table in the file, so `[extensions]`, `[theme]` and `[harness_plugins]` are
+/// not read from it either.
+///
+/// **Every reader of the two files reads them here**, and nowhere else, so a reader added later
+/// cannot forget the check. The Project settings tab shows the file's text whatever this says,
+/// with the check's sentence among its refusals ([`read`]), so what is not applied is said there
+/// with its fix.
+///
+/// A Local file that is there costs one `git status` of that one path; an absent one costs none.
+pub fn layer_text(root: &Path, which: Which) -> Option<String> {
+    let text = std::fs::read_to_string(which.path(root)).ok()?;
+    if which == Which::Local && !profiles::ignore_check(root).passes() {
+        return None;
+    }
+    Some(text)
 }
 
 /// One settings file as it stands, and what charter says about it now.
@@ -135,6 +207,13 @@ fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
     // Either file may hold `[extensions]` (charter-app#253), and it is read by one reader in
     // both, so it is refused in that reader's words in both.
     out.extend(crate::extension::project::refusals(text, which.file()));
+    // And `[harness_plugins]` (charter-app#274), the same way.
+    out.extend(crate::harness_plugin::refusals(text, which.file()));
+    // And `[theme]` (charter-app#273), read by one reader in both too.
+    out.extend(crate::extension::project::theme::refusals(
+        text,
+        which.file(),
+    ));
     // And so may `[plane]` and `[repos]` (charter-app#292), read by `planesave` in both.
     out.extend(crate::planesave::refusals(
         text,
@@ -252,9 +331,14 @@ pub enum Found {
 /// knows yet is already here for the one that will.
 pub fn fields(text: &str) -> Option<Vec<(Vec<Step>, Found)>> {
     let table: toml::Table = text.parse().ok()?;
+    Some(fields_of(&table))
+}
+
+/// [`fields`], of a table already read — a workspace's settings, read as the table they mirror.
+pub(crate) fn fields_of(table: &toml::Table) -> Vec<(Vec<Step>, Found)> {
     let mut out = Vec::new();
-    flatten(&table, &mut Vec::new(), &mut out);
-    Some(out)
+    flatten(table, &mut Vec::new(), &mut out);
+    out
 }
 
 fn flatten(table: &toml::Table, at: &mut Vec<Step>, out: &mut Vec<(Vec<Step>, Found)>) {

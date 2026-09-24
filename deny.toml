@@ -34,6 +34,10 @@ allow = [
   # serving one. CDLA-Permissive-2.0 is the Linux Foundation's permissive licence for data: use,
   # modify and share, with no copyleft and no obligation beyond keeping the licence text.
   "CDLA-Permissive-2.0",
+  # arboard and its Windows backend clipboard-win: the system clipboard a vault's Copy writes
+  # to (#236). The Boost licence is permissive, OSI approved and FSF free, and asks only that
+  # the licence text travel with source copies — nothing of it for a binary.
+  "BSL-1.0",
 ]
 
 [bans]

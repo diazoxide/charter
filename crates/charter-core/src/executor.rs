@@ -190,9 +190,22 @@ pub struct Answer {
 /// group each one is in.** That is what lets it refuse a second question to a program still
 /// answering the first, and what lets [`Self::stop_all`] kill every one of them when the window
 /// goes, so that no program an extension was asked to run outlives the app that asked.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Executor {
     table: Mutex<Table>,
+    /// How long each program has. [`DEADLINE`] for every executor charter makes; only a test
+    /// gives an executor another (charter-app#303), so that a test whose subject is not the
+    /// deadline is not failed by a busy machine taking five seconds to start its program.
+    deadline: Duration,
+}
+
+impl Default for Executor {
+    fn default() -> Self {
+        Self {
+            table: Mutex::default(),
+            deadline: DEADLINE,
+        }
+    }
 }
 
 /// What [`Executor`] guards with its one lock.
@@ -209,6 +222,15 @@ struct Table {
 }
 
 impl Executor {
+    /// An executor whose programs have `deadline` instead of [`DEADLINE`] — for a test.
+    #[cfg(test)]
+    pub(crate) fn with_deadline(deadline: Duration) -> Self {
+        Self {
+            deadline,
+            ..Self::default()
+        }
+    }
+
     /// Ask `extension`'s program about `view`, or say why charter will not.
     ///
     /// `hand` builds what the program is given, from the view's subject. It is called once the
@@ -341,7 +363,7 @@ impl Executor {
             return Err(format!(
                 "'{extension}' is still answering the last thing it was asked. charter asks an \
                  extension one thing at a time; this one has at most {} left.",
-                DEADLINE.as_secs()
+                self.deadline.as_secs()
             ));
         }
         // Zero until the program exists: `stop_all` never signals a group of 0, which would be
@@ -447,7 +469,7 @@ impl Executor {
         // an answer, a refusal, an error on the way, a panic — stops it: its group killed and it
         // reaped, in the order `stop_all` relies on.
         let mut running = Running::new(self, extension, child);
-        let until = Instant::now() + DEADLINE;
+        let until = Instant::now() + self.deadline;
 
         // Its stderr is drained while it runs — a program that logs more than a socket buffer
         // would otherwise stall on its own diagnostics and read as hung — and only the tail is
@@ -507,7 +529,7 @@ impl Executor {
             Heard::TooLate => Err(format!(
                 "'{extension}' did not answer within {} seconds, so charter stopped it. It was \
                  asked one question{}.{}",
-                DEADLINE.as_secs(),
+                self.deadline.as_secs(),
                 if wrote {
                     ""
                 } else {
@@ -967,14 +989,23 @@ fn in_this_project(
         ));
     };
     if effective.state == State::Off {
-        // Off is only ever decided by a file: with neither saying, an approved extension is on.
-        let file = effective
-            .source
-            .file()
-            .unwrap_or(crate::profiles::COMMITTED_FILE);
+        // Off is only ever decided by a file: with none saying, an approved extension is on.
+        let (file, whose, tab) = match (effective.source, project.workspace_file()) {
+            (project::Source::Workspace, Some(file)) => {
+                (file, "this workspace", "Workspace settings")
+            }
+            (source, _) => (
+                source
+                    .file()
+                    .unwrap_or(crate::profiles::COMMITTED_FILE)
+                    .to_owned(),
+                "this project",
+                "Project settings",
+            ),
+        };
         return Err(format!(
-            "'{extension}' is turned off in {file} for this project, so charter will not start \
-             its program here. Turn it on in Project settings to use this view."
+            "'{extension}' is turned off in {file} for {whose}, so charter will not start its \
+             program here. Turn it on in {tab} to use this view."
         ));
     }
     Ok((!declared.settings.is_empty()).then(|| effective.settings_json()))

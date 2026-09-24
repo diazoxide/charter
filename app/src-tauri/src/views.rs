@@ -180,10 +180,13 @@ pub(crate) async fn open_view(
     from: Option<String>,
     view: String,
     key: String,
+    workspace: Option<String>,
 ) -> Result<ViewAnswer, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let Some(extension) = from else {
-        return tauri::async_runtime::spawn_blocking(move || built_in(&root, &view, &key))
+        // The state directory `charter persona list` reads the vault registry's local half from.
+        let state = charter_core::personaverbs::state_dir(&root);
+        return tauri::async_runtime::spawn_blocking(move || built_in(&root, &state, &view, &key))
             .await
             .map_err(|err| format!("reading that view did not finish: {err}"))?;
     };
@@ -211,9 +214,10 @@ pub(crate) async fn open_view(
             });
         }
         let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
-        // What the project this view is in says about the extension, read at the press like
-        // the rest of the gate (ADR 0048).
-        let project = extension::project::Choices::read(&root);
+        // What the project this view is in says about the extension — and the workspace whose
+        // strip it is on (charter-app#280) — read at the press like the rest of the gate
+        // (ADR 0048).
+        let project = extension::project::Choices::read_in(&root, workspace.as_deref());
         executor
             .ask(
                 &config,
@@ -236,12 +240,24 @@ pub(crate) async fn open_view(
     .map_err(|err| format!("asking that view did not finish: {err}"))?
 }
 
-/// charter's own views, by id. **One today**, the persona view, and the match is the whole of
-/// the registry: a built-in view is code in this process, so there is nothing to discover.
-fn built_in(root: &std::path::Path, view: &str, key: &str) -> Result<ViewAnswer, String> {
+/// charter's own views that answer in panel blocks, by id. **One today**, the persona view, and
+/// the match is the whole of the registry: a built-in view is code in this process, so there is
+/// nothing to discover. The vault view (`{ view: "vault", key: <vault> }`, charter-app#235) is
+/// charter's too, but the window draws it itself from the `vault_*` commands — a table the
+/// operator writes to is not something blocks can say — so it is never asked here, and a caller
+/// that did would be told this charter has no such block view.
+///
+/// `state` is the plane's state directory, where this machine's half of the vault registry is
+/// — passed in rather than looked up so a test names its own and never reads `$CHARTER_HOME`.
+fn built_in(
+    root: &std::path::Path,
+    state: &std::path::Path,
+    view: &str,
+    key: &str,
+) -> Result<ViewAnswer, String> {
     let began = std::time::Instant::now();
     match view {
-        "persona" => Ok(match crate::panels::persona_view(root, key)? {
+        "persona" => Ok(match crate::panels::persona_view(root, state, key)? {
             Some(blocks) => ViewAnswer::Answered {
                 blocks: blocks.iter().map(PanelBlock::from).collect(),
                 took_ms: millis(began.elapsed()),
@@ -406,9 +422,13 @@ mod tests {
         )
         .expect("a memory");
 
-        let ViewAnswer::Answered { blocks, .. } =
-            built_in(plane.path(), "persona", "steward").expect("an answer")
-        else {
+        let ViewAnswer::Answered { blocks, .. } = built_in(
+            plane.path(),
+            &plane.path().join(".charter"),
+            "persona",
+            "steward",
+        )
+        .expect("an answer") else {
             panic!("the persona view was not answered");
         };
 
@@ -444,13 +464,99 @@ mod tests {
         assert_eq!(rows.len(), 1);
     }
 
+    /// The persona view's `Vault` fact for `name`, asked with `state` as the state directory.
+    fn vault_fact(root: &std::path::Path, state: &std::path::Path, name: &str) -> String {
+        let ViewAnswer::Answered { blocks, .. } =
+            built_in(root, state, "persona", name).expect("an answer")
+        else {
+            panic!("the persona view was not answered");
+        };
+        blocks
+            .iter()
+            .filter_map(|block| match block {
+                PanelBlock::Facts { facts } => Some(facts),
+                _ => None,
+            })
+            .flatten()
+            .find(|fact| fact.label == "Vault")
+            .map(|fact| fact.value.clone())
+            .expect("a Vault fact")
+    }
+
+    fn persona_on(root: &std::path::Path, name: &str, definition: &str) {
+        let dir = root.join("personas").join(name);
+        std::fs::create_dir_all(&dir).expect("a persona");
+        std::fs::write(dir.join("persona.md"), definition).expect("a definition");
+    }
+
+    /// charter-app#185: a vault only the registry tags to the persona is named on the card, and
+    /// it is the vault `charter persona list` names — not "not declared in its definition".
+    #[test]
+    fn the_persona_view_names_the_vault_the_registry_tags_as_the_cli_does() {
+        let plane = tempfile::tempdir().expect("a plane");
+        let state = plane.path().join(".charter");
+        persona_on(plane.path(), "release", "---\nrole: Release\n---\n");
+        std::fs::write(
+            plane.path().join("vaults.json"),
+            r#"{"vaults": {"release-kr": {"provider": "keyring", "persona": "release"}}}"#,
+        )
+        .expect("a registry");
+
+        let shown = vault_fact(plane.path(), &state, "release");
+
+        let cli = charter_core::personaverbs::vault_of(plane.path(), &state, "release")
+            .expect("the CLI names one");
+        assert!(shown.starts_with(&format!("{cli} — ")), "{shown}");
+        assert!(shown.contains("vault registry"), "{shown}");
+        assert!(!shown.contains("not declared"), "{shown}");
+    }
+
+    /// The other answers the card gives: a definition's own name, `vault: none`, nobody naming
+    /// one, and a registry that does not read — each its own words.
+    #[test]
+    fn the_persona_view_says_where_a_vault_came_from_or_why_there_is_none() {
+        let plane = tempfile::tempdir().expect("a plane");
+        let state = plane.path().join(".charter");
+        persona_on(plane.path(), "devops", "---\nvault: devops\n---\n");
+        persona_on(plane.path(), "steward", "---\nvault: none\n---\n");
+        persona_on(plane.path(), "release", "---\nrole: Release\n---\n");
+
+        assert_eq!(
+            vault_fact(plane.path(), &state, "devops"),
+            "devops — the name; what is in it is never shown here"
+        );
+        assert_eq!(
+            vault_fact(plane.path(), &state, "steward"),
+            "none; this persona holds no credentials of its own"
+        );
+        assert_eq!(
+            vault_fact(plane.path(), &state, "release"),
+            "none — neither its definition nor the vault registry names one"
+        );
+
+        std::fs::write(plane.path().join("vaults.json"), "{not json").expect("a registry");
+        let unread = vault_fact(plane.path(), &state, "release");
+        assert!(
+            unread.starts_with(
+                "unknown — its definition names none, and the vault registry does not read: "
+            ),
+            "{unread}"
+        );
+        assert!(unread.contains("vaults.json is corrupt"), "{unread}");
+    }
+
     #[test]
     fn a_persona_the_plane_no_longer_has_is_a_view_whose_source_has_gone() {
         let plane = tempfile::tempdir().expect("a plane");
         std::fs::create_dir_all(plane.path().join("personas")).expect("a personas directory");
 
         assert!(matches!(
-            built_in(plane.path(), "persona", "steward"),
+            built_in(
+                plane.path(),
+                &plane.path().join(".charter"),
+                "persona",
+                "steward"
+            ),
             Ok(ViewAnswer::Gone { .. })
         ));
     }
@@ -461,7 +567,7 @@ mod tests {
         let plane = tempfile::tempdir().expect("a plane");
 
         assert!(matches!(
-            built_in(plane.path(), "timeline", ""),
+            built_in(plane.path(), &plane.path().join(".charter"), "timeline", ""),
             Ok(ViewAnswer::Gone { .. })
         ));
     }
@@ -470,7 +576,15 @@ mod tests {
     fn a_persona_view_is_never_asked_about_a_name_that_is_not_a_persona_name() {
         let plane = tempfile::tempdir().expect("a plane");
 
-        assert!(built_in(plane.path(), "persona", "../etc").is_err());
+        assert!(
+            built_in(
+                plane.path(),
+                &plane.path().join(".charter"),
+                "persona",
+                "../etc"
+            )
+            .is_err()
+        );
     }
 
     #[test]

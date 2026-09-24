@@ -152,6 +152,9 @@ export type Crumbs = {
   /** The workspace the window is on, already read as it should be said (so `OUTSIDE` has
    *  become its title). `undefined` when it is on none. */
   workspace?: string;
+  /** Whether that workspace has a colour (charter-app#281): its clause then carries a mark in the
+   *  window's accent, which is tinted with that colour while it is in front. */
+  coloured?: boolean;
   /**
    * How many of that project's chats are **running**, or `undefined` before the core has said
    * what it had open.
@@ -192,7 +195,7 @@ export type Crumbs = {
  * anything the row had to cut is a hover away.
  */
 export function Breadcrumb({ crumbs }: { crumbs: Crumbs }) {
-  const { project, decided, read, workspace, running } = crumbs;
+  const { project, decided, read, workspace, coloured, running } = crumbs;
   if (project === undefined)
     return (
       <span className="crumbs" data-testid="title-crumbs">
@@ -222,6 +225,9 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumbs }) {
     >
       <span className="crumb crumb-project">{project}</span>
       <Slash />
+      {coloured === true && workspace !== undefined && (
+        <span className="crumb-mark" aria-hidden="true" data-testid="crumb-mark" />
+      )}
       <span
         className={`crumb crumb-workspace${workspace === undefined ? (read ? " none" : " pending") : ""}`}
       >

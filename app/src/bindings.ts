@@ -544,25 +544,87 @@ export const commands = {
 	 *  doing its one job, and a contributed panel rests on it entirely.
 	 */
 	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
+	/**  Every vault the plane registers: name, provider, secret count and health. Never a value. */
+	vaultList: (plane: PlaneId) => typedError<VaultSummary[], string>(__TAURI_INVOKE("vault_list", { plane })),
+	/**  One vault's secrets: names, size bands and when each was written. Never a value. */
+	vaultOpen: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_open", { plane, vault })),
+	/**
+	 *  One vault read again, after something outside the window may have changed it — a
+	 *  `charter secret set` in a terminal. The same reading as `vault_open`, from the keys index for
+	 *  a keyring vault, so a refresh never makes the Keychain ask anything. Never a value.
+	 */
+	vaultRefresh: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_refresh", { plane, vault })),
+	/**
+	 *  Make a new vault on this plane, kept by `provider` — the keyring when `null` — and answer
+	 *  with it opened. No value crosses.
+	 */
+	vaultCreate: (plane: PlaneId, vault: string, provider: string | null, opVault: string | null) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_create", { plane, vault, provider, opVault })),
+	/**  Store a new secret. The value comes in here and goes nowhere but the vault. */
+	vaultSecretAdd: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_add", { plane, vault, key, value })),
+	/**  Replace a held secret's value. The value comes in here and goes nowhere but the vault. */
+	vaultSecretSet: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_set", { plane, vault, key, value })),
+	/**  Move a secret to a new name. No value crosses. */
+	vaultSecretRename: (plane: PlaneId, vault: string, from: string, to: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_rename", { plane, vault, from, to })),
+	/**  Delete a secret. No value crosses. */
+	vaultSecretDelete: (plane: PlaneId, vault: string, key: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_delete", { plane, vault, key })),
+	/**
+	 *  Move a vault's identity token from the app's OWN environment into the keyring
+	 *  ([`move_identity`]). No value crosses to the window. Kept beside the paste path for an app
+	 *  launched from a shell that exports the token; the answer's `identity_in_app_env` then warns to
+	 *  relaunch, because the app's process still carries the export (#271 review, U3).
+	 */
+	vaultIdentityMove: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_move", { plane, vault })),
+	/**
+	 *  Put a token the operator pasted into the keyring for a vault's identity ([`put_identity`]).
+	 *  The token comes in here and goes straight to the keyring — never the app's environment, never
+	 *  the window, never an error. The preferred path (#271 review, U3).
+	 */
+	vaultIdentityPut: (plane: PlaneId, vault: string, token: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_put", { plane, vault, token })),
 	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
-	 *  what each is in this project — `extension::project::resolve`, shaped for the wire.
+	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
+	 *  `workspace`, when one is named, that workspace's settings are a layer too (charter-app#280):
+	 *  what the Workspace settings tab shows.
 	 * 
 	 *  It takes a survey, so it re-hashes every installed extension's directory: an extension that
 	 *  changed since its yes reads as needing approval here, which is the truth the tab is for. It
 	 *  is asked when the tab is opened and after it saves, never on a timer.
 	 */
-	projectExtensions: (plane: PlaneId) => typedError<ProjectExtension[], string>(__TAURI_INVOKE("project_extensions", { plane })),
+	projectExtensions: (plane: PlaneId, workspace: string | null) => typedError<ProjectExtension[], string>(__TAURI_INVOKE("project_extensions", { plane, workspace })),
 	/**
-	 *  The ids of the extensions that are on in this project: what the window keeps of the panels,
-	 *  views and themes it surveyed once, while this project is in front.
+	 *  The ids of the extensions that are on in this project — in `workspace`, when one is named
+	 *  (charter-app#280): what the window keeps of the panels, views and themes it surveyed once,
+	 *  while this project and that workspace are in front.
 	 * 
 	 *  **The record alone, and no extension's directory** — so it is cheap enough to ask for every
 	 *  project a window holds. What it cannot see, an extension that changed since its yes, the
 	 *  survey already left out of what the window holds, and the executor re-takes the fingerprint
 	 *  at every press. The precedence is `extension::project::resolve`'s, as everywhere else.
 	 */
-	extensionsOn: (plane: PlaneId) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane })),
+	extensionsOn: (plane: PlaneId, workspace: string | null) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane, workspace })),
+	/**
+	 *  Every harness charter knows, with what it has installed on this machine and what this
+	 *  project has each plugin at — in `workspace`, when one is named, with that workspace's
+	 *  settings as the layer between Shared and Local (charter-app#282): what the Workspace settings
+	 *  tab shows. Read from the harness's own files, never written; asked when the tab opens and
+	 *  after it saves.
+	 */
+	projectHarnessPlugins: (plane: PlaneId, workspace: string | null) => typedError<HarnessPlugins[], string>(__TAURI_INVOKE("project_harness_plugins", { plane, workspace })),
+	/**
+	 *  This project's theme, with every theme it may pick — in `workspace`, when one is named, whose
+	 *  `workspace.json` is a layer too (charter-app#281): what the Workspace settings tab shows. It takes a survey, as
+	 *  [`project_extensions`] does, so a pick the extension no longer contributes is said here.
+	 */
+	projectTheme: (plane: PlaneId, workspace: string | null) => typedError<ProjectTheme, string>(__TAURI_INVOKE("project_theme", { plane, workspace })),
+	/**
+	 *  What the window draws while this project — and `workspace` in it, when one is named
+	 *  (charter-app#281) — is in front, as a file holds it: `null` leaves the window its own theme.
+	 * 
+	 *  **The record alone**, as [`extensions_on`] is, so it is cheap enough to ask for every project
+	 *  a window holds. A pick the extension does not contribute is left to the window, which only
+	 *  ever holds the themes a survey found, and draws the built-in when the pick is not among them.
+	 */
+	projectThemeDrawn: (plane: PlaneId, workspace: string | null) => typedError<string | null, string>(__TAURI_INVOKE("project_theme_drawn", { plane, workspace })),
 	/**
 	 *  Every view an approved extension offers this window.
 	 * 
@@ -588,7 +650,7 @@ export const commands = {
 	 *  **Every refusal comes back as the core's sentence**, which names what refused and says what
 	 *  to do. The window draws it where the answer would have been.
 	 */
-	openView: (plane: PlaneId, from: string | null, view: string, key: string) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, from, view, key })),
+	openView: (plane: PlaneId, from: string | null, view: string, key: string, workspace: string | null) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, from, view, key, workspace })),
 	/**
 	 *  The view tabs this plane had open when it was last recorded — at a launch, the ones the
 	 *  record put back. The window opens a tab for each; nothing in one is asked until it is drawn.
@@ -617,6 +679,13 @@ export const commands = {
 	 *  disk since is refused rather than overwritten.
 	 */
 	saveProjectSettings: (plane: PlaneId, which: SettingsWhich, base: string | null, change: SettingsChange) => typedError<SettingsSaved, string>(__TAURI_INVOKE("save_project_settings", { plane, which, base, change })),
+	/**  One workspace's settings, and what charter says about them. */
+	workspaceSettings: (plane: PlaneId, workspace: string) => typedError<WorkspaceSettings, string>(__TAURI_INVOKE("workspace_settings", { plane, workspace })),
+	/**
+	 *  Change one workspace's settings: checked by the readers of the project's files, written into
+	 *  its `workspace.json` with every other key kept (`charter_core::settings::workspace`).
+	 */
+	saveWorkspaceSettings: (plane: PlaneId, workspace: string, base: string | null, edits: SettingsEdit[]) => typedError<WorkspaceSettingsSaved, string>(__TAURI_INVOKE("save_workspace_settings", { plane, workspace, base, edits })),
 	/**
 	 *  What one chat's recorded usage says, or nothing.
 	 * 
@@ -671,6 +740,13 @@ export const commands = {
 	 *  yet**. Answers whether it did, so the window knows the old key can go.
 	 */
 	adoptLayout: (text: string) => typedError<boolean, string>(__TAURI_INVOKE("adopt_layout", { text })),
+	/**  One secret's value, to show in the window for a while ([`reveal`]). */
+	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
+	/**
+	 *  Put one secret's value on the clipboard ([`copy`]) and clear it a minute later
+	 *  ([`clear_later`]). The answer is nothing: the value never comes back to the window.
+	 */
+	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
 };
 
 /* Types */
@@ -947,6 +1023,69 @@ export type ExtensionView = {
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
+/**  Where a handed-off chat came from, as the window draws it. */
+export type HandedFromNote = {
+	/**  The chat it came from, by the name the operator saw it under. */
+	name: string,
+	/**  The workspace it came from. */
+	workspace: string,
+};
+
+/**  One plugin, in one project. */
+export type HarnessPlugin = {
+	/**  The harness's own id for it. */
+	id: string,
+	name: string,
+	/**  Where charter found it installed; empty when this machine has not installed it. */
+	origin: string,
+	/**  `on`, `off` or `not-set`. */
+	state: string,
+	/**  `default`, `shared`, `workspace` or `local`: which layer decided `state`. */
+	source: string,
+	installed: boolean,
+	/**
+	 *  Why charter fixes it whatever a file says, in the core's words ("<id> is always on: …"),
+	 *  or none for a plugin a project may choose. No control is drawn for a fixed one.
+	 */
+	pinned: string | null,
+	/**  Each value a file set that charter did not use, and why. */
+	ignored: ProjectExtensionIgnored[],
+};
+
+/**  One harness's plugins in one project. */
+export type HarnessPlugins = {
+	/**
+	 *  The plane's word for the harness (`claude`, `opencode`, `codex`): the key under
+	 *  `[harness_plugins]`.
+	 */
+	harness: string,
+	/**  What a person calls it. */
+	title: string,
+	/**
+	 *  "plugins for <harness> are not supported yet — <why>", or none where charter applies
+	 *  a project's choice to the chats it starts.
+	 */
+	unsupported: string | null,
+	/**
+	 *  Where charter read what it has installed: the file or directory, as this app's own
+	 *  environment names it. A profile that points the harness elsewhere is listed against its
+	 *  own directory when its chat starts.
+	 */
+	record: string | null,
+	/**  Why the harness's own record of what it installed could not be read, if it could not. */
+	trouble: string | null,
+	plugins: HarnessPlugin[],
+};
+
+/**  Where one of a vault's identity variables is read from now (#237). */
+export type IdentityHeld = 
+/**  Moved into the keyring, which is read first. */
+"keyring" | 
+/**  In charter's environment, and not moved: the tab offers to move it. */
+"environment" | 
+/**  Nowhere: the vault cannot be read. */
+"unset";
+
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
  *  later decision about extensions is read off.
@@ -1036,6 +1175,13 @@ export type Moved = {
 	 */
 	moved_at: number,
 	/**
+	 *  The chats that have reported back to this one and not been read yet, by the name the
+	 *  operator sees them under, oldest first (charter-app#259). Each is a needs-you item that
+	 *  says `<child> reported back` rather than only this chat's name. Empty for nearly every
+	 *  chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
+	 */
+	reports: string[],
+	/**
 	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
 	 * 
 	 *  **What lets the window put its events back in order.** Every `Moved` is built under the
@@ -1110,6 +1256,11 @@ export type OpenChat = {
 	 *  started with.
 	 */
 	label: string | null,
+	/**
+	 *  Where a handoff opened it from, where one did: the note its tab's tooltip and its header
+	 *  draw, `↳ from steward 3 · ops` (charter-app#258). Never the parent's number.
+	 */
+	from: HandedFromNote | null,
 };
 
 /**
@@ -1248,6 +1399,15 @@ export type Panels = {
 	workspace: string,
 	/**  The clones on disk, by name, in the order the directory lists them. */
 	repos: string[],
+	/**
+	 *  Where each clone in `repos` is, by name: the path `repos::clones` **checked**, so the
+	 *  window never joins one together (charter-app#174). It is what lets a clone be picked as
+	 *  where the next chat starts, from the explorer's heading and the bottom bar's row.
+	 * 
+	 *  Beside `repos` rather than in place of it, so the order the directory lists them in and
+	 *  every reader of the names stay as they are.
+	 */
+	paths: { [key in string]: string },
 	/**  Repos `workspace.json` names that are not cloned here. Membership, not presence. */
 	absent: string[],
 	/**
@@ -1461,7 +1621,7 @@ export type ProjectExtension = {
 	name: string,
 	/**  `on`, `off`, `needs-approval` or `not-installed`. */
 	state: string,
-	/**  `default`, `shared` or `local`: which file decided `state`. */
+	/**  `default`, `shared`, `workspace` or `local`: which file decided `state`. */
 	source: string,
 	settings: ProjectExtensionSetting[],
 	/**  Each value a file set that charter did not use, and why. */
@@ -1470,7 +1630,10 @@ export type ProjectExtension = {
 
 /**  A value a file set that charter did not use. */
 export type ProjectExtensionIgnored = {
-	/**  `charter.toml` or `charter.local.toml`: the section that says it. */
+	/**
+	 *  `charter.toml`, `charter.local.toml` or `workspaces/<ws>/workspace.json`: the section
+	 *  that says it.
+	 */
 	file: string,
 	/**  The core's sentence. */
 	why: string,
@@ -1496,6 +1659,36 @@ export type ProjectExtensionSetting = {
 export type ProjectSettings = {
 	shared: SettingsFile,
 	local: SettingsFile,
+};
+
+/**
+ *  A project's theme, as the Project settings tab draws it —
+ *  `extension::project::theme::resolve`, shaped for the wire.
+ */
+export type ProjectTheme = {
+	/**
+	 *  charter's own themes, following the system, and every theme an extension this machine
+	 *  approved contributes — whether or not this project has that extension on.
+	 */
+	options: ThemeOption[],
+	/**  What the files pick, in force, as a file holds it; `null` when none picks one. */
+	picked: string | null,
+	/**
+	 *  `charter.toml`, `charter.local.toml` or `workspaces/<ws>/workspace.json`: the file
+	 *  `picked` came from; `null` with no pick.
+	 */
+	file: string | null,
+	/**  What the window draws while this project is in front; `null` leaves it its own theme. */
+	draws: string | null,
+	/**  Why `draws` is not `picked`, when it is not. */
+	why: string | null,
+	/**
+	 *  The workspace's colour as its file holds it — a palette name or `#rrggbb` — when it was
+	 *  asked in a workspace that has one (charter-app#281).
+	 */
+	colour: string | null,
+	/**  Each value a file set that charter did not use, and why. */
+	ignored: ProjectExtensionIgnored[],
 };
 
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
@@ -1658,6 +1851,12 @@ export type Restore = {
 	dropped: string[],
 };
 
+/**
+ *  A value the window hands over to be stored, and the one a reveal hands back
+ *  ([`vault_secret_reveal`], the only command whose answer holds one).
+ */
+export type SecretValue = string;
+
 /**  What a save is: the raw view's whole text, or a form's changes to the text it was read as. */
 export type SettingsChange = { kind: "raw"; text: string } | { kind: "edits"; edits: SettingsEdit[] };
 
@@ -1742,6 +1941,12 @@ export type SidebarWorkspace = {
 	vision: string,
 	todos: string[],
 	chats: OpenChat[],
+	/**
+	 *  Its colour as its `workspace.json` holds it — a palette name or `#rrggbb` — or `null`
+	 *  (charter-app#281). Here because every workspace tab draws its own, whether or not it is
+	 *  in front, and the sidebar is already the one read of every workspace.
+	 */
+	colour: string | null,
 };
 
 /**  Everything the picker draws, read from the plane when it is opened. */
@@ -1777,6 +1982,14 @@ export type Started = {
 	label: string | null,
 };
 
+/**  One theme a project may pick, as the Theme select lists it. */
+export type ThemeOption = {
+	/**  What the file holds: `charter-dark`, `charter-light`, `system`, or `<extension>/<theme>`. */
+	value: string,
+	/**  What the select shows. */
+	label: string,
+};
+
 /**  What the operating system has already spent of the window's own title bar. */
 export type TitleBarRoom = {
 	/**
@@ -1800,6 +2013,57 @@ export type UsageTurn = {
 	context: Percent | null,
 	/**  What that turn wrote to the cache, as charter spells tokens. */
 	written: string | null,
+};
+
+/**  One vault, opened. */
+export type VaultContents = {
+	name: string,
+	provider: string,
+	count: number,
+	health: VaultHealth,
+	secrets: VaultSecret[],
+	/**
+	 *  The identity variables it is read through; empty for a vault that declares none. Said
+	 *  from the registry's mark and the environment, never by reading the keyring.
+	 */
+	identity: VaultIdentity[],
+	/**
+	 *  Identity variables charter's OWN process environment still carries. A same-user process
+	 *  can read another's environment block, so while this is non-empty a chat could read the
+	 *  token however it was moved — the tab warns to relaunch charter without the export
+	 *  (#271 review, U3). Names only.
+	 */
+	identity_in_app_env: string[],
+};
+
+/**  Whether a vault can be read, and the provider's own sentence about it. Never a value. */
+export type VaultHealth = {
+	ok: boolean,
+	detail: string,
+};
+
+/**
+ *  One identity variable a vault is read through — `$OP_TEAM_TOKEN` — and where it is. Its
+ *  NAME, never its value.
+ */
+export type VaultIdentity = {
+	variable: string,
+	held: IdentityHeld,
+};
+
+/**  One secret, as a vault's table shows it: its name, and what the keys index knows. */
+export type VaultSecret = {
+	key: string,
+	size: string | null,
+	updated: string | null,
+};
+
+/**  One registered vault, as the Vaults panel lists it. */
+export type VaultSummary = {
+	name: string,
+	provider: string,
+	count: number | null,
+	health: VaultHealth,
 };
 
 /**
@@ -1882,6 +2146,35 @@ export type WindowTabs = {
 	 */
 	active: number | null,
 };
+
+/**
+ *  A workspace's settings — the `settings` of its `workspace.json` — as the Workspace settings
+ *  tab draws them. The same shape as a [`SettingsFile`], without a raw view: the manifest is
+ *  charter's and the team's, and a form is the one way into it here.
+ */
+export type WorkspaceSettings = {
+	workspace: string,
+	/**  `workspaces/<ws>/workspace.json`. */
+	file: string,
+	/**  Whether it is there. One that is not is created by the first save. */
+	exists: boolean,
+	/**
+	 *  Its text: what a save is checked against, so an edit made elsewhere since is never
+	 *  written over.
+	 */
+	text: string,
+	/**  What charter does not take from its settings as they stand, in the core's words. */
+	refusals: string[],
+	/**  Whether a form can change it: a JSON object, or no file yet. */
+	parsed: boolean,
+	/**  Every value in its settings, by its path under `settings`. */
+	fields: SettingsField[],
+	/**  Whether the workspace is LIVE, so the file is committed and the team sees it. */
+	live: boolean,
+};
+
+/**  What a workspace settings save answered. */
+export type WorkspaceSettingsSaved = { kind: "saved"; settings: WorkspaceSettings } | { kind: "refused"; reasons: string[] };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

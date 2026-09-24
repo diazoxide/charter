@@ -4,7 +4,10 @@
    terminal ended up with a palette of its own. `src/theme/literals.test.ts` refuses one. */
 :root {
   font-family: ui-sans-serif, Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 13px;
+  /* The default window text size (charter-app#283, `textSize.DEFAULT_TEXT`). What is in force
+     is set on the element itself before the first frame (`main.tsx`), and every size below is
+     in rem or em, so the whole window scales from this one number. */
+  font-size: 14px;
   line-height: 1.4;
   color: var(--text-primary);
   background: var(--surface-base);
@@ -330,10 +333,31 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* **A workspace's colour** (charter-app#281): a small dot in its own accent before its name,
+   on its tab whether or not it is in front, and in the show-more menu. The tab sets the tinted
+   `--accent-base` on itself (`theme.tintVariables`), so this rule names only the token. A dot
+   and not a bar or a stripe: the operator turned down coloured rules on the strips (#193), and
+   a mark the size of a letter is the least that tells two workspaces apart at a glance. */
+.workspace-mark {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-base);
+}
+
+/* **And its shade**: a coloured workspace's tab is drawn on its own tinted `--layer-workspace`
+   — the strip's shade turned to its hue, at the same luminance — so a tab behind the one in
+   front still says which colour it is. Not under the pointer: hover is drawn as on every tab. */
+.workspaces-strip [role="tab"][data-colour]:not([aria-selected="true"], :hover) {
+  background: var(--layer-workspace);
+}
+
 /* And how many of them are asking for you, which is the hole scoping the chats would
    otherwise open. The same mark the project tabs carry one scope up — **the count of chats
    waiting for the operator is the one thing in this window that exists to be seen**, so it is
-   the only mark on a strip drawn in a colour of its own, and it is drawn in the weight of a
+   the only mark on a strip drawn in a colour charter chose — a workspace's own colour is the
+   operator's (above) — and it is drawn in the weight of a
    number rather than the weight of a label. */
 .workspace-needs,
 .project-needs {
@@ -800,6 +824,24 @@ button.show-more:focus-visible {
 
 .gauge-label {
   color: var(--text-muted);
+}
+
+/* **Where a handed-off chat came from** (charter-app#258): `↳ from steward 3 · ops`, beside the
+   gauge in the chat's own corner, and quiet — it is a note about the chat's origin, read once,
+   not a status. The gauge's box so the two read as one strip, never a border of its own colour.
+   Clipped rather than wrapped: a corner that grew a second line would cover the terminal. */
+.pane-from {
+  max-width: 24rem;
+  overflow: hidden;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
 }
 
 .gauge-ok {
@@ -3088,6 +3130,18 @@ button.show-more:focus-visible {
   font-weight: 600;
 }
 
+/* The workspace in front's colour, before its name (charter-app#281): the window's accent is
+   tinted with it while that workspace is in front, so the dot needs no colour of its own. The
+   same size as the tab's mark, so the two read as one thing. */
+.crumb-mark {
+  flex: none;
+  align-self: center;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-base);
+}
+
 .crumb-workspace {
   flex: 0 2 auto;
   min-width: 2.5rem;
@@ -3547,6 +3601,192 @@ button.show-more:focus-visible {
 .facts dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+/* ---- A vault's tab (charter-app#235) ------------------------------------------------- */
+
+/* The search box and Add on one line above the table: the box takes the room, Add keeps its
+   own width. */
+.vault-tools {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  max-width: 60rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.vault-tools .panel-search {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+/* The secrets: names on the left, the size band and when each was written muted beside them.
+   Rows are divided by the subtle rule, not `layer.divider` — that is the tab strips' own hairline
+   (`docs/design-system.md`) — and never by a coloured edge. The row under the pointer or the
+   keyboard takes `layer.selected`: "where you are", which is what it means on a strip too. */
+.vault-secrets {
+  width: 100%;
+  max-width: 60rem;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.vault-secrets th {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.vault-secrets td {
+  padding: 0.1rem 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.vault-secrets td:first-child {
+  width: 100%;
+  padding-inline-start: 0;
+}
+
+.vault-secrets tbody tr {
+  transition: background-color var(--motion-duration-quick) var(--motion-easing-standard);
+}
+
+.vault-secrets tbody tr:hover,
+.vault-secrets tbody tr:focus-within {
+  background: var(--layer-selected);
+}
+
+/* A secret's name is the row's one control: pressing it opens the row's menu. The glyph says
+   there is one, and is quiet until the row is under the pointer or the keyboard. */
+.vault-secret {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.vault-secret:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.vault-secret-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vault-secret .node-icon {
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--motion-duration-quick) var(--motion-easing-standard);
+}
+
+.vault-secrets tr:hover .vault-secret .node-icon,
+.vault-secret:focus-visible .node-icon,
+.vault-secret[data-state="open"] .node-icon {
+  opacity: 1;
+}
+
+/* The eye (charter-app#236): quiet until its row is under the pointer or the keyboard, and
+   plain while it is pressed, so a value on the page always has its hide button showing. */
+.vault-reveal {
+  display: flex;
+  align-items: center;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-muted);
+  cursor: default;
+  /* No easing: a row's hover is not animated (`docs/design-system.md`, motion). */
+  opacity: 0;
+}
+
+.vault-secrets tr:hover .vault-reveal,
+.vault-secrets tr:focus-within .vault-reveal,
+.vault-reveal[aria-pressed="true"] {
+  opacity: 1;
+}
+
+.vault-reveal:hover {
+  background: var(--control-hover);
+}
+
+.vault-reveal:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* A revealed value, under its name: the only place one is ever drawn, for 30 seconds. It wraps
+   rather than widening the table, and is selectable, because reading it is what it is for. */
+.vault-value {
+  display: block;
+  margin: 0 0 0.25rem 0.5rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: var(--control-base);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* What a copy said. Takes no room while it says nothing, but stays in the page: a live region
+   that is not drawn is not announced when it starts to speak. */
+.vault-note {
+  max-width: 60rem;
+  margin: 0 0 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.vault-note:empty {
+  margin: 0;
+}
+
+/* Where the vault's identity token is, and how to put it into the Keychain (#237, hardened after
+   the #271 review): the note's size and colour, and a paste box with its buttons below the
+   sentence. */
+.vault-identity {
+  max-width: 60rem;
+  margin: 0 0 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.vault-identity p {
+  margin: 0 0 0.4rem;
+}
+
+.vault-identity-put {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.vault-identity-put input {
+  flex: 1 1 16rem;
+  min-width: 12rem;
 }
 
 /* A list in a view has the pane's height to use, not a side region's. */
@@ -4033,6 +4273,28 @@ button.show-more:focus-visible {
 .settings-actions button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* A text size on the Preferences tab (charter-app#283): the slider, what it is at, and its
+   reset, on one row. The slider is not a text box, so the box look `.settings-field input`
+   gives every input is taken back off it. */
+.text-size {
+  align-items: center;
+  margin: 0.2rem 0 0;
+}
+
+.text-size input[type="range"] {
+  flex: 1;
+  max-width: 16rem;
+  padding: 0;
+  background: none;
+  border: 0;
+  accent-color: var(--accent-base);
+}
+
+.text-size output {
+  min-width: 3em;
+  font-variant-numeric: tabular-nums;
 }
 
 .settings-standing ul,

@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -48,6 +49,7 @@ import {
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
+  type Clone,
   type Cut,
   type Doing,
   type Offer,
@@ -84,8 +86,12 @@ import {
   panesOf,
   putViewBack,
   refileViews,
+  PREFERENCES_TITLE,
+  PREFERENCES_VIEW,
   SETTINGS_TITLE,
   SETTINGS_VIEW,
+  workspaceSettingsTitle,
+  workspaceSettingsView,
   renameTab,
   viewKey,
   selectTab,
@@ -105,6 +111,8 @@ import {
 import { ChatState, type Asking } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
+import { NewVault } from "./NewVault";
+import { OpenVault, useVaults } from "./Vaults";
 import { ViewMark, ViewPane } from "./Views";
 import { useTabStop } from "./roving";
 import { closeOnDelete, renameOnF2 } from "./tabKeys";
@@ -112,13 +120,23 @@ import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
+import { projectThemeChanged } from "./projectTheme";
+import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
+import { hueOf } from "./theme/tint";
+import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
-import { fitting, LEAST, useRoom } from "./fits";
+import { fitting, LEAST, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
+import { useTextSizes } from "./textSize";
 
 /** One empty list, so a prop left out is the same list at every render. */
 const NONE: readonly never[] = [];
+
+/** Where the picker's chat goes: a new tab — started in `in` when a row asked for one
+ *  directory for that tab alone (charter-app#174), else where the explorer's pick says — or a
+ *  split of the pane in front. */
+type Where = { tab: true; in?: string } | { split: Direction };
 
 /**
  * One project, with everything that belongs to it.
@@ -161,6 +179,7 @@ export function PlaneView({
   contributed: surveyedPanels = NONE,
   views: surveyedViews = NONE,
   settingsAsked,
+  preferencesAsked,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -190,22 +209,10 @@ export function PlaneView({
   /** A count that goes up each time the window is asked for THIS project's settings tab
    *  (`WindowDoing.openSettings`); `undefined` until it is. */
   settingsAsked?: number;
+  /** The same, for the Preferences tab (`WindowDoing.openPreferences`, charter-app#283): a
+   *  count that goes up each time the window asks for it on THIS project's strip. */
+  preferencesAsked?: number;
 }) {
-  /**
-   * **What this project has on** (charter-app#253, ADR 0048): the core's answer for this plane's
-   * two files over this machine's approvals. The window's survey is filtered by it here, once, so
-   * the side region, the view buttons and the palette's view rows all read one list. Charter's
-   * own panels (`from` null) are not an extension's and are never filtered.
-   */
-  const on = useExtensionsOn(plane);
-  const contributed = useMemo(
-    () => surveyedPanels.filter((panel) => panel.from === null || (on?.has(panel.from) ?? false)),
-    [on, surveyedPanels],
-  );
-  const views = useMemo(
-    () => surveyedViews.filter((view) => on?.has(view.extension) ?? false),
-    [on, surveyedViews],
-  );
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
    *  It keeps listening while the project is behind another one, which is what lets its tab
@@ -230,7 +237,7 @@ export function PlaneView({
    *  here, because both start a harness and ADR 0022 admits no path that does not pick. */
   const [picking, setPicking] = useState<{
     options: StartOptions;
-    where: { tab: true } | { split: Direction };
+    where: Where;
   }>();
   /** Why the last start did not happen, shown in the picker rather than behind it. */
   const [pickerTrouble, setPickerTrouble] = useState<string>();
@@ -271,13 +278,30 @@ export function PlaneView({
   // editor, from a `git pull` — is one of these, and what this project has on may have moved
   // with it (charter-app#253). Not at the mount: `useExtensionsOn` asks then.
   useEffect(() => {
-    if (changesOnDisk > 0) extensionsChanged(plane);
+    if (changesOnDisk === 0) return;
+    extensionsChanged(plane);
+    // And the theme it draws, which the same two files and each `workspace.json` pick
+    // (charter-app#273, #281).
+    projectThemeChanged(plane);
   }, [changesOnDisk, plane]);
   /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now. */
   const [makingWorkspace, setMakingWorkspace] = useState(false);
   const [workspaceTrouble, setWorkspaceTrouble] = useState<string>();
   const [busyMaking, setBusyMaking] = useState(false);
+  /** The plane's vaults (`vault_list`), read here because four surfaces answer from them: the
+   *  Vaults panel, the palette's `vault.open:<name>` rows, the picker, and — by asking for it
+   *  again after a write — a vault's own tab (charter-app#235). */
+  const vaults = useVaults(plane);
+  const vaultNames = useMemo(() => vaults.vaults?.map((one) => one.name), [vaults.vaults]);
+  const reloadVaults = vaults.reload;
+  /** Whether the vault picker is up. */
+  const [pickingVault, setPickingVault] = useState(false);
+  /** Whether the new-vault dialog is up, why the last attempt made nothing, and whether
+   *  charter is making one right now — `makingWorkspace`'s three, for a vault. */
+  const [makingVault, setMakingVault] = useState(false);
+  const [vaultTrouble, setVaultTrouble] = useState<string>();
+  const [busyVault, setBusyVault] = useState(false);
   /**
    * The workspace the operator is being asked about deleting, if any.
    *
@@ -337,6 +361,12 @@ export function PlaneView({
    * by a different chat.
    */
   const [startedIn, setStartedIn] = useState<Record<number, string>>({});
+  /**
+   * Where each handed-off chat came from, by session, as its tab's tooltip and its pane say it:
+   * `↳ from steward 3 · platform-next` (charter-app#258). By the parent's name, never its
+   * number. A chat no handoff opened has none.
+   */
+  const [handedFrom, setHandedFrom] = useState<Record<number, string>>({});
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
@@ -452,6 +482,15 @@ export function PlaneView({
         const back = viewAnswer?.status === "ok" ? (viewAnswer.data ?? []) : [];
         if (open.length > 0) {
           setReopened(open);
+          setHandedFrom((was) => ({
+            ...was,
+            ...Object.fromEntries(
+              open.flatMap((chat) => {
+                const note = handedFromNote(chat.from);
+                return note ? [[chat.session, note]] : [];
+              }),
+            ),
+          }));
           // A pinned chat comes back pinned: the pin rides the record it came back from.
           setPinnedChats(open.filter((chat) => chat.pinned).map((chat) => chat.session));
         }
@@ -527,8 +566,18 @@ export function PlaneView({
       // Already drawn: the adoption above can race the event and draw it first.
       if (alreadyShows(now.current, arrived.session)) return;
       setStartedIn((was) => ({ ...was, [arrived.session]: arrived.workspace }));
+      const note = handedFromNote(arrived.from);
+      if (note) setHandedFrom((was) => ({ ...was, [arrived.session]: note }));
+      // Named for its task where the handoff named one, and `<persona> <N>` where it did not
+      // (charter-app#258).
       change((tabs) =>
-        openTabBehind(tabs, arrived.session, arrived.name, whoOf(arrived.persona, arrived.harness)),
+        openTabBehind(
+          tabs,
+          arrived.session,
+          arrived.name,
+          whoOf(arrived.persona, arrived.harness),
+          arrived.label ?? null,
+        ),
       );
     }).catch(() => undefined);
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
@@ -684,6 +733,22 @@ export function PlaneView({
    *  outside every workspace is not a workspace on the plane, so there is no directory to
    *  read and every region says so rather than drawing another workspace's answer. */
   const ofWorkspace = focused === OUTSIDE ? undefined : focused;
+  /**
+   * **What this project has on in the focused workspace** (charter-app#253, #280, ADR 0048): the
+   * core's answer for this plane's two files and the workspace's `workspace.json`, over this
+   * machine's approvals. The window's survey is filtered by it here, once, so the side region,
+   * the view buttons and the palette's view rows all read one list. Charter's own panels (`from`
+   * null) are not an extension's and are never filtered.
+   */
+  const on = useExtensionsOn(plane, ofWorkspace);
+  const contributed = useMemo(
+    () => surveyedPanels.filter((panel) => panel.from === null || (on?.has(panel.from) ?? false)),
+    [on, surveyedPanels],
+  );
+  const views = useMemo(
+    () => surveyedViews.filter((view) => on?.has(view.extension) ?? false),
+    [on, surveyedViews],
+  );
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
@@ -716,11 +781,17 @@ export function PlaneView({
    */
   const spot = useMemo(() => {
     if (pickedSpot === undefined || pickedSpot.workspace !== ofWorkspace) return undefined;
-    const listed = workspaceState.pieces[pickedSpot.spot.repo];
-    if (listed !== undefined && !listed.some((one) => one.piece === pickedSpot.spot.piece))
-      return undefined;
+    const { repo, piece } = pickedSpot.spot;
+    // A picked CLONE (charter-app#174) stops standing the same way, one level up: when the
+    // plane is read again and the clone is not in it.
+    if (piece === undefined) {
+      const clones = workspaceState.panels?.repos;
+      return clones !== undefined && !clones.includes(repo) ? undefined : pickedSpot.spot;
+    }
+    const listed = workspaceState.pieces[repo];
+    if (listed !== undefined && !listed.some((one) => one.piece === piece)) return undefined;
     return pickedSpot.spot;
-  }, [ofWorkspace, pickedSpot, workspaceState.pieces]);
+  }, [ofWorkspace, pickedSpot, workspaceState.panels, workspaceState.pieces]);
 
   // Where a chat starts: **the spot the explorer picked**, and the focused workspace's own
   // directory when nothing is picked — so the sidebar can file it under that workspace.
@@ -760,10 +831,31 @@ export function PlaneView({
    *  one level up, because the operator's complaint was about all of them: a strip that
    *  scrolls says nothing about what is past its edge. */
   const { strip: workspaceStrip, width: workspaceRoom } = useRoom(strips.length);
+  // The floors grow with the window's text (charter-app#283, `fits.leastAt`).
+  const windowText = useTextSizes().window;
+  const workspaceLeast = leastAt(LEAST.workspace, windowText);
+  const chatLeast = leastAt(LEAST.chat, windowText);
   const workspacesShown = useMemo(
-    () => fitting(strips, focused, workspaceRoom, LEAST.workspace),
-    [focused, strips, workspaceRoom],
+    () => fitting(strips, focused, workspaceRoom, workspaceLeast),
+    [focused, strips, workspaceRoom, workspaceLeast],
   );
+
+  /**
+   * **Each workspace's colour** (charter-app#281), as the core read it out of its
+   * `workspace.json` with the sidebar — so it is read again whenever the plane changes on disk,
+   * a save in the Workspace settings tab included. `null` for a workspace with none, for the
+   * chats outside every workspace, which have no file to hold one, and for a grey `#rrggbb`,
+   * which has no hue to tint with: no mark is drawn for a colour that tints nothing (the
+   * Workspace settings tab says why).
+   */
+  const colourOf = (workspace: string | undefined): string | null =>
+    colourWithHue(sidebar?.workspaces.find((ws) => ws.name === workspace)?.colour);
+  /** The theme the window draws, which a colour is a hue shift of: a tab's tint follows it. */
+  const drawnTheme = useSyncExternalStore(followTheme, inForce);
+  /** What a workspace's own tab and its chat strip put on themselves: its colour, on the tab
+   *  shades and the accent (`theme.TINTED_TABS`). Nothing for a workspace with no colour. */
+  const tintOf = (workspace: string | undefined) =>
+    tintVariables(drawnTheme, colourOf(workspace), TINTED_TABS) as CSSProperties;
 
   /**
    * What a workspace is drawn as: its name, its pin, and the two counts.
@@ -786,8 +878,15 @@ export function PlaneView({
     const waiting = states.needsYou.filter((session) => filedIn(session) === workspace).length;
     const here = tabsIn(tabs, workspace, filedIn).length;
     const called = workspace === OUTSIDE ? OUTSIDE_TITLE : workspace;
+    const colour = colourOf(workspace);
     return (
       <>
+        {/* Its colour, as a mark in its own accent (charter-app#281) — on the strip and in the
+            menu of what the strip has no room for, which is why it is here and not a style of
+            the tab alone. Hidden from a screen reader: the name says which workspace. */}
+        {colour !== null && (
+          <span className="workspace-mark" aria-hidden="true" style={tintOf(workspace)} />
+        )}
         <span className="workspace-name">{called}</span>
         <Pin held={pinnedWorkspaces.includes(workspace)} what="workspace" />
         {/* How many chats are open over there. With the strip below showing one workspace's
@@ -843,8 +942,8 @@ export function PlaneView({
     [measured],
   );
   const { shown, hidden } = useMemo(
-    () => fitting(onStrip, tabs.inFront, room, LEAST.chat),
-    [onStrip, room, tabs.inFront],
+    () => fitting(onStrip, tabs.inFront, room, chatLeast),
+    [onStrip, room, tabs.inFront, chatLeast],
   );
 
   /**
@@ -888,7 +987,7 @@ export function PlaneView({
 
   /** Asks which profile and which persona. It starts nothing by itself. */
   const ask = useCallback(
-    async (where: { tab: true } | { split: Direction }) => {
+    async (where: Where) => {
       setPickerTrouble(undefined);
       const options = await commands
         .startOptions(plane)
@@ -903,6 +1002,8 @@ export function PlaneView({
   );
 
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
+  /** A new tab whose chat starts in that directory — this one, and not the next. */
+  const newTabIn = useCallback((path: string) => void ask({ tab: true, in: path }), [ask]);
 
   /** A row was picked: the chat starts on that profile, with that persona, either drawing
    *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in
@@ -911,6 +1012,9 @@ export function PlaneView({
     async (profile: string, persona: string | null, showFooter: boolean, label: string | null) => {
       const where = picking?.where;
       if (where === undefined) return;
+      // A tab asked for in one directory starts there; everything else starts where the
+      // explorer's pick says (charter-app#174).
+      const cwd = ("in" in where ? where.in : undefined) ?? startIn;
       const inFrontTab = now.current.inFront;
       // The tab's CHAT name, not the sentence the tab bar draws: the core is being told what
       // this chat is called, and a split's chat is called what the tab's chat is called. The
@@ -927,7 +1031,7 @@ export function PlaneView({
           plane,
           profile,
           persona,
-          startIn,
+          cwd,
           name,
           label,
           showFooter,
@@ -947,7 +1051,7 @@ export function PlaneView({
       // Where charter put it, written down before the tab is drawn: the plane will say the
       // same thing a tick later, and until it does this is what keeps the tab on the strip
       // the operator is looking at.
-      const filed = startIn === null ? OUTSIDE : (focused ?? OUTSIDE);
+      const filed = cwd === null ? OUTSIDE : (focused ?? OUTSIDE);
       setStartedIn((was) => ({ ...was, [session]: filed }));
       if ("tab" in where) {
         const kind = picking?.options.profiles.find((one) => one.name === profile)?.kind;
@@ -1054,10 +1158,13 @@ export function PlaneView({
    *
    * **Opening one runs nothing.** An extension's view asks its program when its tab draws it,
    * which is a separate, visible step (`Views.tsx`); the persona view reads the plane.
+   *
+   * `workspace` files it on that strip instead: a workspace's own settings belong on its strip
+   * whichever one is in front (charter-app#280).
    */
   const showView = useCallback(
-    (view: ViewRef, title: string) => {
-      const next = change((tabs) => openView(tabs, view, title, focused ?? OUTSIDE));
+    (view: ViewRef, title: string, on?: string) => {
+      const next = change((tabs) => openView(tabs, view, title, on ?? focused ?? OUTSIDE));
       const workspace =
         next.inFront === undefined ? undefined : workspaceOf(next, next.inFront, filedIn);
       if (workspace !== undefined) setPicked(workspace);
@@ -1078,6 +1185,21 @@ export function PlaneView({
     handled.current = settingsAsked;
     showView(SETTINGS_VIEW, SETTINGS_TITLE);
   }, [settingsAsked, showView]);
+
+  /** A workspace's settings tab (charter-app#280), on that workspace's strip. */
+  const openWorkspaceSettings = useCallback(
+    (workspace: string) =>
+      showView(workspaceSettingsView(workspace), workspaceSettingsTitle(workspace), workspace),
+    [showView],
+  );
+
+  /** The Preferences tab, opened the same way and for the same reason (charter-app#283). */
+  const preferencesHandled = useRef(preferencesAsked);
+  useEffect(() => {
+    if (preferencesAsked === undefined || preferencesHandled.current === preferencesAsked) return;
+    preferencesHandled.current = preferencesAsked;
+    showView(PREFERENCES_VIEW, PREFERENCES_TITLE);
+  }, [preferencesAsked, showView]);
 
   /**
    * Focuses a workspace: the strip below it shows that workspace's chats, and one of them
@@ -1221,6 +1343,38 @@ export function PlaneView({
       setReplan((asked) => asked + 1);
     },
     [plane],
+  );
+
+  /** Asks for a new vault. It makes nothing: the dialog asks, and `vault_create` makes one. */
+  const createVault = useCallback(() => {
+    setVaultTrouble(undefined);
+    setMakingVault(true);
+  }, []);
+
+  const pickVault = useCallback(() => setPickingVault(true), []);
+
+  /**
+   * Makes it, through `charter vault add`'s own path (`vault_create`), and opens its tab — a
+   * vault is made to have secrets put in it, and the tab is where that is done. A refusal stays
+   * in the dialog, in the core's words.
+   */
+  const makeVault = useCallback(
+    async (name: string, provider: string, opVault: string | null) => {
+      setBusyVault(true);
+      const answer = await commands
+        .vaultCreate(plane, name, provider, opVault)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      setBusyVault(false);
+      if (answer.status === "error") {
+        setVaultTrouble(answer.error);
+        return;
+      }
+      setMakingVault(false);
+      setVaultTrouble(undefined);
+      reloadVaults();
+      showView({ from: null, view: "vault", key: answer.data.name }, answer.data.name);
+    },
+    [plane, reloadVaults, showView],
   );
 
   /**
@@ -1487,8 +1641,14 @@ export function PlaneView({
       // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
       // is not a reader of the panel list.
       openView: showView,
+      pickVault,
+      createVault,
       removeWorktree,
       mergeWorktree,
+      // A clone picked from its menu is the explorer's own pick one level up: the same state,
+      // so the explorer marks it and `New tab` starts there (charter-app#174).
+      pickClone: (repo, path) => pickSpot({ repo, path }),
+      newChatIn: newTabIn,
       sendKey,
       openProject: windowDoes.openProject,
       createProject: windowDoes.createProject,
@@ -1497,6 +1657,8 @@ export function PlaneView({
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       openSettings: windowDoes.openSettings,
+      openWorkspaceSettings,
+      openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),
     [
@@ -1504,11 +1666,16 @@ export function PlaneView({
       bringToFront,
       close,
       closePane,
+      createVault,
       createWorkspace,
       focusWorkspace,
       ignoreNeedsYou,
       mergeWorktree,
       newTab,
+      pickVault,
+      newTabIn,
+      openWorkspaceSettings,
+      pickSpot,
       pinTab,
       pinWorkspace,
       removeWorkspace,
@@ -1579,6 +1746,20 @@ export function PlaneView({
     [ofWorkspace, workspaceState.panels, workspaceState.pieces],
   );
 
+  /**
+   * The focused workspace's clones with the paths the core spelled (charter-app#174), for the
+   * two rows each clone's menu lists. Held on `panels`, which keeps its identity until the
+   * plane is read again, for the pieces' reason above.
+   */
+  const clones = useMemo<Clone[]>(() => {
+    const panels = workspaceState.panels;
+    if (ofWorkspace === undefined || panels === undefined) return [];
+    return panels.repos.flatMap((repo) => {
+      const path = panels.paths[repo];
+      return path === undefined ? [] : [{ repo, path }];
+    });
+  }, [ofWorkspace, workspaceState.panels]);
+
   /** The plane's personas, straight off the plane's own answer — the array, not a copy of it,
    *  so the catalogue is rebuilt when the plane is read again and not per render. */
   const personas = workspaceState.panels?.personas;
@@ -1607,7 +1788,10 @@ export function PlaneView({
             focused,
             worktree,
             pieces,
+            clones,
+            startsIn: spot?.path,
             personas,
+            vaults: vaultNames,
             plane,
             projects,
             // WHICH row was refused and is still on screen. The catalogue matches the ids it
@@ -1618,6 +1802,7 @@ export function PlaneView({
             needsYou: states.needsYou,
             quiet,
             nameOf,
+            reportsTo: (session) => states.reports[session] ?? [],
             // The projects' pins are the WINDOW's, and travel down with the projects: a
             // project that is not in front draws nothing, so its pin cannot be held here.
             pinned: {
@@ -1629,6 +1814,7 @@ export function PlaneView({
             views,
           }),
     [
+      clones,
       focused,
       inFront,
       nameOf,
@@ -1642,9 +1828,12 @@ export function PlaneView({
       projects,
       quiet,
       report,
+      spot?.path,
       states.needsYou,
+      states.reports,
       strips,
       tabs,
+      vaultNames,
       views,
       worktree,
     ],
@@ -1782,18 +1971,20 @@ export function PlaneView({
   // window's and holds every project's. Their rows are the catalogue's own (`needsYouRows`),
   // asked on their own because the catalogue is built only for the project in front.
   const asking = useMemo<Asking[]>(() => {
-    const rows = catalogued(needsYouRows(states.needsYou, nameOf, tabs));
+    const reportsTo = (session: number) => states.reports[session] ?? [];
+    const rows = catalogued(needsYouRows(states.needsYou, nameOf, tabs, reportsTo));
     return states.needsYou.map((session) => {
       const filed = filedIn(session);
       return {
         session,
         name: nameOf(session),
+        reported: reportsTo(session),
         workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
         go: rows.get(showId(session)),
         ignore: rows.get(ignoreId(session)),
       };
     });
-  }, [filedIn, nameOf, states.needsYou, tabs]);
+  }, [filedIn, nameOf, states.needsYou, states.reports, tabs]);
 
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
@@ -1818,8 +2009,12 @@ export function PlaneView({
       // opposite ends of the window.
       read: sidebar !== undefined,
       where: focused === OUTSIDE ? OUTSIDE_TITLE : focused,
+      // Which workspace, by name, and its colour: the window draws that workspace's theme and
+      // tints its accent with that colour while this project is in front (charter-app#281).
+      workspace: ofWorkspace,
+      colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
     }),
-    [asking, ending, focused, offers, quiet, report, run, settled, sidebar],
+    [asking, ending, focused, ofWorkspace, offers, quiet, report, run, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -1866,7 +2061,7 @@ export function PlaneView({
               role="tablist"
               aria-label="Workspaces"
               ref={workspaceStrip}
-              style={{ "--least": `${LEAST.workspace}px` } as CSSProperties}
+              style={{ "--least": `${workspaceLeast}px` } as CSSProperties}
             >
               {workspacesShown.shown.map((workspace) => {
                 const offer = by(`workspace.focus:${workspace}`);
@@ -1890,6 +2085,10 @@ export function PlaneView({
                         role="tab"
                         aria-selected={workspace === focused}
                         title={offer?.title}
+                        // Its own colour, in front or not (charter-app#281): its shade and its
+                        // mark are its tint, set on the tab and nowhere else.
+                        data-colour={colourOf(workspace) ?? undefined}
+                        style={tintOf(workspace)}
                         onClick={() => {
                           if (offer?.available) press(offer);
                         }}
@@ -1938,7 +2137,9 @@ export function PlaneView({
         </div>
       )}
 
-      <header className="bar">
+      {/* The chat strip is the focused workspace's, so it is drawn in that workspace's colour
+          (charter-app#281): its shade, its selected tab and its accent. */}
+      <header className="bar" style={tintOf(ofWorkspace)}>
         {/* The chats of the FOCUSED WORKSPACE (ADR 0036), which is what the tmux frame's
             sessions-under-a-workspace was. Named, because the projects and the workspaces
             above are tablists too and a query for `role="tab"` across the whole window
@@ -1949,7 +2150,7 @@ export function PlaneView({
             role="tablist"
             aria-label="Tabs"
             ref={strip}
-            style={{ "--least": `${LEAST.chat}px` } as CSSProperties}
+            style={{ "--least": `${chatLeast}px` } as CSSProperties}
           >
             {shown.map((id) => (
               /* Right-click is the third reader of the catalogue (`Menus.tsx`). `asChild`, so
@@ -1977,6 +2178,8 @@ export function PlaneView({
                       <button
                         role="tab"
                         aria-selected={id === tabs.inFront}
+                        // Where a handed-off chat came from, by its parent's name (charter-app#258).
+                        title={handedFrom[chatOf(tabs, id) ?? -1]}
                         // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
                         // tab that has a rename row — a chat's, and never a view's.
                         {...(by(`tab.rename:${id}`) ? { [RENAMES_ON_F2]: "" } : {})}
@@ -2160,9 +2363,17 @@ export function PlaneView({
               views={views}
               shownRow={shownRow}
               onShowRow={setShownRow}
+              vaults={vaults}
             />
           ),
-          bottom: <BottomBar workspace={ofWorkspace} state={workspaceState} />,
+          bottom: (
+            <BottomBar
+              workspace={ofWorkspace}
+              state={workspaceState}
+              offers={found}
+              onPress={press}
+            />
+          ),
         }}
         centre={
           /* The centre is where a chat is, so its menu is the chat verbs the bar has: a new
@@ -2181,9 +2392,11 @@ export function PlaneView({
                   onPaneDoes={onPaneDoes}
                   states={states}
                   name={frontTab.name}
+                  handedFrom={handedFrom}
                   offered={views}
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
+                  onVaultChanged={reloadVaults}
                 />
               ) : tabs.order.length > 0 ? (
                 // Chats are running — just not in the workspace being looked at. Saying
@@ -2266,6 +2479,28 @@ export function PlaneView({
         />
       )}
 
+      {makingVault && (
+        <NewVault
+          plane={plane}
+          trouble={vaultTrouble}
+          making={busyVault}
+          onCreate={(name, provider, opVault) => void makeVault(name, provider, opVault)}
+          onCancel={() => {
+            setMakingVault(false);
+            setVaultTrouble(undefined);
+          }}
+        />
+      )}
+
+      {pickingVault && (
+        <OpenVault
+          vaults={vaults.vaults ?? []}
+          offers={found}
+          onPress={press}
+          onCancel={() => setPickingVault(false)}
+        />
+      )}
+
       {removing && (
         <DeleteWorkspace
           workspace={removing.workspace}
@@ -2313,6 +2548,17 @@ export function PlaneView({
 }
 
 /** What this project told the window about itself. */
+/** Redraws a component when the theme in force changes: what a workspace's tint is taken from
+ *  (charter-app#281). */
+function followTheme(changed: () => void): () => void {
+  return onDrawn(() => changed());
+}
+
+/** A workspace's colour when it has a hue to tint with, else `null` (charter-app#281). */
+function colourWithHue(colour: string | null | undefined): string | null {
+  return hueOf(colour) === undefined ? null : (colour ?? null);
+}
+
 export type PlaneReport = {
   /** Every chat it has open, with what each one is doing — what a quit would end. */
   ending: Ending[];
@@ -2338,6 +2584,12 @@ export type PlaneReport = {
   /** The workspace it is on, already read as it should be said — `undefined` when it is on
    *  none. The title bar's second segment (`TitleBar.tsx`). */
   where: string | undefined;
+  /** The workspace it is on by its name, `undefined` outside every workspace: whose
+   *  `workspace.json` is a layer of the theme the window draws (charter-app#281). */
+  workspace?: string;
+  /** That workspace's colour, a palette name or `#rrggbb`, or `null`: what the window's accent
+   *  and focus ring are tinted with while it is in front (charter-app#281). */
+  colour?: string | null;
 };
 
 /** What a project asks the WINDOW to do, because the window is what holds projects. */
@@ -2357,6 +2609,9 @@ export type WindowDoing = {
    *  window's, because the project may not be the one in front, and only the window can bring
    *  it there. */
   openSettings: (plane: string) => void;
+  /** Opens the Preferences tab (charter-app#283) on the project in front, or draws it where the
+   *  opener is when there is none. The window's, because which project is in front is. */
+  openPreferences: () => void;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
    *  in front draws nothing, and its pin still has to be on that strip (ADR 0039). */
   pinProject: (plane: string, pinned: boolean) => Promise<Ran>;
@@ -2375,6 +2630,10 @@ type Arrived = {
   persona: string | null;
   /** The harness it runs, for its default name when it adopted no persona. */
   harness?: string | null;
+  /** The task name the handoff gave it, which its tab says instead (charter-app#258). */
+  label?: string | null;
+  /** The chat it was handed off from, by name, and that chat's workspace. */
+  from?: HandedFrom | null;
 };
 
 /**
@@ -2471,6 +2730,7 @@ function PaneFrame({
   session,
   moved,
   running,
+  from,
   doing,
   children,
 }: {
@@ -2478,6 +2738,8 @@ function PaneFrame({
   session: number;
   moved: number;
   running: boolean;
+  /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
+  from?: string;
   doing: ReactNode;
   children: ReactNode;
 }) {
@@ -2490,6 +2752,7 @@ function PaneFrame({
           controls are in its top corner, which is where reading order puts them anyway. */}
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
+        {from && <span className="pane-from">{from}</span>}
       </div>
       <div className="pane-corner at-end">{doing}</div>
       {children}
@@ -2825,9 +3088,11 @@ function LayoutPanes({
   onPaneDoes,
   states,
   name,
+  handedFrom,
   offered,
   onOpenView,
   onAsk,
+  onVaultChanged,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
@@ -2843,11 +3108,15 @@ function LayoutPanes({
   states: ChatStates;
   /** The tab's name, which is the title of the view it opened on. */
   name: string;
+  /** Where each handed-off chat came from, by session (charter-app#258). */
+  handedFrom: Readonly<Record<number, string>>;
   /** The views approved extensions offer, for the buttons a view draws beside itself. */
   offered: readonly ExtensionView[];
   onOpenView: (view: ViewRef, title: string) => void;
   /** The operator pressed to have a waiting view in this pane asked. */
   onAsk: (pane: number) => void;
+  /** A vault's tab wrote to its vault: the plane's vault list is read again. */
+  onVaultChanged: () => void;
 }) {
   if (layout.kind === "pane") {
     const content = layout.content;
@@ -2869,10 +3138,12 @@ function LayoutPanes({
               plane={plane}
               view={content.view}
               title={name}
+              workspace={content.workspace === OUTSIDE ? undefined : content.workspace}
               waits={content.waits === true}
               offered={offered}
               onOpenView={onOpenView}
               onAsk={() => onAsk(layout.pane)}
+              onVaultChanged={onVaultChanged}
             />
           </div>
         </div>
@@ -2884,6 +3155,7 @@ function LayoutPanes({
         session={content.session}
         moved={movedAt(states, content.session)}
         running={stateOf(states, content.session) === "running"}
+        from={handedFrom[content.session]}
         doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
       >
         <SessionPane
@@ -2926,9 +3198,11 @@ function LayoutPanes({
               onPaneDoes={onPaneDoes}
               states={states}
               name={name}
+              handedFrom={handedFrom}
               offered={offered}
               onOpenView={onOpenView}
               onAsk={onAsk}
+              onVaultChanged={onVaultChanged}
             />
           </Panel>
         </Fragment>

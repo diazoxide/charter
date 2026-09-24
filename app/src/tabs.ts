@@ -63,6 +63,34 @@ export const SETTINGS_VIEW: ViewRef = { from: null, view: "settings", key: "" };
 /** What the Project settings tab is called. */
 export const SETTINGS_TITLE = "Project settings";
 
+/**
+ * **A workspace's settings view** (charter-app#280): the `settings` of its `workspace.json`, the
+ * layer between the project's Shared and Local files. A view tab of its own rather than a section
+ * of Project settings, because #252 made that tab one section per FILE for one holder of settings
+ * — a plane — and a plane has as many `workspace.json` files as it has workspaces. So it is keyed
+ * by the workspace, the way the persona view is keyed by the persona: one tab per workspace,
+ * deduplicated by the same `viewKey`, and filed on that workspace's strip.
+ */
+export function workspaceSettingsView(workspace: string): ViewRef {
+  return { from: null, view: "workspace-settings", key: workspace };
+}
+
+/** What a workspace's settings tab is called. */
+export function workspaceSettingsTitle(workspace: string): string {
+  return `Workspace settings · ${workspace}`;
+}
+
+/**
+ * **The Preferences view** (charter-app#283): how this machine's window is drawn — the window
+ * and terminal text sizes — which is the machine's and not the plane's. A view tab all the
+ * same, opened on the project in front, because a tab is where the window puts a surface; what
+ * it edits is the machine's layout file (`textSize.ts`), never a file in the plane.
+ */
+export const PREFERENCES_VIEW: ViewRef = { from: null, view: "preferences", key: "" };
+
+/** What the Preferences tab is called. */
+export const PREFERENCES_TITLE = "Preferences";
+
 /** What a pane shows. */
 export type Content =
   /**

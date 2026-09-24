@@ -341,6 +341,41 @@ fn an_extensions_table_charter_would_not_read_is_refused_in_either_file() {
 }
 
 #[test]
+fn a_local_file_may_hold_harness_plugins() {
+    // charter-app#274: a harness's own plugins are turned on or off for this machine's use of
+    // the project in the Local file, which overrides the Shared one plugin by plugin.
+    let dir = plane(COMMENTED);
+    let why = refusals(
+        dir.path(),
+        Which::Local,
+        "[harness_plugins.claude]\n\"figma@official\" = false\n",
+    );
+    assert_eq!(why, Vec::<String>::new());
+}
+
+#[test]
+fn neither_file_may_turn_charters_own_plugin_off() {
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        let why = refusals(
+            dir.path(),
+            which,
+            "[harness_plugins.claude]\n\"charter-app@inline\" = false\n",
+        );
+        assert_eq!(
+            why,
+            [format!(
+                "harness_plugins.claude.\"charter-app@inline\" in {} cannot be false: \
+                 charter-app@inline is always on: it is charter's own plugin, and it carries \
+                 charter's hooks and the Bash guard",
+                which.file()
+            )],
+            "{which:?}"
+        );
+    }
+}
+
+#[test]
 fn a_local_file_that_does_not_exist_is_created_on_the_first_save() {
     let dir = plane(COMMENTED);
     let body = "[harness]\ndefault = \"claude\"\n";
@@ -383,7 +418,7 @@ fn a_local_file_git_would_commit_is_never_written() {
     assert_eq!(
         err,
         [
-            "git would commit charter.local.toml, so the profiles in it are refused until it is \
+            "git would commit charter.local.toml, so charter reads nothing in it until it is \
           ignored — charter reinit adds /charter.local.toml to .gitignore."
         ]
     );
@@ -579,4 +614,48 @@ fn a_value_is_never_written_over_a_table() {
     assert!(err.contains("memory is a table"), "{err}");
     let err = edited(COMMENTED, &[set(&["forge"], Value::Text("x".into()))]).unwrap_err();
     assert!(err.contains("forge is a table"), "{err}");
+}
+
+#[test]
+fn either_file_may_pick_a_theme() {
+    // charter-app#273: a project's theme, Local over Shared.
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        for value in ["charter-light", "system", "solarized/Solarized Dark"] {
+            let why = refusals(dir.path(), which, &format!("[theme]\nuse = \"{value}\"\n"));
+            assert_eq!(why, Vec::<String>::new(), "{which:?} {value}");
+        }
+    }
+}
+
+#[test]
+fn a_theme_charter_would_not_read_is_refused_in_either_file() {
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        let file = which.file();
+        let why = refusals(
+            dir.path(),
+            which,
+            "[theme]\nuse = \"purple\"\nfont = \"x\"\n",
+        );
+        assert_eq!(
+            why,
+            [
+                format!(
+                    "theme.use in {file} is \"purple\", which is not charter-dark, \
+                     charter-light, system or <extension>/<theme>"
+                ),
+                format!("theme.font in {file} is not read — [theme] holds use and nothing else"),
+            ],
+            "{which:?}"
+        );
+        let why = refusals(dir.path(), which, "theme = \"system\"\n");
+        assert_eq!(
+            why,
+            [format!(
+                "theme in {file} is not a table — write [theme] with use = \"<theme>\""
+            )],
+            "{which:?}"
+        );
+    }
 }

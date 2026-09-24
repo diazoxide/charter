@@ -30,8 +30,9 @@ const MAX_COLS: usize = 80;
 const MAX_ROWS: usize = 10;
 const MAX_NAME: usize = 35;
 const MAX_LABEL: usize = MAX_NAME * 2 + 1;
-/// `len("• ") + len("  ") + len(" → ")`, in characters.
-const DECORATION: usize = 2 + 2 + 3;
+/// `len("• ") + len("  ") + len(" → ")`, in characters: 2 + 2 + 3. Written as the sum's
+/// value, because `2 * 2 + 3` is the same 7 and a mutation test could never tell them apart.
+const DECORATION: usize = 7;
 /// The longest consent line charter will print and ask about: a screen, less the label.
 const MAX_LINE: usize = MAX_COLS * MAX_ROWS - MAX_LABEL - DECORATION;
 
@@ -66,11 +67,10 @@ pub fn declared(root: &Path, name: &str) -> (Map<String, Value>, Vec<String>) {
         let Some(doc) = doc.as_object() else {
             continue;
         };
-        let servers = match doc.get("mcpServers") {
-            None => continue,
-            Some(v) if !crate::dispatch::truthy(Some(v)) => continue,
-            Some(Value::Object(servers)) => servers,
-            Some(_) => continue,
+        // Python skips a falsy `mcpServers` and then anything that is not a dict. The only
+        // falsy dict is `{}`, which declares nothing either way, so one test is both.
+        let Some(Value::Object(servers)) = doc.get("mcpServers") else {
+            continue;
         };
         for (server, entry) in servers {
             if name_ok(server) {
@@ -554,3 +554,7 @@ mod tests {
         assert_eq!(label(&[&"x".repeat(40)]), format!("{}...", "x".repeat(32)));
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_tests.rs"]
+mod recorded;

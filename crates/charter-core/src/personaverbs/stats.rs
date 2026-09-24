@@ -89,86 +89,153 @@ pub fn row(root: &Path, name: &str, recent_days: i64, today: NaiveDate) -> Row {
 /// `dispatch._ts`: a row's `ts` as `datetime.fromisoformat` reads it — `(the instant, in UTC,
 /// for ordering; the date as the row wrote it, for printing)`. A stamp with no offset is UTC.
 ///
-/// `fromisoformat` takes more than RFC 3339: a date alone, `T` or a space, an hour with or
-/// without minutes and seconds, a fraction, `Z` or an offset, and the basic forms without
-/// separators. Each is tried here, because a row whose stamp this rejected was one Python
-/// counted, and the advice line then printed an empty date.
+/// A row whose stamp this refused is one Python skipped, and a row it read is one Python
+/// counted: either mistake moves the advice line's date or its count. So this is CPython
+/// 3.11/3.12's `datetime_fromisoformat` step for step. Checked against both, which agree on
+/// every stamp here, over 6.9 million: every time of up to seven characters drawn from
+/// `016:.,` under no offset, `Z`, `+05:00` and `-0130`; and every time of up to five from
+/// `019:.x` after six dates, nine separators and eleven offsets, good and bad. (3.14 reads a
+/// few of these differently — it refuses `10.5` and `10:00:00:25`, and rolls `24:00` over to
+/// the next day.)
 fn ts(row: &serde_json::Value) -> Option<(NaiveDateTime, NaiveDate)> {
     let raw = row.get("ts")?.as_str()?.trim();
-    let (body, offset) = split_offset(raw);
-    let local = naive(body)?;
-    let utc = local - chrono::Duration::seconds(offset?);
-    Some((utc, local.date()))
+    let (local, offset) = from_isoformat(raw)?;
+    Some((local - offset, local.date()))
 }
 
-/// `raw` without its trailing `Z`/`±HH[:MM[:SS]]`, and the offset in seconds — `Some(0)` for
-/// none. `None` for an offset that does not read.
-fn split_offset(raw: &str) -> (&str, Option<i64>) {
-    if let Some(body) = raw.strip_suffix('Z') {
-        return (body, Some(0));
+/// `datetime.fromisoformat`: the stamp as written, and its offset (zero for none).
+///
+/// The date is `YYYY-MM-DD` or `YYYYMMDD`, and after it comes **any one character** — `T`, a
+/// space, or anything else — then the time. The ISO week forms are not read: charter never
+/// wrote one, and CPython's rule for where a week date ends is a guess of its own.
+fn from_isoformat(raw: &str) -> Option<(NaiveDateTime, chrono::Duration)> {
+    let bytes = raw.as_bytes();
+    if matches!(bytes.get(4..6), Some([b'W', _] | [_, b'W'])) {
+        return None;
     }
-    // An offset can only follow the time, which follows the 8th character at the earliest.
-    let at = raw
-        .char_indices()
-        .skip(8)
-        .find(|(_, c)| *c == '+' || *c == '-')
-        .map(|(i, _)| i);
+    let date_len = if bytes.get(4) == Some(&b'-') { 10 } else { 8 };
+    let date = crate::recall::from_isoformat(raw.get(..date_len)?)?;
+    let mut rest = raw[date_len..].chars();
+    if rest.next().is_none() {
+        return Some((date.and_hms_opt(0, 0, 0)?, chrono::Duration::zero()));
+    }
+    let (clock, offset) = time_and_offset(rest.as_str().as_bytes())?;
+    let [h, m, s] = clock.hms;
+    // `hour must be in 0..23` and its kin — Python's range checks on the time, not the offset —
+    // are chrono's too: it refuses an hour past 23 and a minute or second past 59 (a leap second
+    // is spelled in the micros, which stop at 999999 here). A check of our own before this line
+    // could not change an answer: cargo-mutants found every one of its six mutants survived.
+    Some((date.and_hms_micro_opt(h, m, s, clock.micros)?, offset))
+}
+
+/// `parse_isoformat_time`: the time, and the offset after it.
+///
+/// The offset starts at the first `Z`, `+` or `-`. Where there is one, the time may stop short
+/// of it — `10:` and `10x` both read as ten o'clock before `+05:00`, as they do in CPython —
+/// and where there is none it may not.
+fn time_and_offset(t: &[u8]) -> Option<(Clock, chrono::Duration)> {
+    let at = t.iter().position(|b| matches!(b, b'Z' | b'+' | b'-'));
+    let clock = hh_mm_ss_ff(&t[..at.unwrap_or(t.len())])?;
     let Some(at) = at else {
-        return (raw, Some(0));
+        return clock.whole.then_some((clock, chrono::Duration::zero()));
     };
-    let (body, off) = raw.split_at(at);
-    let sign = if off.starts_with('-') { -1 } else { 1 };
-    let digits: String = off[1..].chars().filter(|c| *c != ':').collect();
-    let part = |r: std::ops::Range<usize>| digits.get(r).and_then(|d| d.parse::<i64>().ok());
-    let seconds = match digits.len() {
-        2 => part(0..2).map(|h| h * 3600),
-        4 => part(0..2).zip(part(2..4)).map(|(h, m)| h * 3600 + m * 60),
-        6 => part(0..2)
-            .zip(part(2..4))
-            .zip(part(4..6))
-            .map(|((h, m), s)| h * 3600 + m * 60 + s),
-        _ => None,
+    let zone = &t[at + 1..];
+    let offset = if t[at] == b'Z' {
+        if !zone.is_empty() {
+            return None;
+        }
+        chrono::Duration::zero()
+    } else {
+        let off = hh_mm_ss_ff(zone).filter(|o| o.whole)?;
+        let [h, m, s] = off.hms.map(i64::from);
+        let whole = h * 3600 + m * 60 + s;
+        // `tzinfo_from_isoformat_results`: a whole-second offset of zero is UTC, and the
+        // fraction written after it is dropped.
+        let micros = if whole == 0 { 0 } else { off.micros };
+        let size =
+            chrono::Duration::seconds(whole) + chrono::Duration::microseconds(i64::from(micros));
+        // `timezone()` takes an offset strictly inside a day, and checks nothing else about it.
+        if size >= chrono::Duration::days(1) {
+            return None;
+        }
+        if t[at] == b'-' { -size } else { size }
     };
-    (body, seconds.map(|s| sign * s))
+    Some((clock, offset))
 }
 
-fn naive(body: &str) -> Option<NaiveDateTime> {
-    const DATES: [&str; 2] = ["%Y-%m-%d", "%Y%m%d"];
-    const TIMES: [&str; 8] = [
-        "%H:%M:%S%.f",
-        "%H:%M:%S",
-        "%H:%M",
-        "%H",
-        "%H%M%S%.f",
-        "%H%M%S",
-        "%H%M",
-        "",
-    ];
-    for date in DATES {
-        for sep in ["T", " "] {
-            for time in TIMES {
-                let fmt = if time.is_empty() {
-                    date.to_string()
-                } else {
-                    format!("{date}{sep}{time}")
-                };
-                if time.is_empty() {
-                    if let Ok(d) = NaiveDate::parse_from_str(body, &fmt) {
-                        return d.and_hms_opt(0, 0, 0);
-                    }
-                } else if let Ok(at) = NaiveDateTime::parse_from_str(body, &fmt) {
-                    return Some(at);
-                } else if time == "%H"
-                    && let Some((d, h)) = body.split_once(sep)
-                    && h.len() == 2
-                    && let (Ok(d), Ok(h)) = (NaiveDate::parse_from_str(d, date), h.parse::<u32>())
-                {
-                    return d.and_hms_opt(h, 0, 0);
-                }
-            }
+/// What `parse_hh_mm_ss_ff` read.
+struct Clock {
+    hms: [u32; 3],
+    micros: u32,
+    /// Whether it read to the end. Python's `1` return: the time stopped early, which only an
+    /// offset after it forgives.
+    whole: bool,
+}
+
+/// CPython 3.12's `parse_hh_mm_ss_ff`: `HH[[:]MM[[:]SS]]`, each part exactly two digits, the
+/// separators all `:` or all absent as the first one decides, then an optional fraction after
+/// `.` or `,` of which six digits are kept and the rest cut. Read the way the C reads it, which
+/// is also how it arrives at `10:00:00:25` meaning a quarter second past ten, and at `10.5`,
+/// `10:00.5` and `1000.5` meaning half a second past ten.
+fn hh_mm_ss_ff(t: &[u8]) -> Option<Clock> {
+    let two = |p: usize| -> Option<u32> {
+        let d = t.get(p..p + 2)?;
+        d.iter()
+            .all(u8::is_ascii_digit)
+            .then(|| u32::from(d[0] - b'0') * 10 + u32::from(d[1] - b'0'))
+    };
+    let mut hms = [0; 3];
+    let mut p = 0;
+    let mut colons = false;
+    for i in 0..3 {
+        hms[i] = two(p)?;
+        p += 2;
+        let Some(&c) = t.get(p) else {
+            return Some(Clock {
+                hms,
+                micros: 0,
+                whole: true,
+            });
+        };
+        p += 1;
+        if i == 0 {
+            colons = c == b':';
         }
+        if p == t.len() {
+            // A separator, or a stray character, the time ends on.
+            return Some(Clock {
+                hms,
+                micros: 0,
+                whole: false,
+            });
+        }
+        if colons && c == b':' {
+            continue;
+        }
+        if c == b'.' || c == b',' {
+            break;
+        }
+        if colons {
+            return None;
+        }
+        p -= 1;
     }
-    None
+    let digits = (t.len() - p).min(6);
+    let fraction = t.get(p..p + digits)?;
+    if !fraction.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let read: u32 = fraction.iter().fold(0, |n, d| n * 10 + u32::from(d - b'0'));
+    let micros = read * 10u32.pow(6 - digits as u32);
+    p += digits;
+    while t.get(p).is_some_and(u8::is_ascii_digit) {
+        p += 1;
+    }
+    Some(Clock {
+        hms,
+        micros,
+        whole: p == t.len(),
+    })
 }
 
 fn is_event(row: &serde_json::Value, event: &str) -> bool {
@@ -555,6 +622,122 @@ mod tests {
         assert!(at("yesterday").is_none());
     }
 
+    /// Every answer here is CPython 3.12's `datetime.fromisoformat` (3.11 agrees on every one),
+    /// read as `ts` reads it: the instant in UTC, or `None` where Python raises.
+    #[test]
+    fn a_time_is_refused_exactly_where_fromisoformat_refuses_it() {
+        let at = |raw: &str| {
+            ts(&serde_json::json!({ "ts": format!("2026-03-04T{raw}") }))
+                .map(|(utc, _)| utc.format("%H:%M:%S%.6f").to_string())
+        };
+        let read = [
+            ("10", "10:00:00.000000"),
+            ("1000", "10:00:00.000000"),
+            ("10:00", "10:00:00.000000"),
+            ("100000", "10:00:00.000000"),
+            ("10:00:00", "10:00:00.000000"),
+            ("10:00:00.5", "10:00:00.500000"),
+            ("10:00:00,5", "10:00:00.500000"),
+            ("100000,123", "10:00:00.123000"),
+            // Past six digits the fraction is cut, not rounded.
+            ("10:00:00.1234567", "10:00:00.123456"),
+            // A fraction may follow the hour or the minute as well as the second.
+            ("10.5", "10:00:00.500000"),
+            ("10:00.5", "10:00:00.500000"),
+            ("1000.5", "10:00:00.500000"),
+            // After the seconds, a third `:` reads what follows as the fraction.
+            ("10:00:00:25", "10:00:00.250000"),
+            // A separator the string ends on is Python's "not the end yet", and an offset ends it.
+            ("10:+05:00", "05:00:00.000000"),
+            ("10:00:00.Z", "10:00:00.000000"),
+            ("10x+05:00", "05:00:00.000000"),
+        ];
+        for (raw, want) in read {
+            assert_eq!(at(raw).as_deref(), Some(want), "{raw:?}");
+        }
+        let refused = [
+            "1",       // a one-digit hour
+            "100",     // the issue's stamp: three digits
+            "10000",   // five
+            "1000000", // seven
+            "1:00",    // a one-digit hour before a separator
+            "10:0",    // a one-digit minute
+            "10:00:0", // a one-digit second
+            "10:0000", // separators begun and then dropped
+            "1000:00", // separators begun late
+            "10:",     // a separator with nothing after it
+            "10:00:",
+            "10:00:00.",
+            "10.",
+            "10:00:00.12a",
+            "10x", // a stray character with no offset after it to forgive it
+            " 10",
+            "24:00", // out of range: 3.12 refuses what 3.14 rolls over
+            "23:60",
+            "23:59:60",
+            "\u{661}\u{660}:00", // digits Python's `int` reads, and `fromisoformat` does not
+        ];
+        for raw in refused {
+            assert_eq!(at(raw), None, "{raw:?}");
+        }
+    }
+
+    /// CPython 3.12's answers again: the character after the date is a separator whatever it
+    /// is, and a date's digits are exactly as many as `date.fromisoformat` wants.
+    #[test]
+    fn any_one_character_separates_the_date_from_the_time() {
+        let at = |raw: &str| {
+            ts(&serde_json::json!({ "ts": raw }))
+                .map(|(utc, _)| utc.format("%Y-%m-%d %H:%M:%S").to_string())
+        };
+        assert_eq!(at("2026-03-04x10").as_deref(), Some("2026-03-04 10:00:00"));
+        assert_eq!(at("2026-03-04é10").as_deref(), Some("2026-03-04 10:00:00"));
+        assert_eq!(at("20260304110").as_deref(), Some("2026-03-04 10:00:00"));
+        // `+` straight after the date is the separator, so `05:00` is the time, not an offset.
+        assert_eq!(
+            at("2026-03-04+05:00").as_deref(),
+            Some("2026-03-04 05:00:00")
+        );
+        assert_eq!(at("2026-03-04Z"), None);
+        assert_eq!(at("2026-03-04T"), None);
+        assert_eq!(at("2026-3-04T10:00"), None);
+        assert_eq!(at("2026-02-30"), None);
+        assert_eq!(at("2026-W10-3T10:00"), None, "the week forms are not read");
+    }
+
+    #[test]
+    fn an_offset_is_read_to_the_microsecond_and_must_stay_inside_a_day() {
+        let at = |raw: &str| {
+            ts(&serde_json::json!({ "ts": raw }))
+                .map(|(utc, _)| utc.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
+        };
+        let utc = |raw: &str| at(&format!("2026-03-04T10:00{raw}"));
+        assert_eq!(utc("+05:99").as_deref(), Some("2026-03-04 03:21:00.000000"));
+        assert_eq!(
+            utc("-05:00:00.25").as_deref(),
+            Some("2026-03-04 15:00:00.250000")
+        );
+        assert_eq!(utc("+0530").as_deref(), Some("2026-03-04 04:30:00.000000"));
+        // A whole-second offset of zero is UTC and its fraction is dropped (`if (tzoffset == 0)
+        // return UTC`); any other keeps its fraction.
+        assert_eq!(
+            utc("+00:00:00.5").as_deref(),
+            Some("2026-03-04 10:00:00.000000")
+        );
+        assert_eq!(
+            utc("-00:00:00.5").as_deref(),
+            Some("2026-03-04 10:00:00.000000")
+        );
+        assert_eq!(
+            utc("+00:00:01.5").as_deref(),
+            Some("2026-03-04 09:59:58.500000")
+        );
+        assert_eq!(utc("+24:00"), None);
+        assert_eq!(utc("+5"), None);
+        assert_eq!(utc("+05:"), None);
+        assert_eq!(utc("Zx"), None);
+    }
+
     #[test]
     fn a_memory_blind_role_is_never_dormant() {
         let dir = tempfile::tempdir().unwrap();
@@ -565,3 +748,7 @@ mod tests {
         assert_eq!(row(dir.path(), "router", 14, today).status, "orchestrator");
     }
 }
+
+#[cfg(test)]
+#[path = "stats_tests.rs"]
+mod recorded;

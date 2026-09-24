@@ -20,6 +20,36 @@ use charter_core::harness::StateHooks;
 
 use crate::sessions::{Opening, Reporting, Sessions};
 
+/// Every identity variable a vault of the plane at `cwd` declares — both halves of each `env`
+/// binding — so a chat is started without any of them (#271 review, U6). A `cwd` outside a
+/// plane, or a registry that cannot be read, yields none: the chat still loses every `OP_*` by
+/// prefix. Read on the thread that starts the chat; it is a small JSON read, once per start.
+///
+/// **Skipped in a fenced build.** Resolving the plane walks up from `cwd` and, in a fenced test
+/// build, that walk aborts the moment it names a plane outside the fixture fence
+/// (`charter_core::fence`, charter-app#129) — which a unit test's `cwd` routinely does. A test
+/// build therefore strips only by the `OP_` prefix; the declared-name strip is exercised at the
+/// session builder ([`crate::sessions`] tests pass `env_strip` directly) and in the core.
+fn declared_identity_vars(cwd: Option<&std::path::Path>) -> Vec<String> {
+    if charter_core::fence::FENCED {
+        return Vec::new();
+    }
+    let Some(root) = cwd.and_then(|c| charter_core::plane::find_root(c).ok()) else {
+        return Vec::new();
+    };
+    let ctx = charter_core::secrets::Ctx::new(&root, charter_core::secrets::Env::from_process());
+    let Ok(doc) = charter_core::secrets::registry::load_registry(&ctx) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = charter_core::secrets::registry::identity_vars(&doc)
+        .into_iter()
+        .flat_map(|(_, vars)| vars)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// One chat the app has open, as the UI and the quit warning see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Open {
@@ -44,6 +74,9 @@ pub struct Open {
     /// The name the operator gave it, where they gave one (charter-app#254). It rides the
     /// record too; see [`charter_core::reopen::Chat::label`].
     pub label: Option<String>,
+    /// The chat a handoff opened it from, where one did (charter-app#258). It rides the
+    /// record; see [`charter_core::reopen::Chat::from`].
+    pub from: Option<charter_core::reopen::HandedFrom>,
 }
 
 /// The most chats one record may start at a launch. The product's scale is fifty (the
@@ -175,10 +208,14 @@ impl Chats {
     /// `cwd` is the chat's own directory, which decides whether charter may also fill Claude
     /// Code's status line for it (`charter_core::footerclaim`): project settings are read from
     /// the session's own directory, so that is the directory the question is asked about.
+    ///
+    /// `plugins` is the harness's own plugins the project chose for this chat
+    /// (`charter_core::start::Ready::plugins`, charter-app#274); empty for a chat on no profile.
     fn state_hooks(
         &self,
         harness: Option<Harness>,
         cwd: Option<&std::path::Path>,
+        plugins: &charter_core::harness_plugin::Chosen,
     ) -> (Vec<String>, Vec<(String, String)>) {
         let (Some(harness), Some(binary)) = (harness, self.shipped.binary.as_deref()) else {
             return (Vec::new(), Vec::new());
@@ -187,7 +224,7 @@ impl Chats {
             binary,
             plugin: self.shipped.plugin.as_deref(),
         };
-        match harness.state_hooks(kit, cwd) {
+        match harness.state_hooks(kit, cwd, plugins) {
             StateHooks::ThisSessionOnly { args, env, .. } => (args, env),
             // Nothing is added to the command line, and nothing of the operator's is written
             // behind their back. The chat shows `unknown`.
@@ -215,6 +252,7 @@ impl Chats {
             ready.harness,
             ready.session.as_ref().map(ToString::to_string),
             ready.how.clone(),
+            &ready.plugins,
             size,
         )
     }
@@ -277,6 +315,9 @@ impl Chats {
             chat.harness(),
             launch.session.as_ref().map(ToString::to_string),
             launch.how,
+            // A chat on no profile has no project choice to carry: it runs as it always did,
+            // with the pins alone.
+            &std::collections::BTreeMap::new(),
             size,
         )
     }
@@ -297,13 +338,14 @@ impl Chats {
         harness: Option<Harness>,
         conversation: Option<String>,
         how: charter_core::reopen::Reopened,
+        plugins: &charter_core::harness_plugin::Chosen,
         size: Size,
     ) -> Result<u32, String> {
         // The profile's own command first — a wrapper reads its own words before it hands the
         // rest on (M8.3) — then the state hooks, then charter's own words: a chat's recorded
         // arguments may end in a positional prompt that nothing may come after.
         // `charter_core::start::Ready::command_line` is the one place that order is decided.
-        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref());
+        let (hooks, armed) = self.state_hooks(harness, chat.cwd.as_deref(), plugins);
         let all = charter_core::start::Ready::line(command, hooks, args);
         let mut env = env;
         env.extend(armed);
@@ -327,6 +369,10 @@ impl Chats {
                     cwd: chat.cwd.as_ref().map(|cwd| cwd.display().to_string()),
                     size,
                     env,
+                    // Every identity variable a vault of this chat's plane declares, so none
+                    // reaches the chat even when it is not `OP_`-prefixed (#271 review, U6). Read
+                    // from the plane the chat starts in; a chat outside a plane declares none.
+                    env_strip: declared_identity_vars(chat.cwd.as_deref()),
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);
@@ -432,6 +478,40 @@ impl Chats {
         Ok(label)
     }
 
+    /// The name `session` is shown under — the one it was given, or its default — or `None`
+    /// for a chat charter does not have open (charter-app#258).
+    pub fn shown_name(&self, session: u32) -> Option<String> {
+        let open = lock(&self.open);
+        let one = open.get(&session)?;
+        Some(charter_core::reopen::shown_name(
+            &one.chat,
+            one.harness.map(Harness::name),
+        ))
+    }
+
+    /// The handoff `session` was opened by, where one opened it.
+    pub fn handed_from(&self, session: u32) -> Option<charter_core::reopen::HandedFrom> {
+        lock(&self.open).get(&session)?.chat.from.clone()
+    }
+
+    /// Records what `session` owes the chat that handed it off, and writes the record so it
+    /// holds across a relaunch (charter-app#259). Nothing for a chat no handoff opened.
+    pub fn owes(&self, session: u32, owed: charter_core::reopen::Owed) {
+        let mut open = lock(&self.open);
+        let Some(from) = open
+            .get_mut(&session)
+            .and_then(|one| one.chat.from.as_mut())
+        else {
+            return;
+        };
+        if from.report == owed {
+            return;
+        }
+        from.report = owed;
+        drop(open);
+        self.write_it_down();
+    }
+
     /// What the window says its view tabs are now. Written down when it differs from what was
     /// held, and not otherwise — for [`Self::pin`]'s reason: every write is a fingerprint the
     /// machine store then has to vouch for.
@@ -482,6 +562,7 @@ impl Chats {
                     how: running.how.clone(),
                     pinned: chat.pinned,
                     label: chat.label.clone(),
+                    from: chat.from.clone(),
                 })
             })
             .collect()
@@ -660,6 +741,7 @@ mod tests {
                     pinned: false,
                     number: None,
                     label: None,
+                    from: None,
                 },
                 Size {
                     columns: 80,
@@ -723,6 +805,7 @@ mod tests {
                     pinned: false,
                     number: None,
                     label: None,
+                    from: None,
                 },
                 Size {
                     columns: 80,
@@ -771,6 +854,7 @@ mod tests {
                 pinned: false,
                 number: None,
                 label: None,
+                from: None,
             },
             Size {
                 columns: 80,
@@ -820,6 +904,7 @@ mod tests {
                     pinned: false,
                     number: None,
                     label: None,
+                    from: None,
                 },
                 Size {
                     columns: 80,
@@ -882,6 +967,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         }
     }
 
@@ -2041,6 +2127,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
 
         let session = chats
@@ -2081,6 +2168,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2098,6 +2186,7 @@ mod tests {
             how: charter_core::reopen::Reopened::Fresh(
                 charter_core::reopen::Fresh::NoConversationRecorded,
             ),
+            plugins: std::collections::BTreeMap::new(),
         };
 
         let session = chats
@@ -2148,6 +2237,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2165,6 +2255,7 @@ mod tests {
             how: charter_core::reopen::Reopened::Fresh(
                 charter_core::reopen::Fresh::NoConversationRecorded,
             ),
+            plugins: std::collections::BTreeMap::new(),
         };
 
         let session = chats.start_ready(&chat, &ready, SIZE).unwrap();
@@ -2182,10 +2273,20 @@ mod tests {
     /// profile's command is `command` (its first word replaced by a stand-in that writes its
     /// arguments down) and the app arms it with a plugin.
     fn argv_of_a_profile_chat(command: &[&str]) -> (Vec<String>, String) {
+        argv_of_a_chat_in(command, "", |_| String::new())
+    }
+
+    /// The same, in a plane whose `charter.toml` is `shared`, with `profile(root)` written
+    /// under the profile's table in `charter.local.toml`.
+    fn argv_of_a_chat_in(
+        command: &[&str],
+        shared: &str,
+        profile: impl Fn(&std::path::Path) -> String,
+    ) -> (Vec<String>, String) {
         let dir = tempfile::tempdir().expect("a directory");
         let root = dir.path().join("plane");
         std::fs::create_dir_all(&root).expect("the plane");
-        std::fs::write(root.join(charter_core::plane::MANIFEST), "").expect("charter.toml");
+        std::fs::write(root.join(charter_core::plane::MANIFEST), shared).expect("charter.toml");
         let argv = root.join("argv");
         let program = stand_in::program(
             &root,
@@ -2200,8 +2301,9 @@ mod tests {
         std::fs::write(
             root.join(charter_core::profiles::LOCAL_FILE),
             format!(
-                "[harness.work]\nkind = \"claude\"\ncommand = [{}]\n",
-                words.join(", ")
+                "[harness.work]\nkind = \"claude\"\ncommand = [{}]\n{}",
+                words.join(", "),
+                profile(&root)
             ),
         )
         .expect("the profile");
@@ -2244,6 +2346,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
         let session = chats.start_ready(&chat, &ready, SIZE).expect("it runs");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -2270,6 +2373,41 @@ mod tests {
         // The app's own session words come after the flags, where they always were.
         assert_eq!(argv[5], "--session-id", "{argv:?}");
         assert_eq!(argv[7..], ["--name", "ide.7"], "{argv:?}");
+    }
+
+    #[test]
+    fn a_claude_code_chat_runs_with_the_plugins_its_project_chose() {
+        // charter-app#274: the words the program actually received. The project turns one of
+        // the account's installed plugins off; the other is left to Claude Code, and the two
+        // pins ride beside it as they always have.
+        let (argv, _) = argv_of_a_chat_in(
+            &["claude"],
+            "[harness_plugins.claude]\n\"figma@official\" = false\n",
+            |root| {
+                let config = root.join("claude-config");
+                std::fs::create_dir_all(config.join("plugins")).expect("the config dir");
+                std::fs::write(
+                    config.join("plugins/installed_plugins.json"),
+                    r#"{"version": 2, "plugins": {"figma@official": [{"scope": "user"}],
+                        "serena@official": [{"scope": "user"}]}}"#,
+                )
+                .expect("the install record");
+                format!(
+                    "env = {{ CLAUDE_CONFIG_DIR = {:?} }}\n",
+                    config.display().to_string()
+                )
+            },
+        );
+        let settings: serde_json::Value = serde_json::from_str(&argv[3]).expect("JSON");
+        assert_eq!(
+            settings["enabledPlugins"],
+            serde_json::json!({
+                "charter-app@inline": true,
+                "charter@charter": false,
+                "figma@official": false,
+            }),
+            "{argv:?}"
+        );
     }
 
     #[test]

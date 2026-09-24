@@ -33,7 +33,10 @@ import { useAboutThisMachine } from "./windowprefs";
 import { ApprovePlane } from "./ApprovePlane";
 import { drawThemeFor, Extensions } from "./Extensions";
 import { Opener } from "./Opener";
+import { Preferences } from "./Preferences";
 import { useExtensionsOn } from "./extensionsOn";
+import { useProjectTheme } from "./projectTheme";
+import { drawTint } from "./theme/theme";
 import { useContributedPanels } from "./Panels";
 import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
@@ -42,7 +45,7 @@ import { Palette } from "./Palette";
 import { ClosingProject } from "./ClosingProject";
 import { QuitWarning, type Ending } from "./QuitWarning";
 import { RelaunchAsk } from "./RelaunchAsk";
-import { fitting, LEAST, useRoom } from "./fits";
+import { fitting, LEAST, leastAt, useRoom } from "./fits";
 import { Menued, useNoBrowserMenu } from "./Menus";
 import { NewProject } from "./NewProject";
 import {
@@ -58,7 +61,8 @@ import type { Alerts } from "./StatusLine";
 import { TitleBar, runningIn, useTitleBarRoom, type Crumbs } from "./TitleBar";
 import type { Needing, Quiet } from "./NeedsYou";
 import { useUpdates } from "./Updates";
-import { noTabs } from "./tabs";
+import { noTabs, PREFERENCES_TITLE } from "./tabs";
+import { useTextSizes } from "./textSize";
 
 /**
  * Puts the app's own `charter` on a terminal's `PATH`, and answers what the core said — the
@@ -139,6 +143,17 @@ function App() {
    * have left behind. The project's own `PlaneView` opens it, because its tabs are its own.
    */
   const [settingsAsk, setSettingsAsk] = useState<{ plane: PlaneId; at: number }>();
+  /**
+   * The last ask for the Preferences tab (charter-app#283), the same shape as `settingsAsk`:
+   * the project in front when it was asked, whose strip the tab opens on. The sizes are the
+   * machine's, so any project's strip will do, and the one the operator is looking at is it.
+   */
+  const [preferencesAsk, setPreferencesAsk] = useState<{ plane: PlaneId; at: number }>();
+  /** Preferences asked for with no project in front: drawn where the opener is, because there
+   *  is no strip to open a tab on and a text size is still worth changing. */
+  const [preferencesAlone, setPreferencesAlone] = useState(false);
+  /** The project in front, for a verb that is kept stable across renders. */
+  const inFrontNow = useRef<PlaneId | undefined>(undefined);
   /** Why this launch took longer than the limit, when it did — and nothing when it did not
    *  (charter-app#24). The core decides that; the window only draws it. */
   const [slowStart, setSlowStart] = useState<string>();
@@ -456,6 +471,11 @@ function App() {
         setShowing({ at: "plane", plane });
         setSettingsAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
       },
+      openPreferences: () => {
+        const plane = inFrontNow.current;
+        if (plane === undefined) setPreferencesAlone(true);
+        else setPreferencesAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
+      },
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
     [closeProject, pinProject],
@@ -562,20 +582,45 @@ function App() {
    *  Only once the core has said what the launch resolved and the restore has finished
    *  opening what it remembered: both are about to decide whether there is a project here. */
   const openerUp = inFront === undefined && launch !== undefined && !restoring;
-  /** What the project in front has on (charter-app#253), for the one thing that is the window's
-   *  and not a project's to draw: the theme. */
-  const onInFront = useExtensionsOn(inFront);
-  // The theme the project in front may have, drawn once it has said what it has on — and every
-  // approved extension's with no project in front, which is what the window drew before projects
-  // had a say (ADR 0048). After the first frame, like every extension theme (`Extensions.tsx`).
-  useEffect(() => {
-    if (inFront === undefined) void drawThemeFor("every");
-    else if (onInFront !== undefined) void drawThemeFor(onInFront);
-  }, [inFront, onInFront]);
+  useLayoutEffect(() => {
+    inFrontNow.current = inFront;
+    // A project arriving ends the stand-in: from here Preferences is a tab, and the opener a
+    // later close brings back must be the opener rather than a Preferences left behind.
+    if (inFront !== undefined) setPreferencesAlone(false);
+  }, [inFront]);
   /** What the project in front last said about itself, when it has said anything yet. The
    *  palette lists its catalogue and runs its rows, so a row reaches that project's live
    *  arrangement and no other's. */
   const saying = inFront === undefined ? undefined : reports[inFront];
+  /** The workspace the project in front is on, when it is on one (charter-app#281): its
+   *  `workspace.json` is a layer of the theme the window draws, between the project's two files. */
+  const workspaceInFront = saying?.workspace;
+  /** The project in front once it knows which workspace it is on — its plane read — and not
+   *  before: asked for the project alone first, the window would draw the project's theme and
+   *  then repaint in the workspace's a moment later, a flash at every launch. */
+  const settledInFront = saying?.read === true ? inFront : undefined;
+  /** What the project in front has on in that workspace (charter-app#253, #280), for the one
+   *  thing that is the window's and not a project's to draw: the theme. */
+  const onInFront = useExtensionsOn(settledInFront, workspaceInFront);
+  /** The theme the project in front picked there (charter-app#273, #281): `null` when nothing
+   *  picked one. */
+  const pickInFront = useProjectTheme(settledInFront, workspaceInFront);
+  // The theme the project and workspace in front have, drawn once they have said what they have
+  // on and what they picked — and every approved extension's with no project in front, which is
+  // what the window drew before projects had a say (ADR 0048). After the first frame, like every
+  // extension theme (`Extensions.tsx`). A project or workspace switch redraws it, and
+  // `theme.onDrawn` hands it to every terminal on screen (#216).
+  useEffect(() => {
+    if (inFront === undefined) void drawThemeFor("every");
+    else if (onInFront !== undefined && pickInFront !== undefined)
+      void drawThemeFor(onInFront, pickInFront);
+  }, [inFront, onInFront, pickInFront]);
+  // And the workspace in front's colour on the window's accent and focus ring (charter-app#281),
+  // live on every switch. The terminal is not told: nothing it draws is tinted.
+  const colourInFront = saying?.colour ?? null;
+  useEffect(() => {
+    drawTint(colourInFront);
+  }, [colourInFront]);
   /** What the last action answered — the project in front's, or this window's own when there
    *  is no project in front to have one. */
   const said = saying?.said ?? report;
@@ -667,6 +712,15 @@ function App() {
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, []);
 
+  // The app menu's Preferences… (`⌘,`), which is the core's (`lifecycle.rs`) and says so with
+  // an event, as its Quit does. The same verb the palette row runs.
+  useEffect(() => {
+    const listening = listen("preferences-asked", () => windowDoes.openPreferences()).catch(
+      () => undefined,
+    );
+    return () => void listening.then((stop) => stop?.()).catch(() => undefined);
+  }, [windowDoes]);
+
   const quit = useCallback(() => {
     setAsking(false);
     void commands.quit().catch(() => undefined);
@@ -703,6 +757,8 @@ function App() {
       selectTab: () => undefined,
       renameTab: () => undefined,
       focusWorkspace: () => undefined,
+      pickClone: () => undefined,
+      newChatIn: () => undefined,
       // Both are rows the catalogue marks unavailable with no plane — there is nowhere to make
       // a workspace and no workspace to delete — so `perform` refuses them before either of
       // these is reached. They exist because `Doing` is one shape for every surface.
@@ -714,6 +770,9 @@ function App() {
       // A view is shown in a project's tab, and there is no project here. The rows that open one
       // do not exist without a plane, for the same reason the workspace rows above do not.
       openView: () => undefined,
+      // No plane, no vaults: both rows are unavailable without one.
+      pickVault: () => undefined,
+      createVault: () => undefined,
       pinTab: async () => nowhere(),
       pinWorkspace: async () => nowhere(),
       pinProject: windowDoes.pinProject,
@@ -727,6 +786,9 @@ function App() {
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       openSettings: windowDoes.openSettings,
+      // A workspace is a project's, and there is no project here to have one.
+      openWorkspaceSettings: () => undefined,
+      openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),
     [windowDoes],
@@ -787,15 +849,16 @@ function App() {
    * holder of sessions"*, and the shape is what says so before any word is read.
    */
   const { strip: projectStrip, controls: projectControls, width: room } = useRoom(drawn.length);
+  const projectLeast = leastAt(LEAST.project, useTextSizes().window);
   const projectsShown = useMemo(
     () =>
       fitting(
         drawn,
         drawn.find((one) => one.plane === inFront),
         room,
-        LEAST.project,
+        projectLeast,
       ),
-    [drawn, inFront, room],
+    [drawn, inFront, room, projectLeast],
   );
   const projectStop = useTabStop(
     inFront,
@@ -891,6 +954,7 @@ function App() {
       decided: launch !== undefined && !restoring,
       read: saying?.read ?? false,
       workspace: saying?.where,
+      coloured: saying?.colour != null,
       running: runningIn(saying),
     }),
     [inFront, launch, restoring, saying],
@@ -959,7 +1023,7 @@ function App() {
             role="tablist"
             aria-label="Projects"
             ref={projectStrip}
-            style={{ "--least": `${LEAST.project}px` } as CSSProperties}
+            style={{ "--least": `${projectLeast}px` } as CSSProperties}
           >
             {projectsShown.shown.map((project) => {
               const at = drawn.indexOf(project);
@@ -1096,6 +1160,7 @@ function App() {
           contributed={contributedPanels}
           views={extensionViews}
           settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
+          preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}
         />
       ))}
 
@@ -1120,13 +1185,27 @@ function App() {
       {openerUp && (
         <div className="body">
           <div className="panes">
-            <Opener
-              here={!heldSomething && (launch?.here ?? false)}
-              reason={launch?.reason ?? ""}
-              adding={planes.length > 0}
-              onOpen={(path) => void openInto(path, true)}
-              trouble={openTrouble}
-            />
+            {preferencesAlone ? (
+              <section className="view-pane" aria-label={PREFERENCES_TITLE}>
+                <header className="view-head">
+                  <h2>{PREFERENCES_TITLE}</h2>
+                  <button type="button" tabIndex={0} onClick={() => setPreferencesAlone(false)}>
+                    Done
+                  </button>
+                </header>
+                <div className="view-body">
+                  <Preferences />
+                </div>
+              </section>
+            ) : (
+              <Opener
+                here={!heldSomething && (launch?.here ?? false)}
+                reason={launch?.reason ?? ""}
+                adding={planes.length > 0}
+                onOpen={(path) => void openInto(path, true)}
+                trouble={openTrouble}
+              />
+            )}
           </div>
         </div>
       )}

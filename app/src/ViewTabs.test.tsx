@@ -11,7 +11,8 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { ViewTab } from "./bindings";
+import type { VaultContents, ViewTab } from "./bindings";
+import { BUILT_IN, DEFAULT_THEME, drawIn, inForce } from "./theme/theme";
 
 /**
  * **A tab that holds something other than a chat**, against the whole window (ADR 0043,
@@ -123,6 +124,31 @@ const STATISTICS = {
   about: "personas",
 };
 
+/** The plane's vaults, as the core holds them in these tests: `ops`, and whatever was made. */
+let held: string[] = [];
+let made: string[] = [];
+beforeEach(() => {
+  held = ["API_TOKEN"];
+  made = [];
+});
+const vaultOf = (name: string): VaultContents => ({
+  name,
+  provider: "keyring",
+  count: name === "ops" ? held.length : 0,
+  health: { ok: true, detail: "" },
+  secrets:
+    name === "ops"
+      ? held.map((key) => ({ key, size: "16–31 bytes", updated: "2026-09-24T11:32:17Z" }))
+      : [],
+  identity: [],
+  identity_in_app_env: [],
+});
+const vaultList = () =>
+  ["ops", ...made].map((name) => {
+    const { provider, count, health } = vaultOf(name);
+    return { name, provider, count, health };
+  });
+
 /** The core, answering every command the window sends, and recording what it was asked. */
 function core(
   on: {
@@ -131,6 +157,8 @@ function core(
     offered?: (typeof STATISTICS)[];
     /** What `extensions_on` answers: the extensions this project has on (charter-app#253). */
     extensionsOn?: string[];
+    /** What `project_theme_drawn` answers: the theme this project draws (charter-app#273). */
+    projectTheme?: string | null;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -147,10 +175,12 @@ function core(
     if (cmd === "extension_views") return on.offered ?? [];
     if (cmd === "extension_panels") return [];
     if (cmd === "extensions_on") return on.extensionsOn ?? ["persona-statistics"];
+    if (cmd === "project_theme_drawn") return on.projectTheme ?? null;
     if (cmd === "workspace_panels")
       return {
         workspace: "alpha",
         repos: [],
+        paths: {},
         absent: [],
         refused: [],
         todos: [],
@@ -160,6 +190,16 @@ function core(
         contributed: [PERSONAS_PANEL],
       };
     if (cmd === "workspace_repos") return { workspace: "alpha", repos: [], cache_refused: null };
+    if (cmd === "vault_list") return vaultList();
+    if (cmd === "vault_open") return vaultOf(String(given.vault));
+    if (cmd === "vault_secret_add") {
+      held.push(String(given.key));
+      return vaultOf(String(given.vault));
+    }
+    if (cmd === "vault_create") {
+      made.push(String(given.vault));
+      return vaultOf(String(given.vault));
+    }
     if (cmd === "open_view")
       return given.from === null
         ? {
@@ -200,7 +240,7 @@ describe("a persona's own tab", () => {
     expect(tab).toHaveTextContent("steward");
     expect(tabNames()).toEqual(["steward 1", "steward"]);
     expect(asked.filter((one) => one.cmd === "open_view").map((one) => one.args)).toEqual([
-      { plane: PLANE, from: null, view: "persona", key: "steward" },
+      { plane: PLANE, from: null, view: "persona", key: "steward", workspace: "alpha" },
     ]);
   });
 
@@ -355,7 +395,14 @@ describe("view tabs at a relaunch", () => {
     await userEvent.click(within(waiting).getByRole("button", { name: "Ask persona-statistics" }));
     await waitFor(() =>
       expect(asked.filter((one) => one.cmd === "open_view").map((one) => one.args)).toEqual([
-        { plane: PLANE, from: "persona-statistics", view: "statistics", key: "" },
+        {
+          plane: PLANE,
+          from: "persona-statistics",
+          view: "statistics",
+          key: "",
+          // The strip it came back on: its settings are part of the gate (charter-app#280).
+          workspace: "alpha",
+        },
       ]),
     );
   });
@@ -372,6 +419,120 @@ describe("view tabs at a relaunch", () => {
     expect(told.length).toBeGreaterThan(0);
     for (const one of told)
       expect((one.args.views as ViewTab[]).map((view) => view.key)).toEqual(["steward"]);
+  });
+});
+
+describe("a vault's own tab (charter-app#235)", () => {
+  /** Opens `ops` from its row in the Vaults panel, and waits for its table. */
+  async function openOps() {
+    const panel = await screen.findByTestId("panel-vaults");
+    await userEvent.click(await within(panel).findByRole("button", { name: /ops/ }));
+    return screen.findByRole("table", { name: "Secrets in ops" });
+  }
+
+  it("opens from the Vaults panel in front, and is brought forward rather than opened twice", async () => {
+    core();
+    render(<App />);
+    await openOps();
+    expect(tabNames()).toEqual(["steward 1", "ops"]);
+
+    await userEvent.click(within(strip()).getByRole("tab", { name: /steward 1/ }));
+    await openOps();
+
+    expect(tabNames()).toEqual(["steward 1", "ops"]);
+    expect(within(strip()).getByRole("tab", { selected: true })).toHaveTextContent(/^ops$/);
+  });
+
+  it("is told to the core, so the record brings it back at the next launch", async () => {
+    const { asked } = core();
+    render(<App />);
+    await openOps();
+    await waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "window_views").at(-1)?.args).toMatchObject({
+        views: [{ from: null, view: "vault", key: "ops", title: "ops", active: true }],
+      }),
+    );
+  });
+
+  it("comes back at a relaunch, open on its table", async () => {
+    core({
+      reopened: [
+        {
+          from: null,
+          view: "vault",
+          key: "ops",
+          title: "ops",
+          workspace: "alpha",
+          at: 1,
+          active: true,
+          pinned: false,
+        },
+      ],
+      chats: [{ ...OPEN_CHAT, in_front: false }],
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
+    expect(tabNames()).toEqual(["steward 1", "ops"]);
+  });
+
+  it("has the Vaults panel count again after a secret is added in it", async () => {
+    const { asked } = core();
+    render(<App />);
+    await openOps();
+    const lists = () => asked.filter((one) => one.cmd === "vault_list").length;
+    const before = lists();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a secret to ops" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "DB_URL");
+    await userEvent.type(within(dialog).getByLabelText("Value"), "window-value-5e1d");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add secret" }));
+
+    await waitFor(() => expect(lists()).toBeGreaterThan(before));
+    const panel = screen.getByTestId("panel-vaults");
+    expect(await within(panel).findByText(/2 secrets/)).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain("window-value-5e1d");
+  });
+
+  it("is made from the palette's New vault…, and opens in its own tab", async () => {
+    const { asked } = core();
+    render(<App />);
+    const terminal = await screen.findByTestId("pane");
+    terminal.focus();
+
+    await userEvent.keyboard("{F2}");
+    await screen.findByRole("dialog", { name: "Command palette" });
+    await userEvent.keyboard("New vault{Enter}");
+    const dialog = await screen.findByRole("dialog", { name: "New vault" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "fresh");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create vault" }));
+
+    expect(await screen.findByTestId("vault-empty")).toHaveTextContent("fresh holds no secrets");
+    expect(asked.find((one) => one.cmd === "vault_create")?.args).toEqual({
+      plane: PLANE,
+      vault: "fresh",
+      provider: "keyring",
+      opVault: null,
+    });
+    expect(within(strip()).getByRole("tab", { selected: true })).toHaveTextContent(/^fresh$/);
+  });
+
+  it("is picked from the palette's Open vault…", async () => {
+    core();
+    render(<App />);
+    const terminal = await screen.findByTestId("pane");
+    await within(await screen.findByTestId("panel-vaults")).findByText("ops");
+    terminal.focus();
+
+    await userEvent.keyboard("{F2}");
+    await screen.findByRole("dialog", { name: "Command palette" });
+    await userEvent.keyboard("Open vault…{Enter}");
+    const picker = await screen.findByRole("dialog", { name: "Open vault" });
+    await userEvent.click(within(picker).getByRole("button", { name: /ops/ }));
+
+    expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Open vault" })).toBeNull();
   });
 });
 
@@ -395,5 +556,26 @@ describe("a project's own extensions (charter-app#253)", () => {
     await within(panel).findByRole("button", { name: /steward/ });
 
     expect(within(panel).queryByRole("button", { name: /Statistics/ })).toBeNull();
+  });
+});
+
+describe("a project's own theme (charter-app#273)", () => {
+  afterEach(() => drawIn(DEFAULT_THEME));
+
+  it("is drawn while that project is in front", async () => {
+    const { asked } = core({ projectTheme: "charter-light" });
+    render(<App />);
+    await waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
+    expect(asked.some((one) => one.cmd === "project_theme_drawn" && one.args.plane === PLANE)).toBe(
+      true,
+    );
+  });
+
+  it("leaves the window its own theme for a project that picked nothing", async () => {
+    const { asked } = core({ projectTheme: null });
+    render(<App />);
+    await waitFor(() => expect(asked.some((one) => one.cmd === "project_theme_drawn")).toBe(true));
+    await screen.findByTestId("panel-personas");
+    expect(inForce()).toBe(DEFAULT_THEME);
   });
 });

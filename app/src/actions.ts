@@ -158,6 +158,12 @@ export type Does =
    *  here rather than only a click on the panel because a menu is a third reader of this list
    *  (`Menus.tsx`) and the persona rows had nothing in it to read (charter-app#174). */
   | { verb: "openView"; view: ViewRef; title: string }
+  /** Asks which of the plane's vaults to open (charter-app#235). It opens nothing by itself:
+   *  what the picker's row runs is that vault's own `vault.open:<name>`. */
+  | { verb: "pickVault" }
+  /** Asks for a new vault's name and provider. It makes nothing by itself: what may be called
+   *  what is `charter vault add`'s to say, through `vault_create`. */
+  | { verb: "createVault" }
   /** **Names the worktree it acts on**, and never "whichever one is in front".
    *
    *  It used to carry only `force`, which made `worktree.remove` a row about the chat in
@@ -166,6 +172,14 @@ export type Does =
    *  the piece it means, the same way `tab.close:<id>` spells out its tab. */
   | { verb: "removeWorktree"; cut: Cut; force: boolean }
   | { verb: "mergeWorktree"; cut: Cut }
+  /** Makes a clone the spot the next chat starts in — the explorer's pick, one level up from a
+   *  piece (charter-app#174). It starts nothing: the picker still asks, and the core still
+   *  decides whether that directory can be started in. The path is the one the core spelled. */
+  | { verb: "pickClone"; repo: string; path: string }
+  /** A new tab whose chat starts in that clone — this one tab. The explorer's pick is left as
+   *  it was, so the NEXT plain `New tab` starts where it would have; making the clone the spot
+   *  for every chat after is `pickClone`'s, and the two rows must not do the same thing. */
+  | { verb: "newTabIn"; repo: string; path: string }
   /** Shows the opener, so another project can be opened into this window beside the ones it
    *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
   | { verb: "openProject" }
@@ -197,6 +211,12 @@ export type Does =
    *  front first when it is not. It writes nothing by itself: a save is the tab's, through the
    *  core's own checks. */
   | { verb: "openSettings"; plane: string }
+  /** Opens that workspace's Workspace settings tab (charter-app#280), on that workspace's strip.
+   *  It writes nothing by itself: a save is the tab's, through the core's own checks. */
+  | { verb: "openWorkspaceSettings"; workspace: string }
+  /** Opens the Preferences tab (charter-app#283) — this machine's text sizes — on the project
+   *  in front. It writes nothing by itself: a size is changed on the tab, or by its keys. */
+  | { verb: "openPreferences" }
   | { verb: "quit" }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
@@ -266,11 +286,27 @@ export type Now = {
    */
   pieces?: readonly Cut[];
   /**
+   * The focused workspace's clones, each with the path the core spelled (`Panels.paths`).
+   *
+   * Two rows each (charter-app#174): a clone had no menu because nothing here was about one,
+   * and nothing could be until the core said where a clone is. Ten clones is twenty rows,
+   * counted beside the pieces in `actions.test.ts`.
+   */
+  clones?: readonly Clone[];
+  /** Where the next chat starts, when the explorer has picked somewhere — the path, so a
+   *  clone's pick row can say it is already the spot rather than offer it again. */
+  startsIn?: string;
+  /**
    * The plane's personas, as the right-hand panel lists them.
    *
    * One row each, and they are cheap: a plane has a handful, not a workspace's worth.
    */
   personas?: readonly string[];
+  /**
+   * The plane's vaults, by name (`vault_list`), one row each: a vault opens its own tab. A
+   * vault is the plane's, so these rows are the same whichever workspace is focused.
+   */
+  vaults?: readonly string[];
   /**
    * The views approved extensions offer this window (`extension_views`), one row each. The
    * palette is how a keyboard reaches them; the personas panel's heading is how a pointer does.
@@ -318,6 +354,9 @@ export type Now = {
   quiet?: readonly string[];
   /** What a chat is called, for a row that names one. */
   nameOf: (session: number) => string;
+  /** The chats that reported back to a chat in the queue, by name (charter-app#259), so its row
+   *  says what the operator is being asked to look at. */
+  reportsTo?: (session: number) => readonly string[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -349,10 +388,18 @@ export type Doing = {
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
+  /** Opens the vault picker. Nothing is opened until a vault in it is. */
+  pickVault: () => void;
+  /** Opens the new-vault dialog. Nothing is made until it is answered. */
+  createVault: () => void;
   /** Each takes the piece it acts on. The window no longer decides which worktree a removal
    *  meant by looking at what happens to be in front (charter-app#174). */
   removeWorktree: (cut: Cut, force: boolean) => Promise<Ran>;
   mergeWorktree: (cut: Cut) => Promise<Ran>;
+  /** Makes that clone where the next chat starts. It starts nothing, so it answers no `Ran`. */
+  pickClone: (repo: string, path: string) => void;
+  /** Opens the picker for a new tab whose chat starts in that directory, and nowhere else. */
+  newChatIn: (path: string) => void;
   sendKey: (key: string) => Promise<Ran>;
   openProject: () => void;
   /** Opens the new-project dialog. Nothing is scaffolded and nothing is opened until it is
@@ -364,6 +411,10 @@ export type Doing = {
   closeProject: (plane: string) => Promise<Ran>;
   /** Brings that project to the front and opens its Project settings tab. */
   openSettings: (plane: string) => void;
+  /** Opens that workspace's settings tab on its strip, or brings forward the one already open. */
+  openWorkspaceSettings: (workspace: string) => void;
+  /** Opens the Preferences tab, or brings forward the one already open. */
+  openPreferences: () => void;
   quit: () => void;
 };
 
@@ -376,6 +427,9 @@ export type Doing = {
  * a workspace that is not the one focused.
  */
 export type Cut = { workspace: string; repo: string; piece: string };
+
+/** One clone of the focused workspace: its name, and where it is as the core spelled it. */
+export type Clone = { repo: string; path: string };
 
 /** The id `Cut` gets inside a row: the clone and the piece, which is unique within one
  *  workspace and is what the explorer's row can name without looking anything up. */
@@ -613,7 +667,7 @@ export function catalogue(now: Now): Offer[] {
       ? cannot("needs.next", "Show the chat that needs you", nothingSaidSoFar(now.quiet ?? []))
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
-  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs));
+  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs, now.reportsTo));
 
   const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
 
@@ -688,6 +742,15 @@ export function catalogue(now: Now): Offer[] {
       ),
       note: held ? UNPIN_NOTE : PIN_NOTE,
     });
+    // Its settings (charter-app#280), under the words the project's row uses and told apart by
+    // the name in the note, as `project.settings` rows are.
+    offers.push({
+      ...can(`workspace.settings:${workspace}`, "Workspace settings…", {
+        verb: "openWorkspaceSettings",
+        workspace,
+      }),
+      note: `${workspace}: its workspace.json, between charter.toml and charter.local.toml.`,
+    });
   }
 
   // **A workspace can be made from here, and this is the only row that offers it.** The name
@@ -718,6 +781,13 @@ export function catalogue(now: Now): Offer[] {
     ...projects.pin,
     ...projects.settings,
   );
+  // **This machine's preferences, beside the projects' settings** (charter-app#283): the text
+  // sizes are the machine's and not a project's, so the row is there with no project open too,
+  // as `extensions.show` is.
+  offers.push({
+    ...can("preferences.show", "Preferences…", { verb: "openPreferences" }),
+    note: "This machine's window and terminal text sizes.",
+  });
 
   // **The plane's personas, one row each** (charter-app#174). What the row opens is the
   // persona's view — its own tab — and this is the whole of what charter can do to a persona today:
@@ -735,6 +805,52 @@ export function catalogue(now: Now): Offer[] {
         { verb: "openView", view: { from: null, view: "persona", key: persona }, title: persona },
         persona,
       ),
+    );
+  }
+
+  // **The plane's vaults, one row each, and each opens that vault's own tab** (charter-app#235)
+  // — the row the Vaults panel runs when one of its rows is pressed, and the one the picker
+  // runs. Then the picker itself, which is how "open a vault" is found by those words when the
+  // name is not known, and the way to make one. Both need a plane; the picker needs a vault.
+  const vaults = now.vaults ?? [];
+  for (const vault of vaults) {
+    offers.push(
+      can(
+        `vault.open:${vault}`,
+        `Open vault ${vault}`,
+        { verb: "openView", view: { from: null, view: "vault", key: vault }, title: vault },
+        vault,
+      ),
+    );
+  }
+  const noVaultPlane = "charter found no plane, so there are no vaults to reach.";
+  offers.push(
+    now.plane === undefined
+      ? cannot("vault.pick", "Open vault…", noVaultPlane)
+      : vaults.length === 0
+        ? cannot("vault.pick", "Open vault…", "This plane has no vaults yet. New vault… makes one.")
+        : can("vault.pick", "Open vault…", { verb: "pickVault" }),
+    now.plane === undefined
+      ? cannot("vault.create", "New vault…", noVaultPlane)
+      : {
+          ...can("vault.create", "New vault…", { verb: "createVault" }),
+          note: "Kept in your system's credential store unless you choose another provider.",
+        },
+  );
+  // **The focused workspace's clones, two rows each** (charter-app#174). A clone is where a
+  // chat can start, one level up from a piece, and that is the whole of what this window can
+  // do to one: open a tab there, or pick it as where every new chat starts. The first is the
+  // ordinary `New tab`'s picker aimed at the clone for that one tab; the second is the
+  // explorer's pick. Neither writes anything, so both are above the line.
+  for (const { repo, path } of now.clones ?? []) {
+    offers.push(
+      can(`clone.chat:${repo}`, `New tab in ${repo}`, { verb: "newTabIn", repo, path }, repo),
+    );
+    const pick = `Start new chats in ${repo}`;
+    offers.push(
+      now.startsIn === path
+        ? cannot(`clone.pick:${repo}`, pick, `New chats already start in ${repo}.`, repo)
+        : can(`clone.pick:${repo}`, pick, { verb: "pickClone", repo, path }, repo),
     );
   }
 
@@ -1002,10 +1118,22 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
+    case "pickVault":
+      doing.pickVault();
+      return DID;
+    case "createVault":
+      doing.createVault();
+      return DID;
     case "removeWorktree":
       return doing.removeWorktree(does.cut, does.force);
     case "mergeWorktree":
       return doing.mergeWorktree(does.cut);
+    case "pickClone":
+      doing.pickClone(does.repo, does.path);
+      return DID;
+    case "newTabIn":
+      doing.newChatIn(does.path);
+      return DID;
     case "sendKey":
       return doing.sendKey(does.key);
     case "openProject":
@@ -1027,6 +1155,12 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openSettings":
       doing.openSettings(does.plane);
       return DID;
+    case "openWorkspaceSettings":
+      doing.openWorkspaceSettings(does.workspace);
+      return DID;
+    case "openPreferences":
+      doing.openPreferences();
+      return DID;
     case "quit":
       doing.quit();
       return DID;
@@ -1046,10 +1180,16 @@ export function needsYouRows(
   needsYou: readonly number[],
   nameOf: (session: number) => string,
   tabs: Tabs,
+  /** The chats that reported back to each chat asking (charter-app#259), so its row says so. */
+  reportsTo: (session: number) => readonly string[] = () => [],
 ): Offer[] {
   return needsYou.flatMap((session) => {
     const name = nameOf(session);
-    const title = `Show ${name}, which needs you`;
+    const reported = reportsTo(session);
+    const title =
+      reported.length > 0
+        ? `Show ${name}: ${reported.join(", ")} reported back`
+        : `Show ${name}, which needs you`;
     return [
       tabHolding(tabs, session) === undefined
         ? cannot(showId(session), title, "That chat has no tab in this window.", name)
@@ -1255,6 +1395,9 @@ export type MenuOn =
    *  these, so carrying it would be a third copy of an answer the window already has. */
   | { on: "worktree"; repo: string; piece: string }
   | { on: "persona"; persona: string }
+  /** One clone of the focused workspace, by name — the explorer's clone heading and the bottom
+   *  bar's repo row. The path is the catalogue's, so the menu does not carry it. */
+  | { on: "clone"; repo: string }
   /** The panes — the centre of the window, where a chat is. Not about any one pane: a split
    *  acts on the pane that has the keyboard, which is what the bar's buttons act on too. */
   | { on: "pane" };
@@ -1289,6 +1432,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         above: [
           `workspace.focus:${what.workspace}`,
           `workspace.pin:${what.workspace}`,
+          `workspace.settings:${what.workspace}`,
           "workspace.create",
         ],
         below: [`workspace.remove:${what.workspace}`],
@@ -1320,6 +1464,10 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       // an operator edits. A menu with one honest row is the answer; a menu with three
       // invented ones is the defect this module exists to prevent (charter-app#174).
       return { above: [`persona.show:${what.persona}`], below: [] };
+    case "clone":
+      // Where a chat can start, and nothing else: a clone is the operator's own checkout, and
+      // nothing in this window writes to one (charter-app#174).
+      return { above: [`clone.chat:${what.repo}`, `clone.pick:${what.repo}`], below: [] };
     case "pane":
       return {
         above: ["chat.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],

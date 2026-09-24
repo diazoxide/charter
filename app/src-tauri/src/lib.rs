@@ -1,6 +1,10 @@
 //! The app's Rust side: what the UI can ask the core to do, as commands generated into
 //! TypeScript by `tauri-specta`, so no shape is written by hand on either side.
 
+// First, so its macros are defined for everything below.
+#[macro_use]
+mod ipc_commands;
+
 mod about;
 mod alerts;
 mod chats;
@@ -8,7 +12,9 @@ mod clipath;
 mod doctor;
 mod extensions;
 mod handoff;
+mod harness_plugins;
 mod hooks;
+mod ipc;
 mod lifecycle;
 mod opener;
 mod panels;
@@ -21,6 +27,7 @@ mod settings;
 mod slowstart;
 mod updates;
 mod usage;
+mod vaults;
 mod views;
 mod windowprefs;
 mod workspaces;
@@ -361,6 +368,27 @@ struct OpenChat {
     /// <N>` (charter-app#254). Charter's label only: `name` is still what its harness was
     /// started with.
     label: Option<String>,
+    /// Where a handoff opened it from, where one did: the note its tab's tooltip and its header
+    /// draw, `↳ from steward 3 · ops` (charter-app#258). Never the parent's number.
+    from: Option<HandedFromNote>,
+}
+
+/// Where a handed-off chat came from, as the window draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct HandedFromNote {
+    /// The chat it came from, by the name the operator saw it under.
+    pub name: String,
+    /// The workspace it came from.
+    pub workspace: String,
+}
+
+impl From<&charter_core::reopen::HandedFrom> for HandedFromNote {
+    fn from(from: &charter_core::reopen::HandedFrom) -> Self {
+        Self {
+            name: from.name.clone(),
+            workspace: from.workspace.clone(),
+        }
+    }
 }
 
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
@@ -373,6 +401,10 @@ struct SidebarWorkspace {
     vision: String,
     todos: Vec<String>,
     chats: Vec<OpenChat>,
+    /// Its colour as its `workspace.json` holds it — a palette name or `#rrggbb` — or `null`
+    /// (charter-app#281). Here because every workspace tab draws its own, whether or not it is
+    /// in front, and the sidebar is already the one read of every workspace.
+    colour: Option<String>,
 }
 
 /// The whole left-hand side: every workspace with its chats, and the focused workspace's
@@ -438,6 +470,9 @@ fn plane_sidebar(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sid
                 .map(|todo| todo.title)
                 .collect(),
             chats: filed.remove(&name).unwrap_or_default(),
+            colour: charter_core::extension::project::theme::colour_of(&ws)
+                .as_ref()
+                .map(charter_core::extension::project::theme::Colour::value),
             name,
         });
     }
@@ -740,6 +775,7 @@ fn start_chat(
         // deals it one that this plane has never used (charter-app#90).
         number: None,
         label: label.clone(),
+        from: None,
     };
     let session = held
         .chats()
@@ -792,6 +828,7 @@ fn open_session(
         // deals it one that this plane has never used (charter-app#90).
         number: None,
         label: None,
+        from: None,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
@@ -1022,6 +1059,7 @@ impl From<chats::Open> for OpenChat {
             in_front: open.in_front,
             pinned: open.pinned,
             label: open.label,
+            from: open.from.as_ref().map(HandedFromNote::from),
             resumed: match &open.how {
                 Reopened::Resumed(id) => Some(id.to_string()),
                 Reopened::Fresh(_) => None,
@@ -1143,90 +1181,22 @@ fn running_sessions(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<
     Ok(planes.held(&plane)?.chats().sessions().running())
 }
 
-/// Every command the UI can call, in one place: the source of both the handler and the
-/// TypeScript the UI imports.
+/// Hands `ipc_commands.rs`'s list, both classes of it, to `tauri-specta`.
+macro_rules! register {
+    (
+        value_free: [$($($free:ident)::+),* $(,)?],
+        vault_values: [$($($value:ident)::+),* $(,)?] $(,)?
+    ) => {
+        collect_commands![$($($free)::+,)* $($($value)::+),*]
+    };
+}
+
+/// Every command the UI can call, from the one list in `ipc_commands.rs`: the source of the
+/// handler, of the TypeScript the UI imports, and — through `build.rs` — of the allow-list that
+/// decides which window may call which (ADR 0052).
 fn commands() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
-        .commands(collect_commands![
-            first_frame,
-            title_bar_room,
-            plane_at_launch,
-            open_planes,
-            close_plane,
-            opener::recent_planes,
-            opener::pick_project,
-            opener::open_plane,
-            opener::approve_plane,
-            opener::planes_to_restore,
-            opener::relaunch_ask,
-            opener::relaunch,
-            opener::window_holds_planes,
-            opener::create_project,
-            open_session,
-            close_session,
-            ignore_needs_you,
-            send_input,
-            resize_session,
-            watch_session,
-            unwatch_session,
-            running_sessions,
-            chat_states,
-            opened_chats,
-            chats_that_would_not_start,
-            chat_in_front,
-            plane_pins,
-            pin_project,
-            pin_workspace,
-            pin_chat,
-            rename_chat,
-            ask_to_quit,
-            quit,
-            quit_cancelled,
-            hide_window,
-            window_showing,
-            plane_sidebar,
-            workspace_panels,
-            workspaces::workspace_create,
-            workspaces::workspace_at_risk,
-            workspaces::workspace_remove,
-            workspace_repos,
-            alerts_everywhere,
-            start_options,
-            approve_profile,
-            start_chat,
-            worktrees::worktree_of_chat,
-            worktrees::worktree_list,
-            worktrees::worktree_remove,
-            worktrees::worktree_merge,
-            updates::update_channel,
-            updates::set_update_channel,
-            updates::check_for_update,
-            updates::install_update,
-            updates::restart_to_update,
-            extensions::installed_extensions,
-            extensions::pick_extension,
-            extensions::install_extension,
-            extensions::approve_extension,
-            extensions::forget_extension,
-            extensions::extension_themes,
-            extensions::extension_panels,
-            extensions::project_extensions,
-            extensions::extensions_on,
-            views::extension_views,
-            views::extension_programs_run,
-            views::open_view,
-            views::reopened_views,
-            views::window_views,
-            doctor::plane_doctor,
-            settings::project_settings,
-            settings::save_project_settings,
-            usage::chat_usage,
-            pin::plane_pin,
-            about::about_charter,
-            clipath::install_cli_on_path,
-            windowprefs::write_layout,
-            windowprefs::adopt_layout,
-        ])
+        .commands(app_commands!(register))
         // What `update://checked` carries. It crosses on an event rather than a command, so it
         // is named here or the window would have to write the shape out by hand.
         .typ::<updates::Offer>()
@@ -1358,6 +1328,9 @@ pub fn run() {
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
             app.manage(Showing::default());
+            // The clipboard a vault's Copy writes to, and what it wrote, for the clear a minute
+            // later and the one at exit.
+            app.manage(vaults::SystemClipboard::default());
 
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
             // reads `unknown` — never a hook pointed at a path that is not there. It is a
@@ -1461,6 +1434,9 @@ pub fn run() {
                 // and ends its own sessions. A failure is not worth refusing to exit over —
                 // the next launch of that plane reads no record and starts empty.
                 app.state::<Planes>().let_go_of_all();
+                // A secret a vault's Copy put on the clipboard does not outlive the app: its
+                // clear was waiting on a timer that ends here.
+                app.state::<vaults::SystemClipboard>().clear_at_exit();
             }
         });
 }

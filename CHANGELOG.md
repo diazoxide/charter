@@ -26,27 +26,118 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mid-turn is named first, and you choose to restart now or wait. If the restart does not come
   back, the next launch offers the same sessions.
   ([#251](https://github.com/diazoxide/charter-app/issues/251))
-- **Project settings**, a tab of its own: right-click a project's tab and choose *Project
-  settings…*, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
+- **Project settings**, a tab of its own: right-click a project's tab and choose _Project
+  settings…_, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
   which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
   this machine — each as a form over the keys charter documents and as raw TOML for everything
   else. Saving keeps your comments and the order of your keys, and refuses what charter would
   refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
   in the committed file, a value that looks like a credential. Local is created on the first
   save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
+- **Workspace settings**, a tab of its own for each workspace: right-click a workspace's tab and
+  choose _Workspace settings…_, or find it in the palette. A workspace can turn an extension on
+  or off and set what it declares, for everyone who works in it: it is kept in the workspace's
+  `workspace.json`, committed with a LIVE workspace. It sits between the project's two files —
+  `charter.toml`, then the workspace, then `charter.local.toml` — so a workspace refines its
+  project and this machine still has the last word, and none of them reaches past this
+  machine's approval. Each extension says which of them decided it. The panels and views
+  follow the workspace in front, and a view a workspace turned off says so and where. Saving
+  changes nothing else in the manifest, and a `workspace.json` from before reads as it always
+  did. ([#280](https://github.com/diazoxide/charter-app/issues/280))
+- **A workspace's theme and colour.** Workspace settings has a Theme group: a theme for this
+  workspace, over the project's `charter.toml` pick and under your `charter.local.toml` — each
+  says which file the theme drawn there came from — and a **colour**: red, orange, yellow,
+  green, teal, blue, purple, pink, or one of your own. The colour tints the same theme rather
+  than replacing it: the accent and the focus ring while the workspace is in front, its tab and
+  its chat strip, and a dot on its tab and in the title bar. Text and the terminal keep the
+  theme's colours, so everything stays as readable as the theme was. Every workspace tab shows
+  its own colour whether or not it is in front, and switching workspaces switches the theme and
+  the tint live — the window's theme now follows the workspace in front, not only the project.
+  ([#281](https://github.com/diazoxide/charter-app/issues/281))
+- A workspace can also turn each harness's plugins on or off, in **Workspace settings**: one
+  **Harness plugins** group per harness, as in Project settings, with each plugin saying whether
+  `charter.toml`, the workspace's `workspace.json` or `charter.local.toml` decided it, or that
+  nothing did. A Claude Code chat started in the workspace gets that set; Codex and opencode say
+  their plugins are not supported yet, for a workspace as for a project. charter's own plugin
+  stays on and the old one stays off whatever a workspace says.
+  ([#282](https://github.com/diazoxide/charter-app/issues/282))
+- A vault can live in your system's own credential store: the Keychain on macOS, the Secret
+  Service on Linux. `charter vault add <name>` makes one by default, and every `charter secret`
+  and `charter vault` command works on it as on the other kinds. Each secret is its own
+  Keychain item, and on macOS only the charter program that stored it can read it without the
+  Keychain asking you first. A plaintext vault file is now something you ask for, with
+  `--provider plain-file`. ([#233](https://github.com/diazoxide/charter-app/issues/233))
+- **Vaults in the app.** A Vaults section in the Attention panel lists each vault with its
+  provider and how many secrets it holds. Clicking one opens the vault in a tab of its own, as a
+  persona opens, and the tab comes back at the next launch. The tab has a search box, **Add**,
+  and a table of name, size and when each secret was written. Each row's menu has Edit value,
+  Rename, Copy and Delete. The palette has *Open vault…* and *New vault…*, and a new vault is a
+  keyring one unless you pick another kind. Nothing the window lists or writes ever carries a
+  value back. ([#234](https://github.com/diazoxide/charter-app/issues/234),
+  [#235](https://github.com/diazoxide/charter-app/issues/235))
+- **Reveal and copy.** A secret's eye shows its value for 30 seconds, until you press it again,
+  or until you press Escape. **Copy** puts the value on the clipboard without it reaching the
+  window, marked for clipboard histories to skip. charter clears the clipboard a minute later, or
+  when it quits, but only if the clipboard still holds that value. Each reveal and copy writes
+  the trace event `charter secret get --reveal` writes, `secret-reveal`, with a `to` field saying
+  `window` or `clipboard`. ([#236](https://github.com/diazoxide/charter-app/issues/236))
+- **1Password tokens go into the Keychain, not your chats.** A 1Password vault's tab has a box
+  to paste its service-account token straight into the system keyring; the token never enters
+  charter's own environment. From then on every `charter secret` command reads it from the keyring,
+  so the vault works in a chat and in a terminal that exports nothing. charter runs only the `op`
+  it pinned when the token was stored, verified by path and code-signing team, so a chat cannot
+  redirect the token to an `op` of its own; the keyring item is random per vault and machine, and
+  the binding it was stored against is pinned locally, so a committed registry change cannot steer
+  it. No chat the app starts is given any `OP_*` variable (case insensitively) or any other
+  identity variable a vault declares. A tab can also move a token an app was launched with, and
+  then warns to relaunch charter so the export leaves its process.
+  ([#237](https://github.com/diazoxide/charter-app/issues/237))
 - **Extensions per project.** Each project can turn an installed extension on or off, and set
   what it declares, in either section of Project settings: Shared for the team, Local for you,
   and Local wins key by key. The tab shows every extension with what it is in this project —
-  on, off, *needs approval here*, or *not installed here* — and which file decided it. Approval
+  on, off, _needs approval here_, or _not installed here_ — and which file decided it. Approval
   stays with this machine: a project that enables an extension you have not approved leaves it
   off until you approve it in Extensions. A project that says nothing keeps every approved
   extension on, as before. Panels, views and themes follow the project in front, and a view
   refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter-app/issues/253))
+- **Harness plugins per project.** Project settings has a *Harness plugins* group for each
+  harness charter knows, in Shared and in Local. For Claude Code it lists the plugins installed
+  on this machine, and each one can be on, off or not set for the chats charter starts in the
+  project. Local wins plugin by plugin, and not set leaves the plugin to Claude Code's own
+  settings. charter's own plugin is always on and the old `charter@charter` always off. No file
+  can change either, and a save that tries is refused. Codex and opencode list what they have
+  installed and say their plugins are not supported yet, with the reason: Codex ignores a
+  plugin's on/off given for one session, and charter does not start opencode chats yet.
+  ([#274](https://github.com/diazoxide/charter-app/issues/274))
+- **A theme per project.** Project settings has a Theme select in Shared and in Local: charter's
+  dark or light theme, *Follow the system*, or any theme an extension you approved contributes.
+  Local wins over Shared. While that project is in front the window and every terminal draw its
+  theme, and switching projects switches it live. A pick whose extension is off in the project,
+  or not approved on this machine, draws the built-in dark theme, and the tab says why. A
+  project's pick wins over your `theme.json`; a project that picks nothing keeps it. ([#273](https://github.com/diazoxide/charter-app/issues/273))
 - An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
   counts on its project and workspace tabs at once, without touching the chat. It lasts until
   that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
   the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
   ([#248](https://github.com/diazoxide/charter-app/issues/248))
+- A handed-off chat is named for its task. `charter handoff --name "<short task>"` names the new
+  chat's tab, and the handoff skill always writes one from the brief; without it the tab is the
+  ordinary `<persona> <N>`, so four handoffs from one chat are four tabs you can tell apart. The
+  chat it came from is shown by name, never by number — `↳ from steward 3 · platform-next` in the
+  tab's tooltip and the chat's corner, and in the new chat's first line.
+  ([#258](https://github.com/diazoxide/charter-app/issues/258))
+- A handoff can ask for an answer. With `charter handoff --report`, the new chat is told to
+  finish with `charter handoff report "<summary>"`, and the chat that asked gets a needs-you item
+  (`<chat> reported back`) and the report as context on its next turn — quoted as data, and never
+  typed into it. The report goes only to the chat that asked, and exactly once per handoff —
+  another needs another `--report` handoff; if that chat has closed, the next chat in its workspace learns it when
+  it starts. Without `--report`, nothing changes. ([#259](https://github.com/diazoxide/charter-app/issues/259))
+- Right-click a repo — its heading in the explorer, or its row in the bottom bar — for **New tab
+  in** it, which starts that one tab's chat in the clone, and **Start new chats in** it, which
+  makes the clone where every new chat starts until you pick somewhere else, as picking a
+  worktree does one level down, and the explorer marks it.
+  Shift+F10 or the menu key opens any of charter's menus on the row the keyboard is on.
+  ([#174](https://github.com/diazoxide/charter-app/issues/174))
 
 ### Changed
 
@@ -80,6 +171,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   out of the needs-you queue and out of the red counts on its project and workspace tabs. It
   used to stay there until some other chat moved.
   ([#247](https://github.com/diazoxide/charter-app/issues/247))
+- A persona's card names the vault `charter persona list` names. A persona whose definition has
+  no `vault:` line but that `vaults.json` tags a vault to used to be shown as "not declared in
+  its definition"; the card now shows that vault's name and says it came from the vault
+  registry. A persona nothing names a vault for says so, a `vault: none` still says it holds no
+  credentials of its own, and a registry that does not read is shown with charter's reason.
+  ([#185](https://github.com/diazoxide/charter-app/issues/185))
+- `charter persona stats` reads a dispatch log's timestamps as Python's
+  `datetime.fromisoformat` did, digit for digit. A stamp such as `2026-03-04T100`, with three
+  digits for the time, is skipped rather than read as ten o'clock, and so is a one-digit hour,
+  minute or second. Any one character between the date and the time, a comma before the
+  fraction and an offset with seconds all read as Python read them.
+  ([#315](https://github.com/diazoxide/charter-app/issues/315))
+
+### Security
+
+- The window can only invoke the commands on the app's allow-list. Every command it calls is
+  now listed in one place and granted to the main window by name. Anything not on the list is
+  refused before it runs, and so is a call from any other window. A vault's reveal and copy
+  have a grant of their own and reach the main window only, so a window added later does not
+  get them by default. The Content-Security-Policy is tighter as well: the window loads no
+  plugins or frames, submits no forms, and accepts no `<base>`. The policy and the allow-list are
+  now separate guards on reveal and copy. Before, the policy was the only one.
+  ([#276](https://github.com/diazoxide/charter-app/issues/276))
+- A `charter.local.toml` that git tracks, or would commit, no longer decides anything. The file
+  is meant to stay on one machine, and charter already refused the harness profiles in it when
+  git would carry it. The extensions, theme and harness plugins it chose were still applied,
+  though, so a copy committed by mistake reached every clone of the plane. Now charter reads
+  nothing in such a file, and the workspace and `charter.toml` decide instead. The Local section
+  of Project settings still shows the file and says why it is not read and how to fix it: add
+  `/charter.local.toml` to `.gitignore` (`charter reinit` does that), or, if git already tracks
+  it, `git rm --cached` it first. ([#308](https://github.com/diazoxide/charter-app/issues/308))
 
 ## [0.1.1] - 2026-09-24
 
@@ -98,7 +220,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   says so instead of passing silently. ([#228](https://github.com/diazoxide/charter-app/pull/228))
 - `charter secret`, `charter persona secret` and `charter vault` are back. A chat that runs
   `charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl …` or `charter secret list
-  <vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without
+<vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without
   them; they now answer as the Python charter did, with the plain-file, reference and 1Password
   providers, and a value still never reaches the chat: `list` prints names, `get` a size band
   and a keyed fingerprint, and `exec` hands values to the command's environment or to 0600 temp
@@ -216,7 +338,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pane rather than taking a row from it, and a very light line divides one tab from the next.
   ([#214](https://github.com/diazoxide/charter-app/pull/214))
 - The project, workspace and chat strips nest, and tabs that do not fit collapse into a
-  *N more* button instead of scrolling. ([#139](https://github.com/diazoxide/charter-app/pull/139),
+  _N more_ button instead of scrolling. ([#139](https://github.com/diazoxide/charter-app/pull/139),
   [#171](https://github.com/diazoxide/charter-app/pull/171))
 - Closing the window hides it to the tray. Quitting says which chats it will end, and the next
   launch puts back the projects and chats you had open.

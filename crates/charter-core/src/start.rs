@@ -102,6 +102,11 @@ pub struct Ready {
     /// The conversation this chat is now under — resumed, or the one charter just chose.
     pub session: Option<SessionId>,
     pub how: Reopened,
+    /// The harness's own plugins this chat is handed on or off, by the harness's id: what the
+    /// project chose among those installed, and the pins (charter-app#274, ADR 0050). Empty for
+    /// a harness whose adapter cannot apply per chat. It reaches the harness through
+    /// [`crate::harness::Harness::state_hooks`].
+    pub plugins: crate::harness_plugin::Chosen,
 }
 
 impl Ready {
@@ -196,17 +201,35 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     let mut argv = crate::programs::resolve_argv(&profiles::expanded_command(profile, &home))
         .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
     let program = argv.remove(0);
+    let env = environment(profile, root, persona.as_deref(), start.show_footer);
+    // Listed from the chat's OWN environment: a profile that points its harness at another
+    // account's directory (`CLAUDE_CONFIG_DIR`) is listed against that account. A chat in a
+    // workspace — by its directory, which is how the window files it under one — also takes
+    // that workspace's choices, between Shared and Local (charter-app#282).
+    // Asked only for a kind that has an adapter: any other is handed nothing either way.
+    let workspace = start
+        .cwd
+        .as_deref()
+        .filter(|_| crate::harness_plugin::adapter(&profile.kind).is_some())
+        .and_then(|cwd| crate::workspaces::Plane::open(root).workspace_of(cwd));
+    let plugins = crate::harness_plugin::for_start(
+        &profile.kind,
+        root,
+        workspace.as_deref(),
+        &crate::harness_plugin::Env::of(&env),
+    );
     // The profile's own words stay together and in front; charter's go after them and after
     // whatever arms the harness. [`Ready::command_line`] is where the order is decided.
     Ok(Ready {
         program,
         command: argv,
         args: added,
-        env: environment(profile, root, persona.as_deref(), start.show_footer),
+        env,
         cwd: start.cwd.clone(),
         harness,
         session,
         how,
+        plugins,
     })
 }
 

@@ -22,6 +22,8 @@ pub mod list;
 pub mod mcp;
 pub mod select;
 pub mod stats;
+#[cfg(test)]
+mod tests_plane;
 
 /// `vault: none` — a persona that deliberately holds no credentials. `persona.NO_VAULT`.
 pub const NO_VAULT: &str = "none";
@@ -148,16 +150,32 @@ pub fn vault_ctx(root: &Path, state: &Path) -> crate::secrets::Ctx {
 /// the registry tags with this persona, by name. A registry that does not read names no
 /// vault — Python catches the error here.
 pub fn vault_of(root: &Path, state: &Path, name: &str) -> Option<String> {
+    vault(root, state, name).name().map(str::to_string)
+}
+
+/// [`vault_of`], saying where its answer came from — the persona card's vault, so the card and
+/// the CLI cannot name different ones (charter-app#185).
+pub fn vault(root: &Path, state: &Path, name: &str) -> crate::personas::Vault {
+    use crate::personas::Vault;
     if let Some(r) = resolve(root, name)
         && let Some(v) = r.get("vault")
     {
-        let v = crate::memstore::py_strip(v);
-        return (v != NO_VAULT && !v.is_empty()).then(|| v.to_string());
+        return match crate::memstore::py_strip(v) {
+            NO_VAULT => Vault::DeclaredNone,
+            // Python's `vault_of` answers `None` for a value that strips to nothing and does
+            // not go on to the registry. `Resolved` never carries a blank value, so this is
+            // the port being exact rather than a case a definition reaches.
+            "" => Vault::Unnamed,
+            v => Vault::Named(v.to_string()),
+        };
     }
-    let doc = crate::secrets::registry::load_registry(&vault_ctx(root, state)).ok()?;
-    crate::secrets::registry::vaults_for_persona(&doc, name)
-        .into_iter()
-        .next()
+    match crate::secrets::registry::load_registry(&vault_ctx(root, state)) {
+        Err(why) => Vault::RegistryUnreadable(why.message),
+        Ok(doc) => crate::secrets::registry::vaults_for_persona(&doc, name)
+            .into_iter()
+            .next()
+            .map_or(Vault::Unnamed, Vault::Registered),
+    }
 }
 
 /// Where a persona's definition sits, relative to the plane — `def_path(name).relative_to(ROOT)`.
@@ -250,6 +268,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vault_of(dir.path(), &state, "solo"), None);
+    }
+
+    #[test]
+    fn a_declared_vault_is_the_personas_whatever_the_registry_tags() {
+        let dir = plane(&[
+            ("ops", "---\nvault: ops\n---\n"),
+            ("kid", "---\nextends: ops\n---\n"),
+        ]);
+        let state = dir.path().join(".charter");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("vaults.json"),
+            r#"{"vaults": {"other": {"persona": "ops"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(vault_of(dir.path(), &state, "ops").as_deref(), Some("ops"));
+        assert_eq!(vault_of(dir.path(), &state, "kid").as_deref(), Some("ops"));
+    }
+
+    #[test]
+    fn declared_skills_are_the_personas_own_in_order_blanks_dropped() {
+        let dir = plane(&[
+            ("base", "---\nskills: inherited\n---\n"),
+            (
+                "ops",
+                "---\nextends: base\nskills:  superpowers:tdd , ,deploy \n---\n",
+            ),
+        ]);
+        assert_eq!(
+            declared_skills(dir.path(), "ops"),
+            ["superpowers:tdd", "deploy"]
+        );
+        assert!(declared_skills(dir.path(), "ghost").is_empty());
+    }
+
+    #[test]
+    fn a_definition_is_named_relative_to_the_plane_and_state_lives_in_dot_charter() {
+        let dir = plane(&[("ops", "---\n---\n")]);
+        std::fs::write(dir.path().join("personas/flat.md"), "---\n---\n").unwrap();
+        assert_eq!(def_rel(dir.path(), "ops"), "personas/ops/persona.md");
+        assert_eq!(def_rel(dir.path(), "flat"), "personas/flat.md");
+        assert_eq!(state_dir(dir.path()), dir.path().join(".charter"));
     }
 
     #[test]

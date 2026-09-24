@@ -98,6 +98,19 @@ function core(
           })),
       };
     if (cmd === "workspace_at_risk") return atRisk;
+    if (cmd === "project_extensions") return [];
+    if (cmd === "extensions_on") return [];
+    if (cmd === "workspace_settings")
+      return {
+        workspace: got.workspace,
+        file: `workspaces/${String(got.workspace)}/workspace.json`,
+        exists: true,
+        text: "{}\n",
+        refusals: [],
+        parsed: true,
+        fields: [],
+        live: false,
+      };
     if (cmd === "workspace_remove") {
       if (refuses && got.force !== true)
         throw { said: refusalOver(refusesOver), at_risk: refusesOver };
@@ -157,6 +170,7 @@ describe("deleting a workspace", () => {
     ).toEqual([
       "Focus workspace alpha",
       expect.stringContaining("Pin workspace alpha"),
+      expect.stringContaining("Workspace settings…"),
       "New workspace…",
       expect.stringContaining("Delete workspace alpha"),
     ]);
@@ -340,8 +354,13 @@ describe("deleting a workspace", () => {
 
     // Everything else the delete sets off is the window reading the plane again: the sidebar,
     // this operator's pins, and the two the three regions share for whatever workspace the
-    // window lands on afterwards. None of them writes anything.
+    // window lands on afterwards — and what that workspace has on (charter-app#280). None of
+    // them writes anything.
     const READS = [
+      "extensions_on",
+      // The workspace in front changed, and its theme is a layer of what the window draws
+      // (charter-app#281).
+      "project_theme_drawn",
       "plane_sidebar",
       "plane_pins",
       "workspace_panels",
@@ -469,5 +488,48 @@ describe("making a workspace", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
 
     await vi.waitFor(() => expect(calls("plane_sidebar").length).toBeGreaterThan(before));
+  });
+});
+
+describe("a workspace's settings (charter-app#280)", () => {
+  it("open from the workspace tab's menu, in a tab on that workspace's strip, about that workspace", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+
+    await menuOn("beta");
+    await userEvent.click(screen.getByRole("menuitem", { name: /Workspace settings/ }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Workspace settings · beta" }),
+    ).toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(calls("workspace_settings").map((one) => one.args)).toContainEqual({
+        plane: PLANE,
+        workspace: "beta",
+      }),
+    );
+    // Filed on beta's strip, which is now the one in front.
+    expect(
+      within(screen.getByRole("tablist", { name: "Workspaces" })).getByRole("tab", {
+        selected: true,
+      }),
+    ).toHaveTextContent("beta");
+  });
+
+  it("filter what the window draws by the focused workspace's answer", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+
+    await menuOn("beta");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Focus workspace beta" }));
+
+    await vi.waitFor(() =>
+      expect(calls("extensions_on").map((one) => one.args)).toContainEqual({
+        plane: PLANE,
+        workspace: "beta",
+      }),
+    );
   });
 });

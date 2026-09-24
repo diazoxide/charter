@@ -87,6 +87,27 @@ little bit highlight separation"_. Its own token because `border.subtle` sat too
 layer shades to be seen, and a theme should be able to lift the tabs apart without lifting every
 other subtle rule in the window.
 
+**A workspace's colour is a hue shift of the theme in force, not a colour of its own**
+(charter-app#281, ADR 0048). A workspace names one of eight hues (`tint.PALETTE`, the same eight
+the core reads) or a `#rrggbb` whose hue is taken, and the window turns only these tokens to it:
+
+- on the whole window, from the workspace in front: `accent.base`, `accent.surface`,
+  `focus.ring`, `tab.active` (`theme.TINTED_WINDOW`, drawn by `drawTint`);
+- on that workspace's own tab and on the chat strip, which holds its chats, the same and
+  `layer.workspace`, `layer.chat`, `layer.selected` (`theme.TINTED_TABS`), set on the element as
+  custom properties by `tintVariables`. Each workspace tab carries its own tint whether or not it
+  is in front: a `.workspace-mark` dot in its accent and its own shade. The title bar's workspace
+  carries the same dot, `.crumb-mark`.
+
+Never the text, never `layer.project` (the project strip is not a workspace's), never the
+terminal. `app/src/theme/tint.ts` does the arithmetic in OKLCH and then keeps each token's
+**relative luminance** exactly, so a tinted shade clears every contrast floor the theme's own
+cleared; `contrast.test.ts` runs every palette hue on both built-in themes, and holds two pairs
+the tint adds — the mark (`accent.base`) and a tab's primary text on `layer.workspace`. A neutral
+grey is given a small fixed chroma, felt rather than noticed, as the strips are meant to be;
+white stays white. No colour is written for this anywhere but `app/src/theme/`: a component asks
+`tintVariables` and sets what it answers.
+
 **The chat states and the CI states share a group on purpose.** `.ci-pending` is
 `var(--state-waiting)` because amber means "not finished" in both, and a theme author who wants
 to change that changes one value rather than hunting for the second one.
@@ -184,7 +205,8 @@ has it; nothing reads the key after that.
     },
     { "id": "aside", "side": "left", "order": 0, "collapsed": false },
     { "id": "bottom", "side": "bottom", "order": 0, "collapsed": true }
-  ]
+  ],
+  "text": { "window": 15, "terminal": 14 }
 }
 ```
 
@@ -201,6 +223,12 @@ has it; nothing reads the key after that.
   height, for the bottom slot — above 0 and at most 100; leave it out for the default. Keep it
   inside the slot's own bounds, which a drag is held to as well: the left slot is 8–45%, the
   right 10–45%, the bottom 6–50% (`SLOTS` in `regions.ts`).
+- **`text`** is the two text sizes, in px (charter-app#283): **`window`**, the root font size
+  every `rem` in the stylesheet is measured by, and **`terminal`**, every chat's terminal. Each
+  is a whole number from 10 to 24; leave one out for its default, 14 and 13. A size that is
+  not one is its default, and the alerts drawer says so. The Preferences tab and the size keys
+  (`⌘`/`Ctrl` with `=`, `-`, `0`, `app/src/textSize.ts`) write it; it is in this file and not in
+  a plane because a size is this machine's, and a plane would carry it to every clone.
 - **The file is read once, as the window is created.** Edit it while charter is not running,
   or expect the next change made in the window to replace your edit.
 - **Nothing in it can stop the window.** A file that is not JSON, is not a layout, is a link or

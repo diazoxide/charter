@@ -264,8 +264,9 @@ fn a_section_other_than_harness_in_the_local_file_is_refused_by_name() {
     assert_eq!(
         why(&set, "frame"),
         "[frame] in charter.local.toml is not read — that file carries [harness], \
-         [extensions], [plane] and [repos] and nothing else, because an ignored file must not change plane policy \
-         with no trace in git. Put [frame] in charter.toml."
+         [extensions], [theme], [harness_plugins], [plane] and [repos] and nothing else, \
+         because an ignored file must not change plane policy with no trace in git. \
+         Put [frame] in charter.toml."
     );
 }
 
@@ -275,6 +276,30 @@ fn extensions_in_the_local_file_is_not_refused_by_the_profiles_loader() {
     // charter-app#253 (ADR 0048): `[extensions]` is this machine's choice among the extensions
     // it approved, read by `extension::project`, and is not the loader's to refuse.
     let dir = plane("", "[extensions.stats]\nenabled = false\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert!(set.refused.is_empty(), "{:?}", set.refused);
+}
+
+#[test]
+fn harness_plugins_in_the_local_file_is_not_refused_by_the_profiles_loader() {
+    charter_core::unsteered!();
+    // charter-app#274 (ADR 0050): `[harness_plugins]` is this machine's choice among the
+    // plugins its harnesses have installed, read by `harness_plugin`, and not the loader's.
+    let dir = plane("", "[harness_plugins.claude]\n\"figma@official\" = false\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert!(set.refused.is_empty(), "{:?}", set.refused);
+}
+
+#[test]
+fn a_theme_in_the_local_file_is_not_refused_by_the_profiles_loader() {
+    charter_core::unsteered!();
+    // charter-app#273 (ADR 0048): `[theme]` is this machine's pick of the project's theme, read
+    // by `extension::project::theme`, and is not the loader's to refuse.
+    let dir = plane("", "[theme]\nuse = \"system\"\n");
 
     let set = profiles::derive(dir.path());
 
