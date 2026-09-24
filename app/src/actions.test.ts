@@ -906,7 +906,7 @@ describe("the palette at fifty chats", () => {
     // and within that group the catalogue's own order stands. Every row here is a verb.
     const rows = narrow("re", loaded());
 
-    const verbs = rows.slice(0, 8).map((row) => row.title);
+    const verbs = rows.slice(0, 9).map((row) => row.title);
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",

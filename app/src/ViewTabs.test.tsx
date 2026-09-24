@@ -415,12 +415,12 @@ describe("a vault's own tab (charter-app#235)", () => {
     core();
     render(<App />);
     await openOps();
-    expect(tabNames()).toEqual(["1 steward", "ops"]);
+    expect(tabNames()).toEqual(["steward 1", "ops"]);
 
-    await userEvent.click(within(strip()).getByRole("tab", { name: /1 steward/ }));
+    await userEvent.click(within(strip()).getByRole("tab", { name: /steward 1/ }));
     await openOps();
 
-    expect(tabNames()).toEqual(["1 steward", "ops"]);
+    expect(tabNames()).toEqual(["steward 1", "ops"]);
     expect(within(strip()).getByRole("tab", { selected: true })).toHaveTextContent(/^ops$/);
   });
 
@@ -454,7 +454,7 @@ describe("a vault's own tab (charter-app#235)", () => {
     render(<App />);
 
     expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
-    expect(tabNames()).toEqual(["1 steward", "ops"]);
+    expect(tabNames()).toEqual(["steward 1", "ops"]);
   });
 
   it("has the Vaults panel count again after a secret is added in it", async () => {
