@@ -897,8 +897,9 @@ const TRACKED_STATUS: &str = " MTADRCU";
 /// Otherwise one of three refusals, each with its OWN fix — `charter reinit` adds the ignore
 /// line, and an ignore rule does not apply to a path git already tracks.
 ///
-/// The only function here that runs git, and never on a config read: one `git status` where
-/// a person asked.
+/// The only function here that runs git: one `git status` of one path. It is asked where a
+/// person asked, and — since charter-app#308 — by `crate::settings::layer_text` on every read of
+/// the Local layer, but only when the file exists; a plane with no local file runs no git.
 pub fn ignore_check(root: &Path) -> IgnoreCheck {
     ignore_check_with(root, Path::new("git"))
 }
