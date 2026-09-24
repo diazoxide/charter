@@ -11,6 +11,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Project settings**, a tab of its own: right-click a project's tab and choose *Project
+  settings…*, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
+  which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
+  this machine — each as a form over the keys charter documents and as raw TOML for everything
+  else. Saving keeps your comments and the order of your keys, and refuses what charter would
+  refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
+  in the committed file, a value that looks like a credential. Local is created on the first
+  save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
+
 ### Fixed
 
 - On Linux and Windows the app menu no longer takes a key the chat's shell owns: `Ctrl-C` in a

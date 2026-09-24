@@ -204,58 +204,11 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
         }
         Config::Read(cfg) => cfg,
     };
-    let worktrees = cfg
-        .get("plane")
-        .and_then(toml::Value::as_table)
-        .and_then(|plane| plane.get("worktrees"))
-        .and_then(toml::Value::as_str)
-        .map(crate::memstore::py_strip)
-        .filter(|v| !v.is_empty());
-    if let Some(why) = worktrees.and_then(|w| worktrees_refusal(&d.root, w)) {
-        return Row::warn(
-            NAME,
-            "[plane] worktrees points outside the plane and is being ignored",
-            format!(
-                "{why}. Worktrees are in the default layout (workspaces/<ws>/.worktrees/) \
-                 until the key is fixed or removed; $CHARTER_WORKTREES sets a per-machine \
-                 root without editing the file."
-            ),
-        );
-    }
-    let errors = forge_errors(cfg);
-    if !errors.is_empty() {
-        let mut shown = errors
-            .iter()
-            .take(3)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("; ");
-        if errors.len() > 3 {
-            shown.push_str(" …");
-        }
-        return Row::warn(
-            NAME,
-            format!("{} [[forge]] block(s) failed to resolve", errors.len()),
-            format!(
-                "{shown} — those hosts are NOT covered by the one-credential guard or \
-                 git-policy until fixed (other declared/default hosts still are)."
-            ),
-        );
-    }
-    if let Some(refused) = refused_default(cfg)
-        && crate::profiles::current(&d.root).get(&refused).is_none()
+    if let Some((summary, detail)) = worktrees_finding(&d.root, cfg)
+        .or_else(|| forge_finding(cfg))
+        .or_else(|| default_finding(cfg, &crate::profiles::current(&d.root)))
     {
-        return Row::warn(
-            NAME,
-            format!("[harness] default = \"{refused}\" is not a harness charter can launch"),
-            format!(
-                "The app's new-chat picker marks no row for it and opens on the first one that \
-                 can run — which is also what a plane that declares no default gets, so the \
-                 key currently reads as absent. Name one of: {}, or any profile \
-                 charter.local.toml declares.",
-                LAUNCHABLE.join(", ")
-            ),
-        );
+        return Row::warn(NAME, summary, detail);
     }
     // `[[frame.component]]` is refused WHOLE when charter cannot draw it, and nothing but
     // this row says so. Whether an arrangement can be drawn is the tmux frame's question,
@@ -281,6 +234,93 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
         );
     }
     Row::ok(NAME, format!("parsed cleanly ({})", d.root.display()))
+}
+
+/// Every setting in `cfg` that charter reads as absent, each as the `charter.toml` row's
+/// words — summary, then what to do — in the order the row would name them. `profiles` is
+/// this machine's profiles, which a `[harness] default` may name.
+///
+/// The row reports the first; a writer refuses on any of them (charter-app#252), so the
+/// Project settings tab refuses exactly what the doctor would warn is being ignored, in the
+/// same sentences.
+pub(crate) fn findings(
+    root: &Path,
+    cfg: &toml::Table,
+    profiles: &crate::profiles::ProfileSet,
+) -> Vec<(String, String)> {
+    [
+        worktrees_finding(root, cfg),
+        forge_finding(cfg),
+        default_finding(cfg, profiles),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// A `[plane] worktrees` charter ignores because it points outside the plane.
+fn worktrees_finding(root: &Path, cfg: &toml::Table) -> Option<(String, String)> {
+    let worktrees = cfg
+        .get("plane")
+        .and_then(toml::Value::as_table)
+        .and_then(|plane| plane.get("worktrees"))
+        .and_then(toml::Value::as_str)
+        .map(crate::memstore::py_strip)
+        .filter(|v| !v.is_empty())?;
+    let why = worktrees_refusal(root, worktrees)?;
+    Some((
+        "[plane] worktrees points outside the plane and is being ignored".to_owned(),
+        format!(
+            "{why}. Worktrees are in the default layout (workspaces/<ws>/.worktrees/) \
+             until the key is fixed or removed; $CHARTER_WORKTREES sets a per-machine \
+             root without editing the file."
+        ),
+    ))
+}
+
+/// The `[[forge]]` blocks that do not resolve, as one finding.
+fn forge_finding(cfg: &toml::Table) -> Option<(String, String)> {
+    let errors = forge_errors(cfg);
+    if errors.is_empty() {
+        return None;
+    }
+    let mut shown = errors
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    if errors.len() > 3 {
+        shown.push_str(" …");
+    }
+    Some((
+        format!("{} [[forge]] block(s) failed to resolve", errors.len()),
+        format!(
+            "{shown} — those hosts are NOT covered by the one-credential guard or \
+             git-policy until fixed (other declared/default hosts still are)."
+        ),
+    ))
+}
+
+/// A `[harness] default` that names neither a launchable harness nor a profile in `profiles`.
+fn default_finding(
+    cfg: &toml::Table,
+    profiles: &crate::profiles::ProfileSet,
+) -> Option<(String, String)> {
+    let refused = refused_default(cfg)?;
+    if profiles.get(&refused).is_some() {
+        return None;
+    }
+    Some((
+        format!("[harness] default = \"{refused}\" is not a harness charter can launch"),
+        format!(
+            "The app's new-chat picker marks no row for it and opens on the first one that \
+             can run — which is also what a plane that declares no default gets, so the \
+             key currently reads as absent. Name one of: {}, or any profile \
+             charter.local.toml declares.",
+            LAUNCHABLE.join(", ")
+        ),
+    ))
 }
 
 /// A `[harness] default` naming no launchable harness, as the sentence will quote it —
