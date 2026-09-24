@@ -98,6 +98,7 @@ function doing(): Doing & { calls: string[] } {
     openSettings: vi.fn((plane: string) => {
       calls.push(`openSettings:${plane}`);
     }),
+    openSaving: note("openSaving"),
     openWorkspaceSettings: note("openWorkspaceSettings"),
     openPreferences: note("openPreferences"),
     quit: note("quit"),
@@ -276,6 +277,27 @@ describe("the one list of actions", () => {
     expect(hands.calls).toEqual(["openSettings:/p/two"]);
     // On the project tab's own menu, above the line: it opens a tab and ends nothing.
     expect(menuOn({ on: "project", plane: "/p/two" }).above).toContain("project.settings:/p/two");
+  });
+
+  it("offers each project's Saving tab in the palette and on its tab's menu", async () => {
+    // charter-app#294: where a project's unsaved work sits, reached the way its settings are.
+    const hands = doing();
+    const offers = catalogue(
+      now({
+        projects: [
+          { plane: "/p/one", name: "one" },
+          { plane: "/p/two", name: "two" },
+        ],
+      }),
+    );
+
+    expect(by(offers, "project.saving:/p/two")?.title).toBe("Saving…");
+    expect(by(offers, "project.saving:/p/two")?.note).toBe(
+      "two: what is not saved yet, and the save button.",
+    );
+    await run(offers, "project.saving:/p/two", hands);
+    expect(hands.calls).toEqual(["openSaving:/p/two"]);
+    expect(menuOn({ on: "project", plane: "/p/two" }).above).toContain("project.saving:/p/two");
   });
 
   it("offers each workspace's settings on its menu and in the palette, and none outside every workspace", async () => {
@@ -873,6 +895,8 @@ describe("carrying out a row", () => {
         "closeProject:/other",
         "openSettings:/plane",
         "openSettings:/other",
+        "openSaving:/plane",
+        "openSaving:/other",
         "openWorkspaceSettings:alpha",
         "openWorkspaceSettings:beta",
         "quit",

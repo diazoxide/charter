@@ -1799,3 +1799,101 @@ fn a_save_asked_to_sign_whose_signer_refuses_commits_nothing_unsigned() {
         ],
     );
 }
+
+// --------------------------------------------------------------------------------------- //
+// where unsaved work sits: the Saving view's stage (charter-app#294)                        //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn a_plane_whose_work_is_on_the_remote_is_saved() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let (code, said) = fixture.just_save();
+    assert_eq!(code, 0, "{said}");
+
+    let got = standing(&fixture.root);
+
+    assert_eq!(got.stage, Stage::Saved, "{got:?}");
+    assert_eq!(got.changed, Vec::<String>::new());
+    assert_eq!(got.ahead, Some(0));
+}
+
+#[test]
+fn a_changed_file_and_a_new_one_are_both_what_the_next_save_takes() {
+    let fixture = Fixture::plane();
+    std::fs::write(fixture.root.join("README.md"), "two\n").unwrap();
+    std::fs::write(fixture.root.join("personas/steward/memory/new.md"), "n").unwrap();
+
+    let got = standing(&fixture.root);
+
+    assert_eq!(got.stage, Stage::Changed);
+    assert_eq!(got.changed, ["README.md", "personas/steward/memory/new.md"]);
+}
+
+#[test]
+fn a_commit_the_remote_does_not_have_is_committed_and_counted() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    std::fs::write(fixture.root.join("a.md"), "a").unwrap();
+    let _ = fixture.just_save();
+    fixture.with_settings("[plane]\nmode = \"commit\"\n");
+    std::fs::write(fixture.root.join("b.md"), "b").unwrap();
+    let _ = fixture.just_save();
+
+    let got = standing(&fixture.root);
+
+    assert_eq!(
+        (got.stage, got.ahead),
+        (Stage::Committed, Some(2)),
+        "{got:?}"
+    );
+}
+
+#[test]
+fn a_push_that_conflicted_and_has_not_landed_since_is_blocked() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    let head = ask(&fixture.root, &["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(fixture.root.join(".charter")).unwrap();
+    std::fs::write(
+        push_record_path(&fixture.root),
+        format!(
+            r#"{{"outcome": "conflict", "branch": "main", "head": "{}", "detail": "CONFLICT (content): Merge conflict in a.md"}}"#,
+            head.trim()
+        ),
+    )
+    .unwrap();
+
+    let got = standing(&fixture.root);
+
+    assert_eq!(got.stage, Stage::Blocked);
+    assert_eq!(
+        got.blocked.as_deref(),
+        Some("CONFLICT (content): Merge conflict in a.md")
+    );
+}
+
+#[test]
+fn a_commit_waiting_on_its_pull_request_is_pushed_with_the_pr_open() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    let head = ask(&fixture.root, &["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(fixture.root.join(".charter")).unwrap();
+    std::fs::write(
+        push_record_path(&fixture.root),
+        format!(
+            r#"{{"outcome": "branched", "branch": "main", "landed": "charter/abc", "url": "https://github.com/acme/plane/compare/charter/abc", "head": "{}"}}"#,
+            head.trim()
+        ),
+    )
+    .unwrap();
+
+    let got = standing(&fixture.root);
+
+    assert_eq!(got.stage, Stage::PrOpen);
+    assert_eq!(
+        got.pr.as_deref(),
+        Some("https://github.com/acme/plane/compare/charter/abc")
+    );
+}

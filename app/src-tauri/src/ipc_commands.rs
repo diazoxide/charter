@@ -63,6 +63,8 @@ macro_rules! app_commands {
                 window_showing,
                 plane_sidebar,
                 workspace_panels,
+                saving::plane_saving,
+                saving::save_plane,
                 workspaces::workspace_create,
                 workspaces::workspace_at_risk,
                 workspaces::workspace_remove,

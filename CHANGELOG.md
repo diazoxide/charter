@@ -11,6 +11,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The title bar says what is not saved yet.** Beside the needs-you button, the project in
+  front shows where its unsaved work sits: *3 changed*, *committed, not pushed*,
+  *waiting on its pull request*, *blocked*, or *Saved*. A save button sits next to it while
+  there is anything to save. Press the words to open the project's **Saving** tab, which lists
+  the files the next save takes, lets you type a message (leave it empty and charter writes one
+  that says what changed), and shows the last 50 saves and how each one ended. The tab is also on
+  the project tab's menu and in the palette, as *Saving…*. The button runs the same save as
+  `charter save`, so both follow `[plane] mode`.
+  ([#294](https://github.com/diazoxide/charter-app/issues/294))
+
 ### Changed
 
 - `charter save` follows `[plane] mode`. `off` commits nothing, `commit` stops after the

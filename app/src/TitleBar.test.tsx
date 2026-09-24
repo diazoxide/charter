@@ -3,7 +3,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { TitleBar, Breadcrumb, runningIn, type Crumbs } from "./TitleBar";
-import type { About } from "./bindings";
+import type { About, PlaneSaving } from "./bindings";
 
 /**
  * **The title bar's own rules**, on the components and nothing else.
@@ -357,5 +357,74 @@ describe("About Charter", () => {
     await screen.findByTestId("about-version");
 
     expect(asked.filter((cmd) => cmd === "about_charter")).toHaveLength(1);
+  });
+});
+
+describe("the save indicator (charter-app#294)", () => {
+  function saving(over: Partial<PlaneSaving> = {}): PlaneSaving {
+    return {
+      stage: "changed",
+      changed: ["a.md", "b.md", "c.md"],
+      ahead: 0,
+      pr: null,
+      blocked: null,
+      mode: "push",
+      modeFrom: "charter.toml",
+      journal: [],
+      ...over,
+    };
+  }
+
+  it("says where the project's unsaved work sits, and opens the Saving tab when pressed", async () => {
+    const opened: string[] = [];
+    render(
+      <TitleBar
+        crumbs={crumbs()}
+        save={{
+          saving: saving(),
+          busy: false,
+          onOpen: () => opened.push("open"),
+          onSave: () => {},
+        }}
+      />,
+    );
+
+    const bar = screen.getByTestId("title-bar");
+    const where = within(bar).getByRole("button", { name: "Saving: 3 changed" });
+    expect(where.tabIndex).toBe(0);
+    await userEvent.click(where);
+    expect(opened).toEqual(["open"]);
+  });
+
+  it("saves from the bar, and offers no save when there is nothing to take", async () => {
+    const saved: string[] = [];
+    render(
+      <TitleBar
+        crumbs={crumbs()}
+        save={{ saving: saving(), busy: false, onOpen: () => {}, onSave: () => saved.push("save") }}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save the project" }));
+    expect(saved).toEqual(["save"]);
+    cleanup();
+
+    render(
+      <TitleBar
+        crumbs={crumbs()}
+        save={{
+          saving: saving({ stage: "saved", changed: [] }),
+          busy: false,
+          onOpen: () => {},
+          onSave: () => {},
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Saving: Saved" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save the project" })).toBeNull();
+  });
+
+  it("draws nothing without a project to save", () => {
+    render(<TitleBar crumbs={crumbs()} />);
+    expect(screen.queryByRole("button", { name: /^Saving:/ })).toBeNull();
   });
 });
