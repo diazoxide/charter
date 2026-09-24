@@ -27,6 +27,9 @@ import {
  *
  * - **Shared** is `charter.toml`, committed: the team sees it.
  * - **Local** is `charter.local.toml`, gitignored: this machine only. Harness profiles live here.
+ *   While git would carry it (tracked, or not ignored) charter reads nothing in it
+ *   (charter-app#308, ADR 0048): the section still shows the file, and the reason and its fix
+ *   are among its standing refusals, in the words the profiles loader says them in.
  *
  * **Nothing here decides what a file may say.** A form sends its changes, the raw view sends its
  * text, and the core checks either with the rules it reads the file with and writes it with
@@ -160,7 +163,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         file={both.local}
         testid="settings-local"
         title="Local"
-        who="This machine only. Gitignored; charter will not write it anywhere git would commit it."
+        who="This machine only. Gitignored; charter neither reads nor writes it where git would commit it."
         groups={[...LOCAL, ...harnessPluginGroups(harnesses, "project")]}
         extensions={extensions}
         theme={theme}

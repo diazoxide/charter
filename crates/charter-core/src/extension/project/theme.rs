@@ -168,10 +168,15 @@ impl Said {
         self
     }
 
-    /// The plane at `root`'s two files. A file that cannot be read says nothing.
+    /// The plane at `root`'s two files, as [`crate::settings::layer_text`] hands them: a file
+    /// that cannot be read says nothing, and neither does a `charter.local.toml` git would carry
+    /// (charter-app#308).
     pub fn read(root: &std::path::Path) -> Self {
-        let text = |name: &str| std::fs::read_to_string(root.join(name)).ok();
-        Self::from_text(text(COMMITTED_FILE).as_deref(), text(LOCAL_FILE).as_deref())
+        use crate::settings::{Which, layer_text};
+        Self::from_text(
+            layer_text(root, Which::Shared).as_deref(),
+            layer_text(root, Which::Local).as_deref(),
+        )
     }
 
     /// [`Self::read`], in `workspace` when there is one — `super::Choices::read_in`'s twin, so

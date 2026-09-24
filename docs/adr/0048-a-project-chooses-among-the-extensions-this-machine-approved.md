@@ -15,7 +15,10 @@ same precedence — see [A project's theme](#a-projects-theme) below. **Amended 
 (charter-app#280):** a workspace is a layer of the same order, between Shared and Local — see
 [A workspace refines its project](#a-workspace-refines-its-project) below. **Amended 2026-09-24
 (charter-app#281):** a workspace picks a theme in that order too, and has a colour of its own —
-see [A workspace's theme and colour](#a-workspaces-theme-and-colour) below.
+see [A workspace's theme and colour](#a-workspaces-theme-and-colour) below. **Amended 2026-09-24
+(charter-app#308):** a `charter.local.toml` git would carry is no layer at all — see
+[A Local file git would carry decides nothing](#a-local-file-git-would-carry-decides-nothing)
+below.
 
 ## The decision
 
@@ -242,6 +245,45 @@ Rejected:
 - **A colour in the project's files, or overridable by Local.** See above: a colour is identity,
   not preference. A machine that wants another look picks another theme in Local.
 
+## A Local file git would carry decides nothing
+
+Added by charter-app#308. Everything above lets `charter.local.toml` hold `[extensions]` and
+`[theme]` (and, by ADR 0050, `[harness_plugins]`) on one condition: the file stays on this
+machine. That is the file's own rule — an ignored file must not change plane policy with no trace
+in git — and the profiles loader has enforced it since ADR 0022 with one check,
+`profiles::ignore_check`: the file is refused while git tracks it, would commit it, or cannot say.
+The readers of the other tables did not ask it, so a `charter.local.toml` committed by mistake
+still turned extensions on and off, picked a theme and chose plugins for every clone.
+
+**The whole file, or nothing.** While the check refuses, no reader takes anything from the Local
+file, and the order runs without that layer: this machine's approval, Shared, the workspace. The
+check is per file, not per table, because what makes the file unsafe — it travels — is true of
+every table in it.
+
+**One way in.** Every reader of the two files reads them through
+`charter_core::settings::layer_text(root, which)`, which returns `None` for a Local file the check
+refuses; `extension::project::Choices::read`, `theme::Said::read` and
+`harness_plugin::Choices::read` each call it, and so does every `read_in` through them. #308 was
+three readers that each read the file themselves and so each forgot the check, so a test
+(`crates/charter-core/tests/the_local_layer_has_one_reader.rs`) fails on production code that
+reads the file by name anywhere but `settings.rs` and `profiles.rs`. A reader added later — the
+plane's own save settings (ADR 0051) are the next — goes through `layer_text` or turns that test
+red.
+
+**What the tab shows.** The Project settings tab's Local section still shows the file, as a form
+and as raw TOML, because that is where it is mended. Its standing refusals (_"charter does not take
+this from the file as it stands:"_) carry the check's own sentence, which names the file and the
+fix: _"git would commit charter.local.toml, so charter reads nothing in it until it is ignored —
+charter reinit adds /charter.local.toml to .gitignore."_, or, for a tracked file, the same with
+`git rm --cached` first. The sentence is the profiles loader's, widened from "the profiles in it
+are refused" to "charter reads nothing in it", so `charter harness list`, `charter doctor` and the
+tab say one thing about one state. Each extension, theme and plugin in the tab says which layer
+decided it, and none says Local.
+
+**The cost** is one `git status` of one path per read, and only when the file exists; a plane with
+no `charter.local.toml` runs no git. Rejected: caching the answer, since a file is ignored or
+committed by an edit outside charter and a stale pass is the bug this closes.
+
 ## Where each consumer asks
 
 - **The Project settings tab** shows, in both sections, every extension this machine has
@@ -286,7 +328,9 @@ project says on, would turn off every extension in every project on the day this
 **`[extensions]` in `charter.local.toml` is allowed**, as the one table besides `[harness]`. The
 rule it is an exception to says an ignored file must not change plane policy with no trace in
 git. Turning an approved extension on or off for oneself is not plane policy: it changes nothing
-a teammate's clone does, and it cannot reach past this machine's approval.
+a teammate's clone does, and it cannot reach past this machine's approval. That holds only while
+the file stays on this machine, which is why a Local file git would carry is not read at all
+(charter-app#308, above).
 
 ## What was rejected
 

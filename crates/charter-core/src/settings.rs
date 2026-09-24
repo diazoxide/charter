@@ -10,6 +10,10 @@
 //! A third holder of settings is each workspace's `workspace.json`, whose `settings` sit between
 //! the two (charter-app#280): [`workspace`], read and written by the same readers' rules.
 //!
+//! **Every reader of the two files' layers reads them through [`layer_text`]**, which leaves out
+//! a Local file git would carry (charter-app#308). This tab is the one place such a file is still
+//! shown, with the reason it is not read.
+//!
 //! **Nothing here has rules of its own about what a file may say.** A save is refused for
 //! exactly what the next read of that file would refuse, in the sentences that read uses:
 //! [`crate::doctor`]'s `charter.toml` row for the Shared file (the loader's own parse and
@@ -53,6 +57,31 @@ impl Which {
     fn path(self, root: &Path) -> PathBuf {
         root.join(self.file())
     }
+}
+
+/// The text of `which` as every reader of its layer takes it: `None` when the file says nothing
+/// charter may use (charter-app#308, ADR 0048).
+///
+/// A file that is not there, or cannot be read, says nothing. **And so does a Local file git
+/// would carry** — tracked, or not ignored, or one git could not say about
+/// ([`profiles::ignore_check`]): the Local file is this machine's say only while git leaves it
+/// alone, and one that reaches every clone would change plane policy with no trace in git. The
+/// profiles loader has refused its profiles on that check since ADR 0022; this is the same check
+/// for every other table in the file, so `[extensions]`, `[theme]` and `[harness_plugins]` are
+/// not read from it either.
+///
+/// **Every reader of the two files reads them here**, and nowhere else, so a reader added later
+/// cannot forget the check. The Project settings tab shows the file's text whatever this says,
+/// with the check's sentence among its refusals ([`read`]), so what is not applied is said there
+/// with its fix.
+///
+/// A Local file that is there costs one `git status` of that one path; an absent one costs none.
+pub fn layer_text(root: &Path, which: Which) -> Option<String> {
+    let text = std::fs::read_to_string(which.path(root)).ok()?;
+    if which == Which::Local && !profiles::ignore_check(root).passes() {
+        return None;
+    }
+    Some(text)
 }
 
 /// One settings file as it stands, and what charter says about it now.

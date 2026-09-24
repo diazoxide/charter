@@ -87,7 +87,7 @@ fn a_local_file_git_would_commit_refuses_every_profile_in_it() {
 
     assert_eq!(
         check.reason,
-        "git would commit charter.local.toml, so the profiles in it are refused until it is \
+        "git would commit charter.local.toml, so charter reads nothing in it until it is \
          ignored — charter reinit adds /charter.local.toml to .gitignore."
     );
     assert_eq!(check.fix, "charter reinit");
@@ -106,8 +106,8 @@ fn a_tracked_local_file_is_refused_and_told_that_reinit_alone_will_not_fix_it() 
 
     assert_eq!(
         check.reason,
-        "git tracks charter.local.toml, so the profiles in it would reach every clone of \
-         this plane — charter refuses them until it is untracked: git rm --cached \
+        "git tracks charter.local.toml, so what it says would reach every clone of this \
+         plane — charter reads nothing in it until it is untracked: git rm --cached \
          charter.local.toml, commit that removal, then charter reinit."
     );
     assert_eq!(
@@ -148,7 +148,7 @@ fn an_answer_git_could_not_give_refuses_because_an_unknown_is_not_a_pass() {
             .reason
             .starts_with("git could not say whether charter.local.toml is ignored (")
             && check.reason.ends_with(
-                "), so the profiles in it are refused — an unknown is not a pass. Run git status \
+                "), so charter reads nothing in it — an unknown is not a pass. Run git status \
              --ignored -- charter.local.toml in the plane to see what git says."
             ),
         "{:?}",
@@ -162,7 +162,7 @@ fn an_answer_git_could_not_give_refuses_because_an_unknown_is_not_a_pass() {
 #[test]
 fn a_refusing_check_moves_every_declared_profile_to_refused_and_leaves_the_built_ins() {
     charter_core::unsteered!();
-    // Each of the three sentences says "the profiles in it are refused", so a surface that
+    // Each of the three sentences says "charter reads nothing in it", so a surface that
     // asked must show them refused — not as ordinary rows with a warning underneath.
     let dir = repo("");
     let set = profiles::current(dir.path());
@@ -275,7 +275,7 @@ fn a_status_line_charter_cannot_read_is_an_unknown_and_not_a_tracked_file() {
     assert_eq!(
         check.reason,
         "git could not say whether charter.local.toml is ignored (git status printed \"ZZ \
-         charter.local.toml\"), so the profiles in it are refused — an unknown is not a pass. \
+         charter.local.toml\"), so charter reads nothing in it — an unknown is not a pass. \
          Run git status --ignored -- charter.local.toml in the plane to see what git says."
     );
 }
