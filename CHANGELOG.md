@@ -35,6 +35,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   off until you approve it in Extensions. A project that says nothing keeps every approved
   extension on, as before. Panels, views and themes follow the project in front, and a view
   refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter-app/issues/253))
+- **A theme per project.** Project settings has a Theme select in Shared and in Local: charter's
+  dark or light theme, *Follow the system*, or any theme an extension you approved contributes.
+  Local wins over Shared. While that project is in front the window and every terminal draw its
+  theme, and switching projects switches it live. A pick whose extension is off in the project,
+  or not approved on this machine, draws the built-in dark theme, and the tab says why. A
+  project's pick wins over your `theme.json`; a project that picks nothing keeps it. ([#273](https://github.com/diazoxide/charter-app/issues/273))
 - An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
   counts on its project and workspace tabs at once, without touching the chat. It lasts until
   that chat asks again: its next stop puts it back as a new item. Delete on a focused item does

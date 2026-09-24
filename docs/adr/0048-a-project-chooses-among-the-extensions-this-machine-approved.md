@@ -10,7 +10,8 @@ is (charter-app#246, #253).
 
 "Plugin" in the request is charter's **extension** (ADR 0041 kept the words apart:
 `enabledPlugins` is Claude Code's list). A theme is enabled and disabled with the extension that
-contributes it; charter keeps no separate theme choice per project.
+contributes it. **Amended 2026-09-24 (charter-app#273):** a project also *picks* its theme, by the
+same precedence — see [A project's theme](#a-projects-theme) below.
 
 ## The decision
 
@@ -68,6 +69,47 @@ Any other key, a bad key or type, or a default the setting would not accept refu
 extension, as every other manifest refusal does. Being in the manifest, the declarations are
 inside the fingerprint.
 
+## A project's theme
+
+Added by charter-app#273, after the operator asked to *"pick a theme per project"*. A project picks
+in `[theme] use`, in either file: `charter-dark`, `charter-light`, `system`, or
+`<extension-id>/<theme name>`. It is resolved by one function beside `resolve`,
+`charter_core::extension::project::theme::resolve`, which is handed `resolve`'s answer for the same
+project, so the order above is kept and extended rather than copied:
+
+1. **This machine's approval**, through `resolve`: an extension's theme is drawn only while its
+   extension is **on** in this project — approved here, and not turned off by either file.
+2. **Shared**'s pick, `[theme] use` in `charter.toml`.
+3. **Local**'s pick, in `charter.local.toml`, which overrides Shared's. A value that is none of
+   the four shapes is ignored with a sentence and Shared's is used, as a setting's is.
+
+| Pick in force | Its extension in this project | Drawn |
+|---|---|---|
+| none | — | the window's own: `theme.json`, else the first theme from an extension it has on, else `charter-dark` |
+| `charter-dark` / `charter-light` | — | that built-in |
+| `system` | — | the built-in matching the operating system, followed live |
+| `<id>/<name>` | on, and contributes `<name>` | that theme |
+| `<id>/<name>` | off, needs approval, not installed, or no such theme | **`charter-dark`, and a sentence in the settings tab saying why** |
+
+**The fallback is the built-in, not the next file down.** A pick that names a theme the project
+cannot draw is a pick the operator made on purpose; drawing Shared's instead would look like
+Local was ignored. Drawing the window's own starting theme and saying why in the tab under the
+file that made the pick puts the reason where the choice is changed.
+
+**A project's pick wins over the operator's `theme.json`.** It is the more specific answer —
+this project, rather than this machine — and Local is also the operator's own say. A project that
+picks nothing leaves `theme.json` in force exactly as before.
+
+**`[theme]` in `charter.local.toml` is allowed**, as `[extensions]` is and for the same reason: a
+theme is not plane policy, and a pick cannot reach past this machine's approval.
+
+**Two inputs, one function, again.** The settings tab asks with a survey (`project_theme`), so a
+pick an extension no longer contributes is said there. The window asks the record alone
+(`project_theme_drawn`) and draws the built-in when the pick is not among the themes its one
+survey found — so it can never draw what the tab would refuse. The window draws the answer for
+the project in front; `theme.onDrawn` hands it to every terminal, so a project switch switches
+both live (#216).
+
 ## Where each consumer asks
 
 - **The Project settings tab** shows, in both sections, every extension this machine has
@@ -120,8 +162,8 @@ a teammate's clone does, and it cannot reach past this machine's approval.
 - **A second list of extensions per project.** An extension is installed and approved per
   machine; a project that could name a directory to load one from would be a plane bringing an
   extension with it.
-- **Choosing a theme per project.** Out of scope: a theme is turned on and off with its
-  extension, and choosing among several on at once is still a preference charter does not keep.
+- **Choosing a theme per project** was out of scope when this was first written; charter-app#273
+  added it, above, on the same precedence.
 - **Resolving in each consumer.** Four consumers with four copies of the order would drift; one
   function answers, and a precedence matrix in its tests pins it
   (`crates/charter-core/src/extension/project/tests.rs`).
