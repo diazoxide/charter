@@ -21,6 +21,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `charter git-policy` runs, instead of saying it is not checked. It only reads, and names
   `charter git-policy --apply` for a clone that drifted.
   ([#241](https://github.com/diazoxide/charter-app/pull/241))
+- Closing a chat that was asking for you, with the × on its tab or by ending its pane, takes it
+  out of the needs-you queue and out of the red counts on its project and workspace tabs. It
+  used to stay there until some other chat moved.
+  ([#247](https://github.com/diazoxide/charter-app/issues/247))
 
 ## [0.1.1] - 2026-09-24
 

@@ -275,6 +275,17 @@ impl Hooks {
         Arc::clone(&self.board)
     }
 
+    /// Takes a chat off the board — closed, not merely ended — and answers with what the
+    /// window must now be told: a queue without it.
+    ///
+    /// Answered under the same hold as the removal, for the reason [`apply`] gives: the queue
+    /// it carries is the board's as of the removal, never one read a moment before it.
+    pub fn closed(&self, session: u32) -> Moved {
+        let mut board = self.board();
+        board.closed(session);
+        seen_by(&board, &self.plane, session)
+    }
+
     /// What the window is told when something other than a hook moves a chat: a chat opening
     /// or closing, or a program that has died.
     pub fn now(&self, session: u32) -> Moved {

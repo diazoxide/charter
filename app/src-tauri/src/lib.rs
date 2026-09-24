@@ -789,12 +789,7 @@ fn close_session(
     plane: PlaneId,
     session: u32,
 ) -> Result<(), String> {
-    let held = planes.held(&plane)?;
-    held.chats().close(session)?;
-    // Off the board entirely, not merely ended: a report that arrives for it afterwards —
-    // from a hook that outlived the harness by a moment — moves nothing.
-    held.hooks().board().closed(session);
-    Ok(())
+    planes.held(&plane)?.close_chat(session)
 }
 
 /// The chats the app already has open — at a launch, the ones put back from the record.

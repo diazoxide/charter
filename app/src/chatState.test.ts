@@ -31,6 +31,16 @@ describe("what the window keeps about the chats", () => {
     expect(after.needsYou).toEqual([7, 9]);
   });
 
+  it("drops a chat from the queue when it is closed while asking for you", () => {
+    // charter-app#247. A close is told as the chat the board no longer has: `unknown`, and a
+    // queue without it. The project and workspace badges count this same queue.
+    const asking = moved(nothingKnown, doing(7, "waiting", [7]));
+
+    const closed = moved(asking, doing(7, "unknown", []));
+
+    expect(closed.needsYou).toEqual([]);
+  });
+
   it("does not let the first answer overwrite an event that beat it", () => {
     // **A defect a review reproduced.** `chatStates()` is asked once at startup, and a hook
     // can fire while the question is in flight. Folding the older answer on top dropped the
