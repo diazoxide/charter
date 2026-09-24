@@ -81,7 +81,7 @@ import { useTabStop } from "./roving";
  * worktree, or the workspace itself — and Enter or Space on a clone's heading opens or closes
  * it, which `<summary>` does natively. **Left and Right are not taken**: in a tree they open,
  * close and climb, and promising that on something that does not say it is a tree is the half
- * a widget warned about above. They wait for that ticket.
+ * a widget warned about above. They wait for that ticket, charter-app#238.
  */
 export function Explorer({
   workspace,
@@ -187,7 +187,7 @@ export function Explorer({
                 open
                 onToggle={(event) => {
                   const open = event.currentTarget.open;
-                  const key = `${workspace}/${repo}`;
+                  const key = foldKey(workspace, repo);
                   setFolded((was) => {
                     if (open === !was.has(key)) return was;
                     const now = new Set(was);
@@ -224,7 +224,7 @@ export function Explorer({
                   <ul className="pieces">
                     {pieces[repo].map((piece) => {
                       const working = chats.filter((chat) => under(chat.cwd, piece.path));
-                      const here = spot?.repo === repo && spot.piece === piece.piece;
+                      const isPicked = spot?.repo === repo && spot.piece === piece.piece;
                       return (
                         <li key={piece.piece} data-testid={`piece-${repo}-${piece.piece}`}>
                           {/* **Right-click is what these rows were missing** (charter-app#174).
@@ -244,12 +244,12 @@ export function Explorer({
                             <RovingFocusGroup.Item
                               asChild
                               tabStopId={pieceRow(repo, piece.piece)}
-                              active={here}
+                              active={isPicked}
                             >
                               <button
                                 type="button"
                                 className="spot"
-                                aria-current={here ? "true" : undefined}
+                                aria-current={isPicked ? "true" : undefined}
                                 // The whole path, because two clones in one workspace can hold a
                                 // piece of the same name and the row has room for one word.
                                 title={piece.path}
@@ -427,6 +427,8 @@ const ROOT = "root";
 const chatRow = (session: number) => `chat:${session}`;
 const cloneRow = (repo: string) => `clone:${repo}`;
 const pieceRow = (repo: string, piece: string) => `piece:${repo}/${piece}`;
+/** A folded clone, by workspace as well as name: two workspaces can each clone `svc`. */
+const foldKey = (workspace: string, repo: string) => `${workspace}/${repo}`;
 
 /**
  * Every row the explorer draws right now, for `useTabStop` — the rows inside a folded clone
@@ -444,11 +446,20 @@ function rowsOf(
 ): string[] {
   if (workspace === undefined) return [];
   const { panels, pieces, piecesRefused } = state;
-  const rows = [ROOT, ...chats.map((chat) => chatRow(chat.session))];
+  const inAPiece = new Set<number>();
+  const drawn: string[] = [];
   for (const repo of panels?.repos ?? []) {
-    rows.push(cloneRow(repo));
-    if (folded.has(`${workspace}/${repo}`) || piecesRefused[repo]) continue;
-    for (const piece of pieces[repo] ?? []) rows.push(pieceRow(repo, piece.piece));
+    drawn.push(cloneRow(repo));
+    const shown = !folded.has(foldKey(workspace, repo)) && !piecesRefused[repo];
+    for (const piece of pieces[repo] ?? []) {
+      if (shown) drawn.push(pieceRow(repo, piece.piece));
+      for (const chat of chats) {
+        if (!under(chat.cwd, piece.path)) continue;
+        inAPiece.add(chat.session);
+        if (shown) drawn.push(chatRow(chat.session));
+      }
+    }
   }
-  return rows;
+  const atTheRoot = chats.filter((chat) => !inAPiece.has(chat.session));
+  return [ROOT, ...atTheRoot.map((chat) => chatRow(chat.session)), ...drawn];
 }

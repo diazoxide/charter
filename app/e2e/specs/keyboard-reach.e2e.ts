@@ -20,6 +20,12 @@ import { endEveryChat, pressAndStart } from "../opening.js";
  * measured in #186), and it does not deliver a modifier chord at all (#176). So the Ctrl+Tab
  * below is a dispatched `KeyboardEvent`, as `workspace-lifecycle.e2e.ts` dispatches its
  * `contextmenu`, and that WebKit then walks the sequence it was handed is left to a person.
+ *
+ * **It asks by tag and by class, against AGENTS.md's "by role" rule, and on purpose.** The
+ * rule protects a spec from how a control is drawn; this spec is ABOUT how it is drawn. WebKit's
+ * gate is `HTMLFormControlElement` — the `<button>` tag, not the `button` role — and xterm's
+ * `<textarea>` is the element the keyboard lands in. The regions are found by the classes their
+ * own components give them because a region has no role that names it in every arrangement.
  */
 describe("the window's keyboard reach", () => {
   before(async () => {
@@ -41,51 +47,77 @@ describe("the window's keyboard reach", () => {
     expect(unsaid).toEqual([]);
   });
 
-  it("makes each strip ONE stop: exactly one tab in it says 0, the selected one", async () => {
+  it("makes each strip ONE stop: exactly one tab says 0, the selected one when it is drawn", async () => {
     const strips = await browser.execute(() =>
       [...document.querySelectorAll('[role="tablist"]')].map((strip) => {
         const tabs = [...strip.querySelectorAll('[role="tab"]')];
         const stops = tabs.filter((tab) => tab.getAttribute("tabindex") === "0");
+        const selected = tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
         return {
           strip: strip.getAttribute("aria-label"),
           stops: stops.length,
-          selected: stops.every((tab) => tab.getAttribute("aria-selected") === "true"),
+          // A selected tab the strip collapsed into its menu is not drawn, and then the first
+          // drawn tab is the stop (`roving.ts`).
+          selectedIsTheStop: selected === undefined || stops[0] === selected,
           rest: tabs.every((tab) => stops.includes(tab) || tab.getAttribute("tabindex") === "-1"),
         };
       }),
     );
     expect(strips.map((one) => one.strip)).toEqual(["Projects", "Workspaces", "Tabs"]);
-    for (const one of strips) expect(one).toEqual({ ...one, stops: 1, selected: true, rest: true });
+    for (const one of strips)
+      expect(one).toEqual({ ...one, stops: 1, selectedIsTheStop: true, rest: true });
   });
 
-  it("puts the regions in the order they are drawn, and the pane's controls before its terminal", async () => {
-    const order = await browser.execute(() => {
+  it("reaches the regions in the order they are laid out, top to bottom and left to right", async () => {
+    const { tabbed, laidOut, controlsFirst } = await browser.execute(() => {
       const regions: [string, string][] = [
         ["title bar", ".title-bar"],
         ["projects", '[role="tablist"][aria-label="Projects"]'],
         ["workspaces", '[role="tablist"][aria-label="Workspaces"]'],
         ["chats", '[role="tablist"][aria-label="Tabs"]'],
-        ["pane controls", ".pane-frame .pane-doing"],
-        ["terminal", '[data-testid="pane"]'],
+        ["explorer", 'nav[aria-label="Explorer"]'],
+        ["panes", ".panes"],
+        ["attention", '[data-testid="panels"]'],
         ["status line", ".status-line"],
       ];
-      // The first stop inside each, in document order: what WebKit's sequence reaches first.
       const stops = [...document.querySelectorAll<HTMLElement>("[tabindex]")].filter(
         (el) => el.tabIndex >= 0 && !el.hasAttribute("disabled"),
       );
-      return stops
+      // The regions in the order the TAB SEQUENCE first enters each one…
+      const tabbed = stops
         .map((el) => regions.find(([, where]) => el.closest(where))?.[0])
-        .filter((name, at, all): name is string => name !== undefined && all[at - 1] !== name);
+        .filter((name, at, all): name is string => name !== undefined && all.indexOf(name) === at);
+      // …and in the order the WINDOW draws them, measured: rows first, then left to right.
+      // This is the half jsdom cannot ask — it lays nothing out — and it is what "reading
+      // order" means whichever side the arrangement put a region on (ADR 0038).
+      const laidOut = regions
+        .map(([name, where]) => {
+          const box = document.querySelector(where)?.getBoundingClientRect();
+          return { name, box };
+        })
+        .filter((one) => one.box && one.box.width > 0 && tabbed.includes(one.name))
+        .sort((a, b) => {
+          const [x, y] = [a.box as DOMRect, b.box as DOMRect];
+          // Regions side by side overlap vertically; only one that starts below the other's
+          // bottom edge is a later row.
+          if (y.top >= x.bottom - 1) return -1;
+          if (x.top >= y.bottom - 1) return 1;
+          return x.left - y.left;
+        })
+        .map((one) => one.name);
+      // And inside the focused pane, its own controls before its terminal.
+      const frame = document.querySelector(".pane-frame:has(.pane.focused)");
+      const inFrame = frame ? stops.filter((el) => frame.contains(el)) : [];
+      const controlsFirst =
+        inFrame.length > 0 &&
+        inFrame[0].closest(".pane-doing") !== null &&
+        inFrame[inFrame.length - 1].closest('[data-testid="pane"]') !== null;
+      return { tabbed, laidOut, controlsFirst };
     });
-    expect(order).toEqual([
-      "title bar",
-      "projects",
-      "workspaces",
-      "chats",
-      "pane controls",
-      "terminal",
-      "status line",
-    ]);
+    expect(tabbed).toEqual(laidOut);
+    expect(tabbed.slice(0, 4)).toEqual(["title bar", "projects", "workspaces", "chats"]);
+    expect(tabbed[tabbed.length - 1]).toBe("status line");
+    expect(controlsFirst).toBe(true);
   });
 
   it("draws the focused pane's controls while the keyboard is somewhere else", async () => {

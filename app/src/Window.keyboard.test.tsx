@@ -315,7 +315,7 @@ describe("the window's tab order", () => {
 });
 
 /** The rows of a list-shaped region, in the order it draws them. */
-const rowsOf = (region: HTMLElement) => [
+const rowsIn = (region: HTMLElement) => [
   ...region.querySelectorAll<HTMLElement>("button, summary"),
 ];
 
@@ -323,7 +323,7 @@ describe("a list is one Tab stop", () => {
   it("the explorer: the current row is the stop, and Up, Down, Home and End move", async () => {
     await theWholeWindow();
     const explorer = screen.getByRole("navigation", { name: "Explorer" });
-    const rows = rowsOf(explorer);
+    const rows = rowsIn(explorer);
     // The workspace row, three chats working in it, the clone, its one worktree.
     expect(rows.map(said)).toEqual([
       expect.stringMatching(/^button alpha/),

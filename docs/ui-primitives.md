@@ -430,7 +430,10 @@ carries the rest.
 The attribute above fixed the dialogs. Outside them it is the floor and not the answer: a
 `tabIndex={0}` on every button would put fifty chat tabs between the explorer and the terminal.
 So the window takes the WAI-ARIA Authoring Practices' shape, with the primitive this repo already
-had in its tree under the radio groups and the menus, **`@radix-ui/react-roving-focus`**:
+had in its tree under the radio groups and the menus, **`@radix-ui/react-roving-focus`**. It is
+the package Radix's own `Tabs`, `RadioGroup`, `Menu` and `Toolbar` are built on rather than one of
+the primitives it documents, and it is taken directly because `Tabs` would bring a `Tabs.Content`
+model and a select-on-`mousedown` this window's strips do not have:
 
 - **Each strip is ONE Tab stop** — projects, workspaces, chats. The selected tab says
   `tabindex="0"` and every other `-1`; Left, Right, Home and End move along it; Enter or Space
@@ -441,7 +444,7 @@ had in its tree under the radio groups and the menus, **`@radix-ui/react-roving-
   explorer takes the half of "Tree View" that needs no tree semantics and not Left and Right,
   for the reason `Explorer.tsx` gives: it does not say it is a tree.
 - **Every other control says `tabIndex={0}`**, and a tab's `×` says `-1`: fifty closers would be
-  fifty stops again, and the palette and the tab's own menu both end a chat by the same row.
+  fifty stops again, and the palette and the tab's own menu both end a chat by the same row (a Delete key on the tab is charter-app#239).
 - **The order is the document's, which is the order the window is drawn in**: the title bar,
   the three strips, then the regions as the arrangement places them (ADR 0038 — a region moves,
   and its stops move with it; a fixed order would contradict the layout on screen), each
