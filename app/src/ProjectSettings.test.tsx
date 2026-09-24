@@ -10,6 +10,7 @@ import type {
   ProjectExtension,
   ProjectTheme,
   ProjectSettings as Both,
+  SavingInForce,
   SettingsFile,
   SettingsSaved,
 } from "./bindings";
@@ -114,26 +115,52 @@ const NO_PICK: ProjectTheme = {
   local_left_out: null,
 };
 
+/** One save setting in force: its value as the files write it, and the file that decided it. */
+const said = (value: string | null, source = "default") => ({ value, source });
+
+/** What `project_saving_in_force` answers for a plane with no `[plane]` or `[repos]` and no
+ *  inventory: every default, and no repo. */
+const NO_SAVING: SavingInForce = {
+  plane: {
+    mode: said(null),
+    from_share: false,
+    branch: said(null),
+    save_branch: said(null),
+    sign: said("off"),
+    autosave: said("on"),
+    autosave_after: said("1m"),
+  },
+  repos: [],
+  local_left_out: null,
+};
+
 /** The core, as a mock: `project_settings` answers `both`, `project_extensions` answers
- *  `extensions`, and `save_project_settings` answers `saved` and records what it was sent.
- *  `leftOut` is why every answer says `charter.local.toml` was left out (charter-app#319). */
+ *  `extensions`, `project_saving_in_force` answers `saving`, and `save_project_settings` answers
+ *  `saved` and records what it was sent. `leftOut` is why every answer says
+ *  `charter.local.toml` was left out (charter-app#319). */
 function core(
   both: Both,
   saved?: (sent: Record<string, unknown>) => SettingsSaved,
   extensions: ProjectExtension[] = [],
   theme: ProjectTheme | (() => ProjectTheme) = NO_PICK,
   leftOut: string | null = null,
+  saving: SavingInForce = NO_SAVING,
 ) {
   const themeNow = () => (typeof theme === "function" ? theme() : theme);
   const sent: Record<string, unknown>[] = [];
   let reads = 0;
   let extensionReads = 0;
+  let savingReads = 0;
   let themeAsks = 0;
   mockIPC((cmd, args) => {
     const given = (args ?? {}) as Record<string, unknown>;
     if (cmd === "project_settings") {
       reads += 1;
       return both;
+    }
+    if (cmd === "project_saving_in_force") {
+      savingReads += 1;
+      return { ...saving, local_left_out: leftOut };
     }
     if (cmd === "project_extensions") {
       extensionReads += 1;
@@ -155,6 +182,7 @@ function core(
     sent,
     reads: () => reads,
     extensionReads: () => extensionReads,
+    savingReads: () => savingReads,
     themeAsks: () => themeAsks,
   };
 }
@@ -182,7 +210,7 @@ describe("the Project settings tab", () => {
     core({ shared: SHARED, local: LOCAL });
     const { shared, local } = await drawn();
 
-    expect(within(shared).getByLabelText("How far a memory travels")).toHaveValue("local");
+    expect(within(shared).getByLabelText("[memory] share (deprecated)")).toHaveValue("local");
     expect(within(shared).getByLabelText("Forge 1: kind")).toHaveValue("github");
     expect(within(shared).getByLabelText("Forge 1: owner")).toHaveValue("acme");
     expect(within(shared).getByLabelText("Default workspace")).toHaveValue("");
@@ -200,7 +228,10 @@ describe("the Project settings tab", () => {
 
     const save = within(shared).getByRole("button", { name: "Save charter.toml" });
     expect(save).toBeDisabled();
-    await user.selectOptions(within(shared).getByLabelText("How far a memory travels"), "commit");
+    await user.selectOptions(
+      within(shared).getByLabelText("[memory] share (deprecated)"),
+      "commit",
+    );
     await user.click(save);
 
     await waitFor(() => expect(sent).toHaveLength(1));
@@ -681,7 +712,7 @@ describe("a charter.local.toml git would carry (charter-app#319)", () => {
     core(CARRIED, undefined, EXTENSIONS, NO_PICK, LEFT_OUT);
     const { shared } = await drawn();
 
-    for (const name of ["Extensions", "Theme"]) {
+    for (const name of ["Plane", "Repos", "Extensions", "Theme"]) {
       const group = within(shared).getByRole("group", { name });
       await waitFor(() => expect(within(group).getAllByText(LEFT_OUT)).toHaveLength(1));
     }
@@ -705,5 +736,320 @@ describe("a charter.local.toml git would carry (charter-app#319)", () => {
     await within(shared).findByLabelText("Acme: enabled");
 
     expect(screen.queryByText(/charter reads nothing in it/)).toBeNull();
+  });
+});
+
+/** A plane whose Shared file sets a mode and signing and Local overrides the mode and sets a
+ *  branch, with two catalogued repos, one configured (charter-app#300). */
+const SAVES: Both = {
+  shared: {
+    ...SHARED,
+    fields: [
+      ...SHARED.fields,
+      { path: [{ key: "plane" }, { key: "mode" }], value: { kind: "text", value: "pr" } },
+      { path: [{ key: "plane" }, { key: "sign" }], value: { kind: "bool", value: true } },
+      {
+        path: [{ key: "repos" }, { key: "api" }, { key: "mode" }],
+        value: { kind: "text", value: "push" },
+      },
+    ],
+  },
+  local: {
+    ...LOCAL,
+    fields: [
+      ...LOCAL.fields,
+      { path: [{ key: "plane" }, { key: "mode" }], value: { kind: "text", value: "push" } },
+      { path: [{ key: "plane" }, { key: "branch" }], value: { kind: "text", value: "trunk" } },
+      {
+        path: [{ key: "repos" }, { key: "api" }, { key: "autosave" }],
+        value: { kind: "bool", value: true },
+      },
+    ],
+  },
+};
+
+const SAVES_IN_FORCE: SavingInForce = {
+  plane: {
+    ...NO_SAVING.plane,
+    mode: said("push", "local"),
+    branch: said("trunk", "local"),
+    sign: said("on", "shared"),
+  },
+  repos: [
+    {
+      name: "web",
+      mode: said("pr"),
+      branch: said(null),
+      sign: said("off"),
+      autosave: said("off"),
+      autosave_after: said("1m"),
+    },
+    {
+      name: "api",
+      mode: said("push", "shared"),
+      branch: said(null),
+      sign: said("off"),
+      autosave: said("on", "local"),
+      autosave_after: said("1m"),
+    },
+  ],
+  local_left_out: null,
+};
+
+describe("the Plane group (charter-app#300, ADR 0051)", () => {
+  it("has every [plane] save key in both sections, with the value each file holds", async () => {
+    core(SAVES, undefined, [], NO_PICK, null, SAVES_IN_FORCE);
+    const { shared, local } = await drawn();
+
+    const sharedPlane = within(shared).getByRole("group", { name: "Plane" });
+    const localPlane = within(local).getByRole("group", { name: "Plane" });
+    expect(within(sharedPlane).getByLabelText("Mode")).toHaveValue("pr");
+    expect(within(localPlane).getByLabelText("Mode")).toHaveValue("push");
+    expect(within(sharedPlane).getByLabelText("Target branch")).toHaveValue("");
+    expect(within(localPlane).getByLabelText("Target branch")).toHaveValue("trunk");
+    expect(within(sharedPlane).getByLabelText("Save branch")).toHaveValue("");
+    expect(within(sharedPlane).getByLabelText("Sign commits")).toHaveValue("on");
+    expect(within(localPlane).getByLabelText("Sign commits")).toHaveValue("");
+    expect(within(sharedPlane).getByLabelText("Auto-save")).toHaveValue("");
+    expect(within(sharedPlane).getByLabelText("Auto-save after")).toHaveValue("");
+    expect(
+      within(within(sharedPlane).getByLabelText("Mode"))
+        .getAllByRole("option")
+        .map((option) => option.getAttribute("value")),
+    ).toEqual(["", "off", "commit", "push", "pr", "pr-merge"]);
+  });
+
+  it("says beside each key which file decided it, and marks a Shared value Local overrides", async () => {
+    core(SAVES, undefined, [], NO_PICK, null, SAVES_IN_FORCE);
+    const { shared, local } = await drawn();
+
+    const sharedPlane = within(shared).getByRole("group", { name: "Plane" });
+    const localPlane = within(local).getByRole("group", { name: "Plane" });
+    await waitFor(() =>
+      expect(within(sharedPlane).getByLabelText("Mode")).toHaveAccessibleDescription(
+        /In this project: push, from charter\.local\.toml — overriding the value here\./,
+      ),
+    );
+    expect(within(localPlane).getByLabelText("Mode")).toHaveAccessibleDescription(
+      /In this project: push, from charter\.local\.toml\./,
+    );
+    expect(within(localPlane).getByLabelText("Mode")).not.toHaveAccessibleDescription(/overriding/);
+    expect(within(sharedPlane).getByLabelText("Sign commits")).toHaveAccessibleDescription(
+      /In this project: on, from charter\.toml\./,
+    );
+    expect(within(sharedPlane).getByLabelText("Auto-save after")).toHaveAccessibleDescription(
+      /In this project: 1m, its default\./,
+    );
+    // Local decided a key Shared does not hold: nothing here is overridden.
+    expect(within(sharedPlane).getByLabelText("Target branch")).toHaveAccessibleDescription(
+      /In this project: trunk, from charter\.local\.toml\./,
+    );
+    expect(within(sharedPlane).getByLabelText("Target branch")).not.toHaveAccessibleDescription(
+      /overriding/,
+    );
+  });
+
+  it("says what no value means where no file sets one", async () => {
+    core({ shared: SHARED, local: LOCAL });
+    const { shared } = await drawn();
+
+    const plane = within(shared).getByRole("group", { name: "Plane" });
+    await waitFor(() =>
+      expect(within(plane).getByLabelText("Mode")).toHaveAccessibleDescription(
+        /In this project: not set — the Saving view asks once, before anything is pushed\./,
+      ),
+    );
+    expect(within(plane).getByLabelText("Target branch")).toHaveAccessibleDescription(
+      /In this project: the branch the plane has checked out, its default\./,
+    );
+    expect(within(plane).getByLabelText("Save branch")).toHaveAccessibleDescription(
+      /In this project: charter\/save\/<this machine's name>, its default\./,
+    );
+  });
+
+  it("writes each key to the section it is in, by its kind, and empty removes it", async () => {
+    const { sent } = core(SAVES, undefined, [], NO_PICK, null, SAVES_IN_FORCE);
+    const { shared, local } = await drawn();
+    const user = userEvent.setup();
+
+    const localPlane = within(local).getByRole("group", { name: "Plane" });
+    await user.selectOptions(within(localPlane).getByLabelText("Mode"), "pr-merge");
+    await user.selectOptions(within(localPlane).getByLabelText("Auto-save"), "off");
+    await user.clear(within(localPlane).getByLabelText("Target branch"));
+    await user.type(within(localPlane).getByLabelText("Auto-save after"), "2m");
+    await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].which).toBe("local");
+    expect((sent[0].change as { edits: unknown }).edits).toEqual([
+      { path: [{ key: "plane" }, { key: "mode" }], value: { kind: "text", value: "pr-merge" } },
+      { path: [{ key: "plane" }, { key: "branch" }], value: null },
+      { path: [{ key: "plane" }, { key: "autosave" }], value: { kind: "bool", value: false } },
+      {
+        path: [{ key: "plane" }, { key: "autosave_after" }],
+        value: { kind: "text", value: "2m" },
+      },
+    ]);
+
+    const sharedPlane = within(shared).getByRole("group", { name: "Plane" });
+    await user.type(within(sharedPlane).getByLabelText("Save branch"), "charter/save/team");
+    await user.click(within(shared).getByRole("button", { name: "Save charter.toml" }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect((sent[1].change as { edits: unknown }).edits).toEqual([
+      {
+        path: [{ key: "plane" }, { key: "save_branch" }],
+        value: { kind: "text", value: "charter/save/team" },
+      },
+    ]);
+  });
+
+  it("draws the reader's refusal of a value in its words", async () => {
+    const why =
+      "plane.autosave_after in charter.toml is not a quiet period — a whole number of seconds or minutes";
+    core(SAVES, () => ({ kind: "refused", reasons: [why] }), [], NO_PICK, null, SAVES_IN_FORCE);
+    const { shared } = await drawn();
+    const user = userEvent.setup();
+
+    const plane = within(shared).getByRole("group", { name: "Plane" });
+    await user.type(within(plane).getByLabelText("Auto-save after"), "soon");
+    await user.click(within(shared).getByRole("button", { name: "Save charter.toml" }));
+
+    const alert = await within(shared).findByRole("alert");
+    expect(alert).toHaveTextContent(why);
+    expect(within(plane).getByLabelText("Auto-save after")).toHaveValue("soon");
+  });
+
+  it("shows [memory] share in Shared only, as the deprecated alias of Mode", async () => {
+    core({ shared: SHARED, local: LOCAL }, undefined, [], NO_PICK, null, {
+      ...NO_SAVING,
+      plane: { ...NO_SAVING.plane, mode: said("commit", "shared"), from_share: true },
+    });
+    const { shared, local } = await drawn();
+
+    const plane = within(shared).getByRole("group", { name: "Plane" });
+    const share = within(plane).getByLabelText("[memory] share (deprecated)");
+    expect(share).toHaveValue("local");
+    expect(share).toHaveAccessibleDescription(
+      "Deprecated: read as Mode — commit and push carry over, local says nothing — only while neither file sets Mode. Set Mode instead.",
+    );
+    expect(within(local).queryByLabelText("[memory] share (deprecated)")).toBeNull();
+    await waitFor(() =>
+      expect(within(plane).getByLabelText("Mode")).toHaveAccessibleDescription(
+        /In this project: commit, from \[memory\] share in charter\.toml, the deprecated alias\./,
+      ),
+    );
+  });
+
+  it("asks what is in force again after a save", async () => {
+    const { savingReads } = core(SAVES, undefined, [], NO_PICK, null, SAVES_IN_FORCE);
+    const { local } = await drawn();
+    const user = userEvent.setup();
+    await waitFor(() => expect(savingReads()).toBe(1));
+
+    const plane = within(local).getByRole("group", { name: "Plane" });
+    await user.selectOptions(within(plane).getByLabelText("Mode"), "commit");
+    await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
+
+    await waitFor(() => expect(savingReads()).toBe(2));
+  });
+});
+
+describe("the Repos group (charter-app#300, ADR 0051)", () => {
+  it("has a row per catalogued repo in both sections, each key marked with the file that decided it", async () => {
+    core(SAVES, undefined, [], NO_PICK, null, SAVES_IN_FORCE);
+    const { shared, local } = await drawn();
+
+    const sharedRepos = within(shared).getByRole("group", { name: "Repos" });
+    const localRepos = within(local).getByRole("group", { name: "Repos" });
+    await waitFor(() =>
+      expect(within(sharedRepos).getByLabelText("api: mode")).toHaveValue("push"),
+    );
+    for (const name of ["web", "api"])
+      for (const key of ["mode", "branch", "sign", "auto-save", "auto-save after"]) {
+        expect(within(sharedRepos).getByLabelText(`${name}: ${key}`)).toBeInTheDocument();
+        expect(within(localRepos).getByLabelText(`${name}: ${key}`)).toBeInTheDocument();
+      }
+    expect(within(sharedRepos).queryByLabelText("api: save branch")).toBeNull();
+    expect(within(localRepos).getByLabelText("api: mode")).toHaveValue("");
+    expect(within(localRepos).getByLabelText("api: auto-save")).toHaveValue("on");
+    expect(within(sharedRepos).getByLabelText("api: mode")).toHaveAccessibleDescription(
+      /In this project: push, from charter\.toml\./,
+    );
+    expect(within(sharedRepos).getByLabelText("web: mode")).toHaveAccessibleDescription(
+      /In this project: pr, its default\./,
+    );
+    expect(within(sharedRepos).getByLabelText("web: branch")).toHaveAccessibleDescription(
+      /In this project: the repo's default branch, its default\./,
+    );
+    expect(within(localRepos).getByLabelText("api: auto-save")).toHaveAccessibleDescription(
+      /In this project: on, from charter\.local\.toml\./,
+    );
+  });
+
+  it("marks a Shared repo value that Local overrides", async () => {
+    core(
+      {
+        ...SAVES,
+        shared: {
+          ...SAVES.shared,
+          fields: [
+            ...SAVES.shared.fields,
+            {
+              path: [{ key: "repos" }, { key: "api" }, { key: "autosave" }],
+              value: { kind: "bool", value: false },
+            },
+          ],
+        },
+      },
+      undefined,
+      [],
+      NO_PICK,
+      null,
+      SAVES_IN_FORCE,
+    );
+    const { shared } = await drawn();
+
+    const repos = within(shared).getByRole("group", { name: "Repos" });
+    await waitFor(() =>
+      expect(within(repos).getByLabelText("api: auto-save")).toHaveAccessibleDescription(
+        /In this project: on, from charter\.local\.toml — overriding the value here\./,
+      ),
+    );
+  });
+
+  it("writes a repo's key under [repos.<name>] in the section it is in", async () => {
+    const { sent } = core(SAVES, undefined, [], NO_PICK, null, SAVES_IN_FORCE);
+    const { local } = await drawn();
+    const user = userEvent.setup();
+
+    const repos = within(local).getByRole("group", { name: "Repos" });
+    await user.selectOptions(await within(repos).findByLabelText("web: mode"), "pr-merge");
+    await user.selectOptions(within(repos).getByLabelText("web: sign"), "on");
+    await user.type(within(repos).getByLabelText("web: branch"), "develop");
+    await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0].change as { edits: unknown }).edits).toEqual([
+      {
+        path: [{ key: "repos" }, { key: "web" }, { key: "mode" }],
+        value: { kind: "text", value: "pr-merge" },
+      },
+      {
+        path: [{ key: "repos" }, { key: "web" }, { key: "branch" }],
+        value: { kind: "text", value: "develop" },
+      },
+      {
+        path: [{ key: "repos" }, { key: "web" }, { key: "sign" }],
+        value: { kind: "bool", value: true },
+      },
+    ]);
+  });
+
+  it("says so when no repo is catalogued or named", async () => {
+    core({ shared: SHARED, local: LOCAL });
+    const { shared } = await drawn();
+
+    expect(within(shared).getByRole("group", { name: "Repos" })).toHaveTextContent(
+      "No repo is catalogued in inventory/repos.json or named by either file.",
+    );
   });
 });

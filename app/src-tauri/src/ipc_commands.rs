@@ -114,6 +114,7 @@ macro_rules! app_commands {
                 doctor::plane_doctor,
                 settings::project_settings,
                 settings::save_project_settings,
+                settings::project_saving_in_force,
                 settings::workspace_settings,
                 settings::save_workspace_settings,
                 usage::chat_usage,

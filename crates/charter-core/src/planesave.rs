@@ -69,6 +69,11 @@ pub struct Repo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub plane: Plane,
+    /// Why `charter.local.toml` had no say, when git would carry it and it set something in
+    /// `[plane]` or `[repos]` ([`crate::settings::LayerText::left_out_where`], charter-app#319):
+    /// what the settings tab's Plane and Repos groups say, so a Local value not applied is
+    /// never shown without its reason.
+    pub local_left_out: Option<String>,
     files: Files,
 }
 
@@ -108,6 +113,7 @@ impl Settings {
                 autosave: files.or(&["plane"], "autosave", toml::Value::as_bool, true),
                 autosave_after: files.or(&["plane"], "autosave_after", quiet_period, QUIET),
             },
+            local_left_out: None,
             files,
         }
     }
@@ -117,10 +123,38 @@ impl Settings {
     /// commit, because an ignored file must not change plane policy with no trace in git.
     pub fn read(root: &std::path::Path) -> Self {
         use crate::settings::{Which, layer_text};
-        Self::from_text(
-            layer_text(root, Which::Shared).text(),
-            layer_text(root, Which::Local).text(),
-        )
+        let local = layer_text(root, Which::Local);
+        Self {
+            local_left_out: local.left_out_where(says_saving),
+            ..Self::from_text(layer_text(root, Which::Shared).text(), local.text())
+        }
+    }
+
+    /// The repos a settings form has a row for: every one `inventory/repos.json` at `root`
+    /// catalogues, in its order, then every one a file's `[repos]` names that it does not.
+    ///
+    /// An inventory that cannot be read lists nothing here: `charter doctor` says why, and the
+    /// files' own tables still have their rows.
+    pub fn repo_names(&self, root: &std::path::Path) -> Vec<String> {
+        let catalogued = crate::inventory::load(root, "")
+            .map(|doc| crate::inventory::listed(&doc))
+            .unwrap_or_default();
+        let named = [&self.files.shared, &self.files.local]
+            .into_iter()
+            .filter_map(|top| top.get("repos").and_then(toml::Value::as_table))
+            .flat_map(|repos| repos.keys().cloned());
+        let mut out: Vec<String> = Vec::new();
+        for name in catalogued
+            .iter()
+            .filter_map(|record| record.get("name").and_then(serde_json::Value::as_str))
+            .map(str::to_owned)
+            .chain(named)
+        {
+            if !name.is_empty() && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        out
     }
 
     /// How the repo called `name` is saved.
@@ -227,6 +261,14 @@ impl Mode {
             _ => return None,
         })
     }
+}
+
+/// Whether a file's top table says anything this module reads: a `[plane]` save key, or a
+/// `[repos]` table.
+fn says_saving(top: &toml::Table) -> bool {
+    let plane = table_at(top, &["plane"])
+        .is_some_and(|plane| PLANE_KEYS.iter().any(|key| plane.contains_key(*key)));
+    plane || top.contains_key("repos")
 }
 
 /// The top table of `text`, or an empty one when the text is not TOML.

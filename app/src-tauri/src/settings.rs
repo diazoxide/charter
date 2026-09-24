@@ -190,6 +190,131 @@ pub(crate) fn file_of(
 }
 
 // ---------------------------------------------------------------------------------------
+// How far a save goes, as the two files decide it (charter-app#300, ADR 0051)
+// ---------------------------------------------------------------------------------------
+
+/// One save setting as the project has it: its value, and the file that decided it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct InForce {
+    /// As the files write it — a mode's word, a branch, `on` or `off`, a quiet period as `30s`
+    /// or `2m` — or `null` where no value is the answer: a mode the Saving view asks for, a
+    /// branch the plane or repo already has.
+    pub value: Option<String>,
+    /// `default`, `shared` or `local`.
+    pub source: String,
+}
+
+/// `[plane]`, as `planesave::Settings` resolves it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct PlaneInForce {
+    pub mode: InForce,
+    /// Whether the mode is `charter.toml`'s `[memory] share`, the deprecated alias.
+    pub from_share: bool,
+    pub branch: InForce,
+    pub save_branch: InForce,
+    pub sign: InForce,
+    pub autosave: InForce,
+    pub autosave_after: InForce,
+}
+
+/// `[repos.<name>]` for one repo, as `planesave::Settings::repo` resolves it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct RepoInForce {
+    /// Its name in `inventory/repos.json`, or in a file's `[repos]`.
+    pub name: String,
+    pub mode: InForce,
+    pub branch: InForce,
+    pub sign: InForce,
+    pub autosave: InForce,
+    pub autosave_after: InForce,
+}
+
+/// How far a save of the plane and of each repo goes in this project, and which file decided
+/// each key: what the Project settings tab's Plane and Repos groups say beside each control.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SavingInForce {
+    pub plane: PlaneInForce,
+    /// One per repo `inventory/repos.json` catalogues, in its order, then one per repo only a
+    /// file's `[repos]` names.
+    pub repos: Vec<RepoInForce>,
+    /// Why `charter.local.toml` had no say in any of it, when git would carry it and it set
+    /// something here (charter-app#319).
+    pub local_left_out: Option<String>,
+}
+
+/// The plane's and each repo's save settings in force — `planesave::Settings`, the one
+/// resolver every save asks, shaped for the wire.
+///
+/// On a blocking thread: the Local file's check asks git whether it is ignored.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_saving_in_force(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<SavingInForce, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || saving_in_force(&root))
+        .await
+        .map_err(|err| format!("reading how this project saves did not finish: {err}"))
+}
+
+/// [`project_saving_in_force`], without a runtime.
+pub(crate) fn saving_in_force(root: &std::path::Path) -> SavingInForce {
+    use charter_core::planesave::{Mode, Resolved, Settings};
+
+    fn said<T>(resolved: &Resolved<T>, value: Option<String>) -> InForce {
+        InForce {
+            value,
+            source: resolved.source.as_str().to_owned(),
+        }
+    }
+    let mode = |r: &Resolved<Mode>| said(r, Some(r.value.as_str().to_owned()));
+    let branch = |r: &Resolved<Option<String>>| said(r, r.value.clone());
+    let on = |r: &Resolved<bool>| said(r, Some(if r.value { "on" } else { "off" }.to_owned()));
+    let quiet = |r: &Resolved<std::time::Duration>| said(r, Some(quiet_period(r.value)));
+
+    let settings = Settings::read(root);
+    let plane = &settings.plane;
+    SavingInForce {
+        plane: PlaneInForce {
+            mode: said(&plane.mode, plane.mode.value.map(|m| m.as_str().to_owned())),
+            from_share: plane.from_share,
+            branch: branch(&plane.branch),
+            save_branch: branch(&plane.save_branch),
+            sign: on(&plane.sign),
+            autosave: on(&plane.autosave),
+            autosave_after: quiet(&plane.autosave_after),
+        },
+        repos: settings
+            .repo_names(root)
+            .into_iter()
+            .map(|name| {
+                let repo = settings.repo(&name);
+                RepoInForce {
+                    mode: mode(&repo.mode),
+                    branch: branch(&repo.branch),
+                    sign: on(&repo.sign),
+                    autosave: on(&repo.autosave),
+                    autosave_after: quiet(&repo.autosave_after),
+                    name,
+                }
+            })
+            .collect(),
+        local_left_out: settings.local_left_out.clone(),
+    }
+}
+
+/// A quiet period as the files write it: whole minutes as `2m`, anything else as seconds.
+fn quiet_period(period: std::time::Duration) -> String {
+    let secs = period.as_secs();
+    if secs > 0 && secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // A workspace's settings (charter-app#280)
 // ---------------------------------------------------------------------------------------
 
@@ -492,6 +617,100 @@ mod tests {
             panic!("refused: {saved:?}")
         };
         assert!(reasons[0].contains("changed on disk"), "{reasons:?}");
+    }
+
+    /// A plane that is a git repo whose `charter.local.toml` is ignored, so the Local layer is
+    /// read. git for a fixture never reads the developer's global config.
+    fn plane_with_local(shared: &str, local: &str) -> tempfile::TempDir {
+        let dir = plane(shared);
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "/charter.local.toml\n").unwrap();
+        std::fs::write(root.join("charter.local.toml"), local).unwrap();
+        let mut git = std::process::Command::new("git");
+        git.arg("-C")
+            .arg(root)
+            .args(["init", "-q"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+        let out = charter_core::forklock::output(&mut git).expect("git runs");
+        assert!(out.status.success());
+        dir
+    }
+
+    fn in_force(value: Option<&str>, source: &str) -> InForce {
+        InForce {
+            value: value.map(str::to_owned),
+            source: source.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_planes_save_settings_in_force_say_the_file_that_decided_each() {
+        let dir = plane_with_local(
+            "[plane]\nmode = \"pr\"\nsign = true\nautosave_after = \"120s\"\n",
+            "[plane]\nmode = \"push\"\nbranch = \"trunk\"\n",
+        );
+        let got = saving_in_force(dir.path()).plane;
+        assert_eq!(
+            got,
+            PlaneInForce {
+                mode: in_force(Some("push"), "local"),
+                from_share: false,
+                branch: in_force(Some("trunk"), "local"),
+                save_branch: in_force(None, "default"),
+                sign: in_force(Some("on"), "shared"),
+                autosave: in_force(Some("on"), "default"),
+                autosave_after: in_force(Some("2m"), "shared"),
+            }
+        );
+    }
+
+    #[test]
+    fn a_mode_from_memory_share_says_so() {
+        let dir = plane("[memory]\nshare = \"commit\"\n");
+        let got = saving_in_force(dir.path()).plane;
+        assert_eq!(got.mode, in_force(Some("commit"), "shared"));
+        assert!(got.from_share);
+        let unset = saving_in_force(plane("schema = 1\n").path()).plane;
+        assert_eq!(unset.mode, in_force(None, "default"));
+        assert!(!unset.from_share);
+    }
+
+    #[test]
+    fn every_catalogued_repo_has_a_row_with_its_settings_in_force() {
+        let dir = plane_with_local(
+            "[repos.api]\nmode = \"push\"\nautosave_after = \"45s\"\n",
+            "[repos.api]\nautosave = true\n",
+        );
+        std::fs::create_dir(dir.path().join("inventory")).unwrap();
+        std::fs::write(
+            dir.path().join("inventory/repos.json"),
+            r#"{"group": "acme", "count": 2, "repos": [{"name": "web"}, {"name": "api"}]}"#,
+        )
+        .unwrap();
+        let got = saving_in_force(dir.path());
+        assert_eq!(
+            got.repos,
+            [
+                RepoInForce {
+                    name: "web".into(),
+                    mode: in_force(Some("pr"), "default"),
+                    branch: in_force(None, "default"),
+                    sign: in_force(Some("off"), "default"),
+                    autosave: in_force(Some("off"), "default"),
+                    autosave_after: in_force(Some("30s"), "default"),
+                },
+                RepoInForce {
+                    name: "api".into(),
+                    mode: in_force(Some("push"), "shared"),
+                    branch: in_force(None, "default"),
+                    sign: in_force(Some("off"), "default"),
+                    autosave: in_force(Some("on"), "local"),
+                    autosave_after: in_force(Some("45s"), "shared"),
+                },
+            ]
+        );
+        assert_eq!(got.local_left_out, None);
     }
 
     #[test]

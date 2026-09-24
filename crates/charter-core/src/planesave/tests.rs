@@ -335,3 +335,76 @@ fn a_local_file_git_would_commit_changes_no_save_setting() {
         }
     );
 }
+
+/// A plane whose `charter.local.toml` git would commit (charter-app#308): not ignored.
+fn carried_local(local: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    crate::testgit::run(root, &["init", "-q"]);
+    std::fs::write(root.join("charter.toml"), "[plane]\nmode = \"pr\"\n").unwrap();
+    std::fs::write(root.join("charter.local.toml"), local).unwrap();
+    dir
+}
+
+#[test]
+fn a_left_out_local_file_that_set_a_save_setting_keeps_the_ignore_checks_sentence() {
+    for local in ["[plane]\nmode = \"push\"\n", "[repos.api]\nsign = true\n"] {
+        let dir = carried_local(local);
+        let why = Settings::read(dir.path()).local_left_out;
+        assert!(
+            why.as_deref()
+                .is_some_and(|why| why.contains("charter reads nothing in it")),
+            "{local:?}: {why:?}"
+        );
+        std::fs::write(dir.path().join(".gitignore"), "/charter.local.toml\n").unwrap();
+        assert_eq!(Settings::read(dir.path()).local_left_out, None, "{local:?}");
+    }
+}
+
+#[test]
+fn a_left_out_local_file_that_set_no_save_setting_says_nothing_about_saving() {
+    let dir = carried_local("[harness]\ndefault = \"claude\"\n");
+    assert_eq!(Settings::read(dir.path()).local_left_out, None);
+}
+
+#[test]
+fn the_repos_are_the_inventorys_in_its_order_then_those_only_a_file_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join("inventory")).unwrap();
+    std::fs::write(
+        root.join("inventory/repos.json"),
+        r#"{"group": "acme", "count": 2, "repos": [{"name": "web"}, {"name": "api"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("charter.toml"),
+        "[repos.api]\nmode = \"push\"\n[repos.\"old.lib\"]\nsign = true\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".gitignore"), "/charter.local.toml\n").unwrap();
+    crate::testgit::run(root, &["init", "-q"]);
+    std::fs::write(
+        root.join("charter.local.toml"),
+        "[repos.tools]\nautosave = true\n",
+    )
+    .unwrap();
+
+    let settings = Settings::read(root);
+    assert_eq!(
+        settings.repo_names(root),
+        ["web", "api", "old.lib", "tools"]
+    );
+}
+
+#[test]
+fn a_plane_with_no_inventory_lists_the_repos_its_files_name() {
+    let settings = settings("[repos.api]\nmode = \"push\"\n", "");
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(settings.repo_names(dir.path()), ["api"]);
+    assert!(
+        Settings::from_text(None, None)
+            .repo_names(dir.path())
+            .is_empty()
+    );
+}
