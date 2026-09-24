@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Vaults } from "./Vaults";
 import type { VaultSummary } from "./bindings";
@@ -66,7 +67,13 @@ describe("the Vaults section", () => {
   });
 
   it("marks a vault charter cannot read, and says why in its card", async () => {
-    core([vault("team", { provider: "1password", count: null, health: { ok: false, detail: "op CLI not on PATH" } })]);
+    core([
+      vault("team", {
+        provider: "1password",
+        count: null,
+        health: { ok: false, detail: "op CLI not on PATH" },
+      }),
+    ]);
     render(<Vaults plane={PLANE} />);
     const list = await screen.findByRole("list", { name: "Vaults" });
     const row = within(list).getByRole("listitem");
@@ -78,8 +85,22 @@ describe("the Vaults section", () => {
   it("draws the core's refusal rather than an empty list", async () => {
     core(new Error("vault registry vaults.json is corrupt: not a JSON object"));
     render(<Vaults plane={PLANE} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("vault registry vaults.json is corrupt");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "vault registry vaults.json is corrupt",
+    );
     expect(screen.queryByTestId("list-vaults-empty")).not.toBeInTheDocument();
+  });
+
+  it("is one Tab stop, and Up and Down move between vaults (charter-app#189)", async () => {
+    core([vault("files", { provider: "plain-file", count: 1 }), vault("ops")]);
+    render(<Vaults plane={PLANE} />);
+    const list = await screen.findByRole("list", { name: "Vaults" });
+    const [first, second] = within(list).getAllByRole("button");
+    expect([first, second].map((one) => one.getAttribute("tabindex"))).toEqual(["0", "-1"]);
+
+    first.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    await waitFor(() => expect(second).toHaveFocus());
   });
 
   it("makes no rows out of an answer that is not a list", async () => {
