@@ -471,13 +471,15 @@ key refuses.
   `crates/charter-core/src/extension/project.rs` as `charter.toml`'s is (charter-app#253), and
   its `[theme]` by `crates/charter-core/src/extension/project/theme.rs` (charter-app#273), and
   its `[harness_plugins]` table by `crates/charter-core/src/harness_plugin.rs` as
-  `charter.toml`'s is (charter-app#274).
+  `charter.toml`'s is (charter-app#274), and its `[plane]` and `[repos.<name>]` tables by
+  `crates/charter-core/src/planesave.rs` as `charter.toml`'s are (charter-app#292).
 - **Git:** gitignored — the baseline writes `/charter.local.toml`
   (`charter/commands.py:1104`), and `reinit` backfills it
   (`charter/commands.py:1821`). If git *would* carry it (tracked, committable, or git cannot
   say), **every profile in it is refused** (`charter/profiles.py:518` `ignore_check`,
   `charter/profiles.py:456` `with_ignore_check`). In charter-app, **nothing in it is read**
-  then: its `[extensions]`, `[theme]` and `[harness_plugins]` are left out too, and the other
+  then: its `[extensions]`, `[theme]`, `[harness_plugins]`, `[plane]` and `[repos.<name>]`
+  are left out too, and the other
   layers decide (charter-app#308, ADR 0048). Every reader takes the file through
   `crates/charter-core/src/settings.rs` `layer_text`, which applies the same check.
 - **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
