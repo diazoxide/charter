@@ -386,12 +386,21 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
         // on, and what they are set to (charter-app#253, ADR 0048). It is read by
         // `extension::project`, not here, and it cannot reach past this machine's approval —
         // so it changes nothing a teammate's clone does, which is the reason for the rule below.
-        if key != "harness" && key != crate::extension::project::TABLE {
+        // `[plane]` and `[repos]` are how far this machine's saves go (charter-app#292, ADR
+        // 0051), read by `planesave`; every surface that shows one names this file.
+        if ![
+            "harness",
+            crate::extension::project::TABLE,
+            "plane",
+            "repos",
+        ]
+        .contains(&key.as_str())
+        {
             let name = shown::short(key);
             set.refused.push(Refused {
                 reason: format!(
                     "[{name}] in charter.local.toml is not read — that file carries \
-                     [harness] and [extensions] and nothing else, because an ignored file must \
+                     [harness], [extensions], [plane] and [repos] and nothing else, because an ignored file must \
                      not change plane policy with no trace in git. Put [{name}] in charter.toml."
                 ),
                 name,

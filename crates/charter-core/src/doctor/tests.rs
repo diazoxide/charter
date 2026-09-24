@@ -395,6 +395,52 @@ fn worktrees_declared_outside_the_plane_are_named_and_a_sibling_is_not() {
 }
 
 #[test]
+fn share_standing_in_for_the_mode_is_named_as_the_deprecated_alias() {
+    // charter-app#292, ADR 0051.
+    let (_d, root) = plane("[memory]\nshare = \"push\"\n");
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.status, Status::Warn);
+    assert_eq!(
+        r.detail,
+        "[memory] share is deprecated, and is being read as [plane] mode = \"push\""
+    );
+    assert_eq!(
+        r.hint,
+        "Write mode = \"push\" under [plane] in charter.toml and remove share from [memory] — \
+         [plane] mode says how far every save goes, not only a memory's."
+    );
+}
+
+#[test]
+fn share_local_is_what_init_always_wrote_and_is_not_reported() {
+    let (_d, root) = plane("[memory]\nshare = \"local\"\n");
+    assert_eq!(one(&root, "charter.toml").status, Status::Ok);
+}
+
+#[test]
+fn a_pr_mode_on_a_plane_whose_origin_is_no_forge_charter_knows_is_named() {
+    for mode in ["pr", "pr-merge"] {
+        let (_d, root) = plane(&format!("[plane]\nmode = \"{mode}\"\n"));
+        let r = one(&root, "charter.toml");
+        assert_eq!(r.status, Status::Warn, "{mode}");
+        assert_eq!(
+            r.detail,
+            format!(
+                "[plane] mode = \"{mode}\" opens a pull request, and this plane's origin is not \
+                 a GitHub or GitLab forge charter knows"
+            )
+        );
+        assert_eq!(
+            r.hint,
+            "Saves stop at a local commit, and the plane shows as blocked, until origin is on a \
+             forge a [[forge]] block declares, or mode is commit or push."
+        );
+    }
+    let (_d, root) = plane("[plane]\nmode = \"push\"\n");
+    assert_eq!(one(&root, "charter.toml").status, Status::Ok);
+}
+
+#[test]
 fn no_plane_is_said_out_loud_rather_than_reported_green() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();

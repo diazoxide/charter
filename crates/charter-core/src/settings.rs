@@ -135,6 +135,12 @@ fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
     // Either file may hold `[extensions]` (charter-app#253), and it is read by one reader in
     // both, so it is refused in that reader's words in both.
     out.extend(crate::extension::project::refusals(text, which.file()));
+    // And so may `[plane]` and `[repos]` (charter-app#292), read by `planesave` in both.
+    out.extend(crate::planesave::refusals(
+        text,
+        which == Which::Local,
+        which.file(),
+    ));
     out
 }
 

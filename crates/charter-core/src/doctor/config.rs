@@ -211,6 +211,7 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
             refused_default(cfg)?;
             default_finding(cfg, &crate::profiles::current(&d.root))
         })
+        .or_else(|| save_finding(&d.root))
     {
         return Row::warn(NAME, summary, detail);
     }
@@ -280,6 +281,38 @@ fn worktrees_finding(root: &Path, cfg: &toml::Table) -> Option<(String, String)>
              root without editing the file."
         ),
     ))
+}
+
+/// How far the plane's saves go, when the answer is worth a word (charter-app#292, ADR 0051):
+/// the deprecated `[memory] share` standing in for `[plane] mode`, or a mode that opens a pull
+/// request on a plane whose origin no forge adapter can open one on. Neither is a refusal: the
+/// first still reads, and the second is the Saving view's **blocked**, said ahead of time.
+fn save_finding(root: &Path) -> Option<(String, String)> {
+    let plane = crate::planesave::Settings::read(root).plane;
+    let mode = plane.mode.value?;
+    if plane.from_share {
+        let word = mode.as_str();
+        return Some((
+            format!("[memory] share is deprecated, and is being read as [plane] mode = \"{word}\""),
+            format!(
+                "Write mode = \"{word}\" under [plane] in charter.toml and remove share from \
+                 [memory] — [plane] mode says how far every save goes, not only a memory's."
+            ),
+        ));
+    }
+    if mode.opens_a_pr() && crate::planegit::origin_https(root).is_none() {
+        return Some((
+            format!(
+                "[plane] mode = \"{}\" opens a pull request, and this plane's origin is not a \
+                 GitHub or GitLab forge charter knows",
+                mode.as_str()
+            ),
+            "Saves stop at a local commit, and the plane shows as blocked, until origin is on a \
+             forge a [[forge]] block declares, or mode is commit or push."
+                .to_owned(),
+        ));
+    }
+    None
 }
 
 /// The `[[forge]]` blocks that do not resolve, as one finding.
