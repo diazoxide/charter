@@ -822,6 +822,26 @@ fn cp_names_what_a_destination_that_is_not_a_file_is() {
 }
 
 #[test]
+fn cp_says_a_destination_it_cannot_inspect_cannot_be_inspected() {
+    // Only a destination that is not there yet is let through to be created; one whose
+    // `lstat` fails any other way (here ENOTDIR, a path under a regular file) is refused
+    // before anything is opened, and the refusal says why.
+    let plane = cp_plane();
+    let out = tempfile::tempdir().unwrap();
+    std::fs::write(out.path().join("plain"), "x").unwrap();
+    let dest = out.path().join("plain").join("token");
+    let shown = dest.to_string_lossy().into_owned();
+    let mut io = Rec::default();
+    assert_eq!(cp(&plane.ctx, "p", "k", &shown, true, &mut io), 2);
+    assert!(
+        io.said()
+            .contains(&format!("{shown} cannot be inspected (Not a directory")),
+        "{}",
+        io.said()
+    );
+}
+
+#[test]
 fn cp_refuses_a_path_inside_the_plane_git_would_commit_but_not_an_ignored_one() {
     let plane = cp_plane();
     git(plane.root(), &["init", "-q"]);

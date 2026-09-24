@@ -652,6 +652,10 @@ fn cp_unix(ctx: &Ctx, vault: &str, key: &str, dest: &str, force: bool, io: &mut 
             }
         }
     }
+    // `NOFOLLOW` and `NONBLOCK` are a second line behind `cp_dest_refusal`, which has already
+    // refused a symlink and anything that is not a regular file: only a swap between that
+    // `lstat` and this `open` can reach them, so dropping them (`| NONBLOCK` as `& NONBLOCK`)
+    // changes nothing a test can hold still. `.cargo/mutants.toml` excludes that mutant.
     let mut flags = OFlags::WRONLY | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK;
     if !force {
         flags |= OFlags::EXCL;
