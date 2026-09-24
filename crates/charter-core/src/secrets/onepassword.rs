@@ -160,14 +160,23 @@ fn op_run(
     stdin: Option<&str>,
 ) -> Result<Ran, VaultError> {
     checked(vault)?;
-    if ctx.which("op").is_none() {
-        return Err(VaultError::new(
-            "the 1Password CLI ('op') is not on PATH. Install it and sign in \
-             (https://developer.1password.com/docs/cli/), then retry.",
-        ));
+    // A keyring-held identity runs exactly the `op` pinned when its token was stored — never one
+    // the caller's PATH resolves, which a chat controls (#271 review, U1). A vault whose identity
+    // is not in the keyring keeps resolving `op` from PATH: no keyring item is at stake.
+    let mut argv = argv.to_vec();
+    match super::identity::pinned_op(ctx, vault)? {
+        Some(path) => argv[0] = path.display().to_string(),
+        None => {
+            if ctx.which("op").is_none() {
+                return Err(VaultError::new(
+                    "the 1Password CLI ('op') is not on PATH. Install it and sign in \
+                     (https://developer.1password.com/docs/cli/), then retry.",
+                ));
+            }
+        }
     }
     let overlay = super::env_overlay(ctx, vault)?;
-    run::run(&ctx.env, argv, stdin, &overlay, None).map_err(|e| match e {
+    run::run(&ctx.env, &argv, stdin, &overlay, None).map_err(|e| match e {
         RunError::Timeout => VaultError::new("`op` did not finish and was stopped."),
         RunError::Interrupted(_) => VaultError::interrupted(),
         RunError::Spawn(e) => VaultError::new(format!("`op` could not be started: {e}")),

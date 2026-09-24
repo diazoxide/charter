@@ -30,6 +30,11 @@ sha2 = "0.10"
 # The keyed fingerprint `secret get` prints (`charter/secrets/fingerprint.py`): HMAC-SHA256 over
 # `sha2`, and 32 random bytes for the plane's key. Both already in this workspace's lockfile.
 hmac = "0.12"
+# The `keyring` vault provider (ADR 0047): the operating system's own credential store — the
+# macOS Keychain, the Secret Service on Linux, the Windows Credential Manager — through the
+# standard crate every Rust program that keeps a password there uses. Its default `v1`
+# feature is the one-entry API charter needs and picks the platform's store itself.
+keyring = "4"
 getrandom = "0.3"
 # `secret exec --file`/`--dotenv`: a 0600 temp file, created with a random name that cannot
 # collide or be pre-planted. Already a dev-dependency here and in the lockfile.
