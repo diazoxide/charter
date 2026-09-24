@@ -77,6 +77,12 @@ fn when(stamp: &str) -> String {
 /// line into the program in a terminal and get the same chart — which is ADR 0041's first
 /// argument for a subprocess: *"its whole conversation with charter is a log a human can read."*
 pub fn personas(root: &Path, now: chrono::NaiveDateTime) -> serde_json::Value {
+    personas_within(root, now, MOST_STAMPS)
+}
+
+/// [`personas`], handing at most `most` stamps. The bound is a parameter so that a test can
+/// reach it with a plane of three memories rather than twenty thousand files.
+fn personas_within(root: &Path, now: chrono::NaiveDateTime, most: usize) -> serde_json::Value {
     let plane = crate::workspaces::Plane::open(root);
     let default = plane.default_persona();
     let mut handed = 0usize;
@@ -96,7 +102,7 @@ pub fn personas(root: &Path, now: chrono::NaiveDateTime) -> serde_json::Value {
             Ok(memories) => {
                 let mut written = Vec::new();
                 for memory in memories {
-                    if handed == MOST_STAMPS {
+                    if handed == most {
                         truncated = true;
                         break;
                     }
@@ -187,6 +193,31 @@ mod tests {
             .expect("release");
         assert_eq!(release["default"], false);
         assert_eq!(release["written"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn past_the_bound_the_stamps_stop_and_say_so() {
+        let dir = plane();
+        let stamps = |handed: &serde_json::Value| -> usize {
+            handed["personas"]
+                .as_array()
+                .expect("a list")
+                .iter()
+                .map(|row| row["written"].as_array().expect("stamps").len())
+                .sum()
+        };
+
+        // Exactly as many as the plane holds: every one, and nothing cut.
+        let whole = personas_within(dir.path(), at_noon(), 2);
+        assert_eq!(stamps(&whole), 2);
+        assert_eq!(whole["truncated"], false);
+
+        // One fewer: the list stops at the bound and says it stopped.
+        let cut = personas_within(dir.path(), at_noon(), 1);
+        assert_eq!(stamps(&cut), 1);
+        assert_eq!(cut["truncated"], true);
+
+        assert_eq!(personas(dir.path(), at_noon()), whole);
     }
 
     #[test]

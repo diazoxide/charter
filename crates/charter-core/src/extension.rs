@@ -1710,6 +1710,9 @@ pub fn file(config_root: &Path) -> PathBuf {
 
 /// Whether charter keeps an extension record on this platform at all. See the module
 /// docstring, and [`crate::machine`]'s, and ADR 0031.
+///
+/// On unix this IS `Ok(())`, so cargo-mutants' one mutation of it changes only the refusal
+/// below, which no unix build compiles; `.cargo/mutants.toml` excludes it for that reason.
 #[cfg(unix)]
 fn supported() -> io::Result<()> {
     Ok(())

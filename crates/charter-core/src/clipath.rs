@@ -118,17 +118,21 @@ pub fn link(link: &Path, binary: &Path) -> Linked {
     }
 }
 
-#[cfg(unix)]
+/// One function with the platform inside it, rather than two under `#[cfg]`: a unix build then
+/// compiles every mutation of it, and the tests here see each one (#311).
 fn make_symlink(binary: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(binary, link)
-}
-
-#[cfg(not(unix))]
-fn make_symlink(_binary: &Path, _link: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "charter puts itself on PATH on macOS only",
-    ))
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(binary, link)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (binary, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "charter puts itself on PATH on macOS only",
+        ))
+    }
 }
 
 fn failed(link: &Path, e: &std::io::Error) -> Linked {
@@ -282,5 +286,62 @@ mod tests {
 
     fn link_it(link: &Path, binary: &Path) -> Linked {
         super::link(link, binary)
+    }
+
+    /// A link to a file that is gone was left by an app that has since been moved or deleted:
+    /// nothing is lost by replacing it, so it is replaced.
+    #[test]
+    fn a_link_to_nothing_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = app(dir.path());
+        let link = dir.path().join("charter");
+        std::os::unix::fs::symlink(dir.path().join("gone/charter"), &link).unwrap();
+
+        assert_eq!(plan(&link, &binary), Plan::Link);
+    }
+
+    /// A relative link is resolved beside the link, not against charter's working directory:
+    /// one to somebody else's `charter` next to it is theirs, although nothing by that name
+    /// exists where charter happens to be standing.
+    #[test]
+    fn a_relative_link_to_a_file_beside_it_is_somebody_elses() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = app(dir.path());
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let name = "charter-installed-another-way-311";
+        std::fs::write(bin.join(name), "").unwrap();
+        let link = bin.join("charter");
+        std::os::unix::fs::symlink(name, &link).unwrap();
+        assert!(!Path::new(name).exists(), "the test's cwd holds {name}");
+
+        assert!(matches!(plan(&link, &binary), Plan::Refused(_)));
+    }
+
+    /// Only the whole shape `<name>.app/Contents/MacOS/charter` is an app's binary: a link to a
+    /// file that matches all but one part of it is somebody else's.
+    #[test]
+    fn a_link_to_most_of_an_apps_shape_is_somebody_elses() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = app(dir.path());
+        for near in [
+            "Other.app/Contents/Resources/charter",
+            "Other.app/Contents/MacOS/other",
+            "Other.app/Other/MacOS/charter",
+            "Other/Contents/MacOS/charter",
+            "Other.app/x/y/z",
+        ] {
+            let target = dir.path().join(near);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(&target, "").unwrap();
+            let link = dir.path().join("charter");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+
+            assert!(
+                matches!(plan(&link, &binary), Plan::Refused(_)),
+                "{near} was taken for an app's binary"
+            );
+        }
     }
 }

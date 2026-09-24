@@ -454,3 +454,252 @@ fn the_heartbeat_is_written_by_the_tool_hooks_in_a_piece() {
     );
     assert!(pieces::seen_path(&p.root, "alpha", "svc", Some("p1")).is_file());
 }
+
+// ---- the cadence nudge names the workspace the session is in -------------------------------
+
+/// `alpha` made LIVE, and `.charter/sessions/<sid>.workspace` pointing at it.
+fn live_alpha_for(p: &Plane, sid: &str) {
+    std::fs::create_dir_all(p.root.join("workspaces/alpha")).unwrap();
+    std::fs::write(p.root.join("workspaces/alpha/workspace.md"), "# alpha\n").unwrap();
+    std::fs::write(
+        p.root.join(".gitignore"),
+        "# >>> charter live workspaces (managed by `charter workspace live`) >>>\n\
+         !/workspaces/alpha/workspace.json\n# <<< charter live workspaces <<<\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(p.root.join(".charter/sessions")).unwrap();
+    std::fs::write(
+        p.root.join(format!(".charter/sessions/{sid}.workspace")),
+        "alpha\n",
+    )
+    .unwrap();
+}
+
+/// The twelfth file change's nudge, or `None`.
+fn twelfth(p: &Plane) -> Option<String> {
+    let mut last = None;
+    for i in 1..=12 {
+        last = match p.ask(edit_of(&format!("/p/src/{i}.rs"), "x"), posttooluse) {
+            Answer::Say(json) => Some(json),
+            _ => None,
+        };
+    }
+    last
+}
+
+#[test]
+fn the_cadence_nudge_names_the_live_workspace_of_the_apps_chat_id_first() {
+    let p = Plane::new();
+    // `$CHARTER_SESSION_ID` is `chat-1`; the payload says `s-1`. The chat's id wins.
+    live_alpha_for(&p, "chat-1");
+    let said = twelfth(&p).unwrap();
+    assert!(
+        said.contains("`charter workspace remember \\\"<fact>\\\"` (workspace **alpha**)"),
+        "{said}"
+    );
+}
+
+#[test]
+fn outside_the_app_the_cadence_nudge_keys_the_workspace_on_the_payloads_session() {
+    let mut p = Plane::new();
+    p.env.remove("CHARTER_SESSION_ID");
+    live_alpha_for(&p, "s-1");
+    let said = twelfth(&p).unwrap();
+    assert!(said.contains("(workspace **alpha**)"), "{said}");
+    // An empty `$CHARTER_SESSION_ID` is no id at all.
+    let p = p.with_env("CHARTER_SESSION_ID", "");
+    std::fs::remove_file(p.root.join(".charter/sessions/s-1.memnudge")).unwrap();
+    let said = twelfth(&p).unwrap();
+    assert!(said.contains("(workspace **alpha**)"), "{said}");
+}
+
+#[test]
+fn with_no_session_to_count_for_no_edit_is_ever_nudged() {
+    let p = Plane::new();
+    for i in 1..=24 {
+        let payload = serde_json::json!({"tool_name": "Write",
+            "tool_input": {"file_path": format!("/p/src/{i}.rs"), "content": "x"}});
+        assert_eq!(p.ask(payload, posttooluse), Answer::Nothing, "{i}");
+    }
+}
+
+#[test]
+fn what_recording_a_memory_does_is_said_for_each_share() {
+    let p = Plane::new();
+    assert!(memory_share_note(&p.root).starts_with("It stays on THIS MACHINE"));
+    for (share, opens) in [
+        (
+            "commit",
+            "It is committed locally straight away, but NOT pushed",
+        ),
+        ("push", "It is committed and pushed immediately"),
+    ] {
+        std::fs::write(
+            p.root.join("charter.toml"),
+            format!("schema = 1\n\n[memory]\nshare = \"{share}\"\n"),
+        )
+        .unwrap();
+        assert!(memory_share_note(&p.root).starts_with(opens), "{share}");
+    }
+}
+
+// ---- dispatch --------------------------------------------------------------------------
+
+#[test]
+fn a_dispatch_through_the_agent_tool_is_asked_about_as_a_task_one_is() {
+    let p = Plane::new();
+    p.persona("web", "dispatch-isolation: worktree");
+    let agent = |name: &str| {
+        serde_json::json!({"tool_name": "Agent", "session_id": "s",
+            "tool_input": {"subagent_type": name}})
+    };
+    assert_eq!(
+        p.ask(agent("Explore"), pretooluse_dispatch),
+        Answer::Nothing
+    );
+    let asked = said(&p.ask(agent("web"), pretooluse_dispatch));
+    assert_eq!(asked["hookSpecificOutput"]["permissionDecision"], "ask");
+    // Any other tool is not a dispatch.
+    let other = serde_json::json!({"tool_name": "Bash", "tool_input": {"subagent_type": "web"}});
+    assert_eq!(p.ask(other, pretooluse_dispatch), Answer::Nothing);
+}
+
+#[test]
+fn a_dispatch_is_recorded_as_in_flight_at_this_instant_to_the_fraction_of_a_second() {
+    let p = Plane::new();
+    let payload = dispatch_of("Explore");
+    let env = p.env.clone();
+    let lookup = move |name: &str| env.get(name).cloned();
+    let hook = Hook {
+        root: &p.root,
+        in_plane: true,
+        payload: &payload,
+        env: &lookup,
+        cwd: &p.root,
+        now: DateTime::parse_from_rfc3339("2026-05-04T11:32:17.25+00:00")
+            .unwrap()
+            .with_timezone(&Utc),
+        host: "box",
+    };
+    assert_eq!(pretooluse_dispatch(&hook), Answer::Nothing);
+    let dir = p.root.join(".charter/dispatch-inflight");
+    let records: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(records[0].path()).unwrap(),
+        "{\"agent\": \"Explore\", \"kind\": \"dispatch\", \"ts\": 1777894337.25}"
+    );
+}
+
+#[test]
+fn the_agent_map_keeps_the_newest_two_hundred_and_drops_the_first_listed() {
+    let p = Plane::new();
+    let file = p.root.join(".charter/agent-personas.json");
+    let ids: Vec<String> = (0..199).map(|i| format!("{:06x}", 0x100000 + i)).collect();
+    let doc: serde_json::Map<String, Value> = ids
+        .iter()
+        .map(|id| (id.clone(), Value::String("old".into())))
+        .collect();
+    std::fs::write(&file, Value::Object(doc).to_string()).unwrap();
+    let returned = |id: &str| {
+        let mut done = dispatch_of("web");
+        done["tool_response"] = format!("ok. agentId: {id}").into();
+        p.ask(done, posttooluse_dispatch);
+        let map: serde_json::Map<String, Value> =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        map
+    };
+    // The two hundredth fits.
+    let map = returned("fffff0");
+    assert_eq!(map.len(), 200);
+    assert!(map.contains_key(&ids[0]));
+    assert_eq!(map["fffff0"], "web");
+    // The two hundred and first costs the first one listed, and only it.
+    let map = returned("fffff1");
+    assert_eq!(map.len(), 200);
+    assert!(!map.contains_key(&ids[0]));
+    assert!(map.contains_key(&ids[1]));
+    assert_eq!(map["fffff1"], "web");
+}
+
+#[test]
+fn an_agent_map_grown_past_the_bound_is_cut_back_to_it() {
+    let p = Plane::new();
+    let file = p.root.join(".charter/agent-personas.json");
+    let ids: Vec<String> = (0..250).map(|i| format!("{:06x}", 0x100000 + i)).collect();
+    let doc: serde_json::Map<String, Value> = ids
+        .iter()
+        .map(|id| (id.clone(), Value::String("old".into())))
+        .collect();
+    std::fs::write(&file, Value::Object(doc).to_string()).unwrap();
+    let mut done = dispatch_of("web");
+    done["tool_response"] = "ok. agentId: ffffff".into();
+    p.ask(done, posttooluse_dispatch);
+    let map: serde_json::Map<String, Value> =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(map.len(), 200);
+    // The 51 first listed went; the 52nd is the oldest kept.
+    assert!(!map.contains_key(&ids[50]));
+    assert!(map.contains_key(&ids[51]));
+    assert_eq!(map["ffffff"], "web");
+}
+
+#[test]
+fn a_value_is_true_or_false_as_python_reads_it() {
+    for (value, truth) in [
+        (serde_json::json!(null), false),
+        (serde_json::json!(false), false),
+        (serde_json::json!(true), true),
+        (serde_json::json!(""), false),
+        (serde_json::json!("x"), true),
+        (serde_json::json!([]), false),
+        (serde_json::json!([0]), true),
+        (serde_json::json!({}), false),
+        (serde_json::json!({"a": 0}), true),
+        (serde_json::json!(0), false),
+        (serde_json::json!(0.0), false),
+        (serde_json::json!(2), true),
+        (serde_json::json!(-0.5), true),
+    ] {
+        assert_eq!(truthy(Some(&value)), truth, "{value}");
+    }
+    assert!(!truthy(None));
+}
+
+#[test]
+fn outside_a_plane_no_heartbeat_is_written_even_from_a_piece() {
+    let p = Plane::outside();
+    let tree = p.root.join("workspaces/alpha/.worktrees/svc/p1");
+    std::fs::create_dir_all(&tree).unwrap();
+    let cwd = tree.to_string_lossy().into_owned();
+    p.ask(
+        serde_json::json!({"tool_name": "Read", "cwd": cwd, "session_id": "s",
+            "tool_input": {"file_path": "x"}}),
+        pretooluse_read,
+    );
+    assert!(!pieces::seen_path(&p.root, "alpha", "svc", Some("p1")).exists());
+}
+
+#[test]
+fn a_resume_is_logged_under_the_persona_it_resumes_never_under_the_name_it_was_sent_to() {
+    let p = Plane::new();
+    p.persona("devops", "role: Ops");
+    p.persona("web", "role: Web");
+    std::fs::write(
+        p.root.join(".charter/agent-personas.json"),
+        "{\"abc123\": \"devops\"}",
+    )
+    .unwrap();
+    for to in ["devops", "abc123", "nobody"] {
+        p.ask(
+            serde_json::json!({"tool_name": "SendMessage", "tool_input": {"to": to}}),
+            posttooluse_message,
+        );
+    }
+    let log = std::fs::read_to_string(dispatch::path_for(&p.root, now(), "box")).unwrap();
+    let agents: Vec<String> = log
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap()["agent"].to_string())
+        .collect();
+    assert_eq!(agents, ["\"devops\"", "\"devops\""], "{log}");
+}

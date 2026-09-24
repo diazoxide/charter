@@ -478,17 +478,19 @@ pub fn seen(
             }
         }
         by.insert(persona.to_string(), Value::String(stamp.clone()));
-        if by.len() > PRESENCE_KEEP {
-            let mut keep: Vec<(String, Value)> = by.into_iter().collect();
-            // `sorted(key=ts, reverse=True)`: stable, so equal stamps keep their order.
-            keep.sort_by(|a, b| {
-                b.1.as_str()
-                    .unwrap_or_default()
-                    .cmp(a.1.as_str().unwrap_or_default())
-            });
-            keep.truncate(PRESENCE_KEEP);
-            by = keep.into_iter().collect();
-        }
+        // Python sorts and cuts only `if len(by) > PRESENCE_KEEP`. Here it is unconditional,
+        // which is the same answer: at or under the bound the cut drops nothing, and the order
+        // the sort leaves is not written — `dumps_sorted` writes `by` in key order either way.
+        // A guard that could not change the file was a mutant no test could tell apart (#311).
+        let mut keep: Vec<(String, Value)> = by.into_iter().collect();
+        // `sorted(key=ts, reverse=True)`: stable, so equal stamps keep their order.
+        keep.sort_by(|a, b| {
+            b.1.as_str()
+                .unwrap_or_default()
+                .cmp(a.1.as_str().unwrap_or_default())
+        });
+        keep.truncate(PRESENCE_KEEP);
+        by = keep.into_iter().collect();
     }
     let mut blob = serde_json::Map::new();
     blob.insert("ts".into(), Value::String(stamp));
