@@ -11,6 +11,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-24
+
+0.1.1 brings back what 0.1.0 left out and a working plane still used: vault access through
+`charter secret` and `charter persona secret`, and the `persona use`, `list`, `sync-agents` and
+`stats` commands. A chat started by charter 0.1.0 finds the app's own `charter` first on its
+`PATH`, so a plane whose instructions call those commands lost them. This release restores them.
+
 ### Fixed
 
 - `charter persona list`, `persona use`, `persona sync-agents` and `persona stats` work again,
@@ -29,6 +36,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#227](https://github.com/diazoxide/charter-app/pull/227))
 - The Bash guard refuses a vault file read that is wrapped in `charter secret exec … --`, the
   way it refuses one wrapped in `env`. ([#227](https://github.com/diazoxide/charter-app/pull/227))
+- The Bash guard no longer mistakes text for a handoff. A multi-line quoted string that
+  mentions `charter handoff`, such as a commit message, is read as the text it is, and a real
+  `charter handoff` after it is still judged. ([#226](https://github.com/diazoxide/charter-app/pull/226))
+- A harness profile that wraps another program (`["ccs", "work"]`) starts as
+  `ccs work --plugin-dir …`, with charter's flags after the profile's own words, so a wrapper
+  that expects its subcommand first works. A plain `claude` or `codex` profile starts exactly as
+  before. ([#226](https://github.com/diazoxide/charter-app/pull/226))
+- What `charter docs show` serves, and every message charter prints, name only commands this
+  charter has. A page about something it does not do is gone, and a planned command says "not in
+  this version yet". ([#226](https://github.com/diazoxide/charter-app/pull/226))
 
 ## [0.1.0] - 2026-09-23
 
@@ -170,5 +187,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - No program charter starts can hold a chat's terminal open after the chat ends.
   ([#105](https://github.com/diazoxide/charter-app/pull/105))
 
-[Unreleased]: https://github.com/diazoxide/charter-app/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/diazoxide/charter-app/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/diazoxide/charter-app/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/diazoxide/charter-app/releases/tag/v0.1.0
