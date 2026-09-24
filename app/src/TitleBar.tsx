@@ -2,6 +2,8 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { commands, type TitleBarRoom } from "./bindings";
 import { AboutCharter } from "./About";
 import { UpdateItem, type Updates } from "./Updates";
+import { NeedsYouMenu, type Needing } from "./NeedsYou";
+import type { Offer } from "./actions";
 
 /**
  * **The window's title bar**: where you are on the left, what charter is on the right.
@@ -41,10 +43,10 @@ import { UpdateItem, type Updates } from "./Updates";
  * it meets, where clickable is a `<button>`, a link, an `<input>`, an interactive `role`, or
  * anything carrying a `tabindex` other than `-1`.
  *
- * **Both controls here are `<button>`s, and the TAG is what carries it.** `BUTTON` is in
- * Tauri's `CLICKABLE_TAGS`, so no attribute of ours is load-bearing for this: About's
- * `tabIndex={0}` is there for WebKit's tab sequence (charter-app#186), and the update item's
- * trigger has none at all — which is charter-app#189's, not this bar's. A scenario written
+ * **Every control here is a `<button>`, and the TAG is what carries it.** `BUTTON` is in
+ * Tauri's `CLICKABLE_TAGS`, so no attribute of ours is load-bearing for this: the `tabIndex={0}`
+ * on About, the update item and the needs-you button (charter-app#249) is there for WebKit's
+ * tab sequence (charter-app#186, charter-app#189), not for the drag. A scenario written
  * asserting a `tabindex` on every control was refuted by the real app, which is how that came
  * to be written down here rather than assumed.
  *
@@ -61,6 +63,7 @@ export function TitleBar({
   crumbs,
   updates,
   room,
+  needing,
 }: {
   /** Where the window is, for the left-hand side. */
   crumbs: Crumbs;
@@ -83,6 +86,15 @@ export function TitleBar({
    * and is corrected within a frame of the first paint on that one.
    */
   room?: TitleBarRoom;
+  /**
+   * Every project's chats asking for the operator (charter-app#249) — the queue's one place.
+   * Absent draws no button, which is also what an empty list draws.
+   */
+  needing?: {
+    items: readonly Needing[];
+    quiet: readonly string[];
+    onPress: (plane: string, offer: Offer) => void;
+  };
 }) {
   return (
     <header
@@ -97,6 +109,9 @@ export function TitleBar({
           are about the app rather than the project, which is why they are up here and not on
           the status line: this bar is the window's. */}
       <span className="title-bar-doing">
+        {/* First, because it is the one of the three that is about the operator's chats and
+            not about the app — and it is nothing at all when nothing needs you. */}
+        {needing && <NeedsYouMenu {...needing} />}
         <AboutCharter />
         {updates && <UpdateItem updates={updates} />}
       </span>
@@ -137,8 +152,8 @@ export type Crumbs = {
    * he keeps many chats at once and most of them are sitting still. A chat is running when a
    * hook has said so (`chatState.ts`) — a chat that is waiting for him, one that has finished,
    * one that failed and one that no hook has ever reported are each not running, and the
-   * needs-you queue on the project tab and in the right-hand region is where the waiting ones
-   * are counted. A number here that meant "open" would say 50 all day.
+   * needs-you button at the other end of this bar, and the project tab, are where the waiting
+   * ones are counted. A number here that meant "open" would say 50 all day.
    */
   running?: number;
 };

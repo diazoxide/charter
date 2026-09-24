@@ -1823,50 +1823,106 @@ button.show-more:focus-visible {
   border-radius: 2px;
 }
 
-/* The needs-you queue, now in the right region rather than on the bar (ADR 0038).
-   A column, because it has a side to itself and a queue that has to work at fifty chats was
-   sharing one line with six other things. */
-.needs-you {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  padding-bottom: 0.4rem;
-  border-bottom: 1px solid var(--border-subtle);
+/* **The needs-you queue, in the title bar** (charter-app#249): a hand and a count, and the list
+   it drops. It was the Attention panel's; that region is one project's and the queue is every
+   project's. Minimal, as the bar is: no border of its own, and the colour is the count's alone. */
+.needs-you-anchor {
+  display: contents;
 }
-.needs-you ul {
+.needs-you-button {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.05rem 0.3rem;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.needs-you-button:hover {
+  background: var(--control-hover);
+}
+.needs-you-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+/* The mark may be `needs-you.base`; the WORDS may not. `#b85050` on `surface.base` measures
+   3.64:1 in charter-dark, which is under AA for text and over the 3:1 an icon is held to —
+   the same distinction that split `needs-you` from `danger` in the first place. The number
+   is loud by being filled, on the one pair the contrast test already measures. */
+.needs-you-button svg {
+  width: 1em;
+  height: 1em;
+  color: var(--needs-you-base);
+}
+.needs-you-number {
+  min-width: 1.3rem;
+  padding: 0 0.32rem;
+  border-radius: 999px;
+  background: var(--needs-you-base);
+  color: var(--needs-you-text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* The list: the show-more menu's surface, one row per chat. */
+.needs-you-menu {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  min-width: 16rem;
+  max-width: 28rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 0.3rem;
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: 0 0.5rem 1.5rem var(--overlay-shadow);
+  z-index: 10;
 }
-/* A chat asking, and its Ignore beside it (charter-app#248). */
-.needs-you li {
+/* A chat asking, its Go, and its Ignore beside it. */
+.needs-you-row {
   display: flex;
   align-items: stretch;
 }
-.needs-you li button:not(.needs-you-ignore) {
+.needs-you-go {
   display: flex;
-  gap: 0.35rem;
-  align-items: center;
-  width: 100%;
-  text-align: left;
-  padding: 0.15rem 0.35rem;
-  border: none;
-  border-inline-start: 2px solid var(--needs-you-base);
-  border-radius: 2px;
-  color: inherit;
-  background: var(--control-base);
-  font: inherit;
-  cursor: default;
+  flex: 1;
+  min-width: 0;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.25rem 0.45rem;
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  /* Radix gives a menu item its own roving focus and no outline of its own. */
+  outline: none;
 }
-.needs-you li button:hover {
-  background: var(--control-hover);
+.needs-you-go[data-highlighted] {
+  background: var(--tab-active);
 }
-.needs-you li button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
+.needs-you-name {
+  flex: none;
+  font-weight: 600;
+}
+.needs-you-where {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.needs-you-word {
+  flex: none;
+  color: var(--text-secondary);
+}
+.needs-you-go[data-highlighted] .needs-you-word {
+  color: var(--text-primary);
 }
 /* Flat and muted like a view tab's `×`: ignoring ends nothing, so it hovers as a control does
    and never as a danger — the chat is still there, still waiting. */
@@ -1876,60 +1932,25 @@ button.show-more:focus-visible {
   align-items: center;
   padding: 0 0.35rem;
   border: none;
-  border-radius: 2px;
+  border-radius: 4px;
   background: none;
   color: var(--text-muted);
   line-height: 1;
-  cursor: default;
+  cursor: pointer;
 }
 .needs-you-ignore:hover {
   color: var(--text-primary);
+  background: var(--control-hover);
 }
-
-/* **The count of chats waiting for the operator, drawn as the most important thing in the
-   window.** It is what charter-app is for: at fifty sessions nothing else on screen is worth
-   looking up for, and it was a 0.85rem line in the same grey as the todos under it.
-
-   The number carries the emphasis and the sentence carries the meaning — "3 need you" is still
-   one phrase to a screen reader, because the emphasis is markup inside it rather than a badge
-   beside it. */
-.needs-you-count {
-  display: flex;
-  gap: 0.4rem;
-  align-items: center;
-  font-weight: 600;
-  color: var(--text-primary);
+.needs-you-ignore svg {
+  width: 0.9em;
+  height: 0.9em;
 }
-/* The mark may be `needs-you.base`; the WORDS may not. `#b85050` on `surface.base` measures
-   3.64:1 in charter-dark, which is under AA for text and over the 3:1 an icon is held to —
-   the same distinction that split `needs-you` from `danger` in the first place. The number
-   below is loud by being filled, on the one pair the contrast test already measures. */
-.needs-you-count .node-icon {
-  color: var(--needs-you-base);
-}
-.needs-you-number {
-  min-width: 1.6rem;
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  background: var(--needs-you-base);
-  color: var(--needs-you-text);
-  font-size: 1.15rem;
-  line-height: 1.25;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-.needs-you-empty .node-icon {
-  color: var(--state-success);
-  margin-inline-end: 0.35rem;
-}
-/* The fade is on the reassuring words alone. The note beside them is the half of the answer
-   the app cannot vouch for, and it must not fade with them (#27). */
-.needs-you-empty > span:not(.needs-you-quiet) {
-  opacity: 0.55;
-}
+/* The half of the answer the app cannot vouch for (#27, #52). */
 .needs-you-quiet {
+  margin: 0.2rem 0.45rem 0.1rem;
   font-style: italic;
+  color: var(--text-secondary);
 }
 .mid-turn {
   font-weight: 600;
@@ -3777,6 +3798,12 @@ button.show-more:focus-visible {
    is what says the tabs went somewhere. Only when the strip STARTED collapsing while on screen
    (`ShowMore`'s `arrived`); a count that changes as the window is resized does not move. */
 .show-more.arrived {
+  animation: charter-appear var(--motion-duration-enter) var(--motion-easing-enter);
+}
+
+/* The title bar's needs-you button, appearing when the first chat asks while the window is
+   up — not at launch, where a restored queue was already there (`NeedsYouMenu`'s `arrived`). */
+.needs-you-button.arrived {
   animation: charter-appear var(--motion-duration-enter) var(--motion-easing-enter);
 }
 

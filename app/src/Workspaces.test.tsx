@@ -259,7 +259,7 @@ describe("the workspace strip", () => {
   });
 
   it("follows a chat to its own workspace when something else brings it forward", async () => {
-    // The palette and the needs-you queue both show a chat by bringing its tab to the front,
+    // The palette and the title bar's needs-you list both show a chat by bringing its tab to the front,
     // and that chat can be anywhere. A strip left on another workspace would be drawing a
     // pane whose tab it says is not there.
     core();
@@ -331,6 +331,20 @@ describe("the workspace strip", () => {
     expect(alpha?.querySelector(".workspace-needs")).toBeNull();
   });
 
+  it("goes to a chat in another workspace from the title bar, and its workspace with it (charter-app#249)", async () => {
+    core([chat(5, "5", BETA), chat(6, "6", ALPHA, { in_front: true })], [5]);
+    render(<App />);
+    await waitFor(() => expect(focused()).toEqual(["alpha"]));
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 chat needs you" }));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: /^Go to 5 steward · beta · / }),
+    );
+
+    await waitFor(() => expect(focused()).toEqual(["beta"]));
+    expect(panes()).toEqual(["session 5"]);
+  });
+
   it("takes the count off a workspace tab when its chat is ignored (charter-app#248)", async () => {
     const { asked, move } = core([chat(5, "5", BETA)], [5]);
     render(<App />);
@@ -342,8 +356,9 @@ describe("the workspace strip", () => {
         ?.querySelector(".workspace-needs")?.textContent;
     await waitFor(() => expect(needs()).toBe("1"));
 
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
     await userEvent.click(
-      within(screen.getByLabelText("Needs you")).getByRole("button", { name: /^Ignore / }),
+      within(await screen.findByRole("menu")).getByRole("button", { name: /^Ignore / }),
     );
     await vi.waitFor(() => expect(asked.some((one) => one.cmd === "ignore_needs_you")).toBe(true));
     // What the core answers an ignore with: the chat still waiting, and a queue without it.

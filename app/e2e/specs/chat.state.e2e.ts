@@ -60,16 +60,9 @@ describe("what a chat is doing", () => {
   });
 
   it("shows the chat waiting on you once the harness's turn ends, and queues it", async () => {
-    // Nothing has ASKED for the operator while the turn is running — and this run's profile
-    // is declared `codex`, so this chat is exactly the one charter-app#52 is about: it
-    // cannot say it has stopped mid-turn for an approval, and there is no signal for that
-    // which is not a hook deciding a permission. So the queue says what it knows and no
-    // more. It used to headline "Nothing needs you" over a hedge that contradicted it.
-    const running = await $('[aria-label="Needs you"]');
-    await expect(running).toHaveText(expect.stringContaining("Nothing has said it needs you"));
-    await expect(running).toHaveText(
-      expect.stringContaining("can be waiting on you without saying so"),
-    );
+    // Nothing has ASKED for the operator while the turn is running, so the title bar has no
+    // needs-you button at all: hidden at zero (charter-app#249), never a "0".
+    expect(await $('[data-testid="needs-you-button"]').isExisting()).toBe(false);
 
     // Releasing the output is what lets the harness get to its `stop` hook.
     //
@@ -87,7 +80,52 @@ describe("what a chat is doing", () => {
 
     await until("waiting on you");
 
-    const queue = await $('[aria-label="Needs you"]');
-    await expect(queue).toHaveText(expect.stringContaining("1 need you"));
+    // Queued, in the title bar: a hand and a count (charter-app#249).
+    const hand = await $('[data-testid="title-bar"] [data-testid="needs-you-button"]');
+    await hand.waitForExist({ timeout: 20_000 });
+    await expect(hand).toHaveAttribute("aria-label", "1 chat needs you");
+    await expect(hand).toHaveAttribute("tabindex", "0");
+  });
+
+  it("lists the chat in the title bar's dropdown, and Go brings it forward", async () => {
+    const hand = await $('[data-testid="needs-you-button"]');
+    await hand.click();
+
+    const item = await $('[role="menu"] [role="menuitem"]');
+    await item.waitForDisplayed({ timeout: 10_000 });
+    // Its name, then its workspace and its project, then Go.
+    await expect(item).toHaveAttribute("aria-label", expect.stringMatching(/^Go to .+ · .+ · .+$/));
+    await expect(item).toHaveText(expect.stringContaining("Go"));
+    // And the Ignore beside it, named for what it does and out of the arrows' way.
+    const ignore = await $('[role="menu"] .needs-you-ignore');
+    await expect(ignore).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/^Ignore .+ until it asks again$/),
+    );
+    await expect(ignore).toHaveAttribute("tabindex", "-1");
+
+    await item.click();
+
+    await browser.waitUntil(async () => !(await $('[role="menu"]').isExisting()), {
+      timeout: 10_000,
+      timeoutMsg: "Go left the list open",
+    });
+    await expect(await theTab()).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("ignores the chat from the dropdown, and the button goes with it", async () => {
+    await $('[data-testid="needs-you-button"]').click();
+    const ignore = await $('[role="menu"] .needs-you-ignore');
+    await ignore.waitForDisplayed({ timeout: 10_000 });
+
+    await ignore.click();
+
+    // The core holds the ignore and answers with a queue without the chat; the chat itself
+    // is still waiting, which is what an ignore is (charter-app#248).
+    await browser.waitUntil(
+      async () => !(await $('[data-testid="needs-you-button"]').isExisting()),
+      { timeout: 20_000, interval: 200, timeoutMsg: "the needs-you button outlived its last item" },
+    );
+    expect(await doing(await theTab())).toBe("waiting on you");
   });
 });
