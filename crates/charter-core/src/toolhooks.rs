@@ -701,10 +701,9 @@ fn agent_map_remember(hook: &Hook, agent_id: &str, persona: &str) {
         })
         .unwrap_or_default();
     data.insert(agent_id.to_string(), Value::String(persona.to_string()));
-    if data.len() > AGENT_MAP_MAX {
-        let drop = data.len() - AGENT_MAP_MAX;
-        data = data.into_iter().skip(drop).collect();
-    }
+    // The oldest first, as many as are over the bound — none at or under it.
+    let drop = data.len().saturating_sub(AGENT_MAP_MAX);
+    data = data.into_iter().skip(drop).collect();
     let text = crate::pyjson::dumps_sorted(&Value::Object(data));
     let _ = hook.state().write(&file, text.as_bytes());
 }

@@ -362,6 +362,24 @@ fn a_view_the_extension_does_not_declare_starts_nothing() {
 // -------------------------------------------------------------------------------------
 
 #[test]
+fn a_program_that_never_answers_is_refused_as_too_late_never_as_a_lost_connection() {
+    // What the refusal SAYS, whatever the machine's load: a program that never answers has
+    // nothing to say by any deadline, so a short one decides nothing but how long this takes.
+    // How long the real one is, is the test below's subject.
+    let rig = Rig::new();
+    rig.approved("#!/bin/sh\nexec sleep 60\n");
+
+    let refused = rig
+        .ask(&Executor::with_deadline(Duration::from_secs(1)))
+        .expect_err("an answer from nothing");
+
+    assert!(
+        refused.starts_with("'probe' did not answer within 1 seconds, so charter stopped it."),
+        "{refused}"
+    );
+}
+
+#[test]
 fn a_program_that_never_answers_is_stopped_at_the_deadline() {
     // **The one test on the real executor**, because its subject is the real [`DEADLINE`]:
     // what every executor charter makes gives a program. It is the one test here a machine too
@@ -644,6 +662,8 @@ fn one_extension_is_asked_one_thing_at_a_time() {
         })
     };
     wait_for(&pid);
+    // The extension is named as running for exactly as long as its question is in flight.
+    assert_eq!(executor.running(), ["probe"]);
 
     let second = rig.ask(&executor).expect_err("a second copy started");
     assert!(second.contains("still answering"), "{second}");
@@ -652,6 +672,7 @@ fn one_extension_is_asked_one_thing_at_a_time() {
         .join()
         .expect("the first thread")
         .expect("the first answer");
+    assert!(executor.running().is_empty());
     // And the slot comes back.
     rig.ask(&executor)
         .expect("asked again once the first was done");
@@ -1356,4 +1377,145 @@ fn nothing_is_started_once_charter_is_closing() {
 
     assert!(refused.contains("closing"), "{refused}");
     assert!(!marker.exists(), "the program ran");
+}
+
+// -------------------------------------------------------------------------------------
+// What it is told when it goes wrong (charter-app#311)
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn the_last_words_quoted_are_the_end_of_what_it_printed_not_the_start() {
+    let rig = Rig::new();
+    rig.approved(
+        "#!/bin/sh\nprintf 'FIRST' >&2\nhead -c 4000 /dev/zero | tr '\\0' a >&2\n\
+         printf 'THE END' >&2\nexit 3\n",
+    );
+
+    let refused = rig.ask(&patient()).expect_err("a crash was drawn");
+
+    assert!(refused.contains("exited with status 3"), "{refused}");
+    assert!(refused.ends_with("aaaaTHE END"), "{refused}");
+    assert!(!refused.contains("FIRST"), "{refused}");
+    // The tail kept is the last `MOST_STDERR_BYTES` bytes, quoted whole.
+    let quoted = refused
+        .split("The last of what it printed: ")
+        .nth(1)
+        .expect("its last words");
+    assert_eq!(quoted.len(), MOST_STDERR_BYTES, "{quoted}");
+}
+
+#[test]
+fn a_program_that_ends_part_way_through_a_line_is_said_to_have() {
+    let rig = Rig::new();
+    rig.approved("#!/bin/sh\nprintf '{\"charter\":'\nexit 0\n");
+    let refused = rig.ask(&patient()).expect_err("half a line was drawn");
+    assert!(
+        refused.starts_with(
+            "'probe' exited with status 0 without answering — it wrote part of a line and \
+             never finished it."
+        ),
+        "{refused}"
+    );
+
+    let rig = Rig::new();
+    rig.approved("#!/bin/sh\nexit 0\n");
+    let refused = rig.ask(&patient()).expect_err("nothing was drawn");
+    assert_eq!(
+        refused,
+        "'probe' exited with status 0 without answering. It printed nothing to stderr."
+    );
+}
+
+#[test]
+fn a_program_whose_interpreter_cannot_be_run_is_told_it_must_be_executable() {
+    let rig = Rig::new();
+    // The program itself is executable, so it passes charter's own check; the interpreter its
+    // first line names is a file that is not, and the system refuses to start it.
+    let interpreter = rig.marker("not-an-interpreter");
+    std::fs::write(&interpreter, "just text\n").expect("the file");
+    rig.approved(&format!("#!{}\necho never\n", interpreter.display()));
+
+    let refused = rig.ask(&patient()).expect_err("it could not start");
+
+    assert!(refused.contains("could not be started"), "{refused}");
+    assert!(
+        refused.ends_with(
+            "charter runs an extension's program directly, never through a shell, so it has to \
+             be executable by you."
+        ),
+        "{refused}"
+    );
+
+    // An interpreter that does not exist at all is the other sentence.
+    let rig = Rig::new();
+    rig.approved(&format!(
+        "#!{}\necho never\n",
+        rig.marker("no-such-interpreter").display()
+    ));
+    let refused = rig.ask(&patient()).expect_err("it could not start");
+    assert!(
+        refused.ends_with(
+            "If it is a script, its first line has to name an interpreter that exists on this \
+             machine."
+        ),
+        "{refused}"
+    );
+}
+
+/// An answer line of exactly `size` bytes before its newline: one note, padded.
+fn answer_of(size: usize) -> String {
+    let frame = r#"{"charter":1,"blocks":[{"kind":"note","text":""}]}"#;
+    let pad = "x".repeat(size - frame.len());
+    format!(r#"{{"charter":1,"blocks":[{{"kind":"note","text":"{pad}"}}]}}"#)
+}
+
+#[test]
+fn an_answer_of_exactly_the_most_charter_reads_is_read_and_one_byte_more_is_not() {
+    let frame = r#"{"charter":1,"blocks":[{"kind":"note","text":""}]}"#;
+    assert_eq!(frame.len(), 50);
+    for (size, fits) in [(MOST_ANSWER_BYTES, true), (MOST_ANSWER_BYTES + 1, false)] {
+        let rig = Rig::new();
+        let answer = rig.marker("answer");
+        std::fs::write(&answer, format!("{}\n", answer_of(size))).expect("the answer");
+        rig.approved(&format!(
+            "#!/bin/sh\nread line\ncat '{}'\n",
+            answer.display()
+        ));
+
+        let refused = rig
+            .ask(&patient())
+            .expect_err("a note that long is never drawn");
+
+        // At the bound the line is read whole, and it is the panel that refuses what it says;
+        // past it, the line is not read at all.
+        if fits {
+            assert_eq!(
+                refused,
+                format!(
+                    "'probe' answered a block at 0 that has a 'text' of {} bytes, and charter \
+                     draws at most 8192",
+                    size - 50
+                )
+            );
+        } else {
+            assert!(refused.contains("answered more than 512 KiB"), "{refused}");
+        }
+    }
+}
+
+#[test]
+fn the_highest_descriptor_is_at_least_every_one_this_process_holds_and_at_most_the_bound() {
+    let file = std::fs::File::open("/dev/null").expect("a descriptor");
+    let held = std::os::fd::AsRawFd::as_raw_fd(&file);
+    let highest = highest_descriptor();
+    assert!(highest >= held, "{highest} < {held}");
+    assert!(
+        u64::try_from(highest).unwrap() <= MOST_DESCRIPTORS,
+        "{highest}"
+    );
+    assert_eq!(MOST_DESCRIPTORS, 1_048_576);
+    let limit = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+    if let Some(soft) = limit.current.filter(|soft| *soft <= MOST_DESCRIPTORS) {
+        assert_eq!(u64::try_from(highest).unwrap(), soft);
+    }
 }
