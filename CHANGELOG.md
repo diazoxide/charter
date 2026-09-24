@@ -27,6 +27,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
   in the committed file, a value that looks like a credential. Local is created on the first
   save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
+- **Workspace settings**, a tab of its own for each workspace: right-click a workspace's tab and
+  choose _Workspace settings…_, or find it in the palette. A workspace can turn an extension on
+  or off and set what it declares, for everyone who works in it: it is kept in the workspace's
+  `workspace.json`, committed with a LIVE workspace. It sits between the project's two files —
+  `charter.toml`, then the workspace, then `charter.local.toml` — so a workspace refines its
+  project and this machine still has the last word, and none of them reaches past this
+  machine's approval. Each extension says which of them decided it. The panels and views
+  follow the workspace in front, and a view a workspace turned off says so and where. Saving
+  changes nothing else in the manifest, and a `workspace.json` from before reads as it always
+  did. ([#280](https://github.com/diazoxide/charter-app/issues/280))
 - A vault can live in your system's own credential store: the Keychain on macOS, the Secret
   Service on Linux. `charter vault add <name>` makes one by default, and every `charter secret`
   and `charter vault` command works on it as on the other kinds. Each secret is its own

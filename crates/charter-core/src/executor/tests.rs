@@ -802,6 +802,32 @@ fn an_approved_program_a_project_turned_off_never_starts_in_that_project() {
 }
 
 #[test]
+fn an_approved_program_a_workspace_turned_off_never_starts_in_that_workspace() {
+    // charter-app#280: the workspace layer is asked at the press, like the project's two files.
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.approved(&marking(&marker));
+    let off = project::Choices::from_text(Some("[extensions.probe]\nenabled = true\n"), None)
+        .in_workspace(
+            "alpha",
+            Some(r#"{"settings": {"extensions": {"probe": {"enabled": false}}}}"#),
+        );
+
+    let refused = patient()
+        .ask(&rig.config(), &off, "probe", "stats", None, |_| {
+            serde_json::Value::Null
+        })
+        .expect_err("it ran in a workspace that turned it off");
+
+    assert_eq!(
+        refused,
+        "'probe' is turned off in workspaces/alpha/workspace.json for this workspace, so charter \
+         will not start its program here. Turn it on in Workspace settings to use this view."
+    );
+    assert!(!marker.exists(), "a program the workspace turned off ran");
+}
+
+#[test]
 fn a_project_cannot_start_a_program_this_machine_has_not_approved() {
     let rig = Rig::new();
     let marker = rig.marker("ran");

@@ -110,6 +110,8 @@ macro_rules! app_commands {
                 doctor::plane_doctor,
                 settings::project_settings,
                 settings::save_project_settings,
+                settings::workspace_settings,
+                settings::save_workspace_settings,
                 usage::chat_usage,
                 pin::plane_pin,
                 about::about_charter,

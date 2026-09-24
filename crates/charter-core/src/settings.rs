@@ -7,6 +7,9 @@
 //! - **Local** is `charter.local.toml`: gitignored, this machine's alone. Harness profiles live
 //!   there (ADR 0022).
 //!
+//! A third holder of settings is each workspace's `workspace.json`, whose `settings` sit between
+//! the two (charter-app#280): [`workspace`], read and written by the same readers' rules.
+//!
 //! **Nothing here has rules of its own about what a file may say.** A save is refused for
 //! exactly what the next read of that file would refuse, in the sentences that read uses:
 //! [`crate::doctor`]'s `charter.toml` row for the Shared file (the loader's own parse and
@@ -26,6 +29,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::profiles::{self, COMMITTED_FILE, LOCAL_FILE};
+
+pub mod workspace;
 
 /// Which of a plane's two settings files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,9 +259,14 @@ pub enum Found {
 /// knows yet is already here for the one that will.
 pub fn fields(text: &str) -> Option<Vec<(Vec<Step>, Found)>> {
     let table: toml::Table = text.parse().ok()?;
+    Some(fields_of(&table))
+}
+
+/// [`fields`], of a table already read — a workspace's settings, read as the table they mirror.
+pub(crate) fn fields_of(table: &toml::Table) -> Vec<(Vec<Step>, Found)> {
     let mut out = Vec::new();
-    flatten(&table, &mut Vec::new(), &mut out);
-    Some(out)
+    flatten(table, &mut Vec::new(), &mut out);
+    out
 }
 
 fn flatten(table: &toml::Table, at: &mut Vec<Step>, out: &mut Vec<(Vec<Step>, Found)>) {
