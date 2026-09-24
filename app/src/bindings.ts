@@ -990,6 +990,14 @@ export type ExtensionView = {
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
+/**  Where a handed-off chat came from, as the window draws it. */
+export type HandedFromNote = {
+	/**  The chat it came from, by the name the operator saw it under. */
+	name: string,
+	/**  The workspace it came from. */
+	workspace: string,
+};
+
 /**  Where one of a vault's identity variables is read from now (#237). */
 export type IdentityHeld = 
 /**  Moved into the keyring, which is read first. */
@@ -998,14 +1006,6 @@ export type IdentityHeld =
 "environment" | 
 /**  Nowhere: the vault cannot be read. */
 "unset";
-
-/**  Where a handed-off chat came from, as the window draws it. */
-export type HandedFromNote = {
-	/**  The chat it came from, by the name the operator saw it under. */
-	name: string,
-	/**  The workspace it came from. */
-	workspace: string,
-};
 
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every

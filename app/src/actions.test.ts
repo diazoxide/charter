@@ -934,14 +934,14 @@ describe("the palette at fifty chats", () => {
     // and within that group the catalogue's own order stands. Every row here is a verb.
     const rows = narrow("re", loaded());
 
-    const verbs = rows.slice(0, 9).map((row) => row.title);
+    const verbs = rows.slice(0, 10).map((row) => row.title);
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",
       // `vault.create` is charter's `create` too (charter-app#235), and `preferences` is
       // charter's word (charter-app#283); both join the rows that make things.
-      "New vault…",
       "Preferences…",
+      "New vault…",
       // **Both of the chat in front's rows, then the pieces'.** `aboutWhatIsInFront` is the
       // second rule inside this group (charter-app#174): a row with no name in its id acts on
       // what the operator is looking at, and fifty rows about other worktrees do not get to
@@ -956,6 +956,7 @@ describe("the palette at fifty chats", () => {
       "Ignore chat 103 until it asks again",
       "Ignore chat 107 until it asks again",
       "Rename chat ide.1…",
+      "Rename chat charter.2…",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -1017,8 +1018,8 @@ describe("the palette at fifty chats", () => {
       // The numbers themselves, so "unchanged" cannot be satisfied by both being bad.
       // Two further down than #174 left it under `re` and `r`: `New vault…` (charter-app#235)
       // and `Preferences…` (charter-app#283) are both rows that make/land near the creates.
-      expect(at("re", loaded())).toBe(5);
-      expect(at("r", loaded())).toBe(8);
+      expect(at("re", loaded())).toBe(6);
+      expect(at("r", loaded())).toBe(9);
       expect(at("rem", loaded())).toBe(1);
     });
 
