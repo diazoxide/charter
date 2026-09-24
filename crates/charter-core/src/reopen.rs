@@ -182,11 +182,14 @@ pub struct Record {
     /// Whether this record was written by a quit that restarts charter to install an update
     /// (charter-app#251), rather than by the operator quitting.
     ///
-    /// **Read once, by the launch after that quit, and by nothing else.** It changes what the
-    /// launch's question says and which answer it offers first ([`Choice::ReopenAll`]): the
-    /// operator did not choose to end these chats, charter did, so the answer that keeps them
-    /// is the one in front. Every later write of the record is an ordinary one and carries
-    /// `false`, so the flag cannot outlive the launch it is about.
+    /// **Read by the launch after that quit, and by nothing else.** It adds one sentence to the
+    /// launch's question saying why it is being asked; [`Choice::ReopenAll`] is the answer in
+    /// front either way. Every later write of the record is an ordinary one and carries
+    /// `false`, so it lasts until this plane's record is next written.
+    ///
+    /// **Nothing writes `true` yet**: this is the entry point charter-app#251 is to use. That
+    /// ticket also owns one gap it leaves: a plane that is not opened at the launch after the
+    /// update (`--no-restore`, a declined trust ask) keeps the flag until it is next opened.
     pub relaunch_after_update: bool,
 }
 

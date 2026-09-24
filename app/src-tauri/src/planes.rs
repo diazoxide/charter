@@ -313,7 +313,7 @@ struct Relaunching {
 
 /// What a launch would put back, for the question it asks before putting any of it back.
 #[derive(Debug)]
-pub struct RelaunchAsk {
+pub struct Relaunchable {
     /// Every project with a chat or a view tab to put back, the launch's own first.
     pub projects: Vec<Waiting>,
     /// Whether any of their records was written by a quit that restarted charter to install an
@@ -321,7 +321,7 @@ pub struct RelaunchAsk {
     pub after_update: bool,
 }
 
-/// One project's share of [`RelaunchAsk`].
+/// One project's share of [`Relaunchable`].
 #[derive(Debug)]
 pub struct Waiting {
     pub root: PathBuf,
@@ -440,8 +440,9 @@ impl Planes {
         // which asks this very registry what the chat is called.
         let Ok(held) = self.held(plane) else { return };
         // A project the launch's answer said to start fresh is started fresh the first time it
-        // is put back, and only that time: opened again later in the day, it is an ordinary
-        // open of whatever its record says by then.
+        // is put back, and only that time. That first time may be later in the day — a restore
+        // whose trust ask was declined, opened afterwards from the recents — which is still
+        // the operator's answer for that project; after it, an open is an ordinary one.
         let choice = if self.relaunching().fresh.remove(held.root()) {
             Choice::StartFresh
         } else {
@@ -457,27 +458,13 @@ impl Planes {
     /// named by the paths the window will open them by. **Reading a record here starts
     /// nothing**: the counts are all this takes from it, and each project is read again, by the
     /// one read its own open makes, when it is actually put back (charter-app#123).
-    pub fn relaunch_ask(&self, restoring: &[PathBuf]) -> Option<RelaunchAsk> {
-        let owed = {
-            let relaunching = self.relaunching();
-            if relaunching.decided {
-                return None;
-            }
-            relaunching.owed.clone()
-        };
-        let mut roots: Vec<PathBuf> = owed
-            .and_then(|plane| self.held(&plane).ok())
-            .map(|held| held.root.clone())
-            .into_iter()
-            .collect();
-        for path in restoring {
-            // A project that is no longer a plane is the restore's own news, and it says so.
-            if let Ok(root) = plane_at(path)
-                && !roots.contains(&root)
-            {
-                roots.push(root);
-            }
+    pub fn relaunch_ask(&self, restoring: &[PathBuf]) -> Option<Relaunchable> {
+        let relaunching = self.relaunching();
+        if relaunching.decided {
+            return None;
         }
+        let roots = self.launch_roots(&relaunching, restoring);
+        drop(relaunching);
         let mut after_update = false;
         let projects: Vec<Waiting> = roots
             .into_iter()
@@ -493,7 +480,7 @@ impl Planes {
                 })
             })
             .collect();
-        (!projects.is_empty()).then_some(RelaunchAsk {
+        (!projects.is_empty()).then_some(Relaunchable {
             projects,
             after_update,
         })
@@ -508,9 +495,9 @@ impl Planes {
     /// and marks every project in `restoring` for a fresh start when that is the answer, so
     /// the window's restore opens them through the ordinary gate and they come back empty.
     ///
-    /// **The second of the two approvals this module mints is still the launch's.** This is
-    /// where the launch's yes is spent now, and it covers the one plane [`at_launch`] wrote
-    /// down as owed — never a plane the caller names.
+    /// **This is where the launch's yes — the first of the two approvals [`Approved`] names —
+    /// is spent now**, and it covers the one plane [`at_launch`] wrote down as owed, never a
+    /// plane the caller names.
     pub fn relaunch(&self, choice: Choice, restoring: &[PathBuf]) {
         let owed = {
             let mut relaunching = self.relaunching();
@@ -519,14 +506,9 @@ impl Planes {
             }
             relaunching.decided = true;
             if choice == Choice::StartFresh {
-                let owed_root = relaunching
-                    .owed
-                    .as_ref()
-                    .and_then(|plane| self.held(plane).ok())
-                    .map(|held| held.root.clone());
-                relaunching.fresh = owed_root
+                relaunching.fresh = self
+                    .launch_roots(&relaunching, restoring)
                     .into_iter()
-                    .chain(restoring.iter().filter_map(|path| plane_at(path).ok()))
                     .collect();
             }
             relaunching.owed.take()
@@ -536,6 +518,28 @@ impl Planes {
         if let Some(plane) = owed {
             self.reopen(&plane, &Approved(()), self.record_of(&plane));
         }
+    }
+
+    /// Every project this launch puts back, by root: its own plane first, then each project
+    /// the window will restore. The one list both the question and the answer are about, so
+    /// what is asked about and what is started fresh cannot drift apart.
+    fn launch_roots(&self, relaunching: &Relaunching, restoring: &[PathBuf]) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> = relaunching
+            .owed
+            .as_ref()
+            .and_then(|plane| self.held(plane).ok())
+            .map(|held| held.root.clone())
+            .into_iter()
+            .collect();
+        for path in restoring {
+            // A project that is no longer a plane is the restore's own news, and it says so.
+            if let Ok(root) = plane_at(path)
+                && !roots.contains(&root)
+            {
+                roots.push(root);
+            }
+        }
+        roots
     }
 
     fn relaunching(&self) -> MutexGuard<'_, Relaunching> {
@@ -1321,20 +1325,13 @@ fn resolving_with(
             // launched from a terminal must not find that list empty — and opening it from
             // that list asks once, as every other plane does.
             //
-            // The record is read HERE, because the launch draws no dialog and so has nothing
-            // to have shown. It is still one read: `Held::reopen` no longer makes its own
-            // (charter-app#123), so this line is the whole of it and a second one would have
-            // to be written on purpose.
-            //
-            // Against the root the REGISTRY settled on, never the one the resolver handed
-            // over: `Planes::open` canonicalises, and reading `/var/…` while the plane is held
-            // as `/private/var/…` is the same two-spellings-of-one-directory defect the id
-            // exists to stop, wearing the record's hat.
-            //
-            // **Not put back HERE any more** (charter-app#250). The launch asks the operator
+            // **It is not put back HERE** (charter-app#250). The launch asks the operator
             // whether they want what was open back, and nothing starts before the answer — so
             // the plane is written down as owed, and [`Planes::relaunch`] spends this yes when
-            // the window has the answer.
+            // the window has the answer. That is where the record is read, once, against the
+            // root the registry settled on (`record_of`): `Planes::open` canonicalises, and
+            // reading `/var/…` while the plane is held as `/private/var/…` is the
+            // two-spellings-of-one-directory defect the id exists to stop.
             planes.relaunching().owed = Some(plane.clone());
             Launch {
                 plane: Some(plane),

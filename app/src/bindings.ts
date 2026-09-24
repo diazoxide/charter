@@ -137,7 +137,7 @@ export const commands = {
 	projects: WaitingProject[],
 	/**
 	 *  Whether charter restarted itself to install an update, rather than the operator
-	 *  quitting it (charter-app#251). The question then says so, and keeps what was open.
+	 *  quitting it (charter-app#251). The question then says so.
 	 */
 	after_update: boolean,
 } | null, string>(__TAURI_INVOKE("relaunch_ask")),
@@ -1450,7 +1450,7 @@ export type RelaunchQuestion = {
 	projects: WaitingProject[],
 	/**
 	 *  Whether charter restarted itself to install an update, rather than the operator
-	 *  quitting it (charter-app#251). The question then says so, and keeps what was open.
+	 *  quitting it (charter-app#251). The question then says so.
 	 */
 	after_update: boolean,
 };

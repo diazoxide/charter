@@ -385,11 +385,11 @@ pub async fn planes_to_restore(
 
 /// The projects this launch will restore, as the window will open them — or none under
 /// `--no-restore`. The same list [`planes_to_restore`] answers with, read the same way.
-fn restoring_roots(planes: &Planes, restoring: &Restoring) -> Vec<std::path::PathBuf> {
-    if !restoring.wanted() {
+fn restoring_roots(app: &tauri::AppHandle) -> Vec<std::path::PathBuf> {
+    if !app.state::<Restoring>().wanted() {
         return Vec::new();
     }
-    restorable(planes.remembered()).planes
+    restorable(app.state::<Planes>().remembered()).planes
 }
 
 /// What a launch asks before it puts anything back (charter-app#250).
@@ -398,7 +398,7 @@ pub struct RelaunchQuestion {
     /// Every project with something to put back, the launch's own first.
     pub projects: Vec<WaitingProject>,
     /// Whether charter restarted itself to install an update, rather than the operator
-    /// quitting it (charter-app#251). The question then says so, and keeps what was open.
+    /// quitting it (charter-app#251). The question then says so.
     pub after_update: bool,
 }
 
@@ -438,9 +438,8 @@ impl From<RelaunchChoice> for charter_core::reopen::Choice {
 pub async fn relaunch_ask(app: tauri::AppHandle) -> Result<Option<RelaunchQuestion>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let planes = app.state::<Planes>();
-        let restoring = restoring_roots(&planes, &app.state::<Restoring>());
         planes
-            .relaunch_ask(&restoring)
+            .relaunch_ask(&restoring_roots(&app))
             .map(|asked| RelaunchQuestion {
                 projects: asked
                     .projects
@@ -467,9 +466,8 @@ pub async fn relaunch_ask(app: tauri::AppHandle) -> Result<Option<RelaunchQuesti
 #[specta::specta]
 pub async fn relaunch(app: tauri::AppHandle, choice: RelaunchChoice) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let planes = app.state::<Planes>();
-        let restoring = restoring_roots(&planes, &app.state::<Restoring>());
-        planes.relaunch(choice.into(), &restoring);
+        app.state::<Planes>()
+            .relaunch(choice.into(), &restoring_roots(&app));
     })
     .await
     .map_err(|err| format!("putting back what was open did not finish: {err}"))

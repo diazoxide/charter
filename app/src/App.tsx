@@ -445,7 +445,7 @@ function App() {
    * dialog.** The core decides that; this draws the lines.
    *
    * Run once, after the launch has answered, and only then — the launch's own project is
-   * opened by the core before there is a window, and its tab has to be the first one.
+   * attached by the core before there is a window, and its tab has to be the first one.
    *
    * **And not before the operator has answered the launch's question** (charter-app#250):
    * reopen every session, or start fresh. The core holds the launch's own project back until

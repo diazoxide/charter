@@ -21,7 +21,11 @@ import type { RelaunchChoice, RelaunchQuestion } from "./bindings";
  * Both answers carry `tabIndex={0}` (`docs/ui-primitives.md`, charter-app#186).
  *
  * `question.after_update` is charter-app#251's way in: a restart to install an update writes it
- * into the record, and the question then says why it is being asked.
+ * into the record, and the question then says why it is being asked. "Reopen all" is in front
+ * either way.
+ *
+ * Each project row carries its whole path as its title, for `calledOn`'s reason: two projects
+ * can share a folder name.
  */
 export function RelaunchAsk({
   question,
@@ -36,7 +40,7 @@ export function RelaunchAsk({
   const reopen = useRef<HTMLButtonElement>(null);
   const chats = question.projects.reduce((sum, project) => sum + project.chats, 0);
   const views = question.projects.reduce((sum, project) => sum + project.views, 0);
-  const open = [counted(chats, "chat"), counted(views, "view tab")].filter(Boolean).join(" and ");
+  const open = counts(chats, views, " and ");
   return (
     <Alert.Root
       open
@@ -60,13 +64,9 @@ export function RelaunchAsk({
           </Alert.Description>
           <ul className="ending">
             {question.projects.map((project) => (
-              <li key={project.plane}>
+              <li key={project.plane} title={project.plane}>
                 <span className="who">{nameOf(project.plane)}</span>
-                <span className="what">
-                  {[counted(project.chats, "chat"), counted(project.views, "view tab")]
-                    .filter(Boolean)
-                    .join(", ")}
-                </span>
+                <span className="what">{counts(project.chats, project.views, ", ")}</span>
               </li>
             ))}
           </ul>
@@ -86,6 +86,11 @@ export function RelaunchAsk({
       </Alert.Portal>
     </Alert.Root>
   );
+}
+
+/** `3 chats and 1 view tab`, leaving out a kind there are none of. */
+function counts(chats: number, views: number, between: string): string {
+  return [counted(chats, "chat"), counted(views, "view tab")].filter(Boolean).join(between);
 }
 
 /** `3 chats`, `1 view tab`, or nothing at all for none. */
