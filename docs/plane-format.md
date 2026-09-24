@@ -2060,6 +2060,7 @@ literal `fixture-not-a-secret`.
 | `account` | string | `--account` | 1Password account pin — **LOCAL_ONLY, never written to the shared half** | stable | `charter/secrets/registry.py:50`, `:298`, `:317` |
 | `env` | object `{TARGET: SOURCE}` | `--env TARGET=SOURCE` / `--token-env X` | env var NAMES only (e.g. `{"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_TOKEN"}`); never a value | stable | `charter/commands_secrets.py:188`, `charter/commands_secrets.py:80`; read `charter/secrets/base.py:291` |
 | `version` | string | hand-written only | `browser://` resolver's npx package version | stable | `charter/secrets/reference.py:104` |
+| `identity` | string | the vault tab's *Move this token into the Keychain*, into the **local half only** | `"keyring"`: the vault's `env` sources are read from the keyring (service `charter/identity`, account the source variable's name) first and the environment second. **Honoured only in `.charter/vaults.json`**; a committed one is ignored. charter-app only (#237, ADR 0047 as amended); a Python charter ignores the key | stable | `crates/charter-core/src/secrets/identity.rs` (`MARK`, `in_keyring`, `move_to_keyring`) |
 
 Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepassword.py:134`,
 `:149`) and never written.

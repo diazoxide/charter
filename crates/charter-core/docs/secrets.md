@@ -82,6 +82,21 @@ or `--token-env <VAR>` — as NAMES only. If `<VAR>` is unset, charter refuses r
 the vault as whoever the ambient token belongs to, and `secret exec` never hands one vault's
 identity variables to a command run for another.
 
+**The token itself belongs in the keyring, not in a shell.** Open the vault's tab in the app:
+where its identity variable is set in the app's environment, the tab offers **Move this token
+into the Keychain**. That stores the token in the system keyring — service `charter/identity`,
+account the variable's name (`OP_TEAM_TOKEN`) — and marks the vault's identity as moved in
+`.charter/vaults.json`, this machine's half of the registry. From then on every `charter secret`
+command, in a chat or in a plain terminal, reads that variable from the keyring first and the
+environment second, so a terminal that exports nothing still runs `charter secret exec`. The
+mark is honoured only in this machine's half: a committed `vaults.json` cannot tell charter to
+hand a keyring item to `op`. `vault list` and the tab say where each identity is from the mark,
+without reading the keyring.
+
+**No chat the app starts carries an `OP_*` variable** — not one the app inherited from the
+shell that started it, and not one a harness profile's `env` declares. The extension programs
+the app runs start from an empty environment and never had one.
+
 ### Where the registry lives
 
 `.charter/vaults.json` is this machine's half and `vaults.json` at the plane root is the
@@ -110,11 +125,19 @@ registry is read. A 1Password vault, item or account that starts with `-` is ref
 - **A persona is a label, not an access boundary.** `persona secret` picks a vault by the
   active persona's `vault:` field, but any chat can name any vault with `secret` directly, or
   pass `--persona`. Personas decide which vault is the default, not who may read it.
-- **An identity token lives in the environment.** A vault read through
-  `OP_SERVICE_ACCOUNT_TOKEN` (or any `--env` binding) needs that variable set in the shell
-  charter runs in, which is the shell the agent's commands run in too; `secret exec` keeps it
-  away from the command it starts for another vault, but `echo`, `env` or `printenv` in that
-  shell prints it. Where such a token should live instead is an open design question.
+- **A moved identity token is out of the chat's environment, not out of reach.** After the
+  move no chat the app starts is given an `OP_*` variable, so `echo $OP_TEAM_TOKEN` there prints
+  nothing. What is left: charter itself reads the token from the keyring for every `charter
+  secret` a chat runs, so an agent can still use the vault — it cannot print the token. Your
+  shell's own startup files are yours: a `.zshrc` that exports the token puts it back into every
+  shell the chat starts, so delete that line once the token is moved. A terminal outside the app
+  still carries whatever it exports. Only `OP_*` variables are kept from chats; a vault bound to
+  another variable (`VAULT_TOKEN`) can move it too, but a chat still inherits it unless the app
+  was started without it.
+- **On macOS the two charter programs are asked for separately.** The token item is written by
+  the app, so the first `charter secret` in a chat that reads it makes the Keychain ask whether
+  `charter` may, and "Always Allow" adds it (ADR 0047). On Linux any process in your session can
+  read an unlocked Secret Service collection.
 - **Errors never repeat a stored entry.** A reference that does not resolve is named by its
   key, not by what the file holds under it, because that may be a value.
 

@@ -27,6 +27,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Keychain item, and on macOS only the charter program that stored it can read it without the
   Keychain asking you first. A plaintext vault file is now something you ask for, with
   `--provider plain-file`. ([#233](https://github.com/diazoxide/charter-app/issues/233))
+- **Vaults in the app.** A Vaults section in the Attention panel lists each vault with its
+  provider and how many secrets it holds. Clicking one opens the vault in a tab of its own, as a
+  persona opens, and the tab comes back at the next launch. The tab has a search box, **Add**,
+  and a table of name, size and when each secret was written. Each row's menu has Edit value,
+  Rename, Copy and Delete. The palette has *Open vault…* and *New vault…*, and a new vault is a
+  keyring one unless you pick another kind. Nothing the window lists or writes ever carries a
+  value back. ([#234](https://github.com/diazoxide/charter-app/issues/234),
+  [#235](https://github.com/diazoxide/charter-app/issues/235))
+- **Reveal and copy.** A secret's eye shows its value for 30 seconds, until you press it again,
+  or until you press Escape. **Copy** puts the value on the clipboard without it reaching the
+  window, marked for clipboard histories to skip. charter clears the clipboard a minute later, or
+  when it quits, but only if the clipboard still holds that value. Each reveal and copy writes
+  the trace event `charter secret get --reveal` writes, `secret-reveal`, with a `to` field saying
+  `window` or `clipboard`. ([#236](https://github.com/diazoxide/charter-app/issues/236))
+- **1Password tokens move out of your chats.** Where a vault is read through a token in charter's
+  environment (`$OP_TEAM_TOKEN`), its tab offers **Move this token into the Keychain**. After
+  the move, every `charter secret` command reads that token from the system keyring first and
+  the environment second, so it works in a chat, and in a terminal that no longer exports it.
+  No chat the app starts is given any `OP_*` variable, whether the app inherited it or a harness
+  profile declares it. Delete the `export` from your shell's startup files once the token is
+  moved, or each chat's shell exports it again.
+  ([#237](https://github.com/diazoxide/charter-app/issues/237))
 
 ### Fixed
 
