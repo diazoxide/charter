@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `charter.toml` and `charter.local.toml` accept a `[plane]` section and a `[repos.<name>]`
+  table for each repo, which say how far a save goes: `mode` (`off`, `commit`, `push`, `pr`
+  or `pr-merge`), `branch`, `save_branch`, `sign`, `autosave` and `autosave_after`. The local
+  file overrides the shared one key by key. Nothing saves by these settings yet. For now,
+  `charter doctor` and the Project settings tab check them, and the doctor names
+  `[memory] share` as the deprecated way of saying `mode`.
+  ([#292](https://github.com/diazoxide/charter-app/issues/292))
 - When an update is installed, the title bar says **Restart to update**. It restarts charter
   into the new version and offers every chat and view tab back, with **Reopen all** as the
   answer in front and a line saying charter restarted to install an update. A chat that is

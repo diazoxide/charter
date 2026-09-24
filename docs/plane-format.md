@@ -389,7 +389,7 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051 (accepted, not built) |
 | `[plane].autosave_after` | str | optional; default `"30s"`; a whole number followed by `s` or `m` | **charter-app only.** The quiet period after the last change before an auto-save. | stable | ADR 0051 (accepted, not built) |
 | `[repos.<name>]` | table | optional, one per repo | **charter-app only.** How a workspace repo is saved. `<name>` is the repo's `name` in `inventory/repos.json`, so one table governs every workspace's clone of it. Takes the same keys as `[plane]` (`mode`, `branch`, `sign`, `autosave`, `autosave_after`) except `save_branch`, with the defaults `mode = "pr"` and `autosave = false`. A save commits on the branch the clone is on and `pr` opens its PR from that branch into `branch` (default: the repo's `default_branch`); on that default branch, a PR mode first creates `charter/<workspace>/<short-sha>`. It never runs while a session in that workspace is mid-turn. | stable | ADR 0051 (accepted, not built) |
-| any other key in `[plane]` or `[repos.<name>]` | — | — | Refused by the Project settings tab's save, ignored by readers. | stable | ADR 0051 (accepted, not built) |
+| any other key in `[plane]` or `[repos.<name>]` | — | — | Refused by the Project settings tab's save, ignored by readers. | stable | ADR 0051; `crates/charter-core/src/planesave.rs` `refusals` |
 | `[charter].version` | str | optional | The version lock. Reported **as written** (even if malformed); must match `^\d+\.\d+\.\d+$` before it is acted on. | stable | `charter/instance.py:321`, `charter/instance.py:290` |
 | `[update].channel` | str | default `"stable"`; closed set `stable`,`dev` | Which charter this plane tracks. Unknown → `stable`; the matched **constant** is stored, never the file's string. | stable | `charter/instance.py:2948`, `charter/instance.py:2936` |
 | `[harness].default` | str | default `None` | What bare `charter` launches. Matched against the harness registry's `cli_name`s; a non-match is recorded as `refused` (contained) rather than ignored. | stable | `charter/instance.py:3000`, `charter/instance.py:3088` |
@@ -483,9 +483,12 @@ key refuses.
 - **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
   since charter-app#253 — `[extensions]` by `extension::project` and, since charter-app#273,
   `[theme]` by `extension::project::theme` (ADR 0048), and, since charter-app#274,
-  `[harness_plugins]` by `harness_plugin` (ADR 0050); any other
-  top-level key is refused with a sentence (`charter/profiles.py:325`, and in charter-app
-  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names all four tables). In charter-app, `[plane]` and `[repos.<name>]` are also read, and override `charter.toml`'s values **key by key** (ADR 0051, on ADR 0048's overlay); every surface that shows one names the file that decided it. A missing file declares nothing and is not a refusal
+  `[harness_plugins]` by `harness_plugin` (ADR 0050), and, since charter-app#292, `[plane]`
+  and `[repos.<name>]` by `planesave` (ADR 0051), which override `charter.toml`'s values
+  **key by key** on ADR 0048's overlay, every surface that shows one naming the file that
+  decided it; any other top-level key is refused with a sentence (`charter/profiles.py:325`,
+  and in charter-app `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names
+  all six tables). A missing file declares nothing and is not a refusal
   (`charter/profiles.py:241`). Profile `env` is stored **sorted by name**
   (`charter/profiles.py:363`), and `~` in `command[0]` and in every `env` value is expanded
   only at launch (`charter/profiles.py:474`, `charter/profiles.py:480`) — never in the file
@@ -502,7 +505,7 @@ key refuses.
 | `[extensions.<id>].enabled` | bool | optional | **charter-app only** (charter-app#253, ADR 0048). This machine's choice for this project, over `charter.toml`'s. Same shape and rules as there; still cannot reach past this machine's approval. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[extensions.<id>.settings].<key>` | bool or str | optional | **charter-app only.** Overrides `charter.toml`'s value for the same key, key by key; falls through to it (then to the declared default) when the extension would not accept this one. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[theme].use` | str | optional | **charter-app only** (charter-app#273, ADR 0048). This machine's pick of the project's theme, over `charter.toml`'s and over a workspace's `settings.theme.use` (charter-app#281). Same values and rules as there; falls through to the next layer's pick when it is none of the shapes. | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
-| `[plane].<key>`, `[repos.<name>].<key>` | as in `charter.toml` | optional | **charter-app only.** This machine's value, over `charter.toml`'s, key by key. Same shapes and refusals. | stable | ADR 0051 (accepted, not built) |
+| `[plane].<key>`, `[repos.<name>].<key>` | as in `charter.toml` | optional | **charter-app only.** This machine's value, over `charter.toml`'s, key by key. Same shapes and refusals. | stable | ADR 0051; `crates/charter-core/src/planesave.rs` `Settings::from_text` |
 
 ---
 

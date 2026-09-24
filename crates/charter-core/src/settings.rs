@@ -36,6 +36,43 @@ use crate::profiles::{self, COMMITTED_FILE, LOCAL_FILE};
 
 pub mod workspace;
 
+/// Where an answer came from: which layer of the Shared/Workspace/Local overlay decided it
+/// (ADR 0048). Every reader of the overlay answers with it: [`crate::extension::project`],
+/// [`crate::planesave`] and the rest (charter-app#309).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// No file said: the machine's answer, or the setting's declared default.
+    Default,
+    /// `charter.toml`.
+    Shared,
+    /// The `settings` of the workspace's `workspace.json` (charter-app#280).
+    Workspace,
+    /// `charter.local.toml`.
+    Local,
+}
+
+impl Source {
+    /// The file this source is, or `None` for [`Source::Default`]. A workspace's is
+    /// `workspace.json`; which workspace's, [`crate::extension::project::Choices::workspace_file`] says.
+    pub fn file(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::Shared => Some(COMMITTED_FILE),
+            Self::Workspace => Some(crate::settings::workspace::FILE),
+            Self::Local => Some(LOCAL_FILE),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Shared => "shared",
+            Self::Workspace => "workspace",
+            Self::Local => "local",
+        }
+    }
+}
+
 /// Which of a plane's two settings files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Which {
@@ -175,6 +212,12 @@ fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
     // And `[theme]` (charter-app#273), read by one reader in both too.
     out.extend(crate::extension::project::theme::refusals(
         text,
+        which.file(),
+    ));
+    // And so may `[plane]` and `[repos]` (charter-app#292), read by `planesave` in both.
+    out.extend(crate::planesave::refusals(
+        text,
+        which == Which::Local,
         which.file(),
     ));
     out
