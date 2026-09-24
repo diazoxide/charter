@@ -6,6 +6,14 @@
 # equivalent — a mutant nobody has caught yet belongs in `.github/mutants-survivors.txt`,
 # the backlog, where it stays visible. Each entry names its file and function, and never a
 # line number, so that an edit above it does not quietly point it at a different mutant.
+#
+# `exclude_globs` is for TEST PLUMBING only: a file that is `cfg(test)` in spirit — nothing in
+# the product calls it — but has to be compiled into the library so charter-core's
+# integration tests, which are separate crates, can reach it. cargo-mutants skips `cfg(test)`
+# code on its own; this keeps that true for such a file. Product code never goes here.
+
+# `testrun` was `cfg(test)` until charter-app#267 made the integration tests re-run through it.
+exclude_globs = ["crates/charter-core/src/testrun.rs"]
 
 exclude_re = [
     # `now() < deadline` against `now() <= deadline` differs only at the one instant equal to

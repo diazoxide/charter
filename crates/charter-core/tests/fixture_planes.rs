@@ -28,6 +28,7 @@ fn manifests() -> Vec<PathBuf> {
 
 #[test]
 fn every_fixture_manifest_is_owned_by_charter_because_our_digest_is_the_one_it_stored() {
+    charter_core::unsteered!();
     let found = manifests();
     assert!(!found.is_empty(), "no workspace.json in the fixture planes");
 
@@ -56,6 +57,7 @@ fn every_fixture_manifest_is_owned_by_charter_because_our_digest_is_the_one_it_s
 
 #[test]
 fn a_fixture_manifest_read_and_written_back_is_byte_identical() {
+    charter_core::unsteered!();
     for path in manifests() {
         let text = std::fs::read_to_string(&path).expect("readable manifest");
         let doc: serde_json::Value = serde_json::from_str(&text).expect("manifest is JSON");
@@ -79,11 +81,13 @@ fn daily() -> charter_core::workspaces::Plane {
 
 #[test]
 fn the_workspaces_of_a_plane_are_its_named_directories_in_order() {
+    charter_core::unsteered!();
     assert_eq!(daily().workspaces().unwrap(), vec!["alpha", "beta"]);
 }
 
 #[test]
 fn a_dotted_directory_under_workspaces_is_never_a_workspace() {
+    charter_core::unsteered!();
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
     for name in [".worktrees", "zeta"] {
@@ -97,6 +101,7 @@ fn a_dotted_directory_under_workspaces_is_never_a_workspace() {
 
 #[test]
 fn a_clone_that_landed_beside_the_workspaces_is_not_one_of_them() {
+    charter_core::unsteered!();
     // `workspaces/<x>/.git` means somebody cloned into `workspaces/` itself.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
@@ -110,6 +115,7 @@ fn a_clone_that_landed_beside_the_workspaces_is_not_one_of_them() {
 
 #[test]
 fn a_workspaces_vision_is_the_body_under_its_vision_heading() {
+    charter_core::unsteered!();
     assert_eq!(
         daily().workspace("alpha").unwrap().vision(),
         "Ship the widget"
@@ -122,6 +128,7 @@ fn a_workspaces_vision_is_the_body_under_its_vision_heading() {
 
 #[test]
 fn an_unset_vision_reads_as_empty_rather_than_as_its_placeholder() {
+    charter_core::unsteered!();
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
     let ws = dir.path().join("workspaces/fresh");
@@ -139,6 +146,7 @@ fn an_unset_vision_reads_as_empty_rather_than_as_its_placeholder() {
 
 #[test]
 fn the_open_todos_of_a_workspace_are_the_files_its_index_lists() {
+    charter_core::unsteered!();
     let todos = daily().workspace("alpha").unwrap().todos().unwrap();
 
     assert_eq!(todos.len(), 1, "one todo is open; the other was closed");
@@ -149,11 +157,13 @@ fn the_open_todos_of_a_workspace_are_the_files_its_index_lists() {
 
 #[test]
 fn a_workspace_that_was_never_given_a_todo_has_none_rather_than_failing() {
+    charter_core::unsteered!();
     assert_eq!(daily().workspace("beta").unwrap().todos().unwrap(), vec![]);
 }
 
 #[test]
 fn the_memories_of_a_workspace_come_back_in_the_order_their_names_give() {
+    charter_core::unsteered!();
     let memories = daily().workspace("alpha").unwrap().memories().unwrap();
 
     assert_eq!(
@@ -170,12 +180,14 @@ fn the_memories_of_a_workspace_come_back_in_the_order_their_names_give() {
 
 #[test]
 fn the_personas_of_a_plane_are_the_directories_holding_a_persona_file() {
+    charter_core::unsteered!();
     // `_shared` and `_dispatch` are charter's own, not personas.
     assert_eq!(daily().personas().unwrap(), vec!["devops", "steward"]);
 }
 
 #[test]
 fn an_underscore_directory_is_not_a_persona_even_when_it_holds_a_persona_file() {
+    charter_core::unsteered!();
     // `_shared` carries memory and refs for every persona and is not one itself. The
     // fixture planes do not put a `persona.md` in one, so only this says so.
     let dir = tempfile::tempdir().unwrap();
@@ -209,6 +221,7 @@ fn pinned() -> chrono::NaiveDateTime {
 
 #[test]
 fn a_charter_is_scaffolded_from_the_template_with_the_vision_unset() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
 
@@ -228,6 +241,7 @@ fn a_charter_is_scaffolded_from_the_template_with_the_vision_unset() {
 
 #[test]
 fn a_charter_that_already_exists_is_not_overwritten_by_scaffolding() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     std::fs::write(
@@ -246,6 +260,7 @@ fn a_charter_that_already_exists_is_not_overwritten_by_scaffolding() {
 
 #[test]
 fn setting_a_vision_replaces_that_section_and_leaves_the_others_alone() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
 
@@ -266,6 +281,7 @@ fn setting_a_vision_replaces_that_section_and_leaves_the_others_alone() {
 
 #[test]
 fn a_todo_is_written_and_indexed_the_way_python_writes_one() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
 
@@ -282,6 +298,7 @@ fn a_todo_is_written_and_indexed_the_way_python_writes_one() {
 
 #[test]
 fn closing_a_todo_deletes_it_and_leaves_its_trace_in_the_journal() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     ws.add_todo("Write the migration", pinned()).unwrap();
@@ -306,6 +323,7 @@ fn closing_a_todo_deletes_it_and_leaves_its_trace_in_the_journal() {
 
 #[test]
 fn a_remembered_fact_lands_in_the_journal_with_its_index_header() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
 
@@ -323,6 +341,7 @@ fn a_remembered_fact_lands_in_the_journal_with_its_index_header() {
 
 #[test]
 fn a_written_manifest_carries_the_digest_of_what_it_now_says() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     let mut doc: serde_json::Value = serde_json::from_str(
@@ -353,6 +372,7 @@ fn a_written_manifest_carries_the_digest_of_what_it_now_says() {
 
 #[test]
 fn two_writers_at_once_do_not_share_a_temp_file() {
+    charter_core::unsteered!();
     // #893: `ensure` scaffolds a manifest and `record_members` rewrites one, and two
     // commands doing that at once for one workspace used to share a single
     // `workspace.json.tmp`. The pid in the temp name is what stops that, so this asks for
@@ -393,6 +413,7 @@ fn two_writers_at_once_do_not_share_a_temp_file() {
 
 #[test]
 fn writing_a_manifest_leaves_no_temp_file_behind() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     let doc: serde_json::Value = serde_json::from_str(r#"{"name":"alpha"}"#).unwrap();
@@ -413,6 +434,7 @@ fn writing_a_manifest_leaves_no_temp_file_behind() {
 
 #[test]
 fn a_todo_can_be_closed_by_its_bare_slug_without_the_timestamp() {
+    charter_core::unsteered!();
     // `charter ws todo done write-the-migration` is how the fixture generator closes one.
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
@@ -429,11 +451,13 @@ fn a_todo_can_be_closed_by_its_bare_slug_without_the_timestamp() {
 
 #[test]
 fn the_planes_default_persona_is_the_one_charter_toml_names() {
+    charter_core::unsteered!();
     assert_eq!(daily().default_persona(), Some("steward".to_string()));
 }
 
 #[test]
 fn a_plane_whose_manifest_names_no_persona_has_no_default() {
+    charter_core::unsteered!();
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
 
@@ -445,6 +469,7 @@ fn a_plane_whose_manifest_names_no_persona_has_no_default() {
 
 #[test]
 fn an_unparseable_charter_toml_names_no_persona_rather_than_failing() {
+    charter_core::unsteered!();
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("charter.toml"), "schema = = =\n").unwrap();
 
@@ -456,6 +481,7 @@ fn an_unparseable_charter_toml_names_no_persona_rather_than_failing() {
 
 #[test]
 fn a_path_inside_a_workspace_names_that_workspace() {
+    charter_core::unsteered!();
     let plane = daily();
     let root = plane.root().to_path_buf();
 
@@ -472,6 +498,7 @@ fn a_path_inside_a_workspace_names_that_workspace() {
 
 #[test]
 fn a_path_outside_the_workspaces_belongs_to_none_of_them() {
+    charter_core::unsteered!();
     let plane = daily();
     let root = plane.root().to_path_buf();
 
@@ -482,6 +509,7 @@ fn a_path_outside_the_workspaces_belongs_to_none_of_them() {
 
 #[test]
 fn a_path_naming_a_workspace_that_is_not_there_belongs_to_none() {
+    charter_core::unsteered!();
     let plane = daily();
 
     assert_eq!(
@@ -495,6 +523,7 @@ fn a_path_naming_a_workspace_that_is_not_there_belongs_to_none() {
 
 #[test]
 fn a_name_that_walks_out_of_the_plane_is_not_a_workspace() {
+    charter_core::unsteered!();
     // `Path::join` throws the prefix away for an absolute path and `..` walks out, so an
     // unchecked `-w` was a write anywhere on the filesystem.
     let (_tmp, plane) = temp_plane();
@@ -520,6 +549,7 @@ fn a_name_that_walks_out_of_the_plane_is_not_a_workspace() {
 
 #[test]
 fn a_linked_worktree_under_workspaces_is_still_a_workspace() {
+    charter_core::unsteered!();
     // Git draws the line: a clone's `.git` is a directory, a worktree's is a file.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
@@ -540,6 +570,7 @@ fn a_linked_worktree_under_workspaces_is_still_a_workspace() {
 #[cfg(unix)]
 #[test]
 fn one_unreadable_memory_does_not_cost_the_whole_listing() {
+    charter_core::unsteered!();
     use std::os::unix::fs::PermissionsExt;
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
@@ -562,6 +593,7 @@ fn one_unreadable_memory_does_not_cost_the_whole_listing() {
 
 #[test]
 fn a_memory_with_no_heading_is_named_by_its_file_stem() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     std::fs::create_dir_all(ws.dir().join("memory")).unwrap();
@@ -572,6 +604,7 @@ fn a_memory_with_no_heading_is_named_by_its_file_stem() {
 
 #[test]
 fn a_title_that_itself_begins_with_a_hash_keeps_it() {
+    charter_core::unsteered!();
     // charter takes `ln[2:].strip()`, once — not a repeated prefix strip.
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
@@ -587,6 +620,7 @@ fn a_title_that_itself_begins_with_a_hash_keeps_it() {
 
 #[test]
 fn a_body_of_only_separator_controls_is_empty_to_charter() {
+    charter_core::unsteered!();
     // Python's `str.strip()` is driven by `str.isspace()`, true for U+001C–U+001F; Rust's
     // `White_Space` is false for all four. `write` refuses an empty body so a failed
     // substitution cannot land a secret in a memory file.
@@ -604,6 +638,7 @@ fn a_body_of_only_separator_controls_is_empty_to_charter() {
 
 #[test]
 fn a_separator_control_is_stripped_from_a_title_and_a_body_as_python_strips_it() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
 
@@ -617,6 +652,7 @@ fn a_separator_control_is_stripped_from_a_title_and_a_body_as_python_strips_it()
 
 #[test]
 fn an_unparseable_manifest_belongs_to_the_operator_not_to_nobody() {
+    charter_core::unsteered!();
     // This is the branch that stops the automatic writers putting a fresh manifest over the
     // hand-made file the rule exists to protect.
     use charter_core::manifest::{Ownership, ownership};
@@ -632,6 +668,7 @@ fn an_unparseable_manifest_belongs_to_the_operator_not_to_nobody() {
 
 #[test]
 fn closing_a_todo_resolves_the_first_match_in_sorted_order() {
+    charter_core::unsteered!();
     // `resolve` decides WHICH todo `ws todo done <slug>` closes. Two todos a second apart
     // share a bare slug, and charter takes the first in sorted order — the older one.
     let (_tmp, plane) = temp_plane();
@@ -653,6 +690,7 @@ fn closing_a_todo_resolves_the_first_match_in_sorted_order() {
 
 #[test]
 fn a_bare_slug_matches_at_a_dash_and_nowhere_else() {
+    charter_core::unsteered!();
     // The suffix is `-<ident>.md`. Verified against `charter.memstore.resolve` itself for
     // `20260302-091400-the-migration.md`:
     //   "migration"     -> found   (the dash before it is the boundary)
@@ -672,6 +710,7 @@ fn a_bare_slug_matches_at_a_dash_and_nowhere_else() {
 
 #[test]
 fn an_exact_filename_wins_over_a_suffix_match() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     let dir = ws.dir().join("todos");
@@ -692,6 +731,7 @@ fn an_exact_filename_wins_over_a_suffix_match() {
 
 #[test]
 fn a_todo_is_still_open_if_its_closing_memory_could_not_be_written() {
+    charter_core::unsteered!();
     // charter writes the journal entry FIRST and deletes second, so a failure leaves the
     // todo open rather than closed with nothing recorded.
     let (_tmp, plane) = temp_plane();
@@ -710,6 +750,7 @@ fn a_todo_is_still_open_if_its_closing_memory_could_not_be_written() {
 
 #[test]
 fn an_explicit_title_is_capped_at_the_same_seventy_two_characters() {
+    charter_core::unsteered!();
     assert_eq!(charter_core::memstore::TITLE_MAX, 72);
     assert_eq!(
         charter_core::memstore::title_of(&"z".repeat(100))
@@ -728,6 +769,7 @@ fn an_explicit_title_is_capped_at_the_same_seventy_two_characters() {
 
 #[test]
 fn every_break_python_splits_on_ends_a_line_here_too() {
+    charter_core::unsteered!();
     use charter_core::mdsection::split_lines;
 
     for (breaker, name) in [
@@ -752,6 +794,7 @@ fn every_break_python_splits_on_ends_a_line_here_too() {
 
 #[test]
 fn carriage_return_newline_is_one_break_and_not_two() {
+    charter_core::unsteered!();
     assert_eq!(
         charter_core::mdsection::split_lines("a\r\nb"),
         vec!["a", "b"],
@@ -761,6 +804,7 @@ fn carriage_return_newline_is_one_break_and_not_two() {
 
 #[test]
 fn a_chat_in_a_directory_that_is_no_workspace_is_not_filed_under_an_invented_one() {
+    charter_core::unsteered!();
     // Load-bearing for the sidebar: `plane_sidebar` puts a filed chat into `filed[name]`
     // and only ever drains keys that are real workspaces, so a chat filed under a name the
     // plane does not have vanishes from the window entirely — neither filed nor unfiled.
@@ -782,6 +826,7 @@ fn a_chat_in_a_directory_that_is_no_workspace_is_not_filed_under_an_invented_one
 
 #[test]
 fn the_refs_readme_is_not_a_memory() {
+    charter_core::unsteered!();
     // `refs/README.md` sits beside a store and is not one of its entries.
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
@@ -800,6 +845,7 @@ fn the_refs_readme_is_not_a_memory() {
 
 #[test]
 fn an_index_emptied_of_its_last_entry_keeps_its_header() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     ws.add_todo("only one", pinned()).unwrap();
@@ -825,6 +871,7 @@ use std::collections::BTreeMap;
 
 #[test]
 fn a_personas_memories_are_read_by_slug_with_no_timestamp_in_the_name() {
+    charter_core::unsteered!();
     let devops = daily().persona("devops").unwrap();
 
     let memories = devops.memories().unwrap();
@@ -837,6 +884,7 @@ fn a_personas_memories_are_read_by_slug_with_no_timestamp_in_the_name() {
 
 #[test]
 fn the_shared_store_is_the_one_every_persona_reads() {
+    charter_core::unsteered!();
     let shared = daily().persona(charter_core::personas::SHARED).unwrap();
 
     let memories = shared.memories().unwrap();
@@ -852,6 +900,7 @@ fn the_shared_store_is_the_one_every_persona_reads() {
 
 #[test]
 fn a_persona_carries_the_role_its_charter_file_declares() {
+    charter_core::unsteered!();
     assert_eq!(
         daily().persona("devops").unwrap().role(),
         Some("DevOps Engineer".to_string())
@@ -861,6 +910,7 @@ fn a_persona_carries_the_role_its_charter_file_declares() {
 
 #[test]
 fn scaffolding_a_persona_writes_the_index_and_the_refs_readme_charter_writes() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let devops = plane.persona("devops").unwrap();
 
@@ -878,6 +928,7 @@ fn scaffolding_a_persona_writes_the_index_and_the_refs_readme_charter_writes() {
 
 #[test]
 fn the_shared_store_is_scaffolded_for_all_personas_not_for_one_named_shared() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let shared = plane.persona(charter_core::personas::SHARED).unwrap();
 
@@ -892,6 +943,7 @@ fn the_shared_store_is_scaffolded_for_all_personas_not_for_one_named_shared() {
 
 #[test]
 fn a_remembered_persona_fact_is_named_for_its_slug_alone() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let devops = plane.persona("devops").unwrap();
     devops.scaffold_memory().unwrap();
@@ -931,6 +983,7 @@ fn a_print() -> Fingerprint {
 
 #[test]
 fn a_plane_with_no_record_has_approved_nothing() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
 
     assert_eq!(
@@ -941,6 +994,7 @@ fn a_plane_with_no_record_has_approved_nothing() {
 
 #[test]
 fn a_record_charter_cannot_parse_reads_as_no_approval_rather_than_as_one() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let dir = plane.root().join(".charter");
     std::fs::create_dir_all(&dir).unwrap();
@@ -955,6 +1009,7 @@ fn a_record_charter_cannot_parse_reads_as_no_approval_rather_than_as_one() {
 
 #[test]
 fn an_entry_that_is_not_a_fingerprint_is_not_an_approval() {
+    charter_core::unsteered!();
     // The file is a plain JSON object a chat can write, so this has to read as no record at
     // all rather than as something to compare against.
     let (_tmp, plane) = temp_plane();
@@ -974,6 +1029,7 @@ fn an_entry_that_is_not_a_fingerprint_is_not_an_approval() {
 
 #[test]
 fn recording_a_launch_writes_the_fingerprint_as_declared() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
 
     profiletrust::record_launched(plane.root(), "claude-work", &a_print()).unwrap();
@@ -991,6 +1047,7 @@ fn recording_a_launch_writes_the_fingerprint_as_declared() {
 
 #[test]
 fn approving_one_profile_does_not_make_another_ask_again() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     profiletrust::record_launched(plane.root(), "claude-work", &a_print()).unwrap();
 
@@ -1013,6 +1070,7 @@ fn approving_one_profile_does_not_make_another_ask_again() {
 
 #[test]
 fn re_recording_a_profile_keeps_the_place_it_already_had() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     profiletrust::record_launched(plane.root(), "aaa", &a_print()).unwrap();
     profiletrust::record_launched(plane.root(), "zzz", &a_print()).unwrap();
@@ -1035,6 +1093,7 @@ fn re_recording_a_profile_keeps_the_place_it_already_had() {
 #[cfg(unix)]
 #[test]
 fn the_record_and_its_directory_are_private_to_the_operator() {
+    charter_core::unsteered!();
     use std::os::unix::fs::PermissionsExt;
     let (_tmp, plane) = temp_plane();
 
@@ -1055,6 +1114,7 @@ fn the_record_and_its_directory_are_private_to_the_operator() {
 
 #[test]
 fn a_non_ascii_env_value_is_escaped_in_the_record_as_python_escapes_it() {
+    charter_core::unsteered!();
     // Verified against `charter.profiletrust.record_launched` itself: this file is
     // `json.dumps(..., indent=2)`, so `ensure_ascii` applies here as it does to a manifest.
     let (_tmp, plane) = temp_plane();
@@ -1083,6 +1143,7 @@ fn a_non_ascii_env_value_is_escaped_in_the_record_as_python_escapes_it() {
 
 #[test]
 fn a_workspace_symlinked_out_of_the_plane_cannot_be_written_through() {
+    charter_core::unsteered!();
     // The name rule cannot see this: `escape` is a perfectly legal name. What redirects the
     // write is a COMMITTED symlink, which travels with the plane to every machine that
     // clones it. Python refuses it in `contain.writable` with the same reasoning.
@@ -1114,6 +1175,7 @@ fn a_workspace_symlinked_out_of_the_plane_cannot_be_written_through() {
 
 #[test]
 fn a_persona_symlinked_out_of_the_plane_cannot_be_written_through() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let outside = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(plane.root().join("personas")).unwrap();
@@ -1152,6 +1214,7 @@ fn plane_and_outside() -> (
 
 #[test]
 fn a_charter_file_that_is_a_link_out_of_the_plane_is_not_written_through() {
+    charter_core::unsteered!();
     let (_plane_dir, outside, plane) = plane_and_outside();
     let victim = outside.path().join("victim");
     std::fs::write(&victim, "original\n").unwrap();
@@ -1166,6 +1229,7 @@ fn a_charter_file_that_is_a_link_out_of_the_plane_is_not_written_through() {
 
 #[test]
 fn a_memory_store_that_is_a_link_out_of_the_plane_is_not_written_into() {
+    charter_core::unsteered!();
     let (_plane_dir, outside, plane) = plane_and_outside();
     let ws = plane.workspace("alpha").unwrap();
     std::os::unix::fs::symlink(outside.path(), ws.dir().join("memory")).unwrap();
@@ -1181,6 +1245,7 @@ fn a_memory_store_that_is_a_link_out_of_the_plane_is_not_written_into() {
 
 #[test]
 fn a_manifest_that_is_a_link_out_of_the_plane_is_not_written_through() {
+    charter_core::unsteered!();
     let (_plane_dir, outside, plane) = plane_and_outside();
     let victim = outside.path().join("victim.json");
     std::fs::write(&victim, "{}\n").unwrap();
@@ -1197,6 +1262,7 @@ fn a_manifest_that_is_a_link_out_of_the_plane_is_not_written_through() {
 
 #[test]
 fn a_vision_behind_a_link_out_of_the_plane_is_not_printed() {
+    charter_core::unsteered!();
     // charter #442: a committed `workspaces/evil -> ../../elsewhere` with a LEGAL name
     // printed a file from outside the plane. Containing the name does not contain this.
     let (plane_dir, outside, plane) = plane_and_outside();
@@ -1219,6 +1285,7 @@ fn a_vision_behind_a_link_out_of_the_plane_is_not_printed() {
 
 #[test]
 fn a_store_behind_a_link_out_of_the_plane_is_not_listed() {
+    charter_core::unsteered!();
     let (_plane_dir, outside, plane) = plane_and_outside();
     std::fs::write(
         outside.path().join("secret.md"),
@@ -1233,6 +1300,7 @@ fn a_store_behind_a_link_out_of_the_plane_is_not_listed() {
 
 #[test]
 fn a_single_entry_that_links_out_of_the_plane_is_left_out_of_the_listing() {
+    charter_core::unsteered!();
     // The store is legitimate; one file in it is a link out. Python gates each entry, not
     // only the directory.
     let (_plane_dir, outside, plane) = plane_and_outside();
@@ -1256,6 +1324,7 @@ fn a_single_entry_that_links_out_of_the_plane_is_left_out_of_the_listing() {
 
 #[test]
 fn a_persona_charter_behind_a_link_out_of_the_plane_is_not_read() {
+    charter_core::unsteered!();
     let (plane_dir, outside, plane) = plane_and_outside();
     std::fs::write(
         outside.path().join("persona.md"),
@@ -1277,6 +1346,7 @@ fn a_persona_charter_behind_a_link_out_of_the_plane_is_not_read() {
 
 #[test]
 fn the_consent_record_is_not_written_through_a_link_that_leaves_the_plane() {
+    charter_core::unsteered!();
     // This file says which commands the operator approved RUNNING.
     let (plane_dir, outside, _plane) = plane_and_outside();
     std::os::unix::fs::symlink(outside.path(), plane_dir.path().join(".charter")).unwrap();
@@ -1296,6 +1366,7 @@ fn the_consent_record_is_not_written_through_a_link_that_leaves_the_plane() {
 
 #[test]
 fn only_the_planes_own_data_directories_are_writable() {
+    charter_core::unsteered!();
     // Python's data roots are `personas/`, `workspaces/` and `.charter/persona-state` —
     // NOT `.charter` wholesale, which would put the vaults inside the allowlist.
     let dir = tempfile::tempdir().unwrap();
@@ -1327,6 +1398,7 @@ fn only_the_planes_own_data_directories_are_writable() {
 
 #[test]
 fn a_record_missing_a_field_is_no_record_at_all() {
+    charter_core::unsteered!();
     // The consent bypass this guards: if a missing `env` defaulted to empty instead of
     // failing, `{"kind":"claude","command":["claude"]}` would reconstruct as a fingerprint
     // EQUAL to a profile declared with no env — and launch without asking.
@@ -1352,6 +1424,7 @@ fn a_record_missing_a_field_is_no_record_at_all() {
 
 #[test]
 fn an_index_is_not_created_through_a_dangling_symlink() {
+    charter_core::unsteered!();
     // `exists()` is false for a dangling link, which HELPS an attacker: a plain write would
     // create whatever the link names. The create is exclusive so the kernel refuses it.
     let (_tmp, plane) = temp_plane();
@@ -1372,6 +1445,7 @@ fn an_index_is_not_created_through_a_dangling_symlink() {
 
 #[test]
 fn a_persona_index_is_not_created_through_a_dangling_symlink() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let outside = tempfile::tempdir().unwrap();
     let target = outside.path().join("planted");
@@ -1392,6 +1466,7 @@ fn a_persona_index_is_not_created_through_a_dangling_symlink() {
 
 #[test]
 fn a_slug_that_walks_out_of_the_store_deletes_nothing() {
+    charter_core::unsteered!();
     // charter #339: `memstore.resolve` applies no containment of its own, so
     // `../../<other>/todos/<slug>` resolved to a NEIGHBOUR's file and `unlink` took it.
     // charter gates the slug with `segment_ok` before it ever reaches the store.
@@ -1426,6 +1501,7 @@ fn a_slug_that_walks_out_of_the_store_deletes_nothing() {
 
 #[test]
 fn closing_a_todo_by_a_traversing_slug_deletes_nothing() {
+    charter_core::unsteered!();
     let (plane_dir, _outside, plane) = plane_and_outside();
     std::fs::create_dir_all(plane_dir.path().join("workspaces/beta/todos")).unwrap();
     let neighbour = plane_dir.path().join("workspaces/beta/todos/victim.md");
@@ -1447,6 +1523,7 @@ fn closing_a_todo_by_a_traversing_slug_deletes_nothing() {
 
 #[test]
 fn a_memory_index_that_links_out_of_the_plane_is_not_appended_to() {
+    charter_core::unsteered!();
     // The store directory is legitimate; `MEMORY.md` inside it is a committed link out.
     let (_plane_dir, outside, plane) = plane_and_outside();
     let kept = outside.path().join("important");
@@ -1466,6 +1543,7 @@ fn a_memory_index_that_links_out_of_the_plane_is_not_appended_to() {
 
 #[test]
 fn a_dangling_index_link_is_judged_by_where_it_points() {
+    charter_core::unsteered!();
     // `canonicalize` fails for a dangling link, and judging it by its own name let it pass —
     // after which the write CREATED the file it named.
     let (_plane_dir, outside, plane) = plane_and_outside();
@@ -1482,6 +1560,7 @@ fn a_dangling_index_link_is_judged_by_where_it_points() {
 
 #[test]
 fn a_path_whose_parent_walks_out_with_dot_dot_is_refused() {
+    charter_core::unsteered!();
     // `Path::file_name()` is `None` for `..`, so an ancestor walk that collects names
     // dropped them: the reconstructed path was inside and the write landed in `/etc`.
     let dir = tempfile::tempdir().unwrap();
@@ -1507,6 +1586,7 @@ fn a_path_whose_parent_walks_out_with_dot_dot_is_refused() {
 
 #[test]
 fn a_duplicate_check_does_not_read_a_store_outside_the_plane() {
+    charter_core::unsteered!();
     // It reported the heading of an outside file on stderr — charter #442's shape, on the
     // one read path the gate had missed.
     let (_plane_dir, outside, plane) = plane_and_outside();
@@ -1530,6 +1610,7 @@ fn a_duplicate_check_does_not_read_a_store_outside_the_plane() {
 
 #[test]
 fn a_heading_below_the_first_line_is_still_the_title() {
+    charter_core::unsteered!();
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     let store = ws.dir().join("todos");
@@ -1545,6 +1626,7 @@ fn a_heading_below_the_first_line_is_still_the_title() {
 
 #[test]
 fn a_persona_index_that_resolves_out_of_the_plane_is_refused_by_containment() {
+    charter_core::unsteered!();
     // `create_absent` gates the directory AND the file it opens. Only the directory gate is
     // needed to keep the file from being written — `create_new` refuses a link at the name
     // — so this asserts WHICH refusal fires. Without the file gate the error is the
@@ -1579,6 +1661,7 @@ fn a_persona_index_that_resolves_out_of_the_plane_is_refused_by_containment() {
 
 #[test]
 fn a_consent_record_that_resolves_out_of_the_plane_is_refused_by_containment() {
+    charter_core::unsteered!();
     // Same shape: `private_dir` refusing a symlinked `.charter` and the write ending in a
     // `rename` both keep the bytes inside, so this asserts that the REFUSAL is containment's
     // rather than a side effect of how the write happens to be done.
@@ -1614,6 +1697,7 @@ fn a_consent_record_that_resolves_out_of_the_plane_is_refused_by_containment() {
 
 #[test]
 fn a_single_todo_linked_out_of_the_plane_is_not_read_by_the_duplicate_check() {
+    charter_core::unsteered!();
     // The STORE is legitimate; one entry in it is a committed link out. Gating only the
     // directory left every entry ungated, so this file was read, its heading echoed back by
     // `ws todo`'s refusal, and its body used as the comparison oracle.

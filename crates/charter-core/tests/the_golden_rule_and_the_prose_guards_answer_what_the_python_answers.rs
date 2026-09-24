@@ -167,6 +167,7 @@ fn tables(cmd: &str) -> Value {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_these_guards_give() {
+    charter_core::unsteered!();
     let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
         .into_iter()
         .map(|r| (r.at, r.row))
@@ -357,6 +358,7 @@ fn the_recorded_python_answer_is_the_answer_these_guards_give() {
 /// is asserted BY NAME, with a membership check, the way stages 1, 2 and 3 did it.
 #[test]
 fn the_recording_still_covers_the_rules() {
+    charter_core::unsteered!();
     let rows = corpus();
     let recorded: Vec<String> = rows
         .iter()

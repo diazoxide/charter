@@ -19,6 +19,7 @@ fn cut(f: &support::Fixture, piece: &str) -> worktree::Added {
 
 #[test]
 fn a_piece_with_uncommitted_changes_is_not_removed() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
     std::fs::write(added.path.join("wip.txt"), "unsaved\n").unwrap();
@@ -31,6 +32,7 @@ fn a_piece_with_uncommitted_changes_is_not_removed() {
 
 #[test]
 fn a_piece_holding_commits_that_exist_nowhere_else_is_not_removed() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
     f.commit(&added.path, "work");
@@ -43,6 +45,7 @@ fn a_piece_holding_commits_that_exist_nowhere_else_is_not_removed() {
 
 #[test]
 fn a_piece_that_is_only_as_far_as_its_base_has_nothing_to_lose_and_goes() {
+    charter_core::unsteered!();
     // "Has no upstream" fires on a piece created a minute ago that has nothing to lose, and a
     // guard that fires on the harmless common case is how `--force` becomes a habit
     // (charter #104). The rule is commits reachable from NO OTHER REF.
@@ -56,6 +59,7 @@ fn a_piece_that_is_only_as_far_as_its_base_has_nothing_to_lose_and_goes() {
 
 #[test]
 fn a_tree_charter_could_not_read_is_not_a_tree_charter_clears_for_deletion() {
+    charter_core::unsteered!();
     // Before charter #917 an unreadable tree fell through to `git worktree remove` as clean:
     // a failed `git status` writes nothing to stdout, and `""` reads as "no changes".
     let f = support::plane_with_clone("thing");
@@ -74,6 +78,7 @@ fn a_tree_charter_could_not_read_is_not_a_tree_charter_clears_for_deletion() {
 
 #[test]
 fn a_failure_to_read_unique_commits_says_that_and_not_something_else() {
+    charter_core::unsteered!();
     // Its own sentence. "Could not determine whether this holds uncommitted changes" is not
     // what failed, and a guard that stops a deletion for the wrong stated reason sends the
     // operator to look at the wrong thing.
@@ -101,6 +106,7 @@ fn a_failure_to_read_unique_commits_says_that_and_not_something_else() {
 
 #[test]
 fn forcing_is_how_the_operator_says_to_discard_it() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
     f.commit(&added.path, "work");
@@ -112,6 +118,7 @@ fn forcing_is_how_the_operator_says_to_discard_it() {
 
 #[test]
 fn removing_a_piece_keeps_its_branch() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     cut(&f, "piece");
 
@@ -131,6 +138,7 @@ fn removing_a_piece_keeps_its_branch() {
 
 #[test]
 fn a_workspace_lists_its_own_pieces_and_no_others() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     cut(&f, "mine");
     // git reports the clone itself, and any worktree registered anywhere on the machine.
@@ -156,6 +164,7 @@ fn a_workspace_lists_its_own_pieces_and_no_others() {
 
 #[test]
 fn a_repo_name_that_walks_out_never_reaches_git_through_list() {
+    charter_core::unsteered!();
     // `list` and `clone_dir` are public entry points that did not go through `path_for`, so
     // `repo` was joined straight on: `list(plane, ws, "../beta/repo")` ran git in another
     // workspace's clone.
@@ -171,6 +180,7 @@ fn a_repo_name_that_walks_out_never_reaches_git_through_list() {
 
 #[test]
 fn a_registration_whose_directory_is_gone_is_cleared_without_pretending_to_check_a_tree() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
     std::fs::remove_dir_all(&added.path).unwrap();
@@ -187,6 +197,7 @@ fn a_registration_whose_directory_is_gone_is_cleared_without_pretending_to_check
 
 #[test]
 fn a_piece_records_the_branch_it_was_cut_from() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
 
@@ -200,6 +211,7 @@ fn a_piece_records_the_branch_it_was_cut_from() {
 
 #[test]
 fn a_piece_cut_from_a_detached_head_records_the_commit_rather_than_nothing() {
+    charter_core::unsteered!();
     // The spec says the sha is recorded so `merge` can say what happened at cut time. Without
     // it, `merge` blamed the wrong cause — "a piece cut by the Python charter has no such
     // record" — for a piece this code cut a minute earlier.
@@ -227,6 +239,7 @@ fn a_piece_cut_from_a_detached_head_records_the_commit_rather_than_nothing() {
 
 #[test]
 fn a_branch_that_already_exists_is_refused_and_named() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     support::git(&f.clone, &["branch", "taken"]);
 
@@ -239,6 +252,7 @@ fn a_branch_that_already_exists_is_refused_and_named() {
 
 #[test]
 fn a_name_git_will_not_accept_is_refused_because_git_said_so() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
 
     let refusal = worktree::add(&f.plane, &f.ws, &f.repo, "piece", Some("a..b")).unwrap_err();
@@ -248,6 +262,7 @@ fn a_name_git_will_not_accept_is_refused_because_git_said_so() {
 
 #[test]
 fn a_piece_that_fast_forwards_lands_in_the_clone() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
     f.commit(&added.path, "work");
@@ -261,6 +276,7 @@ fn a_piece_that_fast_forwards_lands_in_the_clone() {
 
 #[test]
 fn a_merge_that_would_land_nothing_is_not_reported_as_a_merge() {
+    charter_core::unsteered!();
     // git says "Already up to date" at exit 0. Charter reporting that as a successful merge
     // is the lie the `@` case produced one level down.
     let f = support::plane_with_clone("thing");
@@ -276,6 +292,7 @@ fn a_merge_that_would_land_nothing_is_not_reported_as_a_merge() {
 
 #[test]
 fn a_piece_that_does_not_fast_forward_is_refused_with_the_repair_in_the_worktree() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
     f.commit(&added.path, "theirs");
@@ -296,6 +313,7 @@ fn a_piece_that_does_not_fast_forward_is_refused_with_the_repair_in_the_worktree
 
 #[test]
 fn two_recorded_bases_are_a_refusal_and_not_a_last_one_wins() {
+    charter_core::unsteered!();
     // `.git/config` is writable by anything in the clone, and `git config --get` returns the
     // LAST value at exit 0 with no warning.
     let f = support::plane_with_clone("thing");
@@ -313,6 +331,7 @@ fn two_recorded_bases_are_a_refusal_and_not_a_last_one_wins() {
 
 #[test]
 fn a_piece_with_no_recorded_base_says_so_rather_than_calling_it_foreign() {
+    charter_core::unsteered!();
     // Python charter records no charterBase, so every Python-cut piece is in this state for
     // the whole cutover.
     let f = support::plane_with_clone("thing");
@@ -332,6 +351,7 @@ fn a_piece_with_no_recorded_base_says_so_rather_than_calling_it_foreign() {
 
 #[test]
 fn a_clone_that_is_not_on_the_recorded_base_is_refused() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
     f.commit(&added.path, "work");
@@ -346,6 +366,7 @@ fn a_clone_that_is_not_on_the_recorded_base_is_refused() {
 
 #[test]
 fn a_dirty_clone_is_refused_because_a_merge_writes_into_it() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let added = cut(&f, "piece");
     f.commit(&added.path, "work");
@@ -362,6 +383,7 @@ fn a_dirty_clone_is_refused_because_a_merge_writes_into_it() {
 
 #[test]
 fn a_plane_that_relocates_its_worktree_root_is_refused_by_name_in_every_verb() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     cut(&f, "piece");
     std::fs::write(
@@ -392,6 +414,7 @@ fn a_plane_that_relocates_its_worktree_root_is_refused_by_name_in_every_verb() {
 
 #[test]
 fn a_directory_that_is_not_a_git_repository_is_refused_with_the_repair() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     std::fs::create_dir_all(f.workspace().join("notarepo")).unwrap();
 
@@ -405,6 +428,7 @@ fn a_directory_that_is_not_a_git_repository_is_refused_with_the_repair() {
 
 #[test]
 fn a_workspace_that_is_a_committed_symlink_out_of_the_plane_cuts_nothing() {
+    charter_core::unsteered!();
     // charter #442: a committed `workspaces/<legal-name> -> elsewhere` travels to every
     // machine that clones the plane. Canonicalising the workspace directory would follow it
     // and move the whole boundary with it — the worktree would be checked out outside the
@@ -429,6 +453,7 @@ fn a_workspace_that_is_a_committed_symlink_out_of_the_plane_cuts_nothing() {
 
 #[test]
 fn a_piece_that_never_existed_is_no_such_piece_even_beside_a_stale_one() {
+    charter_core::unsteered!();
     // Only the stale registration of THIS piece is pruned. The red light for a mutation that
     // takes any stale registration, or any piece of that name, for the one asked about.
     let f = support::plane_with_clone("thing");
@@ -452,6 +477,7 @@ fn a_piece_that_never_existed_is_no_such_piece_even_beside_a_stale_one() {
 
 #[test]
 fn a_live_piece_with_no_layer_is_listed_as_unwired() {
+    charter_core::unsteered!();
     // A plane with nothing to carry writes no record, so the piece has none: it is live and
     // it is not wired. The red light for a mutation that reads "live" alone as wired.
     let f = support::plane_with_clone("thing");

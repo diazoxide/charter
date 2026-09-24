@@ -37,6 +37,7 @@ fn named(found: &repos::Clones) -> Vec<&str> {
 
 #[test]
 fn a_workspaces_repos_are_the_directories_in_it_holding_a_git_directory() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     // The stores a workspace always has, which are directories and are not repos.
     std::fs::create_dir_all(f.workspace().join("memory")).unwrap();
@@ -53,6 +54,7 @@ fn a_workspaces_repos_are_the_directories_in_it_holding_a_git_directory() {
 
 #[test]
 fn a_linked_worktree_is_not_a_clone_because_its_git_is_a_file() {
+    charter_core::unsteered!();
     // Git draws this line, not charter: a clone's `.git` is a directory, a linked worktree's
     // is a file holding `gitdir:`. A worktree listed as a repo would be a second row for one
     // repository, with its own branch, which is the piece view and not this one.
@@ -79,6 +81,7 @@ fn a_linked_worktree_is_not_a_clone_because_its_git_is_a_file() {
 
 #[test]
 fn the_repos_the_manifest_names_are_read_and_a_name_that_is_not_one_is_dropped() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     std::fs::write(
         f.workspace().join("workspace.json"),
@@ -100,6 +103,7 @@ fn the_repos_the_manifest_names_are_read_and_a_name_that_is_not_one_is_dropped()
 
 #[test]
 fn a_repo_reached_through_a_symlink_is_refused_and_said_rather_than_dropped() {
+    charter_core::unsteered!();
     // A committed `workspaces/<ws>/<legal-name> -> elsewhere` travels to every machine that
     // clones the plane. The name is fine, the directory above it is fine, and the only place
     // this is visible is a check on the path charter is about to hand to git.
@@ -125,6 +129,7 @@ fn a_repo_reached_through_a_symlink_is_refused_and_said_rather_than_dropped() {
 
 #[test]
 fn a_git_that_is_a_symlink_is_refused_and_said_rather_than_quietly_dropped() {
+    charter_core::unsteered!();
     // The directory itself is ordinary and passes every path check. What is redirected is
     // the repository git would act on, which is a component below the one that was gated.
     //
@@ -150,6 +155,7 @@ fn a_git_that_is_a_symlink_is_refused_and_said_rather_than_quietly_dropped() {
 
 #[test]
 fn a_directory_with_no_git_at_all_is_not_a_repo_and_not_worth_saying() {
+    charter_core::unsteered!();
     // The other half of the rule: a workspace's own stores are directories too, and a line
     // about each of them on every render is noise that stops refusals being read.
     let f = support::plane_with_clone("thing");
@@ -164,6 +170,7 @@ fn a_directory_with_no_git_at_all_is_not_a_repo_and_not_worth_saying() {
 
 #[test]
 fn a_directory_whose_name_could_not_name_a_repo_is_refused_before_it_is_joined() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     // A legal directory name that is not a name charter mints. `repo_name_ok` is a question
     // about the string, so it answers the same whether or not anything is there.
@@ -182,6 +189,7 @@ fn a_directory_whose_name_could_not_name_a_repo_is_refused_before_it_is_joined()
 
 #[test]
 fn a_workspace_that_is_a_link_out_of_the_plane_holds_no_repos_at_all() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let (_keep, elsewhere) = outside();
     std::os::unix::fs::symlink(&elsewhere, f.plane.join("workspaces/ghost")).unwrap();
@@ -196,6 +204,7 @@ fn a_workspace_that_is_a_link_out_of_the_plane_holds_no_repos_at_all() {
 
 #[test]
 fn a_name_that_is_not_a_workspace_this_plane_has_reads_nothing() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
 
     assert!(repos::clones(&f.plane, "../..").is_err());
@@ -208,6 +217,7 @@ fn a_name_that_is_not_a_workspace_this_plane_has_reads_nothing() {
 
 #[test]
 fn a_clean_checkout_reads_as_its_branch_with_nothing_to_report() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
 
     let state = repos::state_of(&f.clone).expect("the tree reads");
@@ -220,6 +230,7 @@ fn a_clean_checkout_reads_as_its_branch_with_nothing_to_report() {
 
 #[test]
 fn a_changed_file_and_an_untracked_one_are_counted_apart() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     std::fs::write(f.clone.join("README.md"), "two\n").unwrap();
     std::fs::write(f.clone.join("scratch"), "x\n").unwrap();
@@ -232,6 +243,7 @@ fn a_changed_file_and_an_untracked_one_are_counted_apart() {
 
 #[test]
 fn how_far_a_branch_is_from_its_upstream_comes_back_from_real_git() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let from = f.clone.display().to_string();
     support::git(&f.workspace(), &["clone", "-q", &from, "copy"]);
@@ -247,6 +259,7 @@ fn how_far_a_branch_is_from_its_upstream_comes_back_from_real_git() {
 
 #[test]
 fn a_detached_head_is_reported_as_the_commit_it_sits_on() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     support::git(&f.clone, &["checkout", "-q", "--detach"]);
 
@@ -260,6 +273,7 @@ fn a_detached_head_is_reported_as_the_commit_it_sits_on() {
 
 #[test]
 fn a_branch_with_no_commit_on_it_yet_is_unborn_and_not_a_branch_named_after_a_sentence() {
+    charter_core::unsteered!();
     // `## No commits yet on main` is a sentence, not a ref. Read as a branch name it draws a
     // row saying the checkout is on a branch called "No commits yet on main".
     let f = support::plane_with_clone("thing");
@@ -274,6 +288,7 @@ fn a_branch_with_no_commit_on_it_yet_is_unborn_and_not_a_branch_named_after_a_se
 
 #[test]
 fn a_tree_charter_could_not_read_says_so_and_never_reads_as_clean() {
+    charter_core::unsteered!();
     // Python's status line answers all-false-and-zero on any failure, so a timeout and a
     // clean repo are the same row. `gitstate.py` exists in that same codebase to forbid it.
     let f = support::plane_with_clone("thing");
@@ -295,6 +310,7 @@ fn a_tree_charter_could_not_read_says_so_and_never_reads_as_clean() {
 
 #[test]
 fn a_directory_that_is_not_a_repository_at_all_is_unreadable_rather_than_clean() {
+    charter_core::unsteered!();
     let f = support::plane_with_clone("thing");
     let plain = f.workspace().join("notes");
     std::fs::create_dir_all(&plain).unwrap();
@@ -304,6 +320,7 @@ fn a_directory_that_is_not_a_repository_at_all_is_unreadable_rather_than_clean()
 
 #[test]
 fn the_fsmonitor_a_repository_names_is_never_run_by_the_panel() {
+    charter_core::unsteered!();
     // `status` is the verb that runs the fsmonitor, and the fsmonitor is a program named by
     // config. The panel runs `status` on every repo of every workspace the operator looks
     // at, so a clone somebody handed over is a clone that gets to name a program — unless
@@ -348,6 +365,7 @@ fn the_fsmonitor_a_repository_names_is_never_run_by_the_panel() {
 
 #[test]
 fn every_clone_a_workspace_holds_is_read_where_the_listing_said_it_was() {
+    charter_core::unsteered!();
     // The path that comes back from the listing is the path that was checked, and it is the
     // one git is pointed at. Building a second path from the name would be checking one
     // string and using another.

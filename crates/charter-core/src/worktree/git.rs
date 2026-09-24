@@ -531,6 +531,34 @@ pub(crate) fn wait(child: Child, timeout: Duration) -> std::io::Result<Run> {
     })
 }
 
+/// How long a child asked to stop has to do it before it is killed.
+const STOP_GRACE: Duration = Duration::from_secs(2);
+
+/// Stop the child THIS call spawned, by its own pid — never by name: other chats on this
+/// machine run git too.
+///
+/// **Asked first, killed only if it will not go** (charter-app#267). A git killed outright
+/// cannot clean up: it leaves `index.lock` behind, and every git after it in that repository
+/// refuses to start — the `rebase --abort` after a rebase ran out of time failed exactly so,
+/// and left the plane mid-rebase. `SIGTERM` is the signal git's own lockfile cleanup is wired
+/// to, so a git asked to stop removes its locks and exits; `SIGKILL` follows for one that has
+/// not within [`STOP_GRACE`].
+fn stop(child: &mut Child) {
+    let asked = rustix::process::Pid::from_raw(child.id().cast_signed())
+        .map(|pid| rustix::process::kill_process(pid, rustix::process::Signal::TERM).is_ok());
+    if asked == Some(true) {
+        let grace = Instant::now() + STOP_GRACE;
+        while Instant::now() < grace {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// [`wait`], keeping the bytes.
 fn wait_raw(mut child: Child, timeout: Duration) -> std::io::Result<RawRun> {
     let mut stdout = child.stdout.take().expect("stdout is piped");
@@ -553,10 +581,7 @@ fn wait_raw(mut child: Child, timeout: Duration) -> std::io::Result<RawRun> {
         match child.try_wait()? {
             Some(status) => break status.code(),
             None if Instant::now() >= deadline => {
-                // Kill the child THIS call spawned, by its own handle. Never by name: other
-                // chats on this machine run git too.
-                let _ = child.kill();
-                let _ = child.wait();
+                stop(&mut child);
                 break None;
             }
             None => std::thread::sleep(Duration::from_millis(10)),

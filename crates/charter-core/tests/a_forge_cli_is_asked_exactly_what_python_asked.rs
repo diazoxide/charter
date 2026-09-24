@@ -107,16 +107,19 @@ fn in_a_child(filter: &str, bin_name: &str) {
 
 #[test]
 fn every_question_is_asked_of_a_stand_in_cli_first_on_path() {
+    charter_core::unsteered!();
     in_a_child("child::", "bin");
 }
 
 #[test]
 fn a_refresh_asks_the_stand_in_too() {
+    charter_core::unsteered!();
     in_a_child("refreshed::", "bin");
 }
 
 #[test]
 fn a_cli_whose_path_cannot_be_quoted_is_named_bare_in_the_helper() {
+    charter_core::unsteered!();
     in_a_child("quoted::", "it's-bin");
 }
 
@@ -212,6 +215,7 @@ mod child {
 
     #[test]
     fn a_logged_in_gh_passes_the_auth_check_and_a_logged_out_one_is_told_to_log_in() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -244,6 +248,7 @@ mod child {
 
     #[test]
     fn glab_is_logged_in_only_when_it_exits_zero_and_says_so() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -286,6 +291,7 @@ mod child {
 
     #[test]
     fn the_cli_is_handed_its_credential_and_its_quiet_switches_and_nothing_else() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -331,6 +337,7 @@ mod child {
 
     #[test]
     fn a_clones_credential_helper_names_the_cli_that_was_found_by_its_absolute_path() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -348,6 +355,7 @@ mod child {
 
     #[test]
     fn an_orgs_repos_are_read_page_by_page_until_a_short_page() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -380,6 +388,7 @@ mod child {
 
     #[test]
     fn a_full_last_page_is_followed_by_the_empty_one_that_ends_the_listing() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -405,6 +414,7 @@ mod child {
 
     #[test]
     fn a_short_first_page_is_the_whole_listing() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -418,6 +428,7 @@ mod child {
 
     #[test]
     fn a_github_record_is_normalised_to_the_shape_every_backend_produces() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -460,6 +471,7 @@ mod child {
 
     #[test]
     fn a_personal_account_that_404s_as_an_org_is_listed_as_a_user() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -501,6 +513,7 @@ mod child {
 
     #[test]
     fn only_the_first_page_of_the_org_probe_can_mean_not_an_org() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -542,6 +555,7 @@ mod child {
 
     #[test]
     fn a_failed_listing_says_the_clis_own_words_or_how_it_exited() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -601,6 +615,7 @@ mod child {
 
     #[test]
     fn a_gitlab_groups_projects_are_read_page_by_page_and_normalised() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -643,6 +658,7 @@ mod child {
 
     #[test]
     fn a_gitlab_listing_that_fails_raises_rather_than_reading_as_no_repos() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -681,6 +697,7 @@ mod child {
 
     #[test]
     fn a_github_tree_is_read_at_the_ref_asked_else_the_default_branch_else_head() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -714,6 +731,7 @@ mod child {
 
     #[test]
     fn a_github_tree_that_cannot_be_read_raises() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -743,6 +761,7 @@ mod child {
 
     #[test]
     fn a_gitlab_tree_is_read_page_by_page_at_the_ref_asked() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -784,6 +803,7 @@ mod child {
 
     #[test]
     fn a_github_branchs_open_pull_request_is_its_number() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -821,6 +841,7 @@ mod child {
 
     #[test]
     fn a_best_effort_question_that_fails_in_any_way_is_no_answer() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -855,6 +876,7 @@ mod child {
 
     #[test]
     fn a_gitlab_pipeline_status_is_read_in_charters_own_words() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -924,6 +946,7 @@ mod child {
 
     #[test]
     fn a_github_branchs_ci_is_its_status_check_rollup() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -1004,6 +1027,7 @@ mod child {
 
     #[test]
     fn a_refresh_asks_the_forge_its_clones_origin_names_about_the_branch() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -1045,6 +1069,7 @@ mod refreshed {
 
     #[test]
     fn a_refresh_writes_what_the_forge_said_for_a_branch_and_nothing_for_no_branch() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
@@ -1083,6 +1108,7 @@ mod quoted {
 
     #[test]
     fn a_path_holding_a_quote_gets_the_bare_helper() {
+        charter_core::unsteered!();
         if !in_child() {
             return;
         }
