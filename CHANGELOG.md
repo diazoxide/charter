@@ -25,6 +25,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   each one arrives in its own release. An extension with no `capabilities` loads exactly as
   before and keeps its approval. `version` in the manifest is now the protocol its program
   speaks. ([#338](https://github.com/diazoxide/charter-app/issues/338))
+- **LIVE and LOCAL, from the window.** A LIVE workspace, whose charter, memory and todos are
+  published with the project, is marked on its tab, in the title bar and in the Explorer, and
+  the Saving tab names the live ones. Its menu, the palette and its settings page offer
+  *Make live…* or *Make local…*. Before anything changes, a confirmation says which files and
+  where they go (the remote, or "this machine only"). The project is saved at once. Making a
+  workspace LOCAL stops publishing its files and keeps them on disk; what was already pushed
+  stays in history, and the confirmation says so. The new-workspace dialog has a *Live* box,
+  unticked by default. ([#301](https://github.com/diazoxide/charter-app/issues/301))
 - **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,
   on by default) saves by itself: 30 seconds after the last change (`autosave_after`), as soon
   as a chat in it ends, and when you quit. At quit it commits at once and gives the push a few
@@ -76,6 +84,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   follow `[plane] mode`: a memory travels with the plane's next save. The old text promised
   that `share = "push"` pushed each memory immediately, which this charter never did.
   ([#293](https://github.com/diazoxide/charter-app/issues/293))
+
+### Fixed
+
+- A save that deletes a memory file is no longer refused. The secret check asked for the
+  deleted file's staged contents, found none, and stopped the save, so making a workspace LOCAL
+  could never be saved. ([#301](https://github.com/diazoxide/charter-app/issues/301))
 
 ## [0.2.0] - 2026-09-25
 

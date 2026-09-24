@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { commands, type PlaneSaving, type TitleBarRoom } from "./bindings";
 import { SaveIndicator } from "./SavingView";
+import { LiveMark } from "./LiveDialog";
 import { AboutCharter } from "./About";
 import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
@@ -170,6 +171,8 @@ export type Crumbs = {
   /** Whether that workspace has a colour (charter-app#281): its clause then carries a mark in the
    *  window's accent, which is tinted with that colour while it is in front. */
   coloured?: boolean;
+  /** Whether that workspace is LIVE (charter-app#301): its clause carries the LIVE mark. */
+  live?: boolean;
   /**
    * How many of that project's chats are **running**, or `undefined` before the core has said
    * what it had open.
@@ -210,7 +213,7 @@ export type Crumbs = {
  * anything the row had to cut is a hover away.
  */
 export function Breadcrumb({ crumbs }: { crumbs: Crumbs }) {
-  const { project, decided, read, workspace, coloured, running } = crumbs;
+  const { project, decided, read, workspace, coloured, live, running } = crumbs;
   if (project === undefined)
     return (
       <span className="crumbs" data-testid="title-crumbs">
@@ -248,6 +251,7 @@ export function Breadcrumb({ crumbs }: { crumbs: Crumbs }) {
       >
         {workspaceSaid}
       </span>
+      {live === true && workspace !== undefined && <LiveMark />}
       <Slash />
       {/* `flex: none` in the stylesheet: the names give way, the count does not. */}
       <span

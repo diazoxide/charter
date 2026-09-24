@@ -171,6 +171,7 @@ describe("deleting a workspace", () => {
       "Focus workspace alpha",
       expect.stringContaining("Pin workspace alpha"),
       expect.stringContaining("Workspace settings…"),
+      expect.stringContaining("Make alpha live…"),
       "New workspace…",
       expect.stringContaining("Delete workspace alpha"),
     ]);
@@ -418,7 +419,7 @@ describe("making a workspace", () => {
 
     // The same command the menu's row sends, because it is the same row.
     expect(calls("workspace_create").map((one) => one.args)).toEqual([
-      { plane: PLANE, name: "gamma", vision: null },
+      { plane: PLANE, name: "gamma", vision: null, live: false },
     ]);
   });
 
@@ -433,7 +434,7 @@ describe("making a workspace", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
 
     expect(calls("workspace_create").map((one) => one.args)).toEqual([
-      { plane: PLANE, name: "gamma", vision: "ship it" },
+      { plane: PLANE, name: "gamma", vision: "ship it", live: false },
     ]);
   });
 

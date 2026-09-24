@@ -1773,9 +1773,25 @@ fn commit_push(
     // the index instead, so there is no second copy of the file to disagree with. It also
     // answers for a row with no file on disk at all, which the working-tree read could only
     // skip.
+    // A path the save DELETES carries no content to disclose, and has no staged blob to read:
+    // asked for one, the guard below would refuse every save that removes a memory — which is
+    // what going LOCAL does to a workspace's (charter-app#301).
+    let deleted: std::collections::HashSet<String> = git::run(
+        root,
+        &["diff", "--cached", "--name-only", "-z", "--diff-filter=D"],
+        git::READ,
+    )
+    .map(|r| {
+        r.out
+            .split('\0')
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default();
     let mut flagged: Vec<(String, &'static str)> = Vec::new();
     for path in &staged {
-        if !(path.contains("/memory/") || path.contains("/refs/")) {
+        if !(path.contains("/memory/") || path.contains("/refs/")) || deleted.contains(path) {
             continue;
         }
         let file = root.join(path);

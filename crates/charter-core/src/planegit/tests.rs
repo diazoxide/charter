@@ -2146,3 +2146,24 @@ fn reading_where_unsaved_work_sits_never_writes_the_index_a_save_needs() {
         before
     );
 }
+
+#[test]
+fn a_memory_file_deleted_is_saved_because_a_deletion_carries_no_secret() {
+    // charter-app#301 found it: going LOCAL untracks a workspace's memory, and the secret
+    // guard asked the index for a file the save was deleting — "could not read what is
+    // staged" — and refused every save that removed a memory.
+    let fixture = Fixture::plane();
+    std::fs::write(
+        fixture.root.join("personas/steward/memory/old.md"),
+        "an old note\n",
+    )
+    .unwrap();
+    run(&fixture.root, &["add", "-A"]);
+    run(&fixture.root, &["commit", "-q", "-m", "a memory"]);
+    std::fs::remove_file(fixture.root.join("personas/steward/memory/old.md")).unwrap();
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(ask(&fixture.root, &["status", "--porcelain"]), "");
+}
