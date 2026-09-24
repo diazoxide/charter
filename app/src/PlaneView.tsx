@@ -39,9 +39,12 @@ import {
 import {
   catalogue,
   catalogued,
+  ignoreId,
+  needsYouRows,
   OUTSIDE,
   OUTSIDE_TITLE,
   perform,
+  showId,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
@@ -99,7 +102,7 @@ import {
   type Tabs,
   type ViewRef,
 } from "./tabs";
-import { ChatState } from "./NeedsYou";
+import { ChatState, type Asking } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { ViewMark, ViewPane } from "./Views";
@@ -1494,7 +1497,7 @@ export function PlaneView({
 
   // The chats that can be waiting on the operator without saying so. Read from the sidebar,
   // which is the core's own list of what is open and what each chat runs. It is needed up
-  // here as well as beside the queue: the palette's row for the queue must not claim
+  // here as well as in the title bar's list: the palette's row for the queue must not claim
   // "Nothing needs you." over the top of a chat that cannot say it does (charter-app#52).
   //
   // Held, because it is one of the catalogue's inputs: a fresh array on every render would
@@ -1502,9 +1505,15 @@ export function PlaneView({
   const quiet = useMemo(
     () =>
       sidebar
-        ? quietOnes([...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled], states)
+        ? quietOnes(
+            [...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled],
+            states,
+            // The name its tab carries, as everywhere else a chat is named; the plane's own
+            // name for a chat no tab here holds.
+            (chat) => (alreadyShows(tabs, chat.session) ? nameOf(chat.session) : chat.name),
+          )
         : [],
-    [sidebar, states],
+    [nameOf, sidebar, states, tabs],
   );
 
   /** The chats working in the focused workspace, which is what the explorer files under the
@@ -1743,6 +1752,23 @@ export function PlaneView({
     [filedIn, plane, reopened, states, tabs],
   );
 
+  // **This project's chats asking, for the title bar's list** (charter-app#249), which is the
+  // window's and holds every project's. Their rows are the catalogue's own (`needsYouRows`),
+  // asked on their own because the catalogue is built only for the project in front.
+  const asking = useMemo<Asking[]>(() => {
+    const rows = catalogued(needsYouRows(states.needsYou, nameOf, tabs));
+    return states.needsYou.map((session) => {
+      const filed = filedIn(session);
+      return {
+        session,
+        name: nameOf(session),
+        workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
+        go: rows.get(showId(session)),
+        ignore: rows.get(ignoreId(session)),
+      };
+    });
+  }, [filedIn, nameOf, states.needsYou, tabs]);
+
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
   //
@@ -1754,7 +1780,8 @@ export function PlaneView({
   const mine = useMemo<PlaneReport>(
     () => ({
       ending,
-      needsYou: states.needsYou.length,
+      asking,
+      quiet,
       settled,
       offers,
       run,
@@ -1766,7 +1793,7 @@ export function PlaneView({
       read: sidebar !== undefined,
       where: focused === OUTSIDE ? OUTSIDE_TITLE : focused,
     }),
-    [ending, focused, offers, report, run, settled, sidebar, states.needsYou.length],
+    [asking, ending, focused, offers, quiet, report, run, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2101,10 +2128,6 @@ export function PlaneView({
             <Panels
               workspace={ofWorkspace}
               state={workspaceState}
-              queue={states.needsYou}
-              quiet={quiet}
-              nameOf={nameOf}
-              showChat={showChat}
               offers={found}
               onPress={press}
               contributed={contributed}
@@ -2274,8 +2297,12 @@ export type PlaneReport = {
   run: (offer: Offer) => Promise<Ran>;
   /** What its last action answered, drawn by the window beside the palette. */
   said?: { from: string; refused: boolean; words: string };
-  /** How many of its chats are asking for the operator, for its own tab to say so. */
-  needsYou: number;
+  /** Its chats asking for the operator: for its own tab to count, and for the title bar's
+   *  list (charter-app#249). */
+  asking: Asking[];
+  /** Its chats that can be waiting without saying so (charter-app#52), by name: the title
+   *  bar's faint hand. */
+  quiet: readonly string[];
   /** Whether the core has answered what it already had open. Until it has, "no tabs" is
    *  "not yet", and a quit that read it as "nothing is running" would end the lot. */
   settled: boolean;

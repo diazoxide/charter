@@ -55,6 +55,7 @@ import {
 } from "./PlaneView";
 import type { Alerts } from "./StatusLine";
 import { TitleBar, runningIn, useTitleBarRoom, type Crumbs } from "./TitleBar";
+import type { Needing, Quiet } from "./NeedsYou";
 import { useUpdates } from "./Updates";
 import { noTabs } from "./tabs";
 
@@ -798,13 +799,13 @@ function App() {
       <Pin held={pinnedProjects.includes(project.plane)} what="project" />
       {/* What is waiting for you over there. It is the reason a project behind the one on
           screen goes on listening rather than being torn down. */}
-      {(reports[project.plane]?.needsYou ?? 0) > 0 && (
+      {(reports[project.plane]?.asking.length ?? 0) > 0 && (
         <span
           className="project-needs"
-          data-needs={reports[project.plane]?.needsYou}
-          aria-label={`${reports[project.plane]?.needsYou} chats need you in ${project.name}`}
+          data-needs={reports[project.plane]?.asking.length}
+          aria-label={`${reports[project.plane]?.asking.length} chats need you in ${project.name}`}
         >
-          {reports[project.plane]?.needsYou}
+          {reports[project.plane]?.asking.length}
         </span>
       )}
     </>
@@ -884,13 +885,56 @@ function App() {
     [inFront, launch, restoring, saying],
   );
 
+  /**
+   * **Every project's chats asking, for the title bar's list** (charter-app#249), in the order
+   * the project strip draws the projects and each project's queue in its own order.
+   *
+   * Out of the reports the window already holds, so the list costs no command of its own —
+   * and a project behind the one on screen, which draws nothing, still reports its queue.
+   */
+  const needing = useMemo<Needing[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (reports[plane]?.asking ?? []).map((one) => ({ ...one, plane, project: calledOn(plane) })),
+      ),
+    [planes, reports],
+  );
+
+  /** And the chats that can be waiting without saying so, for the faint hand (charter-app#52). */
+  const quiet = useMemo<Quiet[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (reports[plane]?.quiet ?? []).map((name) => ({ name, project: calledOn(plane) })),
+      ),
+    [planes, reports],
+  );
+
+  /**
+   * A row off that list, carried out by the project it is about — through that project's own
+   * `run`, so a Go and an Ignore are exactly the palette's rows.
+   *
+   * **A row that shows a chat shows its project first.** Go is "that chat, in front", and the
+   * chat is only in front when its project is: the project's own `showChat` brings the tab and
+   * its workspace forward, and this brings the project.
+   */
+  const pressNeeding = useCallback((plane: string, offer: Offer) => {
+    if (offer.does.verb === "showChat") setShowing({ at: "plane", plane });
+    void reportsNow.current[plane]?.run(offer);
+  }, []);
+
   return (
     <main className="window">
       {/* The window's own title bar. Above the project strip, because on
           macOS it IS the title bar — the system's traffic lights float over it — and on every
           other platform it is the window's first row under the system's own bar.
           `TitleBar.tsx` argues the shape, the drag region and what moved here. */}
-      <TitleBar crumbs={crumbs} updates={updates} room={titleBarRoom} chats={ending} />
+      <TitleBar
+        crumbs={crumbs}
+        updates={updates}
+        room={titleBarRoom}
+        chats={ending}
+        needing={{ items: needing, quiet, onPress: pressNeeding }}
+      />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
           holds any — including one, because `+` is how it gets a second and `×` is the way
           back to the opener. Named, because the chat tabs and the workspaces are tablists

@@ -33,6 +33,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
   ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
+### Changed
+
+- The needs-you queue is in the title bar now, and nowhere else. A hand and a count sit left of
+  About when anything needs you. When nothing has asked but a chat that can't report is open — a
+  shell, or a harness without charter's hooks — it is a faint hand with no number, and its
+  tooltip and list name those chats ("shell 2 can't tell charter it's waiting"). With neither,
+  nothing is there. Pressing it lists every
+  chat asking in every open project — its name, then its workspace and project — each with
+  **Go**, which brings that chat to the front and switches project and workspace to get there,
+  and **✕**, which ignores it. The Attention panel no longer has the queue; its other sections
+  are unchanged. From the keyboard, Tab reaches the button, Enter opens the list, the arrows
+  move, Delete ignores, and Escape closes it.
+  ([#249](https://github.com/diazoxide/charter-app/issues/249))
+
 ### Fixed
 
 - A chat's report that raced a close, or an Ignore, can no longer put the chat back in the

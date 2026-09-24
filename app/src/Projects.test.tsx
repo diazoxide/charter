@@ -268,8 +268,9 @@ describe("a window holding more than one project", () => {
     const count = () => projectTab("one").querySelector(".project-needs")?.textContent;
     await waitFor(() => expect(count()).toBe("2"));
 
+    await userEvent.click(screen.getByRole("button", { name: "2 chats need you" }));
     await userEvent.click(
-      within(screen.getByLabelText("Needs you")).getByRole("button", {
+      within(await screen.findByRole("menu", { name: "2 chats need you" })).getByRole("button", {
         name: "Ignore one.1 until it asks again",
       }),
     );
@@ -290,9 +291,72 @@ describe("a window holding more than one project", () => {
     move({ ...asking, session: 2, state: "running", needs_you: false, queue: [1], sequence: 4 });
     await waitFor(() => expect(stateOnTab("one.2")).toBe("running"));
     expect(count()).toBe("1");
+    expect(screen.getByRole("button", { name: "1 chat needs you" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Go to one\.1 / })).toBeNull();
+  });
+
+  it("goes from the title bar to a chat in a project behind the one in front (charter-app#249)", async () => {
+    const { move } = core({
+      launch: ONE,
+      chats: {
+        [ONE]: [
+          chat({ session: 1, name: "one.1", in_front: false }),
+          chat({ session: 2, name: "one.2", in_front: true }),
+        ],
+        [TWO]: [chat({ session: 1, name: "two.1" })],
+      },
+    });
+    render(<App />);
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
+    await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
+    await openByPath(TWO);
+    await waitFor(() => expect(chatTabs()).toEqual(["two.1"]));
+    // Project ONE's chat 1 asks while TWO is in front — and ONE's chat 2 was the tab in front
+    // over there, so Go has to change the tab as well as the project.
+    move({
+      plane: ONE,
+      session: 1,
+      state: "waiting",
+      needs_you: true,
+      queue: [1],
+      moved_at: 1,
+      sequence: 1,
+    });
+    const hand = await screen.findByRole("button", { name: "1 chat needs you" });
     expect(
-      within(screen.getByLabelText("Needs you")).queryByRole("button", { name: "one.1" }),
-    ).toBeNull();
+      within(screen.getByTestId("title-bar")).getByRole("button", { name: "1 chat needs you" }),
+    ).toBe(hand);
+
+    await userEvent.click(hand);
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Go to one.1 · Outside every workspace · one" }),
+    );
+
+    await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
+    expect(
+      within(screen.getByRole("tablist", { name: "Tabs" }))
+        .getByRole("tab", { selected: true })
+        .querySelector(".tab-name")?.textContent,
+    ).toBe("one.1");
+  });
+
+  it("draws no queue in the Attention panel any more (charter-app#249)", async () => {
+    const { move } = core({ launch: ONE, chats: { [ONE]: [chat({ session: 1, name: "one.1" })] } });
+    render(<App />);
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
+    move({
+      plane: ONE,
+      session: 1,
+      state: "waiting",
+      needs_you: true,
+      queue: [1],
+      moved_at: 1,
+      sequence: 1,
+    });
+    await screen.findByRole("button", { name: "1 chat needs you" });
+
+    expect(within(screen.getByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
+    expect(within(screen.getByTestId("panels")).queryByText(/need you/)).toBeNull();
   });
 
   it("says on a project's tab when a chat over there needs you", async () => {
