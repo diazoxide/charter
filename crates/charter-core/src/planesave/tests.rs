@@ -279,3 +279,59 @@ fn a_repo_name_with_a_dot_is_one_table_not_a_path() {
     let got = settings("[repos.\"my.repo\"]\nmode = \"push\"\n", "").repo("my.repo");
     assert_eq!(got.mode.value, Mode::Push);
 }
+
+// -------------------------------------------------------------------------------------
+// Review of #307
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn a_quiet_period_ending_in_a_character_wider_than_a_byte_is_refused_not_a_panic() {
+    for word in ["3é", "30秒", "é"] {
+        let text = format!("[plane]\nautosave_after = \"{word}\"\n");
+        assert_eq!(
+            settings(&text, "").plane.autosave_after.source,
+            Source::Default,
+            "{word}"
+        );
+        assert_eq!(refusals(&text, false, "charter.toml").len(), 1, "{word}");
+    }
+}
+
+#[test]
+fn a_branch_with_a_component_ending_in_lock_is_one_git_refuses() {
+    for name in ["a.lock/b", "feature.lock/x"] {
+        assert!(!branch_ok(name), "{name}");
+    }
+    assert!(branch_ok("charter/save/laptop"));
+    assert!(branch_ok("locks/x"));
+}
+
+#[test]
+fn a_local_file_git_would_commit_changes_no_save_setting() {
+    // The local file's own rule: an ignored file must not change plane policy with no trace
+    // in git — and a file git would commit is not the ignored file.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    crate::testgit::run(root, &["init", "-q"]);
+    std::fs::write(root.join("charter.toml"), "[plane]\nmode = \"pr\"\n").unwrap();
+    std::fs::write(
+        root.join("charter.local.toml"),
+        "[plane]\nmode = \"push\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        Settings::read(root).plane.mode,
+        Resolved {
+            value: Some(Mode::Pr),
+            source: Source::Shared
+        }
+    );
+    std::fs::write(root.join(".gitignore"), "/charter.local.toml\n").unwrap();
+    assert_eq!(
+        Settings::read(root).plane.mode,
+        Resolved {
+            value: Some(Mode::Push),
+            source: Source::Local
+        }
+    );
+}

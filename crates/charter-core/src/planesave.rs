@@ -112,11 +112,14 @@ impl Settings {
         }
     }
 
-    /// The plane at `root`'s two files. A file that cannot be read says nothing.
+    /// The plane at `root`'s two files. A file that cannot be read says nothing, and nor does
+    /// a `charter.local.toml` git would commit: an ignored file must not change plane policy
+    /// with no trace in git, and a file git carries is not the ignored file.
     pub fn read(root: &std::path::Path) -> Self {
         use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
         let text = |name: &str| std::fs::read_to_string(root.join(name)).ok();
-        Self::from_text(text(COMMITTED_FILE).as_deref(), text(LOCAL_FILE).as_deref())
+        let local = text(LOCAL_FILE).filter(|_| crate::profiles::ignore_check(root).passes());
+        Self::from_text(text(COMMITTED_FILE).as_deref(), local.as_deref())
     }
 
     /// How the repo called `name` is saved.
@@ -240,16 +243,16 @@ fn table_at<'a>(top: &'a toml::Table, path: &[&str]) -> Option<&'a toml::Table> 
 /// `"30s"` or `"2m"`.
 fn quiet_period(value: &toml::Value) -> Option<Duration> {
     let text = value.as_str()?;
-    let (digits, unit) = text.split_at(text.len().checked_sub(1)?);
+    let (digits, per) = match (text.strip_suffix('s'), text.strip_suffix('m')) {
+        (Some(digits), _) => (digits, 1),
+        (_, Some(digits)) => (digits, 60),
+        _ => return None,
+    };
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     let n: u64 = digits.parse().ok().filter(|n| *n > 0)?;
-    match unit {
-        "s" => Some(Duration::from_secs(n)),
-        "m" => Some(Duration::from_secs(n.checked_mul(60)?)),
-        _ => None,
-    }
+    Some(Duration::from_secs(n.checked_mul(per)?))
 }
 
 /// Whether `name` could be a branch: git's `check-ref-format --branch` rules, checked without
@@ -259,7 +262,7 @@ pub fn branch_ok(name: &str) -> bool {
         && name != "@"
         && !name.starts_with(['-', '/', '.'])
         && !name.ends_with(['/', '.'])
-        && !name.ends_with(".lock")
+        && !name.split('/').any(|part| part.ends_with(".lock"))
         && !name.contains("..")
         && !name.contains("//")
         && !name.contains("@{")
@@ -267,6 +270,12 @@ pub fn branch_ok(name: &str) -> bool {
         && !name
             .chars()
             .any(|c| c.is_control() || c.is_whitespace() || "~^:?*[\\".contains(c))
+}
+
+/// Whether `shared`, `charter.toml`'s text, holds a `[memory] share` that says anything:
+/// `commit` or `push`. `local` is what `charter init` always wrote, and says nothing.
+pub fn share_is_set(shared: &str) -> bool {
+    share_alias(&top_of(shared)).is_some()
 }
 
 /// The mode `charter.toml`'s `[memory] share` stands for: `commit` and `push` carry over, and

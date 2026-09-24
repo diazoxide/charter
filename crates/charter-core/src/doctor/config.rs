@@ -211,7 +211,6 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
             refused_default(cfg)?;
             default_finding(cfg, &crate::profiles::current(&d.root))
         })
-        .or_else(|| save_finding(&d.root))
     {
         return Row::warn(NAME, summary, detail);
     }
@@ -229,6 +228,10 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
             "this plane declares a [[frame.component]] arrangement, which arranges a tmux \
              frame this charter does not have, so nothing reads it",
         );
+    }
+    // After the arrangement, so a save finding never hides that it went unread.
+    if let Some((summary, detail)) = save_finding(&d.root) {
+        return Row::warn(NAME, summary, detail);
     }
     if !d.has_plane {
         return Row::warn(
@@ -288,7 +291,27 @@ fn worktrees_finding(root: &Path, cfg: &toml::Table) -> Option<(String, String)>
 /// request on a plane whose origin no forge adapter can open one on. Neither is a refusal: the
 /// first still reads, and the second is the Saving view's **blocked**, said ahead of time.
 fn save_finding(root: &Path) -> Option<(String, String)> {
+    let shared =
+        std::fs::read_to_string(root.join(crate::profiles::COMMITTED_FILE)).unwrap_or_default();
+    // A key or value the settings tab would refuse is one nothing reads: say so first.
+    if let Some(why) = crate::planesave::refusals(&shared, false, crate::profiles::COMMITTED_FILE)
+        .into_iter()
+        .next()
+    {
+        return Some((
+            why,
+            "Fix or remove it: until then charter reads the next file down, or the default."
+                .to_owned(),
+        ));
+    }
     let plane = crate::planesave::Settings::read(root).plane;
+    if !plane.from_share && crate::planesave::share_is_set(&shared) {
+        return Some((
+            "[memory] share is deprecated, and [plane] mode overrides it, so nothing reads it"
+                .to_owned(),
+            "Remove share from [memory] in charter.toml.".to_owned(),
+        ));
+    }
     let mode = plane.mode.value?;
     if plane.from_share {
         let word = mode.as_str();

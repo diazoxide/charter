@@ -441,6 +441,50 @@ fn a_pr_mode_on_a_plane_whose_origin_is_no_forge_charter_knows_is_named() {
 }
 
 #[test]
+fn share_that_plane_mode_overrides_is_named_as_dead() {
+    let (_d, root) = plane("[memory]\nshare = \"commit\"\n[plane]\nmode = \"push\"\n");
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.status, Status::Warn);
+    assert_eq!(
+        r.detail,
+        "[memory] share is deprecated, and [plane] mode overrides it, so nothing reads it"
+    );
+    assert_eq!(r.hint, "Remove share from [memory] in charter.toml.");
+}
+
+#[test]
+fn a_save_setting_charter_does_not_read_is_named() {
+    let (_d, root) = plane("[plane]\nmod = \"push\"\n");
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.status, Status::Warn);
+    assert_eq!(
+        r.detail,
+        "plane.mod in charter.toml is not read — [plane] holds mode, branch, save_branch, sign, \
+         autosave, autosave_after and worktrees"
+    );
+}
+
+#[test]
+fn a_pr_mode_on_a_github_origin_is_not_reported() {
+    let (_d, root) =
+        plane("[[forge]]\nkind = \"github\"\nowner = \"o\"\n\n[plane]\nmode = \"pr\"\n");
+    git(&root, &["init", "-q"]);
+    git(
+        &root,
+        &["remote", "add", "origin", "https://github.com/o/r.git"],
+    );
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+}
+
+#[test]
+fn a_save_finding_does_not_hide_that_the_frame_arrangement_went_unread() {
+    let (_d, root) = plane("[plane]\nmode = \"pr\"\n\n[[frame.component]]\nkind = \"x\"\n");
+    let r = one(&root, "charter.toml");
+    assert!(r.detail.starts_with("not checked ("), "{r:?}");
+}
+
+#[test]
 fn no_plane_is_said_out_loud_rather_than_reported_green() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
