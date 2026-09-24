@@ -187,9 +187,9 @@ pub fn origin_https(root: &Path) -> Option<String> {
 
 /// A one-click "open a pull request for this branch" URL, or `None`. Python's `_compare_url`.
 ///
-/// A plain HTTPS link, deliberately: charter has no PR-creation capability in any forge
-/// adapter, so this closes the pull-request-gated workflow without adding one — no API call,
-/// no extra token scope. Which form to build is decided by RESOLVING the forge, never by
+/// A plain HTTPS link, deliberately: it closes the pull-request-gated workflow with no API call
+/// and no extra token scope. [`forge::pr`] can now open the PR itself, into an explicit base;
+/// the save's PR modes replace this link with it (ADR 0051, #298). Which form to build is decided by RESOLVING the forge, never by
 /// looking for a hostname inside the URL string: a self-hosted GitLab with a
 /// `mirrors/github.com/…` namespace was handed GitHub's compare URL by the substring check
 /// this replaces.
