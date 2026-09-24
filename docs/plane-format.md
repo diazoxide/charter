@@ -116,6 +116,7 @@ row), and the status of that field where it differs from its file's.
   - [`.charter/persona-state/ephemeral/<session>/<name|_shared>/<slug>.md`](#charterpersona-stateephemeralsessionnamesharedslugmd)
   - [`.charter/persona-state/trace/<session>.jsonl`](#charterpersona-statetracesessionjsonl)
   - [`.charter/reports/<id>.json`](#charterreportsidjson)
+  - [`.charter/handbacks/` — reports back from handed-off chats](#charterhandbacks--reports-back-from-handed-off-chats)
   - [`~/.config/charter/reporting-consent` (outside the plane)](#configcharterreporting-consent-outside-the-plane)
   - [`.charter/sessions/<sid>.persona`, `.charter/terminals/<tid>.persona`, `.charter/active-persona`](#chartersessionssidpersona-charterterminalstidpersona-charteractive-persona)
   - [`.charter/mcp-approved.json`](#chartermcp-approvedjson)
@@ -1968,6 +1969,37 @@ before it is stored.
 
 ---
 
+### `.charter/handbacks/` — reports back from handed-off chats
+
+- **Format:** one JSON object per file, compact, no trailing newline.
+- **Status:** **internal** — written by the app, taken by the `charter` binary's own hooks.
+  A report waits here from the moment a handed-off chat sends it (`charter handoff report`)
+  until the turn it is handed to.
+- **Written by:** `charter_core::handback::leave` (charter-app#259), from the app's answer to a
+  report, and from `handback::orphan` when a chat with reports waiting is closed.
+- **Read by:** `charter hook userpromptsubmit` (`chat-<n>/`, `<n>` from `$CHARTER_SESSION_ID`)
+  and `charter hook sessionstart` (`workspace-<ws>/`, the session's workspace), through
+  `handback::take`, which **removes each file it reads**: a report reaches one turn.
+- **Git:** gitignored (under `/.charter/`).
+- **Layout:** `chat-<n>/` for a report to a chat the app has open, `workspace-<ws>/` for one
+  whose chat has closed. Each file is `<nanoseconds since the epoch, 24 digits>-<uuid>.json`,
+  so a directory reads in arrival order; it is written as `.<name>` and renamed into place, and a
+  reader skips a name starting with `.`. An empty directory is removed by the reader.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `from` | str | the chat that reported, by the name it is shown under |
+| `from_workspace` | str | the workspace that chat works in |
+| `to` | str | the chat that asked, by the name it is shown under |
+| `to_workspace` | str | the workspace that chat handed off from — where the report goes when it is gone |
+| `summary` | str | the report: trimmed, at most 4,096 bytes, no control character but `\n` and no invisible one |
+
+**Held again on the way in.** A file whose `summary` breaks the report rule, whose names break
+the chat-name rule, whose workspaces cannot be one, or which is not JSON at all, is removed and
+handed to nobody. What is handed over is quoted as data: every line of the summary behind `> `.
+
+---
+
 ### `~/.config/charter/reporting-consent` (outside the plane)
 
 - **Format:** plain text, one sentence.
@@ -3087,6 +3119,7 @@ down rather than read off the code.
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
 | `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
+| `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone; `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that cannot be one reads as the whole key absent — the note is not drawn and no report is owed |
 | `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251, **Restart to update**, the only writer of `true`), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. **It counts only at the launch that follows the restart**: the restart also leaves an empty `restarted-to-update` file beside the machine store (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), and the next launch removes it whatever it opens. A plane that launch did not open keeps the flag, and it says nothing at any later launch |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a

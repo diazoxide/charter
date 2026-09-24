@@ -304,6 +304,20 @@ describe("the one list of actions", () => {
     expect(hands.calls).toEqual(["showChat:8"]);
   });
 
+  it("says who reported back to a chat in the queue (charter-app#259)", () => {
+    const tabs = openTab(noTabs(), 7, "one");
+    const offers = catalogue(
+      now({
+        tabs,
+        needsYou: [7],
+        nameOf: () => "steward 3",
+        reportsTo: () => ["drop commons"],
+      }),
+    );
+
+    expect(by(offers, "needs.show:7")?.title).toBe("Show steward 3: drop commons reported back");
+  });
+
   it("ignores a chat in the queue until it asks again, one row for each (charter-app#248)", async () => {
     const hands = doing();
     const offers = catalogue(now({ needsYou: [8, 7], nameOf: (s) => (s === 7 ? "one" : "two") }));

@@ -805,6 +805,24 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
+/* **Where a handed-off chat came from** (charter-app#258): `↳ from steward 3 · ops`, beside the
+   gauge in the chat's own corner, and quiet — it is a note about the chat's origin, read once,
+   not a status. The gauge's box so the two read as one strip, never a border of its own colour.
+   Clipped rather than wrapped: a corner that grew a second line would cover the terminal. */
+.pane-from {
+  max-width: 24rem;
+  overflow: hidden;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
+}
+
 .gauge-ok {
   color: var(--state-success);
 }

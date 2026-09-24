@@ -321,6 +321,9 @@ export type Now = {
   quiet?: readonly string[];
   /** What a chat is called, for a row that names one. */
   nameOf: (session: number) => string;
+  /** The chats that reported back to a chat in the queue, by name (charter-app#259), so its row
+   *  says what the operator is being asked to look at. */
+  reportsTo?: (session: number) => readonly string[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -618,7 +621,7 @@ export function catalogue(now: Now): Offer[] {
       ? cannot("needs.next", "Show the chat that needs you", nothingSaidSoFar(now.quiet ?? []))
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
-  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs));
+  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs, now.reportsTo));
 
   const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
 
@@ -1061,10 +1064,16 @@ export function needsYouRows(
   needsYou: readonly number[],
   nameOf: (session: number) => string,
   tabs: Tabs,
+  /** The chats that reported back to each chat asking (charter-app#259), so its row says so. */
+  reportsTo: (session: number) => readonly string[] = () => [],
 ): Offer[] {
   return needsYou.flatMap((session) => {
     const name = nameOf(session);
-    const title = `Show ${name}, which needs you`;
+    const reported = reportsTo(session);
+    const title =
+      reported.length > 0
+        ? `Show ${name}: ${reported.join(", ")} reported back`
+        : `Show ${name}, which needs you`;
     return [
       tabHolding(tabs, session) === undefined
         ? cannot(showId(session), title, "That chat has no tab in this window.", name)

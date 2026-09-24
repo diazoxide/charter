@@ -221,6 +221,26 @@ pub enum Ask {
     /// first message, which is the brief, and the other variant is two words — clippy's
     /// `large_enum_variant` is right about it.
     Open(Box<OpenChat>),
+    /// Spend a ticket: hand a report back to the chat that opened this one (charter-app#259).
+    /// Boxed for `Open`'s reason.
+    Report(Box<ReportBack>),
+}
+
+/// A report a handed-off chat sends back, as `charter handoff report` hands it over.
+///
+/// **It names no recipient, and that is the guard.** The chat it goes to is the one the app
+/// recorded as this chat's parent when it opened it for a `--report` handoff
+/// (`reopen::HandedFrom`), so nothing a chat can say sends a report anywhere else. The ticket
+/// is [`OpenChat`]'s, spent the same way, so no single line on the socket reports anything and
+/// no line that reported can report again.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ReportBack {
+    /// The chat that is reporting — the app's own number for it, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The report, already through `handoff::report_summary`; the app asks again.
+    pub summary: String,
+    /// See [`OpenChat`]. Minted by the app, spent once, never written down.
+    pub ticket: String,
 }
 
 /// A handoff the app is asked to open, as `charter handoff` hands it over.
@@ -283,6 +303,14 @@ pub struct OpenChat {
     pub message: String,
     /// See the note above. Minted by the app, spent once, never written down.
     pub ticket: String,
+    /// The short task name `--name` gave, which the new chat is called instead of its default
+    /// (charter-app#258). Held to `reopen::label` by the command and again by the app.
+    /// Absent from a `charter` older than it, which reads as no name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Whether `--report` asked for an answer (charter-app#259). Absent reads as no.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub report: bool,
 }
 
 /// What the app answers an [`Ask`] with. One line, on the same connection.
@@ -293,6 +321,13 @@ pub enum Answer {
     Ticket { ticket: String },
     /// The chat is open, under this number on the app's board.
     Opened { chat: u32 },
+    /// The report was handed back: to the chat named `to`, or — where that chat is gone —
+    /// kept for its workspace, `kept_for`, for the next chat that starts there.
+    Reported {
+        to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kept_for: Option<String>,
+    },
     /// The app will not, and this is the sentence saying why. The asker prints the command
     /// to run in a terminal and says this underneath it: a refusal the operator cannot see
     /// is a handoff that vanished.
@@ -1639,7 +1674,36 @@ mod tests {
             message: "⟨handoff from chat 3 · workspace default · 2026-05-04 11:32⟩\n\nbrief"
                 .to_owned(),
             ticket: ticket.to_owned(),
+            name: None,
+            report: false,
         }))
+    }
+
+    #[test]
+    fn an_open_from_a_charter_that_predates_names_and_reports_reads_as_neither() {
+        let line = r#"{"open":{"chat":3,"workspace":"alpha","create_vision":null,"persona":null,"message":"m","ticket":"t"}}"#;
+
+        let Ask::Open(open) = serde_json::from_str::<Ask>(line).expect("it parses") else {
+            panic!("an open")
+        };
+
+        assert_eq!(open.name, None);
+        assert!(!open.report);
+    }
+
+    #[test]
+    fn a_report_back_is_an_ask_and_never_a_report() {
+        let ask = Ask::Report(Box::new(ReportBack {
+            chat: 7,
+            summary: "done".to_owned(),
+            ticket: "t".to_owned(),
+        }));
+        let line = serde_json::to_string(&ask).unwrap();
+
+        assert!(matches!(
+            serde_json::from_str::<Line>(&line),
+            Ok(Line::Ask(_))
+        ));
     }
 
     #[test]
@@ -1761,6 +1825,9 @@ mod tests {
                             Err(why) => Answer::No { why },
                         }
                     }
+                    Ask::Report(_) => Answer::No {
+                        why: "not here".to_owned(),
+                    },
                 }
             }),
         )

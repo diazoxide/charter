@@ -114,6 +114,7 @@ import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
+import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
@@ -344,6 +345,12 @@ export function PlaneView({
    * by a different chat.
    */
   const [startedIn, setStartedIn] = useState<Record<number, string>>({});
+  /**
+   * Where each handed-off chat came from, by session, as its tab's tooltip and its pane say it:
+   * `↳ from steward 3 · platform-next` (charter-app#258). By the parent's name, never its
+   * number. A chat no handoff opened has none.
+   */
+  const [handedFrom, setHandedFrom] = useState<Record<number, string>>({});
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
@@ -459,6 +466,15 @@ export function PlaneView({
         const back = viewAnswer?.status === "ok" ? (viewAnswer.data ?? []) : [];
         if (open.length > 0) {
           setReopened(open);
+          setHandedFrom((was) => ({
+            ...was,
+            ...Object.fromEntries(
+              open.flatMap((chat) => {
+                const note = handedFromNote(chat.from);
+                return note ? [[chat.session, note]] : [];
+              }),
+            ),
+          }));
           // A pinned chat comes back pinned: the pin rides the record it came back from.
           setPinnedChats(open.filter((chat) => chat.pinned).map((chat) => chat.session));
         }
@@ -534,8 +550,18 @@ export function PlaneView({
       // Already drawn: the adoption above can race the event and draw it first.
       if (alreadyShows(now.current, arrived.session)) return;
       setStartedIn((was) => ({ ...was, [arrived.session]: arrived.workspace }));
+      const note = handedFromNote(arrived.from);
+      if (note) setHandedFrom((was) => ({ ...was, [arrived.session]: note }));
+      // Named for its task where the handoff named one, and `<persona> <N>` where it did not
+      // (charter-app#258).
       change((tabs) =>
-        openTabBehind(tabs, arrived.session, arrived.name, whoOf(arrived.persona, arrived.harness)),
+        openTabBehind(
+          tabs,
+          arrived.session,
+          arrived.name,
+          whoOf(arrived.persona, arrived.harness),
+          arrived.label ?? null,
+        ),
       );
     }).catch(() => undefined);
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
@@ -1638,6 +1664,7 @@ export function PlaneView({
             needsYou: states.needsYou,
             quiet,
             nameOf,
+            reportsTo: (session) => states.reports[session] ?? [],
             // The projects' pins are the WINDOW's, and travel down with the projects: a
             // project that is not in front draws nothing, so its pin cannot be held here.
             pinned: {
@@ -1663,6 +1690,7 @@ export function PlaneView({
       quiet,
       report,
       states.needsYou,
+      states.reports,
       strips,
       tabs,
       views,
@@ -1802,18 +1830,20 @@ export function PlaneView({
   // window's and holds every project's. Their rows are the catalogue's own (`needsYouRows`),
   // asked on their own because the catalogue is built only for the project in front.
   const asking = useMemo<Asking[]>(() => {
-    const rows = catalogued(needsYouRows(states.needsYou, nameOf, tabs));
+    const reportsTo = (session: number) => states.reports[session] ?? [];
+    const rows = catalogued(needsYouRows(states.needsYou, nameOf, tabs, reportsTo));
     return states.needsYou.map((session) => {
       const filed = filedIn(session);
       return {
         session,
         name: nameOf(session),
+        reported: reportsTo(session),
         workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
         go: rows.get(showId(session)),
         ignore: rows.get(ignoreId(session)),
       };
     });
-  }, [filedIn, nameOf, states.needsYou, tabs]);
+  }, [filedIn, nameOf, states.needsYou, states.reports, tabs]);
 
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
@@ -1997,6 +2027,8 @@ export function PlaneView({
                       <button
                         role="tab"
                         aria-selected={id === tabs.inFront}
+                        // Where a handed-off chat came from, by its parent's name (charter-app#258).
+                        title={handedFrom[chatOf(tabs, id) ?? -1]}
                         // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
                         // tab that has a rename row — a chat's, and never a view's.
                         {...(by(`tab.rename:${id}`) ? { [RENAMES_ON_F2]: "" } : {})}
@@ -2201,6 +2233,7 @@ export function PlaneView({
                   onPaneDoes={onPaneDoes}
                   states={states}
                   name={frontTab.name}
+                  handedFrom={handedFrom}
                   offered={views}
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
@@ -2398,6 +2431,10 @@ type Arrived = {
   persona: string | null;
   /** The harness it runs, for its default name when it adopted no persona. */
   harness?: string | null;
+  /** The task name the handoff gave it, which its tab says instead (charter-app#258). */
+  label?: string | null;
+  /** The chat it was handed off from, by name, and that chat's workspace. */
+  from?: HandedFrom | null;
 };
 
 /**
@@ -2494,6 +2531,7 @@ function PaneFrame({
   session,
   moved,
   running,
+  from,
   doing,
   children,
 }: {
@@ -2501,6 +2539,8 @@ function PaneFrame({
   session: number;
   moved: number;
   running: boolean;
+  /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
+  from?: string;
   doing: ReactNode;
   children: ReactNode;
 }) {
@@ -2513,6 +2553,7 @@ function PaneFrame({
           controls are in its top corner, which is where reading order puts them anyway. */}
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
+        {from && <span className="pane-from">{from}</span>}
       </div>
       <div className="pane-corner at-end">{doing}</div>
       {children}
@@ -2848,6 +2889,7 @@ function LayoutPanes({
   onPaneDoes,
   states,
   name,
+  handedFrom,
   offered,
   onOpenView,
   onAsk,
@@ -2866,6 +2908,8 @@ function LayoutPanes({
   states: ChatStates;
   /** The tab's name, which is the title of the view it opened on. */
   name: string;
+  /** Where each handed-off chat came from, by session (charter-app#258). */
+  handedFrom: Readonly<Record<number, string>>;
   /** The views approved extensions offer, for the buttons a view draws beside itself. */
   offered: readonly ExtensionView[];
   onOpenView: (view: ViewRef, title: string) => void;
@@ -2907,6 +2951,7 @@ function LayoutPanes({
         session={content.session}
         moved={movedAt(states, content.session)}
         running={stateOf(states, content.session) === "running"}
+        from={handedFrom[content.session]}
         doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
       >
         <SessionPane
@@ -2949,6 +2994,7 @@ function LayoutPanes({
               onPaneDoes={onPaneDoes}
               states={states}
               name={name}
+              handedFrom={handedFrom}
               offered={offered}
               onOpenView={onOpenView}
               onAsk={onAsk}

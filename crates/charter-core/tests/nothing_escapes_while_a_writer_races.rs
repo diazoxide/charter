@@ -86,6 +86,7 @@ fn one_chat() -> Record {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         }],
     }
 }
