@@ -64,6 +64,9 @@ pub struct Arrived {
     /// The workspace whose strip it is filed on.
     pub workspace: String,
     pub persona: Option<String>,
+    /// The harness it runs, by the word the plane calls it — what its tab's default name puts
+    /// before the number when it adopted no persona (charter-app#254).
+    pub harness: Option<String>,
 }
 
 /// Told when a handoff has opened a chat. The event carries its plane.
@@ -263,6 +266,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         name,
         workspace: ws.to_owned(),
         persona,
+        harness: ready.harness.map(|harness| harness.name().to_owned()),
     })
 }
 
@@ -441,6 +445,7 @@ mod tests {
                 name: format!("handoff from {asking}"),
                 workspace: "alpha".to_owned(),
                 persona: None,
+                harness: Some("claude".to_owned()),
             }],
             "the window is told, so the tab lands on alpha's strip"
         );

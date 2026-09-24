@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import * as Popover from "@radix-ui/react-popover";
+import { RENAMES_ON_F2 } from "./actions";
 
 /**
  * A chat tab's name, open for editing in place on the strip (charter-app#254).
@@ -11,13 +12,18 @@ import * as Popover from "@radix-ui/react-popover";
  *
  * **Every key typed here is the box's.** The tab it replaces closes on Delete (and on a Mac on
  * Backspace, `tabKeys.closeOnDelete`) and moves along the strip on the arrows; none of that
- * may happen to a name being typed, so no keystroke leaves the box. The box is not inside the
+ * may happen to a name being typed, so no keystroke leaves the box — and the palette, which
+ * claims `F2` from the whole window, stands back here as it does on the tab (`RENAMES_ON_F2`):
+ * opening it would take the keyboard and save a half-typed name. The box is not inside the
  * tab's button — an input inside a button is two controls in one — it takes the button's place
  * while it is open.
  *
  * **The core's refusal is said here, beside the name**, in its own words, and the box stays
  * open on what was typed: a name charter will not draw is one the operator has to change, and
- * a refusal they cannot see next to the name is one they cannot act on. It hangs under the box
+ * a refusal they cannot see next to the name is one they cannot act on. **Except on a blur**:
+ * the operator has gone somewhere else, and a box left open behind them, holding the tab's
+ * place with nothing to focus, would be a tab they cannot reach. A blur the core refuses leaves
+ * the name as it was and closes, as Escape does. It hangs under the box
  * in a Radix popover, because the strip clips what it holds to its own height; the keyboard
  * stays in the box.
  *
@@ -77,7 +83,8 @@ export function TabRename({
     saving.current = true;
     const why = await onSave(typed);
     saving.current = false;
-    if (why === undefined) finish(back);
+    // Enter keeps the box open on a refusal, to be fixed; a blur does not (see above).
+    if (why === undefined || !back) finish(back);
     else setRefused(why);
   };
 
@@ -89,6 +96,9 @@ export function TabRename({
     } else if (event.key === "Escape") {
       event.preventDefault();
       finish(true);
+    } else if (event.key === "F2") {
+      // Already renaming: the palette stood back for it, and nothing else is asked for.
+      event.preventDefault();
     }
   };
 
@@ -110,8 +120,11 @@ export function TabRename({
           }}
           onKeyDown={key}
           onBlur={() => {
-            if (armed.current) void save(false);
+            if (!armed.current) return;
+            if (refused === undefined) void save(false);
+            else finish(false);
           }}
+          {...{ [RENAMES_ON_F2]: "" }}
         />
       </Popover.Anchor>
       <Popover.Portal>

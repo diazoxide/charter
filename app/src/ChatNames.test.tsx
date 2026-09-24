@@ -11,6 +11,7 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import type { OpenChat } from "./bindings";
 
 /**
  * A chat's name, against the whole window (charter-app#254): the default `<persona> <N>`, the
@@ -65,7 +66,7 @@ const START_OPTIONS = {
 };
 
 /** One chat the core put back at a launch. */
-function putBack(session: number, name: string, label: string | null) {
+function putBack(session: number, name: string, label: string | null): OpenChat {
   return {
     session,
     name,
@@ -163,6 +164,18 @@ describe("a new chat's name", () => {
     await openAChat();
 
     expect(asked(asks, "start_chat")[0].args).toMatchObject({ label: null });
+  });
+
+  it("is the harness and then the number for a chat that adopts no persona", async () => {
+    core();
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    const picker = await screen.findByRole("dialog", { name: "Start a chat" });
+    await userEvent.click(within(picker).getByRole("radio", { name: "none" }));
+    await userEvent.click(within(picker).getByRole("button", { name: "Start" }));
+
+    await waitFor(() => expect(tabNames()).toEqual(["claude 1"]));
   });
 
   it("is refused in the picker, before anything starts, when the core refuses it", async () => {
@@ -296,6 +309,32 @@ describe("renaming a chat's tab", () => {
     expect(tabNames()).toEqual(["steward 1"]);
   });
 
+  it("leaves the name as it was and closes when a refused name loses the keyboard", async () => {
+    // A box left open behind an operator who went elsewhere holds the tab's place with
+    // nothing to focus: the tab could not be clicked or reached by the arrows.
+    await oneChat();
+    clearMocks();
+    core({ refuse: "That name is 80 characters long, and a chat's name is at most 64." });
+
+    await userEvent.dblClick(theTab());
+    await userEvent.keyboard("{Control>}a{/Control}too long");
+    fireEvent.blur(renameBox());
+
+    await waitFor(() => expect(tabNames()).toEqual(["steward 1"]));
+    expect(within(strip()).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("keeps F2 typed into the box from opening the palette", async () => {
+    const asks = await oneChat();
+
+    await userEvent.dblClick(theTab());
+    await userEvent.keyboard("{Control>}a{/Control}half{F2}");
+
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+    expect(renameBox()).toHaveValue("half");
+    expect(asked(asks, "rename_chat")).toEqual([]);
+  });
+
   it("names the chat by it wherever the chat is named: the palette's rows", async () => {
     await oneChat();
     await userEvent.dblClick(theTab());
@@ -316,6 +355,14 @@ describe("a chat's name at a relaunch", () => {
     render(<App />);
 
     await waitFor(() => expect(tabNames()).toEqual(["billing bug"]));
+  });
+
+  it("comes back as the harness and then the number where it adopted no persona", async () => {
+    core({ open: [{ ...putBack(3, "3", null), persona: null, profile: "work" }] });
+    render(<App />);
+
+    // The harness, not the profile: `work` is the operator's word for an account.
+    await waitFor(() => expect(tabNames()).toEqual(["claude 3"]));
   });
 
   it("comes back as its default where none was given", async () => {

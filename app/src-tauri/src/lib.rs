@@ -685,7 +685,7 @@ fn approve_profile(
 /// `label` is the picker's optional Name field (charter-app#254): what the chat's tab says
 /// instead of its default. It is held to the same rule a rename is, and **a refusal comes back
 /// before anything starts**, so a name charter will not draw never costs a chat.
-// One over clippy's threshold, and it is a command's argument list: every one of these is a
+// Over clippy's threshold, and it is a command's argument list: every one of these is a
 // separate value the window sends, and folding a few into a struct would put a generated
 // TypeScript type between the picker and the call for nothing. Not a doc comment, because
 // the generated bindings carry those and this is about the Rust.

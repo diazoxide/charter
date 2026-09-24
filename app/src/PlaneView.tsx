@@ -420,7 +420,8 @@ export function PlaneView({
         // frame rather than reading `3` until the sidebar has been read (charter-app#130) — and
         // so does the name the operator gave it, which rides the record (charter-app#254).
         const chats = open.reduce(
-          (tabs, chat) => openTab(tabs, chat.session, chat.name, whoOf(chat), chat.label),
+          (tabs, chat) =>
+            openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
           noTabs(),
         );
         // Each view at the place it had, in the order of those places, so a view recorded at 2
@@ -486,7 +487,9 @@ export function PlaneView({
       // Already drawn: the adoption above can race the event and draw it first.
       if (alreadyShows(now.current, arrived.session)) return;
       setStartedIn((was) => ({ ...was, [arrived.session]: arrived.workspace }));
-      change((tabs) => openTabBehind(tabs, arrived.session, arrived.name, arrived.persona));
+      change((tabs) =>
+        openTabBehind(tabs, arrived.session, arrived.name, whoOf(arrived.persona, arrived.harness)),
+      );
     }).catch(() => undefined);
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, [change, plane]);
@@ -906,10 +909,9 @@ export function PlaneView({
       const filed = startIn === null ? OUTSIDE : (focused ?? OUTSIDE);
       setStartedIn((was) => ({ ...was, [session]: filed }));
       if ("tab" in where) {
-        // Before the number, the persona — or with none, the profile it runs on: `claude 4`
-        // says more than `4` (charter-app#254).
+        const kind = picking?.options.profiles.find((one) => one.name === profile)?.kind;
         const held = started.data.label ?? null;
-        change((tabs) => openTab(tabs, session, name, persona ?? profile, held));
+        change((tabs) => openTab(tabs, session, name, whoOf(persona, kind), held));
         return;
       }
       const before = now.current;
@@ -2267,16 +2269,19 @@ type Arrived = {
   name: string;
   workspace: string;
   persona: string | null;
+  /** The harness it runs, for its default name when it adopted no persona. */
+  harness?: string | null;
 };
 
 /**
  * What a chat's default name puts before its number (charter-app#254): the persona it adopted,
- * or — with none — the profile it was started on, which is the program the operator picked.
- * `steward 3`, `claude 4`. A chat on neither is a shell or a record older than both, and says
- * its own name alone, as it always has.
+ * or — with none — the program it runs, by the word the plane calls its harness. `steward 3`,
+ * `claude 4`. Not the profile's name, which is the operator's word for an account (`work 4`
+ * would name the account, not the program). A chat on neither is a shell, and says its own
+ * name alone, as it always has. Every path a tab opens by goes through here.
  */
-function whoOf(chat: OpenChat): string | null {
-  return chat.persona ?? chat.profile;
+function whoOf(persona: string | null, harness: string | null | undefined): string | null {
+  return persona ?? harness ?? null;
 }
 
 /** Whether any tab already shows `session`, in any of its panes. */

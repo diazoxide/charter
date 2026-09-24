@@ -23,9 +23,9 @@ import {
  * **Keyboard first, and nothing in it needs a mouse.** `⌘K` opens it from anywhere, `F2` from
  * anywhere but a focused chat tab — where it is the platform's rename key (charter-app#254,
  * `theTabRenamesOnIt`) — and `Ctrl-K` from anywhere but a chat's own terminal (the rule is
- * below); typing narrows it, the
- * arrows move over every row, Enter runs the one it is aimed at, Escape leaves — and the focus
- * goes back where it was, which for an operator mid-chat is the terminal they were typing in.
+ * below); typing narrows it, the arrows move over every row, Enter runs the one it is aimed at,
+ * Escape leaves — and the focus goes back where it was, which for an operator mid-chat is the
+ * terminal they were typing in.
  * A click selects and runs too; that is a convenience, not the path.
  *
  * **An unavailable row is listed WITH ITS REASON.** It is dimmed and `aria-disabled`, and the

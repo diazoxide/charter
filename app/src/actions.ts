@@ -91,7 +91,7 @@ export const CHAT_KEYBOARD = "data-chat-keyboard";
  * on the window, capture-phase, from anywhere (`Palette.opensIt`). **A focused chat tab is the
  * one place the palette stands back**, for the reason `CHAT_KEYBOARD` gives about a pane: the
  * key means something else where it landed. The palette is still `⌘K` from the tab, and `F2`
- * from anywhere else. An attribute rather than the tab's role, because the role is what the tab
+ * from anywhere else. The rename box carries it too, so `F2` typed into a name opens nothing. An attribute rather than the tab's role, because the role is what the tab
  * IS and this is what the key MEANS on it: a view's tab is a tab too, and has no rename.
  */
 export const RENAMES_ON_F2 = "data-renames-on-f2";

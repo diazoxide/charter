@@ -167,6 +167,11 @@ export function openTab(
  * **The tab's name and nothing else**: the chat's own name, which its harness was started
  * with, stays what it was. A tab that opened on a view is named after what it shows, and is
  * left as it is; so is a tab that is not there.
+ *
+ * **A split tab's name is its own chat's** — the first pane's, {@link chatOf} — whichever pane
+ * has the keyboard, because that is the chat the tab is (its state mark and its pin are that
+ * chat's too). A relaunch brings each chat back as a tab of its own, so the name comes back on
+ * that chat's tab and the chat that was split beside it comes back under its default.
  */
 export function renameTab(tabs: Tabs, id: number, label: string | null): Tabs {
   const tab = tabs.byId[id];

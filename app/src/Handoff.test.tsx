@@ -35,7 +35,9 @@ function chat(session: number): OpenChat {
     session,
     name: `ide.${session}`,
     cwd: "/home/dev/plane/workspaces/ide",
-    harness: "claude",
+    // No harness and no persona, so its tab is its own name alone and the assertions below read
+    // the names they gave it (the default before the name is charter-app#254's, tested there).
+    harness: null,
     in_front: session === 1,
     resumed: null,
     fresh: null,
@@ -108,6 +110,23 @@ describe("a chat a handoff opened", () => {
 
     await waitFor(() => expect(tabNames()).toEqual(["ide.1", "handoff from 1"]));
     expect(selected()).toEqual(["ide.1"]);
+  });
+
+  it("is named by its persona, or its harness, and then its name, as any chat is (charter-app#254)", async () => {
+    const { arrive } = core([chat(1)]);
+    render(<App />);
+    await waitFor(() => expect(tabNames()).toEqual(["ide.1"]));
+
+    arrive({
+      plane: "/home/dev/plane",
+      session: 2,
+      name: "handoff from 1",
+      workspace: "ide",
+      persona: null,
+      harness: "claude",
+    });
+
+    await waitFor(() => expect(tabNames()).toEqual(["ide.1", "claude handoff from 1"]));
   });
 
   it("is not drawn in a window showing another plane", async () => {
