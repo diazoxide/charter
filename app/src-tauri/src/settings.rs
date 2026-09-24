@@ -184,16 +184,120 @@ pub(crate) fn file_of(
         exists: read.exists,
         refusals: read.refusals,
         parsed: fields.is_some(),
-        fields: fields
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(path, value)| SettingsField {
-                path: path.into_iter().map(step_of).collect(),
-                value: value_of(value),
-            })
-            .collect(),
+        fields: fields_on_the_wire(fields.unwrap_or_default()),
         text: read.text,
     })
+}
+
+// ---------------------------------------------------------------------------------------
+// A workspace's settings (charter-app#280)
+// ---------------------------------------------------------------------------------------
+
+/// A workspace's settings — the `settings` of its `workspace.json` — as the Workspace settings
+/// tab draws them. The same shape as a [`SettingsFile`], without a raw view: the manifest is
+/// charter's and the team's, and a form is the one way into it here.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
+pub struct WorkspaceSettings {
+    pub workspace: String,
+    /// `workspaces/<ws>/workspace.json`.
+    pub file: String,
+    /// Whether it is there. One that is not is created by the first save.
+    pub exists: bool,
+    /// Its text: what a save is checked against, so an edit made elsewhere since is never
+    /// written over.
+    pub text: String,
+    /// What charter does not take from its settings as they stand, in the core's words.
+    pub refusals: Vec<String>,
+    /// Whether a form can change it: a JSON object, or no file yet.
+    pub parsed: bool,
+    /// Every value in its settings, by its path under `settings`.
+    pub fields: Vec<SettingsField>,
+    /// Whether the workspace is LIVE, so the file is committed and the team sees it.
+    pub live: bool,
+}
+
+/// What a workspace settings save answered.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WorkspaceSettingsSaved {
+    Saved { settings: WorkspaceSettings },
+    Refused { reasons: Vec<String> },
+}
+
+/// One workspace's settings, and what charter says about them.
+#[tauri::command]
+#[specta::specta]
+pub async fn workspace_settings(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+) -> Result<WorkspaceSettings, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || workspace_of(&root, &workspace))
+        .await
+        .map_err(|err| format!("reading the workspace's settings did not finish: {err}"))?
+}
+
+/// Change one workspace's settings: checked by the readers of the project's files, written into
+/// its `workspace.json` with every other key kept (`charter_core::settings::workspace`).
+#[tauri::command]
+#[specta::specta]
+pub async fn save_workspace_settings(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    base: Option<String>,
+    edits: Vec<SettingsEdit>,
+) -> Result<WorkspaceSettingsSaved, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        save_workspace(&root, &workspace, base.as_deref(), edits)
+    })
+    .await
+    .map_err(|err| format!("saving the workspace's settings did not finish: {err}"))?
+}
+
+/// [`save_workspace_settings`], without a runtime.
+pub(crate) fn save_workspace(
+    root: &std::path::Path,
+    workspace: &str,
+    base: Option<&str>,
+    edits: Vec<SettingsEdit>,
+) -> Result<WorkspaceSettingsSaved, String> {
+    let edits: Vec<Edit> = edits.into_iter().map(edit_of).collect::<Result<_, _>>()?;
+    match settings::workspace::save(root, workspace, base, &edits) {
+        Ok(()) => Ok(WorkspaceSettingsSaved::Saved {
+            settings: workspace_of(root, workspace)?,
+        }),
+        Err(reasons) => Ok(WorkspaceSettingsSaved::Refused { reasons }),
+    }
+}
+
+pub(crate) fn workspace_of(
+    root: &std::path::Path,
+    workspace: &str,
+) -> Result<WorkspaceSettings, String> {
+    let read = settings::workspace::read_file(root, workspace)?;
+    Ok(WorkspaceSettings {
+        workspace: workspace.to_owned(),
+        file: read.file,
+        exists: read.exists,
+        text: read.text,
+        refusals: read.refusals,
+        parsed: read.parsed,
+        fields: fields_on_the_wire(read.fields),
+        live: read.live,
+    })
+}
+
+fn fields_on_the_wire(fields: Vec<(Vec<Step>, Found)>) -> Vec<SettingsField> {
+    fields
+        .into_iter()
+        .map(|(path, value)| SettingsField {
+            path: path.into_iter().map(step_of).collect(),
+            value: value_of(value),
+        })
+        .collect()
 }
 
 fn step_of(step: Step) -> SettingsStep {
@@ -335,6 +439,59 @@ mod tests {
             panic!("saved: {saved:?}")
         };
         assert_eq!(file.text, "# keep me\n[memory]\nshare = \"push\" # why\n");
+    }
+
+    fn with_workspace(manifest: &str) -> tempfile::TempDir {
+        let dir = plane("schema = 1\n");
+        let ws = dir.path().join("workspaces/alpha");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("workspace.json"), manifest).unwrap();
+        dir
+    }
+
+    fn enabled(on: bool) -> SettingsEdit {
+        SettingsEdit {
+            path: ["extensions", "stats", "enabled"]
+                .into_iter()
+                .map(|key| SettingsStep::Key(key.into()))
+                .collect(),
+            value: Some(SettingsValue::Bool(on)),
+        }
+    }
+
+    #[test]
+    fn a_workspace_settings_edit_is_saved_through_the_core_and_answers_the_new_settings() {
+        let manifest = "{\n  \"name\": \"alpha\"\n}\n";
+        let dir = with_workspace(manifest);
+        let before = workspace_of(dir.path(), "alpha").unwrap();
+        assert_eq!(before.file, "workspaces/alpha/workspace.json");
+        assert!(before.exists && before.parsed && before.fields.is_empty());
+        let saved =
+            save_workspace(dir.path(), "alpha", Some(manifest), vec![enabled(false)]).unwrap();
+        let WorkspaceSettingsSaved::Saved { settings } = saved else {
+            panic!("saved: {saved:?}")
+        };
+        assert_eq!(
+            settings.fields,
+            [SettingsField {
+                path: ["extensions", "stats", "enabled"]
+                    .into_iter()
+                    .map(|key| SettingsStep::Key(key.into()))
+                    .collect(),
+                value: SettingsValue::Bool(false),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_refused_workspace_save_answers_the_cores_sentences() {
+        let manifest = "{\n  \"name\": \"alpha\"\n}\n";
+        let dir = with_workspace(manifest);
+        let saved = save_workspace(dir.path(), "alpha", Some("{}"), vec![enabled(true)]).unwrap();
+        let WorkspaceSettingsSaved::Refused { reasons } = saved else {
+            panic!("refused: {saved:?}")
+        };
+        assert!(reasons[0].contains("changed on disk"), "{reasons:?}");
     }
 
     #[test]

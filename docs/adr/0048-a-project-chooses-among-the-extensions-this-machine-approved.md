@@ -11,7 +11,9 @@ is (charter-app#246, #253).
 "Plugin" in the request is charter's **extension** (ADR 0041 kept the words apart:
 `enabledPlugins` is Claude Code's list). A theme is enabled and disabled with the extension that
 contributes it. **Amended 2026-09-24 (charter-app#273):** a project also *picks* its theme, by the
-same precedence — see [A project's theme](#a-projects-theme) below.
+same precedence — see [A project's theme](#a-projects-theme) below. **Amended 2026-09-24
+(charter-app#280):** a workspace is a layer of the same order, between Shared and Local — see
+[A workspace refines its project](#a-workspace-refines-its-project) below.
 
 ## The decision
 
@@ -109,6 +111,83 @@ pick an extension no longer contributes is said there. The window asks the recor
 survey found — so it can never draw what the tab would refuse. The window draws the answer for
 the project in front; `theme.onDrawn` hands it to every terminal, so a project switch switches
 both live (#216).
+
+## A workspace refines its project
+
+Added by charter-app#280, the first of three (#279: extensions, then a workspace's theme and
+colour, #281, then its harness plugins, #282). The operator, grilled 2026-09-24: *"per workspace
+also configuration — as we already have workspace.json files"*; and the ruling on the order:
+**Shared, then the workspace, then Local** — a workspace refines its project for the team, and
+this machine has the last word.
+
+For an extension in a workspace, the order above becomes:
+
+1. **This machine's approval** — unchanged, and for the same reason: `workspace.json` travels
+   with a LIVE workspace exactly as `charter.toml` travels with the plane.
+2. **Shared**, `charter.toml`.
+3. **The workspace**, `settings.extensions.<id>` in `workspaces/<ws>/workspace.json`.
+4. **Local**, `charter.local.toml`.
+
+Key by key, as between the two files: `enabled` on its own and each setting on its own, the
+first layer that says (and, for a setting, says a value it accepts) deciding. With none saying,
+an approved extension is on.
+
+| This machine | Shared | Workspace | Local | State in this workspace | Decided by |
+|---|---|---|---|---|---|
+| approved | — | `false` | — | off | workspace |
+| approved | `false` | `true` | — | on | workspace |
+| approved | `true` | `false` | — | off | workspace |
+| approved | — | `false` | `true` | on | Local |
+| not approved | — | `true` | — | **needs approval here, and off** | workspace |
+| approved | `false` | — (or an old manifest with no `settings`) | — | off | Shared |
+
+**Why between the two, and not above Local.** A workspace is a team's arrangement of one task —
+its manifest is committed when it is LIVE — so it is more specific than the project and still a
+shared file. Local is the operator's own say on this machine (ADR 0022's split); letting a
+committed workspace file overrule it would make the ignored file the only one that can lose to
+something a teammate pushed. So a workspace narrows or names what the project said, and
+`charter.local.toml` still has the last word.
+
+**One resolver, one more input.** `Choices` carries the workspace's layer
+(`Choices::read_in(root, workspace)`, `Choices::in_workspace`), and `resolve` reads the three
+layers in order; nothing else changed about it, and no consumer has an order of its own. The
+precedence matrix in `crates/charter-core/src/extension/project/tests.rs` has the rows above.
+
+**The file's shape mirrors the TOML tables.** `settings` in `workspace.json` holds
+`extensions.<id>.enabled` and `extensions.<id>.settings.<key>`, which is `[extensions.<id>]` in
+JSON. It is read as the TOML table it mirrors and handed to the same reader, so a workspace's
+value is refused, and ignored, in the same words as a file's. `null` reads as not set. #281 and
+#282 add their tables (`theme`, `harness_plugins`) the same way: one more name the workspace's
+settings may hold (`settings::workspace::READ`), one more reader handed the same table.
+
+**Old manifests read as before.** A `workspace.json` with no `settings` — every one written
+before this — is a workspace that says nothing, so its answer is the project's. Every writer of
+the manifest mutates the document it read, so `snapshot`, `fork` and a clone's record keep the
+settings (a fork inherits them).
+
+**A save keeps the manifest's owner.** `charter_generated` is how the automatic writers tell
+charter's manifest from a hand's (`crate::manifest`). The Workspace settings tab's save changes
+only `settings` and re-stamps a manifest charter wrote, and writes one a hand wrote unstamped, so
+saving a setting never hands an operator's manifest to the automatic writers.
+
+**Where it is edited: a Workspace settings view tab, not a section of Project settings.**
+charter-app#252 made Project settings one tab for one holder of settings — a plane — with one
+section per file. A plane has as many `workspace.json` files as it has workspaces, so a section
+per workspace would grow the tab without bound, and one section with a picker would be a tab
+whose content depends on a control rather than on what it is. A view keyed by the workspace is
+#252's own shape one level down: one tab per holder, one section for its one file, opened by the
+same verb, deduplicated by the same `viewKey`, filed on that workspace's strip, and reached from
+the workspace tab's menu and the palette (`workspace.settings:<ws>`), as Project settings is from
+the project tab's. It holds the same Extensions group, asked for that workspace, so each
+extension says which layer decided it — Shared, the workspace, Local, or the default.
+
+**What asks for the workspace.** The window's filter on extension panels and views asks
+`extensions_on` for the project **and the focused workspace**, so the side region and the view
+buttons follow the workspace in front. The executor's gate is handed the workspace of the strip
+the view is on, read at the press; a view the workspace turned off is refused with a sentence
+naming `workspaces/<ws>/workspace.json` and the Workspace settings tab. The Project settings tab
+still asks for the project alone. **The theme stays the project's** until #281 gives a workspace
+a theme of its own: the window's theme is asked for the project in front, as before.
 
 ## Where each consumer asks
 

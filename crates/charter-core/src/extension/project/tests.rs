@@ -1,5 +1,5 @@
-//! The precedence matrix (charter-app#253, ADR 0048): machine approval, then Shared, then Local,
-//! key by key — each row a case the operator was told about, with the expected answer written
+//! The precedence matrix (charter-app#253, #280, ADR 0048): machine approval, then Shared, then
+//! the workspace, then Local, key by key — each row a case the operator was told about, with the expected answer written
 //! out rather than recomputed.
 
 use super::*;
@@ -310,4 +310,185 @@ fn extensions_that_is_not_a_table_is_refused() {
                 .to_owned()
         ]
     );
+}
+
+// -------------------------------------------------------------------------------------
+// The workspace layer (charter-app#280): approval, Shared, the workspace, Local
+// -------------------------------------------------------------------------------------
+
+/// `one`, in the workspace `alpha` whose `workspace.json` is `manifest`.
+fn in_workspace(installed: Installed, shared: &str, manifest: &str, local: &str) -> Effective {
+    let choices =
+        Choices::from_text(Some(shared), Some(local)).in_workspace("alpha", Some(manifest));
+    let mut all = resolve(&[installed], &choices);
+    assert_eq!(all.len(), 1, "one extension in, one answer out: {all:?}");
+    all.remove(0)
+}
+
+const WS_OFF: &str =
+    r#"{"name": "alpha", "settings": {"extensions": {"stats": {"enabled": false}}}}"#;
+const WS_ON: &str =
+    r#"{"name": "alpha", "settings": {"extensions": {"stats": {"enabled": true}}}}"#;
+
+#[test]
+fn a_workspace_can_turn_off_what_its_project_left_on() {
+    let got = in_workspace(approved("stats"), "", WS_OFF, "");
+    assert_eq!((got.state, got.source), (State::Off, Source::Workspace));
+}
+
+#[test]
+fn a_workspace_overrides_shared_in_both_directions() {
+    let on_over_off = in_workspace(
+        approved("stats"),
+        "[extensions.stats]\nenabled = false\n",
+        WS_ON,
+        "",
+    );
+    assert_eq!(
+        (on_over_off.state, on_over_off.source),
+        (State::On, Source::Workspace)
+    );
+    let off_over_on = in_workspace(
+        approved("stats"),
+        "[extensions.stats]\nenabled = true\n",
+        WS_OFF,
+        "",
+    );
+    assert_eq!(
+        (off_over_on.state, off_over_on.source),
+        (State::Off, Source::Workspace)
+    );
+}
+
+#[test]
+fn local_overrides_the_workspace_so_the_machine_has_the_last_word() {
+    let got = in_workspace(
+        approved("stats"),
+        "",
+        WS_OFF,
+        "[extensions.stats]\nenabled = true\n",
+    );
+    assert_eq!((got.state, got.source), (State::On, Source::Local));
+}
+
+#[test]
+fn a_workspace_yes_cannot_stand_in_for_this_machines_approval() {
+    let got = in_workspace(unapproved("stats"), "", WS_ON, "");
+    assert_eq!(
+        (got.state, got.source),
+        (State::NeedsApproval, Source::Workspace)
+    );
+    assert!(!got.is_on());
+}
+
+#[test]
+fn an_old_workspace_json_with_no_settings_leaves_the_project_in_charge() {
+    // Every workspace.json written before charter-app#280 has no `settings`.
+    let old = r#"{"name": "alpha", "description": "", "repos": [], "updated_at": "2026-09-17T14:01:35+00:00", "updated_by": "me"}"#;
+    let got = in_workspace(
+        approved("stats"),
+        "[extensions.stats]\nenabled = false\n",
+        old,
+        "",
+    );
+    assert_eq!((got.state, got.source), (State::Off, Source::Shared));
+}
+
+#[test]
+fn a_workspace_json_that_is_not_json_says_nothing() {
+    let got = in_workspace(approved("stats"), "", "{\"settings\": ", "");
+    assert_eq!((got.state, got.source), (State::On, Source::Default));
+}
+
+#[test]
+fn a_null_in_workspace_json_is_not_set() {
+    let got = in_workspace(
+        approved("stats"),
+        "[extensions.stats]\nenabled = false\n",
+        r#"{"settings": {"extensions": {"stats": {"enabled": null}}}}"#,
+        "",
+    );
+    assert_eq!((got.state, got.source), (State::Off, Source::Shared));
+}
+
+#[test]
+fn a_workspace_with_no_manifest_is_exactly_the_project() {
+    let choices = Choices::from_text(Some("[extensions.stats]\nenabled = false\n"), None)
+        .in_workspace("alpha", None);
+    let got = resolve(&[approved("stats")], &choices).remove(0);
+    assert_eq!((got.state, got.source), (State::Off, Source::Shared));
+}
+
+#[test]
+fn settings_resolve_key_by_key_shared_then_workspace_then_local() {
+    let got = in_workspace(
+        with_settings(),
+        "[extensions.stats.settings]\nwindow = \"7d\"\ncompact = true\n",
+        r#"{"settings": {"extensions": {"stats": {"settings": {"window": "30d", "compact": false}}}}}"#,
+        "[extensions.stats.settings]\ncompact = true\n",
+    );
+    let window = setting(&got, "window");
+    assert_eq!(
+        (&window.value, window.source),
+        (&SettingValue::Text("30d".into()), Source::Workspace)
+    );
+    let compact = setting(&got, "compact");
+    assert_eq!(
+        (&compact.value, compact.source),
+        (&SettingValue::Bool(true), Source::Local)
+    );
+}
+
+#[test]
+fn a_workspace_value_the_extension_would_not_accept_falls_through_to_shared_and_says_why() {
+    let got = in_workspace(
+        with_settings(),
+        "[extensions.stats.settings]\nwindow = \"7d\"\n",
+        r#"{"settings": {"extensions": {"stats": {"settings": {"window": "1y", "nope": true}}}}}"#,
+        "",
+    );
+    let window = setting(&got, "window");
+    assert_eq!(
+        (&window.value, window.source),
+        (&SettingValue::Text("7d".into()), Source::Shared)
+    );
+    assert_eq!(
+        got.ignored,
+        vec![
+            Ignored {
+                source: Source::Workspace,
+                why: "workspaces/alpha/workspace.json sets settings.extensions.stats.settings.window \
+                      to \"1y\", and it is one of 7d, 30d — so the value from charter.toml is used"
+                    .to_owned(),
+            },
+            Ignored {
+                source: Source::Workspace,
+                why: "workspaces/alpha/workspace.json sets settings.extensions.stats.settings.nope, \
+                      which stats does not declare — charter hands it nothing"
+                    .to_owned(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_local_value_passed_over_names_the_workspaces_value_as_the_one_used() {
+    let got = in_workspace(
+        with_settings(),
+        "",
+        r#"{"settings": {"extensions": {"stats": {"settings": {"window": "7d"}}}}}"#,
+        "[extensions.stats.settings]\nwindow = \"1y\"\n",
+    );
+    assert_eq!(setting(&got, "window").source, Source::Workspace);
+    assert_eq!(
+        got.ignored[0].why,
+        "charter.local.toml sets extensions.stats.settings.window to \"1y\", and it is one of \
+         7d, 30d — so the value from workspaces/alpha/workspace.json is used"
+    );
+}
+
+#[test]
+fn the_workspace_source_names_its_file() {
+    assert_eq!(Source::Workspace.as_str(), "workspace");
+    assert_eq!(Source::Workspace.file(), Some("workspace.json"));
 }
