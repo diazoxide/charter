@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `charter persona list`, `persona use`, `persona sync-agents` and `persona stats` work again,
+  and answer as the charter your plane was set up with did. Re-syncing a plane's sub-agents
+  changes only the ones whose persona changed since they were last generated.
+  ([#228](https://github.com/diazoxide/charter-app/pull/228))
+- `charter ws todo` says what it recorded, closed or dropped, and a slug that is not there
+  says so instead of passing silently. ([#228](https://github.com/diazoxide/charter-app/pull/228))
 - `charter secret`, `charter persona secret` and `charter vault` are back. A chat that runs
   `charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl …` or `charter secret list
   <vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without

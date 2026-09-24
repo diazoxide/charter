@@ -205,7 +205,11 @@ pub fn block(rows: &[Row], generic: u64, total: u64) -> String {
         );
         out.push(String::new());
     }
-    out.push("Regenerate with `charter docs generate`. Detail: `docs/personas.md`.".to_string());
+    out.push(
+        "Regenerate with `charter docs generate`. Detail: `charter persona stats` · \
+         `docs/personas.md`."
+            .to_string(),
+    );
     out.push(String::new());
     out.push(END.to_string());
     out.join("\n")

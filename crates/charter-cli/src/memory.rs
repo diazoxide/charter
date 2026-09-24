@@ -113,6 +113,54 @@ pub enum PersonaCommand {
         #[arg(long)]
         clear: bool,
     },
+    /// List personas; mark active; show role + vault status.
+    ///
+    /// The work is [`charter_core::personaverbs::list`].
+    List,
+    /// Set the active persona (writes .charter/active-persona).
+    ///
+    /// For this session and this pane — the plane-wide file only when the process has
+    /// neither id. The work is [`charter_core::personaverbs::select`].
+    Use {
+        name: String,
+        /// Pin the trace's clock, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
+    /// Generate a Claude Code sub-agent (.claude/agents/<name>.md) per persona.
+    ///
+    /// The work is [`charter_core::personaverbs::agents`].
+    #[command(name = "sync-agents")]
+    SyncAgents {
+        /// Only sync this persona (default: all).
+        #[arg(long)]
+        persona: Option<String>,
+        /// Ask, per server, whether the MCP command the personas' mcp.json files name may
+        /// receive the persona's vault value. What is recorded is a digest of the line
+        /// printed above the question, so ANY change that changes that line — including the
+        /// persona's vault, an env value, or a key charter does not read — lapses the
+        /// approval and asks again.
+        #[arg(long)]
+        approve_mcp: bool,
+        /// With --approve-mcp: approve every credentialed server without asking. Required
+        /// off a terminal, where nobody can be asked.
+        #[arg(long)]
+        yes: bool,
+        /// With --approve-mcp: print the servers it would ask about and record nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Roster health from committed memory: usage (count/recency) + quality proxy
+    /// (verification / dedup ratios); flags prune candidates.
+    ///
+    /// The work is [`charter_core::personaverbs::stats`].
+    Stats {
+        /// Only this persona (default: all + _shared).
+        name: Option<String>,
+        /// Window for the RECENT column (default 14).
+        #[arg(long, default_value_t = 14, allow_negative_numbers = true)]
+        recent_days: i64,
+    },
     /// Read/write the ACTIVE persona's vault (values stay out of the model).
     ///
     /// Not a memory command; here because this is the enum `charter persona` dispatches on.
@@ -742,6 +790,66 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
                 no_sync,
                 stamp(now.as_deref())?,
             )
+        }
+        PersonaCommand::List => {
+            let root = plane.root();
+            let selection =
+                charter_core::active::persona(&here.asking(None, here.persona_env.as_deref()));
+            let state = charter_core::personaverbs::state_dir(root);
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::list::list(
+                root, &state, &selection, &mut sink,
+            ))
+        }
+        PersonaCommand::Use { name, now } => {
+            let asking = charter_core::personaverbs::select::Asking {
+                ids: &here.ids,
+                env_persona: here.persona_env.as_deref(),
+                bucket: &session(),
+                now: stamp(now.as_deref())?,
+            };
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::select::use_persona(
+                plane.root(),
+                &name,
+                &asking,
+                &mut sink,
+            ))
+        }
+        PersonaCommand::SyncAgents {
+            persona,
+            approve_mcp,
+            yes,
+            dry_run,
+        } => {
+            let options = charter_core::personaverbs::agents::Options {
+                persona: persona.as_deref(),
+                approve_mcp,
+                yes,
+                dry_run,
+            };
+            let mut confirm = charter_core::personaverbs::agents::confirm_on_terminal();
+            let ask = confirm
+                .as_mut()
+                .map(|f| f.as_mut() as charter_core::personaverbs::agents::Ask);
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::agents::sync_agents(
+                plane.root(),
+                &here.cwd,
+                &options,
+                ask,
+                &mut sink,
+            ))
+        }
+        PersonaCommand::Stats { name, recent_days } => {
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::stats::stats(
+                plane.root(),
+                name.as_deref(),
+                recent_days,
+                chrono::Local::now().date_naive(),
+                &mut sink,
+            ))
         }
         PersonaCommand::Recall { name, query, log } => {
             let Some(name) = here.active_persona(name.as_deref().filter(|n| !n.is_empty())) else {

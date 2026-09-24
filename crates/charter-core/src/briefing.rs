@@ -244,13 +244,7 @@ fn workspace_confirm_nudge(ask: &Ask, ids: &Ids) -> Option<String> {
 /// `_stale_persona_note`: the selection names a persona this plane does not have (#1045).
 fn stale_persona_note(name: &str, source: &str) -> String {
     let shown = one_line(name, COMMITTED_LINE_CAP);
-    let ways_out = if source == "$CHARTER_PERSONA" {
-        "unset `$CHARTER_PERSONA`, or set it to a persona that exists; it outranks every \
-         other selection, so nothing else moves it"
-    } else {
-        "start a chat on a persona that exists from the app's picker, or add the missing one \
-         as `personas/<name>/persona.md`"
-    };
+    let ways_out = crate::personaverbs::list::ways_out(source);
     format!(
         "⬢ **No persona is active for this session.** charter selected `{shown}` (via {source}), \
          and no persona by that name exists on this plane — it was removed or renamed, or never \

@@ -1118,12 +1118,22 @@ fn every_hook_the_bundled_plugin_wires_answers_an_ordinary_call_with_exit_zero()
                     .stderr(Stdio::piped())
                     .spawn()
                     .expect("sh runs");
-                child
+                // A hook may answer without reading its payload at all (a no-op word exits at
+                // once), and then this write meets a closed pipe. That is an answer, not a
+                // failure: CI once went red on exactly that race (#228). Any other write error
+                // still fails the test.
+                if let Err(e) = child
                     .stdin
                     .take()
                     .expect("stdin")
                     .write_all(payload.as_bytes())
-                    .expect("written");
+                {
+                    assert_eq!(
+                        e.kind(),
+                        std::io::ErrorKind::BrokenPipe,
+                        "{event}: writing the payload failed: {e}"
+                    );
+                }
                 let out = child.wait_with_output().expect("it finishes");
                 let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
                 assert_eq!(

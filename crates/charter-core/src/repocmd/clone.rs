@@ -247,7 +247,7 @@ fn clone_all(root: &Path, ws: &str, ws_dir: &Path, targets: &[Value]) -> Vec<Out
 }
 
 /// Python's `contain.refusal`: the sentence a name that is a path is refused with.
-pub(crate) fn not_a_segment(name: &str) -> String {
+pub fn not_a_segment(name: &str) -> String {
     format!(
         "'{}' is not a name — it is a path. This is read from a committed file and joined onto \
          a directory, so it may name one entry there and nothing else: no '/', no '\\', no '.' \
