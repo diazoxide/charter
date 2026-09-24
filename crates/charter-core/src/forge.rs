@@ -3,9 +3,8 @@
 //! A port of `charter/forge/` — the registry, and the parts of the GitHub and GitLab backends
 //! `discover`, `clone` and `gl-refresh` use: authentication, enumerating an owner's repos, a
 //! repo's top-level file list, the branch's open change and last CI result, and the
-//! credential helper and SSH→HTTPS rewrite each forge's clones get. The change surface —
-//! opening, reviewing and merging a request — is not here; nothing in the Rust charter asks
-//! it yet.
+//! credential helper and SSH→HTTPS rewrite each forge's clones get. Opening or updating a
+//! pull request and asking for auto-merge are in [`pr`] (ADR 0051); reviewing one is not here.
 //!
 //! # One credential, and charter never holds it
 //!
@@ -35,6 +34,8 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::worktree::git;
+
+pub mod pr;
 
 /// The best-effort budget: an auth check. Python's `base.STATUS_TIMEOUT`.
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(10);

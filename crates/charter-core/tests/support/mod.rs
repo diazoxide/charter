@@ -8,6 +8,8 @@
 //! is not a defect in the helper.
 #![allow(dead_code)]
 
+pub mod forge_cli;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
