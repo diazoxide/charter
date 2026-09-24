@@ -590,7 +590,7 @@ export const commands = {
 	 *  changed since its yes reads as needing approval here, which is the truth the tab is for. It
 	 *  is asked when the tab is opened and after it saves, never on a timer.
 	 */
-	projectExtensions: (plane: PlaneId, workspace: string | null) => typedError<ProjectExtension[], string>(__TAURI_INVOKE("project_extensions", { plane, workspace })),
+	projectExtensions: (plane: PlaneId, workspace: string | null) => typedError<ProjectExtensions, string>(__TAURI_INVOKE("project_extensions", { plane, workspace })),
 	/**
 	 *  The ids of the extensions that are on in this project — in `workspace`, when one is named
 	 *  (charter-app#280): what the window keeps of the panels, views and themes it surveyed once,
@@ -1075,6 +1075,13 @@ export type HarnessPlugins = {
 	/**  Why the harness's own record of what it installed could not be read, if it could not. */
 	trouble: string | null,
 	plugins: HarnessPlugin[],
+	/**
+	 *  The ignore check's sentence while git would carry `charter.local.toml` and it names a
+	 *  plugin of this harness — the one the Project settings tab's Local section says — so this
+	 *  group says why a plugin set there is not applied (charter-app#319). The core's
+	 *  `Choices::local_left_out`, asked for this harness.
+	 */
+	local_left_out: string | null,
 };
 
 /**  Where one of a vault's identity variables is read from now (#237). */
@@ -1655,6 +1662,20 @@ export type ProjectExtensionSetting = {
 	source: string,
 };
 
+/**
+ *  Every extension in one project, and why `charter.local.toml` had no say in them when it had
+ *  none (charter-app#319).
+ */
+export type ProjectExtensions = {
+	extensions: ProjectExtension[],
+	/**
+	 *  The ignore check's sentence while git would carry `charter.local.toml` and it sets an
+	 *  extension — the one the Project settings tab's Local section says — so the Extensions
+	 *  group says why a value set there is not applied. The core's `Choices::local_left_out`.
+	 */
+	local_left_out: string | null,
+};
+
 /**  Both files. */
 export type ProjectSettings = {
 	shared: SettingsFile,
@@ -1689,6 +1710,12 @@ export type ProjectTheme = {
 	colour: string | null,
 	/**  Each value a file set that charter did not use, and why. */
 	ignored: ProjectExtensionIgnored[],
+	/**
+	 *  Why `charter.local.toml` had no say in the theme when it picks one, as
+	 *  [`ProjectExtensions::local_left_out`] says it for extensions (charter-app#319): the core's
+	 *  `Said::local_left_out`.
+	 */
+	local_left_out: string | null,
 };
 
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */

@@ -36,6 +36,43 @@ use crate::profiles::{self, COMMITTED_FILE, LOCAL_FILE};
 
 pub mod workspace;
 
+/// Where an answer came from: which layer of the Shared/Workspace/Local overlay decided it
+/// (ADR 0048). Every reader of the overlay answers with it: [`crate::extension::project`],
+/// [`crate::planesave`] and the rest (charter-app#309).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// No file said: the machine's answer, or the setting's declared default.
+    Default,
+    /// `charter.toml`.
+    Shared,
+    /// The `settings` of the workspace's `workspace.json` (charter-app#280).
+    Workspace,
+    /// `charter.local.toml`.
+    Local,
+}
+
+impl Source {
+    /// The file this source is, or `None` for [`Source::Default`]. A workspace's is
+    /// `workspace.json`; which workspace's, [`crate::extension::project::Choices::workspace_file`] says.
+    pub fn file(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::Shared => Some(COMMITTED_FILE),
+            Self::Workspace => Some(crate::settings::workspace::FILE),
+            Self::Local => Some(LOCAL_FILE),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Shared => "shared",
+            Self::Workspace => "workspace",
+            Self::Local => "local",
+        }
+    }
+}
+
 /// Which of a plane's two settings files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Which {
@@ -59,8 +96,54 @@ impl Which {
     }
 }
 
-/// The text of `which` as every reader of its layer takes it: `None` when the file says nothing
-/// charter may use (charter-app#308, ADR 0048).
+/// One layer as its readers are handed it by [`layer_text`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayerText {
+    /// The file's text.
+    Text(String),
+    /// No file, or one that cannot be read: it says nothing, and there is nothing to say about it.
+    Nothing,
+    /// A Local file git would carry, left out. `why` is [`profiles::ignore_check`]'s sentence,
+    /// which is also what the Project settings tab's Local section says about it ([`read`]).
+    /// `text` is what the file says, which no reader takes — only asks whether it said anything
+    /// in its own table, so a group says the file was left out only where it would have decided
+    /// something (charter-app#319).
+    LeftOut { why: String, text: String },
+}
+
+impl LayerText {
+    /// The text a reader reads, or `None`.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Nothing | Self::LeftOut { .. } => None,
+        }
+    }
+
+    /// Why the file is there and was not read, when that is so.
+    pub fn left_out(&self) -> Option<&str> {
+        match self {
+            Self::LeftOut { why, .. } => Some(why),
+            Self::Text(_) | Self::Nothing => None,
+        }
+    }
+
+    /// The sentence a reader keeps, when the file was left out **and** its `said` — the reader's
+    /// own parse of the left-out text — says something: a group whose table the file does not
+    /// touch has nothing that was not applied, and says nothing (charter-app#319).
+    pub fn left_out_where(&self, said: impl FnOnce(&toml::Table) -> bool) -> Option<String> {
+        match self {
+            Self::LeftOut { why, text } => text
+                .parse::<toml::Table>()
+                .is_ok_and(|top| said(&top))
+                .then(|| why.clone()),
+            Self::Text(_) | Self::Nothing => None,
+        }
+    }
+}
+
+/// The text of `which` as every reader of its layer takes it — [`LayerText::Text`] only when the
+/// file says something charter may use (charter-app#308, ADR 0048).
 ///
 /// A file that is not there, or cannot be read, says nothing. **And so does a Local file git
 /// would carry** — tracked, or not ignored, or one git could not say about
@@ -73,15 +156,26 @@ impl Which {
 /// **Every reader of the two files reads them here**, and nowhere else, so a reader added later
 /// cannot forget the check. The Project settings tab shows the file's text whatever this says,
 /// with the check's sentence among its refusals ([`read`]), so what is not applied is said there
-/// with its fix.
+/// with its fix. **And a reader keeps that sentence** ([`LayerText::LeftOut`], charter-app#319)
+/// when the file said something in its table: each group of a settings tab that shows what is in
+/// force says it where the file would have decided something, so a value set in Local and not
+/// applied is never shown without its reason — in the same words, from the same check.
 ///
 /// A Local file that is there costs one `git status` of that one path; an absent one costs none.
-pub fn layer_text(root: &Path, which: Which) -> Option<String> {
-    let text = std::fs::read_to_string(which.path(root)).ok()?;
-    if which == Which::Local && !profiles::ignore_check(root).passes() {
-        return None;
+pub fn layer_text(root: &Path, which: Which) -> LayerText {
+    let Ok(text) = std::fs::read_to_string(which.path(root)) else {
+        return LayerText::Nothing;
+    };
+    if which == Which::Local {
+        let check = profiles::ignore_check(root);
+        if !check.passes() {
+            return LayerText::LeftOut {
+                why: check.reason,
+                text,
+            };
+        }
     }
-    Some(text)
+    LayerText::Text(text)
 }
 
 /// One settings file as it stands, and what charter says about it now.
@@ -175,6 +269,12 @@ fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
     // And `[theme]` (charter-app#273), read by one reader in both too.
     out.extend(crate::extension::project::theme::refusals(
         text,
+        which.file(),
+    ));
+    // And so may `[plane]` and `[repos]` (charter-app#292), read by `planesave` in both.
+    out.extend(crate::planesave::refusals(
+        text,
+        which == Which::Local,
         which.file(),
     ));
     out

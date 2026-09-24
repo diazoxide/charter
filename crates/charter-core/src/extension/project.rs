@@ -52,40 +52,9 @@ pub const ENABLED: &str = "enabled";
 /// The table of values for the settings it declares, inside `[extensions.<id>]`.
 pub const SETTINGS: &str = "settings";
 
-/// Where an answer came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
-    /// No file said: the machine's answer, or the setting's declared default.
-    Default,
-    /// `charter.toml`.
-    Shared,
-    /// The `settings` of the workspace's `workspace.json` (charter-app#280).
-    Workspace,
-    /// `charter.local.toml`.
-    Local,
-}
-
-impl Source {
-    /// The file this source is, or `None` for [`Source::Default`]. A workspace's is
-    /// `workspace.json`; which workspace's, [`Choices::workspace_file`] says.
-    pub fn file(self) -> Option<&'static str> {
-        match self {
-            Self::Default => None,
-            Self::Shared => Some(COMMITTED_FILE),
-            Self::Workspace => Some(crate::settings::workspace::FILE),
-            Self::Local => Some(LOCAL_FILE),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Shared => "shared",
-            Self::Workspace => "workspace",
-            Self::Local => "local",
-        }
-    }
-}
+/// Where an answer came from: the overlay's layers, in [`crate::settings`] because every
+/// reader of the overlay shares them (charter-app#309).
+pub use crate::settings::Source;
 
 /// What an extension is in this project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +98,9 @@ pub struct Choices {
     local: BTreeMap<String, Said>,
     /// The workspace these were read in, when they were.
     workspace_name: Option<String>,
+    /// Why `charter.local.toml` is not among these layers, when it is there and git would carry
+    /// it (charter-app#319).
+    local_left_out: Option<String>,
 }
 
 impl Choices {
@@ -167,10 +139,30 @@ impl Choices {
     /// (charter-app#308).
     pub fn read(root: &Path) -> Self {
         use crate::settings::{Which, layer_text};
-        Self::from_text(
-            layer_text(root, Which::Shared).as_deref(),
-            layer_text(root, Which::Local).as_deref(),
+        Self::from_layers(
+            &layer_text(root, Which::Shared),
+            &layer_text(root, Which::Local),
         )
+    }
+
+    /// The two files as [`crate::settings::layer_text`] hands them — [`Self::from_text`], and,
+    /// when the Local file was left out having said something here, why (charter-app#319).
+    pub fn from_layers(
+        shared: &crate::settings::LayerText,
+        local: &crate::settings::LayerText,
+    ) -> Self {
+        Self {
+            local_left_out: local.left_out_where(|top| !said_in(top).is_empty()),
+            ..Self::from_text(shared.text(), local.text())
+        }
+    }
+
+    /// Why `charter.local.toml` is not among the choices, when it is there, git would carry it,
+    /// and it said something here: the ignore check's sentence, which the Project settings tab's Local section says too
+    /// (charter-app#319). A settings tab says it in every group that shows these in force, so a
+    /// value set in Local and not applied is never shown without its reason.
+    pub fn local_left_out(&self) -> Option<&str> {
+        self.local_left_out.as_deref()
     }
 
     /// [`Self::read`], in `workspace` when there is one: the answer for whatever is in that

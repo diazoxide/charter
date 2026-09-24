@@ -262,6 +262,69 @@ fn a_local_file_may_hold_extensions_as_well_as_harness() {
 }
 
 #[test]
+fn a_local_file_may_hold_plane_and_repos_as_well() {
+    // charter-app#292, ADR 0051: how far a save goes is overridable per machine, key by key.
+    let dir = plane(COMMENTED);
+    let why = refusals(
+        dir.path(),
+        Which::Local,
+        "[plane]\nmode = \"commit\"\nautosave = false\n\n[repos.charter-app]\nmode = \"push\"\n",
+    );
+    assert_eq!(why, Vec::<String>::new());
+}
+
+#[test]
+fn plane_and_repos_values_charter_would_not_read_are_refused_in_either_file() {
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        let file = which.file();
+        let why = refusals(
+            dir.path(),
+            which,
+            "[plane]\nmode = \"yolo\"\nsign = \"yes\"\nautosave_after = \"soon\"\n\
+             branch = \"has space\"\ncolour = \"red\"\n\n\
+             [repos.charter-app]\nsave_branch = \"x\"\n",
+        );
+        assert_eq!(
+            why,
+            [
+                format!(
+                    "plane.mode in {file} is not a mode — one of off, commit, push, pr, pr-merge"
+                ),
+                format!("plane.sign in {file} is not true or false"),
+                format!(
+                    "plane.autosave_after in {file} is not a quiet period — a whole number of \
+                     seconds or minutes, like \"30s\" or \"2m\""
+                ),
+                format!("plane.branch in {file} is not a branch name git would accept"),
+                format!(
+                    "plane.colour in {file} is not read — [plane] holds mode, branch, \
+                     save_branch, sign, autosave, autosave_after and worktrees"
+                ),
+                format!(
+                    "repos.charter-app.save_branch in {file} is not read — [repos.<name>] holds \
+                     mode, branch, sign, autosave and autosave_after"
+                ),
+            ],
+            "{which:?}"
+        );
+    }
+}
+
+#[test]
+fn worktrees_in_the_local_file_is_refused_with_the_way_to_set_it_per_machine() {
+    let dir = plane(COMMENTED);
+    let why = refusals(dir.path(), Which::Local, "[plane]\nworktrees = \"../wt\"\n");
+    assert_eq!(
+        why,
+        [
+            "plane.worktrees in charter.local.toml is not read — it belongs in charter.toml, and \
+          $CHARTER_WORKTREES sets it for this machine alone"
+        ]
+    );
+}
+
+#[test]
 fn an_extensions_table_charter_would_not_read_is_refused_in_either_file() {
     let dir = plane(COMMENTED);
     for which in [Which::Shared, Which::Local] {
