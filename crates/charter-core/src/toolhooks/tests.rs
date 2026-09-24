@@ -703,3 +703,38 @@ fn a_resume_is_logged_under_the_persona_it_resumes_never_under_the_name_it_was_s
         .collect();
     assert_eq!(agents, ["\"devops\"", "\"devops\""], "{log}");
 }
+#[test]
+fn what_a_memory_will_do_follows_the_planes_mode_and_never_promises_a_push_nobody_makes() {
+    // charter-app#293: the note said `share = "push"` meant "committed and pushed
+    // immediately" while charter committed nothing. A memory travels with the plane's next save.
+    let note = |toml: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), toml).unwrap();
+        memory_share_note(dir.path())
+    };
+    assert_eq!(
+        note(""),
+        "It stays on THIS MACHINE until the plane is saved — `charter save` commits and pushes \
+         it."
+    );
+    assert_eq!(note("[memory]\nshare = \"local\"\n"), note(""));
+    assert_eq!(
+        note("[plane]\nmode = \"off\"\n"),
+        "It stays on THIS MACHINE — this plane's `[plane] mode` is `off`, so charter commits \
+         nothing; commit and push it yourself if the team needs it."
+    );
+    assert_eq!(
+        note("[plane]\nmode = \"commit\"\n"),
+        "It is committed with the plane's next save, but NOT pushed — this plane's `[plane] \
+         mode` is `commit`."
+    );
+    assert_eq!(
+        note("[memory]\nshare = \"push\"\n"),
+        "It reaches the team with the plane's next save — `charter save` pushes it."
+    );
+    assert_eq!(
+        note("[plane]\nmode = \"pr\"\n"),
+        "It is committed with the plane's next save; this plane's `[plane] mode` is `pr`, and \
+         this charter does not open that pull request yet."
+    );
+}

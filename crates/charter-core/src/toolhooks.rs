@@ -506,17 +506,34 @@ fn ws_edit_first(hook: &Hook, ws: &str) -> bool {
     true
 }
 
-/// `memory_share_note`: what recording a memory will actually do on this plane.
+/// `memory_share_note`: what recording a memory will actually do on this plane — which is
+/// whatever the plane's next save does with it, by `[plane] mode` (ADR 0051). Nothing commits a
+/// memory on its own.
 pub fn memory_share_note(root: &Path) -> &'static str {
-    match crate::workspaces::Plane::open(root).memory_share() {
-        "commit" => {
-            "It is committed locally straight away, but NOT pushed — this plane's `share` is \
-             `commit`."
+    use crate::planesave::Mode;
+    match crate::planesave::Settings::read(root).plane.mode.value {
+        None => {
+            "It stays on THIS MACHINE until the plane is saved — `charter save` commits and \
+             pushes it."
         }
-        "push" => "It is committed and pushed immediately, so it reaches the team.",
-        _ => {
-            "It stays on THIS MACHINE — this plane's `share` is `local`, so charter commits \
+        Some(Mode::Off) => {
+            "It stays on THIS MACHINE — this plane's `[plane] mode` is `off`, so charter commits \
              nothing; commit and push it yourself if the team needs it."
+        }
+        Some(Mode::Commit) => {
+            "It is committed with the plane's next save, but NOT pushed — this plane's `[plane] \
+             mode` is `commit`."
+        }
+        Some(Mode::Push) => {
+            "It reaches the team with the plane's next save — `charter save` pushes it."
+        }
+        Some(Mode::Pr) => {
+            "It is committed with the plane's next save; this plane's `[plane] mode` is `pr`, \
+             and this charter does not open that pull request yet."
+        }
+        Some(Mode::PrMerge) => {
+            "It is committed with the plane's next save; this plane's `[plane] mode` is \
+             `pr-merge`, and this charter does not open that pull request yet."
         }
     }
 }

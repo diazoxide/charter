@@ -3359,7 +3359,8 @@ charter-app. `charter save` keeps writing this record until its contract moves (
   lines.
 - **Status:** **internal**. Only the app and `charter save` write it, and only the Saving view
   reads it. Deleted ⇒ the Saving view's history starts empty.
-- **Written by:** `charter-core`'s save function (ADR 0051). Not built yet.
+- **Written by:** `crates/charter-core/src/planegit.rs` `save_as`, the one save function
+  (charter-app#293, ADR 0051), once per attempt, with `profiletrust::write_private`.
 - **Read by:** the Saving view (its last 50 entries).
 - **Git:** gitignored (under `/.charter/`).
 - **Fields:**

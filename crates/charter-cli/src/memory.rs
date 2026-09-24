@@ -195,15 +195,21 @@ fn session() -> String {
 
 /// What happens after a memory is written, in charter's words — `commit_memory_reactive`.
 ///
-/// `local`, the default, commits nothing and says nothing. Anything else is a plane that
-/// expects the memory committed as it is written, which this binary cannot do; it says so
-/// rather than leaving the operator to find the memory uncommitted later.
+/// Nothing commits a memory on its own: it travels with the plane's next save, by
+/// `[plane] mode` (ADR 0051). A plane that names no mode, or `off`, says nothing; any other
+/// says when the memory will leave this machine, rather than leaving the operator to find it
+/// uncommitted later.
 fn reactive(plane: &Plane) {
-    let share = plane.memory_share();
-    if share != "local" {
-        voice::warn(&format!(
-            "memory share is '{share}', and this version of charter does not commit memory \
-             yet — commit and push memory/ in the plane with git to share it."
+    use charter_core::planesave::Mode;
+    let mode = charter_core::planesave::Settings::read(plane.root())
+        .plane
+        .mode
+        .value;
+    if let Some(mode @ (Mode::Commit | Mode::Push | Mode::Pr | Mode::PrMerge)) = mode {
+        voice::info(&format!(
+            "This plane's [plane] mode is {}: the memory goes with the plane's next save — \
+             `charter save`.",
+            mode.as_str()
         ));
     }
 }

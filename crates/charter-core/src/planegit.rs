@@ -538,17 +538,25 @@ enum Rebased {
 /// signal of somebody else's has no code either, and that is not charter stopping it.
 fn rebase_onto_fetched(root: &Path, sign: bool, deadline: Duration) -> Rebased {
     let started = std::time::Instant::now();
-    let mut rebase: Vec<&str> = if sign {
-        Vec::new()
-    } else {
-        vec!["-c", "commit.gpgsign=false"]
-    };
+    let mut rebase: Vec<&str> = vec!["-c", gpgsign(sign)];
     rebase.extend(["rebase", "FETCH_HEAD"]);
     match git::run(root, &rebase, deadline) {
         Ok(run) if run.ok() => Rebased::Replayed,
         Ok(run) if run.code.is_none() && started.elapsed() >= deadline => Rebased::OutOfTime,
         Ok(run) if sign && run.err.contains(UNWRITTEN) => Rebased::Unsigned(signer_said(&run.err)),
         _ => Rebased::Conflict,
+    }
+}
+
+/// The `-c` that decides signing for one git command, beating the operator's own
+/// `commit.gpgsign` either way: a save that is not asked to sign never runs a signer, and one
+/// that is — `--sign`, or `[plane] sign = true` (ADR 0051) — is signed whatever the machine's
+/// default says.
+fn gpgsign(sign: bool) -> &'static str {
+    if sign {
+        "commit.gpgsign=true"
+    } else {
+        "commit.gpgsign=false"
     }
 }
 
@@ -610,16 +618,27 @@ fn rebase_undone(
 ///
 /// `sign` is the `--sign` the commit was made under: a remote that moved sends HEAD through a
 /// rebase, and the commit it replays is signed exactly when the commit was.
-pub fn push_head(root: &Path, sign: bool, say: Sink) -> PushResult {
-    push_head_within(root, sign, WRITE, say)
+///
+/// `target` is the branch to advance: `[plane] branch`, or `None` for the one HEAD is on.
+pub fn push_head(root: &Path, target: Option<&str>, sign: bool, say: Sink) -> PushResult {
+    push_head_within(root, target, sign, WRITE, say)
 }
 
 /// [`push_head`], with the rebase given `deadline` rather than [`WRITE`] — so a test can drive
 /// a rebase that runs out of time without waiting out the real one.
-fn push_head_within(root: &Path, sign: bool, deadline: Duration, say: Sink) -> PushResult {
-    let branch = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
-        .map(|r| r.line().trim().to_string())
-        .unwrap_or_default();
+fn push_head_within(
+    root: &Path,
+    target: Option<&str>,
+    sign: bool,
+    deadline: Duration,
+    say: Sink,
+) -> PushResult {
+    let branch = match target {
+        Some(target) => target.to_string(),
+        None => git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
+            .map(|r| r.line().trim().to_string())
+            .unwrap_or_default(),
+    };
     let mut head = git::run(root, &["rev-parse", "HEAD"], git::READ)
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
@@ -912,9 +931,154 @@ pub struct Request<'a> {
     pub cwd: &'a Path,
 }
 
-/// `charter save`. Returns the exit status.
+/// `charter save`: [`save_as`] started from the command line.
 pub fn save(request: &Request, say: Sink) -> u8 {
-    commit_push(request, &["add", "-A"], say)
+    save_as(request, Trigger::Cli, say)
+}
+
+/// What started a save — the journal's `trigger`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    /// The window's save button.
+    Manual,
+    /// Auto-save, after the quiet period.
+    Quiet,
+    /// Auto-save, when a session ended.
+    SessionEnd,
+    /// Auto-save, as the app quit.
+    Quit,
+    /// A launch pushing what the last run left unpushed.
+    Launch,
+    /// `charter save`.
+    Cli,
+    /// A workspace going LIVE or LOCAL.
+    Live,
+}
+
+impl Trigger {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Quiet => "quiet",
+            Self::SessionEnd => "session-end",
+            Self::Quit => "quit",
+            Self::Launch => "launch",
+            Self::Cli => "cli",
+            Self::Live => "live",
+        }
+    }
+}
+
+/// Every save of the plane: the one save function (ADR 0051). Returns the exit status, and
+/// leaves one line in the save journal ([`journal`]) saying how it ended.
+///
+/// How far it goes is `[plane] mode` ([`crate::planesave`]). A plane that names no mode is
+/// saved as `charter save` always saved it — committed and pushed — because a bare command is
+/// the operator asking for exactly that; only the app asks such a plane which mode it wants.
+pub fn save_as(request: &Request, trigger: Trigger, say: Sink) -> u8 {
+    let started = std::time::Instant::now();
+    let plane = crate::planesave::Settings::read(request.root).plane;
+    let mut attempt = Attempt::default();
+    let code = if plane.mode.value == Some(crate::planesave::Mode::Off) {
+        say(Say::Info(format!(
+            "[plane] mode is off ({}), so charter commits nothing here — commit with git \
+             yourself, or set another mode.",
+            plane.mode.source.file().unwrap_or("default")
+        )));
+        attempt.outcome = "skipped";
+        0
+    } else {
+        commit_push(request, &plane, &["add", "-A"], &mut attempt, say)
+    };
+    let mode = match (request.no_push, plane.mode.value) {
+        (true, Some(crate::planesave::Mode::Off)) | (false, _) => plane.mode.value,
+        (true, _) => Some(crate::planesave::Mode::Commit),
+    };
+    journal_append(
+        request.root,
+        &serde_json::json!({
+            "at": now(),
+            "target": "plane",
+            "trigger": trigger.word(),
+            "mode": mode.unwrap_or(crate::planesave::Mode::Push).as_str(),
+            "files": attempt.files,
+            "commit": attempt.commit,
+            "pr": attempt.pr,
+            "ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "outcome": attempt.outcome,
+            "detail": attempt.detail,
+        }),
+    );
+    code
+}
+
+/// What one save attempt came to, filled in as it goes — the journal's line.
+#[derive(Debug)]
+struct Attempt {
+    /// `saved`, `committed`, `pr-open`, `blocked`, `skipped` or `failed`.
+    outcome: &'static str,
+    files: usize,
+    commit: Option<String>,
+    pr: Option<String>,
+    detail: String,
+}
+
+impl Default for Attempt {
+    fn default() -> Self {
+        Self {
+            // Every path that is not a failure says what it was, so one that says nothing is.
+            outcome: "failed",
+            files: 0,
+            commit: None,
+            pr: None,
+            detail: String::new(),
+        }
+    }
+}
+
+/// The most lines the journal keeps. The Saving view shows the newest fifty.
+const JOURNAL_LINES: usize = 500;
+
+/// Where the save journal lives: beside the push record, in the plane's state directory.
+pub fn journal_path(root: &Path) -> PathBuf {
+    crate::plane::state_dir(root).join("save-journal.jsonl")
+}
+
+/// The save journal, oldest first. A line that is not JSON is left out.
+pub fn journal(root: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(journal_path(root))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+/// Add `entry` to the journal, keeping the newest [`JOURNAL_LINES`]. Never fails loudly: a save
+/// that cannot write its note must still have saved.
+fn journal_append(root: &Path, entry: &serde_json::Value) {
+    let path = journal_path(root);
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let entry = entry.to_string();
+    lines.push(&entry);
+    let keep = &lines[lines.len().saturating_sub(JOURNAL_LINES)..];
+    let mut out = keep.join("\n");
+    out.push('\n');
+    // As the push record is written: into the state directory `private_dir` has refused as a
+    // link, beside the file and renamed over it.
+    if let Some(dir) = path.parent()
+        && crate::profiletrust::private_dir(dir).is_ok()
+    {
+        let _ = crate::profiletrust::write_private(dir, &path, out.as_bytes());
+    }
+}
+
+/// Seconds since the epoch, as the push record writes them.
+fn now() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// Outcome three of three: charter could not determine the tree's state, so it stops.
@@ -997,8 +1161,70 @@ fn show_what_is_staged(root: &Path, staged: &[String], say: Sink) {
     }
 }
 
-fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
+/// How many groups a generated message names before it says how many more there are.
+const SUMMARY_GROUPS: usize = 4;
+
+/// The message a save writes when it is given none: how many files, and what they are in the
+/// plane's own words — `charter save: 3 files (steward memory 2, ide todos 1)` — biggest group
+/// first, ties by name.
+fn summary(staged: &[String]) -> String {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for path in staged {
+        *counts.entry(group_of(path)).or_default() += 1;
+    }
+    let mut groups: Vec<(String, usize)> = counts.into_iter().collect();
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut named: Vec<String> = groups
+        .iter()
+        .take(SUMMARY_GROUPS)
+        .map(|(group, n)| format!("{group} {n}"))
+        .collect();
+    if groups.len() > SUMMARY_GROUPS {
+        named.push(format!("+{} more", groups.len() - SUMMARY_GROUPS));
+    }
+    let files = if staged.len() == 1 { "file" } else { "files" };
+    format!(
+        "charter save: {} {files} ({})",
+        staged.len(),
+        named.join(", ")
+    )
+}
+
+/// What a plane path is part of, as a person would name it: a persona's memory, a
+/// workspace's todos, the dispatch log — or, for anything else, its top directory.
+fn group_of(path: &str) -> String {
+    let parts: Vec<&str> = path.split('/').collect();
+    match parts.as_slice() {
+        ["personas", "_dispatch", ..] => "dispatch".into(),
+        ["personas", "_skills", ..] => "skills".into(),
+        ["personas", who, kind @ ("memory" | "refs"), _, ..] => format!("{who} {kind}"),
+        ["personas", who, _, ..] => format!("{who} persona"),
+        [
+            "workspaces",
+            ws,
+            kind @ ("memory" | "todos" | "changes" | "pieces" | "refs"),
+            _,
+            ..,
+        ] => {
+            format!("{ws} {kind}")
+        }
+        ["workspaces", ws, _, ..] => format!("{ws} workspace"),
+        [only] => (*only).to_string(),
+        [top, ..] => (*top).to_string(),
+        [] => String::new(),
+    }
+}
+
+fn commit_push(
+    request: &Request,
+    plane: &crate::planesave::Plane,
+    add_cmd: &[&str],
+    attempt: &mut Attempt,
+    say: Sink,
+) -> u8 {
     let root = request.root;
+    // `--sign` asks for it this once; `[plane] sign` asks for it every time.
+    let sign = request.sign || plane.sign.value;
     if stages_the_whole_tree(add_cmd) {
         // BEFORE the git-repo check and before any staging: a refusal that has already run
         // `git add -A` has done the damage and merely declined to name it.
@@ -1126,6 +1352,7 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
             say(Say::Info(
                 "Nothing to save — the control-plane working tree is clean.".into(),
             ));
+            attempt.outcome = "skipped";
             return 0;
         }
         Some(1) => {}
@@ -1160,6 +1387,7 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
         })
         .unwrap_or_default();
 
+    attempt.files = staged.len();
     show_what_is_staged(root, &staged, say);
 
     // The secret guard: refuse if a staged memory/ref file looks like it holds a secret. A
@@ -1252,23 +1480,20 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
             "Secrets belong in the vault (`charter persona secret set`). Remove it, then retry."
                 .into(),
         ));
+        attempt.outcome = "blocked";
+        attempt.detail = "a secret-shaped value in a memory or ref file".into();
         return 1;
     }
 
     let msg = match request.message {
         Some(text) if !text.is_empty() => text.to_string(),
-        _ => format!("charter save: {} file(s)", staged.len()),
+        _ => summary(&staged),
     };
     // Unsigned by default so a signer never hangs; `--sign` opts in. `-c` on the command line
     // beats the operator's global `commit.gpgsign = true`, which is the whole point: their
     // preference keeps working everywhere else on their machine, and inside the plane the
     // command-line value wins.
-    let unsigned = ["-c", "commit.gpgsign=false"];
-    let mut commit: Vec<&str> = if request.sign {
-        Vec::new()
-    } else {
-        unsigned.to_vec()
-    };
+    let mut commit: Vec<&str> = vec!["-c", gpgsign(sign)];
     commit.extend(["commit", "-q", "-m", msg.as_str()]);
     let _ = git::run(root, &commit, WRITE);
     let still_staged = |root: &Path| {
@@ -1297,6 +1522,11 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
         )));
         return 1;
     }
+    attempt.outcome = "committed";
+    attempt.commit = git::run(root, &["rev-parse", "HEAD"], git::READ)
+        .ok()
+        .map(|r| r.line().trim().to_string())
+        .filter(|sha| !sha.is_empty());
     let short = git::run(root, &["rev-parse", "--short", "HEAD"], git::READ)
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
@@ -1313,6 +1543,26 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
         say(Say::Info("Skipped push (--no-push).".into()));
         return 0;
     }
+    let file = plane.mode.source.file().unwrap_or("default");
+    match plane.mode.value {
+        Some(crate::planesave::Mode::Commit) => {
+            say(Say::Info(format!(
+                "Not pushed: [plane] mode is commit ({file})."
+            )));
+            return 0;
+        }
+        Some(mode @ (crate::planesave::Mode::Pr | crate::planesave::Mode::PrMerge)) => {
+            // charter-app#298 builds the save branch and the pull request. Until then, the
+            // one push a PR mode must never make is to the target branch.
+            say(Say::Info(format!(
+                "Not pushed: [plane] mode is {} ({file}), and this charter cannot open the pull \
+                 request yet.",
+                mode.as_str()
+            )));
+            return 0;
+        }
+        _ => {}
+    }
     if origin_https(root).is_none() {
         say(Say::Warn(
             "origin isn't on a forge charter knows (gitlab.com/github.com/…) — committed \
@@ -1324,7 +1574,23 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
     // rc 1 only when the commit reached NOWHERE — a pull-request branch that also failed. An
     // ordinary push failure has been reported and stays rc 0: `charter save` having committed
     // successfully is not a failed command.
-    u8::from(push_head(root, request.sign, say).outcome == Outcome::Stranded)
+    let target = plane.branch.value.as_deref();
+    let pushed = push_head(root, target, sign, say);
+    // The push may have rebased: the commit that landed is HEAD now.
+    attempt.commit = git::run(root, &["rev-parse", "HEAD"], git::READ)
+        .ok()
+        .map(|r| r.line().trim().to_string())
+        .filter(|sha| !sha.is_empty());
+    attempt.outcome = match pushed.outcome {
+        Outcome::Pushed => "saved",
+        Outcome::Branched => "pr-open",
+        Outcome::Unreachable => "committed",
+        Outcome::Conflict => "blocked",
+        Outcome::Stranded | Outcome::Failed => "failed",
+    };
+    attempt.pr = pushed.url.clone();
+    attempt.detail = pushed.detail.clone();
+    u8::from(pushed.outcome == Outcome::Stranded)
 }
 
 #[cfg(test)]
