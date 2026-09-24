@@ -285,8 +285,9 @@ describe("the Harness plugins groups in a workspace (charter-app#282)", () => {
     );
     expect(claude).not.toHaveTextContent("a Shared sentence");
     for (const title of ["opencode", "Codex"]) {
-      expect(within(section).getByRole("group", { name: `Harness plugins: ${title}` }))
-        .toHaveTextContent(`plugins for ${title} are not supported yet`);
+      expect(
+        within(section).getByRole("group", { name: `Harness plugins: ${title}` }),
+      ).toHaveTextContent(`plugins for ${title} are not supported yet`);
     }
     expect(asked("project_harness_plugins")).toEqual([{ plane: PLANE, workspace: "alpha" }]);
   });
