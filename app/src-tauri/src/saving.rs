@@ -6,7 +6,9 @@
 //! save is [`planegit::save_as`] with [`Trigger::Manual`] — the same function `charter save`
 //! runs, so the button and the command cannot disagree about what a save does.
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use charter_core::planegit::{self, Trigger};
 use charter_core::planesave;
@@ -44,6 +46,10 @@ pub struct PlaneSaving {
     pub ahead: Option<u32>,
     pub pr: Option<String>,
     pub blocked: Option<String>,
+    /// The target branch: `[plane] branch`, or the one the plane has checked out.
+    pub branch: String,
+    /// Whether a save would push. When it would not, a commit is as far as a save goes.
+    pub pushes: bool,
     /// `[plane] mode`, or `null` when the plane names none.
     pub mode: Option<String>,
     /// Where the mode came from: `charter.toml`, `charter.local.toml`, `[memory] share`, or
@@ -107,14 +113,47 @@ pub fn saving_of(root: &Path) -> PlaneSaving {
         ahead: standing.ahead,
         pr: standing.pr,
         blocked: standing.blocked,
+        branch: standing.branch,
+        pushes: standing.pushes,
         mode: plane.mode.value.map(|m| m.as_str().to_owned()),
         mode_from,
         journal,
     }
 }
 
+/// The planes a save is running in, so a second press waits its turn in words rather than
+/// racing the first for git's index lock (and journalling a failure that was only a race).
+static SAVING: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// A save running in one plane, for as long as it is held.
+struct Claim(PathBuf);
+
+impl Claim {
+    /// The plane at `root`, unless a save is already running in it.
+    fn of(root: &Path) -> Option<Self> {
+        let mut running = SAVING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        running
+            .insert(root.to_path_buf())
+            .then(|| Self(root.to_path_buf()))
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        SAVING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
 /// [`save_plane`], without a runtime.
 pub fn save(root: &Path, message: Option<&str>) -> Result<Vec<String>, String> {
+    let Some(_claim) = Claim::of(root) else {
+        return Err("A save of this project is already running — wait for it to finish.".into());
+    };
     let message = message.map(str::trim).filter(|m| !m.is_empty());
     let mut said: Vec<Say> = Vec::new();
     let mut say = |line: Say| said.push(line);
@@ -229,6 +268,30 @@ mod tests {
         assert_eq!(
             (last.trigger.as_str(), last.outcome.as_str(), last.files),
             ("manual", "committed", 1)
+        );
+    }
+
+    #[test]
+    fn a_second_save_while_one_runs_is_refused_in_words_and_the_first_is_untouched() {
+        let dir = plane("");
+        std::fs::write(dir.path().join("note.md"), "n").unwrap();
+        let running = Claim::of(dir.path()).expect("the first save");
+
+        let err = save(dir.path(), None).expect_err("a second save");
+
+        assert_eq!(
+            err,
+            "A save of this project is already running — wait for it to finish."
+        );
+        assert_eq!(
+            saving_of(dir.path()).changed,
+            ["note.md"],
+            "the second save committed"
+        );
+        drop(running);
+        assert!(
+            save(dir.path(), None).is_ok(),
+            "the next save, once the first is done"
         );
     }
 

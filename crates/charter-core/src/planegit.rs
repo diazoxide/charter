@@ -410,14 +410,38 @@ pub struct Standing {
     pub pr: Option<String>,
     /// Why the save is blocked, in git's own words.
     pub blocked: Option<String>,
+    /// The target branch commits are counted against: `[plane] branch`, or the one HEAD is on.
+    pub branch: String,
+    /// Whether a save would push: a mode that goes past the commit, and an origin on a forge
+    /// charter knows. When it would not, a commit is as far as a save goes, and a plane with
+    /// nothing left to commit is saved.
+    pub pushes: bool,
 }
 
 /// Where the plane at `root`'s unsaved work sits.
 pub fn standing(root: &Path) -> Standing {
+    let plane = crate::planesave::Settings::read(root).plane;
+    let here = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
+        .ok()
+        .filter(git::Run::ok)
+        .map(|r| r.line().trim().to_string());
+    let Some(here) = here else {
+        return Standing {
+            stage: Stage::Blocked,
+            changed: Vec::new(),
+            ahead: None,
+            pr: None,
+            blocked: Some(
+                "this plane is not a git repository, so there is nothing to commit to".into(),
+            ),
+            branch: String::new(),
+            pushes: false,
+        };
+    };
+    let branch = plane.branch.value.clone().unwrap_or(here);
+    let pushes = matches!(plane.mode.value, None | Some(crate::planesave::Mode::Push))
+        && origin_https(root).is_some();
     let changed = changed_paths(root);
-    let branch = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
-        .map(|r| r.line().trim().to_string())
-        .unwrap_or_default();
     let ahead = git::run(
         root,
         &[
@@ -451,7 +475,7 @@ pub fn standing(root: &Path) -> Standing {
         Stage::Changed
     } else if pr.is_some() {
         Stage::PrOpen
-    } else if ahead != Some(0) {
+    } else if pushes && ahead != Some(0) {
         // Nothing to count against is not nothing unpushed: say committed, never saved.
         Stage::Committed
     } else {
@@ -463,6 +487,8 @@ pub fn standing(root: &Path) -> Standing {
         ahead,
         pr,
         blocked,
+        branch,
+        pushes,
     }
 }
 

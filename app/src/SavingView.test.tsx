@@ -19,6 +19,8 @@ function standing(over: Partial<PlaneSaving> = {}): PlaneSaving {
     ahead: 0,
     pr: null,
     blocked: null,
+    branch: "main",
+    pushes: true,
     mode: "push",
     modeFrom: "charter.toml",
     journal: [],
@@ -71,7 +73,7 @@ describe("SavingView", () => {
         .getAllByRole("listitem")
         .map((li) => li.textContent),
     ).toEqual(["notes/a.md", "todos/b.json"]);
-    expect(screen.getByText("Mode: push (charter.toml)")).toBeTruthy();
+    expect(screen.getByText("Mode: push (charter.toml) — a save pushes to main")).toBeTruthy();
   });
 
   it("saves with the message typed, then reads the plane again", async () => {
@@ -131,10 +133,32 @@ describe("SavingView", () => {
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("says what a plane with no mode will do", async () => {
+  it("says what a plane with no mode will do, and where a save that cannot push stops", async () => {
     core([standing({ mode: null, modeFrom: "default" })]);
     render(<SavingView plane={PLANE} />);
-    expect(await screen.findByText("Mode: not set — a save commits and pushes")).toBeTruthy();
+    expect(await screen.findByText("Mode: not set — a save pushes to main")).toBeTruthy();
+    cleanup();
+
+    core([standing({ mode: "commit", pushes: false })]);
+    render(<SavingView plane={PLANE} />);
+    expect(
+      await screen.findByText("Mode: commit (charter.toml) — a save commits and goes no further"),
+    ).toBeTruthy();
+  });
+
+  it("offers a save for commits only when a save would push them", async () => {
+    core([standing({ stage: "committed", ahead: 2 })]);
+    render(<SavingView plane={PLANE} />);
+    await screen.findByText("2 committed, not pushed");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    cleanup();
+
+    core([standing({ stage: "committed", ahead: 2, pushes: false })]);
+    render(<SavingView plane={PLANE} />);
+    await screen.findByText("2 committed, not pushed");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("lists the last saves, newest first, each with how it ended", async () => {

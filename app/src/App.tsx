@@ -1007,18 +1007,19 @@ function App() {
    * whose journal holds the refusal's own words.
    */
   const { saving } = usePlaneSaving(inFront);
-  const [savingBusy, setSavingBusy] = useState(false);
+  /** The project a save from the bar is running in: busy is that project's, not the window's. */
+  const [savingIn, setSavingIn] = useState<PlaneId>();
   const saveInFront = useCallback(() => {
     const plane = inFrontNow.current;
     if (plane === undefined) return;
-    setSavingBusy(true);
+    setSavingIn(plane);
     void commands
       .savePlane(plane, null)
       .then((answer) => {
         if (answer.status === "error") windowDoes.openSaving(plane);
       })
       .finally(() => {
-        setSavingBusy(false);
+        setSavingIn(undefined);
         tellSaved();
       });
   }, [windowDoes]);
@@ -1044,7 +1045,7 @@ function App() {
           inFront !== undefined && saving !== undefined
             ? {
                 saving,
-                busy: savingBusy,
+                busy: savingIn === inFront,
                 onOpen: () => windowDoes.openSaving(inFront),
                 onSave: saveInFront,
               }

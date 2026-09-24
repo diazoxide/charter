@@ -11,7 +11,7 @@ import { closeProject } from "../opening.js";
  * A copy of the `daily` fixture made into a git repository with one commit and no remote, opened
  * through the window's own gate. A file written into it is what the title bar then says is
  * unsaved; the bar's save button runs the core's one save function, and with no remote the
- * commit is as far as it goes — so the bar moves from *1 changed* to *committed, not pushed*.
+ * commit is as far as it goes — so the bar moves from *1 changed* back to *Saved*.
  *
  * What is proved here and not in jsdom: `plane_saving` reads a real repository, `save_plane`
  * commits in it through `planegit::save_as`, and the bar re-reads after the save.
@@ -43,9 +43,26 @@ function git(dir: string, args: string[]): void {
 async function indicator(): Promise<string | null> {
   return browser.execute(
     (bar: string) =>
-      document.querySelector(`${bar} .save-indicator-where`)?.getAttribute("aria-label") ?? null,
+      document.querySelector(`${bar} button[aria-label^="Saving:"]`)?.getAttribute("aria-label") ??
+      null,
     BAR,
   );
+}
+
+/** Waits until the bar says `want`, and when it never does, says what it said instead. */
+async function untilTheBarSays(want: string, what: string): Promise<void> {
+  let last: string | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        last = await indicator();
+        return last === want;
+      },
+      { timeout: 30_000, interval: 250 },
+    );
+  } catch {
+    throw new Error(`${what}: the bar said ${JSON.stringify(last)}, not ${JSON.stringify(want)}`);
+  }
 }
 
 describe("saving the project from the title bar", function () {
@@ -56,7 +73,8 @@ describe("saving the project from the title bar", function () {
     const renamed = join(dirname(copied), "saving-plane");
     renameSync(copied, renamed);
     mkdirSync(join(renamed, ".charter"), { recursive: true });
-    writeFileSync(join(renamed, ".gitignore"), ".charter/\ncharter.local.toml\n");
+    // The fixture's own `.gitignore` already leaves `.charter/` and `charter.local.toml` out, and
+    // everything else it ignores is what a real plane ignores: kept as it is.
     git(renamed, ["init", "-q", "-b", "main"]);
     git(renamed, ["config", "user.name", "fixture"]);
     git(renamed, ["config", "user.email", "fixture@example.invalid"]);
@@ -86,25 +104,18 @@ describe("saving the project from the title bar", function () {
     await question.waitForDisplayed({ timeout: 30_000 });
     await $("button=Open project").click();
 
-    await browser.waitUntil(async () => (await indicator()) === "Saving: Saved", {
-      timeout: 30_000,
-      timeoutMsg: "the bar never said the fresh plane was saved",
-    });
+    await untilTheBarSays("Saving: Saved", "the bar never said the fresh plane was saved");
 
     writeFileSync(join(plane, "note.md"), "written by the scenario\n");
     // Focus is one of the reads' triggers, and the quickest one a spec can pull.
     await browser.execute(() => window.dispatchEvent(new Event("focus")));
-    await browser.waitUntil(async () => (await indicator()) === "Saving: 1 changed", {
-      timeout: 30_000,
-      timeoutMsg: "the bar never said the written file was unsaved",
-    });
+    await untilTheBarSays("Saving: 1 changed", "the bar never said the written file was unsaved");
 
     await $(`${BAR} button[aria-label="Save the project"]`).click();
 
-    await browser.waitUntil(async () => (await indicator()) === "Saving: Committed, not pushed", {
-      timeout: 30_000,
-      timeoutMsg: "the bar never said the save was committed",
-    });
-    expect(await $(`${BAR} button[aria-label="Save the project"]`).isExisting()).toBe(true);
+    // No remote: the commit is as far as a save goes, so once it is made the plane is saved
+    // and there is nothing left for the button to take.
+    await untilTheBarSays("Saving: Saved", "the bar never said the saved plane was saved");
+    expect(await $(`${BAR} button[aria-label="Save the project"]`).isExisting()).toBe(false);
   });
 });

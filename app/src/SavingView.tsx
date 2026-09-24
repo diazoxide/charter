@@ -1,7 +1,7 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { CircleAlert, CircleCheck, CircleDot, LoaderCircle, Save } from "lucide-react";
 import { commands, type PlaneId, type PlaneSaving, type SaveEntry } from "./bindings";
-import { PLANE_SAVED, tellSaved } from "./saving";
+import { tellSaved, usePlaneSaving } from "./saving";
 
 /**
  * **The Saving view** (charter-app#294, ADR 0051): where this plane's unsaved work sits, what
@@ -13,79 +13,44 @@ import { PLANE_SAVED, tellSaved } from "./saving";
  * again rather than guessing what changed.
  */
 export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () => void }) {
-  const [saving, setSaving] = useState<PlaneSaving | null>(null);
-  /** Why the plane could not be read. */
-  const [trouble, setTrouble] = useState<string | null>(null);
-  /** Why the last save was refused — kept across the read that follows it. */
+  // The title bar's reader: fresh on focus, on plane changes, on a timer and after any save.
+  const { saving } = usePlaneSaving(plane);
+  /** Why the last save was refused — kept across the reads that follow it. */
   const [refused, setRefused] = useState<string | null>(null);
   const [said, setSaid] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const messageId = useId();
 
-  /** Goes up after a save, so the plane is read again. */
-  const [reads, setReads] = useState(0);
-
-  useEffect(() => {
-    // Keyed by the plane and the count: an answer for a read the view has moved past is dropped.
-    let gone = false;
-    void commands
-      .planeSaving(plane)
-      .then((got) => {
-        if (gone) return;
-        if (got.status === "ok") {
-          setSaving(got.data);
-          setTrouble(null);
-        } else {
-          setTrouble(got.error);
-        }
-      })
-      .catch((err: unknown) => {
-        if (!gone) setTrouble(String(err));
-      });
-    return () => {
-      gone = true;
-    };
-  }, [plane, reads]);
-
-  // A save from the title bar is one this view should show too.
-  useEffect(() => {
-    const again = () => setReads((n) => n + 1);
-    window.addEventListener(PLANE_SAVED, again);
-    return () => window.removeEventListener(PLANE_SAVED, again);
-  }, []);
-
   const save = async () => {
     setBusy(true);
     setSaid(null);
     setRefused(null);
     const typed = message.trim();
-    const got = await commands.savePlane(plane, typed === "" ? null : typed);
-    if (got.status === "ok") {
-      setSaid(got.data);
-      setMessage("");
-      onSaved?.();
+    try {
+      const got = await commands.savePlane(plane, typed === "" ? null : typed);
+      if (got.status === "ok") {
+        setSaid(got.data);
+        setMessage("");
+        onSaved?.();
+      } else {
+        setRefused(got.error);
+      }
+    } catch (err: unknown) {
+      setRefused(String(err));
+    } finally {
+      setBusy(false);
       tellSaved();
-    } else {
-      setRefused(got.error);
     }
-    setReads((n) => n + 1);
-    setBusy(false);
   };
 
   return (
     <div className="saving" data-testid="saving-view">
-      {saving === null ? (
-        trouble === null ? (
-          <p className="pending" aria-busy="true">
-            <LoaderCircle className="node-icon spinning" aria-hidden="true" />
-            Reading the plane
-          </p>
-        ) : (
-          <p className="trouble" role="alert">
-            {trouble}
-          </p>
-        )
+      {saving === undefined ? (
+        <p className="pending" aria-busy="true">
+          <LoaderCircle className="node-icon spinning" aria-hidden="true" />
+          Reading the plane
+        </p>
       ) : (
         <>
           <p className={`saving-stage saving-${saving.stage}`}>{stageText(saving)}</p>
@@ -132,9 +97,9 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
               Save
             </button>
           </div>
-          {(refused ?? trouble) !== null && (
+          {refused !== null && (
             <p className="trouble" role="alert">
-              {refused ?? trouble}
+              {refused}
             </p>
           )}
           {said !== null && (
@@ -212,9 +177,15 @@ export function SaveIndicator({
   );
 }
 
-/** Whether pressing Save could do anything: there is work, or commits, the remote lacks. */
+/** Whether pressing Save could do anything: files to commit, a blocked save to try again, or
+ *  commits a push would carry. Commits on a plane whose save stops at the commit are as far as
+ *  a save goes, and a button that could only say "nothing to save" is not offered. */
 function savable(saving: PlaneSaving): boolean {
-  return saving.stage !== "saved" && saving.stage !== "pr-open";
+  return (
+    saving.changed.length > 0 ||
+    saving.stage === "blocked" ||
+    (saving.stage === "committed" && saving.pushes)
+  );
 }
 
 /** The stage, as the view and the title bar say it. */
@@ -236,8 +207,11 @@ export function stageText(saving: PlaneSaving): string {
 }
 
 function modeText(saving: PlaneSaving): string {
-  if (saving.mode === null) return "Mode: not set — a save commits and pushes";
-  return `Mode: ${saving.mode} (${saving.modeFrom})`;
+  const mode = saving.mode === null ? "Mode: not set" : `Mode: ${saving.mode} (${saving.modeFrom})`;
+  const reach = saving.pushes
+    ? `a save pushes to ${saving.branch}`
+    : "a save commits and goes no further";
+  return `${mode} — ${reach}`;
 }
 
 function entryText(one: SaveEntry): string {

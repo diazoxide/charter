@@ -1837,15 +1837,18 @@ fn a_commit_the_remote_does_not_have_is_committed_and_counted() {
     fixture.with_a_remote();
     std::fs::write(fixture.root.join("a.md"), "a").unwrap();
     let _ = fixture.just_save();
-    fixture.with_settings("[plane]\nmode = \"commit\"\n");
-    std::fs::write(fixture.root.join("b.md"), "b").unwrap();
-    let _ = fixture.just_save();
+    // An agent's own commits, with plain git, on a plane whose saves push.
+    for name in ["b.md", "c.md"] {
+        std::fs::write(fixture.root.join(name), name).unwrap();
+        run(&fixture.root, &["add", name]);
+        run(&fixture.root, &["commit", "-q", "-m", name]);
+    }
 
     let got = standing(&fixture.root);
 
     assert_eq!(
-        (got.stage, got.ahead),
-        (Stage::Committed, Some(2)),
+        (got.stage, got.ahead, got.pushes),
+        (Stage::Committed, Some(2), true),
         "{got:?}"
     );
 }
@@ -1895,5 +1898,52 @@ fn a_commit_waiting_on_its_pull_request_is_pushed_with_the_pr_open() {
     assert_eq!(
         got.pr.as_deref(),
         Some("https://github.com/acme/plane/compare/charter/abc")
+    );
+}
+
+#[test]
+fn a_plane_whose_save_stops_at_the_commit_is_saved_once_nothing_is_left_to_take() {
+    // No remote at all: a save commits and can go no further, so nothing more is unsaved.
+    let fixture = Fixture::plane();
+    let got = standing(&fixture.root);
+    assert_eq!((got.stage, got.pushes), (Stage::Saved, false), "{got:?}");
+
+    // A remote, and a mode that stops at the commit.
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    fixture.with_settings("[plane]\nmode = \"commit\"\n");
+    std::fs::write(fixture.root.join("a.md"), "a").unwrap();
+    let _ = fixture.just_save();
+    let got = standing(&fixture.root);
+    assert_eq!((got.stage, got.pushes), (Stage::Saved, false), "{got:?}");
+}
+
+#[test]
+fn commits_are_counted_against_the_target_branch_the_settings_name() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    run(&fixture.root, &["checkout", "-q", "-b", "trunk"]);
+    fixture.with_settings("[plane]\nmode = \"push\"\nbranch = \"trunk\"\n");
+    std::fs::write(fixture.root.join("a.md"), "a").unwrap();
+    let (code, said) = fixture.just_save();
+    assert_eq!(code, 0, "{said}");
+
+    let got = standing(&fixture.root);
+
+    assert_eq!(
+        (got.stage, got.ahead, got.branch.as_str()),
+        (Stage::Saved, Some(0), "trunk")
+    );
+}
+
+#[test]
+fn a_plane_that_is_not_a_repository_is_blocked_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+    let got = standing(dir.path());
+    assert_eq!(got.stage, Stage::Blocked);
+    assert_eq!(
+        got.blocked.as_deref(),
+        Some("this plane is not a git repository, so there is nothing to commit to")
     );
 }

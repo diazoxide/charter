@@ -1622,6 +1622,10 @@ export type PlaneSaving = {
 	ahead: number | null,
 	pr: string | null,
 	blocked: string | null,
+	/**  The target branch: `[plane] branch`, or the one the plane has checked out. */
+	branch: string,
+	/**  Whether a save would push. When it would not, a commit is as far as a save goes. */
+	pushes: boolean,
 	/**  `[plane] mode`, or `null` when the plane names none. */
 	mode: string | null,
 	/**
