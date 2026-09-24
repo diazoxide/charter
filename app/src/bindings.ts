@@ -480,6 +480,20 @@ export const commands = {
 	 *  doing its one job, and a contributed panel rests on it entirely.
 	 */
 	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
+	/**  Every vault the plane registers: name, provider, secret count and health. Never a value. */
+	vaultList: (plane: PlaneId) => typedError<VaultSummary[], string>(__TAURI_INVOKE("vault_list", { plane })),
+	/**  One vault's secrets: names, size bands and when each was written. Never a value. */
+	vaultOpen: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_open", { plane, vault })),
+	/**  One vault read again, from the keys index for a keyring vault. Never a value. */
+	vaultRefresh: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_refresh", { plane, vault })),
+	/**  Store a new secret. The value comes in here and goes nowhere but the vault. */
+	vaultSecretAdd: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_add", { plane, vault, key, value })),
+	/**  Replace a held secret's value. The value comes in here and goes nowhere but the vault. */
+	vaultSecretSet: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_set", { plane, vault, key, value })),
+	/**  Move a secret to a new name. No value crosses. */
+	vaultSecretRename: (plane: PlaneId, vault: string, from: string, to: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_rename", { plane, vault, from, to })),
+	/**  Delete a secret. No value crosses. */
+	vaultSecretDelete: (plane: PlaneId, vault: string, key: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_delete", { plane, vault, key })),
 	/**
 	 *  Every view an approved extension offers this window.
 	 * 
@@ -1479,6 +1493,9 @@ export type Restore = {
 	dropped: string[],
 };
 
+/**  A value the window hands over to be stored, and the only way one enters. */
+export type SecretValue = string;
+
 /**
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's
  *  persona and todos.
@@ -1557,6 +1574,36 @@ export type UsageTurn = {
 	context: Percent | null,
 	/**  What that turn wrote to the cache, as charter spells tokens. */
 	written: string | null,
+};
+
+/**  One vault, opened. */
+export type VaultContents = {
+	name: string,
+	provider: string,
+	count: number,
+	health: VaultHealth,
+	secrets: VaultSecret[],
+};
+
+/**  Whether a vault can be read, and the provider's own sentence about it. Never a value. */
+export type VaultHealth = {
+	ok: boolean,
+	detail: string,
+};
+
+/**  One secret, as a vault's table shows it: its name, and what the keys index knows. */
+export type VaultSecret = {
+	key: string,
+	size: string | null,
+	updated: string | null,
+};
+
+/**  One registered vault, as the Vaults panel lists it. */
+export type VaultSummary = {
+	name: string,
+	provider: string,
+	count: number | null,
+	health: VaultHealth,
 };
 
 /**

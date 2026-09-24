@@ -169,3 +169,81 @@ fn nothing_that_holds_a_value_prints_it_in_debug() {
         assert!(!shown.contains("debug-leak-value"), "{shown}");
     }
 }
+
+/// A plane with one vault registered locally, and the context to reach it.
+fn plane_with(provider: &str) -> (tempfile::TempDir, Ctx, registry::Vault) {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let mut config = serde_json::Map::new();
+    if provider != "keyring" {
+        config.insert(
+            "file".into(),
+            serde_json::Value::String(
+                tmp.path()
+                    .join(".charter/vaults/ops.json")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+    }
+    registry::add_vault(&ctx, "ops", provider, config, None, false, false).unwrap();
+    let v = registry::vault(&ctx, "ops").unwrap();
+    (tmp, ctx, v)
+}
+
+#[test]
+fn renaming_a_secret_moves_its_value_to_the_new_key_and_the_old_one_is_gone() {
+    for provider in ["keyring", "plain-file"] {
+        let (_tmp, ctx, v) = plane_with(provider);
+        cmd::set_value(&ctx, &v, "OLD", "rename-value-7c1e").unwrap();
+
+        cmd::rename(&ctx, &v, "OLD", "NEW").unwrap();
+
+        assert_eq!(
+            cmd::keys(&ctx, &v).unwrap(),
+            vec!["NEW".to_string()],
+            "{provider}"
+        );
+        assert_eq!(
+            cmd::get_value(&ctx, &v, "NEW").unwrap(),
+            "rename-value-7c1e"
+        );
+    }
+}
+
+#[test]
+fn a_rename_onto_a_key_that_exists_is_refused_and_both_are_left_as_they_were() {
+    let (_tmp, ctx, v) = plane_with("keyring");
+    cmd::set_value(&ctx, &v, "A", "value-of-a-19f").unwrap();
+    cmd::set_value(&ctx, &v, "B", "value-of-b-2d8").unwrap();
+
+    let err = cmd::rename(&ctx, &v, "A", "B").unwrap_err();
+
+    assert!(err.message.contains("'B'"), "{}", err.message);
+    assert!(!err.message.contains("value-of"), "{}", err.message);
+    assert_eq!(cmd::get_value(&ctx, &v, "A").unwrap(), "value-of-a-19f");
+    assert_eq!(cmd::get_value(&ctx, &v, "B").unwrap(), "value-of-b-2d8");
+}
+
+#[test]
+fn a_rename_of_a_key_the_vault_does_not_hold_is_not_found() {
+    let (_tmp, ctx, v) = plane_with("keyring");
+    let err = cmd::rename(&ctx, &v, "MISSING", "NEW").unwrap_err();
+    assert_eq!(err.kind, Kind::NotFound);
+}
+
+#[test]
+fn renaming_in_a_reference_vault_moves_the_reference_and_never_resolves_it() {
+    // No `op` on this PATH: a rename that resolved the reference would fail, and one that
+    // then stored what it resolved would turn a pointer into a plaintext.
+    let (_tmp, ctx, v) = plane_with("reference");
+    cmd::set_value(&ctx, &v, "OLD", "op://Eng/deploy/token").unwrap();
+
+    cmd::rename(&ctx, &v, "OLD", "NEW").unwrap();
+
+    assert_eq!(
+        reference::reference_for(&ctx, &v, "NEW").unwrap(),
+        serde_json::json!("op://Eng/deploy/token")
+    );
+    assert!(reference::reference_for(&ctx, &v, "OLD").is_err());
+}

@@ -7,12 +7,14 @@ import {
   FolderGit2,
   GitBranch,
   LoaderCircle,
+  KeyRound,
   TriangleAlert,
   UserRound,
 } from "lucide-react";
 import { NeedsYou } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
+import { Vaults } from "./Vaults";
 import { Chart, Facts } from "./Views";
 import { commands, type ExtensionView, type PanelView } from "./bindings";
 import type { Catalogued, Offer } from "./actions";
@@ -63,6 +65,7 @@ export function Panels({
   views = [],
   shownRow,
   onShowRow,
+  plane,
 }: {
   /** The focused workspace, whose todos these are. The queue is not its — it is every
    *  workspace's, because a chat asking for you in a workspace nobody is looking at is
@@ -94,6 +97,9 @@ export function Panels({
    */
   shownRow: string | undefined;
   onShowRow: (row: string | undefined) => void;
+  /** The project on screen, whose vaults are drawn under the workspace's panels. A vault is
+   *  the plane's, so they are drawn with no workspace focused too. */
+  plane?: string;
 }) {
   const { panels, trouble } = state;
 
@@ -147,6 +153,8 @@ export function Panels({
           )}
         </>
       )}
+
+      {plane !== undefined && <Vaults plane={plane} />}
     </aside>
   );
 }
@@ -194,6 +202,7 @@ const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   piece: GitBranch,
   note: FileText,
   trouble: TriangleAlert,
+  vault: KeyRound,
   dot: Circle,
 };
 

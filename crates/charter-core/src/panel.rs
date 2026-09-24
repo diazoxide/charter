@@ -109,6 +109,8 @@ pub enum Mark {
     Note,
     /// Something that is wrong.
     Trouble,
+    /// A vault of secrets.
+    Vault,
     /// No claim about what the row is. What a declared panel gets when it says nothing.
     #[default]
     Dot,
@@ -124,13 +126,14 @@ impl Mark {
             Self::Piece => "piece",
             Self::Note => "note",
             Self::Trouble => "trouble",
+            Self::Vault => "vault",
             Self::Dot => "dot",
         }
     }
 
     /// Every word in the vocabulary, for a refusal that lists what was allowed instead of
     /// leaving the author to guess.
-    pub fn every() -> [Self; 7] {
+    pub fn every() -> [Self; 8] {
         [
             Self::Todo,
             Self::Persona,
@@ -138,6 +141,7 @@ impl Mark {
             Self::Piece,
             Self::Note,
             Self::Trouble,
+            Self::Vault,
             Self::Dot,
         ]
     }

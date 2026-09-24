@@ -19,6 +19,7 @@ mod sessions;
 mod slowstart;
 mod updates;
 mod usage;
+mod vaults;
 mod views;
 mod windowprefs;
 mod workspaces;
@@ -1158,6 +1159,13 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::forget_extension,
             extensions::extension_themes,
             extensions::extension_panels,
+            vaults::vault_list,
+            vaults::vault_open,
+            vaults::vault_refresh,
+            vaults::vault_secret_add,
+            vaults::vault_secret_set,
+            vaults::vault_secret_rename,
+            vaults::vault_secret_delete,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,

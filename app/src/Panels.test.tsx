@@ -5,7 +5,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { clearMocks } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Panels } from "./Panels";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
@@ -170,6 +170,7 @@ function draw(
     onPress?: (offer: Offer) => void;
     contributed?: PanelView[];
     views?: ExtensionView[];
+    plane?: string;
   } = {},
 ) {
   function Window() {
@@ -188,6 +189,7 @@ function draw(
         views={on.views ?? []}
         shownRow={shownRow}
         onShowRow={setShownRow}
+        plane={on.plane}
       />
     );
   }
@@ -231,6 +233,20 @@ describe("the right-hand region", () => {
     draw();
 
     expect(screen.getByTestId("panels").textContent).not.toMatch(/alert/i);
+  });
+
+  it("draws the plane's vaults whichever workspace is focused, and with none", async () => {
+    // A vault is registered once per plane, so it is not one workspace's.
+    mockIPC((cmd) =>
+      cmd === "vault_list"
+        ? [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }]
+        : null,
+    );
+    draw({ workspace: undefined, plane: PLANE });
+
+    const vaults = await screen.findByTestId("panel-vaults");
+    expect(within(vaults).getByRole("heading")).toHaveTextContent("Vaults");
+    expect(await within(vaults).findByText("ops")).toBeInTheDocument();
   });
 
   it("draws no workspace answers when none is focused", () => {

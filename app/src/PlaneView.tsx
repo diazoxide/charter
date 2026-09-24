@@ -1926,6 +1926,7 @@ export function PlaneView({
               views={views}
               shownRow={shownRow}
               onShowRow={setShownRow}
+              plane={plane}
             />
           ),
           bottom: <BottomBar workspace={ofWorkspace} state={workspaceState} />,

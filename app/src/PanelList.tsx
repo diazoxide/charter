@@ -9,6 +9,7 @@ import {
   GitBranch,
   Search,
   Star,
+  KeyRound,
   TriangleAlert,
   UserRound,
 } from "lucide-react";
@@ -77,6 +78,7 @@ const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   piece: GitBranch,
   note: FileText,
   trouble: TriangleAlert,
+  vault: KeyRound,
   dot: Circle,
 };
 
