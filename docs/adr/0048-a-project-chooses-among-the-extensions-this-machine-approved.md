@@ -261,8 +261,8 @@ check is per file, not per table, because what makes the file unsafe — it trav
 every table in it.
 
 **One way in.** Every reader of the two files reads them through
-`charter_core::settings::layer_text(root, which)`, which returns `None` for a Local file the check
-refuses; `extension::project::Choices::read`, `theme::Said::read` and
+`charter_core::settings::layer_text(root, which)`, which hands a Local file the check refuses to
+no reader — `LayerText::LeftOut`, carrying the check's sentence (charter-app#319, below); `extension::project::Choices::read`, `theme::Said::read` and
 `harness_plugin::Choices::read` each call it, and so does every `read_in` through them. #308 was
 three readers that each read the file themselves and so each forgot the check, so a test
 (`crates/charter-core/tests/the_local_layer_has_one_reader.rs`) fails on production code that
@@ -279,6 +279,20 @@ charter reinit adds /charter.local.toml to .gitignore."_, or, for a tracked file
 are refused" to "charter reads nothing in it", so `charter harness list`, `charter doctor` and the
 tab say one thing about one state. Each extension, theme and plugin in the tab says which layer
 decided it, and none says Local.
+
+**And every group that shows what is in force says why** (charter-app#319). A value set in Local
+and not applied would otherwise read "decided by charter.toml" with no reason beside it — worst in
+Workspace settings, which has no Local section. So each reader keeps the check's sentence with
+what it read (`Choices::local_left_out`, `theme::Said::local_left_out`), each answer the settings
+tabs ask for carries it (`project_extensions`, `project_theme`, and each harness's group from
+`project_harness_plugins`), and the Extensions group, the Theme group and each Harness plugins
+group say it once, in Project settings' Shared section and in every Workspace settings tab. It is
+the same sentence, from the same `git status`, as the Local section's refusal: there is one
+wording, and the window writes none of it. The Local section's own groups leave it to that
+section's head, which already says it once. **Only where the file would have decided something:**
+a reader keeps the sentence only when the left-out file says something in its own table — an
+extension, a theme pick, a plugin of that harness (`LayerText::left_out_where`) — so a Local file
+that holds only profiles does not put the sentence in five groups that had nothing to lose.
 
 **The cost** is one `git status` of one path per read, and only when the file exists; a plane with
 no `charter.local.toml` runs no git. Rejected: caching the answer, since a file is ignored or

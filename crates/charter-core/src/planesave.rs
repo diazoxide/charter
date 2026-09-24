@@ -118,8 +118,8 @@ impl Settings {
     pub fn read(root: &std::path::Path) -> Self {
         use crate::settings::{Which, layer_text};
         Self::from_text(
-            layer_text(root, Which::Shared).as_deref(),
-            layer_text(root, Which::Local).as_deref(),
+            layer_text(root, Which::Shared).text(),
+            layer_text(root, Which::Local).text(),
         )
     }
 

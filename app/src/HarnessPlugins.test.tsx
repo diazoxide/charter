@@ -45,6 +45,11 @@ const OWN_WHY =
 const OLD_WHY =
   "charter@charter is always off: it is the Python charter's plugin, and a chat the app starts carrying it too would have two sets of hooks and two handoff skills";
 
+/** The ignore check's sentence for a `charter.local.toml` git would commit, as the core says it
+ *  (charter-app#308): what the Local section says, and every group that shows what is in force. */
+const LEFT_OUT =
+  "git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter reinit adds /charter.local.toml to .gitignore.";
+
 const HARNESSES: HarnessPlugins[] = [
   {
     harness: "claude",
@@ -52,6 +57,7 @@ const HARNESSES: HarnessPlugins[] = [
     unsupported: null,
     record: "/home/dev/.claude/plugins/installed_plugins.json",
     trouble: null,
+    local_left_out: null,
     plugins: [
       {
         id: "acme@corp",
@@ -117,6 +123,7 @@ const HARNESSES: HarnessPlugins[] = [
     unsupported:
       "plugins for opencode are not supported yet — charter does not start opencode chats yet",
     trouble: null,
+    local_left_out: null,
     plugins: [],
   },
   {
@@ -126,6 +133,7 @@ const HARNESSES: HarnessPlugins[] = [
     unsupported:
       "plugins for Codex are not supported yet — Codex 0.147.0 turns a plugin on or off only in its own config.toml",
     trouble: null,
+    local_left_out: null,
     plugins: [
       {
         id: "charter@charter",
@@ -146,7 +154,7 @@ function core(harnesses: HarnessPlugins[] = HARNESSES) {
   let reads = 0;
   mockIPC((cmd, args) => {
     if (cmd === "project_settings") return BOTH;
-    if (cmd === "project_extensions") return [];
+    if (cmd === "project_extensions") return { extensions: [], local_left_out: null };
     if (cmd === "extensions_on") return [];
     if (cmd === "project_harness_plugins") {
       reads += 1;
@@ -272,5 +280,20 @@ describe("the Harness plugins groups (charter-app#274)", () => {
     await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
 
     await waitFor(() => expect(reads()).toBe(2));
+  });
+
+  it("says once in each harness's group why charter.local.toml was left out (charter-app#319)", async () => {
+    core(HARNESSES.map((one) => ({ ...one, local_left_out: LEFT_OUT })));
+    const { shared, local } = await drawn();
+
+    for (const title of ["Claude Code", "opencode", "Codex"]) {
+      const name = `Harness plugins: ${title}`;
+      expect(
+        within(within(shared).getByRole("group", { name })).getAllByText(LEFT_OUT),
+      ).toHaveLength(1);
+      // The Local section's groups leave it to the section's head, which says it from the file's
+      // own refusals (held in ProjectSettings.test.tsx).
+      expect(within(local).getByRole("group", { name })).not.toHaveTextContent(LEFT_OUT);
+    }
   });
 });

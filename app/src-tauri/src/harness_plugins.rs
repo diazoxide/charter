@@ -24,6 +24,11 @@ pub struct HarnessPlugins {
     /// Why the harness's own record of what it installed could not be read, if it could not.
     pub trouble: Option<String>,
     pub plugins: Vec<HarnessPlugin>,
+    /// The ignore check's sentence while git would carry `charter.local.toml` and it names a
+    /// plugin of this harness — the one the Project settings tab's Local section says — so this
+    /// group says why a plugin set there is not applied (charter-app#319). The core's
+    /// `Choices::local_left_out`, asked for this harness.
+    pub local_left_out: Option<String>,
 }
 
 /// One plugin, in one project.
@@ -109,6 +114,9 @@ fn groups(
                         .collect(),
                 })
                 .collect(),
+            local_left_out: choices
+                .local_left_out(group.adapter.harness())
+                .map(str::to_owned),
         })
         .collect()
 }
@@ -228,5 +236,50 @@ mod tests {
             .expect("the pin is listed");
         assert_eq!(own.ignored.len(), 1, "{:?}", own.ignored);
         assert_eq!(own.ignored[0].file, "workspaces/alpha/workspace.json");
+        assert_eq!(
+            got[0].local_left_out, None,
+            "there is no local file to leave out"
+        );
+    }
+
+    #[test]
+    fn the_group_of_a_harness_the_left_out_local_file_names_says_why_in_project_and_workspace() {
+        // charter-app#319: each harness is a group of its own in the settings tabs, and the one
+        // whose plugins the Local file set carries the ignore check's sentence — the Local
+        // section's — while git would carry the file, so a plugin Local turned off and still on
+        // says why. A harness the file does not name has nothing that was not applied.
+        let plane = crate::extensions::test_plane(
+            "",
+            "[harness_plugins.claude]\n\"figma@official\" = false\n",
+            false,
+        );
+        let root = plane.path();
+        let why = charter_core::profiles::ignore_check(root).reason;
+        assert!(why.contains("charter reads nothing in it"), "{why}");
+        let empty = tempfile::tempdir().expect("an empty home");
+        let env = harness_plugin::Env {
+            chat: &[],
+            home: Some(empty.path().to_path_buf()),
+            process: false,
+        };
+
+        for workspace in [None, Some("alpha")] {
+            let choices = harness_plugin::Choices::read_in(root, workspace);
+            let got = groups(harness_plugin::survey(&choices, &env), &choices);
+
+            let said: Vec<(&str, Option<&str>)> = got
+                .iter()
+                .map(|group| (group.harness.as_str(), group.local_left_out.as_deref()))
+                .collect();
+            assert_eq!(
+                said,
+                [
+                    ("claude", Some(why.as_str())),
+                    ("opencode", None),
+                    ("codex", None)
+                ],
+                "{workspace:?}"
+            );
+        }
     }
 }

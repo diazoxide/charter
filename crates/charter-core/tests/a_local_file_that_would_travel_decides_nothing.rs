@@ -9,6 +9,10 @@
 //! Each reader is asked of the same three planes: the local file ignored (Local decides), not
 //! ignored (Local is not read), and tracked (Local is not read). And in a workspace, whose layer
 //! sits between the two files: with Local refused, the workspace has the last word.
+//!
+//! **And each reader says it left the file out** (charter-app#319), in the ignore check's own
+//! sentence — the one the Project settings tab's Local section says — so every group of a
+//! settings tab that shows what is in force can say why a Local value is not.
 
 use std::fs;
 use std::path::Path;
@@ -16,7 +20,7 @@ use std::path::Path;
 use charter_core::extension::project::{self, theme};
 use charter_core::harness_plugin;
 use charter_core::profiles::LOCAL_FILE;
-use charter_core::settings::{self, Which};
+use charter_core::settings::{self, LayerText, Which};
 
 mod support;
 
@@ -61,6 +65,23 @@ fn refused(root: &Path) -> bool {
     !charter_core::profiles::ignore_check(root).passes()
 }
 
+/// The ignore check's sentence for the plane at `root`.
+fn why(root: &Path) -> String {
+    charter_core::profiles::ignore_check(root).reason
+}
+
+/// The two layers of the plane at `root` as `layer_text` hands them there: Shared read, and
+/// Local left out with its sentence.
+fn left_out(root: &Path) -> (LayerText, LayerText) {
+    (
+        LayerText::Text(SHARED.to_owned()),
+        LayerText::LeftOut {
+            why: why(root),
+            text: LOCAL.to_owned(),
+        },
+    )
+}
+
 #[test]
 fn an_ignored_local_file_is_read_by_every_reader() {
     charter_core::unsteered!();
@@ -80,10 +101,8 @@ fn an_ignored_local_file_is_read_by_every_reader() {
         harness_plugin::Choices::read(root),
         harness_plugin::Choices::from_text(Some(SHARED), Some(LOCAL))
     );
-    assert_eq!(
-        settings::layer_text(root, Which::Local).as_deref(),
-        Some(LOCAL)
-    );
+    assert_eq!(settings::layer_text(root, Which::Local).text(), Some(LOCAL));
+    assert_eq!(settings::layer_text(root, Which::Local).left_out(), None);
 }
 
 #[test]
@@ -94,14 +113,12 @@ fn a_local_file_git_would_commit_or_tracks_decides_no_extension() {
         let root = dir.path();
         assert!(refused(root), "{how:?}");
 
-        assert_eq!(
-            project::Choices::read(root),
-            project::Choices::from_text(Some(SHARED), None),
-            "{how:?}"
-        );
+        let (shared, local) = left_out(root);
+        let without = || project::Choices::from_layers(&shared, &local);
+        assert_eq!(project::Choices::read(root), without(), "{how:?}");
         assert_eq!(
             project::Choices::read_in(root, Some("alpha")),
-            project::Choices::from_text(Some(SHARED), None).in_workspace("alpha", Some(MANIFEST)),
+            without().in_workspace("alpha", Some(MANIFEST)),
             "{how:?}: in a workspace, the workspace has the last word"
         );
     }
@@ -114,14 +131,12 @@ fn a_local_file_git_would_commit_or_tracks_picks_no_theme() {
         let dir = plane(how);
         let root = dir.path();
 
-        assert_eq!(
-            theme::Said::read(root),
-            theme::Said::from_text(Some(SHARED), None),
-            "{how:?}"
-        );
+        let (shared, local) = left_out(root);
+        let without = || theme::Said::from_layers(&shared, &local);
+        assert_eq!(theme::Said::read(root), without(), "{how:?}");
         assert_eq!(
             theme::Said::read_in(root, Some("alpha")),
-            theme::Said::from_text(Some(SHARED), None).in_workspace("alpha", Some(MANIFEST)),
+            without().in_workspace("alpha", Some(MANIFEST)),
             "{how:?}"
         );
     }
@@ -134,15 +149,12 @@ fn a_local_file_git_would_commit_or_tracks_chooses_no_harness_plugin() {
         let dir = plane(how);
         let root = dir.path();
 
-        assert_eq!(
-            harness_plugin::Choices::read(root),
-            harness_plugin::Choices::from_text(Some(SHARED), None),
-            "{how:?}"
-        );
+        let (shared, local) = left_out(root);
+        let without = || harness_plugin::Choices::from_layers(&shared, &local);
+        assert_eq!(harness_plugin::Choices::read(root), without(), "{how:?}");
         assert_eq!(
             harness_plugin::Choices::read_in(root, Some("alpha")),
-            harness_plugin::Choices::from_text(Some(SHARED), None)
-                .in_workspace("alpha", Some(MANIFEST)),
+            without().in_workspace("alpha", Some(MANIFEST)),
             "{how:?}"
         );
     }
@@ -154,10 +166,100 @@ fn the_shared_file_is_read_whatever_git_says_about_the_local_one() {
     let dir = plane(Git::Tracked);
 
     assert_eq!(
-        settings::layer_text(dir.path(), Which::Shared).as_deref(),
+        settings::layer_text(dir.path(), Which::Shared).text(),
         Some(SHARED)
     );
-    assert_eq!(settings::layer_text(dir.path(), Which::Local), None);
+    assert_eq!(settings::layer_text(dir.path(), Which::Local).text(), None);
+}
+
+#[test]
+fn each_reader_says_it_left_the_local_file_out_in_the_local_sections_words() {
+    charter_core::unsteered!();
+    for how in [Git::Committable, Git::Tracked] {
+        let dir = plane(how);
+        let root = dir.path();
+        let local = settings::read(root, Which::Local).unwrap();
+        let said = local
+            .refusals
+            .iter()
+            .find(|one| one.contains("charter reads nothing in it"))
+            .unwrap_or_else(|| panic!("{how:?}: {:?}", local.refusals))
+            .as_str();
+
+        assert_eq!(
+            settings::layer_text(root, Which::Local).left_out(),
+            Some(said),
+            "{how:?}"
+        );
+        for workspace in [None, Some("alpha")] {
+            assert_eq!(
+                project::Choices::read_in(root, workspace).local_left_out(),
+                Some(said),
+                "{how:?} {workspace:?}: extensions"
+            );
+            assert_eq!(
+                theme::Said::read_in(root, workspace).local_left_out(),
+                Some(said),
+                "{how:?} {workspace:?}: theme"
+            );
+            assert_eq!(
+                harness_plugin::Choices::read_in(root, workspace).local_left_out("claude"),
+                Some(said),
+                "{how:?} {workspace:?}: harness plugins"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_local_file_that_is_read_or_is_not_there_is_left_out_of_nothing() {
+    charter_core::unsteered!();
+    let ignored = plane(Git::Ignored);
+    let absent = plane(Git::Committable);
+    fs::remove_file(absent.path().join(LOCAL_FILE)).unwrap();
+
+    for root in [ignored.path(), absent.path()] {
+        assert_eq!(settings::layer_text(root, Which::Local).left_out(), None);
+        assert_eq!(settings::layer_text(root, Which::Shared).left_out(), None);
+        for workspace in [None, Some("alpha")] {
+            assert_eq!(
+                project::Choices::read_in(root, workspace).local_left_out(),
+                None
+            );
+            assert_eq!(theme::Said::read_in(root, workspace).local_left_out(), None);
+            assert_eq!(
+                harness_plugin::Choices::read_in(root, workspace).local_left_out("claude"),
+                None
+            );
+        }
+    }
+}
+
+#[test]
+fn a_left_out_local_file_is_said_only_where_it_would_have_decided_something() {
+    charter_core::unsteered!();
+    // A Local file that sets only a default profile, and one plugin of one harness: nothing it
+    // says was an extension or a theme, so those groups have nothing that was not applied.
+    let dir = plane(Git::Committable);
+    let root = dir.path();
+    fs::write(
+        root.join(LOCAL_FILE),
+        "[harness]\ndefault = \"claude\"\n\n[harness_plugins.claude]\n\"figma@official\" = false\n",
+    )
+    .unwrap();
+    let said = why(root);
+
+    for workspace in [None, Some("alpha")] {
+        assert_eq!(
+            project::Choices::read_in(root, workspace).local_left_out(),
+            None
+        );
+        assert_eq!(theme::Said::read_in(root, workspace).local_left_out(), None);
+        let plugins = harness_plugin::Choices::read_in(root, workspace);
+        assert_eq!(plugins.local_left_out("claude"), Some(said.as_str()));
+        assert_eq!(plugins.local_left_out("codex"), None);
+        assert_eq!(plugins.local_left_out("opencode"), None);
+    }
 }
 
 #[test]
