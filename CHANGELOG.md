@@ -37,6 +37,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   follow the workspace in front, and a view a workspace turned off says so and where. Saving
   changes nothing else in the manifest, and a `workspace.json` from before reads as it always
   did. ([#280](https://github.com/diazoxide/charter-app/issues/280))
+- **A workspace's theme and colour.** Workspace settings has a Theme group: a theme for this
+  workspace, over the project's `charter.toml` pick and under your `charter.local.toml` — each
+  says which file the theme drawn there came from — and a **colour**: red, orange, yellow,
+  green, teal, blue, purple, pink, or one of your own. The colour tints the same theme rather
+  than replacing it: the accent and the focus ring while the workspace is in front, its tab and
+  its chat strip, and a dot on its tab and in the title bar. Text and the terminal keep the
+  theme's colours, so everything stays as readable as the theme was. Every workspace tab shows
+  its own colour whether or not it is in front, and switching workspaces switches the theme and
+  the tint live — the window's theme now follows the workspace in front, not only the project.
+  ([#281](https://github.com/diazoxide/charter-app/issues/281))
 - A vault can live in your system's own credential store: the Keychain on macOS, the Secret
   Service on Linux. `charter vault add <name>` makes one by default, and every `charter secret`
   and `charter vault` command works on it as on the other kinds. Each secret is its own

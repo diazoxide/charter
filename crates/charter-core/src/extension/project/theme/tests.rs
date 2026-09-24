@@ -288,7 +288,10 @@ fn a_workspace_that_picks_nothing_leaves_the_projects_pick() {
         r#"{"name": "alpha"}"#,
         "",
     );
-    assert_eq!((got.draws, got.source), (Some(Pick::System), Source::Shared));
+    assert_eq!(
+        (got.draws, got.source),
+        (Some(Pick::System), Source::Shared)
+    );
     assert_eq!(got.colour, None);
 }
 
@@ -383,8 +386,10 @@ fn only_a_workspace_has_a_colour() {
     assert_eq!(got.colour, None);
     assert_eq!(
         refusals("[theme]\ncolour = \"teal\"\n", "charter.toml"),
-        ["theme.colour in charter.toml is not read — [theme] holds use and nothing else; a \
-          colour is a workspace's"]
+        [
+            "theme.colour in charter.toml is not read — [theme] holds use and nothing else; a \
+          colour is a workspace's"
+        ]
     );
 }
 
@@ -409,8 +414,10 @@ fn a_workspaces_theme_table_is_refused_in_the_readers_words() {
     let not_a_table: toml::Table = toml::from_str("theme = \"teal\"\n").unwrap();
     assert_eq!(
         refusals_in_workspace(&not_a_table, "workspaces/alpha/workspace.json"),
-        ["settings.theme in workspaces/alpha/workspace.json is not an object — write \
-          {\"use\": \"<theme>\", \"colour\": \"<colour>\"}"]
+        [
+            "settings.theme in workspaces/alpha/workspace.json is not an object — write \
+          {\"use\": \"<theme>\", \"colour\": \"<colour>\"}"
+        ]
     );
 }
 
@@ -439,7 +446,10 @@ fn a_workspaces_theme_is_read_from_its_manifest_on_disk() {
         said.workspace_file().as_deref(),
         Some("workspaces/alpha/workspace.json")
     );
-    assert_eq!(colour_of(dir.path(), "alpha"), Some(Colour::Palette("pink")));
+    assert_eq!(
+        colour_of(dir.path(), "alpha"),
+        Some(Colour::Palette("pink"))
+    );
     // Outside every workspace there is no workspace layer.
     let got = resolve(&[], None, &Said::read_in(dir.path(), None));
     assert_eq!((got.draws, got.colour), (None, None));

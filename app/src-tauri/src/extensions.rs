@@ -967,7 +967,10 @@ mod tests {
             .in_workspace("alpha", Some(manifest));
 
         let theme = project_theme_of(&extension::survey(&config), &choices, &said);
-        assert_eq!(theme.file.as_deref(), Some("workspaces/alpha/workspace.json"));
+        assert_eq!(
+            theme.file.as_deref(),
+            Some("workspaces/alpha/workspace.json")
+        );
         assert_eq!(theme.colour.as_deref(), Some("purple"));
         assert_eq!(theme.draws.as_deref(), Some("charter-dark"));
         assert_eq!(

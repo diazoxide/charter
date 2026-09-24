@@ -3,7 +3,8 @@ import * as RadioGroup from "@radix-ui/react-radio-group";
 import { LoaderCircle } from "lucide-react";
 import { extensionsChanged } from "./extensionsOn";
 import { projectThemeChanged, useProjectThemeAnswers } from "./projectTheme";
-import { BUILT_IN, SYSTEM } from "./theme/theme";
+import { BUILT_IN, DEFAULT_THEME, inForce, SYSTEM } from "./theme/theme";
+import { PALETTE } from "./theme/tint";
 import {
   commands,
   type HarnessPlugin,
@@ -64,7 +65,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
     const mine = ++themeReading.current;
     const newest = () => themeReading.current === mine;
     void commands
-      .projectTheme(plane)
+      .projectTheme(plane, null)
       .then((said) => {
         if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
       })
@@ -177,15 +178,32 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
  * The layer between the project's two files: `charter.toml`, then this workspace, then
  * `charter.local.toml`. A workspace refines its project for the team, and this machine's Local
  * file still has the last word; none of the three reaches past this machine's approval. It holds
- * the one group a workspace can set today, Extensions — the same group as Project settings',
- * asked with `project_extensions` for this workspace, so each extension says which layer
- * decided it. A form only: the manifest holds more than settings, and charter keeps the rest.
+ * Extensions — the same group as Project settings', asked with `project_extensions` for this
+ * workspace, so each extension says which layer decided it — and **Theme** (charter-app#281):
+ * the workspace's pick, read by the same resolver as the project's (`project_theme` for this
+ * workspace), and its **colour**. A form only: the manifest holds more than settings, and
+ * charter keeps the rest.
  */
 export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; workspace: string }) {
   const [file, setFile] = useState<OneWorkspace | { trouble: string }>();
   const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  const [theme, setTheme] = useState<ProjectTheme>();
   /** The newest read out, as in {@link ProjectSettings}. */
   const reading = useRef(0);
+  /** And the newest theme read out, which is also read on its own, as there. */
+  const themeReading = useRef(0);
+  const readTheme = useCallback(() => {
+    const mine = ++themeReading.current;
+    const newest = () => themeReading.current === mine;
+    void commands
+      .projectTheme(plane, workspace)
+      .then((said) => {
+        if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
+      })
+      .catch(() => {
+        if (newest()) setTheme(undefined);
+      });
+  }, [plane, workspace]);
 
   const read = useCallback(() => {
     const mine = ++reading.current;
@@ -206,14 +224,23 @@ export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; worksp
       .catch(() => {
         if (newest()) setExtensions([]);
       });
-  }, [plane, workspace]);
+    readTheme();
+  }, [plane, workspace, readTheme]);
 
   useEffect(read, [read]);
+  // What the window draws here was asked again — by a save, or by an approval in the Extensions
+  // dialog — so the sentence about it is asked again with it, as Project settings' is.
+  const answers = useProjectThemeAnswers(plane, workspace);
+  useEffect(() => {
+    if (answers > 0) readTheme();
+  }, [answers, readTheme]);
 
   const saved = useCallback(() => {
     read();
     // What the window keeps of its surveyed panels and views for this workspace.
     extensionsChanged(plane);
+    // And the theme and colour it draws while this workspace is in front (charter-app#281).
+    projectThemeChanged(plane);
   }, [plane, read]);
 
   if (file === undefined) {
@@ -249,7 +276,7 @@ export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; worksp
         }
         groups={WORKSPACE}
         extensions={extensions}
-        theme={undefined}
+        theme={theme}
         rawView={false}
         send={(base, change) =>
           commands
@@ -290,8 +317,9 @@ type Control = {
   id: string;
   label: string;
   hint?: string;
-  /** `text` is one line, `choice` a closed set, `lines` one entry per line. */
-  kind: "text" | "choice" | "lines";
+  /** `text` is one line, `choice` a closed set, `lines` one entry per line, and `colour` a
+   *  closed set whose `custom` pick is a `#rrggbb` of the operator's own (charter-app#281). */
+  kind: "text" | "choice" | "lines" | "colour";
   choices?: readonly string[];
   /** What a `choice`'s empty option says. */
   unset?: string;
@@ -599,7 +627,7 @@ const BUILT_IN_PICKS = [...Object.keys(BUILT_IN), SYSTEM];
  * machine approved it, and the core's sentence says why when the pick in force is not drawn —
  * under the section whose file made it.
  */
-function themeGroup(unset: string): Group {
+function themeGroup(unset: string, here: "project" | "workspace" = "project"): Group {
   const path = key("theme", "use");
   return {
     title: "Theme",
@@ -608,18 +636,22 @@ function themeGroup(unset: string): Group {
       const labels = Object.fromEntries(options.map((one) => [one.value, one.label]));
       const drawn =
         theme?.draws == null
-          ? "the window's own theme — your theme.json, else the first theme from an extension this project has on, else charter-dark"
+          ? `the window's own theme — your theme.json, else the first theme from an extension this ${here} has on, else charter-dark`
           : (labels[theme.draws] ?? theme.draws);
+      // In a workspace, which of the three files the theme drawn here came from: its own, or
+      // the project's that it did not override (charter-app#281).
+      const from = here === "workspace" && theme?.file != null ? `, from ${theme.file}` : "";
       return [
         {
           ...textAt(path, "Theme", {
             kind: "choice",
             choices: options.map((one) => one.value),
-            hint: `Drawn in this project: ${drawn}. The terminal follows the window.`,
+            hint: `Drawn in this ${here}: ${drawn}${from}. The terminal follows the window.`,
           }),
           unset,
           labels,
         },
+        ...(here === "workspace" ? [COLOUR] : []),
       ];
     },
     notes: (file, _extensions, theme) => {
@@ -694,8 +726,32 @@ const SHARED: Group[] = [
   themeGroup("not set — the window's own theme"),
 ];
 
-/** A workspace's `settings` (charter-app#280): what a workspace can set today. */
-const WORKSPACE: Group[] = [EXTENSIONS];
+/** The pick that says a workspace's colour is its own `#rrggbb` rather than a palette name. */
+const CUSTOM = "custom";
+
+/**
+ * **A workspace's colour** (charter-app#281): `settings.theme.colour`, one of the eight the core
+ * reads (`theme/tint.ts`'s `PALETTE`, held to the core's by a test) or a custom `#rrggbb`, whose
+ * hue is taken. A select, and a colour well beside it while the pick is custom.
+ */
+const COLOUR: Control = {
+  ...textAt(key("theme", "colour"), "Colour", {
+    kind: "colour",
+    choices: [...Object.keys(PALETTE), CUSTOM],
+    hint: "Tints this workspace's tab, its chat strip, the title bar's mark and the accent while it is in front. Text and the terminal keep the theme's own colours.",
+  }),
+  unset: "none — the theme as it is",
+  labels: {
+    ...Object.fromEntries(
+      Object.keys(PALETTE).map((name) => [name, name[0].toUpperCase() + name.slice(1)]),
+    ),
+    [CUSTOM]: "Custom…",
+  },
+};
+
+/** A workspace's `settings` (charter-app#280): what a workspace can set — its extensions, and
+ *  its theme and colour (charter-app#281). */
+const WORKSPACE: Group[] = [EXTENSIONS, themeGroup("not set — the project's pick", "workspace")];
 
 /** `charter.local.toml`: `[harness]`, `[extensions]` and `[theme]`, which is all its readers read
  *  there. */
@@ -988,7 +1044,15 @@ function SettingControl({
   return (
     <div className="settings-field">
       <label htmlFor={id}>{control.label}</label>
-      {control.kind === "choice" ? (
+      {control.kind === "colour" ? (
+        <ColourControl
+          id={id}
+          described={described}
+          value={value}
+          control={control}
+          onChange={onChange}
+        />
+      ) : control.kind === "choice" ? (
         <select
           id={id}
           // #190: WebKit leaves a control out of the Tab order without `tabIndex`.
@@ -1035,5 +1099,70 @@ function SettingControl({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * A workspace's colour (charter-app#281): the palette as a select, and — while the pick is
+ * custom — the platform's own colour well beside it, labelled, whose value is the `#rrggbb` the
+ * file holds. `value` is what the file will hold: a palette name, a `#rrggbb`, or empty.
+ */
+function ColourControl({
+  id,
+  described,
+  value,
+  control,
+  onChange,
+}: {
+  id: string;
+  described: string | undefined;
+  value: string;
+  control: Control;
+  onChange: (to: string) => void;
+}) {
+  const well = useId();
+  const custom = value.startsWith("#");
+  /** Where a new custom colour starts: the accent the window is drawn in, as `#rrggbb`. */
+  const start = () =>
+    /^#[0-9a-fA-F]{6}/.exec(inForce().values["accent.base"])?.[0] ??
+    DEFAULT_THEME.values["accent.base"];
+  return (
+    <>
+      <select
+        id={id}
+        // #190: WebKit leaves a control out of the Tab order without `tabIndex`.
+        tabIndex={0}
+        value={custom ? "custom" : value}
+        aria-describedby={described}
+        onChange={(event) => {
+          const to = event.target.value;
+          onChange(to === "custom" ? (custom ? value : start()) : to);
+        }}
+      >
+        <option value="">{control.unset ?? "not set"}</option>
+        {/* A value the file holds that is neither a name nor a colour is still shown as held,
+            for the reason `SettingControl` gives. */}
+        {value !== "" && !custom && !control.choices?.includes(value) && (
+          <option value={value}>{value}</option>
+        )}
+        {control.choices?.map((choice) => (
+          <option key={choice} value={choice}>
+            {control.labels?.[choice] ?? choice}
+          </option>
+        ))}
+      </select>
+      {custom && (
+        <>
+          <label htmlFor={well}>Custom colour</label>
+          <input
+            id={well}
+            type="color"
+            tabIndex={0}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        </>
+      )}
+    </>
   );
 }

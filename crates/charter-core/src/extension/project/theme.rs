@@ -140,7 +140,11 @@ pub struct Said {
 impl Said {
     /// The two files' text: `None` for a file that is not there.
     pub fn from_text(shared: Option<&str>, local: Option<&str>) -> Self {
-        let said = |text: &str| text.parse::<toml::Table>().ok().and_then(|top| said_in(&top, USE));
+        let said = |text: &str| {
+            text.parse::<toml::Table>()
+                .ok()
+                .and_then(|top| said_in(&top, USE))
+        };
         Self {
             shared: shared.and_then(said),
             local: local.and_then(said),
@@ -306,10 +310,8 @@ fn colour(said: &Said, file: &str, ignored: &mut Vec<Ignored>) -> Option<Colour>
 /// for the window's workspace tabs, which each show their own. `None` for a workspace with no
 /// colour, or one charter does not read.
 pub fn colour_of(root: &std::path::Path, workspace: &str) -> Option<Colour> {
-    let said = Said::default().with_workspace(
-        workspace,
-        crate::settings::workspace::read(root, workspace),
-    );
+    let said = Said::default()
+        .with_workspace(workspace, crate::settings::workspace::read(root, workspace));
     colour(&said, "", &mut Vec::new())
 }
 

@@ -151,9 +151,7 @@ describe("the window's tint", () => {
       expect(root.style.getPropertyValue(property(token)), token).toBe(tint.values[token]);
     // The tab shades are each tab's own, set on the tab: the project strip is not a workspace's.
     for (const token of ["layer.project", "layer.workspace", "layer.chat"] as const)
-      expect(root.style.getPropertyValue(property(token)), token).toBe(
-        DEFAULT_THEME.values[token],
-      );
+      expect(root.style.getPropertyValue(property(token)), token).toBe(DEFAULT_THEME.values[token]);
   });
 
   it("follows the theme drawn under it, and goes when the workspace has no colour", () => {

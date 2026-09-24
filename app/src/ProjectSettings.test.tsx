@@ -109,6 +109,7 @@ const NO_PICK: ProjectTheme = {
   file: null,
   draws: null,
   why: null,
+  colour: null,
   ignored: [],
 };
 

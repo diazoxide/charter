@@ -123,10 +123,7 @@ const degrees = (rad: number) => ((rad * 180) / Math.PI + 360) % 360;
 /** A theme value as linear sRGB, and its alpha as the two hex digits it was written with. */
 function parse(hex: string): { rgb: Vec3; alpha: string } {
   const digits = hex.slice(1);
-  const long =
-    digits.length <= 4
-      ? [...digits].map((d) => d + d).join("")
-      : digits;
+  const long = digits.length <= 4 ? [...digits].map((d) => d + d).join("") : digits;
   const rgb = [0, 2, 4].map((at) => toLinear(Number.parseInt(long.slice(at, at + 2), 16) / 255));
   return { rgb: rgb as Vec3, alpha: long.slice(6, 8) };
 }
