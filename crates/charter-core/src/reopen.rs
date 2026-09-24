@@ -197,9 +197,9 @@ pub struct Record {
     /// front either way. Every later write of the record is an ordinary one and carries
     /// `false`, so it lasts until this plane's record is next written.
     ///
-    /// **Nothing writes `true` yet**: this is the entry point charter-app#251 is to use. That
-    /// ticket also owns one gap it leaves: a plane that is not opened at the launch after the
-    /// update (`--no-restore`, a declined trust ask) keeps the flag until it is next opened.
+    /// **Restart to update is the one writer of `true`**, on each plane the app held. A plane
+    /// the launch after it does not open (`--no-restore`, a declined trust ask) keeps the flag
+    /// on disk, so it counts only at the launch that took [`RESTARTED_TO_UPDATE`] — see there.
     pub relaunch_after_update: bool,
 }
 
@@ -240,6 +240,45 @@ impl Record {
             },
         }
     }
+}
+
+/// The file a restart to update leaves in charter's own config directory, beside
+/// `machine.json` ([`crate::machine::dir`]) — charter-app#251.
+///
+/// **It is what scopes [`Record::relaunch_after_update`] to the restart.** The flag is written
+/// into each plane the app held, and a plane the launch after the restart does not open
+/// (`--no-restore`, a trust ask declined) keeps it on disk until its record is next written. A
+/// launch days later from that plane's directory would then say "charter restarted to install
+/// an update", which is not true of that launch. So the restart also leaves this, the next
+/// launch takes it ([`take_restart_to_update`]) whatever it opens, and a record's flag counts
+/// only at the launch that took it.
+///
+/// **A file of its own and not a field of the machine store**, the choice `theme.json` and
+/// `layout.json` made for the reason [`crate::machine`] gives: that store keeps five things and
+/// says the count is load-bearing, and this is not a fact about any plane it names. It also
+/// works where the store refuses (ADR 0031's Windows): it holds nothing, so there is no
+/// `0600` for it to need. Its existence is the whole of it, and all it can do is add one
+/// sentence to a question charter was going to ask anyway.
+pub const RESTARTED_TO_UPDATE: &str = "restarted-to-update";
+
+/// Leaves [`RESTARTED_TO_UPDATE`] for the launch after this one.
+///
+/// Created in charter's own `0700` directory and never through a link at its name: the
+/// directory is shared with the machine store, and a planted link is the one way a write of
+/// nothing could land somewhere that matters.
+pub fn mark_restart_to_update(config_root: &Path) -> std::io::Result<()> {
+    let dir = crate::machine::private_dir(config_root)?;
+    crate::contain::create_no_link(&dir, &dir.join(RESTARTED_TO_UPDATE)).map(drop)
+}
+
+/// Whether this launch follows a restart to update, answered once: the marker is removed as
+/// it is read, so no later launch reads it too.
+///
+/// Every failure is "no", because the one thing "yes" adds is a sentence saying why a
+/// question is being asked. A marker that cannot be removed is also "no" — one that stayed
+/// would say "restarted" at every launch after this one.
+pub fn take_restart_to_update(config_root: &Path) -> bool {
+    std::fs::remove_file(crate::machine::dir(config_root).join(RESTARTED_TO_UPDATE)).is_ok()
 }
 
 /// How a chat came back, which is what the pane showing it says.
@@ -1912,5 +1951,44 @@ mod tests {
     #[test]
     fn a_space_inside_a_label_is_content() {
         assert_eq!(label("steward 1"), Ok(Some("steward 1".into())));
+    }
+
+    #[test]
+    fn a_restart_to_update_is_taken_by_the_next_launch_and_by_no_launch_after_it() {
+        // charter-app#251's scope: a plane the launch after the restart did not open keeps its
+        // flag on disk, and a launch a week later must not read it as "charter restarted".
+        let config = tempfile::tempdir().unwrap();
+
+        mark_restart_to_update(config.path()).unwrap();
+
+        assert!(take_restart_to_update(config.path()), "the next launch");
+        assert!(
+            !take_restart_to_update(config.path()),
+            "the launch after it"
+        );
+    }
+
+    #[test]
+    fn a_launch_no_restart_came_before_takes_nothing() {
+        let config = tempfile::tempdir().unwrap();
+
+        assert!(!take_restart_to_update(config.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_restart_marker_is_not_written_through_a_link() {
+        let config = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let dir = crate::machine::dir(config.path());
+        fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(
+            elsewhere.path().join("planted"),
+            dir.join(RESTARTED_TO_UPDATE),
+        )
+        .unwrap();
+
+        assert!(mark_restart_to_update(config.path()).is_err());
+        assert!(!elsewhere.path().join("planted").exists());
     }
 }

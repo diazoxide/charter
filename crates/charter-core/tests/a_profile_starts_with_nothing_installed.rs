@@ -88,6 +88,7 @@ impl Stand {
 
 #[test]
 fn an_approved_profile_may_start_and_its_harness_is_asked_nothing() {
+    charter_core::unsteered!();
     // The whole change: no `plugin list`, no `marketplace add`, no `plugin install`. The app
     // arms the chat itself, so the launch gate runs nothing of the profile's.
     let stand = Stand::new();
@@ -104,6 +105,7 @@ fn an_approved_profile_may_start_and_its_harness_is_asked_nothing() {
 
 #[test]
 fn a_profile_charter_may_not_run_a_command_for_is_refused_and_never_run() {
+    charter_core::unsteered!();
     let stand = Stand::new();
     let p = stand.declared();
 
@@ -116,6 +118,7 @@ fn a_profile_charter_may_not_run_a_command_for_is_refused_and_never_run() {
 
 #[test]
 fn a_kind_this_app_does_not_start_is_refused_by_that_name() {
+    charter_core::unsteered!();
     // Parsing is not launching. `profiles` knows all three kinds, including opencode, because
     // the Python charter accepts one and an operator must not get two answers about their own
     // file. What this app will not do is START one (spec decision 6).
@@ -134,6 +137,7 @@ fn a_kind_this_app_does_not_start_is_refused_by_that_name() {
 
 #[test]
 fn the_kind_refusal_comes_before_every_gate_that_would_ask_anything() {
+    charter_core::unsteered!();
     // A profile that can never start is not worth approving, and the sentence an operator
     // wants is the one about v1 rather than one about consent.
     let stand = Stand::new();
@@ -147,6 +151,7 @@ fn the_kind_refusal_comes_before_every_gate_that_would_ask_anything() {
 
 #[test]
 fn both_kinds_this_app_does_start_are_taken_by_their_declared_word() {
+    charter_core::unsteered!();
     for kind in ["claude", "codex"] {
         assert!(
             charter_core::harness::Harness::of_kind(kind).is_some(),
@@ -158,6 +163,7 @@ fn both_kinds_this_app_does_start_are_taken_by_their_declared_word() {
 
 #[test]
 fn detect_says_a_kind_is_not_startable_rather_than_that_it_could_not_look() {
+    charter_core::unsteered!();
     // `doctor` reaches `detect` directly, so the v1 decision has to be its sentence too.
     let stand = Stand::new();
     stand.declares("opencode", "opencode");
@@ -174,6 +180,7 @@ fn detect_says_a_kind_is_not_startable_rather_than_that_it_could_not_look() {
 
 #[test]
 fn a_codex_profile_needs_nothing_in_its_home_either() {
+    charter_core::unsteered!();
     // Codex used to need the Python charter's Codex plugin, a policy line and a trusted guard
     // hook in `$CODEX_HOME/config.toml`. The app arms a Codex chat with `-c` flags now, so an
     // empty home is a home a chat can start from.

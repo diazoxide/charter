@@ -57,11 +57,6 @@ export function QuitWarning({
   onQuit: () => void;
   onCancel: () => void;
 }) {
-  const running = chats.filter((chat) => chat.state === "running");
-  const unknown = chats.filter((chat) => chat.state === "unknown");
-  // Only when there is more than one: naming the project on every row of a window holding one
-  // is a column that says the same thing all the way down.
-  const several = new Set(chats.map((chat) => chat.project ?? "")).size > 1;
   // Cancel, focused by the dialog itself rather than by `autoFocus`: see `StartChat`.
   const cancel = useRef<HTMLButtonElement>(null);
   return (
@@ -88,37 +83,8 @@ export function QuitWarning({
               ? "1 session will be ended"
               : `${chats.length} sessions will be ended`}
           </Dialog.Title>
-          <ul className="ending">
-            {chats.map((chat) => (
-              <li key={chat.key}>
-                <span className="what">{chat.harness ?? "shell"}</span>
-                <span className="who">{chat.name}</span>
-                <ChatState state={chat.state} />
-                {several && chat.project && <code className="where">{chat.project}</code>}
-                {chat.cwd && <code className="where">{chat.cwd}</code>}
-              </li>
-            ))}
-          </ul>
-          {running.length > 0 && (
-            <p className="honest mid-turn" role="alert">
-              {running.length === 1
-                ? `${running[0].name} is mid-turn and will be interrupted.`
-                : `${running.length} sessions are mid-turn and will be interrupted.`}
-            </p>
-          )}
-          {unknown.length > 0 && (
-            <p className="honest">
-              {/* Named, not counted into the reassuring number. A harness that reports nothing
-                could be mid-turn and charter would never know — saying "nothing is running"
-                over the top of it would be the app claiming something it cannot see. */}
-              {unknown.length === 1
-                ? `${unknown[0].name} reports no state, so charter cannot tell whether it is mid-turn.`
-                : `${unknown.length} sessions report no state, so charter cannot tell whether they are mid-turn.`}
-            </p>
-          )}
-          {running.length === 0 && unknown.length === 0 && (
-            <p className="honest">No session is mid-turn.</p>
-          )}
+          <EndingList chats={chats} />
+          <MidTurnSaid chats={chats} />
           {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186): WebKit
               leaves a `<button>` out of the tab sequence unless its `tabindex` is written
               down. These two were reachable anyway, because they are the two edges Radix's
@@ -138,5 +104,63 @@ export function QuitWarning({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/**
+ * The rows of the chats an act is about to end, each with what it is doing — the quit warning's
+ * list, and Restart to update's (`Updates.tsx`), so the two cannot drift apart.
+ */
+export function EndingList({ chats }: { chats: readonly Ending[] }) {
+  // Only when there is more than one: naming the project on every row of a window holding one
+  // is a column that says the same thing all the way down.
+  const several = new Set(chats.map((chat) => chat.project ?? "")).size > 1;
+  return (
+    <ul className="ending">
+      {chats.map((chat) => (
+        <li key={chat.key}>
+          <span className="what">{chat.harness ?? "shell"}</span>
+          <span className="who">{chat.name}</span>
+          <ChatState state={chat.state} />
+          {several && chat.project && <code className="where">{chat.project}</code>}
+          {chat.cwd && <code className="where">{chat.cwd}</code>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Whether `chat` could be interrupted mid-turn: it says it is, or it says nothing at all. */
+export function mightBeMidTurn(chat: Ending): boolean {
+  return chat.state === "running" || chat.state === "unknown";
+}
+
+/** What the chats about to be ended are doing: which are mid-turn, and which cannot say. */
+export function MidTurnSaid({ chats }: { chats: readonly Ending[] }) {
+  const running = chats.filter((chat) => chat.state === "running");
+  const unknown = chats.filter((chat) => chat.state === "unknown");
+  return (
+    <>
+      {running.length > 0 && (
+        <p className="honest mid-turn" role="alert">
+          {running.length === 1
+            ? `${running[0].name} is mid-turn and will be interrupted.`
+            : `${running.length} sessions are mid-turn and will be interrupted.`}
+        </p>
+      )}
+      {unknown.length > 0 && (
+        <p className="honest">
+          {/* Named, not counted into the reassuring number. A harness that reports nothing
+            could be mid-turn and charter would never know — saying "nothing is running"
+            over the top of it would be the app claiming something it cannot see. */}
+          {unknown.length === 1
+            ? `${unknown[0].name} reports no state, so charter cannot tell whether it is mid-turn.`
+            : `${unknown.length} sessions report no state, so charter cannot tell whether they are mid-turn.`}
+        </p>
+      )}
+      {running.length === 0 && unknown.length === 0 && (
+        <p className="honest">No session is mid-turn.</p>
+      )}
+    </>
   );
 }

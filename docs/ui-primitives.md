@@ -150,6 +150,11 @@ primitive's `Cancel`**, first and focused, so Escape and a stray Return both kee
 **"Start fresh" is a plain button, not the primitive's `Action`**: an `Action` also closes the
 dialog, and closing is this dialog's "Reopen all", so one press would send both answers.
 
+And the **ask before Restart to update** (`app/src/Updates.tsx`, charter-app#251): an
+`AlertDialog` naming each chat that is mid-turn or reports no state, in the quit warning's rows
+and words. **"Wait" is the primitive's `Cancel`**, first and focused; "Restart now" is a plain
+button, for the relaunch question's reason.
+
 And the **question before a chat ends** (`app/src/EndingChat.tsx`):
 `@radix-ui/react-alert-dialog`, the operator's _"closing session should ask confirmation"_. It is
 the first surface here that is **not** a `Dialog`, and the reason is the role: an
@@ -171,8 +176,9 @@ right-hand region's persona list opens. It is the first popover in the window, a
 over the other two surfaces Radix has for the same content:
 
 - **Not a dialog**, because a dialog is modal and modal is wrong here twice. Radix marks
-  everything outside an open dialog `aria-hidden`, including the needs-you queue two sections up
-  — the one surface ADR 0038 says this region must never compete with — and a modal is
+  everything outside an open dialog `aria-hidden`, which then
+  included the needs-you queue two sections up (in the title bar since charter-app#249) — the
+  one surface ADR 0038 says this region must never compete with — and a modal is
   for a question that has to be answered before anything else happens. A persona's role is
   reading.
 - **Not a sheet**, because the window already has one and it is the window's: `AlertsDrawer` is a
@@ -445,8 +451,12 @@ model and a select-on-`mousedown` this window's strips do not have:
   `tabindex="0"` and every other `-1`; Left, Right, Home and End move along it; Enter or Space
   selects, which is the button's own click. Moving is not selecting ("Tabs", manual activation):
   arrowing past a chat must not swap the panes under the operator.
-- **Each list is ONE Tab stop** — the explorer, the needs-you queue, every panel's rows
-  (`PanelList`, so a contributed panel gets it for nothing). Up, Down, Home and End move.
+- **Each list is ONE Tab stop** — the explorer, every panel's rows (`PanelList`, so a
+  contributed panel gets it for nothing). Up, Down, Home and End move.
+- **A list behind a button is a menu** — the title bar's needs-you list (charter-app#249), the
+  strips' show-more menus. The button is the Tab stop; Enter opens the menu on its first item,
+  the arrows move, Escape closes it and puts the keyboard back on the button. Radix's
+  `DropdownMenu` does all of that, so nothing here is hand-written.
 - **The explorer is a tree** (charter-app#238), the whole "Tree View" pattern on top of the
   same roving focus: `role="tree"`, each row a `treeitem` with its level and its place among
   its siblings, `aria-expanded` on every parent (a clone says whether it is open, a parent that
