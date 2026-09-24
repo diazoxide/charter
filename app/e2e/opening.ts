@@ -130,3 +130,22 @@ export async function endEveryChat(most = 200): Promise<void> {
   }
   throw new Error(`${most} presses did not end every chat`);
 }
+
+/**
+ * Closes a project by its `×` (a selector for it), and answers the question it asks when it has chats open
+ * (`ClosingProject`, charter-app#239). A project with nothing open closes without one, so the
+ * question is waited for briefly and not required.
+ */
+export async function closeProject(closer: string): Promise<void> {
+  await $(closer).click();
+  const asking = await $('[role="alertdialog"]');
+  const asked = await asking
+    .waitForDisplayed({ timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!asked) return;
+  const answer = await asking.$("button*=Close and end");
+  await answer.waitForClickable({ timeout: 20_000 });
+  await answer.click();
+  await expect(asking).not.toBeDisplayed();
+}

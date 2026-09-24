@@ -9,7 +9,8 @@ import type { Offer } from "./actions";
  * stops); before this, a Mac keyboard reached it only through the palette, having no
  * context-menu key to open the tab's menu with. **It presses the row the `×` presses**, so it
  * asks what the `×` asks: ending a chat asks first (`EndingChat`), a view tab closes without
- * asking because nothing runs in it, and closing a project says what the project's `×` says.
+ * asking because nothing runs in it, and closing a project with chats open asks first
+ * (`ClosingProject`) — the operator's ruling, because on a Mac this key is the ordinary delete.
  *
  * - **Delete, and Backspace on a Mac.** The Mac key marked "delete" sends Backspace — Delete is
  *   fn+delete — and it is the key Mail and Notes delete the selected item with (Finder asks

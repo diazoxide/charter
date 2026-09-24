@@ -1591,8 +1591,9 @@ export function PlaneView({
   // session number names a chat only inside its own project.
   const ending = useMemo<Ending[]>(
     () =>
-      tabs.order.flatMap((id) =>
-        panesOf(tabs, id).map(({ session }) => {
+      tabs.order.flatMap((id) => {
+        const filed = workspaceOf(tabs, id, filedIn);
+        return panesOf(tabs, id).map(({ session }) => {
           const known = reopened.find((chat) => chat.session === session);
           return {
             key: `${plane}#${session}`,
@@ -1600,11 +1601,12 @@ export function PlaneView({
             name: known?.name ?? tabs.byId[id].name,
             harness: known?.harness ?? null,
             cwd: known?.cwd ?? null,
+            workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
             state: stateOf(states, session),
           };
-        }),
-      ),
-    [plane, reopened, states, tabs],
+        });
+      }),
+    [filedIn, plane, reopened, states, tabs],
   );
 
   // What this project has open, told to the window: the quit warning lists every project's
@@ -2171,8 +2173,8 @@ function alreadyShows(tabs: Tabs, session: number): boolean {
  * is asked about without anybody remembering to add it here — the same rule the region toggles
  * follow. A close says whether it ends one (`Does.ends`): a pane or a tab showing only a view
  * closes, kills nothing, and is not asked about. `closeProject` is deliberately not one of
- * them: it ends every chat in a project and has its own sentence on its own row, and the window
- * is where that question belongs.
+ * them: it ends every chat in a project, and the window is where that question belongs — it
+ * asks it there (`ClosingProject`, charter-app#239) whenever the project has chats open.
  */
 function endsAChat(does: Offer["does"]): boolean {
   return (does.verb === "closeTab" || does.verb === "closePane") && does.ends;

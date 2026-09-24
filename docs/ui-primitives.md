@@ -452,7 +452,9 @@ model and a select-on-`mousedown` this window's strips do not have:
   fifty stops again. **Delete on a focused project or chat tab presses the row its `×` presses**
   (charter-app#239, `closeOnDelete` in `app/src/tabKeys.ts`), and so does Backspace on a Mac,
   whose key marked "delete" sends it: ending a chat still asks first, a view tab still closes
-  without asking, and the keyboard lands on the strip's stop afterwards. A new strip with a `×`
+  without asking, closing a project with chats open now asks first too (`ClosingProject`, on
+  the row's verb, so the `×`, the menu and the palette ask it as well), and the keyboard lands
+  back on the tab after a Cancel and on the strip's stop after a close. A new strip with a `×`
   (a vault tab's) calls it from its tab's `onKeyDown` with that `×`'s row. The palette and the
   tab's own menu reach the same row.
 - **The order is the document's, which is the order the window is drawn in**: the title bar,

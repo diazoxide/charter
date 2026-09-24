@@ -32,6 +32,7 @@ import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
 import { useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
+import { ClosingProject } from "./ClosingProject";
 import { QuitWarning, type Ending } from "./QuitWarning";
 import { fitting, LEAST, useRoom } from "./fits";
 import { Menued, useNoBrowserMenu } from "./Menus";
@@ -311,8 +312,9 @@ function App() {
   }, []);
 
   /** Lets go of one project. Its chats end, its record is written into it, and its tab goes.
-   *  Nothing of the project on disk goes. */
-  const closeProject = useCallback(async (plane: string): Promise<Ran> => {
+   *  Nothing of the project on disk goes. Reached through {@link closeProject}, which asks
+   *  first when there is anything to end. */
+  const letGoOf = useCallback(async (plane: string): Promise<Ran> => {
     const answer = await commands
       .closePlane(plane)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -340,6 +342,36 @@ function App() {
     });
     return { ok: true, said: `charter let go of ${plane}. Nothing in it was changed.` };
   }, []);
+
+  /** The project whose close is waiting on the operator's answer (`ClosingProject`). */
+  const [closing, setClosing] = useState<string>();
+  /** Every project's report as of the last render, read when a close arrives rather than
+   *  closed over, so the verb below stays one function. */
+  const reportsNow = useRef(reports);
+  useLayoutEffect(() => {
+    reportsNow.current = reports;
+  });
+
+  /**
+   * The `project.close:<plane>` row's verb: **ask first when the project has chats open**, and
+   * let go of it at once when it has none — the operator's ruling on charter-app#239, where
+   * Delete on a project's tab put "end every chat in it" one key away.
+   *
+   * Here, where the row is carried out, and not on any one button, so the `×`, Delete, the
+   * tab's menu and the palette all ask it (`EndingChat` is the same rule one scope down). A
+   * project that has not yet said what it has open is asked about too: "no tabs" there is
+   * "not yet", the quit warning's rule. It answers `{ ok: true }` for a row it has only asked
+   * about, as `PlaneView`'s `run` does.
+   */
+  const closeProject = useCallback(
+    async (plane: string): Promise<Ran> => {
+      const said = reportsNow.current[plane];
+      if (said?.settled && said.ending.length === 0) return letGoOf(plane);
+      setClosing(plane);
+      return { ok: true };
+    },
+    [letGoOf],
+  );
 
   /**
    * Scaffolds a new project and takes it into this window — **through the same gate**.
@@ -1029,6 +1061,28 @@ function App() {
       {extensions && <Extensions onClose={() => setExtensions(false)} />}
 
       {asking && <QuitWarning chats={ending} onQuit={quit} onCancel={dontQuit} />}
+
+      {closing !== undefined && (
+        <ClosingProject
+          name={calledOn(closing)}
+          chats={reports[closing]?.ending ?? []}
+          heard={reports[closing]?.settled ?? false}
+          onClose={() => {
+            const plane = closing;
+            setClosing(undefined);
+            void letGoOf(plane).then((answer) =>
+              setReport(
+                answer.ok
+                  ? answer.said
+                    ? { from: `project.close:${plane}`, refused: false, words: answer.said }
+                    : undefined
+                  : { from: `project.close:${plane}`, refused: true, words: answer.refused },
+              ),
+            );
+          }}
+          onCancel={() => setClosing(undefined)}
+        />
+      )}
     </main>
   );
 }

@@ -21,6 +21,8 @@ export type Ending = {
   name: string;
   harness: string | null;
   cwd: string | null;
+  /** The workspace it is filed in, as the strip names it — for a question that says where. */
+  workspace?: string;
   state: State;
 };
 

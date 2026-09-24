@@ -71,8 +71,10 @@ function chat(session: number, name: string, inFront = false) {
 }
 
 /** A plane with two workspaces, three chats in the first and one worktree cut there. */
-function core({ waiting = [] as number[] } = {}) {
-  const chats = [chat(1, "one"), chat(2, "two", true), chat(3, "three")];
+function core({
+  waiting = [] as number[],
+  chats = [chat(1, "one"), chat(2, "two", true), chat(3, "three")],
+} = {}) {
   /** Every command the window sent, by name. */
   const asked: string[] = [];
   mockIPC((cmd, args) => {
@@ -467,6 +469,8 @@ describe("Delete on a focused tab", () => {
     await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(tabsOf("Tabs")).toHaveLength(3);
+    // And the keyboard is back on the tab it pressed Delete on.
+    await waitFor(() => expect(tabsOf("Tabs")[0]).toHaveFocus());
   });
 
   it("ends it once the question is answered", async () => {
@@ -487,9 +491,12 @@ describe("Delete on a focused tab", () => {
   });
 
   it("closes a project from its tab, through the row its × runs", async () => {
-    const { asked } = core();
+    // A project with nothing open closes without a question; one with chats asks
+    // ("closing a project" below).
+    const { asked } = core({ chats: [] });
     render(<App />);
     await waitFor(() => expect(tabsOf("Projects")).toHaveLength(1));
+    await screen.findByRole("button", { name: "New tab" });
     tabsOf("Projects")[0].focus();
 
     await userEvent.keyboard("{Delete}");
@@ -580,5 +587,80 @@ describe("Delete on a focused tab", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(tabsOf("Tabs")).toHaveLength(3);
     expect(asked).not.toContain("close_session");
+  });
+});
+
+/**
+ * **Closing a project that has chats open asks first**, as ending one chat does. The project's
+ * `×` always ended every chat in it without a word, and #239 put that one key away — on a Mac,
+ * the ordinary delete key. The question is on the `project.close:<plane>` row's verb, so the
+ * `×`, Delete, the tab's menu and the palette all ask it.
+ */
+describe("closing a project", () => {
+  /** Waits for the project to have said what it has open: before that, it would be asked about. */
+  const settled = async () => {
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    return tabsOf("Projects")[0];
+  };
+
+  it("asks first when chats are open, naming how many end and in which workspaces", async () => {
+    const { asked } = core();
+    render(<App />);
+    await settled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close project plane" }));
+
+    const asking = await screen.findByRole("alertdialog");
+    expect(asking).toHaveAccessibleName("Close project plane and end 3 chats?");
+    expect(asking).toHaveTextContent("in alpha");
+    expect(within(asking).getAllByRole("listitem")).toHaveLength(3);
+    expect(asked).not.toContain("close_plane");
+    // Cancel is first and focused: a stray Return keeps everything.
+    expect(within(asking).getByRole("button", { name: "Cancel" })).toHaveFocus();
+  });
+
+  it("keeps everything on Cancel, and gives the keyboard back to the tab", async () => {
+    const { asked } = core();
+    render(<App />);
+    const project = await settled();
+    project.focus();
+
+    await userEvent.keyboard("{Delete}");
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(asked).not.toContain("close_plane");
+    expect(tabsOf("Tabs")).toHaveLength(3);
+    await waitFor(() => expect(tabsOf("Projects")[0]).toHaveFocus());
+  });
+
+  it("closes the project once the question is answered", async () => {
+    const { asked } = core();
+    render(<App />);
+    const project = await settled();
+    project.focus();
+
+    await userEvent.keyboard("{Delete}");
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: /end 3 chats/i }));
+
+    await waitFor(() => expect(asked).toContain("close_plane"));
+    expect(asked.filter((cmd) => cmd === "close_plane")).toHaveLength(1);
+  });
+
+  it("asks from the palette's row too, because the question is on the row's verb", async () => {
+    const { asked } = core();
+    render(<App />);
+    await settled();
+
+    await userEvent.keyboard("{F2}");
+    await screen.findByRole("dialog", { name: "Command palette" });
+    await userEvent.keyboard("Close project plane{Enter}");
+
+    expect(await screen.findByRole("alertdialog")).toHaveAccessibleName(
+      "Close project plane and end 3 chats?",
+    );
+    expect(asked).not.toContain("close_plane");
   });
 });
