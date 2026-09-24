@@ -1,4 +1,4 @@
-//! The rows that ask git: `git`, `git identity`, `plane root` and `index lock`.
+//! The rows that ask git: `git`, `git identity`, `git auth`, `plane root` and `index lock`.
 //!
 //! Every call goes through [`crate::worktree::git`], the hardened runner — a cleared
 //! environment and no hooks or fsmonitor — so a row that asks git a question cannot be made
@@ -71,6 +71,130 @@ pub(super) fn identity(d: &Doctor) -> Row {
         "Run: git config --global user.email \"you@example.com\" && git config --global \
          user.name \"Your Name\"  — otherwise a commit (memory, workspace notes, dispatch \
          tallies) silently never happens.",
+    )
+}
+
+/// `git auth`: golden rule 0 — does every repo in scope carry ITS forge's token-only policy.
+/// Python's `check_ssh`.
+///
+/// **The same check `charter git-policy` runs, and only its read half.** [`gitpolicy::scan`]
+/// and [`gitpolicy::check`] list directories and read each repo's `origin` and local config;
+/// [`gitpolicy::apply`] is never called from here, so a doctor cannot change a clone's config.
+/// The fix it names is `charter git-policy --apply`, which the operator runs.
+///
+/// [`gitpolicy::scan`]: crate::gitpolicy::scan
+/// [`gitpolicy::check`]: crate::gitpolicy::check
+/// [`gitpolicy::apply`]: crate::gitpolicy::apply
+pub(super) fn git_auth(d: &Doctor) -> Row {
+    use crate::gitpolicy;
+    const NAME: &str = "git auth";
+    /// How many drifted repos the detail names before it says `…`.
+    const NAMED: usize = 3;
+    let listing = d.root.join("workspaces");
+    let (scope, unseen) = gitpolicy::scan(&d.root, &listing);
+    let bad: Vec<(&PathBuf, Vec<String>)> = scope
+        .iter()
+        .map(|repo| (repo, gitpolicy::check(repo, &d.root)))
+        .filter(|(_, drift)| !drift.is_empty())
+        .collect();
+    // A directory under `workspaces/` charter could not look into is named with what clears
+    // it, never left out of the count without a word. `workspaces/` itself, when it could not
+    // be listed, is named as itself and is then the only entry.
+    //
+    // Not `fsx::beside_unread`, whose detail lists every path: Python's `check_ssh` counts them
+    // ("N director(ies) under workspaces/") and names each `<workspace>/<clone>`, and the
+    // recorded `doctor-*` scenarios hold this row to that wording.
+    let base = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let named = |p: &Path| {
+        if p == listing {
+            format!("{}/", base(p))
+        } else {
+            format!("{}/{}", p.parent().map(base).unwrap_or_default(), base(p))
+        }
+    };
+    let cannot = if unseen.is_empty() {
+        String::new()
+    } else {
+        let each: Vec<String> = unseen
+            .iter()
+            .map(|u| {
+                format!(
+                    "{} cannot be checked — {}",
+                    named(&u.path),
+                    super::fsx::uncheckable_fix(
+                        u.code,
+                        &crate::shown::readable(
+                            &u.path.display().to_string(),
+                            super::PATH_DISPLAY_LIMIT
+                        )
+                    )
+                )
+            })
+            .collect();
+        format!("   {}.", each.join("; "))
+    };
+    if bad.is_empty() {
+        if unseen.is_empty() {
+            return Row::ok(
+                NAME,
+                format!(
+                    "token-only across {} repo(s) (each forge's own HTTPS token; no SSH/signing)",
+                    scope.len()
+                ),
+            );
+        }
+        let what = if unseen.len() == 1 && unseen[0].path == listing {
+            named(&listing)
+        } else {
+            format!("{} director(ies) under workspaces/", unseen.len())
+        };
+        return Row::warn(
+            NAME,
+            format!(
+                "token-only across {} repo(s); {what} cannot be checked",
+                scope.len()
+            ),
+            cannot.trim_start(),
+        );
+    }
+    // `--apply` deliberately does nothing for a repo on a forge charter cannot name, so a hint
+    // sending that repo to it could never be acted on: the two cases are told apart.
+    let unmanaged = bad
+        .iter()
+        .filter(|(_, drift)| gitpolicy::is_unmanaged(drift))
+        .count();
+    let fixable = bad.len() - unmanaged;
+    let names: Vec<String> = bad.iter().take(NAMED).map(|(repo, _)| base(repo)).collect();
+    let more = if bad.len() > NAMED { " …" } else { "" };
+    let hint = if fixable == 0 {
+        format!(
+            "{unmanaged} repo(s) have an unrecognised forge — `charter git-policy --apply` \
+             deliberately no-ops for these (there's no policy to apply for a host it can't \
+             identify). Declare the host under [[forge]] in charter.toml to bring them under \
+             management, then re-run."
+        )
+    } else if unmanaged == 0 {
+        "Apply the single-credential policy to every clone: charter git-policy --apply".into()
+    } else {
+        format!(
+            "charter git-policy --apply fixes {fixable} drifted repo(s); {unmanaged} more have \
+             an unrecognised forge and need a [[forge]] declaration in charter.toml first — \
+             --apply alone won't touch those."
+        )
+    };
+    Row::warn(
+        NAME,
+        format!(
+            "{}/{} repo(s) not token-only: {}{more}",
+            bad.len(),
+            scope.len(),
+            names.join(", ")
+        ),
+        hint + &cannot,
     )
 }
 

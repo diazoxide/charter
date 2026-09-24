@@ -2349,7 +2349,7 @@ mod tests {
     // ---------------------------------------------------------------------------------------
 
     fn git(dir: &Path, args: &[&str]) {
-        let r = crate::worktree::git::run(dir, args, crate::worktree::git::READ).expect("git");
+        let r = crate::testgit::run(dir, args);
         assert!(r.ok(), "git {args:?} failed: {}", r.err);
     }
 

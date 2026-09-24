@@ -20,6 +20,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Keychain asking you first. A plaintext vault file is now something you ask for, with
   `--provider plain-file`. ([#233](https://github.com/diazoxide/charter-app/issues/233))
 
+### Fixed
+
+- On Linux and Windows the app menu no longer takes a key the chat's shell owns: `Ctrl-C` in a
+  chat is the interrupt again, not Copy, and the same goes for `Ctrl-A`, `Ctrl-Z`, `Ctrl-Y`,
+  `Ctrl-V`, `Ctrl-X` and `Ctrl-H`. Quit is `Ctrl+Shift+Q` there, as in a terminal app. macOS is
+  unchanged. ([#241](https://github.com/diazoxide/charter-app/pull/241))
+- `charter doctor`'s `git auth` row checks the one-credential git policy, the check
+  `charter git-policy` runs, instead of saying it is not checked. It only reads, and names
+  `charter git-policy --apply` for a clone that drifted.
+  ([#241](https://github.com/diazoxide/charter-app/pull/241))
+
 ## [0.1.1] - 2026-09-24
 
 0.1.1 brings back what 0.1.0 left out and a working plane still used: vault access through

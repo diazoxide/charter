@@ -36,8 +36,6 @@ pub(crate) fn python3() -> Row {
 pub(crate) const PYTHON: &str = "this charter does not run on Python and has no interpreter \
                                  to report";
 pub(crate) const FORGES: &str = "this version of charter does not check forges yet";
-pub(crate) const GIT_POLICY: &str = "this version of charter does not check the one-credential \
-                                     git policy yet";
 pub(crate) const HARNESS: &str = "this version of charter does not check the harness \
                                   registry's capability ceilings yet";
 pub(crate) const FRAME: &str = "this charter has no tmux frame; its window takes the frame's \

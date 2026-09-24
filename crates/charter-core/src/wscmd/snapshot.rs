@@ -161,7 +161,7 @@ mod tests {
     }
 
     fn git(at: &Path, argv: &[&str]) {
-        let run = crate::worktree::git::run(at, argv, crate::worktree::git::READ).unwrap();
+        let run = crate::testgit::run(at, argv);
         assert!(run.ok(), "git {argv:?}: {}", run.err);
     }
 

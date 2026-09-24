@@ -691,11 +691,12 @@ document **unprevented**, which is what reaching the shell actually means.
 
 **What is still eaten, and where.** The palette's window listener is the only place the
 front-end claims a key, and after #106 it claims no readline binding. The application menu is
-the other claimant, and on Linux and Windows its accelerators are `Ctrl` chords — muda 0.19.3
-gives the predefined items `CmdOrCtrl` — where on macOS they are `⌘` chords and harmless:
-`Ctrl-C` (copy, against SIGINT), `Ctrl-A` (select all, against beginning-of-line), `Ctrl-Z`
-(undo, against SUSP), `Ctrl-Y` (redo, against `yank`), `Ctrl-V` (paste, against
-`quoted-insert`), `Ctrl-X` (cut, against readline's `C-x` prefix), `Ctrl-H` (hide, against
-backward-delete-char) and charter's own `Ctrl-Q` (quit). Whether GTK hands an accelerator to
-the menu before the WebKitGTK webview sees it is **not measured**, so this is a list to check
-and not a list of confirmed defects; charter-app#187 is where it is being checked.
+the other claimant. On macOS its accelerators are `⌘` chords, which xterm encodes as nothing, so
+it takes nothing. Off macOS muda 0.19.3 gives the predefined items fixed `Ctrl` chords, every one
+a key a shell owns: `Ctrl-C` (copy, against SIGINT), `Ctrl-A` (select all, against
+beginning-of-line), `Ctrl-Z` (undo, against SUSP), `Ctrl-Y` (redo, against `yank`), `Ctrl-V`
+(paste, against `quoted-insert`), `Ctrl-X` (cut, against readline's `C-x` prefix) and `Ctrl-H`
+(hide, against backward-delete-char). So since charter-app#187 the menu off macOS is Quit alone,
+on `Ctrl+Shift+Q`: a terminal app's own keys add `Shift` (GNOME Terminal, Konsole), and xterm
+sends nothing for a `Ctrl+Shift` letter. `lifecycle::layout` is where that is decided, and its
+tests hold every accelerator it produces off macOS to this rule.
