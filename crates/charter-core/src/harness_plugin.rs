@@ -34,11 +34,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::extension::project::Source;
+use crate::extension::project::{Source, toml_key};
 use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
 
 /// The table both files hold choices in: `[harness_plugins.<harness>]`, `"<id>" = true|false`.
 pub const TABLE: &str = "harness_plugins";
+
+/// What one chat is handed: each plugin on (`true`) or off (`false`), by the harness's own id.
+/// A plugin it does not name is left to the harness.
+pub type Chosen = BTreeMap<String, bool>;
 
 /// One plugin a harness has installed on this machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,8 +122,11 @@ pub trait Adapter: Sync {
     fn harness(&self) -> &'static str;
     /// What a person calls it.
     fn title(&self) -> &'static str;
-    /// Everything it has installed on this machine, read and never written, or why it could not
-    /// be read.
+    /// Where it records what it has installed, under `env`: what the settings tab names, so a
+    /// listing is never mistaken for another account's.
+    fn record(&self, env: &Env<'_>) -> Option<PathBuf>;
+    /// Everything it has installed on this machine, read from [`Self::record`] and never
+    /// written, or why it could not be read.
     fn installed(&self, env: &Env<'_>) -> Result<Vec<Plugin>, String>;
     fn support(&self) -> Support;
     /// What charter fixes for it, whatever a file says.
@@ -185,11 +192,15 @@ impl Adapter for ClaudeCode {
     /// the record `claude plugin list` reads. Measured on the operator's 2.1.x install: version
     /// 2, `plugins` keyed by `<name>@<marketplace>`, each a list of installs with a `scope`
     /// (`user`, `project`, `local`). One plugin installed in several scopes is one plugin here.
+    fn record(&self, env: &Env<'_>) -> Option<PathBuf> {
+        env.dir("CLAUDE_CONFIG_DIR", ".claude")
+            .map(|dir| dir.join("plugins").join("installed_plugins.json"))
+    }
+
     fn installed(&self, env: &Env<'_>) -> Result<Vec<Plugin>, String> {
-        let Some(dir) = env.dir("CLAUDE_CONFIG_DIR", ".claude") else {
+        let Some(path) = self.record(env) else {
             return Ok(Vec::new());
         };
-        let path = dir.join("plugins").join("installed_plugins.json");
         let Some(text) = read(&path)? else {
             return Ok(Vec::new());
         };
@@ -258,11 +269,15 @@ impl Adapter for Codex {
     /// `[plugins."<name>@<marketplace>"]` in `$CODEX_HOME/config.toml`, else `~/.codex`, which
     /// is where Codex records an installed plugin and whether it is on (its plugin docs, and the
     /// operator's 0.147.0 install).
+    fn record(&self, env: &Env<'_>) -> Option<PathBuf> {
+        env.dir("CODEX_HOME", ".codex")
+            .map(|dir| dir.join("config.toml"))
+    }
+
     fn installed(&self, env: &Env<'_>) -> Result<Vec<Plugin>, String> {
-        let Some(dir) = env.dir("CODEX_HOME", ".codex") else {
+        let Some(path) = self.record(env) else {
             return Ok(Vec::new());
         };
-        let path = dir.join("config.toml");
         let Some(text) = read(&path)? else {
             return Ok(Vec::new());
         };
@@ -338,12 +353,14 @@ impl Adapter for Opencode {
     /// script in `plugin/` and `plugins/` (opencode's plugin docs name `plugins/`; the operator's
     /// install has `plugin/`). `opencode.jsonc` is not read: charter has no JSONC reader, and a
     /// plugin listed only there is not listed here.
-    fn installed(&self, env: &Env<'_>) -> Result<Vec<Plugin>, String> {
-        let Some(dir) = env
-            .var("XDG_CONFIG_HOME")
+    fn record(&self, env: &Env<'_>) -> Option<PathBuf> {
+        env.var("XDG_CONFIG_HOME")
             .map(|base| PathBuf::from(base).join("opencode"))
             .or_else(|| env.home.as_ref().map(|home| home.join(".config/opencode")))
-        else {
+    }
+
+    fn installed(&self, env: &Env<'_>) -> Result<Vec<Plugin>, String> {
+        let Some(dir) = self.record(env) else {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
@@ -449,6 +466,13 @@ impl Choices {
         let text = |name: &str| std::fs::read_to_string(root.join(name)).ok();
         Self::from_text(text(COMMITTED_FILE).as_deref(), text(LOCAL_FILE).as_deref())
     }
+
+    /// Whether either file turns any of `harness`'s plugins on or off.
+    fn names_any(&self, harness: &str) -> bool {
+        [&self.shared, &self.local]
+            .iter()
+            .any(|file| file.get(harness).is_some_and(|said| !said.is_empty()))
+    }
 }
 
 /// Every well-formed `"<id>" = true|false` under each `[harness_plugins.<harness>]` in `text`.
@@ -493,8 +517,9 @@ pub struct Effective {
     pub source: Source,
     /// Whether this machine has it installed for this harness.
     pub installed: bool,
-    /// Whether charter fixes it, whatever a file says.
-    pub pinned: bool,
+    /// Why charter fixes it whatever a file says ([`Pin::why`]), or none for a plugin a project
+    /// may choose.
+    pub pinned: Option<&'static str>,
     pub ignored: Vec<Ignored>,
 }
 
@@ -552,7 +577,7 @@ pub fn resolve(adapter: &dyn Adapter, installed: &[Plugin], choices: &Choices) -
                 wanted,
                 source,
                 installed: here.is_some(),
-                pinned: pin.is_some(),
+                pinned: pin.map(|pin| pin.why),
                 ignored,
             }
         })
@@ -562,34 +587,41 @@ pub fn resolve(adapter: &dyn Adapter, installed: &[Plugin], choices: &Choices) -
 /// **What a chat on this harness is handed**: every pin, and every installed plugin a file
 /// turned on or off. Nothing for a harness whose adapter cannot apply, and nothing not set: the
 /// harness decides those as it always did.
-pub fn chosen(adapter: &dyn Adapter, all: &[Effective]) -> BTreeMap<String, bool> {
+pub fn chosen(adapter: &dyn Adapter, all: &[Effective]) -> Chosen {
     if adapter.support() != Support::PerChat {
-        return BTreeMap::new();
+        return Chosen::new();
     }
     all.iter()
-        .filter(|it| it.pinned || it.installed)
+        .filter(|it| it.pinned.is_some() || it.installed)
         .filter_map(|it| Some((it.id.clone(), it.wanted?)))
         .collect()
 }
 
-/// What a chat of `kind`, started in the plane at `root` with `env`, is handed. Where the
-/// harness's own record cannot be read, the pins alone: a listing charter could not read is not
-/// a reason to start a chat without its guard.
-pub fn for_start(kind: &str, root: &Path, env: &Env<'_>) -> BTreeMap<String, bool> {
+/// What a chat of `kind`, started in the plane at `root` with `env`, is handed.
+///
+/// **The harness's record is read only when a project file names one of its plugins**: with
+/// nothing chosen, the answer is the pins whatever is installed, so a project that says nothing
+/// costs no read of anybody's home directory. Where the record cannot be read, the pins alone: a
+/// listing charter could not read is not a reason to start a chat without its guard.
+pub fn for_start(kind: &str, root: &Path, env: &Env<'_>) -> Chosen {
     let Some(adapter) = adapter(kind) else {
-        return BTreeMap::new();
+        return Chosen::new();
     };
-    if adapter.support() != Support::PerChat {
-        return BTreeMap::new();
-    }
-    let installed = adapter.installed(env).unwrap_or_default();
-    chosen(adapter, &resolve(adapter, &installed, &Choices::read(root)))
+    let choices = Choices::read(root);
+    let installed = if choices.names_any(adapter.harness()) {
+        adapter.installed(env).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    chosen(adapter, &resolve(adapter, &installed, &choices))
 }
 
 /// One harness in the settings tab.
 #[derive(Clone)]
 pub struct Group {
     pub adapter: &'static dyn Adapter,
+    /// Where its listing was read from ([`Adapter::record`]).
+    pub record: Option<PathBuf>,
     /// Why the harness's own record could not be read, if it could not.
     pub trouble: Option<String>,
     pub plugins: Vec<Effective>,
@@ -607,6 +639,7 @@ pub fn survey(root: &Path, env: &Env<'_>) -> Vec<Group> {
             };
             Group {
                 adapter,
+                record: adapter.record(env),
                 trouble,
                 plugins: resolve(adapter, &installed, &choices),
             }
@@ -668,11 +701,6 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
         }
     }
     out
-}
-
-/// A key as TOML would write it: bare when it can be, quoted when it cannot.
-fn toml_key(key: &str) -> String {
-    toml_edit::Key::new(key).display_repr().into_owned()
 }
 
 #[cfg(test)]

@@ -410,6 +410,11 @@ function harnessPluginGroups(harnesses: readonly HarnessPlugins[]): Group[] {
           ),
         ),
       notes: (file) => [
+        ...(harness.record === null
+          ? []
+          : [
+              `Listed from ${harness.record}. A profile that points ${harness.title} at another directory is listed against that one when its chat starts.`,
+            ]),
         ...(harness.trouble === null ? [] : [harness.trouble]),
         ...harness.plugins.flatMap((it) => (it.pinned === null ? [] : [it.pinned])),
         ...(harness.unsupported === null

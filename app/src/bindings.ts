@@ -924,6 +924,12 @@ export type HarnessPlugins = {
 	 *  a project's choice to the chats it starts.
 	 */
 	unsupported: string | null,
+	/**
+	 *  Where charter read what it has installed: the file or directory, as this app's own
+	 *  environment names it. A profile that points the harness elsewhere is listed against its
+	 *  own directory when its chat starts.
+	 */
+	record: string | null,
 	/**  Why the harness's own record of what it installed could not be read, if it could not. */
 	trouble: string | null,
 	plugins: HarnessPlugin[],

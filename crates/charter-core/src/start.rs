@@ -106,7 +106,7 @@ pub struct Ready {
     /// project chose among those installed, and the pins (charter-app#274, ADR 0050). Empty for
     /// a harness whose adapter cannot apply per chat. It reaches the harness through
     /// [`crate::harness::Harness::state_hooks`].
-    pub plugins: std::collections::BTreeMap<String, bool>,
+    pub plugins: crate::harness_plugin::Chosen,
 }
 
 impl Ready {

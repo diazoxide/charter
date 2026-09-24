@@ -179,7 +179,7 @@ impl Chats {
         &self,
         harness: Option<Harness>,
         cwd: Option<&std::path::Path>,
-        plugins: &std::collections::BTreeMap<String, bool>,
+        plugins: &charter_core::harness_plugin::Chosen,
     ) -> (Vec<String>, Vec<(String, String)>) {
         let (Some(harness), Some(binary)) = (harness, self.shipped.binary.as_deref()) else {
             return (Vec::new(), Vec::new());
@@ -302,7 +302,7 @@ impl Chats {
         harness: Option<Harness>,
         conversation: Option<String>,
         how: charter_core::reopen::Reopened,
-        plugins: &std::collections::BTreeMap<String, bool>,
+        plugins: &charter_core::harness_plugin::Chosen,
         size: Size,
     ) -> Result<u32, String> {
         // The profile's own command first — a wrapper reads its own words before it hands the

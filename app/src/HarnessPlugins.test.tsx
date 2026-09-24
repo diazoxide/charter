@@ -50,6 +50,7 @@ const HARNESSES: HarnessPlugins[] = [
     harness: "claude",
     title: "Claude Code",
     unsupported: null,
+    record: "/home/dev/.claude/plugins/installed_plugins.json",
     trouble: null,
     plugins: [
       {
@@ -112,6 +113,7 @@ const HARNESSES: HarnessPlugins[] = [
   {
     harness: "opencode",
     title: "opencode",
+    record: "/home/dev/.config/opencode",
     unsupported:
       "plugins for opencode are not supported yet — charter does not start opencode chats yet",
     trouble: null,
@@ -120,6 +122,7 @@ const HARNESSES: HarnessPlugins[] = [
   {
     harness: "codex",
     title: "Codex",
+    record: "/home/dev/.codex/config.toml",
     unsupported:
       "plugins for Codex are not supported yet — Codex 0.147.0 turns a plugin on or off only in its own config.toml",
     trouble: null,
@@ -191,6 +194,17 @@ describe("the Harness plugins groups (charter-app#274)", () => {
     expect(group).toHaveTextContent("not set — Claude Code decides, from its own settings");
     expect(group).toHaveTextContent(
       "not installed on this machine — named in charter.local.toml, so no chat is handed it",
+    );
+  });
+
+  it("names the file it listed a harness's plugins from, since a profile may list another", async () => {
+    core();
+    const { shared } = await drawn();
+
+    expect(
+      within(shared).getByRole("group", { name: "Harness plugins: Claude Code" }),
+    ).toHaveTextContent(
+      "Listed from /home/dev/.claude/plugins/installed_plugins.json. A profile that points Claude Code at another directory is listed against that one when its chat starts.",
     );
   });
 

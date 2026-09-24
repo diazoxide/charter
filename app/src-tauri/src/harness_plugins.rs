@@ -17,6 +17,10 @@ pub struct HarnessPlugins {
     /// "plugins for <harness> are not supported yet — <why>", or none where charter applies
     /// a project's choice to the chats it starts.
     pub unsupported: Option<String>,
+    /// Where charter read what it has installed: the file or directory, as this app's own
+    /// environment names it. A profile that points the harness elsewhere is listed against its
+    /// own directory when its chat starts.
+    pub record: Option<String>,
     /// Why the harness's own record of what it installed could not be read, if it could not.
     pub trouble: Option<String>,
     pub plugins: Vec<HarnessPlugin>,
@@ -67,39 +71,32 @@ fn groups(survey: Vec<harness_plugin::Group>) -> Vec<HarnessPlugins> {
             harness: group.adapter.harness().to_owned(),
             title: group.adapter.title().to_owned(),
             unsupported: harness_plugin::not_supported(group.adapter),
+            record: group.record.map(|path| path.display().to_string()),
             trouble: group.trouble,
             plugins: group
                 .plugins
                 .into_iter()
-                .map(|it| {
-                    let pinned = group
-                        .adapter
-                        .pinned()
-                        .iter()
-                        .find(|pin| it.pinned && pin.id == it.id)
-                        .map(|pin| pin.why.to_owned());
-                    HarnessPlugin {
-                        state: match it.wanted {
-                            Some(true) => "on",
-                            Some(false) => "off",
-                            None => "not-set",
-                        }
-                        .to_owned(),
-                        source: it.source.as_str().to_owned(),
-                        id: it.id,
-                        name: it.name,
-                        origin: it.origin,
-                        installed: it.installed,
-                        pinned,
-                        ignored: it
-                            .ignored
-                            .into_iter()
-                            .map(|one| crate::extensions::ProjectExtensionIgnored {
-                                file: one.source.file().unwrap_or_default().to_owned(),
-                                why: one.why,
-                            })
-                            .collect(),
+                .map(|it| HarnessPlugin {
+                    state: match it.wanted {
+                        Some(true) => "on",
+                        Some(false) => "off",
+                        None => "not-set",
                     }
+                    .to_owned(),
+                    source: it.source.as_str().to_owned(),
+                    id: it.id,
+                    name: it.name,
+                    origin: it.origin,
+                    installed: it.installed,
+                    pinned: it.pinned.map(str::to_owned),
+                    ignored: it
+                        .ignored
+                        .into_iter()
+                        .map(|one| crate::extensions::ProjectExtensionIgnored {
+                            file: one.source.file().unwrap_or_default().to_owned(),
+                            why: one.why,
+                        })
+                        .collect(),
                 })
                 .collect(),
         })

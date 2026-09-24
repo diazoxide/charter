@@ -18,8 +18,8 @@ plane's word for the harness, which is a profile's `kind` (`claude`, `opencode`,
 `source` says where charter read it from. An adapter
 (`charter_core::harness_plugin::Adapter`) knows one harness:
 
-- **what it has installed on this machine**, read from the harness's own files and never
-  written;
+- **where it records what it has installed** (`record`), and **what that is**, read from the
+  harness's own files and never written;
 - **whether it can apply** a set of plugins to one chat that charter starts (`Support::PerChat`)
   or cannot yet (`Support::NotYet(why)`);
 - **which plugins charter fixes** whatever a project says (`pinned`).
@@ -63,15 +63,26 @@ can move them.
 carries it on `Ready::plugins`. `Harness::state_hooks` hands it to the harness. The listing is
 read from **the chat's own environment**: a profile that sets `CLAUDE_CONFIG_DIR` or
 `CODEX_HOME` for another account is listed against that account. The settings tab lists
-against this process's environment, since it has no profile in front of it. A chat on no
-profile, the operator's shell, is handed the pins alone, as before.
+against this process's environment, since it has no profile in front of it, and it names the
+file it listed from, with a line saying that a profile that points the harness elsewhere is
+listed against its own directory when its chat starts. **The harness's record is read at a
+start only when a project file names one of that harness's plugins.** With nothing chosen, the
+answer is the pins whatever is installed, so a project that says nothing reads nobody's home
+directory. A chat on no profile, the operator's shell, is handed the pins alone, as before: it
+has no declared kind to choose an adapter by, and `Harness::of_command` may not be relied on to
+pick one.
 
 ## The adapters
 
 ### Claude Code: applies per chat
 
 - **Lists** `plugins/installed_plugins.json` under `CLAUDE_CONFIG_DIR`, else `~/.claude`. This
-  is the record `claude plugin list` reads. Read from the operator's 2.1.x install: `version`
+  is the record `claude plugin list` reads: on the operator's machine, `claude plugin list
+  --json` answered one row per install in that file, each with the same `id`, `scope`,
+  `projectPath` and `installPath`. The only field it added was `enabled`, which comes from
+  settings, and charter does not need it to list what is installed. A plugin loaded with
+  `--plugin-dir` is not installed and is not listed. charter's own plugin is loaded that way
+  and is shown as a pin. Read from the operator's 2.1.x install: `version`
   2, and `plugins` keyed by `<name>@<marketplace>`, each holding a list of installs with a
   `scope` (`user`, `project`, `local`). A plugin installed in several scopes is listed once,
   with its scopes as its source.

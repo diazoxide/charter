@@ -232,7 +232,7 @@ impl Harness {
         self,
         kit: Kit<'_>,
         cwd: Option<&std::path::Path>,
-        plugins: &std::collections::BTreeMap<String, bool>,
+        plugins: &crate::harness_plugin::Chosen,
     ) -> StateHooks {
         match self {
             // **The bundled plugin, loaded for this session alone** (`crate::plugin` has the
@@ -351,7 +351,7 @@ impl Harness {
 fn claude_code_settings(
     binary: &std::path::Path,
     may_fill_the_footer: bool,
-    plugins: &std::collections::BTreeMap<String, bool>,
+    plugins: &crate::harness_plugin::Chosen,
 ) -> String {
     let mut settings = serde_json::Map::new();
     // The project's own choice of Claude Code's plugins first (charter-app#274, ADR 0050): a

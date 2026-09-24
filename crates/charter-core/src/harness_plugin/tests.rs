@@ -143,9 +143,9 @@ fn pins(adapter: &dyn Adapter) -> [(String, bool); 2] {
 fn charters_own_plugin_is_always_on_and_the_old_one_always_off() {
     let all = claude(&["charter@charter"], "", "");
     assert_eq!(row(&all, "charter-app@inline").wanted, Some(true));
-    assert!(row(&all, "charter-app@inline").pinned);
+    assert!(row(&all, "charter-app@inline").pinned.is_some());
     assert_eq!(row(&all, "charter@charter").wanted, Some(false));
-    assert!(row(&all, "charter@charter").pinned);
+    assert!(row(&all, "charter@charter").pinned.is_some());
 }
 
 #[test]
@@ -457,4 +457,60 @@ fn a_harness_plugins_that_is_not_a_table_is_refused() {
                 .to_owned()
         ]
     );
+}
+
+// -------------------------------------------------------------------------------------
+// At a chat's start
+// -------------------------------------------------------------------------------------
+
+/// A plane whose `charter.toml` is `shared`, and a Claude Code config dir whose install record
+/// is `record` — read only through the chat's own `CLAUDE_CONFIG_DIR`.
+fn start_with(shared: &str, record: &str) -> Chosen {
+    let plane = tempfile::tempdir().unwrap();
+    std::fs::write(plane.path().join("charter.toml"), shared).unwrap();
+    let config = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("plugins")).unwrap();
+    std::fs::write(config.path().join("plugins/installed_plugins.json"), record).unwrap();
+    let chat = env_of(&[("CLAUDE_CONFIG_DIR", config.path())]);
+    let env = Env {
+        chat: &chat,
+        home: None,
+        process: false,
+    };
+    for_start("claude", plane.path(), &env)
+}
+
+#[test]
+fn a_project_that_chooses_nothing_starts_its_chats_with_the_pins_and_reads_no_record() {
+    // The record here is not JSON: had it been read, the listing would have failed. It was not,
+    // and the answer is the pins, as every chat before this carried.
+    assert_eq!(start_with("", "{"), BTreeMap::from(pins(&CLAUDE_CODE)));
+}
+
+#[test]
+fn a_project_that_chooses_is_handed_what_the_chats_own_record_has_installed() {
+    let got = start_with(
+        "[harness_plugins.claude]\n\"figma@official\" = false\n\"acme@corp\" = true\n",
+        r#"{"version": 2, "plugins": {"figma@official": [{"scope": "user"}]}}"#,
+    );
+    let mut want = BTreeMap::from(pins(&CLAUDE_CODE));
+    want.insert("figma@official".to_owned(), false);
+    assert_eq!(got, want);
+}
+
+#[test]
+fn a_chat_on_a_harness_that_cannot_apply_is_handed_nothing_at_its_start() {
+    let plane = tempfile::tempdir().unwrap();
+    std::fs::write(
+        plane.path().join("charter.toml"),
+        "[harness_plugins.codex]\n\"charter@charter\" = false\n",
+    )
+    .unwrap();
+    let env = Env {
+        chat: &[],
+        home: None,
+        process: false,
+    };
+    assert_eq!(for_start("codex", plane.path(), &env), Chosen::new());
+    assert_eq!(for_start("opencode", plane.path(), &env), Chosen::new());
 }

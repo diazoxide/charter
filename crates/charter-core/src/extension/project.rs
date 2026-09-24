@@ -470,7 +470,7 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
 }
 
 /// A key as TOML would write it: bare when it can be, quoted when it cannot.
-fn toml_key(key: &str) -> String {
+pub(crate) fn toml_key(key: &str) -> String {
     toml_edit::Key::new(key).display_repr().into_owned()
 }
 
