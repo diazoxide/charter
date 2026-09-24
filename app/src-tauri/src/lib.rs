@@ -1238,6 +1238,8 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::project_extensions,
             extensions::extensions_on,
             harness_plugins::project_harness_plugins,
+            extensions::project_theme,
+            extensions::project_theme_drawn,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,

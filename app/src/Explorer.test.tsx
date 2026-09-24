@@ -19,6 +19,7 @@ const CUT = `${ALPHA}/.worktrees/svc`;
 const PANELS: PanelsModel = {
   workspace: "alpha",
   repos: ["svc", "tool"],
+  paths: {},
   absent: [],
   refused: [],
   todos: [],
@@ -326,16 +327,75 @@ describe("a piece row's menu", () => {
 
     expect(pressed).toEqual(["worktree.remove:svc/one"]);
   });
+});
 
-  it("leaves a clone row without one, because nothing in the catalogue is about a clone", () => {
-    // The gap this component's docstring records: `workspace_panels` answers with clone NAMES
-    // and nothing charter can do takes one. A menu there would have to invent a verb.
+/**
+ * Right-click on a clone's heading (charter-app#174, the second half).
+ *
+ * It had no menu because nothing in the catalogue was about a clone, and nothing could be until
+ * the core said where one is. `Panels.paths` says so now, and the catalogue has two rows per
+ * clone: a new tab in it, and picking it as where new chats start.
+ */
+describe("a clone row's menu", () => {
+  const SVC = `${ALPHA}/svc`;
+  const offers = (startsIn?: string) =>
+    catalogued(
+      catalogue({
+        tabs: noTabs(),
+        workspaces: ["alpha"],
+        focused: "alpha",
+        plane: "/plane",
+        clones: [{ repo: "svc", path: SVC }],
+        startsIn,
+        needsYou: [],
+        nameOf: String,
+      }),
+    );
+  const heading = () =>
+    within(screen.getByTestId("clone-svc")).getByRole("treeitem", { name: /^svc/ });
+
+  it("opens on a right-click with the catalogue's own rows for that clone", async () => {
     draw({ offers: offers() });
 
-    const clone = within(screen.getByTestId("clone-svc")).getByText("svc");
-    clone.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    heading().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 
-    expect(screen.queryByRole("menu")).toBeNull();
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual(["New tab in svc", "Start new chats in svc"]);
+  });
+
+  it("hands the catalogue's offer back when a row is pressed", async () => {
+    const pressed: string[] = [];
+    draw({ offers: offers(), onPress: (offer) => pressed.push(offer.id) });
+
+    heading().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Start new chats in svc" }));
+
+    expect(pressed).toEqual(["clone.pick:svc"]);
+  });
+
+  it("opens from the keyboard on the clone's row, which the arrows reach", async () => {
+    const pressed: string[] = [];
+    draw({ offers: offers(), onPress: (offer) => pressed.push(offer.id) });
+    await userEvent.tab();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(heading()).toHaveFocus();
+
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    await screen.findByRole("menu");
+    await userEvent.keyboard("{Enter}");
+
+    expect(pressed).toEqual(["clone.chat:svc"]);
+  });
+
+  it("marks a picked clone as where the next chat starts, and only it", () => {
+    draw({ offers: offers(SVC), spot: { repo: "svc", path: SVC } });
+
+    expect(picked()).toEqual([expect.stringMatching(/^svc/)]);
   });
 });
 

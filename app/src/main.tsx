@@ -5,14 +5,14 @@ import { attach } from "./bench";
 import { settleLayout } from "./regions";
 import { drawWindowText, listenForSizeKeys, onTextSizes, textSizes } from "./textSize";
 import { DEFAULT_THEME, drawIn } from "./theme/theme";
-import { theirTheme } from "./windowprefs";
+import { theirThemeOnce } from "./windowprefs";
 
 // The window's colours, before anything is rendered and therefore before anything is painted:
 // the operator's own `theme.json` when there is one, else the built-in compiled into the bundle.
 // Neither is a read from disk on the way to the first frame — the file was read by the Rust side
 // before the window existed and handed to it with the window (`windowprefs.ts`) — which is the
 // only arrangement ADR 0026's 2 s cold start can afford.
-drawIn(theirTheme() ?? DEFAULT_THEME);
+drawIn(theirThemeOnce() ?? DEFAULT_THEME);
 
 // The window's text size, for the same reason and from the same place: the layout file the
 // window was handed (`textSize.ts`, charter-app#283). The root's font size is what every `rem`

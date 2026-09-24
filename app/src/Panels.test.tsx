@@ -128,6 +128,7 @@ const TODO = row("20260302-091400-review", "Review the rollout plan", {
 const PANELS: PanelsModel = {
   workspace: "alpha",
   repos: ["svc", "tool"],
+  paths: {},
   absent: [],
   refused: [],
   todos: [

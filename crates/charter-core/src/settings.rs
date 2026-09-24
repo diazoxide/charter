@@ -138,6 +138,11 @@ fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
     out.extend(crate::extension::project::refusals(text, which.file()));
     // And `[harness_plugins]` (charter-app#274), the same way.
     out.extend(crate::harness_plugin::refusals(text, which.file()));
+    // And `[theme]` (charter-app#273), read by one reader in both too.
+    out.extend(crate::extension::project::theme::refusals(
+        text,
+        which.file(),
+    ));
     out
 }
 

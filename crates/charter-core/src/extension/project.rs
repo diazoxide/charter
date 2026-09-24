@@ -33,6 +33,8 @@ use std::path::Path;
 use super::{Setting, SettingValue};
 use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
 
+pub mod theme;
+
 /// The table both files hold choices in.
 pub const TABLE: &str = "extensions";
 

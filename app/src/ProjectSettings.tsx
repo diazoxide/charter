@@ -2,12 +2,15 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { LoaderCircle } from "lucide-react";
 import { extensionsChanged } from "./extensionsOn";
+import { projectThemeChanged, useProjectThemeAnswers } from "./projectTheme";
+import { BUILT_IN, SYSTEM } from "./theme/theme";
 import {
   commands,
   type HarnessPlugin,
   type HarnessPlugins,
   type PlaneId,
   type ProjectExtension,
+  type ProjectTheme,
   type ProjectSettings as Both,
   type SettingsEdit,
   type SettingsFile,
@@ -32,7 +35,10 @@ import {
  * under it, each reading and writing keys by path. **Extensions** (charter-app#253, ADR 0048) is
  * one group in either section: each extension with what it is in this project and which file
  * decided it — the core's `extension::project::resolve`, asked with `project_extensions` — and
- * a control per key that writes `[extensions.<id>]` in the section it is in.
+ * a control per key that writes `[extensions.<id>]` in the section it is in. **Theme**
+ * (charter-app#273) is one too: `[theme] use`, from charter's own, the system's, or an approved
+ * extension's, with the core's sentence when the pick in force cannot be drawn
+ * (`extension::project::theme`, asked with `project_theme`).
  *
  * **Harness plugins** (charter-app#274, ADR 0050) is one group per harness charter knows, in
  * either section: each plugin that harness has installed, on, off or not set, writing
@@ -43,9 +49,27 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [both, setBoth] = useState<Both | { trouble: string }>();
   const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
+  const [theme, setTheme] = useState<ProjectTheme>();
   /** The newest read out: an answer to an older one — before a save, or for another plane — is
    *  dropped rather than drawn over what came after it. */
   const reading = useRef(0);
+
+  /** The newest theme read out, kept apart from {@link reading}: the theme is also read on its
+   *  own, when the window's answer for this project changes. */
+  const themeReading = useRef(0);
+  // The theme, as the files are; a refusal leaves the Theme group with charter's own picks only.
+  const readTheme = useCallback(() => {
+    const mine = ++themeReading.current;
+    const newest = () => themeReading.current === mine;
+    void commands
+      .projectTheme(plane)
+      .then((said) => {
+        if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
+      })
+      .catch(() => {
+        if (newest()) setTheme(undefined);
+      });
+  }, [plane]);
 
   const read = useCallback(() => {
     const mine = ++reading.current;
@@ -76,14 +100,24 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
       .catch(() => {
         if (newest()) setHarnesses([]);
       });
-  }, [plane]);
+    readTheme();
+  }, [plane, readTheme]);
 
   useEffect(read, [read]);
+  // What the window draws for this project was asked again — by this tab's save, or by an
+  // approval or a removal in the Extensions dialog, which tells the window and not this tab —
+  // so the tab's sentence about the theme is asked again with it, and the two never disagree.
+  const answers = useProjectThemeAnswers(plane);
+  useEffect(() => {
+    if (answers > 0) readTheme();
+  }, [answers, readTheme]);
 
   const saved = useCallback(() => {
     read();
     // The window keeps of its surveyed panels, views and themes what this project has on.
     extensionsChanged(plane);
+    // And the theme it draws while it is in front (charter-app#273).
+    projectThemeChanged(plane);
   }, [plane, read]);
 
   if (both === undefined) {
@@ -115,6 +149,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         who="Committed; your team sees this."
         groups={[...SHARED, ...harnessPluginGroups(harnesses)]}
         extensions={extensions}
+        theme={theme}
         onSaved={saved}
       />
       <Section
@@ -124,6 +159,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         who="This machine only. Gitignored; charter will not write it anywhere git would commit it."
         groups={[...LOCAL, ...harnessPluginGroups(harnesses)]}
         extensions={extensions}
+        theme={theme}
         onSaved={saved}
       />
     </div>
@@ -148,19 +184,29 @@ type Control = {
   choices?: readonly string[];
   /** What a `choice`'s empty option says. */
   unset?: string;
+  /** What a `choice` shows for each of its values, when that is not the value itself. */
+  labels?: Readonly<Record<string, string>>;
   read: (file: SettingsFile) => string;
   /** The edits `draft` makes to `file`, the file it was typed over. */
   edits: (draft: string, file: SettingsFile) => SettingsEdit[];
 };
 
 /** A heading and what is under it. `extensions` is what the core says is in force in this
- *  project, for the group that draws it. */
+ *  project, and `theme` what it says the project draws, for the groups that draw them. */
 type Group = {
   title: string;
   note?: string;
-  controls: (file: SettingsFile, extensions: readonly ProjectExtension[]) => Control[];
+  controls: (
+    file: SettingsFile,
+    extensions: readonly ProjectExtension[],
+    theme: ProjectTheme | undefined,
+  ) => Control[];
   /** Sentences about this file the group says under its heading. */
-  notes?: (file: SettingsFile, extensions: readonly ProjectExtension[]) => string[];
+  notes?: (
+    file: SettingsFile,
+    extensions: readonly ProjectExtension[],
+    theme: ProjectTheme | undefined,
+  ) => string[];
   /** What the group says when it has no controls; "None in this file." otherwise. */
   empty?: string;
 };
@@ -428,6 +474,48 @@ function harnessPluginGroups(harnesses: readonly HarnessPlugins[]): Group[] {
   });
 }
 
+/** charter's own picks, for when the core could not be asked what else there is. */
+const BUILT_IN_PICKS = [...Object.keys(BUILT_IN), SYSTEM];
+
+/**
+ * **Theme, in either section** (charter-app#273, ADR 0048): `[theme] use`. Local's pick wins over
+ * Shared's; an extension's theme is drawn only while the project has that extension on and this
+ * machine approved it, and the core's sentence says why when the pick in force is not drawn —
+ * under the section whose file made it.
+ */
+function themeGroup(unset: string): Group {
+  const path = key("theme", "use");
+  return {
+    title: "Theme",
+    controls: (_file, _extensions, theme) => {
+      const options = theme?.options ?? BUILT_IN_PICKS.map((value) => ({ value, label: value }));
+      const labels = Object.fromEntries(options.map((one) => [one.value, one.label]));
+      const drawn =
+        theme?.draws == null
+          ? "the window's own theme — your theme.json, else the first theme from an extension this project has on, else charter-dark"
+          : (labels[theme.draws] ?? theme.draws);
+      return [
+        {
+          ...textAt(path, "Theme", {
+            kind: "choice",
+            choices: options.map((one) => one.value),
+            hint: `Drawn in this project: ${drawn}. The terminal follows the window.`,
+          }),
+          unset,
+          labels,
+        },
+      ];
+    },
+    notes: (file, _extensions, theme) => {
+      if (theme === undefined) return [];
+      return [
+        ...(theme.why !== null && theme.file === file.file ? [theme.why] : []),
+        ...theme.ignored.filter((one) => one.file === file.file).map((one) => one.why),
+      ];
+    },
+  };
+}
+
 /** The harness kinds a profile may name — `profiles::KINDS`, in the registry's order. */
 const KINDS = ["claude", "opencode", "codex"] as const;
 
@@ -487,9 +575,11 @@ const SHARED: Group[] = [
       }),
   },
   EXTENSIONS,
+  themeGroup("not set — the window's own theme"),
 ];
 
-/** `charter.local.toml`: `[harness]` and `[extensions]`, which is all its readers read there. */
+/** `charter.local.toml`: `[harness]`, `[extensions]` and `[theme]`, which is all its readers read
+ *  there. */
 const LOCAL: Group[] = [
   {
     title: "Harness",
@@ -514,6 +604,7 @@ const LOCAL: Group[] = [
       ]),
   },
   EXTENSIONS,
+  themeGroup("not set — charter.toml's pick"),
 ];
 
 // ------------------------------------------------------------------------------------------
@@ -529,6 +620,7 @@ function Section({
   who,
   groups,
   extensions,
+  theme,
   onSaved,
 }: {
   plane: PlaneId;
@@ -537,6 +629,7 @@ function Section({
   who: string;
   groups: readonly Group[];
   extensions: readonly ProjectExtension[];
+  theme: ProjectTheme | undefined;
   onSaved: () => void;
 }) {
   const heading = useId();
@@ -561,8 +654,8 @@ function Section({
 
   const controls = groups.map((group) => ({
     group,
-    controls: group.controls(file, extensions),
-    notes: group.notes?.(file, extensions) ?? [],
+    controls: group.controls(file, extensions, theme),
+    notes: group.notes?.(file, extensions, theme) ?? [],
   }));
   const all = controls.flatMap((one) => one.controls);
   const changed = all.filter((one) => one.id in drafts && drafts[one.id] !== one.read(file));
@@ -784,7 +877,7 @@ function SettingControl({
           )}
           {control.choices?.map((choice) => (
             <option key={choice} value={choice}>
-              {choice}
+              {control.labels?.[choice] ?? choice}
             </option>
           ))}
         </select>
