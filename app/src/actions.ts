@@ -586,7 +586,7 @@ export function catalogue(now: Now): Offer[] {
     // request, and a chat asking from a tab this window does not hold is still asking.
     offers.push(
       can(
-        `needs.ignore:${session}`,
+        ignoreId(session),
         `Ignore ${name} until it asks again`,
         { verb: "ignoreNeedsYou", session },
         name,
@@ -991,6 +991,11 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "nothing":
       return DID;
   }
+}
+
+/** The catalogue's id for a queued chat's Ignore row, for a surface drawing that row. */
+export function ignoreId(session: number): string {
+  return `needs.ignore:${session}`;
 }
 
 /**

@@ -2,7 +2,7 @@
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { CircleCheck, Hand, SquareTerminal, X } from "lucide-react";
 import type { KeyboardEvent } from "react";
-import type { Catalogued, Offer } from "./actions";
+import { ignoreId, type Catalogued, type Offer } from "./actions";
 import { type State } from "./chatState";
 import { useArrived } from "./lib/arrived";
 import { useTabStop } from "./roving";
@@ -131,11 +131,6 @@ export function NeedsYou({
       {unsaid}
     </div>
   );
-}
-
-/** The catalogue's id for a queued chat's Ignore row (`actions.catalogue`). */
-export function ignoreId(session: number): string {
-  return `needs.ignore:${session}`;
 }
 
 /**

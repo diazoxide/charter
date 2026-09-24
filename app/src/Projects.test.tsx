@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -190,6 +190,14 @@ const chatTabs = () =>
     .getAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
 
+/** What the chat tab called `name` says its chat is doing. */
+const stateOnTab = (name: string) =>
+  within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getAllByRole("tab")
+    .find((tab) => tab.querySelector(".tab-name")?.textContent === name)
+    ?.querySelector("[data-state]")
+    ?.getAttribute("data-state");
+
 /** Opens a project by typing its path into the opener. */
 async function openByPath(path: string) {
   const person = userEvent.setup();
@@ -250,12 +258,12 @@ describe("a window holding more than one project", () => {
       chats: { [ONE]: [chat({ session: 1, name: "one.1" }), chat({ session: 2, name: "one.2" })] },
     });
     render(<App />);
-    await vi.waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
     const asking = { plane: ONE, state: "waiting", moved_at: 1 };
     move({ ...asking, session: 1, needs_you: true, queue: [1, 2], sequence: 1 });
     move({ ...asking, session: 2, needs_you: true, queue: [1, 2], sequence: 2 });
     const count = () => projectTab("one").querySelector(".project-needs")?.textContent;
-    await vi.waitFor(() => expect(count()).toBe("2"));
+    await waitFor(() => expect(count()).toBe("2"));
 
     await userEvent.click(
       within(screen.getByLabelText("Needs you")).getByRole("button", {
@@ -269,12 +277,15 @@ describe("a window holding more than one project", () => {
         { plane: ONE, session: 1 },
       ]),
     );
-    move({ ...asking, session: 1, needs_you: false, queue: [2], sequence: 4 });
-    await vi.waitFor(() => expect(count()).toBe("1"));
+    move({ ...asking, session: 1, needs_you: false, queue: [2], sequence: 10 });
+    await waitFor(() => expect(count()).toBe("1"));
 
-    // And a report the board took before the ignore, landing after it, does not bring it back.
+    // A report the board took before the ignore, landing after it, does not bring it back.
+    // The one after it is older than the ignore too, but it is the newest word about chat 2 —
+    // so chat 2's tab changing is proof that both had been taken in when the count is read.
     move({ ...asking, session: 1, needs_you: true, queue: [1, 2], sequence: 3 });
-    await new Promise((settle) => setTimeout(settle, 50));
+    move({ ...asking, session: 2, state: "running", needs_you: false, queue: [1], sequence: 4 });
+    await waitFor(() => expect(stateOnTab("one.2")).toBe("running"));
     expect(count()).toBe("1");
     expect(
       within(screen.getByLabelText("Needs you")).queryByRole("button", { name: "one.1" }),
