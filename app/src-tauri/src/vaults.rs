@@ -24,8 +24,9 @@ pub(crate) struct VaultSummary {
     pub health: VaultHealth,
 }
 
-/// A value the window hands over to be stored, and the only way one enters.
-#[derive(serde::Deserialize, specta::Type)]
+/// A value the window hands over to be stored, and the one a reveal hands back
+/// ([`vault_secret_reveal`], the only command whose answer holds one).
+#[derive(serde::Deserialize, serde::Serialize, specta::Type)]
 #[serde(transparent)]
 pub(crate) struct SecretValue(String);
 
@@ -261,6 +262,108 @@ pub(crate) fn delete(ctx: &Ctx, vault: &str, key: &str) -> Result<VaultContents,
     open(ctx, vault)
 }
 
+/// Where a value handed out by the window went, as the trace names it: a reveal's `to`.
+#[derive(Clone, Copy)]
+enum Handed {
+    Window,
+    Clipboard,
+}
+
+/// Read `key`'s value and record that it left — the event `charter secret get --reveal` writes,
+/// with `to` saying whether the window showed it or put it on the clipboard. Recorded before it
+/// is handed back, as the CLI records before it prints; a read that fails records nothing,
+/// because nothing left.
+fn handed_out(ctx: &Ctx, vault: &str, key: &str, to: Handed) -> Result<String, String> {
+    let v = cmd::provider(ctx, vault).map_err(message_of)?;
+    let value = cmd::get_value(ctx, &v, key).map_err(message_of)?;
+    let to = match to {
+        Handed::Window => "window",
+        Handed::Clipboard => "clipboard",
+    };
+    cmd::trace_secret_use(
+        ctx,
+        "secret-reveal",
+        std::slice::from_ref(&value),
+        &[
+            ("vault", serde_json::Value::String(vault.into())),
+            (
+                "key_names",
+                serde_json::Value::Array(vec![serde_json::Value::String(key.into())]),
+            ),
+            ("to", serde_json::Value::String(to.into())),
+        ],
+    );
+    Ok(value)
+}
+
+/// One secret's value, for the window to show: the one answer that holds a value. A keyring
+/// vault reads the store, so the system may ask the operator first.
+pub(crate) fn reveal(ctx: &Ctx, vault: &str, key: &str) -> Result<SecretValue, String> {
+    handed_out(ctx, vault, key, Handed::Window).map(SecretValue)
+}
+
+/// The system clipboard, as far as a copy needs it.
+pub(crate) trait Clipboard {
+    /// The text it holds, when it holds text.
+    fn text(&mut self) -> Option<String>;
+    /// Put a secret on it, marked for clipboard histories to leave out where the system has a
+    /// way to say so.
+    fn set_secret(&mut self, text: &str) -> Result<(), String>;
+    fn clear(&mut self) -> Result<(), String>;
+}
+
+/// A digest of the value charter last put on the clipboard, so that clearing it can tell
+/// whether the clipboard still holds it without keeping the value itself.
+#[derive(Default)]
+pub(crate) struct Copied(Option<[u8; 32]>);
+
+impl std::fmt::Debug for Copied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "Copied(waiting)"
+        } else {
+            "Copied(none)"
+        })
+    }
+}
+
+fn digest(text: &str) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(text.as_bytes()).into()
+}
+
+/// Put `key`'s value on the clipboard, and answer with nothing: the value never reaches the
+/// window. The clipboard is left as it was when the read fails.
+pub(crate) fn copy(
+    ctx: &Ctx,
+    vault: &str,
+    key: &str,
+    clipboard: &mut dyn Clipboard,
+    copied: &mut Copied,
+) -> Result<(), String> {
+    let value = handed_out(ctx, vault, key, Handed::Clipboard)?;
+    clipboard.set_secret(&value)?;
+    copied.0 = Some(digest(&value));
+    Ok(())
+}
+
+/// Clear the clipboard if it still holds the value charter last copied, and answer whether it
+/// did. Whatever the operator copied since is theirs and is left alone. Either way nothing is
+/// waiting afterwards.
+pub(crate) fn clear_copied(
+    clipboard: &mut dyn Clipboard,
+    copied: &mut Copied,
+) -> Result<bool, String> {
+    let Some(waiting) = copied.0.take() else {
+        return Ok(false);
+    };
+    if clipboard.text().is_some_and(|now| digest(&now) == waiting) {
+        clipboard.clear()?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// What a new vault is kept in when the window does not say: the system's own credential
 /// store (#232, decision 1).
 const DEFAULT_PROVIDER: &str = "keyring";
@@ -451,6 +554,106 @@ pub(crate) async fn vault_secret_delete(
         delete(ctx, &vault, &key)
     })
     .await
+}
+
+/// One secret's value, to show in the window for a while — the only command whose answer holds
+/// a value. Recorded as `charter secret get --reveal` records. A keyring vault reads the store
+/// here, so the system may ask the operator first.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_secret_reveal(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    vault: String,
+    key: String,
+) -> Result<SecretValue, String> {
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+        reveal(ctx, &vault, &key)
+    })
+    .await
+}
+
+/// The system clipboard, opened once and kept for the app's life — on X11 what a process puts
+/// on the clipboard is served by that process's handle, and goes when the handle does — and a
+/// digest of what a vault's Copy last put there.
+#[derive(Default)]
+pub(crate) struct SystemClipboard(std::sync::Mutex<(Option<arboard::Clipboard>, Copied)>);
+
+/// The system's clipboard, as [`Clipboard`].
+struct Arboard<'a>(&'a mut arboard::Clipboard);
+
+impl Clipboard for Arboard<'_> {
+    fn text(&mut self) -> Option<String> {
+        self.0.get_text().ok()
+    }
+    fn set_secret(&mut self, text: &str) -> Result<(), String> {
+        let set = self.0.set();
+        #[cfg(target_os = "macos")]
+        let set = arboard::SetExtApple::exclude_from_history(set);
+        #[cfg(windows)]
+        let set = arboard::SetExtWindows::exclude_from_history(set);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let set = arboard::SetExtLinux::exclude_from_history(set);
+        set.text(text)
+            .map_err(|e| format!("the clipboard did not take the copy: {e}"))
+    }
+    fn clear(&mut self) -> Result<(), String> {
+        self.0
+            .clear()
+            .map_err(|e| format!("the clipboard could not be cleared: {e}"))
+    }
+}
+
+/// `work` with the system clipboard and what was last copied to it, on a blocking thread.
+async fn with_clipboard<T: Send + 'static>(
+    app: tauri::AppHandle,
+    work: impl FnOnce(&mut dyn Clipboard, &mut Copied) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    use tauri::Manager as _;
+    tauri::async_runtime::spawn_blocking(move || {
+        let held = app.state::<SystemClipboard>();
+        let mut held = held
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (board, copied) = &mut *held;
+        let board = match board {
+            Some(open) => open,
+            closed => closed.insert(
+                arboard::Clipboard::new()
+                    .map_err(|e| format!("the clipboard could not be opened: {e}"))?,
+            ),
+        };
+        work(&mut Arboard(board), copied)
+    })
+    .await
+    .map_err(|err| format!("the clipboard did not answer: {err}"))?
+}
+
+/// Put one secret's value on the clipboard, recorded as a reveal is. The value never comes back
+/// to the window: the answer is nothing.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_secret_copy(
+    app: tauri::AppHandle,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    vault: String,
+    key: String,
+) -> Result<(), String> {
+    let ctx = ctx_of(&planes, &plane)?;
+    with_clipboard(app, move |board, copied| {
+        copy(&ctx, &vault, &key, board, copied)
+    })
+    .await
+}
+
+/// Clear the clipboard if it still holds what a vault's Copy last put there, and answer whether
+/// it did. What the operator copied since is left alone.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_clipboard_clear(app: tauri::AppHandle) -> Result<bool, String> {
+    with_clipboard(app, clear_copied).await
 }
 
 #[cfg(test)]
@@ -677,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn no_list_open_refresh_or_write_ever_answers_with_a_value() {
+    fn no_list_open_refresh_write_or_copy_ever_answers_with_a_value() {
         let (dir, ctx) = plane();
         register_file_vault(&ctx, "refs", "reference");
         let v = |s: &str| SecretValue::from(s);
@@ -701,6 +904,19 @@ mod tests {
             answers.push(wire(&open(&ctx, vault)));
             answers.push(wire(&open(&ctx, vault))); // what `vault_refresh` answers
         }
+        // A copy puts a value on the clipboard and answers the window with nothing; clearing it
+        // answers whether it did. Only `reveal` answers with a value, and it is not asked here.
+        let mut board = Pasteboard::default();
+        let mut copied = Copied::default();
+        for (vault, key) in [
+            ("ops", "TOKEN"),
+            ("files", "DATABASE_URL"),
+            ("refs", "DEPLOY_REF"),
+        ] {
+            answers.push(wire(&copy(&ctx, vault, key, &mut board, &mut copied)));
+            answers.push(wire(&clear_copied(&mut board, &mut copied)));
+        }
+        answers.push(wire(&copy(&ctx, "ops", "MISSING", &mut board, &mut copied)));
         answers.push(wire(&delete(&ctx, "ops", "TOKEN")));
         answers.push(wire(&delete(&ctx, "files", "DATABASE_URL")));
         answers.push(wire(&delete(&ctx, "refs", "DEPLOY_REF")));
@@ -716,6 +932,146 @@ mod tests {
                 assert!(!answer.contains(fixture), "{fixture} in {answer}");
             }
         }
+    }
+
+    /// Every line the plane's trace holds, for a test run outside any session.
+    fn traced(ctx: &Ctx) -> Vec<serde_json::Value> {
+        let file = charter_core::trace::file(&ctx.root, charter_core::trace::NO_SESSION);
+        std::fs::read_to_string(file)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_reveal_answers_with_that_one_value_and_is_recorded_as_secret_get_reveal_is() {
+        let (_dir, ctx) = plane();
+        add(
+            &ctx,
+            "ops",
+            "API_TOKEN",
+            &SecretValue::from("reveal-value-0c41"),
+        )
+        .unwrap();
+        add(
+            &ctx,
+            "ops",
+            "OTHER",
+            &SecretValue::from("neighbour-value-7d"),
+        )
+        .unwrap();
+
+        let shown = reveal(&ctx, "ops", "API_TOKEN");
+
+        assert_eq!(wire(&shown), "\"reveal-value-0c41\"");
+        let lines = traced(&ctx);
+        let [line] = lines.as_slice() else {
+            panic!("{lines:?}")
+        };
+        assert_eq!(line["event"], "secret-reveal");
+        assert_eq!(line["vault"], "ops");
+        assert_eq!(line["key_names"], serde_json::json!(["API_TOKEN"]));
+        assert_eq!(line["to"], "window");
+        assert!(!line.to_string().contains("reveal-value"), "{line}");
+    }
+
+    #[test]
+    fn a_reveal_of_a_key_the_vault_does_not_hold_is_refused_and_records_nothing() {
+        let (_dir, ctx) = plane();
+        assert!(reveal(&ctx, "ops", "NEVER_ADDED").is_err());
+        assert!(traced(&ctx).is_empty());
+    }
+
+    /// A clipboard held in memory, so no test touches the operator's.
+    #[derive(Default)]
+    struct Pasteboard {
+        text: Option<String>,
+    }
+
+    impl Clipboard for Pasteboard {
+        fn text(&mut self) -> Option<String> {
+            self.text.clone()
+        }
+        fn set_secret(&mut self, text: &str) -> Result<(), String> {
+            self.text = Some(text.to_owned());
+            Ok(())
+        }
+        fn clear(&mut self) -> Result<(), String> {
+            self.text = None;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_copy_puts_the_value_on_the_clipboard_answers_with_nothing_and_is_recorded() {
+        let (_dir, ctx) = plane();
+        add(
+            &ctx,
+            "files",
+            "DB_URL",
+            &SecretValue::from("copied-value-2e9b"),
+        )
+        .unwrap();
+        let mut board = Pasteboard::default();
+        let mut copied = Copied::default();
+
+        let answer = copy(&ctx, "files", "DB_URL", &mut board, &mut copied);
+
+        assert_eq!(wire(&answer), "null");
+        assert_eq!(board.text.as_deref(), Some("copied-value-2e9b"));
+        let lines = traced(&ctx);
+        let [line] = lines.as_slice() else {
+            panic!("{lines:?}")
+        };
+        assert_eq!(line["event"], "secret-reveal");
+        assert_eq!(line["key_names"], serde_json::json!(["DB_URL"]));
+        assert_eq!(line["to"], "clipboard");
+        assert!(!line.to_string().contains("copied-value"), "{line}");
+        assert!(
+            !format!("{copied:?}").contains("copied-value"),
+            "{copied:?}"
+        );
+    }
+
+    #[test]
+    fn the_clipboard_is_cleared_only_while_it_still_holds_what_charter_copied() {
+        let (_dir, ctx) = plane();
+        add(&ctx, "ops", "A", &SecretValue::from("copied-value-a-51")).unwrap();
+        let mut board = Pasteboard::default();
+        let mut copied = Copied::default();
+
+        copy(&ctx, "ops", "A", &mut board, &mut copied).unwrap();
+        assert_eq!(clear_copied(&mut board, &mut copied), Ok(true));
+        assert_eq!(board.text, None);
+
+        copy(&ctx, "ops", "A", &mut board, &mut copied).unwrap();
+        board.text = Some("something the operator copied since".into());
+        assert_eq!(clear_copied(&mut board, &mut copied), Ok(false));
+        assert_eq!(
+            board.text.as_deref(),
+            Some("something the operator copied since")
+        );
+
+        // Nothing charter copied is waiting, so nothing is cleared — even the same text.
+        board.text = Some("copied-value-a-51".into());
+        assert_eq!(clear_copied(&mut board, &mut copied), Ok(false));
+        assert_eq!(board.text.as_deref(), Some("copied-value-a-51"));
+    }
+
+    #[test]
+    fn a_copy_of_a_key_the_vault_does_not_hold_leaves_the_clipboard_alone() {
+        let (_dir, ctx) = plane();
+        let mut board = Pasteboard {
+            text: Some("the operator's own".into()),
+        };
+        let mut copied = Copied::default();
+
+        assert!(copy(&ctx, "ops", "NEVER_ADDED", &mut board, &mut copied).is_err());
+
+        assert_eq!(board.text.as_deref(), Some("the operator's own"));
+        assert_eq!(clear_copied(&mut board, &mut copied), Ok(false));
+        assert!(traced(&ctx).is_empty());
     }
 
     #[test]

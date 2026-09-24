@@ -1162,6 +1162,9 @@ fn commands() -> Builder<tauri::Wry> {
             vaults::vault_secret_set,
             vaults::vault_secret_rename,
             vaults::vault_secret_delete,
+            vaults::vault_secret_reveal,
+            vaults::vault_secret_copy,
+            vaults::vault_clipboard_clear,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,
@@ -1303,6 +1306,9 @@ pub fn run() {
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
             app.manage(Showing::default());
+            // The clipboard a vault's Copy writes to, and what it wrote, for the clear a minute
+            // later.
+            app.manage(vaults::SystemClipboard::default());
             // Whether this launch puts the last quit's window set back. Read from THIS
             // process's arguments, once: a second launch's `--no-restore` would be about a
             // restore that happened hours ago, so the single-instance closure never reaches

@@ -504,6 +504,22 @@ export const commands = {
 	/**  Delete a secret. No value crosses. */
 	vaultSecretDelete: (plane: PlaneId, vault: string, key: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_delete", { plane, vault, key })),
 	/**
+	 *  One secret's value, to show in the window for a while — the only command whose answer holds
+	 *  a value. Recorded as `charter secret get --reveal` records. A keyring vault reads the store
+	 *  here, so the system may ask the operator first.
+	 */
+	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
+	/**
+	 *  Put one secret's value on the clipboard, recorded as a reveal is. The value never comes back
+	 *  to the window: the answer is nothing.
+	 */
+	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
+	/**
+	 *  Clear the clipboard if it still holds what a vault's Copy last put there, and answer whether
+	 *  it did. What the operator copied since is left alone.
+	 */
+	vaultClipboardClear: () => typedError<boolean, string>(__TAURI_INVOKE("vault_clipboard_clear")),
+	/**
 	 *  Every view an approved extension offers this window.
 	 * 
 	 *  An extension that is new, changed or unreadable offers nothing — the registry's one job, as
@@ -1502,7 +1518,10 @@ export type Restore = {
 	dropped: string[],
 };
 
-/**  A value the window hands over to be stored, and the only way one enters. */
+/**
+ *  A value the window hands over to be stored, and the one a reveal hands back
+ *  ([`vault_secret_reveal`], the only command whose answer holds one).
+ */
 export type SecretValue = string;
 
 /**

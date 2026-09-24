@@ -1,30 +1,39 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type Ref } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
-import { Ellipsis, KeyRound, LoaderCircle, Plus, Search } from "lucide-react";
+import { Ellipsis, Eye, EyeOff, KeyRound, LoaderCircle, Plus, Search } from "lucide-react";
 import { EmptyState } from "./EmptyState";
-import { commands, type PlaneId, type VaultContents } from "./bindings";
+import { commands, type PlaneId, type VaultContents, type VaultSecret } from "./bindings";
 import { useTabStop } from "./roving";
 import { counted } from "./Vaults";
 
 /**
  * **One vault, in a tab of its own** (charter-app#235): its name, its provider and how many
  * secrets it holds, a search box, **Add**, and a table of NAME / SIZE / UPDATED whose rows each
- * have a menu — Edit value, Rename, Delete.
+ * have a menu — Edit value, Rename, Copy, Delete — and an eye that reveals the value.
  *
  * A view like the persona's (`tabs.ts`: `{ from: null, view: "vault", key: <name> }`), opened
  * by the one `open_view` path the palette, the Vaults panel and a relaunch all take — but drawn
  * by this component rather than from panel blocks, because a table the operator writes to is
  * not something the panel vocabulary has words for, and should not grow them.
  *
- * **No value is ever in the document.** Nothing this tab reads carries one: `vault_open` and
- * every write answer with names, size bands and times, and `vaults.rs`'s test serializes every
- * answer looking for the values it wrote. The one way a value enters is a box the operator types
- * into, and that box is **uncontrolled**: React writes a controlled input's value into its
- * `value` attribute, which is markup — a copy of the page, a devtools snapshot, an accessibility
- * dump would all carry it. Read from the element once, at the press, and emptied there.
+ * **No value is in the document unless the operator asked to see it.** Nothing this tab reads
+ * carries one: `vault_open`, every write and a copy answer with names, size bands and times, and
+ * `vaults.rs`'s test serializes every answer looking for the values it wrote. A value comes in
+ * two ways only:
+ *
+ * - **the eye** (charter-app#236): `vault_secret_reveal` answers with that one value, which is
+ *   shown for {@link SHOWN_FOR_MS} and then dropped from state and the page. Pressing the eye
+ *   again, or Escape, drops it sooner; revealing another drops it first; so does any write.
+ * - **a box the operator types into**, which is **uncontrolled**: React writes a controlled
+ *   input's value into its `value` attribute, which is markup — a copy of the page, a devtools
+ *   snapshot, an accessibility dump would all carry it. Read from the element once, at the press,
+ *   and emptied there.
+ *
+ * **Copy never brings the value here.** The core reads it and puts it on the clipboard itself,
+ * and a minute later clears the clipboard if it still holds it ({@link clearTheClipboardLater}).
  *
  * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
  * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
@@ -43,6 +52,65 @@ export function VaultTab({
   const [said, setSaid] = useState<{ contents?: VaultContents; trouble?: string }>();
   const [query, setQuery] = useState("");
   const [asking, setAsking] = useState<Asking>();
+  const [shown, setShown] = useState<Shown>();
+  const [note, setNote] = useState<{ said: string; trouble?: boolean }>();
+  /** Which press of an eye is the latest, so an answer to an earlier one is dropped. */
+  const pressed = useRef(0);
+
+  const hide = useCallback(() => {
+    pressed.current += 1;
+    setShown(undefined);
+  }, []);
+
+  const reveal = async (key: string) => {
+    if (shown?.key === key) {
+      hide();
+      return;
+    }
+    hide();
+    const mine = pressed.current;
+    setNote(undefined);
+    const answer = await commands
+      .vaultSecretReveal(plane, vault, key)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (mine !== pressed.current) return;
+    if (answer.status === "error") setNote({ said: answer.error, trouble: true });
+    else setShown({ key, value: answer.data });
+  };
+
+  useEffect(() => {
+    if (shown === undefined) return;
+    const gone = setTimeout(hide, SHOWN_FOR_MS);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") hide();
+    };
+    window.addEventListener("keydown", escape);
+    return () => {
+      clearTimeout(gone);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [shown, hide]);
+
+  const copy = async (key: string) => {
+    setNote(undefined);
+    const answer = await commands
+      .vaultSecretCopy(plane, vault, key)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (answer.status === "error") {
+      setNote({ said: answer.error, trouble: true });
+      return;
+    }
+    clearTheClipboardLater();
+    setNote({
+      said: `Copied ${key}. The clipboard clears in a minute, unless something else is copied first.`,
+    });
+  };
+
+  useEffect(() => {
+    if (note === undefined || note.trouble) return;
+    const gone = setTimeout(() => setNote(undefined), CLIPBOARD_FOR_MS);
+    return () => clearTimeout(gone);
+  }, [note]);
 
   useEffect(() => {
     // No reset to "opening" here: the tab is keyed by plane and vault (`Views.tsx`), so a pane
@@ -72,6 +140,8 @@ export function VaultTab({
       if (answer.status === "error") return answer.error;
       setSaid({ contents: answer.data });
       setAsking(undefined);
+      // The value shown may be the one just replaced, or under a name that has gone.
+      hide();
       onChanged();
       return undefined;
     } catch (err) {
@@ -143,6 +213,15 @@ export function VaultTab({
               </button>
             </div>
 
+            {note?.trouble && (
+              <p className="trouble" role="alert">
+                {note.said}
+              </p>
+            )}
+            <p className="vault-note" role="status">
+              {note?.trouble ? "" : note?.said}
+            </p>
+
             {contents.secrets.length === 0 ? (
               <EmptyState
                 mark={KeyRound}
@@ -167,6 +246,7 @@ export function VaultTab({
                     <th scope="col">Name</th>
                     <th scope="col">Size</th>
                     <th scope="col">Updated</th>
+                    <th scope="col" aria-label="Reveal" />
                   </tr>
                 </thead>
                 {/* The rows are ONE Tab stop, and Up and Down move along them (charter-app#189,
@@ -174,19 +254,14 @@ export function VaultTab({
                 <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
                   <tbody>
                     {secrets.map((one) => (
-                      <tr key={one.key}>
-                        <td>
-                          <SecretMenu secret={one.key} onAsk={setAsking} />
-                        </td>
-                        <td>{one.size ?? "—"}</td>
-                        <td>
-                          {one.updated === null ? (
-                            "—"
-                          ) : (
-                            <time dateTime={one.updated}>{shownAt(one.updated)}</time>
-                          )}
-                        </td>
-                      </tr>
+                      <SecretRow
+                        key={one.key}
+                        secret={one}
+                        value={shown?.key === one.key ? shown.value : undefined}
+                        onAsk={setAsking}
+                        onReveal={() => void reveal(one.key)}
+                        onCopy={() => void copy(one.key)}
+                      />
                     ))}
                   </tbody>
                 </RovingFocusGroup.Root>
@@ -235,6 +310,33 @@ export function VaultTab({
 /** What the core answers every vault command with: the vault as it now is, or its refusal. */
 type VaultAnswer = Awaited<ReturnType<typeof commands.vaultOpen>>;
 
+/** How long a revealed value stays on the page. */
+const SHOWN_FOR_MS = 30_000;
+
+/** How long a copied value may stay on the clipboard. */
+const CLIPBOARD_FOR_MS = 60_000;
+
+/** The one value the tab is showing, and whose it is. */
+type Shown = { key: string; value: string };
+
+/** The clear that is waiting, for whichever copy was last. */
+let clearing: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Ask the core, a minute from now, to clear the clipboard — which it does only while the
+ * clipboard still holds what it copied, so whatever the operator copied since is left alone
+ * (`vaults.rs`, `clear_copied`). **Kept outside the tab**, so closing the tab within the minute
+ * does not leave the value on the clipboard; a later copy, from any tab, restarts the minute.
+ */
+function clearTheClipboardLater() {
+  clearTimeout(clearing);
+  clearing = setTimeout(() => {
+    clearing = undefined;
+    // Nothing to tell anyone if it fails: the answer is the core's sentence, not the value.
+    void commands.vaultClipboardClear().catch(() => undefined);
+  }, CLIPBOARD_FOR_MS);
+}
+
 /** Which dialog the tab is asking in, and about which secret. */
 type Asking =
   | { doing: "add" }
@@ -253,21 +355,112 @@ function shownAt(updated: string): string {
 }
 
 /**
+ * One secret's row: its name and menu, its size band and when it was written, and the eye.
+ *
+ * **The eye is not a Tab stop of its own**: the rows are one (charter-app#189), and an eye in
+ * each would make them one per row. Right from a row's name reaches its eye, and Left comes
+ * back; the pointer reaches it as any button.
+ */
+function SecretRow({
+  secret,
+  value,
+  onAsk,
+  onReveal,
+  onCopy,
+}: {
+  secret: VaultSecret;
+  /** The value, while it is revealed. */
+  value: string | undefined;
+  onAsk: (asking: Asking) => void;
+  onReveal: () => void;
+  onCopy: () => void;
+}) {
+  const name = useRef<HTMLButtonElement>(null);
+  const eye = useRef<HTMLButtonElement>(null);
+  const key = secret.key;
+  return (
+    <tr>
+      <td>
+        <SecretMenu
+          secret={key}
+          trigger={name}
+          onAsk={onAsk}
+          onCopy={onCopy}
+          onRight={() => eye.current?.focus()}
+        />
+        {value !== undefined && <code className="vault-value">{value}</code>}
+      </td>
+      <td>{secret.size ?? "—"}</td>
+      <td>
+        {secret.updated === null ? (
+          "—"
+        ) : (
+          <time dateTime={secret.updated}>{shownAt(secret.updated)}</time>
+        )}
+      </td>
+      <td>
+        <button
+          type="button"
+          ref={eye}
+          className="vault-reveal"
+          tabIndex={-1}
+          aria-label={`Reveal ${key}`}
+          aria-pressed={value !== undefined}
+          onClick={onReveal}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft") return;
+            event.preventDefault();
+            name.current?.focus();
+          }}
+        >
+          {value === undefined ? (
+            <Eye className="node-icon" aria-hidden="true" />
+          ) : (
+            <EyeOff className="node-icon" aria-hidden="true" />
+          )}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+/**
  * A secret's name in its row, and the row's menu.
  *
  * **The roving item is outside the menu's trigger**, and the order is the point: the item's
  * handler sees a key first and, for Up and Down, moves the focus and marks the event handled —
  * so the trigger, which would otherwise open the menu on Down, leaves it alone. Enter and Space
- * are not the item's, and open the menu.
+ * are not the item's, and open the menu. Right is neither's, and goes to the row's eye.
  */
-function SecretMenu({ secret, onAsk }: { secret: string; onAsk: (asking: Asking) => void }) {
+function SecretMenu({
+  secret,
+  trigger,
+  onAsk,
+  onCopy,
+  onRight,
+}: {
+  secret: string;
+  trigger: Ref<HTMLButtonElement>;
+  onAsk: (asking: Asking) => void;
+  onCopy: () => void;
+  onRight: () => void;
+}) {
   return (
     // **Not modal**, for the strip's show-more menu's reason (`PlaneView.tsx`): a menu is not a
     // question. What an item opens is, and that dialog is modal.
     <Menu.Root modal={false}>
       <RovingFocusGroup.Item asChild tabStopId={secret}>
         <Menu.Trigger asChild>
-          <button type="button" className="vault-secret">
+          <button
+            type="button"
+            ref={trigger}
+            className="vault-secret"
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowRight") return;
+              event.preventDefault();
+              onRight();
+            }}
+          >
             <span className="vault-secret-name">{secret}</span>
             <Ellipsis className="node-icon" aria-hidden="true" />
           </button>
@@ -280,6 +473,9 @@ function SecretMenu({ secret, onAsk }: { secret: string; onAsk: (asking: Asking)
           </Menu.Item>
           <Menu.Item className="more-tab" onSelect={() => onAsk({ doing: "rename", secret })}>
             Rename
+          </Menu.Item>
+          <Menu.Item className="more-tab" onSelect={onCopy}>
+            Copy
           </Menu.Item>
           <Menu.Item className="more-tab" onSelect={() => onAsk({ doing: "delete", secret })}>
             Delete

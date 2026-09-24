@@ -45,6 +45,12 @@ tauri-plugin-dialog = "2"
 # of the plugin, not a feature, so there is no build of it that skips verification.
 tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["time"] }
+# A vault's Copy (charter-app#236): the core puts the value on the system clipboard itself, so
+# it never reaches the window, and marks it for clipboard histories to leave out. Text only.
+arboard = { version = "3.6.1", default-features = false }
+# What that Copy remembers instead of the value: a digest, to clear the clipboard a minute later
+# only while it still holds what was copied. The version charter-core already uses.
+sha2 = "0.10"
 
 [lints]
 workspace = true

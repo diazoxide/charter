@@ -3578,6 +3578,64 @@ button.show-more:focus-visible {
   opacity: 1;
 }
 
+/* The eye (charter-app#236): quiet until its row is under the pointer or the keyboard, and
+   plain while it is pressed, so a value on the page always has its hide button showing. */
+.vault-reveal {
+  display: flex;
+  align-items: center;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0;
+  transition: opacity var(--motion-duration-quick) var(--motion-easing-standard);
+}
+
+.vault-secrets tr:hover .vault-reveal,
+.vault-secrets tr:focus-within .vault-reveal,
+.vault-reveal[aria-pressed="true"] {
+  opacity: 1;
+}
+
+.vault-reveal:hover {
+  background: var(--control-hover);
+}
+
+.vault-reveal:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* A revealed value, under its name: the only place one is ever drawn, for 30 seconds. It wraps
+   rather than widening the table, and is selectable, because reading it is what it is for. */
+.vault-value {
+  display: block;
+  margin: 0 0 0.25rem 0.5rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: var(--control-base);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* What a copy said. Takes no room while it says nothing, but stays in the page: a live region
+   that is not drawn is not announced when it starts to speak. */
+.vault-note {
+  max-width: 60rem;
+  margin: 0 0 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.vault-note:empty {
+  margin: 0;
+}
+
 /* A list in a view has the pane's height to use, not a side region's. */
 .view-body .panel-list {
   margin-top: 0.6rem;

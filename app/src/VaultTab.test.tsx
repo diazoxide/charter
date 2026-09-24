@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { VaultTab } from "./VaultTab";
@@ -8,6 +8,7 @@ import type { VaultContents, VaultSecret } from "./bindings";
 afterEach(() => {
   cleanup();
   clearMocks();
+  vi.useRealTimers();
 });
 
 const PLANE = "/home/dev/plane";
@@ -39,7 +40,7 @@ type Asked = { cmd: string; args: Record<string, unknown> };
  */
 function core(
   opened: VaultContents | Error,
-  writes: Record<string, VaultContents | Error> = {},
+  writes: Record<string, VaultContents | string | boolean | Error> = {},
 ): Asked[] {
   const asked: Asked[] = [];
   mockIPC((cmd, args) => {
@@ -101,10 +102,10 @@ describe("a vault's tab", () => {
       within(table)
         .getAllByRole("columnheader")
         .map((h) => h.textContent),
-    ).toEqual(["Name", "Size", "Updated"]);
+    ).toEqual(["Name", "Size", "Updated", ""]);
     expect(rows()).toEqual([
-      ["API_TOKEN", "16–31 bytes", "2026-09-24 11:32 UTC"],
-      ["DB_URL", "—", "—"],
+      ["API_TOKEN", "16–31 bytes", "2026-09-24 11:32 UTC", ""],
+      ["DB_URL", "—", "—", ""],
     ]);
     expect(asked).toEqual([{ cmd: "vault_open", args: { plane: PLANE, vault: "ops" } }]);
   });
@@ -204,7 +205,7 @@ describe("a vault's tab", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Save value" }));
 
     await waitFor(() =>
-      expect(rows()).toEqual([["API_TOKEN", "32–63 bytes", "2026-09-24 11:32 UTC"]]),
+      expect(rows()).toEqual([["API_TOKEN", "32–63 bytes", "2026-09-24 11:32 UTC", ""]]),
     );
     expect(asked.find((one) => one.cmd === "vault_secret_set")?.args).toEqual({
       plane: PLANE,
@@ -281,6 +282,240 @@ describe("a vault's tab", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
-    ).toEqual(["Edit value", "Rename", "Delete"]);
+    ).toEqual(["Edit value", "Rename", "Copy", "Delete"]);
+  });
+});
+
+/** What the core answers a reveal with. Never in the page once it is hidden. */
+const REVEALED = "revealed-value-6d02b8";
+const OTHER = "other-revealed-value-31fa";
+
+/**
+ * A fake clock for the 30 seconds and the minute, and a user whose waits run on it. It also moves
+ * with real time — Testing Library's own waits are timeouts, and a clock that never moved would
+ * leave them waiting — so the assertions below leave a second's slack either side of a deadline
+ * rather than a millisecond's.
+ */
+function onAFakeClock() {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  return userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+}
+
+/** Moves the fake clock on by `ms`, and lets what it set off settle. */
+async function after(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+describe("revealing a value", () => {
+  it("fetches that one value, shows it for 30 seconds, then drops it from the page", async () => {
+    const user = onAFakeClock();
+    const asked = core(contents([secret("API_TOKEN"), secret("DB_URL")]), {
+      vault_secret_reveal: REVEALED,
+    });
+    draw();
+    const eye = await screen.findByRole("button", { name: "Reveal API_TOKEN" });
+    expect(eye).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(eye);
+
+    expect(await screen.findByText(REVEALED)).toBeInTheDocument();
+    expect(eye).toHaveAttribute("aria-pressed", "true");
+    expect(asked.filter((one) => one.cmd === "vault_secret_reveal")).toEqual([
+      { cmd: "vault_secret_reveal", args: { plane: PLANE, vault: "ops", key: "API_TOKEN" } },
+    ]);
+
+    await after(29_000);
+    expect(screen.getByText(REVEALED)).toBeInTheDocument();
+    await after(1_000);
+    expect(eye).toHaveAttribute("aria-pressed", "false");
+    noValueAnywhere(REVEALED);
+  });
+
+  it("hides the value early when the eye is pressed again, or on Escape", async () => {
+    const user = onAFakeClock();
+    core(contents([secret("API_TOKEN")]), { vault_secret_reveal: REVEALED });
+    draw();
+    const eye = await screen.findByRole("button", { name: "Reveal API_TOKEN" });
+
+    await user.click(eye);
+    await screen.findByText(REVEALED);
+    await user.click(eye);
+    noValueAnywhere(REVEALED);
+
+    await user.click(eye);
+    await screen.findByText(REVEALED);
+    await user.keyboard("{Escape}");
+    noValueAnywhere(REVEALED);
+    expect(eye).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows one value at a time", async () => {
+    const user = onAFakeClock();
+    let answer = REVEALED;
+    const asked: string[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "vault_open") return contents([secret("A"), secret("B")]);
+      if (cmd === "vault_secret_reveal") {
+        asked.push((args as { key: string }).key);
+        return answer;
+      }
+      return null;
+    });
+    draw();
+
+    await user.click(await screen.findByRole("button", { name: "Reveal A" }));
+    await screen.findByText(REVEALED);
+    answer = OTHER;
+    await user.click(screen.getByRole("button", { name: "Reveal B" }));
+
+    await screen.findByText(OTHER);
+    noValueAnywhere(REVEALED);
+    expect(screen.getByRole("button", { name: "Reveal A" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(asked).toEqual(["A", "B"]);
+  });
+
+  it("says why when the core refuses a reveal, and shows nothing", async () => {
+    const user = onAFakeClock();
+    core(contents([secret("API_TOKEN")]), {
+      vault_secret_reveal: new Error("the keychain refused to hand over 'API_TOKEN'"),
+    });
+    draw();
+
+    await user.click(await screen.findByRole("button", { name: "Reveal API_TOKEN" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("the keychain refused");
+    expect(screen.getByRole("button", { name: "Reveal API_TOKEN" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("drops a revealed value when the vault is written to", async () => {
+    const user = onAFakeClock();
+    core(contents([secret("OLD")]), {
+      vault_secret_reveal: REVEALED,
+      vault_secret_rename: contents([secret("NEW")]),
+    });
+    draw();
+    await user.click(await screen.findByRole("button", { name: "Reveal OLD" }));
+    await screen.findByText(REVEALED);
+
+    await user.click(screen.getByRole("button", { name: "OLD" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const box = within(await screen.findByRole("dialog")).getByLabelText("New name");
+    await user.clear(box);
+    await user.type(box, "NEW");
+    await user.keyboard("{Enter}");
+
+    await screen.findByRole("button", { name: "Reveal NEW" });
+    noValueAnywhere(REVEALED);
+  });
+
+  it("reaches a row's eye with Right from its name, and comes back with Left", async () => {
+    core(contents([secret("A"), secret("B")]));
+    draw();
+    const a = await screen.findByRole("button", { name: "A" });
+    const eye = screen.getByRole("button", { name: "Reveal A" });
+    // The eyes are not Tab stops of their own: the list stays one.
+    expect(eye).toHaveAttribute("tabindex", "-1");
+
+    a.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(eye).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(a).toHaveFocus();
+  });
+});
+
+describe("copying a value", () => {
+  it("asks the core to copy it, never receives it, and asks for the clear a minute later", async () => {
+    const user = onAFakeClock();
+    const asked = core(contents([secret("API_TOKEN")]), { vault_clipboard_clear: true });
+    draw();
+
+    await user.click(await screen.findByRole("button", { name: "API_TOKEN" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Copied API_TOKEN. The clipboard clears in a minute",
+    );
+    expect(asked.filter((one) => one.cmd === "vault_secret_copy")).toEqual([
+      { cmd: "vault_secret_copy", args: { plane: PLANE, vault: "ops", key: "API_TOKEN" } },
+    ]);
+    expect(asked.some((one) => one.cmd === "vault_secret_reveal")).toBe(false);
+
+    await after(59_000);
+    expect(asked.some((one) => one.cmd === "vault_clipboard_clear")).toBe(false);
+    await after(1_000);
+    expect(asked.filter((one) => one.cmd === "vault_clipboard_clear")).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("leaves the clipboard to the core when something else was copied since", async () => {
+    // The core keeps a digest of what it copied and clears only while the clipboard still
+    // holds it (`vaults.rs`); here it answers that it did not, and the tab claims nothing.
+    const user = onAFakeClock();
+    const asked = core(contents([secret("API_TOKEN")]), { vault_clipboard_clear: false });
+    draw();
+
+    await user.click(await screen.findByRole("button", { name: "API_TOKEN" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
+    await screen.findByText(/Copied API_TOKEN/);
+    await after(60_000);
+
+    expect(asked.filter((one) => one.cmd === "vault_clipboard_clear")).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("counts the minute from the last copy, and clears once", async () => {
+    const user = onAFakeClock();
+    const asked = core(contents([secret("A"), secret("B")]), { vault_clipboard_clear: true });
+    draw();
+    const copy = async (key: string) => {
+      await user.click(await screen.findByRole("button", { name: key }));
+      await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
+      await screen.findByText(new RegExp(`Copied ${key}`));
+    };
+
+    await copy("A");
+    await after(30_000);
+    await copy("B");
+    await after(59_000);
+    expect(asked.some((one) => one.cmd === "vault_clipboard_clear")).toBe(false);
+    await after(1_000);
+    expect(asked.filter((one) => one.cmd === "vault_clipboard_clear")).toHaveLength(1);
+  });
+
+  it("still clears the clipboard when the tab is closed within the minute", async () => {
+    const user = onAFakeClock();
+    const asked = core(contents([secret("API_TOKEN")]), { vault_clipboard_clear: true });
+    draw();
+    await user.click(await screen.findByRole("button", { name: "API_TOKEN" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
+    await screen.findByText(/Copied API_TOKEN/);
+
+    cleanup();
+    await after(60_000);
+
+    expect(asked.filter((one) => one.cmd === "vault_clipboard_clear")).toHaveLength(1);
+  });
+
+  it("says why when the core refuses a copy", async () => {
+    const user = onAFakeClock();
+    const asked = core(contents([secret("API_TOKEN")]), {
+      vault_secret_copy: new Error("the clipboard did not take the copy"),
+    });
+    draw();
+    await user.click(await screen.findByRole("button", { name: "API_TOKEN" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("did not take the copy");
+    await after(60_000);
+    expect(asked.some((one) => one.cmd === "vault_clipboard_clear")).toBe(false);
   });
 });
