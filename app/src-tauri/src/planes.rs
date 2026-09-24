@@ -257,11 +257,15 @@ impl Held {
     /// changed". A chat closed while it was asking for you therefore stayed in the queue, and
     /// in the red counts on its project and workspace tabs, until some other chat moved.
     ///
-    /// Off the board and told even when the session had already gone: either way the chat is
-    /// gone from the app, and a window left believing otherwise is the defect.
+    /// **Off the board first, and told last.** Off first, so a hook that fires while the
+    /// program is being ended finds no chat to move and tells nothing; told last, so a report
+    /// the board took just before is told before this, never after it with the chat still
+    /// asking. And off and told even when the session had already gone: either way the chat
+    /// is gone from the app, and a window left believing otherwise is the defect.
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
+        let gone = self.hooks.closed(session);
         let closed = self.chats.close(session);
-        (self.tell)(self.hooks.closed(session));
+        (self.tell)(gone);
         closed
     }
 
@@ -2458,22 +2462,7 @@ mod tests {
     fn a_chat_asking_for_you(held: &Held, told: &Mutex<Vec<Moved>>, program: &str) -> u32 {
         let session = held
             .chats()
-            .start(
-                &charter_core::reopen::Chat {
-                    program: program.to_owned(),
-                    args: Vec::new(),
-                    cwd: None,
-                    name: "asking".to_owned(),
-                    resume: None,
-                    active: true,
-                    profile: None,
-                    persona: None,
-                    show_footer: false,
-                    pinned: false,
-                    number: None,
-                },
-                STARTING,
-            )
+            .start(&one_chat_on(program).chats[0], STARTING)
             .expect("the chat starts");
         a_stop_from(held, session);
         assert_eq!(
@@ -2581,6 +2570,11 @@ mod tests {
                 .all(|moved| moved.queue.is_empty() && !moved.needs_you),
             "a relaunch put back a chat needing you: {snapshot:?}"
         );
-        assert_eq!(the_window_s_queue(&told, &plane), Vec::<u32>::new());
+        let told = told.lock().expect("the log");
+        assert!(
+            told.iter()
+                .all(|moved| moved.queue.is_empty() && !moved.needs_you),
+            "a relaunch told the window a chat needs you: {told:?}"
+        );
     }
 }

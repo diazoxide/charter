@@ -286,8 +286,8 @@ impl Hooks {
         seen_by(&board, &self.plane, session)
     }
 
-    /// What the window is told when something other than a hook moves a chat: a chat opening
-    /// or closing, or a program that has died.
+    /// What the window is told when something other than a hook moves a chat: a chat opening,
+    /// or a program that has died. A chat closing is [`Hooks::closed`].
     pub fn now(&self, session: u32) -> Moved {
         now(&self.board, self.plane.clone(), session)
     }
