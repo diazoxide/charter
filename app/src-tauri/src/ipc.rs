@@ -172,13 +172,21 @@ mod tests {
             .unwrap_or_else(|why| panic!("{} is not JSON: {why}", path.display()))
     }
 
+    /// Each capability file in `capabilities/`: the JSON ones, which are the only kind the app
+    /// has, and not whatever else an editor or Finder leaves beside them.
+    fn capability_files() -> Vec<serde_json::Value> {
+        std::fs::read_dir(src_tauri().join("capabilities"))
+            .expect("capabilities/")
+            .map(|entry| entry.expect("an entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .map(|path| json(&path))
+            .collect()
+    }
+
     /// Every capability the app is built with: each file in `capabilities/`, and each one
     /// `tauri.e2e.conf.json` writes inline.
     fn capabilities() -> Vec<serde_json::Value> {
-        let mut all: Vec<_> = std::fs::read_dir(src_tauri().join("capabilities"))
-            .expect("capabilities/")
-            .map(|entry| json(&entry.expect("an entry").path()))
-            .collect();
+        let mut all = capability_files();
         let e2e = json(&src_tauri().join("tauri.e2e.conf.json"));
         all.extend(
             e2e["app"]["security"]["capabilities"]
@@ -245,8 +253,7 @@ mod tests {
             .iter()
             .filter_map(serde_json::Value::as_str)
             .collect();
-        for entry in std::fs::read_dir(src_tauri().join("capabilities")).expect("capabilities/") {
-            let capability = json(&entry.expect("an entry").path());
+        for capability in capability_files() {
             let id = capability["identifier"].as_str().expect("an identifier");
             assert!(
                 named.contains(id),
