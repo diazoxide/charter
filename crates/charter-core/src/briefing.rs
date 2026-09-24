@@ -365,6 +365,8 @@ fn index_refusal(root: &Path, path: &Path) -> Option<String> {
 fn strerror(e: &std::io::Error) -> String {
     let text = e.to_string();
     match text.rfind(" (os error ") {
+        // An OS error's text always ENDS in its ` (os error N)`, so this guard only refuses a
+        // text charter never builds; `.cargo/mutants.toml` records that.
         Some(at) if text.ends_with(')') => text[..at].to_owned(),
         _ => text,
     }
@@ -575,10 +577,8 @@ fn last_active(root: &Path, name: &str) -> Option<f64> {
     let dir = root.join("workspaces").join(name);
     let mut best: Option<f64> = None;
     let mut bump = |seen: Option<f64>| {
-        if let Some(m) = seen
-            && best.is_none_or(|b| m > b)
-        {
-            best = Some(m);
+        if let Some(m) = seen {
+            best = Some(best.map_or(m, |b| b.max(m)));
         }
     };
     for file in ["workspace.md", "workspace.json"] {

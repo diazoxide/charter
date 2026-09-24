@@ -68,10 +68,10 @@ exclude_re = [
     # `secret cp`'s open flags are single, distinct bits (`WRONLY`, `CREATE`, `NOFOLLOW`,
     # `NONBLOCK`), and XOR of distinct bits IS their OR: `^` for `|` builds the same flags.
     'src/secrets/cmd\.rs:\d+:\d+: replace \| with \^ in (identify_dest|cp_unix)$',
-    # `secrets::cmd::strerror`'s `ends_with(')')` against `true`: an OS error's text always ends
-    # in the ` (os error N)` it found, so the guard is never false where the pattern matched.
-    # The site says so.
-    'src/secrets/cmd\.rs:\d+:\d+: replace match guard text\.ends_with\(.\).\) with true in strerror$',
+    # `secrets::cmd::strerror`'s and `briefing::strerror`'s `ends_with(')')` against `true`: an
+    # OS error's text always ends in the ` (os error N)` it found, so the guard is never false
+    # where the pattern matched. Each site says so.
+    'src/(secrets/cmd|briefing)\.rs:\d+:\d+: replace match guard text\.ends_with\(.\).\) with true in strerror$',
     # `secrets::cmd::cp_off_unix` is the refusal a non-unix build gives, and no unix build
     # compiles it: a change to it is a change to code this platform does not build.
     'src/secrets/cmd\.rs:\d+:\d+: replace cp_off_unix -> i32 with ',

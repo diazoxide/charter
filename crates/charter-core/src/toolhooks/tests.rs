@@ -623,6 +623,64 @@ fn the_agent_map_keeps_the_newest_two_hundred_and_drops_the_first_listed() {
 }
 
 #[test]
+fn an_agent_map_grown_past_the_bound_is_cut_back_to_it() {
+    let p = Plane::new();
+    let file = p.root.join(".charter/agent-personas.json");
+    let ids: Vec<String> = (0..250).map(|i| format!("{:06x}", 0x100000 + i)).collect();
+    let doc: serde_json::Map<String, Value> = ids
+        .iter()
+        .map(|id| (id.clone(), Value::String("old".into())))
+        .collect();
+    std::fs::write(&file, Value::Object(doc).to_string()).unwrap();
+    let mut done = dispatch_of("web");
+    done["tool_response"] = "ok. agentId: ffffff".into();
+    p.ask(done, posttooluse_dispatch);
+    let map: serde_json::Map<String, Value> =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(map.len(), 200);
+    // The 51 first listed went; the 52nd is the oldest kept.
+    assert!(!map.contains_key(&ids[50]));
+    assert!(map.contains_key(&ids[51]));
+    assert_eq!(map["ffffff"], "web");
+}
+
+#[test]
+fn a_value_is_true_or_false_as_python_reads_it() {
+    for (value, truth) in [
+        (serde_json::json!(null), false),
+        (serde_json::json!(false), false),
+        (serde_json::json!(true), true),
+        (serde_json::json!(""), false),
+        (serde_json::json!("x"), true),
+        (serde_json::json!([]), false),
+        (serde_json::json!([0]), true),
+        (serde_json::json!({}), false),
+        (serde_json::json!({"a": 0}), true),
+        (serde_json::json!(0), false),
+        (serde_json::json!(0.0), false),
+        (serde_json::json!(2), true),
+        (serde_json::json!(-0.5), true),
+    ] {
+        assert_eq!(truthy(Some(&value)), truth, "{value}");
+    }
+    assert!(!truthy(None));
+}
+
+#[test]
+fn outside_a_plane_no_heartbeat_is_written_even_from_a_piece() {
+    let p = Plane::outside();
+    let tree = p.root.join("workspaces/alpha/.worktrees/svc/p1");
+    std::fs::create_dir_all(&tree).unwrap();
+    let cwd = tree.to_string_lossy().into_owned();
+    p.ask(
+        serde_json::json!({"tool_name": "Read", "cwd": cwd, "session_id": "s",
+            "tool_input": {"file_path": "x"}}),
+        pretooluse_read,
+    );
+    assert!(!pieces::seen_path(&p.root, "alpha", "svc", Some("p1")).exists());
+}
+
+#[test]
 fn a_resume_is_logged_under_the_persona_it_resumes_never_under_the_name_it_was_sent_to() {
     let p = Plane::new();
     p.persona("devops", "role: Ops");
