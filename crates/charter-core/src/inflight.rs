@@ -261,4 +261,132 @@ mod tests {
             assert_eq!(mode, 0o700);
         }
     }
+
+    /// Writes `body` as the record `name` with its mtime at `mtime`, a whole second.
+    fn record_at(state: &State, name: &str, body: &str, mtime: u64) -> PathBuf {
+        std::fs::create_dir_all(dir(state)).unwrap();
+        let path = dir(state).join(name);
+        std::fs::write(&path, body).unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime))
+            .unwrap();
+        path
+    }
+
+    #[test]
+    fn a_record_is_presumed_dead_after_thirty_minutes_and_pruned_after_a_day() {
+        assert_eq!(PRESUMED_DEAD_SECS, 1800.0);
+        assert_eq!(PRUNE_SECS, 86_400.0);
+    }
+
+    #[test]
+    fn a_record_with_an_empty_kind_is_a_dispatch_and_another_kind_is_not() {
+        let (_d, state) = state();
+        let t = now();
+        record_at(
+            &state,
+            "a.1.json",
+            &format!(r#"{{"agent": "a", "kind": "", "ts": {t}}}"#),
+            t as u64,
+        );
+        record_at(
+            &state,
+            "b.1.json",
+            &format!(r#"{{"agent": "b", "kind": "clone", "ts": {t}}}"#),
+            t as u64,
+        );
+        assert_eq!(still_running(&state, t), vec!["a"]);
+    }
+
+    #[test]
+    fn a_record_exactly_at_either_age_is_still_counted() {
+        let (_d, state) = state();
+        let mtime: u64 = 1_700_000_000;
+        let now = mtime as f64 + PRUNE_SECS;
+        // Written a day ago to the second, started thirty minutes ago to the second: neither
+        // bound is passed, so it is running and its file stays.
+        let at_both = record_at(
+            &state,
+            "edge.1.json",
+            &format!(
+                r#"{{"agent": "edge", "ts": {}}}"#,
+                py_float(now - PRESUMED_DEAD_SECS)
+            ),
+            mtime,
+        );
+        // Started a second before that: presumed dead, and not pruned for it.
+        let dead = record_at(
+            &state,
+            "dead.1.json",
+            &format!(
+                r#"{{"agent": "dead", "ts": {}}}"#,
+                py_float(now - PRESUMED_DEAD_SECS - 1.0)
+            ),
+            mtime,
+        );
+        // Written a second before a day ago: pruned, whatever its own clock says.
+        let old = record_at(
+            &state,
+            "old.1.json",
+            &format!(r#"{{"agent": "old", "ts": {}}}"#, py_float(now)),
+            mtime - 1,
+        );
+        // Written two hours ago and started now: running, not pruned.
+        let fresh = record_at(
+            &state,
+            "fresh.1.json",
+            &format!(r#"{{"agent": "fresh", "ts": {}}}"#, py_float(now)),
+            now as u64 - 7200,
+        );
+
+        assert_eq!(still_running(&state, now), vec!["edge", "fresh"]);
+        assert!(at_both.exists() && dead.exists() && fresh.exists());
+        assert!(!old.exists(), "a record past a day is pruned");
+    }
+
+    #[test]
+    fn finish_takes_the_oldest_record_still_alive_before_an_older_dead_one() {
+        // `inflight.finish`: the OLDEST of those still presumed alive, else the oldest of any
+        // age. A dead record is older than every live one, so "oldest" alone would take it.
+        let (_d, state) = state();
+        let now: u64 = 1_700_000_000;
+        let body = r#"{"agent": "devops", "kind": "dispatch"}"#;
+        let dead = record_at(&state, "devops.dead.json", body, now - 3600);
+        let alive = record_at(&state, "devops.alive.json", body, now - 60);
+        let newer = record_at(&state, "devops.newer.json", body, now - 10);
+
+        finish(&state, "devops", now as f64);
+        assert!(dead.exists() && newer.exists());
+        assert!(
+            !alive.exists(),
+            "finish took a record other than the oldest live one"
+        );
+
+        // With nothing alive left but `newer`, and then nothing alive at all, the oldest goes.
+        finish(&state, "devops", now as f64);
+        assert!(!newer.exists());
+        finish(&state, "devops", now as f64);
+        assert!(!dead.exists());
+    }
+
+    #[test]
+    fn finish_never_takes_a_record_whose_name_is_only_the_prefix() {
+        // `devops..json` starts with `devops.` and ends with `.json`, and names no record `start`
+        // could have written: `start` always puts a token between the two.
+        let (_d, state) = state();
+        let t = now();
+        let bare = record_at(
+            &state,
+            "devops..json",
+            &format!(r#"{{"agent": "devops", "kind": "dispatch", "ts": {t}}}"#),
+            t as u64,
+        );
+        finish(&state, "devops", t);
+        assert!(bare.exists(), "finish removed a record start never names");
+
+        let token = start(&state, "devops", t).unwrap();
+        finish(&state, "devops", t);
+        assert!(!dir(&state).join(format!("{token}.json")).exists());
+        assert!(bare.exists());
+    }
 }

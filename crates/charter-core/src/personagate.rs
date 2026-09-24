@@ -347,7 +347,10 @@ impl Surface {
                     chain_ids.insert(i);
                 }
                 let parent = dirname(&cur);
-                if parent == cur || parent.is_empty() {
+                // Python also stops on an empty parent. That only saves a step: an empty parent
+                // becomes `cur`, `ids("")` is nothing, and `dirname("")` is `""` again, which
+                // stops here. The test could not change the set, so it is not spelled (#311).
+                if parent == cur {
                     break;
                 }
                 cur = parent;
@@ -384,7 +387,8 @@ impl Surface {
                 }
             }
             let parent = dirname(&cur);
-            if parent == cur || parent.is_empty() {
+            // No `|| parent.is_empty()`, for the reason `Surface::of` gives.
+            if parent == cur {
                 break;
             }
             cur = parent;
@@ -480,11 +484,17 @@ fn registered_vault_files(plane: &Path) -> Option<Vec<String>> {
 
 /// `Path.expanduser` for the one spelling a registry holds: `~` or `~/…` under `$HOME`.
 fn expanduser(path: &str) -> String {
-    let home = || std::env::var("HOME").ok().filter(|h| !h.is_empty());
+    expand_home(path, std::env::var("HOME").ok().as_deref())
+}
+
+/// [`expanduser`] with `$HOME` handed in, so the rule is asked without touching the process's
+/// environment. An empty `$HOME` is no home, and the path stays as written.
+fn expand_home(path: &str, home: Option<&str>) -> String {
+    let home = home.filter(|h| !h.is_empty());
     if path == "~" {
-        return home().unwrap_or_else(|| path.to_string());
+        return home.unwrap_or(path).to_string();
     }
-    match (path.strip_prefix("~/"), home()) {
+    match (path.strip_prefix("~/"), home) {
         (Some(rest), Some(home)) => format!("{}/{rest}", home.trim_end_matches('/')),
         _ => path.to_string(),
     }
@@ -900,6 +910,119 @@ mod tests {
         std::fs::write(root.join("secrets/db.enc"), "x").unwrap();
         assert_eq!(ask(&root, "cat secrets/db.enc"), None);
         assert_eq!(ask(&root, "cat SECRETS/DB.ENC"), None);
+        // Named inside a longer word, where no path is peeled out of it: the spelling itself is
+        // on the surface, so it still declines.
+        let inside = format!("cat x:{}/secrets/db.enc", root.display());
+        assert_eq!(ask(&root, &inside), None, "{inside}");
+        // The registry puts that one file on the surface and nothing else in the plane.
+        std::fs::write(root.join("notes.txt"), "x").unwrap();
+        assert_eq!(
+            ask(&root, "cat notes.txt"),
+            Some(("ops".into(), "cat".into()))
+        );
+    }
+
+    #[test]
+    fn a_home_relative_vault_file_is_expanded_under_home_and_only_there() {
+        let home = Some("/home/op");
+        assert_eq!(expand_home("~/v/db.enc", home), "/home/op/v/db.enc");
+        assert_eq!(
+            expand_home("~/v/db.enc", Some("/home/op/")),
+            "/home/op/v/db.enc"
+        );
+        assert_eq!(expand_home("~", home), "/home/op");
+        // No home, or an empty one: the path stays as written.
+        assert_eq!(expand_home("~/v/db.enc", None), "~/v/db.enc");
+        assert_eq!(expand_home("~/v/db.enc", Some("")), "~/v/db.enc");
+        assert_eq!(expand_home("~", Some("")), "~");
+        assert_eq!(expand_home("~", None), "~");
+        // Another user's home is not this rule's, nor is a `~` that is not the first character.
+        assert_eq!(expand_home("~root/x", home), "~root/x");
+        assert_eq!(expand_home("v/~/x", home), "v/~/x");
+    }
+
+    #[test]
+    fn the_program_is_the_first_word_after_the_assignments() {
+        let words = |xs: &[&str]| xs.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse("gh pr list"),
+            Some((
+                "gh".into(),
+                words(&["pr", "list"]),
+                words(&["gh", "pr", "list"])
+            ))
+        );
+        assert_eq!(
+            parse("A=1 B=2 /usr/bin/gh pr"),
+            Some((
+                "gh".into(),
+                words(&["pr"]),
+                words(&["A=1", "B=2", "/usr/bin/gh", "pr"])
+            ))
+        );
+        assert_eq!(parse("A=1"), None);
+        assert_eq!(parse(""), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_to_the_program_path_finds_is_that_program() {
+        // A persona that ships no script of the name: the reference is whatever `$PATH` finds,
+        // and a path naming that very file runs the declared program.
+        let (_d, root) = plane("ls");
+        let found = which("ls").expect("ls is on PATH on every unix charter's tests run on");
+        let spelled = found.to_string_lossy().into_owned();
+        assert_eq!(
+            ask(&root, &spelled),
+            Some(("ops".into(), "ls".into())),
+            "{spelled}"
+        );
+        assert_eq!(which("charter-no-such-program-311"), None);
+    }
+
+    #[test]
+    fn a_path_argument_that_is_not_an_executable_is_just_an_argument() {
+        let (_d, root) = plane("gh");
+        assert_eq!(
+            ask(&root, "gh api repos/o/r/pulls"),
+            Some(("ops".into(), "gh".into()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_executable_named_without_a_slash_is_not_a_program_the_argument_names() {
+        // `_argv_names_another_program` asks only about a word with a `/` in it: a bare word is
+        // looked up on PATH by whatever runs it, not in the directory the command stands in.
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, root) = plane("gh");
+        let script = root.join("run.sh");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            ask(&root, "gh extension exec run.sh"),
+            Some(("ops".into(), "gh".into()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_to_another_file_of_the_same_name_is_not_the_declared_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, root) = plane("deploy");
+        for dir in ["personas/ops/bin", "elsewhere"] {
+            let at = root.join(dir);
+            std::fs::create_dir_all(&at).unwrap();
+            std::fs::write(at.join("deploy"), "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(at.join("deploy"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        assert_eq!(ask(&root, "elsewhere/deploy prod"), None);
+        assert_eq!(ask(&root, "./elsewhere/deploy prod"), None);
+        assert_eq!(
+            ask(&root, "./personas/ops/bin/deploy prod"),
+            Some(("ops".into(), "deploy".into()))
+        );
     }
 
     #[test]

@@ -377,6 +377,22 @@ mod tests {
     }
 
     #[test]
+    fn a_layout_exactly_as_large_as_the_bound_is_read() {
+        // Padded with the whitespace JSON ignores, to the byte: 64 KiB is the bound.
+        let home = home();
+        let padding = usize::try_from(MAX_BYTES).unwrap() - A_LAYOUT.len();
+        put(
+            home.path(),
+            LAYOUT,
+            &format!("{A_LAYOUT}{}", " ".repeat(padding)),
+        );
+        let reading = read_layout(home.path());
+        assert_eq!(reading.trouble, None, "{reading:?}");
+        assert!(reading.document.is_some());
+        assert_eq!(MAX_BYTES, 65_536);
+    }
+
+    #[test]
     fn a_theme_is_read_whole_and_judged_only_on_being_an_object() {
         let home = home();
         put(

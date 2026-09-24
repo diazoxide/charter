@@ -435,6 +435,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn this_charters_version_is_the_workspaces_one_as_numbers() {
+        // The one number `charter version` prints and a pin is compared with: the app's, which
+        // every crate in the workspace shares — never a placeholder, and always dotted numbers.
+        assert_eq!(app_version(), env!("CARGO_PKG_VERSION"));
+        let parts: Vec<&str> = app_version().split('.').collect();
+        assert_eq!(parts.len(), 3, "{}", app_version());
+        assert!(
+            parts
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
+            "{}",
+            app_version()
+        );
+    }
+
     fn said(report: &Report) -> String {
         report
             .said

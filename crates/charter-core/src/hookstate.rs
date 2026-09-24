@@ -137,7 +137,9 @@ pub fn session(explicit: Option<&str>, env: &dyn Fn(&str) -> Option<String>) -> 
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
         .or_else(|| env(crate::active::SESSION_ID_ENV).filter(|v| !v.is_empty()))
-        .or_else(|| env(crate::active::CONVERSATION_ENV).filter(|v| !v.is_empty()))?;
+        // The last rung needs no empty-filter of its own: an empty value is an empty id below,
+        // which is `None` either way — a filter here was a mutant nothing could see (#311).
+        .or_else(|| env(crate::active::CONVERSATION_ENV))?;
     let id = safe(crate::memstore::py_strip(&raw));
     (!id.is_empty()).then_some(id)
 }
@@ -154,6 +156,35 @@ mod tests {
         assert_eq!(session(Some(""), &env).as_deref(), Some("chat-7"));
         assert_eq!(session(Some(" ../x "), &|_| None).as_deref(), Some("..x"));
         assert_eq!(session(Some("///"), &|_| None), None);
+    }
+
+    #[test]
+    fn removing_what_is_not_there_is_fine_and_what_cannot_be_removed_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let state = State {
+            dir: root.join(".charter"),
+            trust: root.clone(),
+        };
+        std::fs::create_dir_all(state.sessions()).unwrap();
+        assert!(state.remove(&state.sessions().join("never-was")).is_ok());
+        // A directory is not a file `remove_file` can take: that error is not swallowed.
+        assert!(state.remove(&state.sessions()).is_err());
+        assert!(state.sessions().is_dir());
+    }
+
+    #[test]
+    fn each_of_charters_state_directories_is_where_config_puts_it() {
+        let state = State {
+            dir: PathBuf::from("/plane/.charter"),
+            trust: PathBuf::from("/plane"),
+        };
+        assert_eq!(state.sessions(), Path::new("/plane/.charter/sessions"));
+        assert_eq!(
+            state.persona_state(),
+            Path::new("/plane/.charter/persona-state")
+        );
+        assert_eq!(state.vaults(), Path::new("/plane/.charter/vaults"));
     }
 
     #[cfg(unix)]
