@@ -77,6 +77,9 @@ pub fn rerun_if_steered() -> bool {
 /// The first line of every test in `crates/charter-core/tests/`: when the shell that ran the
 /// suite set a steering variable, run this test again without it and stop here
 /// ([`testrun::rerun_if_steered`](crate::testrun::rerun_if_steered)).
+///
+/// Not for a `#[should_panic]` test: the child's panic fails the re-run, and the parent then
+/// panics for the wrong reason. The directory's own check refuses one.
 #[macro_export]
 macro_rules! unsteered {
     () => {
@@ -97,9 +100,11 @@ mod tests {
             if super::rerun_if_steered() {
                 return;
             }
-            let seen = std::env::var_os("CHARTER_WORKTREES")
-                .map_or_else(|| "cleared".into(), |v| v.to_string_lossy().into_owned());
-            std::fs::write(saw, seen).unwrap();
+            let seen: Vec<&str> = ["CHARTER_WORKTREES", "CHARTER_HOME"]
+                .into_iter()
+                .filter(|name| std::env::var_os(name).is_some())
+                .collect();
+            std::fs::write(saw, format!("still set: {seen:?}")).unwrap();
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -109,14 +114,15 @@ mod tests {
             &["testrun::tests::a_test_started_with_a_steering_variable_set_runs_again_without_it"],
             &[
                 ("CHARTER_WORKTREES", "/nowhere/worktrees".as_ref()),
+                ("CHARTER_HOME", "/nowhere/state".as_ref()),
                 (SAW, saw.as_os_str()),
             ],
         );
 
         assert_eq!(
             std::fs::read_to_string(&saw).ok().as_deref(),
-            Some("cleared"),
-            "the body ran, and without the variable"
+            Some("still set: []"),
+            "the body ran, and without either variable"
         );
     }
 }

@@ -661,7 +661,7 @@ fn the_signer_is_never_asked_even_when_the_operator_signs_every_commit() {
 /// deadline. What holds it is a smudge filter that sleeps: git runs it for every file the
 /// rebase checks out, and the runner turns off hooks and the fsmonitor but not filters —
 /// standing in for a signer prompt, a lock, anything that waits. Answers the bare remote.
-fn with_a_rebase_that_cannot_finish(fixture: &Fixture) -> PathBuf {
+fn a_remote_no_rebase_can_finish_onto(fixture: &Fixture) -> PathBuf {
     let bare = fixture.with_a_remote();
     run(
         &fixture.root,
@@ -706,7 +706,7 @@ fn a_rebase_still_running_at_its_deadline_is_stopped_and_said_to_be_out_of_time(
     // charter-app#242: the rebase used to have no deadline at all. The deadline is the
     // helper's argument so the test does not wait out the real one.
     let fixture = Fixture::plane();
-    let bare = with_a_rebase_that_cannot_finish(&fixture);
+    let bare = a_remote_no_rebase_can_finish_onto(&fixture);
     run(
         &fixture.root,
         &["fetch", "-q", &bare.display().to_string(), "main"],
@@ -729,21 +729,11 @@ fn a_push_whose_rebase_runs_out_of_time_is_undone_reported_and_recorded_as_not_l
     // fetch, the rebase stopped at its deadline, the abort, what the operator is told, and the
     // record `doctor` reads. Only the deadline is shortened.
     let fixture = Fixture::plane();
-    let bare = with_a_rebase_that_cannot_finish(&fixture);
+    let bare = a_remote_no_rebase_can_finish_onto(&fixture);
     let mine = ask(&fixture.root, &["rev-parse", "HEAD"]);
-    let mut said = String::new();
-    let mut say = |line: Say| {
-        said.push_str(&line.to_string());
-        said.push('\n');
-    };
 
     let started = std::time::Instant::now();
-    let pushed = push_head_within(
-        &fixture.root,
-        false,
-        std::time::Duration::from_secs(1),
-        &mut say,
-    );
+    let (pushed, said) = push_within(&fixture, false, std::time::Duration::from_secs(1));
 
     assert!(
         started.elapsed() < std::time::Duration::from_secs(15),
@@ -874,12 +864,21 @@ fn a_save_asked_to_sign_that_has_to_rebase_signs_the_commit_it_replays() {
 
 /// Push HEAD with `sign`, and answer what it did and what it said.
 fn push(fixture: &Fixture, sign: bool) -> (PushResult, String) {
+    push_within(fixture, sign, WRITE)
+}
+
+/// [`push`], with the rebase given `deadline`.
+fn push_within(
+    fixture: &Fixture,
+    sign: bool,
+    deadline: std::time::Duration,
+) -> (PushResult, String) {
     let mut said = String::new();
     let mut say = |line: Say| {
         said.push_str(&line.to_string());
         said.push('\n');
     };
-    let pushed = push_head(&fixture.root, sign, &mut say);
+    let pushed = push_head_within(&fixture.root, sign, deadline, &mut say);
     (pushed, said)
 }
 

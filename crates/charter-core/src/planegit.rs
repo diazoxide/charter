@@ -530,7 +530,9 @@ enum Rebased {
 /// cannot be signed stops the rebase exactly where a conflict would, with no conflict in it:
 /// git says `failed to write commit object` (in the C locale the runner pins) after the
 /// signer's own words, and a conflict never says that. What the signer said is kept for the
-/// operator; which signer, and why, only it knows.
+/// operator; which signer, and why, only it knows. A commit object git failed to write for
+/// another reason — a full disk — would be put down to the signer too, but git's own words
+/// follow the claim, so the operator reads the real cause either way.
 ///
 /// A run with no exit code is out of time only once the deadline has passed: git killed by a
 /// signal of somebody else's has no code either, and that is not charter stopping it.
@@ -572,6 +574,30 @@ fn signer_said(err: &str) -> String {
     } else {
         said.join(" ")
     }
+}
+
+/// A rebase that stopped for a reason other than a conflict, undone: aborted, the operator
+/// told `detail` and what to do `next`, and recorded as `failed` with that detail — the
+/// commit is on this laptop only.
+fn rebase_undone(
+    root: &Path,
+    branch: &str,
+    head: &str,
+    detail: String,
+    next: &str,
+    say: Sink,
+) -> PushResult {
+    let _ = git::run(root, &["rebase", "--abort"], WRITE);
+    say(Say::Warn(format!("Committed locally, but {detail}.")));
+    say(Say::Info(format!("  {next}")));
+    record_push(
+        root,
+        PushResult {
+            detail,
+            ..PushResult::of(Outcome::Failed, branch)
+        },
+        head,
+    )
 }
 
 /// Push the plane root's HEAD to its own branch on origin — **the one pusher**.
@@ -690,47 +716,35 @@ fn push_head_within(root: &Path, sign: bool, deadline: Duration, say: Sink) -> P
                     return record_push(root, PushResult::of(Outcome::Conflict, &branch), &head);
                 }
                 Rebased::Unsigned(signer) => {
-                    let _ = git::run(root, &["rebase", "--abort"], WRITE);
                     // Stopped, not retried unsigned as the commit is: the commit stays on this
                     // laptop, where re-signing it is the operator's to do, while a push is
                     // public and final. The remote never gets an unsigned copy of a commit the
                     // operator asked to sign.
-                    let detail = format!("the rebase could not sign the replayed commit: {signer}");
-                    say(Say::Warn(format!("Committed locally, but {detail}")));
-                    say(Say::Info(
-                        "  Nothing was pushed, so nothing unsigned reached the remote. Fix the \
-                         signer, then rebase onto the remote and push by hand."
-                            .into(),
-                    ));
-                    return record_push(
+                    return rebase_undone(
                         root,
-                        PushResult {
-                            detail,
-                            ..PushResult::of(Outcome::Failed, &branch)
-                        },
+                        &branch,
                         &head,
+                        format!("the rebase could not sign the replayed commit: {signer}"),
+                        "Nothing was pushed, so nothing unsigned reached the remote. Fix the \
+                         signer, then rebase onto the remote and push by hand.",
+                        say,
                     );
                 }
                 Rebased::OutOfTime => {
-                    let _ = git::run(root, &["rebase", "--abort"], WRITE);
                     // Not a conflict, and not called one: nothing says the trees disagree,
                     // only that git did not finish. The push that started this is what failed
                     // to land.
-                    let detail = format!(
-                        "the rebase onto the remote did not finish within {} seconds, so \
-                         charter stopped it",
-                        deadline.as_secs()
-                    );
-                    say(Say::Warn(format!(
-                        "Committed locally, but {detail} — rebase by hand, then `charter save`."
-                    )));
-                    return record_push(
+                    return rebase_undone(
                         root,
-                        PushResult {
-                            detail,
-                            ..PushResult::of(Outcome::Failed, &branch)
-                        },
+                        &branch,
                         &head,
+                        format!(
+                            "the rebase onto the remote did not finish within {} seconds, so \
+                             charter stopped it",
+                            deadline.as_secs()
+                        ),
+                        "Rebase by hand, then `charter save`.",
+                        say,
                     );
                 }
             }
