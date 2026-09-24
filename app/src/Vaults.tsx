@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { KeyRound } from "lucide-react";
 import { PanelList } from "./PanelList";
@@ -177,7 +177,7 @@ export function useVaults(plane: string): VaultsSaid {
     void commands
       .vaultList(plane)
       .then((answer) => {
-        if (gone) return;
+        if (gone || answer == null) return;
         if (answer.status === "error") setSaid({ plane, trouble: answer.error });
         else if (Array.isArray(answer.data)) setSaid({ plane, vaults: answer.data });
       })
@@ -189,6 +189,12 @@ export function useVaults(plane: string): VaultsSaid {
     };
   }, [plane, asked]);
   const reload = useCallback(() => setAsked((was) => was + 1), []);
-  // An answer for the plane before is not this plane's.
-  return said?.plane === plane ? { ...said, reload } : { reload };
+  // An answer for the plane before is not this plane's. Memoised so the object's identity only
+  // changes when the answer does: it is passed down to `Panels` and read into a `useMemo`, and a
+  // fresh object every render would re-run both on every unrelated window change.
+  const mine = said?.plane === plane ? said : undefined;
+  return useMemo(
+    () => (mine ? { vaults: mine.vaults, trouble: mine.trouble, reload } : { reload }),
+    [mine, reload],
+  );
 }
