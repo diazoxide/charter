@@ -362,6 +362,24 @@ fn a_view_the_extension_does_not_declare_starts_nothing() {
 // -------------------------------------------------------------------------------------
 
 #[test]
+fn a_program_that_never_answers_is_refused_as_too_late_never_as_a_lost_connection() {
+    // What the refusal SAYS, whatever the machine's load: a program that never answers has
+    // nothing to say by any deadline, so a short one decides nothing but how long this takes.
+    // How long the real one is, is the test below's subject.
+    let rig = Rig::new();
+    rig.approved("#!/bin/sh\nexec sleep 60\n");
+
+    let refused = rig
+        .ask(&Executor::with_deadline(Duration::from_secs(1)))
+        .expect_err("an answer from nothing");
+
+    assert!(
+        refused.starts_with("'probe' did not answer within 1 seconds, so charter stopped it."),
+        "{refused}"
+    );
+}
+
+#[test]
 fn a_program_that_never_answers_is_stopped_at_the_deadline() {
     // **The one test on the real executor**, because its subject is the real [`DEADLINE`]:
     // what every executor charter makes gives a program. It is the one test here a machine too

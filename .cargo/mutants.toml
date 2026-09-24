@@ -105,4 +105,19 @@ exclude_re = [
     # `reference::urlsplit`'s `i > 0` against `>=`: at `i == 0` the candidate scheme is empty,
     # and an empty candidate fails the first-character check that follows. The site says so.
     'src/secrets/reference\.rs:\d+:\d+: replace > with >= in urlsplit$',
+    # `executor::supported` is `Ok(())` on unix and a refusal only off unix, which no unix build
+    # compiles: its one mutant is the unix function itself, as `machine::supported` above.
+    'src/executor\.rs:\d+:\d+: replace supported -> Result<\(\), String> with Ok\(\(\)\)$',
+    # `executor::inherit_nothing_else`'s comparisons and arithmetic are the macOS arm, which the
+    # Linux nightly does not compile, and Linux's `close_range(...) == 0`, whose `!=` only sends
+    # the child to the per-number loop that marks the same descriptors. The doc comment on the
+    # function says which of the macOS ones macOS CI pins and which no test can reach. Its
+    # whole-body mutant (`with ()`) is not excluded: every platform catches it.
+    'src/executor\.rs:\d+:\d+: replace (==|&&|>|<|/) with \S+ in inherit_nothing_else$',
+    # `executor::drain`'s two `>` against `>=`: one is an instant on a clock, and at the other the
+    # cut it guards is 0. Each site says so.
+    'src/executor\.rs:\d+:\d+: replace > with >= in drain$',
+    # `executor::ask_within`'s `left.is_zero() || set_write_timeout(..).is_err()` against `&&`:
+    # a zero timeout is an error to `set_write_timeout`, so the halves agree. The site says so.
+    'src/executor\.rs:\d+:\d+: replace \|\| with && in ask_within$',
 ]

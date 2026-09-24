@@ -709,6 +709,16 @@ const MOST_DESCRIPTORS: u64 = 1 << 20;
 ///   per number up to [`highest_descriptor`], which answers `EBADF` at once for a number that
 ///   is not open.
 ///
+/// **What mutation testing cannot see here** (`.cargo/mutants.toml`). The nightly builds Linux,
+/// where the macOS arm is not compiled at all, and on Linux a failed `close_range` check only
+/// sends the child to the per-number loop, which marks the same descriptors. On macOS the fast
+/// path's bounds (`got > 0 && got < size`) likewise only choose between the listed table and
+/// that same loop, except when `proc_pidinfo` fails on the child's own pid, which no test can
+/// arrange, and `got / each` as `got * each` reads the zeroed entries past the table, which
+/// `proc_fd > 2` skips. What does change the answer there — the count taken, which entries are
+/// marked — is pinned on macOS by
+/// `a_descriptor_charter_holds_without_close_on_exec_does_not_reach_the_program`.
+///
 /// **Not `portable_pty::unix::close_random_fds`**, which is what portable-pty itself calls
 /// there: it lists `/dev/fd` with `read_dir`, which allocates, and after a fork in a
 /// multi-threaded process the allocator's lock may be held by a thread that no longer exists.
@@ -846,6 +856,7 @@ fn drain(
         if stopped_at.is_none() && stop.load(Ordering::Relaxed) {
             stopped_at = Some(Instant::now());
         }
+        // `>` against `>=` differs at one instant of a clock no test can land on.
         if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) {
             break;
         }
@@ -853,6 +864,7 @@ fn drain(
             Ok(0) => break,
             Ok(got) => {
                 kept.extend_from_slice(&chunk[..got]);
+                // At exactly the bound the cut is 0, so `>=` here changes nothing.
                 if kept.len() > MOST_STDERR_BYTES {
                     let cut = kept.len() - MOST_STDERR_BYTES;
                     kept.drain(..cut);
@@ -888,6 +900,8 @@ fn ask_within(ours: &std::os::unix::net::UnixStream, request: &[u8], until: Inst
             break true;
         }
         let left = until.saturating_duration_since(Instant::now());
+        // A zero timeout is itself an error to `set_write_timeout`, so the second half is
+        // true whenever the first is and `&&` would decide the same.
         if left.is_zero() || ours.set_write_timeout(Some(left)).is_err() {
             break false;
         }
@@ -905,6 +919,9 @@ fn ask_within(ours: &std::os::unix::net::UnixStream, request: &[u8], until: Inst
 }
 
 /// Whether charter starts extension programs on this platform at all ([`RUNS_PROGRAMS`]).
+///
+/// On unix this IS `Ok(())`, so its one mutant is the function a unix build runs;
+/// `.cargo/mutants.toml` records that.
 fn supported() -> Result<(), String> {
     if RUNS_PROGRAMS {
         Ok(())
