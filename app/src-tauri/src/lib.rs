@@ -15,6 +15,7 @@ mod panels;
 mod panics;
 mod pin;
 mod planes;
+mod planewatch;
 mod sessions;
 mod settings;
 mod slowstart;
@@ -357,6 +358,10 @@ struct OpenChat {
     /// Whether the operator pinned it (ADR 0039). It rides the plane's own app
     /// record, so a pinned chat comes back pinned at the next launch.
     pinned: bool,
+    /// The name the operator gave it, or none — then its tab says the default, `<persona>
+    /// <N>` (charter-app#254). Charter's label only: `name` is still what its harness was
+    /// started with.
+    label: Option<String>,
 }
 
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
@@ -679,7 +684,11 @@ fn approve_profile(
 /// (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 /// it is decided here and nowhere later: Claude Code's footer command inherits the
 /// environment its harness was started with, and no later click can change it.
-// One over clippy's threshold, and it is a command's argument list: every one of these is a
+///
+/// `label` is the picker's optional Name field (charter-app#254): what the chat's tab says
+/// instead of its default. It is held to the same rule a rename is, and **a refusal comes back
+/// before anything starts**, so a name charter will not draw never costs a chat.
+// Over clippy's threshold, and it is a command's argument list: every one of these is a
 // separate value the window sends, and folding a few into a struct would put a generated
 // TypeScript type between the picker and the call for nothing. Not a doc comment, because
 // the generated bindings carry those and this is about the Rust.
@@ -693,10 +702,15 @@ fn start_chat(
     persona: Option<String>,
     cwd: Option<String>,
     name: String,
+    label: Option<String>,
     show_footer: bool,
     columns: u16,
     rows: u16,
 ) -> Result<Started, String> {
+    let label = match label {
+        Some(raw) => charter_core::reopen::label(&raw)?,
+        None => None,
+    };
     let held = planes.held(&plane)?;
     let root = held.root();
     let start = charter_core::start::Start {
@@ -726,17 +740,21 @@ fn start_chat(
         // A chat the operator has just asked for has no number yet: `Sessions`
         // deals it one that this plane has never used (charter-app#90).
         number: None,
+        label: label.clone(),
     };
     let session = held
         .chats()
         .start_ready(&chat, &ready, Size { columns, rows })?;
-    Ok(Started { session })
+    Ok(Started { session, label })
 }
 
-/// A chat that started: its session.
+/// A chat that started: its session, and the name it was given as charter holds it.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 struct Started {
     session: u32,
+    /// The picker's Name field as the core's rule left it — trimmed, and none when it was
+    /// blank — so the tab draws what the record holds rather than what was typed.
+    label: Option<String>,
 }
 
 /// Starts a session, and remembers it as a chat so a quit can write it down. No program is
@@ -774,6 +792,7 @@ fn open_session(
         // A chat the operator has just asked for has no number yet: `Sessions`
         // deals it one that this plane has never used (charter-app#90).
         number: None,
+        label: None,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
@@ -794,10 +813,24 @@ fn close_session(
     planes.held(&plane)?.close_chat(session)
 }
 
+/// Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
+/// (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
+#[tauri::command]
+#[specta::specta]
+fn ignore_needs_you(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<(), String> {
+    planes.held(&plane)?.ignore_needs_you(session);
+    Ok(())
+}
+
 /// The chats the app already has open — at a launch, the ones put back from the record.
 ///
-/// The window asks this instead of opening its own: putting the record back happens before
-/// there is a window, so that a relaunch does not depend on a webview having run.
+/// The window asks this instead of opening its own: the core puts the record back, once the
+/// window has sent the operator's answer to the launch's question (`opener::relaunch`,
+/// charter-app#250), and a window that reloads asks again rather than starting a second copy.
 #[tauri::command]
 #[specta::specta]
 fn opened_chats(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<OpenChat>, String> {
@@ -918,6 +951,23 @@ fn pin_chat(
     planes.held(&plane)?.chats().pin(session, pinned)
 }
 
+/// Gives one chat a name, or takes the one it was given off with a blank — and answers the name
+/// it now has, so the tab draws what charter holds rather than what was typed (charter-app#254).
+///
+/// **Charter's label, never the harness's**: the program keeps the `--name` it was started
+/// with, so renaming a chat never disturbs one that is running. The name goes in the plane's
+/// own `.charter/app/reopen.json`, beside the chat's pin, so it comes back at a relaunch.
+#[tauri::command]
+#[specta::specta]
+fn rename_chat(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    label: String,
+) -> Result<Option<String>, String> {
+    planes.held(&plane)?.chats().rename(session, &label)
+}
+
 /// Asks the app to quit, the way the menu's Quit and the tray's do.
 ///
 /// It is the same function they call, so what this goes through is the real path: the ask
@@ -972,6 +1022,7 @@ impl From<chats::Open> for OpenChat {
             persona: open.persona,
             in_front: open.in_front,
             pinned: open.pinned,
+            label: open.label,
             resumed: match &open.how {
                 Reopened::Resumed(id) => Some(id.to_string()),
                 Reopened::Fresh(_) => None,
@@ -1108,10 +1159,13 @@ fn commands() -> Builder<tauri::Wry> {
             opener::open_plane,
             opener::approve_plane,
             opener::planes_to_restore,
+            opener::relaunch_ask,
+            opener::relaunch,
             opener::window_holds_planes,
             opener::create_project,
             open_session,
             close_session,
+            ignore_needs_you,
             send_input,
             resize_session,
             watch_session,
@@ -1125,6 +1179,7 @@ fn commands() -> Builder<tauri::Wry> {
             pin_project,
             pin_workspace,
             pin_chat,
+            rename_chat,
             ask_to_quit,
             quit,
             quit_cancelled,
@@ -1148,6 +1203,7 @@ fn commands() -> Builder<tauri::Wry> {
             updates::set_update_channel,
             updates::check_for_update,
             updates::install_update,
+            updates::restart_to_update,
             extensions::installed_extensions,
             extensions::pick_extension,
             extensions::install_extension,
@@ -1185,6 +1241,8 @@ fn commands() -> Builder<tauri::Wry> {
         // What `update://checked` carries. It crosses on an event rather than a command, so it
         // is named here or the window would have to write the shape out by hand.
         .typ::<updates::Offer>()
+        // What `plane-changed` carries, for the same reason.
+        .typ::<planewatch::PlaneChanged>()
 }
 
 /// Where the generated TypeScript lives.
@@ -1303,6 +1361,7 @@ pub fn run() {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
+            app.manage(updates::Installed::default());
             // The extension executor (ADR 0041 stage 2). Managed for the table of
             // programs it is running, which `Exit` below empties.
             app.manage(views::Views::default());
@@ -1313,11 +1372,6 @@ pub fn run() {
             // The clipboard a vault's Copy writes to, and what it wrote, for the clear a minute
             // later and the one at exit.
             app.manage(vaults::SystemClipboard::default());
-            // Whether this launch puts the last quit's window set back. Read from THIS
-            // process's arguments, once: a second launch's `--no-restore` would be about a
-            // restore that happened hours ago, so the single-instance closure never reaches
-            // this.
-            app.manage(Restoring::from_args(std::env::args()));
 
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
             // reads `unknown` — never a hook pointed at a path that is not there. It is a
@@ -1357,6 +1411,15 @@ pub fn run() {
                     std::sync::Arc::new(move |arrived: handoff::Arrived| {
                         let _ = window.emit(handoff::ARRIVED, &arrived);
                     })
+                })
+                // The plane moved on disk — a todo closed in a terminal, a workspace another
+                // chat made — and the window reads it again (charter-app#264).
+                .telling_changes({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |plane: PlaneId| {
+                        let _ =
+                            window.emit(planewatch::CHANGED, &planewatch::PlaneChanged { plane });
+                    })
                 }),
             );
 
@@ -1365,6 +1428,15 @@ pub fn run() {
             // directory again. A launch that finds no plane leaves the app holding none,
             // which is a state and not a failure.
             let launch = planes::at_launch(&app.state::<Planes>(), std::env::current_dir());
+            // Whether this launch puts the last quit's window set back. Read from THIS
+            // process's arguments, once: a second launch's `--no-restore` would be about a
+            // restore that happened hours ago, so the single-instance closure never reaches
+            // this. After `at_launch`, which is what learns whether this launch follows a
+            // restart to update — and that one always restores (charter-app#251).
+            app.manage(Restoring::after(
+                std::env::args(),
+                app.state::<Planes>().restarted_to_update(),
+            ));
             app.manage(launch);
             reached("the record is back");
 

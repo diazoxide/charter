@@ -53,7 +53,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::forge::{self, Forge};
 use crate::gitstate;
@@ -490,6 +490,116 @@ fn land_via_branch(
     }
 }
 
+/// The deadline for every git call `save` makes that writes a commit — the commit, its unsigned
+/// retry, the rebase a moved remote sends it through — and for the rebase's abort.
+///
+/// Not [`git::READ`]: a rebase checks out a tree, and a killed one leaves a rebase in progress
+/// for the abort to clear. But not untimed either, which each of them was until
+/// charter-app#242: a git that waits — on a signer, on a lock, on anything — held
+/// `charter save`, and the hook that ran it, for ever. A plane's save commits a handful of
+/// files and replays the few commits the remote does not have yet, so two minutes is ample
+/// and still ends.
+const WRITE: Duration = Duration::from_secs(120);
+
+/// How the rebase onto a remote that moved ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Rebased {
+    /// The plane's commits were replayed onto the remote's.
+    Replayed,
+    /// git stopped on its own — the trees conflict, it refused, or it died.
+    Conflict,
+    /// Asked to sign (`--sign`), git could not write a replayed commit: the signer refused.
+    /// Carries what the signer said (charter-app#267).
+    Unsigned(String),
+    /// Still running at its deadline, and killed.
+    OutOfTime,
+}
+
+/// Rebase the plane root onto `FETCH_HEAD`, giving up at `deadline`.
+///
+/// **Signed exactly when the commit was** (charter-app#242). A rebase REPLAYS commits and a
+/// replay is a commit, so it reads `commit.gpgsign` as the commit did. Unless the operator
+/// asked for `--sign`, `-c commit.gpgsign=false` keeps it from the signer the commit was kept
+/// from — the commit `save` made unsigned came back out of the rebase asking for a 1Password
+/// prompt that blocks, or a signer that fails and turns a remote that merely moved into a
+/// reported conflict. With `--sign` the `-c` is left off, as it is for the commit, so the
+/// replay is signed the way the commit was; putting it on would hand the remote an unsigned
+/// copy of a commit the operator asked to sign.
+///
+/// **A signer that refuses is not a conflict** (charter-app#267). Under `--sign` a replay that
+/// cannot be signed stops the rebase exactly where a conflict would, with no conflict in it:
+/// git says `failed to write commit object` (in the C locale the runner pins) after the
+/// signer's own words, and a conflict never says that. What the signer said is kept for the
+/// operator; which signer, and why, only it knows. A commit object git failed to write for
+/// another reason — a full disk — would be put down to the signer too, but git's own words
+/// follow the claim, so the operator reads the real cause either way.
+///
+/// A run with no exit code is out of time only once the deadline has passed: git killed by a
+/// signal of somebody else's has no code either, and that is not charter stopping it.
+fn rebase_onto_fetched(root: &Path, sign: bool, deadline: Duration) -> Rebased {
+    let started = std::time::Instant::now();
+    let mut rebase: Vec<&str> = if sign {
+        Vec::new()
+    } else {
+        vec!["-c", "commit.gpgsign=false"]
+    };
+    rebase.extend(["rebase", "FETCH_HEAD"]);
+    match git::run(root, &rebase, deadline) {
+        Ok(run) if run.ok() => Rebased::Replayed,
+        Ok(run) if run.code.is_none() && started.elapsed() >= deadline => Rebased::OutOfTime,
+        Ok(run) if sign && run.err.contains(UNWRITTEN) => Rebased::Unsigned(signer_said(&run.err)),
+        _ => Rebased::Conflict,
+    }
+}
+
+/// What git's sequencer says when it cannot write a replayed commit — under `--sign`, because
+/// the signer refused. `sequencer.c`'s own message, read in the C locale.
+const UNWRITTEN: &str = "failed to write commit object";
+
+/// The signer's words out of a rebase that stopped on it: everything git printed before
+/// [`UNWRITTEN`], without its progress, its hints or its `error: ` prefixes.
+///
+/// git prints `Rebasing (1/1)` with a carriage return and no newline, so the line the signer's
+/// error lands on starts with it; a line is read from its last `\r`.
+fn signer_said(err: &str) -> String {
+    let before = err.split(UNWRITTEN).next().unwrap_or_default();
+    let said: Vec<&str> = before
+        .lines()
+        .map(|line| line.rsplit('\r').next().unwrap_or_default().trim())
+        .map(|line| line.strip_prefix("error: ").unwrap_or(line))
+        .filter(|line| !line.is_empty() && !line.starts_with("hint:") && *line != "error:")
+        .collect();
+    if said.is_empty() {
+        "the signer gave no reason".to_string()
+    } else {
+        said.join(" ")
+    }
+}
+
+/// A rebase that stopped for a reason other than a conflict, undone: aborted, the operator
+/// told `detail` and what to do `next`, and recorded as `failed` with that detail — the
+/// commit is on this laptop only.
+fn rebase_undone(
+    root: &Path,
+    branch: &str,
+    head: &str,
+    detail: String,
+    next: &str,
+    say: Sink,
+) -> PushResult {
+    let _ = git::run(root, &["rebase", "--abort"], WRITE);
+    say(Say::Warn(format!("Committed locally, but {detail}.")));
+    say(Say::Info(format!("  {next}")));
+    record_push(
+        root,
+        PushResult {
+            detail,
+            ..PushResult::of(Outcome::Failed, branch)
+        },
+        head,
+    )
+}
+
 /// Push the plane root's HEAD to its own branch on origin — **the one pusher**.
 ///
 /// **The branch is never predicted.** Nothing here asks the forge whether the branch is
@@ -497,7 +607,16 @@ fn land_via_branch(
 /// business making from a hook, and guessing it from the branch name is the unearned diagnosis
 /// ADR 0009 forbids. The rejection IS the evidence, and it arrives only after the commit
 /// exists — so the commit is made, and the OUTCOME is what gets reported honestly.
-pub fn push_head(root: &Path, say: Sink) -> PushResult {
+///
+/// `sign` is the `--sign` the commit was made under: a remote that moved sends HEAD through a
+/// rebase, and the commit it replays is signed exactly when the commit was.
+pub fn push_head(root: &Path, sign: bool, say: Sink) -> PushResult {
+    push_head_within(root, sign, WRITE, say)
+}
+
+/// [`push_head`], with the rebase given `deadline` rather than [`WRITE`] — so a test can drive
+/// a rebase that runs out of time without waiting out the real one.
+fn push_head_within(root: &Path, sign: bool, deadline: Duration, say: Sink) -> PushResult {
     let branch = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
@@ -584,15 +703,51 @@ pub fn push_head(root: &Path, say: Sink) -> PushResult {
             say(Say::Warn(
                 "Could not reach origin to fetch, so the retry was skipped.".into(),
             ));
-        } else if !git::run_untimed(root, &["rebase", "FETCH_HEAD"]).is_ok_and(|r| r.ok()) {
-            let _ = git::run_untimed(root, &["rebase", "--abort"]);
-            say(Say::Warn(
-                "Committed locally, but rebase hit a conflict — resolve manually, then \
-                 `charter save`."
-                    .into(),
-            ));
-            return record_push(root, PushResult::of(Outcome::Conflict, &branch), &head);
         } else {
+            match rebase_onto_fetched(root, sign, deadline) {
+                Rebased::Replayed => {}
+                Rebased::Conflict => {
+                    let _ = git::run(root, &["rebase", "--abort"], WRITE);
+                    say(Say::Warn(
+                        "Committed locally, but rebase hit a conflict — resolve manually, then \
+                         `charter save`."
+                            .into(),
+                    ));
+                    return record_push(root, PushResult::of(Outcome::Conflict, &branch), &head);
+                }
+                Rebased::Unsigned(signer) => {
+                    // Stopped, not retried unsigned as the commit is: the commit stays on this
+                    // laptop, where re-signing it is the operator's to do, while a push is
+                    // public and final. The remote never gets an unsigned copy of a commit the
+                    // operator asked to sign.
+                    return rebase_undone(
+                        root,
+                        &branch,
+                        &head,
+                        format!("the rebase could not sign the replayed commit: {signer}"),
+                        "Nothing was pushed, so nothing unsigned reached the remote. Fix the \
+                         signer, then rebase onto the remote and push by hand.",
+                        say,
+                    );
+                }
+                Rebased::OutOfTime => {
+                    // Not a conflict, and not called one: nothing says the trees disagree,
+                    // only that git did not finish. The push that started this is what failed
+                    // to land.
+                    return rebase_undone(
+                        root,
+                        &branch,
+                        &head,
+                        format!(
+                            "the rebase onto the remote did not finish within {} seconds, so \
+                             charter stopped it",
+                            deadline.as_secs()
+                        ),
+                        "Rebase by hand, then `charter save`.",
+                        say,
+                    );
+                }
+            }
             // The rebase rewrote it, so the commit the record names is a different one now.
             head = git::run(root, &["rev-parse", "HEAD"], git::READ)
                 .map(|r| r.line().trim().to_string())
@@ -1115,14 +1270,18 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
         unsigned.to_vec()
     };
     commit.extend(["commit", "-q", "-m", msg.as_str()]);
-    let _ = git::run_untimed(root, &commit);
+    let _ = git::run(root, &commit, WRITE);
     let still_staged = |root: &Path| {
         git::run(root, &["diff", "--cached", "--quiet"], git::READ).is_ok_and(|r| !r.ok())
     };
     if still_staged(root) {
         // A signed commit that failed: retry without the signature rather than leaving the
         // work staged and the operator guessing.
-        let _ = git::run_untimed(root, &["commit", "--no-gpg-sign", "-q", "-m", msg.as_str()]);
+        let _ = git::run(
+            root,
+            &["commit", "--no-gpg-sign", "-q", "-m", msg.as_str()],
+            WRITE,
+        );
     }
     // Still staged after both attempts = nothing was committed. Reporting success here is how a
     // failed commit became `✓ Committed :` with an empty sha — the sha was empty precisely
@@ -1165,7 +1324,7 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
     // rc 1 only when the commit reached NOWHERE — a pull-request branch that also failed. An
     // ordinary push failure has been reported and stays rc 0: `charter save` having committed
     // successfully is not a failed command.
-    u8::from(push_head(root, say).outcome == Outcome::Stranded)
+    u8::from(push_head(root, request.sign, say).outcome == Outcome::Stranded)
 }
 
 #[cfg(test)]

@@ -11,8 +11,8 @@
 //! existed.
 //!
 //! **It is a trust-model hole, not only a nuisance.** The reopen record is an execution
-//! input (ADR 0035): putting it back STARTS the programs it names, before any window and
-//! with nothing to click. A suite that can write that file in a real plane can write
+//! input (ADR 0035): putting it back STARTS the programs it names, behind one question that
+//! asks whether to — and never says what they run. A suite that can write that file in a real plane can write
 //! programs into it.
 //!
 //! **What the fence establishes.** A *fenced* build — one compiled with the `fenced` cargo

@@ -51,6 +51,11 @@ arboard = { version = "3.6.1", default-features = false }
 # What that Copy remembers instead of the value: a digest, to clear the clipboard a minute later
 # only while it still holds what was copied. The version charter-core already uses.
 sha2 = "0.10"
+# The plane changing under the window (charter-app#264): the todos a terminal closed, a workspace
+# another process made. notify is the standard cross-platform watcher (FSEvents, inotify,
+# ReadDirectoryChangesW); the debouncer folds a burst into one read.
+notify = "8.2"
+notify-debouncer-full = "0.7"
 
 [lints]
 workspace = true

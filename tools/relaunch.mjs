@@ -10,9 +10,30 @@
 // What it proves, end to end and through the real binary: a record on disk brings a chat
 // back under `--resume`, and the app writes that record itself, so the second launch reads
 // what the first one wrote rather than what a test hand-wrote.
+//
+// **And that a launch asks first** (charter-app#250): reopen every session, or start fresh.
+// Nothing starts while the question is up, so this answers it the way an operator does — by
+// pressing a button in the window, through the WebDriver server a build with the `e2e` feature
+// carries (`tauri-plugin-wdio-webdriver`). Plain W3C WebDriver over `fetch`, one request per
+// step; nothing is evaluated inside the page.
+//
+// **And the launch a Restart to update restarts into** (charter-app#251). The restart itself
+// needs an update this build has really installed, so it is not driven here; what is driven is
+// what it leaves behind — each record saying a restart to update wrote it, and the
+// `restarted-to-update` word beside the machine store — and that the launch reading them says
+// so, with Reopen all as the answer in front, and spends the word.
 
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -38,7 +59,11 @@ const PATIENCE = 90_000;
 const CONFIG_HOME = mkdtempSync(join(tmpdir(), "charter-relaunch-config-"));
 
 if (!existsSync(APP)) {
-  console.error(`no app at ${APP} — build it first (npx tauri build --debug --no-bundle)`);
+  console.error(
+    `no app at ${APP} — build it first, with the WebDriver server this answers the launch's ` +
+      "question through (in app/: npx tauri build --debug --no-bundle --features e2e " +
+      "--config src-tauri/tauri.e2e.conf.json)",
+  );
   process.exit(1);
 }
 
@@ -78,8 +103,91 @@ function aClaude(where, argvFile) {
   return claude;
 }
 
-/** Runs the app in `plane` until `done()` is true, then ends it and everything it started. */
-async function theAppRuns(plane, done) {
+/** A port nothing on this machine is listening on, for the app's WebDriver server. */
+async function aFreePort() {
+  return new Promise((found, failed) => {
+    const probe = createServer();
+    probe.on("error", failed);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => found(port));
+    });
+  });
+}
+
+/** One W3C WebDriver request to the app's own server, answering with its `value`. */
+async function webdriver(port, method, path, body) {
+  const answer = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const { value } = await answer.json();
+  if (!answer.ok) throw new Error(`${method} ${path}: ${JSON.stringify(value)}`);
+  return value;
+}
+
+/** An element reference's id, whatever key the server filed it under. */
+const idOf = (element) => Object.values(element)[0];
+
+/**
+ * Waits for the launch's question and presses `answer` in it — the button whose text it is.
+ *
+ * Before pressing, it waits `hold` ms with the question up and reports how many chats the
+ * stand-in harness had seen started by then, which is the whole of "nothing starts while the
+ * question is up" — and what the question said, and the text of the control that had the
+ * keyboard, which is the answer a stray Return would give.
+ */
+function pressing(answer, argvFile, hold = 2_000) {
+  return async (port, until) => {
+    let session;
+    while (Date.now() < until && session === undefined) {
+      session = await webdriver(port, "POST", "/session", { capabilities: { alwaysMatch: {} } })
+        .then((made) => made.sessionId)
+        .catch(() => undefined);
+      if (session === undefined) await new Promise((tick) => setTimeout(tick, 250));
+    }
+    if (session === undefined) throw new Error("the app's WebDriver server never answered");
+    const buttons = async () =>
+      webdriver(port, "POST", `/session/${session}/elements`, {
+        using: "css selector",
+        value: '[role="alertdialog"] button',
+      });
+    while (Date.now() < until && (await buttons()).length === 0) {
+      await new Promise((tick) => setTimeout(tick, 250));
+    }
+    await new Promise((tick) => setTimeout(tick, hold));
+    const startedWhileAsking = argvSeen(argvFile).length;
+    const textOf = (element) =>
+      webdriver(port, "GET", `/session/${session}/element/${idOf(element)}/text`);
+    const said = await textOf(
+      await webdriver(port, "POST", `/session/${session}/element`, {
+        using: "css selector",
+        value: '[role="alertdialog"]',
+      }),
+    );
+    const focused = await textOf(
+      await webdriver(port, "GET", `/session/${session}/element/active`),
+    );
+    for (const button of await buttons()) {
+      const text = await textOf(button);
+      if (text.trim() === answer) {
+        await webdriver(port, "POST", `/session/${session}/element/${idOf(button)}/click`, {});
+        return { startedWhileAsking, said, focused: focused.trim() };
+      }
+    }
+    throw new Error(`the launch's question has no "${answer}" button`);
+  };
+}
+
+/**
+ * Runs the app in `plane` until `done()` is true, then ends it and everything it started.
+ *
+ * `answer`, when given, is run beside the wait with the app's WebDriver port — it is how the
+ * launch's question is answered — and what it returns comes back as `answered`.
+ */
+async function theAppRuns(plane, done, answer) {
+  const port = await aFreePort();
   // `CHARTER_LAUNCH_LOG` makes the app say how far up it got. A launch that never reaches
   // its first chat says nothing at all otherwise, which cost three round trips of guessing.
   //
@@ -99,6 +207,7 @@ async function theAppRuns(plane, done) {
       CHARTER_ROOT: plane,
       CHARTER_PLANE_FENCE: tmpdir(),
       CHARTER_CONFIG_HOME: CONFIG_HOME,
+      TAURI_WEBDRIVER_PORT: String(port),
     },
   });
   let output = "";
@@ -106,12 +215,21 @@ async function theAppRuns(plane, done) {
   app.stderr.on("data", (chunk) => (output += chunk));
   try {
     const until = Date.now() + PATIENCE;
+    let answered;
+    let refused;
+    if (answer) {
+      answer(port, until).then(
+        (said) => (answered = said),
+        (why) => (refused = why),
+      );
+    }
     while (Date.now() < until) {
-      if (done()) return { ok: true, output };
+      if (refused) return { ok: false, output: `${output}\n(answering failed: ${refused})` };
+      if (done() && (!answer || answered)) return { ok: true, output, answered };
       if (app.exitCode !== null) return { ok: false, output: `${output}\n(the app exited)` };
       await new Promise((tick) => setTimeout(tick, 100));
     }
-    return { ok: false, output };
+    return { ok: false, output, answered };
   } finally {
     // The pid this started, never a name: other things on this machine are called claude.
     app.kill("SIGTERM");
@@ -167,8 +285,26 @@ writeFileSync(
 
 console.log(`a plane at ${plane}`);
 
-const first = await theAppRuns(plane, () => argvSeen(argvFile).length >= 1);
-check("the app starts the chat its record holds", first.ok, first.ok ? "" : `the app said:\n${first.output}`);
+const first = await theAppRuns(
+  plane,
+  () => argvSeen(argvFile).length >= 1,
+  pressing("Reopen all sessions", argvFile),
+);
+check(
+  "an ordinary relaunch does not say it followed an update",
+  first.answered?.said !== undefined && !first.answered.said.includes("install an update"),
+  `the question said: ${JSON.stringify(first.answered?.said)}`,
+);
+check(
+  "nothing starts while the launch's question is up",
+  first.answered?.startedWhileAsking === 0,
+  `${first.answered?.startedWhileAsking} chat(s) had started before the answer`,
+);
+check(
+  "the app starts the chat its record holds, once the operator reopens all",
+  first.ok,
+  first.ok ? "" : `the app said:\n${first.output}`,
+);
 const started = argvSeen(argvFile);
 check(
   "it is started as a resume of the conversation that was recorded",
@@ -212,13 +348,104 @@ check(
 );
 
 // The second launch reads what the first one wrote, not what this script hand-wrote.
-const second = await theAppRuns(plane, () => argvSeen(argvFile).length >= 2);
+const second = await theAppRuns(
+  plane,
+  () => argvSeen(argvFile).length >= 2,
+  pressing("Reopen all sessions", argvFile, 0),
+);
 check("a second launch brings the chat back again", second.ok, second.ok ? "" : `the app said:\n${second.output}`);
 check(
   "still as a resume of the same conversation",
   argvSeen(argvFile)[1]?.includes(`--resume ${CONVERSATION}`),
   `it was given: ${JSON.stringify(argvSeen(argvFile)[1] ?? "")}`,
 );
+
+// The other answer. Nothing is started, and the record is cleared of what it held — but keeps
+// the numbers it has dealt, so no later chat inherits a closed one's workspace (charter-app#90).
+//
+// The counter is set by hand first, because nothing above spends a number that the record would
+// carry: the chat this script wrote has none, so the app deals it one and may not write that
+// down until something changes.
+const DEALT = 7;
+writeFileSync(record, JSON.stringify({ ...JSON.parse(readFileSync(record, "utf8")), dealt: DEALT }));
+const before = argvSeen(argvFile).length;
+const recordCleared = () => {
+  try {
+    const now = JSON.parse(readFileSync(record, "utf8"));
+    return (now.chats?.length ?? 0) === 0 && (now.views?.length ?? 0) === 0;
+  } catch {
+    return false;
+  }
+};
+const third = await theAppRuns(plane, recordCleared, pressing("Start fresh", argvFile, 0));
+check("start fresh clears the record", third.ok, third.ok ? "" : `the app said:\n${third.output}`);
+check(
+  "and starts no chat",
+  argvSeen(argvFile).length === before,
+  `the stand-in harness was started ${argvSeen(argvFile).length - before} more time(s)`,
+);
+const cleared = JSON.parse(readFileSync(record, "utf8"));
+check(
+  "and keeps the numbers already dealt",
+  cleared.dealt >= DEALT,
+  `the record says dealt ${JSON.stringify(cleared.dealt)}`,
+);
+
+// The launch a Restart to update restarts into. The restart wrote the record with the flag and
+// left its word beside the machine store (`Planes::let_go_of_all_to_update`); both are written
+// here the way it writes them, because the restart itself needs a real installed update.
+const RESTARTED = join(CONFIG_HOME, "charter", "restarted-to-update");
+writeFileSync(
+  record,
+  JSON.stringify(
+    {
+      version: 1,
+      at: STAMPED,
+      chats: [
+        {
+          program: claude,
+          args: [],
+          cwd: plane,
+          name: "ide.7",
+          resume: CONVERSATION,
+          active: true,
+        },
+      ],
+      relaunch_after_update: true,
+    },
+    null,
+    2,
+  ),
+);
+mkdirSync(join(CONFIG_HOME, "charter"), { recursive: true, mode: 0o700 });
+writeFileSync(RESTARTED, "");
+const beforeRestart = argvSeen(argvFile).length;
+const fourth = await theAppRuns(
+  plane,
+  () => argvSeen(argvFile).length > beforeRestart,
+  pressing("Reopen all sessions", argvFile, 0),
+);
+check(
+  "the launch after a restart to update says why it is asking",
+  fourth.answered?.said?.includes("charter restarted to install an update.") === true,
+  `the question said: ${JSON.stringify(fourth.answered?.said)}`,
+);
+check(
+  "with Reopen all as the answer in front",
+  fourth.answered?.focused === "Reopen all sessions",
+  `the keyboard was on ${JSON.stringify(fourth.answered?.focused)}`,
+);
+check(
+  "and Reopen all resumes the chat the restart recorded",
+  fourth.ok && argvSeen(argvFile).at(-1)?.includes(`--resume ${CONVERSATION}`),
+  fourth.ok ? `it was given: ${JSON.stringify(argvSeen(argvFile).at(-1) ?? "")}` : fourth.output,
+);
+check(
+  "and the word of the restart is spent, so no later launch says it again",
+  !existsSync(RESTARTED),
+  `${RESTARTED} is still there`,
+);
+rmSync(RESTARTED, { force: true });
 
 console.log(failures.length === 0 ? "\nall good" : `\n${failures.length} failed`);
 process.exit(failures.length === 0 ? 0 : 1);

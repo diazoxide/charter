@@ -121,7 +121,14 @@ export function Panels({
       aria-label={workspace === undefined ? "Attention" : `Attention · ${workspace}`}
       data-testid="panels"
     >
-      <NeedsYou queue={queue} quiet={quiet} nameOf={nameOf} show={showChat} />
+      <NeedsYou
+        queue={queue}
+        quiet={quiet}
+        nameOf={nameOf}
+        show={showChat}
+        offers={offers}
+        onPress={onPress}
+      />
 
       {workspace === undefined ? (
         <p className="empty">No workspace focused.</p>

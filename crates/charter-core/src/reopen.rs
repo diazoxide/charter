@@ -14,7 +14,8 @@
 //! operator never typed. `program`, `args` and `cwd` are **not** checked: they say what to
 //! run, and there is no shape that separates a harness the operator installed from anything
 //! else they might run. So this file is, for whoever can write it, a way to have a command
-//! run at every later launch — before any window, with nothing to click.
+//! run at every later launch — behind one question that names how many chats and in which
+//! projects (charter-app#250), and never what they run.
 //!
 //! **It is not true that a gitignored `.charter/` keeps this out of a clone.** An ignore rule
 //! does not apply to a tracked path: `git add -f` commits a symlink — or a file far larger
@@ -107,6 +108,16 @@ pub struct Chat {
     /// was not: a bump drops every operator's open chats, and this field's absence reads as
     /// the behaviour every record without it was written under.
     pub number: Option<u32>,
+    /// The name the operator gave this chat, where they gave one (charter-app#254) — what its
+    /// tab says instead of the default `<persona> <N>`.
+    ///
+    /// **Charter's label and nothing else.** It is not [`Self::name`], which is what the
+    /// harness was started with (`--name`) and is told again at a resume: renaming a chat
+    /// never reaches a harness that is running, and a split still starts its chat under the
+    /// tab's chat name. Held to [`label`] wherever it comes from. `None` is "no name given",
+    /// which is what every record written before this field says — not a format change, for
+    /// [`Self::pinned`]'s reason.
+    pub label: Option<String>,
 }
 
 /// The most view tabs one record puts back. A window opens one per persona and per extension
@@ -178,6 +189,96 @@ pub struct Record {
     /// while the record is readable: the conversion both ways holds it at or above every
     /// number the record names, so a hand-edited file cannot re-deal one it still lists.
     pub dealt: u32,
+    /// Whether this record was written by a quit that restarts charter to install an update
+    /// (charter-app#251), rather than by the operator quitting.
+    ///
+    /// **Read by the launch after that quit, and by nothing else.** It adds one sentence to the
+    /// launch's question saying why it is being asked; [`Choice::ReopenAll`] is the answer in
+    /// front either way. Every later write of the record is an ordinary one and carries
+    /// `false`, so it lasts until this plane's record is next written.
+    ///
+    /// **Restart to update is the one writer of `true`**, on each plane the app held. A plane
+    /// the launch after it does not open (`--no-restore`, a declined trust ask) keeps the flag
+    /// on disk, so it counts only at the launch that took [`RESTARTED_TO_UPDATE`] — see there.
+    pub relaunch_after_update: bool,
+}
+
+/// What the operator answered when a launch found something to put back (charter-app#250).
+///
+/// **Asked once per launch, before any chat starts**, and never when the record holds
+/// nothing ([`Record::holds_anything`]). A choice that is lost — the dialog closed, Esc, a
+/// window that never answered — is [`Choice::ReopenAll`], because the other answer is the only
+/// one that throws anything away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    /// Every chat back in its tab and pane, resuming its conversation, and every view tab
+    /// back where it was: what a launch did before it asked.
+    ReopenAll,
+    /// Nothing is put back, and the record is cleared of what it held.
+    StartFresh,
+}
+
+impl Record {
+    /// Whether a launch has anything to put back — a chat or a view tab. The counter of
+    /// numbers dealt is bookkeeping and is not something that was open.
+    pub fn holds_anything(&self) -> bool {
+        !self.chats.is_empty() || !self.views.is_empty()
+    }
+
+    /// The record a launch puts back once the operator has answered.
+    ///
+    /// **A fresh start keeps [`Record::dealt`]**, and it is the one thing it keeps: the chats
+    /// it drops still have workspace pointers and locks on disk keyed on their numbers, so a
+    /// new chat dealt one of those would read a stranger's workspace (charter-app#90). The
+    /// counter is taken at or above every number the record names, as a write would take it.
+    pub fn chosen(self, choice: Choice) -> Record {
+        match choice {
+            Choice::ReopenAll => self,
+            Choice::StartFresh => Record {
+                dealt: highest_dealt(&self),
+                ..Record::default()
+            },
+        }
+    }
+}
+
+/// The file a restart to update leaves in charter's own config directory, beside
+/// `machine.json` ([`crate::machine::dir`]) — charter-app#251.
+///
+/// **It is what scopes [`Record::relaunch_after_update`] to the restart.** The flag is written
+/// into each plane the app held, and a plane the launch after the restart does not open
+/// (`--no-restore`, a trust ask declined) keeps it on disk until its record is next written. A
+/// launch days later from that plane's directory would then say "charter restarted to install
+/// an update", which is not true of that launch. So the restart also leaves this, the next
+/// launch takes it ([`take_restart_to_update`]) whatever it opens, and a record's flag counts
+/// only at the launch that took it.
+///
+/// **A file of its own and not a field of the machine store**, the choice `theme.json` and
+/// `layout.json` made for the reason [`crate::machine`] gives: that store keeps five things and
+/// says the count is load-bearing, and this is not a fact about any plane it names. It also
+/// works where the store refuses (ADR 0031's Windows): it holds nothing, so there is no
+/// `0600` for it to need. Its existence is the whole of it, and all it can do is add one
+/// sentence to a question charter was going to ask anyway.
+pub const RESTARTED_TO_UPDATE: &str = "restarted-to-update";
+
+/// Leaves [`RESTARTED_TO_UPDATE`] for the launch after this one.
+///
+/// Created in charter's own `0700` directory and never through a link at its name: the
+/// directory is shared with the machine store, and a planted link is the one way a write of
+/// nothing could land somewhere that matters.
+pub fn mark_restart_to_update(config_root: &Path) -> std::io::Result<()> {
+    let dir = crate::machine::private_dir(config_root)?;
+    crate::contain::create_no_link(&dir, &dir.join(RESTARTED_TO_UPDATE)).map(drop)
+}
+
+/// Whether this launch follows a restart to update, answered once: the marker is removed as
+/// it is read, so no later launch reads it too.
+///
+/// Every failure is "no", because the one thing "yes" adds is a sentence saying why a
+/// question is being asked. A marker that cannot be removed is also "no" — one that stayed
+/// would say "restarted" at every launch after this one.
+pub fn take_restart_to_update(config_root: &Path) -> bool {
+    std::fs::remove_file(crate::machine::dir(config_root).join(RESTARTED_TO_UPDATE)).is_ok()
 }
 
 /// How a chat came back, which is what the pane showing it says.
@@ -458,6 +559,7 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
             .take(MOST_VIEWS)
             .collect(),
         dealt: on_disk.dealt,
+        relaunch_after_update: on_disk.relaunch_after_update,
     };
     // Held to the same invariant on the way in as on the way out: a file whose counter sits
     // below a number it still names — hand-edited, or written by a charter that did not know
@@ -467,6 +569,40 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
         dealt: highest_dealt(&record),
         ..record
     })
+}
+
+/// The longest name, in characters, an operator can give a chat.
+pub const MOST_LABEL: usize = 64;
+
+/// A name an operator gave a chat, as charter will hold it — or why it will not.
+///
+/// **One rule for every way a name arrives**: the picker's Name field, a rename on the tab, and
+/// a record read off disk. Trimmed, because a space at either end is never what was meant and
+/// draws as nothing. **Blank is `None`**, which is "no name given" — the tab says its default,
+/// so clearing a name is how the default comes back. Bounded, because it is drawn on a tab.
+/// And **refused, never stripped**, when it holds a control character or an invisible
+/// formatting one ([`crate::panel::undrawable`]): what those do is make two different names look
+/// like one on the strip, or turn the words around them backwards, and a name quietly changed
+/// into another is not the one the operator typed.
+pub fn label(raw: &str) -> Result<Option<String>, String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let length = text.chars().count();
+    if length > MOST_LABEL {
+        return Err(format!(
+            "That name is {length} characters long, and a chat's name is at most {MOST_LABEL}."
+        ));
+    }
+    if text.contains(crate::panel::undrawable) {
+        return Err(
+            "That name holds a control character or an invisible formatting one, which \
+             charter will not draw."
+                .to_owned(),
+        );
+    }
+    Ok(Some(text.to_owned()))
 }
 
 /// The record as JSON, and the only place this file's field names are written down.
@@ -495,6 +631,11 @@ struct OnDisk {
     /// the key, because nothing here refuses one it does not know.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     views: Vec<ViewOnDisk>,
+    /// See [`Record::relaunch_after_update`]. **Written only when true**, so an ordinary
+    /// quit writes the record it always wrote, and absent reads as the ordinary quit every
+    /// record before it was. Not a version bump, for [`Chat::pinned`]'s reason.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    relaunch_after_update: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -626,6 +767,12 @@ struct ChatOnDisk {
     /// counts from one.
     #[serde(default)]
     number: u32,
+    /// The name the operator gave the chat, or absent — see [`Chat::label`]. Absent in every
+    /// record written before a chat could have one, and whenever none was given, so a plane
+    /// that never renamed a chat writes the record it always wrote. Held to [`label`] on the
+    /// way in, and a value it refuses reads as absent: the chat comes back under its default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    label: String,
 }
 
 impl From<&Record> for OnDisk {
@@ -663,10 +810,12 @@ impl From<&Record> for OnDisk {
                     },
                     pinned: chat.pinned,
                     number: chat.number.unwrap_or_default(),
+                    label: chat.label.clone().unwrap_or_default(),
                 })
                 .collect(),
             dealt: highest_dealt(record),
             views: record.views.iter().map(ViewOnDisk::from).collect(),
+            relaunch_after_update: record.relaunch_after_update,
         }
     }
 }
@@ -707,6 +856,7 @@ impl From<ChatOnDisk> for Chat {
             // that `contain::segment_ok` would pass for any integer, and a record that names
             // a number no chat here holds costs at most a gap in the counting.
             number: (chat.number > 0).then_some(chat.number),
+            label: label(&chat.label).ok().flatten(),
         }
     }
 }
@@ -729,6 +879,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         }
     }
 
@@ -1044,6 +1195,7 @@ mod tests {
         Record {
             views: Vec::new(),
             dealt: 0,
+            relaunch_after_update: false,
             chats: vec![Chat {
                 program: "/bin/sh".into(),
                 args: vec!["-c".into(), "touch /tmp/pwned".into()],
@@ -1056,6 +1208,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             }],
         }
     }
@@ -1235,6 +1388,7 @@ mod tests {
         let record = Record {
             views: Vec::new(),
             dealt: 0,
+            relaunch_after_update: false,
             chats: vec![
                 Chat {
                     pinned: true,
@@ -1307,6 +1461,7 @@ mod tests {
                 },
             ],
             dealt: 5,
+            relaunch_after_update: false,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -1365,6 +1520,7 @@ mod tests {
                     ..claude("ide.7", None)
                 }],
                 dealt: 1,
+                relaunch_after_update: false,
             },
         )
         .expect("the record is written");
@@ -1444,6 +1600,7 @@ mod tests {
                 },
             ],
             dealt: 0,
+            relaunch_after_update: false,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -1574,5 +1731,286 @@ mod tests {
         std::fs::write(path(&plane), &text).unwrap();
 
         assert_eq!(read_or_refusal(&plane).unwrap(), one_chat());
+    }
+
+    // ----- the choice at a relaunch (charter-app#250) -----
+
+    fn a_record_with_a_chat_and_a_view() -> Record {
+        Record {
+            chats: vec![Chat {
+                number: Some(3),
+                ..claude("ide.7", Some(ID))
+            }],
+            views: vec![persona_view("steward")],
+            dealt: 5,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_record_with_no_chat_and_no_view_tab_has_nothing_to_ask_about() {
+        // A first launch, and a plane whose last quit had nothing open: no question.
+        assert!(!Record::default().holds_anything());
+        assert!(
+            !Record {
+                dealt: 9,
+                ..Default::default()
+            }
+            .holds_anything(),
+            "a counter is bookkeeping, not something that was open"
+        );
+    }
+
+    #[test]
+    fn a_chat_or_a_view_tab_alone_is_something_to_ask_about() {
+        let chat = Record {
+            chats: vec![claude("ide.7", None)],
+            ..Default::default()
+        };
+        let view = Record {
+            views: vec![persona_view("steward")],
+            ..Default::default()
+        };
+
+        assert!(chat.holds_anything());
+        assert!(view.holds_anything());
+    }
+
+    #[test]
+    fn reopen_all_puts_back_the_record_exactly_as_it_was() {
+        let record = a_record_with_a_chat_and_a_view();
+
+        assert_eq!(record.clone().chosen(Choice::ReopenAll), record);
+    }
+
+    #[test]
+    fn start_fresh_puts_back_no_chat_and_no_view_tab() {
+        let fresh = a_record_with_a_chat_and_a_view().chosen(Choice::StartFresh);
+
+        assert!(fresh.chats.is_empty());
+        assert!(fresh.views.is_empty());
+        assert!(!fresh.holds_anything());
+    }
+
+    #[test]
+    fn start_fresh_keeps_every_number_already_dealt_so_none_is_dealt_twice() {
+        // charter-app#90: a number is never dealt twice. Chat 3's workspace pointer and lock
+        // are still on disk, so the first chat after a fresh start must not be 3 again —
+        // nor 4 or 5, which the counter says were dealt to chats closed before the quit.
+        let fresh = a_record_with_a_chat_and_a_view().chosen(Choice::StartFresh);
+
+        assert_eq!(fresh.dealt, 5);
+
+        let only_the_chat_knew = Record {
+            chats: vec![Chat {
+                number: Some(7),
+                ..claude("ide.7", None)
+            }],
+            dealt: 2,
+            ..Default::default()
+        }
+        .chosen(Choice::StartFresh);
+        assert_eq!(only_the_chat_knew.dealt, 7);
+    }
+
+    #[test]
+    fn a_fresh_start_written_and_read_back_is_still_nothing_to_reopen() {
+        let plane = tempfile::tempdir().unwrap();
+
+        write(
+            plane.path(),
+            &a_record_with_a_chat_and_a_view().chosen(Choice::StartFresh),
+        )
+        .unwrap();
+        let back = read(plane.path());
+
+        assert!(!back.holds_anything());
+        assert_eq!(back.dealt, 5);
+    }
+
+    #[test]
+    fn a_relaunch_after_an_update_is_said_in_the_record_and_read_back() {
+        // charter-app#251's way in: the quit that installs an update writes this, and the
+        // launch after it knows why it is being asked.
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            relaunch_after_update: true,
+            ..a_record_with_a_chat_and_a_view()
+        };
+
+        write(plane.path(), &record).unwrap();
+
+        assert_eq!(read(plane.path()), record);
+    }
+
+    #[test]
+    fn an_ordinary_quit_writes_no_update_key_and_an_absent_one_reads_as_an_ordinary_quit() {
+        let plane = tempfile::tempdir().unwrap();
+        write(plane.path(), &a_record_with_a_chat_and_a_view()).unwrap();
+
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+
+        assert!(!text.contains("relaunch_after_update"), "{text}");
+        assert!(!read(plane.path()).relaunch_after_update);
+    }
+
+    #[test]
+    fn a_fresh_start_is_not_a_relaunch_after_an_update_any_more() {
+        // The flag is about the launch that reads it, and no later one.
+        let fresh = Record {
+            relaunch_after_update: true,
+            ..a_record_with_a_chat_and_a_view()
+        }
+        .chosen(Choice::StartFresh);
+
+        assert!(!fresh.relaunch_after_update);
+    }
+
+    // ----- the name the operator gave a chat (charter-app#254) ----------------------------
+
+    #[test]
+    fn a_chat_comes_back_under_the_name_the_operator_gave_it() {
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![Chat {
+                label: Some("billing bug".into()),
+                ..claude("3", None)
+            }],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        assert_eq!(
+            read(plane.path()).chats[0].label.as_deref(),
+            Some("billing bug")
+        );
+    }
+
+    #[test]
+    fn a_record_written_before_chats_had_names_reads_as_the_default_one() {
+        // Not a format change, for `Chat::pinned`'s reason: a missing key reads as "no name
+        // given", which is what was true of every record written before a chat could have one.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[{"program":"claude","name":"3"}]}"#,
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        assert_eq!(back.chats.len(), 1);
+        assert_eq!(back.chats[0].label, None);
+    }
+
+    #[test]
+    fn a_chat_with_no_name_given_writes_no_label_key() {
+        // So the record a plane that never renamed a chat writes is the one it always wrote.
+        let plane = tempfile::tempdir().unwrap();
+        write(plane.path(), &one_chat()).unwrap();
+
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+
+        assert!(!text.contains("\"label\""), "{text}");
+    }
+
+    #[test]
+    fn a_label_off_disk_charter_would_refuse_reads_as_no_name_given() {
+        // The file is writable by whoever can write the plane's state directory, and the label
+        // is drawn on a tab: a line that would draw as something else keeps its chat and loses
+        // only the name.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            "{\"version\":1,\"at\":0,\"chats\":[{\"program\":\"claude\",\"name\":\"3\",\
+             \"label\":\"pay\u{202e}lanigiro\"}]}",
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        assert_eq!(back.chats.len(), 1);
+        assert_eq!(back.chats[0].label, None);
+    }
+
+    #[test]
+    fn a_label_is_trimmed() {
+        assert_eq!(label("  billing bug \t"), Ok(Some("billing bug".into())));
+    }
+
+    #[test]
+    fn a_blank_label_is_no_name_given() {
+        assert_eq!(label(""), Ok(None));
+        assert_eq!(label("   "), Ok(None));
+    }
+
+    #[test]
+    fn a_label_of_the_longest_length_is_kept_and_one_longer_is_refused() {
+        let longest = "é".repeat(MOST_LABEL);
+        assert_eq!(label(&longest), Ok(Some(longest.clone())));
+
+        let refused = label(&format!("{longest}x")).unwrap_err();
+        assert!(refused.contains(&MOST_LABEL.to_string()), "{refused}");
+    }
+
+    #[test]
+    fn a_label_with_a_control_character_is_refused() {
+        assert!(label("two\nlines").is_err());
+        assert!(label("bell\u{7}").is_err());
+    }
+
+    #[test]
+    fn a_label_with_an_invisible_character_is_refused() {
+        // Each makes two different names look like one on the strip, or turns the words
+        // around it backwards.
+        for sneaky in ["pay\u{202e}lanigiro", "a\u{200b}b", "\u{feff}steward"] {
+            assert!(label(sneaky).is_err(), "{sneaky:?} was let through");
+        }
+    }
+
+    #[test]
+    fn a_space_inside_a_label_is_content() {
+        assert_eq!(label("steward 1"), Ok(Some("steward 1".into())));
+    }
+
+    #[test]
+    fn a_restart_to_update_is_taken_by_the_next_launch_and_by_no_launch_after_it() {
+        // charter-app#251's scope: a plane the launch after the restart did not open keeps its
+        // flag on disk, and a launch a week later must not read it as "charter restarted".
+        let config = tempfile::tempdir().unwrap();
+
+        mark_restart_to_update(config.path()).unwrap();
+
+        assert!(take_restart_to_update(config.path()), "the next launch");
+        assert!(
+            !take_restart_to_update(config.path()),
+            "the launch after it"
+        );
+    }
+
+    #[test]
+    fn a_launch_no_restart_came_before_takes_nothing() {
+        let config = tempfile::tempdir().unwrap();
+
+        assert!(!take_restart_to_update(config.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_restart_marker_is_not_written_through_a_link() {
+        let config = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let dir = crate::machine::dir(config.path());
+        fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(
+            elsewhere.path().join("planted"),
+            dir.join(RESTARTED_TO_UPDATE),
+        )
+        .unwrap();
+
+        assert!(mark_restart_to_update(config.path()).is_err());
+        assert!(!elsewhere.path().join("planted").exists());
     }
 }

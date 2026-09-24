@@ -27,11 +27,13 @@ fn a_chat_on(profile: &str, persona: Option<&str>) -> Chat {
         show_footer: false,
         pinned: false,
         number: None,
+        label: None,
     }
 }
 
 #[test]
 fn the_profile_and_the_persona_survive_a_quit_and_come_back() {
+    charter_core::unsteered!();
     let dir = tempfile::tempdir().unwrap();
     let record = Record {
         chats: vec![a_chat_on("claude-work", Some("steward"))],
@@ -47,6 +49,7 @@ fn the_profile_and_the_persona_survive_a_quit_and_come_back() {
 
 #[test]
 fn the_record_never_holds_the_environment_that_names_an_account() {
+    charter_core::unsteered!();
     // A profile's `env` is where a second config folder is named. Writing it down would put
     // the account into a file that outlives the app and travels with the plane's state
     // directory — and it would freeze it, so an edit to the profile would not take.
@@ -82,6 +85,7 @@ fn the_record_never_holds_the_environment_that_names_an_account() {
 
 #[test]
 fn a_record_written_before_profiles_existed_still_reads_as_a_chat_with_none() {
+    charter_core::unsteered!();
     // The file is written by a process that may be an older version. A chat with no profile
     // is the shell the app opened before there was a picker, and it still comes back.
     let dir = tempfile::tempdir().unwrap();
@@ -101,6 +105,7 @@ fn a_record_written_before_profiles_existed_still_reads_as_a_chat_with_none() {
 
 #[test]
 fn a_profile_name_that_is_not_one_charter_would_mint_reads_as_no_profile() {
+    charter_core::unsteered!();
     // The name goes back to `profiles::current` as a lookup key and never onto a command
     // line, but it is also printed in a sidebar and in a refusal. A value off disk that is
     // not a name charter accepts is not one this app will carry.
@@ -126,6 +131,7 @@ fn a_profile_name_that_is_not_one_charter_would_mint_reads_as_no_profile() {
 
 #[test]
 fn a_chats_footer_choice_survives_a_quit_and_comes_back_with_it() {
+    charter_core::unsteered!();
     // Charter ADR 0029. The choice is the operator's, made once in the picker, and a
     // relaunch that dropped it would blank a footer they had turned on with nothing on
     // screen to say why.
@@ -158,6 +164,7 @@ fn a_chats_footer_choice_survives_a_quit_and_comes_back_with_it() {
 
 #[test]
 fn a_record_written_before_the_footer_was_a_choice_comes_back_blanked() {
+    charter_core::unsteered!();
     // Charter ADR 0029 keeps the default exactly as it was, and this is the upgrade path:
     // every record already on disk has no such key, and every chat in one was running under
     // a blanked footer when it was written.
@@ -177,6 +184,7 @@ fn a_record_written_before_the_footer_was_a_choice_comes_back_blanked() {
 
 #[test]
 fn a_footer_word_charter_did_not_write_reads_as_the_default() {
+    charter_core::unsteered!();
     // The same rule `profile` and `persona` are held to: a value off a file somebody else
     // may have written is only ever taken as the one word charter itself writes.
     let dir = tempfile::tempdir().unwrap();

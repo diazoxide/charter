@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- When an update is installed, the title bar says **Restart to update**. It restarts charter
+  into the new version and offers every chat and view tab back, with **Reopen all** as the
+  answer in front and a line saying charter restarted to install an update. A chat that is
+  mid-turn is named first, and you choose to restart now or wait. If the restart does not come
+  back, the next launch offers the same sessions.
+  ([#251](https://github.com/diazoxide/charter-app/issues/251))
 - **Project settings**, a tab of its own: right-click a project's tab and choose *Project
   settings…*, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
   which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
@@ -52,8 +58,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   identity variable a vault declares. A tab can also move a token an app was launched with, and
   then warns to relaunch charter so the export leaves its process.
   ([#237](https://github.com/diazoxide/charter-app/issues/237))
+- An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
+  counts on its project and workspace tabs at once, without touching the chat. It lasts until
+  that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
+  the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
 ### Fixed
+
+- A chat's report that raced a close, or an Ignore, can no longer put the chat back in the
+  needs-you queue: every update the window gets is numbered, and it keeps the newest.
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
 - On Linux and Windows the app menu no longer takes a key the chat's shell owns: `Ctrl-C` in a
   chat is the interrupt again, not Copy, and the same goes for `Ctrl-A`, `Ctrl-Z`, `Ctrl-Y`,

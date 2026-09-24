@@ -99,9 +99,7 @@ const MORE: &str = "\n        \u{21b3} ";
 /// own identity, and a name charter has not met is information — or Claude Code's own
 /// evidence, `$CLAUDE_PLUGIN_ROOT`.
 fn current() -> Option<String> {
-    let named = std::env::var("CHARTER_HARNESS")
-        .ok()
-        .filter(|v| !v.is_empty());
+    let named = crate::steer::var("CHARTER_HARNESS").filter(|v| !v.is_empty());
     named.or_else(|| {
         std::env::var_os("CLAUDE_PLUGIN_ROOT")
             .filter(|v| !v.is_empty())

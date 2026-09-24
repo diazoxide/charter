@@ -219,14 +219,14 @@ describe("a persona's own tab", () => {
     const { asked } = core();
     render(<App />);
     await within(await screen.findByRole("tablist", { name: "Tabs" })).findByRole("tab", {
-      name: /1 steward/,
+      name: /steward 1/,
     });
 
     await openFromTheRow();
 
     const tab = within(strip()).getByRole("tab", { selected: true });
     expect(tab).toHaveTextContent("steward");
-    expect(tabNames()).toEqual(["1 steward", "steward"]);
+    expect(tabNames()).toEqual(["steward 1", "steward"]);
     expect(asked.filter((one) => one.cmd === "open_view").map((one) => one.args)).toEqual([
       { plane: PLANE, from: null, view: "persona", key: "steward" },
     ]);
@@ -247,11 +247,11 @@ describe("a persona's own tab", () => {
     core();
     render(<App />);
     await openFromTheRow();
-    await userEvent.click(within(strip()).getByRole("tab", { name: /1 steward/ }));
+    await userEvent.click(within(strip()).getByRole("tab", { name: /steward 1/ }));
 
     await openFromTheRow();
 
-    expect(tabNames()).toEqual(["1 steward", "steward"]);
+    expect(tabNames()).toEqual(["steward 1", "steward"]);
     expect(within(strip()).getByRole("tab", { selected: true })).toHaveTextContent(/^steward$/);
   });
 
@@ -285,7 +285,7 @@ describe("a persona's own tab", () => {
     await userEvent.click(within(strip()).getByRole("button", { name: "Close steward" }));
 
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(tabNames()).toEqual(["1 steward"]);
+    expect(tabNames()).toEqual(["steward 1"]);
     expect(asked.some((one) => one.cmd === "close_session")).toBe(false);
   });
 
@@ -298,9 +298,9 @@ describe("a persona's own tab", () => {
 
     await userEvent.keyboard("{Delete}");
 
-    await waitFor(() => expect(tabNames()).toEqual(["1 steward"]));
+    await waitFor(() => expect(tabNames()).toEqual(["steward 1"]));
     await waitFor(() =>
-      expect(within(strip()).getByRole("tab", { name: /1 steward/ })).toHaveFocus(),
+      expect(within(strip()).getByRole("tab", { name: /steward 1/ })).toHaveFocus(),
     );
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(asked.some((one) => one.cmd === "close_session")).toBe(false);
@@ -361,7 +361,7 @@ describe("view tabs at a relaunch", () => {
     });
     render(<App />);
 
-    await waitFor(() => expect(tabNames()).toEqual(["Statistics", "steward", "1 steward"]));
+    await waitFor(() => expect(tabNames()).toEqual(["Statistics", "steward", "steward 1"]));
     // Pinned first on the strip (ADR 0039), and the pin rode the record back.
     expect(within(strip()).getByRole("tab", { name: /Statistics/ })).toContainElement(
       within(strip()).getByRole("img", { name: "pinned tab" }),
