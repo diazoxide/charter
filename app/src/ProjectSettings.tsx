@@ -2,7 +2,8 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { LoaderCircle } from "lucide-react";
 import { extensionsChanged } from "./extensionsOn";
-import { projectThemeChanged } from "./projectTheme";
+import { projectThemeChanged, useProjectThemeAnswers } from "./projectTheme";
+import { BUILT_IN, SYSTEM } from "./theme/theme";
 import {
   commands,
   type PlaneId,
@@ -45,6 +46,23 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
    *  dropped rather than drawn over what came after it. */
   const reading = useRef(0);
 
+  /** The newest theme read out, kept apart from {@link reading}: the theme is also read on its
+   *  own, when the window's answer for this project changes. */
+  const themeReading = useRef(0);
+  // The theme, as the files are; a refusal leaves the Theme group with charter's own picks only.
+  const readTheme = useCallback(() => {
+    const mine = ++themeReading.current;
+    const newest = () => themeReading.current === mine;
+    void commands
+      .projectTheme(plane)
+      .then((said) => {
+        if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
+      })
+      .catch(() => {
+        if (newest()) setTheme(undefined);
+      });
+  }, [plane]);
+
   const read = useCallback(() => {
     const mine = ++reading.current;
     const newest = () => reading.current === mine;
@@ -66,18 +84,17 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
       .catch(() => {
         if (newest()) setExtensions([]);
       });
-    // The theme, likewise; a refusal leaves the Theme group with charter's own choices only.
-    void commands
-      .projectTheme(plane)
-      .then((said) => {
-        if (newest()) setTheme(said.status === "ok" ? (said.data ?? undefined) : undefined);
-      })
-      .catch(() => {
-        if (newest()) setTheme(undefined);
-      });
-  }, [plane]);
+    readTheme();
+  }, [plane, readTheme]);
 
   useEffect(read, [read]);
+  // What the window draws for this project was asked again — by this tab's save, or by an
+  // approval or a removal in the Extensions dialog, which tells the window and not this tab —
+  // so the tab's sentence about the theme is asked again with it, and the two never disagree.
+  const answers = useProjectThemeAnswers(plane);
+  useEffect(() => {
+    if (answers > 0) readTheme();
+  }, [answers, readTheme]);
 
   const saved = useCallback(() => {
     read();
@@ -388,7 +405,7 @@ const EXTENSIONS: Group = {
 };
 
 /** charter's own picks, for when the core could not be asked what else there is. */
-const BUILT_IN_PICKS = ["charter-dark", "charter-light", "system"] as const;
+const BUILT_IN_PICKS = [...Object.keys(BUILT_IN), SYSTEM];
 
 /**
  * **Theme, in either section** (charter-app#273, ADR 0048): `[theme] use`. Local's pick wins over
@@ -404,7 +421,9 @@ function themeGroup(unset: string): Group {
       const options = theme?.options ?? BUILT_IN_PICKS.map((value) => ({ value, label: value }));
       const labels = Object.fromEntries(options.map((one) => [one.value, one.label]));
       const drawn =
-        theme?.draws == null ? "the window's own theme" : (labels[theme.draws] ?? theme.draws);
+        theme?.draws == null
+          ? "the window's own theme — your theme.json, else the first theme from an extension this project has on, else charter-dark"
+          : (labels[theme.draws] ?? theme.draws);
       return [
         {
           ...textAt(path, "Theme", {
@@ -419,11 +438,8 @@ function themeGroup(unset: string): Group {
     },
     notes: (file, _extensions, theme) => {
       if (theme === undefined) return [];
-      const decided = theme.source === "local" ? "charter.local.toml" : "charter.toml";
       return [
-        ...(theme.why !== null && theme.source !== "default" && decided === file.file
-          ? [theme.why]
-          : []),
+        ...(theme.why !== null && theme.file === file.file ? [theme.why] : []),
         ...theme.ignored.filter((one) => one.file === file.file).map((one) => one.why),
       ];
     },

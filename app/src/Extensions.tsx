@@ -16,6 +16,7 @@ import {
   inForce,
   load,
   PREFERS_LIGHT,
+  SYSTEM,
   systemTheme,
   type Theme,
 } from "./theme/theme";
@@ -251,9 +252,6 @@ export function forgetExtensionThemes() {
   forgetTheirTheme();
 }
 
-/** The pick that follows the operating system's appearance. */
-const SYSTEM = "system";
-
 /** How to stop following the system's appearance, while it is followed. */
 let unfollowSystem: (() => void) | undefined;
 
@@ -326,7 +324,10 @@ export async function drawWhatIsInForce({ reread = false } = {}): Promise<void> 
       ? // Choosing among several is the project's pick; with none, the first in force.
         themes.find(may)
       : themes.find((theme) => may(theme) && `${theme.extension}/${theme.name}` === pick);
-  draw(chosen === undefined ? DEFAULT_THEME : parsed(chosen.text));
+  const theme = chosen === undefined ? DEFAULT_THEME : parsed(chosen.text);
+  // A theme that is not JSON at all keeps the window as it is — unless the project picked it,
+  // where keeping it would leave the last project's theme on this one: that draws the built-in.
+  draw(theme === null && pick !== null ? DEFAULT_THEME : theme);
 }
 
 /** A theme's text as a theme, loaded once, or `null` when it is not JSON at all. */

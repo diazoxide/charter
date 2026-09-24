@@ -208,6 +208,10 @@ export const BUILT_IN: Record<string, Theme> = {
 /** The theme the window comes up in when nothing has said otherwise. */
 export const DEFAULT_THEME: Theme = BUILT_IN["charter-dark"];
 
+/** The pick that follows the operating system's appearance, as a project's `[theme] use` holds it
+ *  (charter-app#273; `charter_core::extension::project::theme::SYSTEM`). */
+export const SYSTEM = "system";
+
 /** The media query the operating system answers with its appearance: true when it is light. */
 export const PREFERS_LIGHT = "(prefers-color-scheme: light)";
 

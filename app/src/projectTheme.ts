@@ -15,6 +15,9 @@ import { commands, type PlaneId } from "./bindings";
 const known = new Map<PlaneId, string | null>();
 /** The newest question out per project: an answer to an older one is dropped. */
 const latest = new Map<PlaneId, number>();
+/** How many answers each project has had: what the settings tab re-reads its own on, since an
+ *  approval in the Extensions dialog tells this store and not the tab. */
+const answers = new Map<PlaneId, number>();
 const listeners = new Set<() => void>();
 
 function ask(plane: PlaneId) {
@@ -27,6 +30,7 @@ function ask(plane: PlaneId) {
     .then((drawn) => {
       if (latest.get(plane) !== mine) return;
       known.set(plane, drawn);
+      answers.set(plane, (answers.get(plane) ?? 0) + 1);
       for (const listener of listeners) listener();
     });
 }
@@ -54,8 +58,18 @@ export function useProjectTheme(plane: PlaneId | undefined): string | null | und
   );
 }
 
+/** How many times `plane` has answered, asking once: a number that changes whenever what the
+ *  window draws for it was asked again — after a save, an approval or a removal. */
+export function useProjectThemeAnswers(plane: PlaneId): number {
+  useEffect(() => {
+    if (!latest.has(plane)) ask(plane);
+  }, [plane]);
+  return useSyncExternalStore(subscribe, () => answers.get(plane) ?? 0);
+}
+
 /** For tests: forget every answer. */
 export function forgetProjectThemes() {
   known.clear();
   latest.clear();
+  answers.clear();
 }

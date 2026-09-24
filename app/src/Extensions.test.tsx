@@ -436,6 +436,13 @@ describe("the theme a project picks (charter-app#273)", () => {
     expect(inForce()).toBe(DEFAULT_THEME);
   });
 
+  it("draws the built-in for a picked theme that is not JSON, never the last project's", async () => {
+    core({ themes: [{ ...SOLARIZED, text: "not json" }] });
+    drawIn(BUILT_IN["charter-light"]); // the project in front before this one
+    await drawThemeFor(new Set(["solarized"]), "solarized/Solarized Dark");
+    expect(inForce()).toBe(DEFAULT_THEME);
+  });
+
   it("follows the system, and keeps following it while the pick stands", async () => {
     core({});
     const turn = system(true);

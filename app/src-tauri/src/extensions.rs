@@ -537,8 +537,8 @@ pub struct ProjectTheme {
     pub options: Vec<ThemeOption>,
     /// What the files pick, in force, as a file holds it; `null` when neither picks one.
     pub picked: Option<String>,
-    /// `default`, `shared` or `local`: which file `picked` came from.
-    pub source: String,
+    /// `charter.toml` or `charter.local.toml`: the file `picked` came from; `null` with no pick.
+    pub file: Option<String>,
     /// What the window draws while this project is in front; `null` leaves it its own theme.
     pub draws: Option<String>,
     /// Why `draws` is not `picked`, when it is not.
@@ -616,7 +616,7 @@ fn project_theme_of(
     ProjectTheme {
         options,
         picked: it.picked.as_ref().map(theme::Pick::value),
-        source: it.source.as_str().to_owned(),
+        file: it.source.file().map(str::to_owned),
         draws: it.draws.as_ref().map(theme::Pick::value),
         why: it.why,
         ignored: it
@@ -645,7 +645,7 @@ pub async fn project_theme_drawn(
     let root = planes.held(&plane)?.root().to_path_buf();
     let config = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
-        drawn_in(
+        project_theme_drawn_of(
             &extension::read(&config),
             &extension::project::Choices::read(&root),
             &extension::project::theme::Said::read(&root),
@@ -656,7 +656,7 @@ pub async fn project_theme_drawn(
 }
 
 /// [`project_theme_drawn`] without a runtime.
-fn drawn_in(
+fn project_theme_drawn_of(
     loaded: &extension::Loaded,
     choices: &extension::project::Choices,
     said: &extension::project::theme::Said,
@@ -869,7 +869,7 @@ mod tests {
             ]
         );
         assert_eq!(theme.picked.as_deref(), Some("solarized/Solarized Dark"));
-        assert_eq!(theme.source, "shared");
+        assert_eq!(theme.file.as_deref(), Some("charter.toml"));
         assert_eq!(theme.draws.as_deref(), Some("charter-dark"));
         assert_eq!(
             theme.why.as_deref(),
@@ -879,7 +879,7 @@ mod tests {
             )
         );
         assert_eq!(
-            drawn_in(&extension::read(&config), &choices, &said).as_deref(),
+            project_theme_drawn_of(&extension::read(&config), &choices, &said).as_deref(),
             Some("charter-dark"),
             "the window drew a theme the project turned off"
         );
@@ -887,11 +887,11 @@ mod tests {
         let choices = extension::project::Choices::from_text(Some(shared), None);
         let said = extension::project::theme::Said::from_text(Some(shared), None);
         assert_eq!(
-            drawn_in(&extension::read(&config), &choices, &said).as_deref(),
+            project_theme_drawn_of(&extension::read(&config), &choices, &said).as_deref(),
             Some("solarized/Solarized Dark")
         );
         assert_eq!(
-            drawn_in(
+            project_theme_drawn_of(
                 &extension::read(&config),
                 &choices,
                 &extension::project::theme::Said::default()
