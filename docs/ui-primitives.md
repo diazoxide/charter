@@ -440,11 +440,23 @@ model and a select-on-`mousedown` this window's strips do not have:
   selects, which is the button's own click. Moving is not selecting ("Tabs", manual activation):
   arrowing past a chat must not swap the panes under the operator.
 - **Each list is ONE Tab stop** — the explorer, the needs-you queue, every panel's rows
-  (`PanelList`, so a contributed panel gets it for nothing). Up, Down, Home and End move. The
-  explorer takes the half of "Tree View" that needs no tree semantics and not Left and Right,
-  for the reason `Explorer.tsx` gives: it does not say it is a tree.
+  (`PanelList`, so a contributed panel gets it for nothing). Up, Down, Home and End move.
+- **The explorer is a tree** (charter-app#238), the whole "Tree View" pattern on top of the
+  same roving focus: `role="tree"`, each row a `treeitem` with its level and its place among
+  its siblings, `aria-expanded` on every parent (a clone says whether it is open, a parent that
+  cannot fold says `true`), Right to open or go in,
+  Left to close or climb, and a typed letter to the next row it starts. `Explorer.tsx` says
+  why the levels are written down and not left to the DOM. A tree's rows are `treeitem`s and
+  no longer `button`s to a role query, so a test reaches them by that role.
 - **Every other control says `tabIndex={0}`**, and a tab's `×` says `-1`: fifty closers would be
-  fifty stops again, and the palette and the tab's own menu both end a chat by the same row (a Delete key on the tab is charter-app#239).
+  fifty stops again. **Delete on a focused project or chat tab presses the row its `×` presses**
+  (charter-app#239, `closeOnDelete` in `app/src/tabKeys.ts`), and so does Backspace on a Mac,
+  whose key marked "delete" sends it: ending a chat still asks first, a view tab still closes
+  without asking, closing a project with chats open now asks first too (`ClosingProject`, on
+  the row's verb, so the `×`, the menu and the palette ask it as well), and the keyboard lands
+  back on the tab after a Cancel and on the strip's stop after a close. A new strip with a `×`
+  (a vault tab's) calls it from its tab's `onKeyDown` with that `×`'s row. The palette and the
+  tab's own menu reach the same row.
 - **The order is the document's, which is the order the window is drawn in**: the title bar,
   the three strips, then the regions as the arrangement places them (ADR 0038 — a region moves,
   and its stops move with it; a fixed order would contradict the layout on screen), each

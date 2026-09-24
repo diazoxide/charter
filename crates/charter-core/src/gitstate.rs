@@ -28,7 +28,10 @@ pub const STALE_AFTER: f64 = 15.0 * 60.0;
 /// A coarse age — `4s`, `12m`, `23h`, `3d`. Context for a human deciding whether to run `rm`,
 /// never an input to a decision charter makes.
 pub fn age_phrase(seconds: f64) -> String {
-    let secs = if seconds < 0.0 { 0u64 } else { seconds as u64 };
+    // `as` from a float saturates: a negative age (a clock that moved back) and NaN are both
+    // 0. So no guard for them here: one said `< 0.0` and could not be told from `<= 0.0` or
+    // `== 0.0`, since the cast already answered every value it caught.
+    let secs = seconds as u64;
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
@@ -142,8 +145,13 @@ mod tests {
     #[test]
     fn an_age_is_coarse_and_never_negative() {
         assert_eq!(age_phrase(-5.0), "0s");
+        assert_eq!(age_phrase(f64::NAN), "0s");
         assert_eq!(age_phrase(4.0), "4s");
         assert_eq!(age_phrase(59.9), "59s");
+        // Each unit starts exactly at its boundary, as Python's `secs < 60` has it.
+        assert_eq!(age_phrase(60.0), "1m");
+        assert_eq!(age_phrase(3600.0), "1h");
+        assert_eq!(age_phrase(86400.0), "1d");
         assert_eq!(age_phrase(12.0 * 60.0), "12m");
         assert_eq!(age_phrase(23.0 * 3600.0), "23h");
         assert_eq!(age_phrase(3.0 * 86400.0), "3d");

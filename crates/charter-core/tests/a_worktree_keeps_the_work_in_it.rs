@@ -426,3 +426,40 @@ fn a_workspace_that_is_a_committed_symlink_out_of_the_plane_cuts_nothing() {
         "nothing was created outside the plane: {refusal}"
     );
 }
+
+#[test]
+fn a_piece_that_never_existed_is_no_such_piece_even_beside_a_stale_one() {
+    // Only the stale registration of THIS piece is pruned. The red light for a mutation that
+    // takes any stale registration, or any piece of that name, for the one asked about.
+    let f = support::plane_with_clone("thing");
+    let gone = cut(&f, "gone");
+    std::fs::remove_dir_all(&gone.path).unwrap();
+
+    let refusal = worktree::remove(&f.plane, &f.ws, &f.repo, "ghost", false, false).unwrap_err();
+
+    assert!(
+        matches!(refusal, worktree::Refusal::NoSuchPiece { .. }),
+        "{refusal}"
+    );
+    let still = worktree::list(&f.plane, &f.ws, &f.repo).unwrap();
+    assert!(
+        still
+            .iter()
+            .any(|p| p.piece == "gone" && p.prunable.is_some()),
+        "and the other piece's registration is untouched: {still:?}"
+    );
+}
+
+#[test]
+fn a_live_piece_with_no_layer_is_listed_as_unwired() {
+    // A plane with nothing to carry writes no record, so the piece has none: it is live and
+    // it is not wired. The red light for a mutation that reads "live" alone as wired.
+    let f = support::plane_with_clone("thing");
+    cut(&f, "piece");
+
+    let pieces = worktree::list(&f.plane, &f.ws, &f.repo).unwrap();
+
+    let row = pieces.iter().find(|p| p.piece == "piece").unwrap();
+    assert!(row.prunable.is_none());
+    assert!(!row.wired, "{row:?}");
+}
