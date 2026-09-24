@@ -57,15 +57,15 @@ impl Installed {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(version.to_owned());
     }
 
-    /// The version waiting for a restart, or the sentence saying there is none.
-    pub fn version(&self) -> Result<String, String> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-            .ok_or_else(|| {
-                "no update has been installed, so there is nothing to restart into".to_owned()
-            })
+    /// Nothing, when an update is waiting for a restart; otherwise the sentence saying there
+    /// is none.
+    pub fn ready(&self) -> Result<(), String> {
+        match *self.0.lock().unwrap_or_else(PoisonError::into_inner) {
+            Some(_) => Ok(()),
+            None => {
+                Err("no update has been installed, so there is nothing to restart into".to_owned())
+            }
+        }
     }
 }
 
@@ -214,10 +214,21 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
             .endpoint()
             .parse()
             .map_err(|why| format!("charter's update endpoint is not a url: {why}"))?;
+        let leaving = app.clone();
         let updater = app
             .updater_builder()
             .endpoints(vec![endpoint])
             .map_err(|why| format!("charter's update endpoint was refused: {why}"))?
+            // **Windows only**: there the plugin runs the installer and ends this process with
+            // `std::process::exit`, which runs no exit event — so the install IS the restart,
+            // and what Restart to update writes is written here instead (charter-app#251). The
+            // installer starts charter again, and that launch asks as it would after a restart.
+            // Nothing on macOS or Linux calls this.
+            .on_before_exit(move || {
+                leaving
+                    .state::<crate::planes::Planes>()
+                    .let_go_of_all_to_update();
+            })
             .build()
             .map_err(|why| format!("charter's updater could not be built: {why}"))?;
         let Some(update) = updater.check().await.map_err(|why| {
@@ -329,9 +340,19 @@ pub fn restart_to_update(
     installed: tauri::State<'_, Installed>,
     planes: tauri::State<'_, crate::planes::Planes>,
 ) -> Result<(), String> {
-    installed.version()?;
+    restarting(&installed, &planes, || app.request_restart())
+}
+
+/// [`restart_to_update`]'s order, with the restart handed in so a test can watch it: refused
+/// before anything is touched, then everything written and ended, and only then the restart.
+fn restarting(
+    installed: &Installed,
+    planes: &crate::planes::Planes,
+    restart: impl FnOnce(),
+) -> Result<(), String> {
+    installed.ready()?;
     planes.let_go_of_all_to_update();
-    app.request_restart();
+    restart();
     Ok(())
 }
 
@@ -351,11 +372,53 @@ mod tests {
         // The launch after it would say "charter restarted to install an update", and that
         // sentence is only ever true when one was.
         let installed = Installed::default();
-        assert!(installed.version().is_err());
+        assert!(installed.ready().is_err());
 
         installed.now("0.2.0");
 
-        assert_eq!(installed.version(), Ok("0.2.0".to_owned()));
+        assert_eq!(installed.ready(), Ok(()));
+    }
+
+    #[test]
+    fn a_restart_to_update_touches_nothing_without_an_update_and_restarts_only_last() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = dir.path().join("plane");
+        std::fs::create_dir_all(&root).expect("the plane's directory");
+        std::fs::write(root.join(charter_core::plane::MANIFEST), "").expect("its charter.toml");
+        let planes = crate::planes::Planes::telling(
+            std::sync::Arc::new(|_: crate::hooks::Moved| {}),
+            crate::Shipped::default(),
+            Some(config.clone()),
+        );
+        let plane = planes.open(&root);
+        let installed = Installed::default();
+        let mut restarted = false;
+
+        assert!(restarting(&installed, &planes, || restarted = true).is_err());
+        assert!(!restarted, "it restarted with no update installed");
+        assert!(
+            planes.held(&plane).is_ok(),
+            "a refused restart let go of a plane"
+        );
+        assert!(
+            !charter_core::reopen::take_restart_to_update(&config),
+            "a refused restart left word of a restart"
+        );
+
+        installed.now("0.2.0");
+        let mut held_at_the_restart = None;
+        restarting(&installed, &planes, || {
+            held_at_the_restart = Some(planes.open_now().len());
+        })
+        .expect("it restarts");
+
+        assert_eq!(
+            held_at_the_restart,
+            Some(0),
+            "the restart was asked for before every plane was written and let go of"
+        );
+        assert!(charter_core::reopen::take_restart_to_update(&config));
     }
 
     #[test]

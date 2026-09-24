@@ -1356,11 +1356,6 @@ pub fn run() {
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
             app.manage(Showing::default());
-            // Whether this launch puts the last quit's window set back. Read from THIS
-            // process's arguments, once: a second launch's `--no-restore` would be about a
-            // restore that happened hours ago, so the single-instance closure never reaches
-            // this.
-            app.manage(Restoring::from_args(std::env::args()));
 
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
             // reads `unknown` — never a hook pointed at a path that is not there. It is a
@@ -1417,6 +1412,15 @@ pub fn run() {
             // directory again. A launch that finds no plane leaves the app holding none,
             // which is a state and not a failure.
             let launch = planes::at_launch(&app.state::<Planes>(), std::env::current_dir());
+            // Whether this launch puts the last quit's window set back. Read from THIS
+            // process's arguments, once: a second launch's `--no-restore` would be about a
+            // restore that happened hours ago, so the single-instance closure never reaches
+            // this. After `at_launch`, which is what learns whether this launch follows a
+            // restart to update — and that one always restores (charter-app#251).
+            app.manage(Restoring::after(
+                std::env::args(),
+                app.state::<Planes>().restarted_to_update(),
+            ));
             app.manage(launch);
             reached("the record is back");
 

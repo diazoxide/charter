@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowUpCircle, LoaderCircle, Pin } from "lucide-react";
 import { commands, type Offer, type PinReport, type PlaneId } from "./bindings";
-import { ChatState } from "./NeedsYou";
-import { type Ending } from "./QuitWarning";
+import { EndingList, MidTurnSaid, mightBeMidTurn, type Ending } from "./QuitWarning";
 import { ReleaseNotes } from "./ReleaseNotes";
 
 /**
@@ -180,12 +180,14 @@ export function useUpdates(): Updates {
   const restart = useCallback(() => {
     void commands
       .restartToUpdate()
-      .then((done) => {
+      .then((done) => (done.status === "error" ? done.error : undefined))
+      // A command that never reached the core is a refusal too, and says so in the same place.
+      .catch((why: unknown) => `charter could not ask to restart: ${String(why)}`)
+      .then((refused) => {
         // On success nothing comes back: the process is on its way out.
-        if (done.status === "error")
-          setState((was) => (was.kind === "installed" ? { ...was, refused: done.error } : was));
-      })
-      .catch(() => {});
+        if (refused !== undefined)
+          setState((was) => (was.kind === "installed" ? { ...was, refused } : was));
+      });
   }, []);
 
   return { state, channel, check, install, choose, restart };
@@ -231,57 +233,41 @@ export function UpdateItem({
   /** Whether the dialog is asking about the chats a restart would interrupt. */
   const [asking, setAsking] = useState(false);
   const { state, channel, check, install, choose, restart } = updates;
-  const midTurn = chats.filter((chat) => chat.state === "running");
+  // Live, so a chat that finishes its turn while the ask is up leaves it.
+  const midTurn = chats.filter(mightBeMidTurn);
   const words = said(state);
   const toRestart = () => {
-    if (midTurn.length > 0) setAsking(true);
-    else restart();
+    if (midTurn.length === 0) return restart();
+    setOpen(false);
+    setAsking(true);
   };
   const label = words
     ? `Updates: ${words}`
     : `Updates — ${channel ?? "…"} channel, nothing new known`;
   return (
-    <Dialog.Root
-      open={open}
-      onOpenChange={(now) => {
-        setOpen(now);
-        if (!now) setAsking(false);
-      }}
-    >
-      <Dialog.Trigger asChild>
-        <button
-          type="button"
-          className={`status-update update-${state.kind}`}
-          // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
-          // down (`docs/ui-primitives.md`, charter-app#189).
-          tabIndex={0}
-          data-testid="status-update"
-          aria-label={label}
-          title={label}
-        >
-          {state.kind === "installing" ? (
-            <LoaderCircle aria-hidden="true" className="spinning" />
-          ) : (
-            <ArrowUpCircle aria-hidden="true" />
-          )}
-          {words && <span> {words}</span>}
-        </button>
-      </Dialog.Trigger>
-      <Dialog.Portal>
-        <Dialog.Overlay className="asking" />
-        {asking ? (
-          <MidTurn
-            chats={midTurn}
-            onWait={() => {
-              setAsking(false);
-              setOpen(false);
-            }}
-            onRestart={() => {
-              setAsking(false);
-              restart();
-            }}
-          />
-        ) : (
+    <>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Trigger asChild>
+          <button
+            type="button"
+            className={`status-update update-${state.kind}`}
+            // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+            // down (`docs/ui-primitives.md`, charter-app#189).
+            tabIndex={0}
+            data-testid="status-update"
+            aria-label={label}
+            title={label}
+          >
+            {state.kind === "installing" ? (
+              <LoaderCircle aria-hidden="true" className="spinning" />
+            ) : (
+              <ArrowUpCircle aria-hidden="true" />
+            )}
+            {words && <span> {words}</span>}
+          </button>
+        </Dialog.Trigger>
+        <Dialog.Portal>
+          <Dialog.Overlay className="asking" />
           <Dialog.Content className="warning update" aria-describedby="update-what">
             <Dialog.Title>Updates</Dialog.Title>
             <div id="update-what">
@@ -370,20 +356,36 @@ export function UpdateItem({
               </Dialog.Close>
             </div>
           </Dialog.Content>
-        )}
-      </Dialog.Portal>
-    </Dialog.Root>
+        </Dialog.Portal>
+      </Dialog.Root>
+      {asking && (
+        <MidTurn
+          chats={midTurn}
+          onWait={() => setAsking(false)}
+          onRestart={() => {
+            setAsking(false);
+            restart();
+          }}
+        />
+      )}
+    </>
   );
 }
 
 /**
- * What Restart to update asks when a chat is mid-turn: continue, or wait for it.
+ * What Restart to update asks when a chat could be mid-turn: restart now, or wait.
  *
- * The quit warning's shape (`QuitWarning.tsx`), because it is the same act for those chats —
- * they are ended — with one difference the words carry: the restart puts them back. **Wait is
- * first and focused**, so the answer a stray Return finds interrupts nothing, and Escape is
- * Wait too, through the dialog's own close. The list is live: a chat that finishes its turn
- * while this is up leaves it.
+ * The quit warning's rows and sentences (`QuitWarning.tsx`), because it is the same act for
+ * those chats — they are ended — with one difference the words carry: the restart offers them
+ * back. A chat that reports no state is asked about too, for the quit warning's reason: it could
+ * be mid-turn and charter would never know.
+ *
+ * **Radix's `AlertDialog`**, per `docs/ui-primitives.md`: it arrives because of what the
+ * operator pressed, a click outside answers nothing, and its `Cancel` — **Wait** — is first and
+ * has the keyboard, so the answer a stray Return or Escape finds interrupts nothing. **Restart
+ * now is a plain button, not the primitive's `Action`**, for `RelaunchAsk`'s reason: an `Action`
+ * also closes the dialog, and closing is this dialog's Wait. The list is live: a chat that
+ * finishes its turn while this is up leaves it.
  */
 function MidTurn({
   chats,
@@ -394,59 +396,41 @@ function MidTurn({
   onWait: () => void;
   onRestart: () => void;
 }) {
-  const wait = useRef<HTMLButtonElement>(null);
-  // Only when there is more than one project: naming it on every row of a window holding one
-  // is a column that says the same thing all the way down.
-  const several = new Set(chats.map((chat) => chat.project ?? "")).size > 1;
   return (
-    <Dialog.Content
-      className="warning"
-      aria-labelledby="restart-mid-turn"
-      aria-describedby="restart-mid-turn-said"
-      // A click outside answers nothing. Wait, Escape and Restart now are the ways out.
-      onInteractOutside={(e) => e.preventDefault()}
-      onOpenAutoFocus={(e) => {
-        e.preventDefault();
-        wait.current?.focus();
+    <AlertDialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onWait();
       }}
     >
-      <Dialog.Title id="restart-mid-turn">Restart to update</Dialog.Title>
-      <ul className="ending">
-        {chats.map((chat) => (
-          <li key={chat.key}>
-            <span className="what">{chat.harness ?? "shell"}</span>
-            <span className="who">{chat.name}</span>
-            <ChatState state={chat.state} />
-            {several && chat.project && <code className="where">{chat.project}</code>}
-            {chat.cwd && <code className="where">{chat.cwd}</code>}
-          </li>
-        ))}
-      </ul>
-      <div id="restart-mid-turn-said">
-        {chats.length > 0 ? (
-          <p className="honest mid-turn" role="alert">
-            {chats.length === 1
-              ? `${chats[0].name} is mid-turn and will be interrupted.`
-              : `${chats.length} chats are mid-turn and will be interrupted.`}
-          </p>
-        ) : (
-          <p className="honest">No chat is mid-turn now.</p>
-        )}
-        <p className="honest">
-          Every chat is offered back when charter starts again. Wait to let a turn finish, or
-          restart now.
-        </p>
-      </div>
-      {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
-      <div className="answer">
-        <button ref={wait} type="button" tabIndex={0} onClick={onWait}>
-          Wait
-        </button>
-        <button type="button" className="ends-it" tabIndex={0} onClick={onRestart}>
-          Restart now
-        </button>
-      </div>
-    </Dialog.Content>
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay className="asking" />
+        <AlertDialog.Content className="warning" aria-describedby="restart-mid-turn-said">
+          <AlertDialog.Title>Restart to update</AlertDialog.Title>
+          <EndingList chats={chats} />
+          <AlertDialog.Description asChild>
+            <div id="restart-mid-turn-said">
+              <MidTurnSaid chats={chats} />
+              <p className="honest">
+                Every chat is offered back when charter starts again. Wait to let a turn finish, or
+                restart now.
+              </p>
+            </div>
+          </AlertDialog.Description>
+          {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
+          <div className="answer">
+            <AlertDialog.Cancel asChild>
+              <button type="button" tabIndex={0}>
+                Wait
+              </button>
+            </AlertDialog.Cancel>
+            <button type="button" className="ends-it" tabIndex={0} onClick={onRestart}>
+              Restart now
+            </button>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   );
 }
 

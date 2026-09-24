@@ -138,7 +138,7 @@ describe("the update button", () => {
       within(await screen.findByRole("dialog")).getByRole("button", { name: "Restart to update" }),
     );
 
-    const asking = await screen.findByRole("dialog");
+    const asking = await screen.findByRole("alertdialog");
     expect(within(asking).getByRole("alert").textContent).toBe(
       "ide.1 is mid-turn and will be interrupted.",
     );
@@ -148,7 +148,8 @@ describe("the update button", () => {
     await userEvent.click(within(asking).getByRole("button", { name: "Wait" }));
 
     expect(restarted).toBe(0);
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("restarts over a chat that is mid-turn when the operator says to continue", async () => {
@@ -167,9 +168,9 @@ describe("the update button", () => {
     await userEvent.click(
       within(await screen.findByRole("dialog")).getByRole("button", { name: "Restart to update" }),
     );
-    const asking = await screen.findByRole("dialog");
+    const asking = await screen.findByRole("alertdialog");
     expect(within(asking).getByRole("alert").textContent).toBe(
-      "2 chats are mid-turn and will be interrupted.",
+      "2 sessions are mid-turn and will be interrupted.",
     );
     // Two projects, and a chat's name is only unique inside its own.
     expect(within(asking).getByText("alpha")).toBeInTheDocument();
@@ -177,6 +178,30 @@ describe("the update button", () => {
     await userEvent.click(within(asking).getByRole("button", { name: "Restart now" }));
 
     expect(restarted).toBe(1);
+  });
+
+  it("asks about a chat that reports no state, which could be mid-turn", async () => {
+    let restarted = 0;
+    render(
+      <UpdateItem
+        updates={updates(
+          { kind: "installed", version: "0.2.0" },
+          { restart: () => (restarted += 1) },
+        )}
+        chats={[chat("shell.1", "unknown")]}
+      />,
+    );
+
+    await userEvent.click(button());
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Restart to update" }),
+    );
+
+    const asking = await screen.findByRole("alertdialog");
+    expect(asking.textContent).toContain(
+      "shell.1 reports no state, so charter cannot tell whether it is mid-turn.",
+    );
+    expect(restarted).toBe(0);
   });
 
   it("says why charter would not restart, and still offers it", async () => {

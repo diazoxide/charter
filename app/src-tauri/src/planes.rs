@@ -529,14 +529,14 @@ impl Planes {
         let roots = self.launch_roots(&relaunching, restoring);
         let restarted = relaunching.after_update;
         drop(relaunching);
-        let mut after_update = false;
+        let mut flagged = false;
         let projects: Vec<Waiting> = roots
             .into_iter()
             .filter_map(|root| {
                 // A record charter refuses to read puts nothing back, so it is not asked about;
                 // the refusal is said where it always was, when the project is opened.
                 let record = reopen::read_or_refusal(&root).ok()?;
-                after_update |= record.relaunch_after_update;
+                flagged |= record.relaunch_after_update;
                 record.holds_anything().then_some(Waiting {
                     chats: record.chats.len(),
                     views: record.views.len(),
@@ -546,7 +546,7 @@ impl Planes {
             .collect();
         (!projects.is_empty()).then_some(Relaunchable {
             projects,
-            after_update: restarted && after_update,
+            after_update: restarted && flagged,
         })
     }
 
@@ -604,6 +604,11 @@ impl Planes {
             }
         }
         roots
+    }
+
+    /// Whether this launch follows a restart to update — it took the word the restart left.
+    pub fn restarted_to_update(&self) -> bool {
+        self.relaunching().after_update
     }
 
     fn relaunching(&self) -> MutexGuard<'_, Relaunching> {
@@ -1275,6 +1280,18 @@ impl Restoring {
         Self(!args.into_iter().any(|arg| arg == NO_RESTORE))
     }
 
+    /// [`Self::from_args`], unless this launch follows a restart to update (charter-app#251),
+    /// which always puts the window set back.
+    ///
+    /// Tauri's restart starts the new process with the old one's arguments, so a charter that
+    /// was started with `--no-restore` would otherwise come back from Restart to update without
+    /// the projects it was holding a moment earlier — and without asking about their chats. The
+    /// flag was about the launch it was typed at, which the restart continues rather than
+    /// repeats.
+    pub fn after(args: impl IntoIterator<Item = String>, restarted_to_update: bool) -> Self {
+        Self(restarted_to_update || Self::from_args(args).0)
+    }
+
     pub fn wanted(&self) -> bool {
         self.0
     }
@@ -1406,7 +1423,9 @@ fn resolving_with(
     resolve: impl FnOnce(&Path) -> Result<PathBuf, String>,
 ) -> Launch {
     // Taken whatever this launch opens, so the word a restart to update left is spent by the
-    // launch after it and by no later one (charter-app#251).
+    // launch after it and by no later one (charter-app#251). This runs once per process, from
+    // `setup`: a second launch's arguments reach the running app through the single-instance
+    // plugin and never come back through here to take the word a second time.
     planes.relaunching().after_update = planes
         .config
         .as_deref()
@@ -3016,6 +3035,17 @@ mod tests {
 
         assert_eq!(back.planes, vec![one, two]);
         assert_eq!(back.active, Some(0), "the first window's front tab is lost");
+    }
+
+    #[test]
+    fn a_restart_to_update_puts_the_window_set_back_even_under_no_restore() {
+        // Tauri restarts with the old process's arguments, and the projects held a moment ago
+        // are what Restart to update is to reopen.
+        let args = || ["charter-app".to_owned(), NO_RESTORE.to_owned()];
+
+        assert!(Restoring::after(args(), true).wanted());
+        assert!(!Restoring::after(args(), false).wanted());
+        assert!(Restoring::after(["charter-app".to_owned()], false).wanted());
     }
 
     #[test]

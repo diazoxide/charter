@@ -466,6 +466,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     ]);
 
     await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    await screen.findByRole("alertdialog");
     await waitFor(() => expect(screen.getByRole("button", { name: "Wait" })).toHaveFocus());
 
     expect(await reachableByKeyboard()).toEqual(['button "Wait"', 'button "Restart now"']);
