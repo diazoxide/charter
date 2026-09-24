@@ -19,6 +19,13 @@ A machine switches with `charter update --channel dev` (or `stable`). The app ch
 after launch and every six hours after that. It **installs only when asked**, because
 installing restarts charter and charter owns every running session.
 
+On macOS and Linux an installed update waits in place, and the title bar says **Restart to
+update**. That writes down every chat and view tab each open project holds, ends the chats, and
+restarts into the new version, which asks whether to reopen every session or start fresh, says
+that it restarted to install an update, and has **Reopen all** as the answer in front. A chat
+that is mid-turn is named first, and the operator chooses to restart now or wait. On Windows
+the installer closes charter itself, as it always did.
+
 ## 1. The updater keypair (minisign): mandatory
 
 This is the key the app checks every update against before it installs anything. Without it

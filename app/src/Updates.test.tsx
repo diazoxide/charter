@@ -12,6 +12,7 @@ import {
   type UpdateState,
 } from "./Updates";
 import type { Offer, PinReport } from "./bindings";
+import type { Ending } from "./QuitWarning";
 
 /**
  * **The update offer and the pin, on the status line.**
@@ -36,11 +37,17 @@ function updates(state: UpdateState, over: Partial<Updates> = {}): Updates {
     check: () => {},
     install: () => {},
     choose: () => {},
+    restart: () => {},
     ...over,
   };
 }
 
 const button = () => screen.getByTestId("status-update");
+
+/** One chat the window holds, as the quit warning is given it. */
+function chat(name: string, state: Ending["state"], project?: string): Ending {
+  return { key: `${project ?? ""}/${name}`, project, name, harness: "claude", cwd: null, state };
+}
 
 describe("the update button", () => {
   it("is an icon with no words while nothing new is known", () => {
@@ -88,21 +95,106 @@ describe("the update button", () => {
     expect(within(dialog).getByRole("button", { name: "Check now" })).toBeInTheDocument();
   });
 
-  it("finishes an install through Quit, which is the warning that lists the chats", async () => {
-    const asked: string[] = [];
-    mockIPC((cmd) => {
-      asked.push(cmd);
-      return null;
-    });
+  it("says Restart to update once the update is installed", () => {
     render(<UpdateItem updates={updates({ kind: "installed", version: "0.2.0" })} />);
+
+    expect(button().textContent?.trim()).toBe("Restart to update");
+    expect(button()).toHaveAccessibleName("Updates: Restart to update");
+  });
+
+  it("restarts at once when no chat is mid-turn", async () => {
+    let restarted = 0;
+    render(
+      <UpdateItem
+        updates={updates(
+          { kind: "installed", version: "0.2.0" },
+          { restart: () => (restarted += 1) },
+        )}
+        chats={[chat("ide.1", "done"), chat("ide.2", "waiting")]}
+      />,
+    );
 
     await userEvent.click(button());
     const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Quit charter…" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Restart to update" }));
 
-    await waitFor(() => expect(asked).toContain("ask_to_quit"));
-    // Never `quit`: that ends the chats without the warning.
-    expect(asked).not.toContain("quit");
+    expect(restarted).toBe(1);
+  });
+
+  it("names each chat that is mid-turn and waits when asked to", async () => {
+    let restarted = 0;
+    render(
+      <UpdateItem
+        updates={updates(
+          { kind: "installed", version: "0.2.0" },
+          { restart: () => (restarted += 1) },
+        )}
+        chats={[chat("ide.1", "running", "alpha"), chat("ide.2", "done", "alpha")]}
+      />,
+    );
+
+    await userEvent.click(button());
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Restart to update" }),
+    );
+
+    const asking = await screen.findByRole("dialog");
+    expect(within(asking).getByRole("alert").textContent).toBe(
+      "ide.1 is mid-turn and will be interrupted.",
+    );
+    expect(within(asking).queryByText("ide.2")).toBeNull();
+    // The answer that ends nothing is the one a stray Return finds.
+    await waitFor(() => expect(within(asking).getByRole("button", { name: "Wait" })).toHaveFocus());
+    await userEvent.click(within(asking).getByRole("button", { name: "Wait" }));
+
+    expect(restarted).toBe(0);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("restarts over a chat that is mid-turn when the operator says to continue", async () => {
+    let restarted = 0;
+    render(
+      <UpdateItem
+        updates={updates(
+          { kind: "installed", version: "0.2.0" },
+          { restart: () => (restarted += 1) },
+        )}
+        chats={[chat("ide.1", "running", "alpha"), chat("ide.1", "running", "beta")]}
+      />,
+    );
+
+    await userEvent.click(button());
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Restart to update" }),
+    );
+    const asking = await screen.findByRole("dialog");
+    expect(within(asking).getByRole("alert").textContent).toBe(
+      "2 chats are mid-turn and will be interrupted.",
+    );
+    // Two projects, and a chat's name is only unique inside its own.
+    expect(within(asking).getByText("alpha")).toBeInTheDocument();
+    expect(within(asking).getByText("beta")).toBeInTheDocument();
+    await userEvent.click(within(asking).getByRole("button", { name: "Restart now" }));
+
+    expect(restarted).toBe(1);
+  });
+
+  it("says why charter would not restart, and still offers it", async () => {
+    render(
+      <UpdateItem
+        updates={updates({
+          kind: "installed",
+          version: "0.2.0",
+          refused: "no update has been installed",
+        })}
+      />,
+    );
+
+    await userEvent.click(button());
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).getByRole("alert").textContent).toBe("no update has been installed");
+    expect(within(dialog).getByRole("button", { name: "Restart to update" })).toBeInTheDocument();
   });
 
   it("spins only while installing", () => {
@@ -217,6 +309,33 @@ describe("useUpdates", () => {
     expect(result.current.state.kind).toBe("installing");
     await act(() => emit("update://installed", "0.2.0"));
     expect(result.current.state).toEqual({ kind: "installed", version: "0.2.0" });
+  });
+
+  it("asks the core to restart to update, and says why when it will not", async () => {
+    clearMocks();
+    mockIPC(
+      (cmd) => {
+        asked.push(cmd);
+        if (cmd === "update_channel") return "stable";
+        if (cmd === "restart_to_update") throw "no update has been installed";
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+    const { result } = await mounted();
+    await act(() => emit("update://installed", "0.2.0"));
+
+    await act(async () => {
+      result.current.restart();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(asked).toContain("restart_to_update");
+    expect(result.current.state).toEqual({
+      kind: "installed",
+      version: "0.2.0",
+      refused: "no update has been installed",
+    });
   });
 
   it("drops an offer from the old channel when the channel changes, and looks again", async () => {

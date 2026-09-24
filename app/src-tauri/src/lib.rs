@@ -1154,6 +1154,7 @@ fn commands() -> Builder<tauri::Wry> {
             updates::set_update_channel,
             updates::check_for_update,
             updates::install_update,
+            updates::restart_to_update,
             extensions::installed_extensions,
             extensions::pick_extension,
             extensions::install_extension,
@@ -1295,6 +1296,7 @@ pub fn run() {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
+            app.manage(updates::Installed::default());
             // The extension executor (ADR 0041 stage 2). Managed for the table of
             // programs it is running, which `Exit` below empties.
             app.manage(views::Views::default());

@@ -11,6 +11,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- When an update is installed, the title bar says **Restart to update**. It restarts charter
+  into the new version and offers every chat and view tab back, with **Reopen all** as the
+  answer in front and a line saying charter restarted to install an update. A chat that is
+  mid-turn is named first, and you choose to restart now or wait. If the restart does not come
+  back, the next launch offers the same sessions.
+  ([#251](https://github.com/diazoxide/charter-app/issues/251))
+
 ### Fixed
 
 - On Linux and Windows the app menu no longer takes a key the chat's shell owns: `Ctrl-C` in a

@@ -421,6 +421,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
           check: () => {},
           install: () => {},
           choose: () => {},
+          restart: () => {},
         }}
       />,
     );
@@ -433,6 +434,37 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Check now"',
       'button "Close"',
     ]);
+  });
+
+  it("reaches Restart to update, and both answers of the ask about a chat mid-turn", async () => {
+    // The restart ends every chat, so it is the same kind of act Install was — and the ask in
+    // front of it has the safe answer first.
+    render(
+      <UpdateItem
+        updates={{
+          state: { kind: "installed", version: "0.2.0" },
+          channel: "stable",
+          check: () => {},
+          install: () => {},
+          choose: () => {},
+          restart: () => {},
+        }}
+        chats={[{ key: "a/1", name: "ide.1", harness: "claude", cwd: null, state: "running" }]}
+      />,
+    );
+    await userEvent.click(screen.getByTestId("status-update"));
+    await screen.findByRole("dialog");
+
+    expect(await reachableByKeyboard()).toEqual([
+      'radio "stable"',
+      'button "Restart to update"',
+      'button "Close"',
+    ]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Wait" })).toHaveFocus());
+
+    expect(await reachableByKeyboard()).toEqual(['button "Wait"', 'button "Restart now"']);
   });
 
   it("reaches both answers of every two-answer dialog, forwards", async () => {

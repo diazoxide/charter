@@ -441,6 +441,26 @@ export const commands = {
 	 */
 	installUpdate: () => __TAURI_INVOKE<void>("install_update"),
 	/**
+	 *  Restart into the update this process installed, and put back what was open
+	 *  (charter-app#251).
+	 * 
+	 *  Every plane's record is written first, saying it was written by a restart to update, and
+	 *  every session is ended — [`crate::planes::Planes::let_go_of_all_to_update`] — so all of it
+	 *  is on disk before the restart is asked for. The launch that follows asks #250's question,
+	 *  with "charter restarted to install an update." in it and **Reopen all** in front, and a
+	 *  launch that does not follow — the relaunch failed, the operator started charter by hand a
+	 *  day later — reads the same records and asks the same question.
+	 * 
+	 *  **Which chats are mid-turn is asked before this, by the window**, which is where each
+	 *  chat's state is drawn (`Updates.tsx`). By the time this runs the operator has said to go.
+	 * 
+	 *  Tauri's own restart, never one of charter's: `request_restart` runs the exit event first
+	 *  (the single-instance plugin gives up its socket there, so the new process is not handed
+	 *  straight back to this one), then starts the binary the bundle now names — on macOS read
+	 *  from the new `Info.plist`, because an update may have renamed it.
+	 */
+	restartToUpdate: () => typedError<null, string>(__TAURI_INVOKE("restart_to_update")),
+	/**
 	 *  What has contributed what to this window.
 	 * 
 	 *  It reads the disk — every installed extension's whole directory, to re-take the fingerprint

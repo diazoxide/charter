@@ -30,8 +30,10 @@
 //! 0030), and the status line's item for it asks `adopt::version_report`, never a comparison
 //! of its own. This module deliberately does not restate it.
 
+use std::sync::{Mutex, PoisonError};
+
 use charter_core::updates::{Channel, NotAKey, pubkey_usable};
-use tauri::{Emitter, Runtime};
+use tauri::{Emitter, Manager, Runtime};
 use tauri_plugin_updater::UpdaterExt;
 
 /// The event a finished check emits, carrying [`Offer`] or nothing.
@@ -40,6 +42,32 @@ pub const CHECKED: &str = "update://checked";
 pub const INSTALLED: &str = "update://installed";
 /// The event a check or an install that went wrong emits, carrying the sentence.
 pub const FAILED: &str = "update://failed";
+
+/// The version this process has installed and not yet restarted into, if any.
+///
+/// Held so that [`restart_to_update`] refuses without one: the launch after that restart says
+/// "charter restarted to install an update", and a restart that installed nothing would make
+/// the one sentence it adds untrue.
+#[derive(Default)]
+pub struct Installed(Mutex<Option<String>>);
+
+impl Installed {
+    /// `version` is in place and runs from the next start.
+    pub fn now(&self, version: &str) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(version.to_owned());
+    }
+
+    /// The version waiting for a restart, or the sentence saying there is none.
+    pub fn version(&self) -> Result<String, String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                "no update has been installed, so there is nothing to restart into".to_owned()
+            })
+    }
+}
 
 /// What a check found, for the window and for the notification.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -212,6 +240,7 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
     .await;
     match done {
         Ok(version) => {
+            app.state::<Installed>().now(&version);
             let _ = app.emit(INSTALLED, version);
         }
         Err(why) => {
@@ -276,6 +305,36 @@ pub fn install_update(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(install(app));
 }
 
+/// Restart into the update this process installed, and put back what was open
+/// (charter-app#251).
+///
+/// Every plane's record is written first, saying it was written by a restart to update, and
+/// every session is ended — [`crate::planes::Planes::let_go_of_all_to_update`] — so all of it
+/// is on disk before the restart is asked for. The launch that follows asks #250's question,
+/// with "charter restarted to install an update." in it and **Reopen all** in front, and a
+/// launch that does not follow — the relaunch failed, the operator started charter by hand a
+/// day later — reads the same records and asks the same question.
+///
+/// **Which chats are mid-turn is asked before this, by the window**, which is where each
+/// chat's state is drawn (`Updates.tsx`). By the time this runs the operator has said to go.
+///
+/// Tauri's own restart, never one of charter's: `request_restart` runs the exit event first
+/// (the single-instance plugin gives up its socket there, so the new process is not handed
+/// straight back to this one), then starts the binary the bundle now names — on macOS read
+/// from the new `Info.plist`, because an update may have renamed it.
+#[tauri::command]
+#[specta::specta]
+pub fn restart_to_update(
+    app: tauri::AppHandle,
+    installed: tauri::State<'_, Installed>,
+    planes: tauri::State<'_, crate::planes::Planes>,
+) -> Result<(), String> {
+    installed.version()?;
+    planes.let_go_of_all_to_update();
+    app.request_restart();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +344,18 @@ mod tests {
         let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))
             .expect("tauri.conf.json is beside this crate");
         serde_json::from_str(&text).expect("tauri.conf.json is json")
+    }
+
+    #[test]
+    fn a_restart_to_update_is_refused_until_an_update_is_installed() {
+        // The launch after it would say "charter restarted to install an update", and that
+        // sentence is only ever true when one was.
+        let installed = Installed::default();
+        assert!(installed.version().is_err());
+
+        installed.now("0.2.0");
+
+        assert_eq!(installed.version(), Ok("0.2.0".to_owned()));
     }
 
     #[test]
