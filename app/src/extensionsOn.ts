@@ -2,58 +2,79 @@ import { useEffect, useSyncExternalStore } from "react";
 import { commands, type PlaneId } from "./bindings";
 
 /**
- * **Which extensions are on in each project this window holds** (charter-app#253, ADR 0048).
+ * **Which extensions are on in each project this window holds** (charter-app#253, ADR 0048) —
+ * and in each of its workspaces (charter-app#280).
  *
  * The window surveys this machine's extensions once — panels, views and themes — because a
  * survey re-hashes every installed extension's directory. What a project has on is a cheaper
  * question (`extensions_on`: the record and the project's two files, no directory read), and the
- * answer is the core's `extension::project::resolve`, the one function every consumer takes. So
- * each project asks it once, keeps it here, and the window keeps of its survey only what the
- * project in front has on.
+ * answer is the core's `extension::project::resolve`, the one function every consumer takes. A
+ * workspace's `workspace.json` is a layer of that answer, between the project's Shared and Local
+ * files, so the question is asked per project AND workspace: the focused workspace's answer is
+ * what its panels and views are filtered by. `undefined` asks for the project with no workspace.
  *
- * **Until a project has answered, nothing an extension contributes is drawn for it.** An
- * extension turned off in a project must not flash on while the question is out; charter's own
- * panels and views never wait on this.
+ * **Until one has answered, nothing an extension contributes is drawn for it.** An extension
+ * turned off must not flash on while the question is out; charter's own panels and views never
+ * wait on this.
  */
 
-const known = new Map<PlaneId, ReadonlySet<string>>();
-/** The newest question out per project: an answer to an older one is dropped, so a save made
- *  while the first question was out is never overwritten by what the file said before it. */
-const latest = new Map<PlaneId, number>();
+type Where = { plane: PlaneId; workspace: string | undefined };
+
+const whereOf = new Map<string, Where>();
+const known = new Map<string, ReadonlySet<string>>();
+/** The newest question out per project and workspace: an answer to an older one is dropped, so
+ *  a save made while the first question was out is never overwritten by what the file said
+ *  before it. */
+const latest = new Map<string, number>();
 const listeners = new Set<() => void>();
+
+function keyOf(plane: PlaneId, workspace: string | undefined): string {
+  return `${plane}\u0000${workspace ?? ""}`;
+}
 
 function tell() {
   for (const listener of listeners) listener();
 }
 
-function ask(plane: PlaneId) {
-  const mine = (latest.get(plane) ?? 0) + 1;
-  latest.set(plane, mine);
+function ask(plane: PlaneId, workspace: string | undefined) {
+  const key = keyOf(plane, workspace);
+  whereOf.set(key, { plane, workspace });
+  const mine = (latest.get(key) ?? 0) + 1;
+  latest.set(key, mine);
   void commands
-    .extensionsOn(plane)
+    .extensionsOn(plane, workspace ?? null)
     .then((said) => (said.status === "ok" ? (said.data ?? []) : undefined))
     .catch(() => undefined)
     .then((ids) => {
-      if (latest.get(plane) !== mine) return;
+      if (latest.get(key) !== mine) return;
       // A question that failed is not an answer: nothing is kept, so the next component to ask
       // asks again rather than a project going without its extensions until something is saved.
       if (ids === undefined) {
-        latest.delete(plane);
+        latest.delete(key);
         return;
       }
-      known.set(plane, new Set(ids));
+      known.set(key, new Set(ids));
       tell();
     });
 }
 
-/** Ask `plane` again — after its settings were saved, or an extension was approved. */
+/** Ask `plane` again, for every workspace it was asked about — after its settings or a
+ *  workspace's were saved, or an extension was approved. With no plane, every one. */
 export function extensionsChanged(plane?: PlaneId) {
-  for (const one of plane === undefined ? [...latest.keys()] : [plane]) ask(one);
+  for (const key of [...latest.keys()]) {
+    const where = whereOf.get(key);
+    if (where !== undefined && (plane === undefined || where.plane === plane)) {
+      ask(where.plane, where.workspace);
+    }
+  }
 }
 
-/** What `plane` has on, or `undefined` until it has said. */
-export function extensionsOnIn(plane: PlaneId | undefined): ReadonlySet<string> | undefined {
-  return plane === undefined ? undefined : known.get(plane);
+/** What `plane` has on in `workspace`, or `undefined` until it has said. */
+export function extensionsOnIn(
+  plane: PlaneId | undefined,
+  workspace?: string,
+): ReadonlySet<string> | undefined {
+  return plane === undefined ? undefined : known.get(keyOf(plane, workspace));
 }
 
 function subscribe(listener: () => void) {
@@ -64,15 +85,19 @@ function subscribe(listener: () => void) {
 }
 
 /** {@link extensionsOnIn}, for a component that redraws when it changes, asking once. */
-export function useExtensionsOn(plane: PlaneId | undefined): ReadonlySet<string> | undefined {
+export function useExtensionsOn(
+  plane: PlaneId | undefined,
+  workspace?: string,
+): ReadonlySet<string> | undefined {
   useEffect(() => {
-    if (plane !== undefined && !latest.has(plane)) ask(plane);
-  }, [plane]);
-  return useSyncExternalStore(subscribe, () => extensionsOnIn(plane));
+    if (plane !== undefined && !latest.has(keyOf(plane, workspace))) ask(plane, workspace);
+  }, [plane, workspace]);
+  return useSyncExternalStore(subscribe, () => extensionsOnIn(plane, workspace));
 }
 
 /** For tests: forget every answer. */
 export function forgetExtensionsOn() {
   known.clear();
   latest.clear();
+  whereOf.clear();
 }

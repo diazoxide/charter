@@ -180,6 +180,7 @@ pub(crate) async fn open_view(
     from: Option<String>,
     view: String,
     key: String,
+    workspace: Option<String>,
 ) -> Result<ViewAnswer, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let Some(extension) = from else {
@@ -211,9 +212,10 @@ pub(crate) async fn open_view(
             });
         }
         let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
-        // What the project this view is in says about the extension, read at the press like
-        // the rest of the gate (ADR 0048).
-        let project = extension::project::Choices::read(&root);
+        // What the project this view is in says about the extension — and the workspace whose
+        // strip it is on (charter-app#280) — read at the press like the rest of the gate
+        // (ADR 0048).
+        let project = extension::project::Choices::read_in(&root, workspace.as_deref());
         executor
             .ask(
                 &config,

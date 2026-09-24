@@ -381,7 +381,7 @@ pub struct ProjectExtension {
     pub name: String,
     /// `on`, `off`, `needs-approval` or `not-installed`.
     pub state: String,
-    /// `default`, `shared` or `local`: which file decided `state`.
+    /// `default`, `shared`, `workspace` or `local`: which file decided `state`.
     pub source: String,
     pub settings: Vec<ProjectExtensionSetting>,
     /// Each value a file set that charter did not use, and why.
@@ -391,14 +391,17 @@ pub struct ProjectExtension {
 /// A value a file set that charter did not use.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct ProjectExtensionIgnored {
-    /// `charter.toml` or `charter.local.toml`: the section that says it.
+    /// `charter.toml`, `charter.local.toml` or `workspaces/<ws>/workspace.json`: the section
+    /// that says it.
     pub file: String,
     /// The core's sentence.
     pub why: String,
 }
 
 /// Every extension this machine has installed, and every one this project's files name, with
-/// what each is in this project — `extension::project::resolve`, shaped for the wire.
+/// what each is in this project — `extension::project::resolve`, shaped for the wire. In
+/// `workspace`, when one is named, that workspace's settings are a layer too (charter-app#280):
+/// what the Workspace settings tab shows.
 ///
 /// It takes a survey, so it re-hashes every installed extension's directory: an extension that
 /// changed since its yes reads as needing approval here, which is the truth the tab is for. It
@@ -408,13 +411,14 @@ pub struct ProjectExtensionIgnored {
 pub async fn project_extensions(
     planes: tauri::State<'_, crate::planes::Planes>,
     plane: crate::planes::PlaneId,
+    workspace: Option<String>,
 ) -> Result<Vec<ProjectExtension>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let config = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         project_rows(
             &extension::survey(&config),
-            &extension::project::Choices::read(&root),
+            &extension::project::Choices::read_in(&root, workspace.as_deref()),
         )
     })
     .await
@@ -465,13 +469,21 @@ fn project_rows(
                     .ignored
                     .into_iter()
                     .map(|one| ProjectExtensionIgnored {
-                        file: one.source.file().unwrap_or_default().to_owned(),
+                        file: file_of(one.source, choices),
                         why: one.why,
                     })
                     .collect(),
             }
         })
         .collect()
+}
+
+/// The file a source is, as a section of a settings tab names it: a workspace's by its path.
+fn file_of(source: extension::project::Source, choices: &extension::project::Choices) -> String {
+    match (source, choices.workspace_file()) {
+        (extension::project::Source::Workspace, Some(file)) => file,
+        (source, _) => source.file().unwrap_or_default().to_owned(),
+    }
 }
 
 fn as_text(value: &extension::SettingValue) -> String {
@@ -481,8 +493,9 @@ fn as_text(value: &extension::SettingValue) -> String {
     }
 }
 
-/// The ids of the extensions that are on in this project: what the window keeps of the panels,
-/// views and themes it surveyed once, while this project is in front.
+/// The ids of the extensions that are on in this project — in `workspace`, when one is named
+/// (charter-app#280): what the window keeps of the panels, views and themes it surveyed once,
+/// while this project and that workspace are in front.
 ///
 /// **The record alone, and no extension's directory** — so it is cheap enough to ask for every
 /// project a window holds. What it cannot see, an extension that changed since its yes, the
@@ -493,13 +506,14 @@ fn as_text(value: &extension::SettingValue) -> String {
 pub async fn extensions_on(
     planes: tauri::State<'_, crate::planes::Planes>,
     plane: crate::planes::PlaneId,
+    workspace: Option<String>,
 ) -> Result<Vec<String>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let config = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         on_ids(
             &extension::read(&config),
-            &extension::project::Choices::read(&root),
+            &extension::project::Choices::read_in(&root, workspace.as_deref()),
         )
     })
     .await
@@ -824,6 +838,28 @@ mod tests {
             vec!["solarized".to_owned()],
             "a project that says nothing kept the machine-wide answer"
         );
+    }
+
+    #[test]
+    fn a_workspace_that_turns_an_extension_off_has_it_off_there_and_names_its_file() {
+        // charter-app#280: the focused workspace's settings are a layer of what the window keeps.
+        let (_dir, at, config) = made();
+        let found = extension::install(&config, &at).expect("installed");
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        let choices = extension::project::Choices::default().in_workspace(
+            "alpha",
+            Some(
+                r#"{"settings": {"extensions": {"solarized": {"enabled": false, "settings": {"x": true}}}}}"#,
+            ),
+        );
+
+        let rows = project_rows(&extension::survey(&config), &choices);
+        assert_eq!(
+            (rows[0].state.as_str(), rows[0].source.as_str()),
+            ("off", "workspace")
+        );
+        assert_eq!(rows[0].ignored[0].file, "workspaces/alpha/workspace.json");
+        assert!(on_ids(&extension::read(&config), &choices).is_empty());
     }
 
     #[test]

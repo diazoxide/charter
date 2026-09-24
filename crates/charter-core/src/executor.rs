@@ -989,14 +989,23 @@ fn in_this_project(
         ));
     };
     if effective.state == State::Off {
-        // Off is only ever decided by a file: with neither saying, an approved extension is on.
-        let file = effective
-            .source
-            .file()
-            .unwrap_or(crate::profiles::COMMITTED_FILE);
+        // Off is only ever decided by a file: with none saying, an approved extension is on.
+        let (file, whose, tab) = match (effective.source, project.workspace_file()) {
+            (project::Source::Workspace, Some(file)) => {
+                (file, "this workspace", "Workspace settings")
+            }
+            (source, _) => (
+                source
+                    .file()
+                    .unwrap_or(crate::profiles::COMMITTED_FILE)
+                    .to_owned(),
+                "this project",
+                "Project settings",
+            ),
+        };
         return Err(format!(
-            "'{extension}' is turned off in {file} for this project, so charter will not start \
-             its program here. Turn it on in Project settings to use this view."
+            "'{extension}' is turned off in {file} for {whose}, so charter will not start its \
+             program here. Turn it on in {tab} to use this view."
         ));
     }
     Ok((!declared.settings.is_empty()).then(|| effective.settings_json()))

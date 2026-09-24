@@ -120,6 +120,7 @@ function draw(
     onOpenView?: (view: ViewRef, title: string) => void;
     onAsk?: () => void;
     strict?: boolean;
+    workspace?: string;
   } = {},
 ) {
   const pane = (
@@ -127,6 +128,7 @@ function draw(
       plane={PLANE}
       view={view}
       title={on.title ?? "steward"}
+      workspace={on.workspace}
       waits={on.waits ?? false}
       offered={on.offered ?? []}
       onOpenView={on.onOpenView ?? (() => {})}
@@ -159,7 +161,9 @@ describe("the persona view", () => {
 
     await screen.findByText("routing");
 
-    expect(opened).toEqual([{ plane: PLANE, from: null, view: "persona", key: "steward" }]);
+    expect(opened).toEqual([
+      { plane: PLANE, from: null, view: "persona", key: "steward", workspace: null },
+    ]);
   });
 
   it("draws the definition, how much it remembers, and the memories as the list primitive", async () => {
@@ -225,12 +229,24 @@ describe("the persona view", () => {
 describe("an extension's view", () => {
   it("is asked of its program and drawn as a chart, a list to a screen reader", async () => {
     const { opened } = core(() => CHARTED);
-    draw(THE_PLANE_S_STATISTICS, { title: "Statistics", offered: [STATISTICS] });
+    draw(THE_PLANE_S_STATISTICS, {
+      title: "Statistics",
+      offered: [STATISTICS],
+      workspace: "alpha",
+    });
 
     const chart = await screen.findByTestId("chart");
 
+    // With the workspace whose strip it is on: its settings are a layer of the gate at the
+    // press (charter-app#280).
     expect(opened).toEqual([
-      { plane: PLANE, from: "persona-statistics", view: "statistics", key: "" },
+      {
+        plane: PLANE,
+        from: "persona-statistics",
+        view: "statistics",
+        key: "",
+        workspace: "alpha",
+      },
     ]);
     expect(within(chart).getByRole("list", { name: "Memories per persona" })).toBeInTheDocument();
     expect(within(chart).getAllByRole("listitem")[0]).toHaveTextContent("steward3 · default · 75%");

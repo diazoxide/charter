@@ -10,10 +10,12 @@ import {
   type ProjectExtension,
   type ProjectTheme,
   type ProjectSettings as Both,
+  type SettingsChange,
   type SettingsEdit,
   type SettingsFile,
   type SettingsStep,
   type SettingsValue,
+  type WorkspaceSettings as OneWorkspace,
 } from "./bindings";
 
 /**
@@ -77,7 +79,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
     // What is in force is read with the files, so a save shows its effect. A refusal leaves the
     // list empty: the group then says there is nothing, and the files' forms still work.
     void commands
-      .projectExtensions(plane)
+      .projectExtensions(plane, null)
       .then((said) => {
         if (newest()) setExtensions(said.status === "ok" ? (said.data ?? []) : []);
       })
@@ -127,23 +129,129 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         credential.
       </p>
       <Section
-        plane={plane}
         file={both.shared}
+        testid="settings-shared"
         title="Shared"
         who="Committed; your team sees this."
         groups={SHARED}
         extensions={extensions}
         theme={theme}
+        send={(base, change) => commands.saveProjectSettings(plane, "shared", base, change)}
         onSaved={saved}
       />
       <Section
-        plane={plane}
         file={both.local}
+        testid="settings-local"
         title="Local"
         who="This machine only. Gitignored; charter will not write it anywhere git would commit it."
         groups={LOCAL}
         extensions={extensions}
         theme={theme}
+        send={(base, change) => commands.saveProjectSettings(plane, "local", base, change)}
+        onSaved={saved}
+      />
+    </div>
+  );
+}
+
+/**
+ * **Workspace settings** (charter-app#280, ADR 0048): the `settings` of one workspace's
+ * `workspace.json`, in a view tab of its own (`tabs.workspaceSettingsView`).
+ *
+ * The layer between the project's two files: `charter.toml`, then this workspace, then
+ * `charter.local.toml`. A workspace refines its project for the team, and this machine's Local
+ * file still has the last word; none of the three reaches past this machine's approval. It holds
+ * the one group a workspace can set today, Extensions — the same group as Project settings',
+ * asked with `project_extensions` for this workspace, so each extension says which layer
+ * decided it. A form only: the manifest holds more than settings, and charter keeps the rest.
+ */
+export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; workspace: string }) {
+  const [file, setFile] = useState<OneWorkspace | { trouble: string }>();
+  const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  /** The newest read out, as in {@link ProjectSettings}. */
+  const reading = useRef(0);
+
+  const read = useCallback(() => {
+    const mine = ++reading.current;
+    const newest = () => reading.current === mine;
+    void commands
+      .workspaceSettings(plane, workspace)
+      .then((said) => {
+        if (newest()) setFile(said.status === "ok" ? said.data : { trouble: said.error });
+      })
+      .catch((err: unknown) => {
+        if (newest()) setFile({ trouble: String(err) });
+      });
+    void commands
+      .projectExtensions(plane, workspace)
+      .then((said) => {
+        if (newest()) setExtensions(said.status === "ok" ? (said.data ?? []) : []);
+      })
+      .catch(() => {
+        if (newest()) setExtensions([]);
+      });
+  }, [plane, workspace]);
+
+  useEffect(read, [read]);
+
+  const saved = useCallback(() => {
+    read();
+    // What the window keeps of its surveyed panels and views for this workspace.
+    extensionsChanged(plane);
+  }, [plane, read]);
+
+  if (file === undefined) {
+    return (
+      <p className="pending" aria-busy="true">
+        <LoaderCircle className="node-icon spinning" />
+        Reading the settings…
+      </p>
+    );
+  }
+  if ("trouble" in file) {
+    return (
+      <p className="trouble" role="alert">
+        {file.trouble}
+      </p>
+    );
+  }
+  return (
+    <div className="settings">
+      <p className="note">
+        Read in this order: charter.toml, then this workspace, then charter.local.toml — the
+        workspace refines its project for the team, and this machine has the last word. Never put a
+        secret here: keep it in a vault and name it as <code>vault:&lt;vault&gt;/&lt;key&gt;</code>.
+      </p>
+      <Section
+        file={file}
+        testid="settings-workspace"
+        title="Workspace"
+        who={
+          file.live
+            ? "Committed with this LIVE workspace; your team sees this."
+            : "This workspace is not LIVE, so its workspace.json stays on this machine."
+        }
+        groups={WORKSPACE}
+        extensions={extensions}
+        theme={undefined}
+        rawView={false}
+        send={(base, change) =>
+          commands
+            .saveWorkspaceSettings(
+              plane,
+              workspace,
+              base,
+              change.kind === "edits" ? change.edits : [],
+            )
+            .then((said) =>
+              said.status === "error"
+                ? said
+                : {
+                    status: "ok" as const,
+                    data: said.data.kind === "refused" ? said.data : { kind: "saved" as const },
+                  },
+            )
+        }
         onSaved={saved}
       />
     </div>
@@ -159,6 +267,9 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
  * new value makes. Every value a control holds is text while it is being typed; `edits` is where
  * it becomes a key.
  */
+/** What a section shows of a file: a project's settings file, or a workspace's manifest. */
+type Shown = Pick<SettingsFile, "file" | "exists" | "text" | "refusals" | "parsed" | "fields">;
+
 type Control = {
   id: string;
   label: string;
@@ -170,9 +281,9 @@ type Control = {
   unset?: string;
   /** What a `choice` shows for each of its values, when that is not the value itself. */
   labels?: Readonly<Record<string, string>>;
-  read: (file: SettingsFile) => string;
+  read: (file: Shown) => string;
   /** The edits `draft` makes to `file`, the file it was typed over. */
-  edits: (draft: string, file: SettingsFile) => SettingsEdit[];
+  edits: (draft: string, file: Shown) => SettingsEdit[];
 };
 
 /** A heading and what is under it. `extensions` is what the core says is in force in this
@@ -181,13 +292,13 @@ type Group = {
   title: string;
   note?: string;
   controls: (
-    file: SettingsFile,
+    file: Shown,
     extensions: readonly ProjectExtension[],
     theme: ProjectTheme | undefined,
   ) => Control[];
   /** Sentences about this file the group says under its heading. */
   notes?: (
-    file: SettingsFile,
+    file: Shown,
     extensions: readonly ProjectExtension[],
     theme: ProjectTheme | undefined,
   ) => string[];
@@ -203,7 +314,7 @@ function same(a: readonly SettingsStep[], b: readonly SettingsStep[]): boolean {
   );
 }
 
-function valueAt(file: SettingsFile, path: readonly SettingsStep[]): SettingsValue | undefined {
+function valueAt(file: Shown, path: readonly SettingsStep[]): SettingsValue | undefined {
   return file.fields.find((field) => same(field.path, path))?.value;
 }
 
@@ -266,7 +377,7 @@ function entries(draft: string): string[] {
 }
 
 /** The places `[[forge]]` blocks are at, and the names `[harness.<name>]` tables have. */
-function forgeBlocks(file: SettingsFile): number[] {
+function forgeBlocks(file: Shown): number[] {
   const at = new Set<number>();
   for (const { path } of file.fields) {
     const [first, second] = path;
@@ -275,7 +386,7 @@ function forgeBlocks(file: SettingsFile): number[] {
   return [...at];
 }
 
-function profiles(file: SettingsFile): string[] {
+function profiles(file: Shown): string[] {
   const names = new Set<string>();
   for (const { path } of file.fields) {
     const [first, second] = path;
@@ -289,7 +400,7 @@ function profiles(file: SettingsFile): string[] {
  *  removed and the others are left exactly as they were written. */
 function envAt(name: string): Control {
   const env = key("harness", name, "env");
-  const pairs = (file: SettingsFile) =>
+  const pairs = (file: Shown) =>
     file.fields
       .filter((field) => field.path.length === 4 && same(field.path.slice(0, 3), env))
       .map((field) => [field.path[3].key ?? "", shown(field.value)] as const);
@@ -321,9 +432,16 @@ function envAt(name: string): Control {
   };
 }
 
+/** Where a source is, as the end of a sentence: a file, or this workspace. */
+function where(source: string): string {
+  if (source === "local") return "charter.local.toml";
+  if (source === "workspace") return "this workspace";
+  return "charter.toml";
+}
+
 /** What an extension is in this project, and why, in a sentence after its name. */
 function standing(it: ProjectExtension): string {
-  const file = it.source === "local" ? "charter.local.toml" : "charter.toml";
+  const file = where(it.source);
   switch (it.state) {
     case "on":
       return it.source === "default"
@@ -363,9 +481,7 @@ function onOffAt(path: SettingsStep[], label: string, hint: string, unset: strin
 
 /** Where a resolved setting came from, as the end of a sentence. */
 function from(source: string): string {
-  if (source === "local") return "from charter.local.toml";
-  if (source === "shared") return "from charter.toml";
-  return "its default";
+  return source === "default" ? "its default" : `from ${where(source)}`;
 }
 
 /**
@@ -508,6 +624,9 @@ const SHARED: Group[] = [
   themeGroup("not set — the window's own theme"),
 ];
 
+/** A workspace's `settings` (charter-app#280): what a workspace can set today. */
+const WORKSPACE: Group[] = [EXTENSIONS];
+
 /** `charter.local.toml`: `[harness]`, `[extensions]` and `[theme]`, which is all its readers read
  *  there. */
 const LOCAL: Group[] = [
@@ -543,27 +662,38 @@ const LOCAL: Group[] = [
 
 type Mode = "form" | "raw";
 
+/** What a save answered, as a section reads it. */
+type Sent =
+  | { status: "ok"; data: { kind: "saved" } | { kind: "refused"; reasons: string[] } }
+  | { status: "error"; error: string };
+
 function Section({
-  plane,
   file,
+  testid,
   title,
   who,
   groups,
   extensions,
   theme,
+  send,
   onSaved,
+  rawView = true,
 }: {
-  plane: PlaneId;
-  file: SettingsFile;
+  file: Shown;
+  testid: string;
   title: string;
   who: string;
   groups: readonly Group[];
   extensions: readonly ProjectExtension[];
   theme: ProjectTheme | undefined;
+  /** Sends a change against the text it was typed over: `null` for a file not there yet. */
+  send: (base: string | null, change: SettingsChange) => Promise<Sent>;
   onSaved: () => void;
+  /** Whether the file is also offered as raw TOML. A workspace's manifest is not (#280). */
+  rawView?: boolean;
 }) {
   const heading = useId();
-  const [mode, setMode] = useState<Mode>(file.parsed ? "form" : "raw");
+  const [mode, setMode] = useState<Mode>(file.parsed || !rawView ? "form" : "raw");
   /** What the operator has typed into a control, by its id, until it is saved or discarded. */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [raw, setRaw] = useState(file.text);
@@ -579,7 +709,7 @@ function Section({
     setSeen(file.text);
     setDrafts({});
     setRaw(file.text);
-    if (!file.parsed) setMode("raw");
+    if (!file.parsed && rawView) setMode("raw");
   }
 
   const controls = groups.map((group) => ({
@@ -590,6 +720,8 @@ function Section({
   const all = controls.flatMap((one) => one.controls);
   const changed = all.filter((one) => one.id in drafts && drafts[one.id] !== one.read(file));
   const dirty = mode === "form" ? changed.length > 0 : raw !== file.text;
+  /** The file's own name, which the save button says: `workspace.json`, not its path. */
+  const named = file.file.split("/").pop() ?? file.file;
 
   const discard = () => {
     setDrafts({});
@@ -599,16 +731,12 @@ function Section({
 
   const save = async () => {
     setSaving(true);
-    const said = await commands
-      .saveProjectSettings(
-        plane,
-        file.which,
-        file.exists ? file.text : null,
-        mode === "raw"
-          ? { kind: "raw", text: raw }
-          : { kind: "edits", edits: changed.flatMap((one) => one.edits(drafts[one.id], file)) },
-      )
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    const said = await send(
+      file.exists ? file.text : null,
+      mode === "raw"
+        ? { kind: "raw", text: raw }
+        : { kind: "edits", edits: changed.flatMap((one) => one.edits(drafts[one.id], file)) },
+    ).catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     setSaving(false);
     if (said.status === "error") {
       setRefused([said.error]);
@@ -621,11 +749,7 @@ function Section({
   };
 
   return (
-    <section
-      className="settings-file"
-      aria-labelledby={heading}
-      data-testid={`settings-${file.which}`}
-    >
+    <section className="settings-file" aria-labelledby={heading} data-testid={testid}>
       <header className="settings-head">
         <h3 id={heading}>{title}</h3>
         <p className="settings-who">
@@ -642,28 +766,33 @@ function Section({
         />
       )}
 
-      <RadioGroup.Root
-        className="settings-mode"
-        orientation="horizontal"
-        value={mode}
-        onValueChange={(to) => setMode(to as Mode)}
-        aria-label={`How to edit ${file.file}`}
-      >
-        <ModeItem
-          value="form"
-          disabled={(mode === "raw" && dirty) || !file.parsed}
-          onPick={setMode}
+      {rawView && (
+        <RadioGroup.Root
+          className="settings-mode"
+          orientation="horizontal"
+          value={mode}
+          onValueChange={(to) => setMode(to as Mode)}
+          aria-label={`How to edit ${file.file}`}
         >
-          Form
-        </ModeItem>
-        <ModeItem value="raw" disabled={mode === "form" && dirty} onPick={setMode}>
-          Raw TOML
-        </ModeItem>
-      </RadioGroup.Root>
-      {dirty && <p className="settings-hint">Save or discard these changes to switch views.</p>}
+          <ModeItem
+            value="form"
+            disabled={(mode === "raw" && dirty) || !file.parsed}
+            onPick={setMode}
+          >
+            Form
+          </ModeItem>
+          <ModeItem value="raw" disabled={mode === "form" && dirty} onPick={setMode}>
+            Raw TOML
+          </ModeItem>
+        </RadioGroup.Root>
+      )}
+      {rawView && dirty && (
+        <p className="settings-hint">Save or discard these changes to switch views.</p>
+      )}
 
       {mode === "form" ? (
-        controls.map(({ group, controls: under, notes }) => (
+        // A file no form can read, with no raw view to mend it in, shows only why (above).
+        (file.parsed ? controls : []).map(({ group, controls: under, notes }) => (
           <fieldset key={group.title} className="settings-group">
             <legend>{group.title}</legend>
             {group.note && <p className="settings-hint">{group.note}</p>}
@@ -700,7 +829,7 @@ function Section({
 
       <div className="settings-actions">
         <button type="button" tabIndex={0} disabled={!dirty || saving} onClick={() => void save()}>
-          {saving ? "Saving…" : `Save ${file.file}`}
+          {saving ? "Saving…" : `Save ${named}`}
         </button>
         <button type="button" tabIndex={0} disabled={!dirty || saving} onClick={discard}>
           Discard

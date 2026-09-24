@@ -89,6 +89,8 @@ import {
   PREFERENCES_VIEW,
   SETTINGS_TITLE,
   SETTINGS_VIEW,
+  workspaceSettingsTitle,
+  workspaceSettingsView,
   renameTab,
   viewKey,
   selectTab,
@@ -205,21 +207,6 @@ export function PlaneView({
    *  count that goes up each time the window asks for it on THIS project's strip. */
   preferencesAsked?: number;
 }) {
-  /**
-   * **What this project has on** (charter-app#253, ADR 0048): the core's answer for this plane's
-   * two files over this machine's approvals. The window's survey is filtered by it here, once, so
-   * the side region, the view buttons and the palette's view rows all read one list. Charter's
-   * own panels (`from` null) are not an extension's and are never filtered.
-   */
-  const on = useExtensionsOn(plane);
-  const contributed = useMemo(
-    () => surveyedPanels.filter((panel) => panel.from === null || (on?.has(panel.from) ?? false)),
-    [on, surveyedPanels],
-  );
-  const views = useMemo(
-    () => surveyedViews.filter((view) => on?.has(view.extension) ?? false),
-    [on, surveyedViews],
-  );
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
    *  It keeps listening while the project is behind another one, which is what lets its tab
@@ -723,6 +710,22 @@ export function PlaneView({
    *  outside every workspace is not a workspace on the plane, so there is no directory to
    *  read and every region says so rather than drawing another workspace's answer. */
   const ofWorkspace = focused === OUTSIDE ? undefined : focused;
+  /**
+   * **What this project has on in the focused workspace** (charter-app#253, #280, ADR 0048): the
+   * core's answer for this plane's two files and the workspace's `workspace.json`, over this
+   * machine's approvals. The window's survey is filtered by it here, once, so the side region,
+   * the view buttons and the palette's view rows all read one list. Charter's own panels (`from`
+   * null) are not an extension's and are never filtered.
+   */
+  const on = useExtensionsOn(plane, ofWorkspace);
+  const contributed = useMemo(
+    () => surveyedPanels.filter((panel) => panel.from === null || (on?.has(panel.from) ?? false)),
+    [on, surveyedPanels],
+  );
+  const views = useMemo(
+    () => surveyedViews.filter((view) => on?.has(view.extension) ?? false),
+    [on, surveyedViews],
+  );
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
@@ -1108,10 +1111,13 @@ export function PlaneView({
    *
    * **Opening one runs nothing.** An extension's view asks its program when its tab draws it,
    * which is a separate, visible step (`Views.tsx`); the persona view reads the plane.
+   *
+   * `workspace` files it on that strip instead: a workspace's own settings belong on its strip
+   * whichever one is in front (charter-app#280).
    */
   const showView = useCallback(
-    (view: ViewRef, title: string) => {
-      const next = change((tabs) => openView(tabs, view, title, focused ?? OUTSIDE));
+    (view: ViewRef, title: string, on?: string) => {
+      const next = change((tabs) => openView(tabs, view, title, on ?? focused ?? OUTSIDE));
       const workspace =
         next.inFront === undefined ? undefined : workspaceOf(next, next.inFront, filedIn);
       if (workspace !== undefined) setPicked(workspace);
@@ -1132,6 +1138,13 @@ export function PlaneView({
     handled.current = settingsAsked;
     showView(SETTINGS_VIEW, SETTINGS_TITLE);
   }, [settingsAsked, showView]);
+
+  /** A workspace's settings tab (charter-app#280), on that workspace's strip. */
+  const openWorkspaceSettings = useCallback(
+    (workspace: string) =>
+      showView(workspaceSettingsView(workspace), workspaceSettingsTitle(workspace), workspace),
+    [showView],
+  );
 
   /** The Preferences tab, opened the same way and for the same reason (charter-app#283). */
   const preferencesHandled = useRef(preferencesAsked);
@@ -1563,6 +1576,7 @@ export function PlaneView({
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       openSettings: windowDoes.openSettings,
+      openWorkspaceSettings,
       openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),
@@ -1577,6 +1591,7 @@ export function PlaneView({
       mergeWorktree,
       newTab,
       newTabIn,
+      openWorkspaceSettings,
       pickSpot,
       pinTab,
       pinWorkspace,
@@ -2984,6 +2999,7 @@ function LayoutPanes({
               plane={plane}
               view={content.view}
               title={name}
+              workspace={content.workspace === OUTSIDE ? undefined : content.workspace}
               waits={content.waits === true}
               offered={offered}
               onOpenView={onOpenView}

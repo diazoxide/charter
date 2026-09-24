@@ -205,7 +205,7 @@ describe("a persona's own tab", () => {
     expect(tab).toHaveTextContent("steward");
     expect(tabNames()).toEqual(["steward 1", "steward"]);
     expect(asked.filter((one) => one.cmd === "open_view").map((one) => one.args)).toEqual([
-      { plane: PLANE, from: null, view: "persona", key: "steward" },
+      { plane: PLANE, from: null, view: "persona", key: "steward", workspace: "alpha" },
     ]);
   });
 
@@ -360,7 +360,14 @@ describe("view tabs at a relaunch", () => {
     await userEvent.click(within(waiting).getByRole("button", { name: "Ask persona-statistics" }));
     await waitFor(() =>
       expect(asked.filter((one) => one.cmd === "open_view").map((one) => one.args)).toEqual([
-        { plane: PLANE, from: "persona-statistics", view: "statistics", key: "" },
+        {
+          plane: PLANE,
+          from: "persona-statistics",
+          view: "statistics",
+          key: "",
+          // The strip it came back on: its settings are part of the gate (charter-app#280).
+          workspace: "alpha",
+        },
       ]),
     );
   });

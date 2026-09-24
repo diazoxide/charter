@@ -13,10 +13,13 @@
 //!    kept. A project that wants one this machine has not approved reads as
 //!    [`State::NeedsApproval`] and stays off.
 //! 2. **Shared**, `charter.toml`'s `[extensions.<id>]`.
-//! 3. **Local**, `charter.local.toml`'s `[extensions.<id>]`, which overrides Shared **key by
-//!    key**: `enabled` on its own, and each setting on its own.
+//! 3. **The workspace**, in one: `settings.extensions.<id>` in its `workspace.json`
+//!    (charter-app#280, [`Choices::read_in`]). A workspace refines its project for the team.
+//! 4. **Local**, `charter.local.toml`'s `[extensions.<id>]`, which has the last word. Each layer
+//!    overrides the ones before it **key by key**: `enabled` on its own, and each setting on its
+//!    own.
 //!
-//! With neither file naming it, an approved extension is **on** — the machine-wide list keeps
+//! With no layer naming it, an approved extension is **on** — the machine-wide list keeps
 //! working exactly as it did, and a project's choices only ever narrow or name it.
 //!
 //! # What a file cannot do
@@ -47,20 +50,24 @@ pub const SETTINGS: &str = "settings";
 /// Where an answer came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
-    /// Neither file said: the machine's answer, or the setting's declared default.
+    /// No file said: the machine's answer, or the setting's declared default.
     Default,
     /// `charter.toml`.
     Shared,
+    /// The `settings` of the workspace's `workspace.json` (charter-app#280).
+    Workspace,
     /// `charter.local.toml`.
     Local,
 }
 
 impl Source {
-    /// The file this source is, or `None` for [`Source::Default`].
+    /// The file this source is, or `None` for [`Source::Default`]. A workspace's is
+    /// `workspace.json`; which workspace's, [`Choices::workspace_file`] says.
     pub fn file(self) -> Option<&'static str> {
         match self {
             Self::Default => None,
             Self::Shared => Some(COMMITTED_FILE),
+            Self::Workspace => Some(crate::settings::workspace::FILE),
             Self::Local => Some(LOCAL_FILE),
         }
     }
@@ -69,6 +76,7 @@ impl Source {
         match self {
             Self::Default => "default",
             Self::Shared => "shared",
+            Self::Workspace => "workspace",
             Self::Local => "local",
         }
     }
@@ -106,20 +114,47 @@ struct Said {
     settings: BTreeMap<String, toml::Value>,
 }
 
-/// What a project's two files say about extensions, by id.
+/// What a project's two files say about extensions, by id — and, in a workspace, what that
+/// workspace's `workspace.json` says (charter-app#280).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Choices {
     shared: BTreeMap<String, Said>,
+    /// Empty outside a workspace, and for a workspace whose manifest says nothing.
+    workspace: BTreeMap<String, Said>,
     local: BTreeMap<String, Said>,
+    /// The workspace these were read in, when they were.
+    workspace_name: Option<String>,
 }
 
 impl Choices {
     /// The two files' text, as they would be read: `None` for a file that is not there.
     pub fn from_text(shared: Option<&str>, local: Option<&str>) -> Self {
+        let said = |text: &str| {
+            text.parse::<toml::Table>()
+                .map(|top| said_in(&top))
+                .unwrap_or_default()
+        };
         Self {
-            shared: shared.map(said_in).unwrap_or_default(),
-            local: local.map(said_in).unwrap_or_default(),
+            shared: shared.map(said).unwrap_or_default(),
+            local: local.map(said).unwrap_or_default(),
+            ..Self::default()
         }
+    }
+
+    /// The same choices, in the workspace `name` whose `workspace.json` has this text (`None`:
+    /// it has none). Its `settings` go between Shared and Local. A manifest with none, or one
+    /// that is not JSON, says nothing, which leaves the project's answer exactly as it was.
+    pub fn in_workspace(self, name: &str, manifest: Option<&str>) -> Self {
+        self.with_workspace(
+            name,
+            manifest.and_then(crate::settings::workspace::table_in),
+        )
+    }
+
+    fn with_workspace(mut self, name: &str, settings: Option<toml::Table>) -> Self {
+        self.workspace = settings.as_ref().map(said_in).unwrap_or_default();
+        self.workspace_name = Some(name.to_owned());
+        self
     }
 
     /// The plane at `root`'s two files. A file that cannot be read says nothing.
@@ -128,22 +163,56 @@ impl Choices {
         Self::from_text(text(COMMITTED_FILE).as_deref(), text(LOCAL_FILE).as_deref())
     }
 
-    /// Every id either file names.
+    /// [`Self::read`], in `workspace` when there is one: the answer for whatever is in that
+    /// workspace. A name that is not one of the plane's workspaces reads as a workspace with
+    /// no settings.
+    pub fn read_in(root: &Path, workspace: Option<&str>) -> Self {
+        let project = Self::read(root);
+        match workspace {
+            None => project,
+            Some(name) => {
+                project.with_workspace(name, crate::settings::workspace::read(root, name))
+            }
+        }
+    }
+
+    /// The workspace's file as a sentence names it — `workspaces/<ws>/workspace.json` — or
+    /// `None` outside a workspace.
+    pub fn workspace_file(&self) -> Option<String> {
+        self.workspace_name
+            .as_deref()
+            .map(crate::settings::workspace::named)
+    }
+
+    /// Every layer that can say something, the one with the last word first, with the file a
+    /// sentence names for it.
+    fn layers(&self) -> [(Source, String, &BTreeMap<String, Said>); 3] {
+        [
+            (Source::Local, LOCAL_FILE.to_owned(), &self.local),
+            (
+                Source::Workspace,
+                self.workspace_file().unwrap_or_default(),
+                &self.workspace,
+            ),
+            (Source::Shared, COMMITTED_FILE.to_owned(), &self.shared),
+        ]
+    }
+
+    /// Every id any layer names.
     fn named(&self) -> BTreeSet<&str> {
         self.shared
             .keys()
+            .chain(self.workspace.keys())
             .chain(self.local.keys())
             .map(String::as_str)
             .collect()
     }
 }
 
-/// Every well-formed `[extensions.<id>]` in `text`. What is not well formed is left out here
-/// and refused by [`refusals`], in words.
-fn said_in(text: &str) -> BTreeMap<String, Said> {
-    let Ok(top) = text.parse::<toml::Table>() else {
-        return BTreeMap::new();
-    };
+/// Every well-formed `[extensions.<id>]` in `top` — a whole TOML file, or a workspace's
+/// `settings` read as one. What is not well formed is left out here and refused by
+/// [`refusals`], in words.
+fn said_in(top: &toml::Table) -> BTreeMap<String, Said> {
     let Some(table) = top.get(TABLE).and_then(toml::Value::as_table) else {
         return BTreeMap::new();
     };
@@ -282,16 +351,16 @@ pub fn resolve(installed: &[Installed], choices: &Choices) -> Vec<Effective> {
 }
 
 fn one(id: &str, here: Option<&Installed>, choices: &Choices) -> Effective {
-    let shared = choices.shared.get(id);
-    let local = choices.local.get(id);
-    let (wanted, source) = match (
-        local.and_then(|said| said.enabled),
-        shared.and_then(|said| said.enabled),
-    ) {
-        (Some(on), _) => (on, Source::Local),
-        (None, Some(on)) => (on, Source::Shared),
-        (None, None) => (true, Source::Default),
-    };
+    // Local, then the workspace, then Shared: the first that says, decides.
+    let layers: Vec<(Source, String, Option<&Said>)> = choices
+        .layers()
+        .into_iter()
+        .map(|(source, file, said)| (source, file, said.get(id)))
+        .collect();
+    let (wanted, source) = layers
+        .iter()
+        .find_map(|(source, _, said)| said.and_then(|said| said.enabled).map(|on| (on, *source)))
+        .unwrap_or((true, Source::Default));
     let state = match here {
         _ if !wanted => State::Off,
         None => State::NotInstalled,
@@ -303,18 +372,15 @@ fn one(id: &str, here: Option<&Installed>, choices: &Choices) -> Effective {
     let mut settings = Vec::new();
     if let Some(it) = here {
         for declared in &it.settings {
-            settings.push(setting(id, declared, shared, local, &mut ignored));
+            settings.push(setting(id, declared, &layers, &mut ignored));
         }
-        // A key a file sets that the extension does not declare is said once per file: it
+        // A key a layer sets that the extension does not declare is said once per layer: it
         // reaches nothing, and a form that silently dropped it would read as a value in force.
-        for (source, file, said) in [
-            (Source::Local, LOCAL_FILE, local),
-            (Source::Shared, COMMITTED_FILE, shared),
-        ] {
+        for (source, file, said) in &layers {
             for key in said.map(|said| said.settings.keys()).into_iter().flatten() {
                 if !it.settings.iter().any(|declared| &declared.key == key) {
                     ignored.push(Ignored {
-                        source,
+                        source: *source,
                         why: format!(
                             "{file} sets {TABLE}.{id}.{SETTINGS}.{key}, which {id} does not \
                              declare — charter hands it nothing"
@@ -335,26 +401,22 @@ fn one(id: &str, here: Option<&Installed>, choices: &Choices) -> Effective {
     }
 }
 
-/// One declared setting: Local's value if it is one the setting accepts, else Shared's, else
-/// the default — saying each value that was passed over.
+/// One declared setting: the value of the first layer — Local, the workspace, Shared — that the
+/// setting accepts, else its default, saying each value that was passed over.
 fn setting(
     id: &str,
     declared: &Setting,
-    shared: Option<&Said>,
-    local: Option<&Said>,
+    layers: &[(Source, String, Option<&Said>)],
     ignored: &mut Vec<Ignored>,
 ) -> Resolved {
     let key = &declared.key;
-    let mut candidates = [
-        (Source::Local, LOCAL_FILE, local),
-        (Source::Shared, COMMITTED_FILE, shared),
-    ]
-    .into_iter()
-    .filter_map(|(source, file, said)| {
-        said.and_then(|said| said.settings.get(key))
-            .map(|value| (source, file, value))
-    })
-    .peekable();
+    let mut candidates = layers
+        .iter()
+        .filter_map(|(source, file, said)| {
+            said.and_then(|said| said.settings.get(key))
+                .map(|value| (*source, file, value))
+        })
+        .peekable();
     while let Some((source, file, value)) = candidates.next() {
         match declared.accepts(value) {
             Ok(value) => {
@@ -406,9 +468,14 @@ pub fn key_ok(key: &str) -> bool {
 /// sentence each. Empty when there is nothing to refuse, and when the text is not TOML at all —
 /// that is the file's own reader's refusal, not this one's.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
-    let Ok(top) = text.parse::<toml::Table>() else {
-        return Vec::new();
-    };
+    text.parse::<toml::Table>()
+        .map(|top| refusals_in(&top, file))
+        .unwrap_or_default()
+}
+
+/// [`refusals`], of a table already read — a whole TOML file, or a workspace's `settings` read
+/// as one (`crate::settings::workspace`).
+pub fn refusals_in(top: &toml::Table, file: &str) -> Vec<String> {
     let Some(table) = top.get(TABLE) else {
         return Vec::new();
     };
@@ -472,7 +539,7 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
 }
 
 /// A key as TOML would write it: bare when it can be, quoted when it cannot.
-fn toml_key(key: &str) -> String {
+pub(crate) fn toml_key(key: &str) -> String {
     toml_edit::Key::new(key).display_repr().into_owned()
 }
 

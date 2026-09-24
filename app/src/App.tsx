@@ -768,6 +768,8 @@ function App() {
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       openSettings: windowDoes.openSettings,
+      // A workspace is a project's, and there is no project here to have one.
+      openWorkspaceSettings: () => undefined,
       openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),

@@ -546,23 +546,26 @@ export const commands = {
 	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
 	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
-	 *  what each is in this project — `extension::project::resolve`, shaped for the wire.
+	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
+	 *  `workspace`, when one is named, that workspace's settings are a layer too (charter-app#280):
+	 *  what the Workspace settings tab shows.
 	 * 
 	 *  It takes a survey, so it re-hashes every installed extension's directory: an extension that
 	 *  changed since its yes reads as needing approval here, which is the truth the tab is for. It
 	 *  is asked when the tab is opened and after it saves, never on a timer.
 	 */
-	projectExtensions: (plane: PlaneId) => typedError<ProjectExtension[], string>(__TAURI_INVOKE("project_extensions", { plane })),
+	projectExtensions: (plane: PlaneId, workspace: string | null) => typedError<ProjectExtension[], string>(__TAURI_INVOKE("project_extensions", { plane, workspace })),
 	/**
-	 *  The ids of the extensions that are on in this project: what the window keeps of the panels,
-	 *  views and themes it surveyed once, while this project is in front.
+	 *  The ids of the extensions that are on in this project — in `workspace`, when one is named
+	 *  (charter-app#280): what the window keeps of the panels, views and themes it surveyed once,
+	 *  while this project and that workspace are in front.
 	 * 
 	 *  **The record alone, and no extension's directory** — so it is cheap enough to ask for every
 	 *  project a window holds. What it cannot see, an extension that changed since its yes, the
 	 *  survey already left out of what the window holds, and the executor re-takes the fingerprint
 	 *  at every press. The precedence is `extension::project::resolve`'s, as everywhere else.
 	 */
-	extensionsOn: (plane: PlaneId) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane })),
+	extensionsOn: (plane: PlaneId, workspace: string | null) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane, workspace })),
 	/**
 	 *  This project's theme, with every theme it may pick. It takes a survey, as
 	 *  [`project_extensions`] does, so a pick the extension no longer contributes is said here.
@@ -602,7 +605,7 @@ export const commands = {
 	 *  **Every refusal comes back as the core's sentence**, which names what refused and says what
 	 *  to do. The window draws it where the answer would have been.
 	 */
-	openView: (plane: PlaneId, from: string | null, view: string, key: string) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, from, view, key })),
+	openView: (plane: PlaneId, from: string | null, view: string, key: string, workspace: string | null) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, from, view, key, workspace })),
 	/**
 	 *  The view tabs this plane had open when it was last recorded — at a launch, the ones the
 	 *  record put back. The window opens a tab for each; nothing in one is asked until it is drawn.
@@ -631,6 +634,13 @@ export const commands = {
 	 *  disk since is refused rather than overwritten.
 	 */
 	saveProjectSettings: (plane: PlaneId, which: SettingsWhich, base: string | null, change: SettingsChange) => typedError<SettingsSaved, string>(__TAURI_INVOKE("save_project_settings", { plane, which, base, change })),
+	/**  One workspace's settings, and what charter says about them. */
+	workspaceSettings: (plane: PlaneId, workspace: string) => typedError<WorkspaceSettings, string>(__TAURI_INVOKE("workspace_settings", { plane, workspace })),
+	/**
+	 *  Change one workspace's settings: checked by the readers of the project's files, written into
+	 *  its `workspace.json` with every other key kept (`charter_core::settings::workspace`).
+	 */
+	saveWorkspaceSettings: (plane: PlaneId, workspace: string, base: string | null, edits: SettingsEdit[]) => typedError<WorkspaceSettingsSaved, string>(__TAURI_INVOKE("save_workspace_settings", { plane, workspace, base, edits })),
 	/**
 	 *  What one chat's recorded usage says, or nothing.
 	 * 
@@ -1504,7 +1514,7 @@ export type ProjectExtension = {
 	name: string,
 	/**  `on`, `off`, `needs-approval` or `not-installed`. */
 	state: string,
-	/**  `default`, `shared` or `local`: which file decided `state`. */
+	/**  `default`, `shared`, `workspace` or `local`: which file decided `state`. */
 	source: string,
 	settings: ProjectExtensionSetting[],
 	/**  Each value a file set that charter did not use, and why. */
@@ -1513,7 +1523,10 @@ export type ProjectExtension = {
 
 /**  A value a file set that charter did not use. */
 export type ProjectExtensionIgnored = {
-	/**  `charter.toml` or `charter.local.toml`: the section that says it. */
+	/**
+	 *  `charter.toml`, `charter.local.toml` or `workspaces/<ws>/workspace.json`: the section
+	 *  that says it.
+	 */
 	file: string,
 	/**  The core's sentence. */
 	why: string,
@@ -1955,6 +1968,35 @@ export type WindowTabs = {
 	 */
 	active: number | null,
 };
+
+/**
+ *  A workspace's settings — the `settings` of its `workspace.json` — as the Workspace settings
+ *  tab draws them. The same shape as a [`SettingsFile`], without a raw view: the manifest is
+ *  charter's and the team's, and a form is the one way into it here.
+ */
+export type WorkspaceSettings = {
+	workspace: string,
+	/**  `workspaces/<ws>/workspace.json`. */
+	file: string,
+	/**  Whether it is there. One that is not is created by the first save. */
+	exists: boolean,
+	/**
+	 *  Its text: what a save is checked against, so an edit made elsewhere since is never
+	 *  written over.
+	 */
+	text: string,
+	/**  What charter does not take from its settings as they stand, in the core's words. */
+	refusals: string[],
+	/**  Whether a form can change it: a JSON object, or no file yet. */
+	parsed: boolean,
+	/**  Every value in its settings, by its path under `settings`. */
+	fields: SettingsField[],
+	/**  Whether the workspace is LIVE, so the file is committed and the team sees it. */
+	live: boolean,
+};
+
+/**  What a workspace settings save answered. */
+export type WorkspaceSettingsSaved = { kind: "saved"; settings: WorkspaceSettings } | { kind: "refused"; reasons: string[] };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

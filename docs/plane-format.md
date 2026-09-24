@@ -390,7 +390,7 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[update].channel` | str | default `"stable"`; closed set `stable`,`dev` | Which charter this plane tracks. Unknown → `stable`; the matched **constant** is stored, never the file's string. | stable | `charter/instance.py:2948`, `charter/instance.py:2936` |
 | `[harness].default` | str | default `None` | What bare `charter` launches. Matched against the harness registry's `cli_name`s; a non-match is recorded as `refused` (contained) rather than ignored. | stable | `charter/instance.py:3000`, `charter/instance.py:3088` |
 | `[harness.<name>]` | table | — | **Refused here**: profiles live in `charter.local.toml`. Reported by name. | stable | `charter/profiles.py:316`, `charter/profiles.py:132` |
-| `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one. `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
+| `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one, and in a workspace, that workspace's `settings.extensions.<id>.enabled` in `workspace.json` comes between the two (charter-app#280). `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[extensions.<id>.settings].<key>` | bool or str | optional; absent = the extension's declared default | **charter-app only.** A value for a setting the extension's manifest declares (`bool`, `text` of at most 200 bytes, or one of a `choice`'s words), handed to its program with each question as `settings`. A key it does not declare, or a value it would not accept, is ignored with a sentence and the next file down is used. Overridden key by key by `charter.local.toml`. | stable | `crates/charter-core/src/extension/project.rs` `resolve`, `crates/charter-core/src/extension.rs` `Setting::accepts` |
 | any other key in `[extensions.<id>]` | — | — | Refused by the Project settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/extension/project.rs` `refusals` |
 | `[theme].use` | str | optional; absent = the window's own theme (the operator's `theme.json`, else the first theme from an extension the project has on, else `charter-dark`) | **charter-app only** (charter-app#273, ADR 0048). The theme the window and its terminals draw while this project is in front: `charter-dark`, `charter-light`, `system` (the built-in matching the operating system's appearance, followed live), or `<extension-id>/<theme name>` — split at the first `/`. An extension's theme is drawn only while the extension is on in this project and approved on this machine, and contributes that theme; otherwise the built-in `charter-dark` is drawn and the Project settings tab says why. A value of none of those shapes is ignored with a sentence and the next file down is used. `charter.local.toml`'s value overrides this one. | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
@@ -868,7 +868,10 @@ Two rules hold for the whole area and are not repeated per file:
 - **Read by:** `workspace.read_manifest` (`charter/workspace.py:1500`), `manifest_owner`
   (`charter/workspace.py:1556`), `restore` (`charter/commands_workspace.py:955`), `fork`
   (`charter/commands_workspace.py:1709`), `merge_repo_rows` (`charter/workspace.py:1739`),
-  `last_active` (`charter/workspace.py:4421`).
+  `last_active` (`charter/workspace.py:4421`). In charter-app, its `settings` are read by
+  `crates/charter-core/src/extension/project.rs` (`Choices::read_in`) for the Workspace
+  settings tab, the window's filter on extension panels and views for the focused workspace, and
+  the executor's gate for a view on that workspace's strip (charter-app#280).
 - **Git:** gitignored unless LIVE (`!/workspaces/<ws>/workspace.json`,
   `charter/workspace.py:1397`); it is the first path of the managed block.
 - **Encoding details:**
@@ -895,6 +898,7 @@ Two rules hold for the whole area and are not repeated per file:
 | `updated_at` | string | required | UTC ISO-8601, `timespec="seconds"`, e.g. `2026-09-17T14:01:35+00:00` | stable | `charter/workspace.py:1616`, `charter/commands_workspace.py:940` |
 | `updated_by` | string | required | `$USER` or `"unknown"` for automatic writes (`charter/workspace.py:1633`); `git config user.name` for `snapshot`/`fork` (`charter/commands_workspace.py:860`) | stable | `charter/workspace.py:1679` |
 | `forked_from` | string | present only on a fork | the source workspace | stable | `charter/commands_workspace.py:1714` |
+| `settings` | object | **absent** in every manifest written before charter-app#280, and in one whose workspace sets nothing; absent = the project's answer | **charter-app only** (charter-app#280, ADR 0048). The workspace's layer of the project's settings, read between `charter.toml` and `charter.local.toml`. Its keys mirror those files' tables — see [`settings`](#settings--a-workspaces-layer) below. Every writer keeps it: `snapshot`, `fork` (which inherits it) and a clone's `record_members` mutate the document they read. | stable | `crates/charter-core/src/settings/workspace.rs` |
 | `charter_generated` | string | written on every charter write | sha256 of the rest of the document, canonically serialised | stable | `charter/workspace.py:1529`, `charter/workspace.py:1611` |
 
 **`charter_generated` computation** (a Rust writer must match it byte for byte):
@@ -905,6 +909,35 @@ while the file on disk is `indent=2` in insertion order. Ownership: a document w
 `charter_generated` matches is `"charter"`; anything else present is `"operator"` and the
 automatic writers leave it byte for byte alone; absent is `"absent"`
 (`charter/workspace.py:1556`–`1574`). A present-but-unparseable file is `"operator"`.
+
+#### `settings` — a workspace's layer
+
+**charter-app only** (charter-app#280, ADR 0048). A workspace refines its project for the team:
+for each key, the order is this machine's approval, then `charter.toml` (Shared), then this
+object, then `charter.local.toml` (Local). A workspace's settings are committed with the
+manifest when the workspace is LIVE, and stay on this machine when it is not. Old manifests
+have no `settings` and read exactly as before: the project's answer.
+
+The object mirrors the TOML files' tables, so one reader reads all three: JSON `true`/`false`
+is a TOML bool, a string is a string, an object is a table. **`null` reads as not set**, so the
+next layer down answers.
+
+| Key | Type | Meaning | Source |
+|---|---|---|---|
+| `settings.extensions.<id>.enabled` | bool | Whether this workspace has the extension on, over `charter.toml`'s `[extensions.<id>] enabled` and under `charter.local.toml`'s. It cannot reach past this machine's approval. | `crates/charter-core/src/extension/project.rs` `resolve` |
+| `settings.extensions.<id>.settings.<key>` | bool or str | A value for a setting the extension declares, over Shared's and under Local's, key by key. A value it would not accept is ignored with a sentence and the next layer down is used. | `crates/charter-core/src/extension/project.rs` `resolve` |
+| any other key in `settings.extensions.<id>` | — | Refused by the Workspace settings tab's save, and ignored by the reader, in the words it refuses `[extensions]` in a TOML file. | `crates/charter-core/src/extension/project.rs` `refusals_in` |
+| any other key in `settings`, or `settings` that is not an object | — | Refused by the save, and ignored by the reader: a workspace's settings hold `extensions` and nothing else yet. A theme and harness plugins are later tables (charter-app#281, #282). | `crates/charter-core/src/settings/workspace.rs` `refusals` |
+
+**Written by** the Workspace settings tab (`settings::workspace::save`), which changes only
+`settings`: every other key keeps its place and value, a key removed takes every object it
+leaves empty with it (so removing the last setting gives the manifest back as it was), and the
+`settings` key itself keeps its place. **It keeps the manifest's owner**: a manifest charter
+wrote is stamped again (`charter_generated`), one a hand wrote is written unstamped, so the
+automatic writers keep leaving it alone. A workspace with no manifest gets the one
+`scaffold_manifest` would write, with the settings in it. The save is refused when the file
+changed since the tab read it, for what the reader would refuse (what the file already held
+excepted), and for a secret-shaped value, named by its kind.
 
 ### `workspaces/<ws>/memory/` — the task journal
 

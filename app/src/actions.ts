@@ -205,6 +205,9 @@ export type Does =
    *  front first when it is not. It writes nothing by itself: a save is the tab's, through the
    *  core's own checks. */
   | { verb: "openSettings"; plane: string }
+  /** Opens that workspace's Workspace settings tab (charter-app#280), on that workspace's strip.
+   *  It writes nothing by itself: a save is the tab's, through the core's own checks. */
+  | { verb: "openWorkspaceSettings"; workspace: string }
   /** Opens the Preferences tab (charter-app#283) — this machine's text sizes — on the project
    *  in front. It writes nothing by itself: a size is changed on the tab, or by its keys. */
   | { verb: "openPreferences" }
@@ -393,6 +396,8 @@ export type Doing = {
   closeProject: (plane: string) => Promise<Ran>;
   /** Brings that project to the front and opens its Project settings tab. */
   openSettings: (plane: string) => void;
+  /** Opens that workspace's settings tab on its strip, or brings forward the one already open. */
+  openWorkspaceSettings: (workspace: string) => void;
   /** Opens the Preferences tab, or brings forward the one already open. */
   openPreferences: () => void;
   quit: () => void;
@@ -721,6 +726,15 @@ export function catalogue(now: Now): Offer[] {
         workspace,
       ),
       note: held ? UNPIN_NOTE : PIN_NOTE,
+    });
+    // Its settings (charter-app#280), under the words the project's row uses and told apart by
+    // the name in the note, as `project.settings` rows are.
+    offers.push({
+      ...can(`workspace.settings:${workspace}`, "Workspace settings…", {
+        verb: "openWorkspaceSettings",
+        workspace,
+      }),
+      note: `${workspace}: its workspace.json, between charter.toml and charter.local.toml.`,
     });
   }
 
@@ -1091,6 +1105,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openSettings":
       doing.openSettings(does.plane);
       return DID;
+    case "openWorkspaceSettings":
+      doing.openWorkspaceSettings(does.workspace);
+      return DID;
     case "openPreferences":
       doing.openPreferences();
       return DID;
@@ -1365,6 +1382,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         above: [
           `workspace.focus:${what.workspace}`,
           `workspace.pin:${what.workspace}`,
+          `workspace.settings:${what.workspace}`,
           "workspace.create",
         ],
         below: [`workspace.remove:${what.workspace}`],
