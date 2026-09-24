@@ -10,26 +10,28 @@
 //! unset: the one environment such a test can control, since setting a variable in-process
 //! needs `unsafe` and would leak into every test running beside it.
 //!
-//! **Only the steering names.** `HOME`, `PATH` and the rest pass through untouched, and so does
-//! [`crate::fence::VAR`]: the fence is what stops a test acting on a plane it did not make, and
-//! hiding it would switch that guard off exactly where it matters. A unit test cannot see a
-//! steering variable at all, so what a set one does is proven where it is read for real: by the
-//! integration tests, which run the binary with it set.
+//! **Only the names read here.** `HOME`, `PATH` and the rest pass through untouched, and so
+//! does [`crate::fence::VAR`]: the fence is what stops a test acting on a plane it did not
+//! make, and hiding it would switch that guard off exactly where it matters.
+//! `CHARTER_PERSONA` and `CHARTER_SESSION_ID` are not here either: they reach the library as a
+//! named environment the caller hands in (`active::Ids::of`, the CLI's `workspace_env` and
+//! `persona_env`), which a test builds for itself, and `active`'s own test proves the real
+//! variable is read by setting it on a child — which this module would have hidden.
 //!
-//! The integration tests under `tests/` link the library without `cfg(test)`, so they read the
-//! real environment, as the binaries they drive do; each of those sets or clears the variables
-//! on the child it runs.
+//! A unit test therefore cannot see a steering variable at all; what a set one does is proven
+//! by the integration tests, which link the library without `cfg(test)` and run the binary
+//! with it set. They read the real environment, so a steering variable in the shell that runs
+//! them reaches them too.
 
 use std::ffi::OsString;
 
-/// The variables a process reads to decide what it acts on. `CHARTER_WORKTREES` is here with
-/// the rest: set in the operator's shell, it turns every worktree verb into a refusal.
-pub const STEERING: [&str; 7] = [
+/// The variables the library reads straight from its own environment to decide what it acts
+/// on: the plane, its state directory, the workspace, the harness, and the worktree root —
+/// which, set in the operator's shell, turns every worktree verb into a refusal.
+pub const STEERING: [&str; 5] = [
     "CHARTER_ROOT",
     "CHARTER_HOME",
-    "CHARTER_PERSONA",
     "CHARTER_WORKSPACE",
-    "CHARTER_SESSION_ID",
     "CHARTER_HARNESS",
     "CHARTER_WORKTREES",
 ];
