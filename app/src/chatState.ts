@@ -77,12 +77,17 @@ export function movedAt(states: ChatStates, session: number): number {
  * something it cannot see. Not one already in the queue, which is named there, and not one
  * whose program has ended, which cannot be waiting on anybody.
  */
-export function quietOnes(chats: readonly OpenChat[], states: ChatStates): string[] {
+export function quietOnes(
+  chats: readonly OpenChat[],
+  states: ChatStates,
+  /** What the window calls a chat, when it has a name for it — a tab's (#270). */
+  nameOf: (chat: OpenChat) => string = (chat) => chat.name,
+): string[] {
   return chats
     .filter((chat) => Boolean(chat.unreported))
     .filter((chat) => !states.needsYou.includes(chat.session))
     .filter((chat) => !["done", "failed"].includes(stateOf(states, chat.session)))
-    .map((chat) => chat.name);
+    .map(nameOf);
 }
 
 /**

@@ -3,7 +3,7 @@ import { commands, type TitleBarRoom } from "./bindings";
 import { AboutCharter } from "./About";
 import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
-import { NeedsYouMenu, type Needing } from "./NeedsYou";
+import { NeedsYouMenu, type Needing, type Quiet } from "./NeedsYou";
 import type { Offer } from "./actions";
 
 /**
@@ -100,6 +100,7 @@ export function TitleBar({
    */
   needing?: {
     items: readonly Needing[];
+    quiet: readonly Quiet[];
     onPress: (plane: string, offer: Offer) => void;
   };
 }) {

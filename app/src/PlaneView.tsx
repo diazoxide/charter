@@ -1505,9 +1505,15 @@ export function PlaneView({
   const quiet = useMemo(
     () =>
       sidebar
-        ? quietOnes([...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled], states)
+        ? quietOnes(
+            [...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled],
+            states,
+            // The name its tab carries, as everywhere else a chat is named; the plane's own
+            // name for a chat no tab here holds.
+            (chat) => (alreadyShows(tabs, chat.session) ? nameOf(chat.session) : chat.name),
+          )
         : [],
-    [sidebar, states],
+    [nameOf, sidebar, states, tabs],
   );
 
   /** The chats working in the focused workspace, which is what the explorer files under the
@@ -1775,6 +1781,7 @@ export function PlaneView({
     () => ({
       ending,
       asking,
+      quiet,
       settled,
       offers,
       run,
@@ -1786,7 +1793,7 @@ export function PlaneView({
       read: sidebar !== undefined,
       where: focused === OUTSIDE ? OUTSIDE_TITLE : focused,
     }),
-    [asking, ending, focused, offers, report, run, settled, sidebar],
+    [asking, ending, focused, offers, quiet, report, run, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2293,6 +2300,9 @@ export type PlaneReport = {
   /** Its chats asking for the operator: for its own tab to count, and for the title bar's
    *  list (charter-app#249). */
   asking: Asking[];
+  /** Its chats that can be waiting without saying so (charter-app#52), by name: the title
+   *  bar's faint hand. */
+  quiet: readonly string[];
   /** Whether the core has answered what it already had open. Until it has, "no tabs" is
    *  "not yet", and a quit that read it as "nothing is running" would end the lot. */
   settled: boolean;

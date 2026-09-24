@@ -111,6 +111,21 @@ export type Needing = Asking & {
   project: string;
 };
 
+/** A chat that can be waiting on the operator without being able to say so (charter-app#52):
+ *  a shell, or a harness without charter's hooks. */
+export type Quiet = {
+  name: string;
+  /** The project it is in, named as its tab names it. */
+  project: string;
+};
+
+/** What the faint hand says, in its name and its tooltip. */
+function quietSaid(quiet: readonly Quiet[]): string {
+  return quiet.length === 1
+    ? `Nothing has asked for you, but ${quiet[0].name} can't tell charter it's waiting`
+    : `Nothing has asked for you, but ${quiet.length} chats can't tell charter they're waiting`;
+}
+
 /**
  * **The needs-you queue, in the title bar** (charter-app#249): a hand and a count, and nothing
  * at all when nothing needs you. Pressed, it drops a list of every chat asking across every
@@ -128,15 +143,25 @@ export type Needing = Asking & {
  * arrows' way as it is out of Tab's in the queue it came from, and Delete on the item is the
  * keyboard's way to it ([`ignoreOnDelete`]).
  *
- * **Nothing at zero, as the operator asked** (charter-app#244) — and so no hedge at zero
- * either. The queue's old home said "Nothing has said it needs you" while a chat that cannot
- * report was open (charter-app#52); that sentence is now the palette's `needs.next` row alone.
+ * **Three states, and the middle one is the honest one** (the operator's ruling on #249):
+ *
+ * - a chat has asked: the hand, and the count;
+ * - nothing has asked, but a chat that cannot report is open — a shell, a harness without
+ *   charter's hooks (charter-app#52): a **faint hand with no number**, whose name, tooltip and
+ *   list say which chats those are. "Nothing needs you" would be a claim about a chat charter
+ *   cannot see, and a blank bar says it without words;
+ * - neither: nothing at all.
+ *
+ * The faint hand is the same button with the same menu, so the keyboard reaches it the same way.
  */
 export function NeedsYouMenu({
   items,
+  quiet,
   onPress,
 }: {
   items: readonly Needing[];
+  /** The chats that can be waiting without saying so, across every project. */
+  quiet: readonly Quiet[];
   /** Carries a row out in the project it belongs to. */
   onPress: (plane: string, offer: Offer) => void;
 }) {
@@ -149,31 +174,38 @@ export function NeedsYouMenu({
   /** Whether the list closed because a Go put the keyboard in a chat (see `onCloseAutoFocus`). */
   const went = useRef(false);
   /**
-   * **The keyboard, when the last chat leaves.** The button goes with it, and focus on an
-   * element that goes is focus on the page, where the next key does nothing — the reason
-   * [`ignoreOnDelete`] moves it before the item leaves. With no item left to move to, it goes
-   * to the next Tab stop after where the button was, as Tab would (`tabSequence.moveAlong`).
+   * **The keyboard, when the last chat leaves.** Focus on an element that goes is focus on the
+   * page, where the next key does nothing — the reason [`ignoreOnDelete`] moves it before the
+   * item leaves. With no item left to move to, it goes to the faint hand when there is one, and
+   * otherwise to the next Tab stop after where the button was, as Tab would
+   * (`tabSequence.moveAlong`).
    * `held` is whether the keyboard was on the button or in the
    * list (React's focus events travel out of the portal the list is drawn in); a blur towards
    * somewhere else clears it, and the element being taken away is no such blur.
    */
   const anchor = useRef<HTMLSpanElement>(null);
   const held = useRef(false);
-  const none = items.length === 0;
+  const trigger = useRef<HTMLButtonElement>(null);
+  const asked = items.length > 0;
+  const none = !asked && quiet.length === 0;
   // The button appearing because a chat has just asked, as opposed to having been there when
   // the bar was drawn: only the first is a change worth drawing (`useArrived`).
-  const arrived = useArrived(none);
+  const arrived = useArrived(asked);
   // A list that emptied is a list that closed: the next chat to ask brings the button back,
   // not a menu the operator did not open. Adjusted while rendering, React's own way to reset
   // state on a change of props.
   if (none && open) setOpen(false);
   useLayoutEffect(() => {
-    if (!none || !held.current) return;
+    if (asked || !held.current) return;
     held.current = false;
     const lost = document.activeElement === null || document.activeElement === document.body;
-    if (lost && anchor.current) moveAlong(anchor.current, false);
-  }, [none]);
-  const said = `${items.length} ${items.length === 1 ? "chat needs" : "chats need"} you`;
+    if (!lost) return;
+    if (trigger.current) trigger.current.focus();
+    else if (anchor.current) moveAlong(anchor.current, false);
+  }, [asked]);
+  const said = asked
+    ? `${items.length} ${items.length === 1 ? "chat needs" : "chats need"} you`
+    : quietSaid(quiet);
   return (
     // `display: contents`: a place to be next to, not a box in the bar's row.
     <span
@@ -193,8 +225,9 @@ export function NeedsYouMenu({
             `tabindex` is written down (`docs/ui-primitives.md`, charter-app#186), and Tauri's
             drag handler stops at it either way because it is a `<button>`. */}
             <button
+              ref={trigger}
               type="button"
-              className={arrived ? "needs-you-button arrived" : "needs-you-button"}
+              className={`needs-you-button${asked ? "" : " muted"}${arrived && asked ? " arrived" : ""}`}
               data-testid="needs-you-button"
               tabIndex={0}
               aria-label={said}
@@ -203,7 +236,7 @@ export function NeedsYouMenu({
               onClick={() => setOpen((up) => !up)}
             >
               <Hand aria-hidden="true" />
-              <span className="needs-you-number">{items.length}</span>
+              {asked && <span className="needs-you-number">{items.length}</span>}
             </button>
           </Menu.Trigger>
           <Menu.Portal>
@@ -259,6 +292,16 @@ export function NeedsYouMenu({
                   </Menu.Group>
                 );
               })}
+              {quiet.length > 0 && (
+                <Menu.Group className="needs-you-quiet" aria-label="Can't say they're waiting">
+                  {quiet.map((one) => (
+                    <p key={`${one.project}#${one.name}`}>
+                      <span className="needs-you-name">{one.name}</span>
+                      {` · ${one.project} can't tell charter it's waiting`}
+                    </p>
+                  ))}
+                </Menu.Group>
+              )}
             </Menu.Content>
           </Menu.Portal>
         </Menu.Root>

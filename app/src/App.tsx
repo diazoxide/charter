@@ -55,7 +55,7 @@ import {
 } from "./PlaneView";
 import type { Alerts } from "./StatusLine";
 import { TitleBar, runningIn, useTitleBarRoom, type Crumbs } from "./TitleBar";
-import type { Needing } from "./NeedsYou";
+import type { Needing, Quiet } from "./NeedsYou";
 import { useUpdates } from "./Updates";
 import { noTabs } from "./tabs";
 
@@ -900,6 +900,15 @@ function App() {
     [planes, reports],
   );
 
+  /** And the chats that can be waiting without saying so, for the faint hand (charter-app#52). */
+  const quiet = useMemo<Quiet[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (reports[plane]?.quiet ?? []).map((name) => ({ name, project: calledOn(plane) })),
+      ),
+    [planes, reports],
+  );
+
   /**
    * A row off that list, carried out by the project it is about — through that project's own
    * `run`, so a Go and an Ignore are exactly the palette's rows.
@@ -924,7 +933,7 @@ function App() {
         updates={updates}
         room={titleBarRoom}
         chats={ending}
-        needing={{ items: needing, onPress: pressNeeding }}
+        needing={{ items: needing, quiet, onPress: pressNeeding }}
       />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
           holds any — including one, because `+` is how it gets a second and `×` is the way

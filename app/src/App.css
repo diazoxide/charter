@@ -1886,6 +1886,13 @@ button.show-more:focus-visible {
   height: 1em;
   color: var(--needs-you-base);
 }
+/* **The faint hand** (charter-app#52, the operator's ruling on #249): nothing has asked, but a
+   chat that cannot say so is open. No number, and none of the count's colour — the muted text
+   token, so it reads as "charter cannot vouch for this" and never as a request. */
+.needs-you-button.muted,
+.needs-you-button.muted svg {
+  color: var(--text-muted);
+}
 .needs-you-number {
   min-width: 1.3rem;
   padding: 0 0.32rem;
@@ -1902,6 +1909,13 @@ button.show-more:focus-visible {
 .needs-you-menu {
   min-width: 16rem;
   max-width: 28rem;
+}
+/* The chats that cannot say they are waiting, under the ones that asked. Words, not items:
+   there is nothing to do to them from here, and the button's own name already says them. */
+.needs-you-quiet p {
+  margin: 0.2rem 0.45rem 0.1rem;
+  color: var(--text-secondary);
+  font-style: italic;
 }
 /* A chat asking, its Go, and its Ignore beside it. */
 .needs-you-row {

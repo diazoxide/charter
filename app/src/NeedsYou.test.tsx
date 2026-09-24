@@ -39,7 +39,7 @@ function needing(plane: string, session: number, workspace: string, project: str
 
 describe("the title bar's needs-you button (charter-app#249)", () => {
   it("draws nothing when nothing needs you", () => {
-    const { container } = render(<NeedsYouMenu items={[]} onPress={() => {}} />);
+    const { container } = render(<NeedsYouMenu quiet={[]} items={[]} onPress={() => {}} />);
 
     expect(screen.queryByRole("button")).toBeNull();
     expect(container).toHaveTextContent("");
@@ -48,6 +48,7 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
   it("says how many chats need you, in the count and in words", () => {
     render(
       <NeedsYouMenu
+        quiet={[]}
         items={[needing("/a", 1, "ide", "charter"), needing("/b", 2, "easydmarc", "devops")]}
 
         onPress={() => {}}
@@ -64,6 +65,7 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
     const pressed: string[] = [];
     render(
       <NeedsYouMenu
+        quiet={[]}
         items={[needing("/a", 1, "ide", "steward"), needing("/b", 2, "easydmarc", "devops")]}
         onPress={(plane: string, offer: Offer) => pressed.push(`${plane} ${offer.id}`)}
       />,
@@ -159,6 +161,7 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
     };
     render(
       <NeedsYouMenu
+        quiet={[]}
         items={[stray]}
         onPress={(plane, offer) => pressed.push(`${plane} ${offer.id}`)}
       />,
@@ -204,7 +207,7 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
     const one = [needing("/a", 1, "ide", "steward")];
     const bar = (items: Needing[]) => (
       <header>
-        <NeedsYouMenu items={items} onPress={() => {}} />
+        <NeedsYouMenu quiet={[]} items={items} onPress={() => {}} />
         <button type="button" tabIndex={0}>
           About
         </button>
@@ -223,15 +226,110 @@ describe("the title bar's needs-you button (charter-app#249)", () => {
 
   it("does not spring open again when a chat asks after the list emptied", async () => {
     const one = [needing("/a", 1, "ide", "steward")];
-    const { rerender } = render(<NeedsYouMenu items={one} onPress={() => {}} />);
+    const { rerender } = render(<NeedsYouMenu quiet={[]} items={one} onPress={() => {}} />);
     await userEvent.click(button());
     await screen.findByRole("menu");
 
-    rerender(<NeedsYouMenu items={[]} onPress={() => {}} />);
-    rerender(<NeedsYouMenu items={one} onPress={() => {}} />);
+    rerender(<NeedsYouMenu quiet={[]} items={[]} onPress={() => {}} />);
+    rerender(<NeedsYouMenu quiet={[]} items={one} onPress={() => {}} />);
 
     expect(button()).toBeInTheDocument();
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+describe("the muted hand: a chat that cannot say it is waiting (charter-app#52, #249)", () => {
+  const quiet = [{ name: "shell 2", project: "charter" }];
+
+  it("shows a faint hand with no number when only a chat that cannot report is open", () => {
+    render(<NeedsYouMenu items={[]} quiet={quiet} onPress={() => {}} />);
+
+    const hand = screen.getByRole("button", {
+      name: "Nothing has asked for you, but shell 2 can't tell charter it's waiting",
+    });
+    expect(hand).toHaveClass("muted");
+    expect(hand).toHaveAttribute("title", hand.getAttribute("aria-label"));
+    expect(hand).toHaveTextContent(/^$/);
+    expect(hand).toHaveAttribute("tabindex", "0");
+  });
+
+  it("counts several such chats in its name rather than listing them", () => {
+    render(
+      <NeedsYouMenu
+        items={[]}
+        quiet={[...quiet, { name: "codex 4", project: "ops" }]}
+        onPress={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Nothing has asked for you, but 2 chats can't tell charter they're waiting",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("names each such chat, and its project, in the list it opens", async () => {
+    render(
+      <NeedsYouMenu
+        items={[]}
+        quiet={[...quiet, { name: "codex 4", project: "ops" }]}
+        onPress={() => {}}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button"));
+
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveTextContent("shell 2 · charter can't tell charter it's waiting");
+    expect(menu).toHaveTextContent("codex 4 · ops can't tell charter it's waiting");
+  });
+
+  it("opens and closes from the keyboard the same way, and gives the keyboard back", async () => {
+    render(<NeedsYouMenu items={[]} quiet={quiet} onPress={() => {}} />);
+    const hand = screen.getByRole("button");
+    hand.focus();
+
+    await userEvent.keyboard("{Enter}");
+    await screen.findByRole("menu");
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(hand).toHaveFocus());
+  });
+
+  it("is the normal hand with the count once a chat really asks", () => {
+    render(
+      <NeedsYouMenu
+        items={[needing("/a", 1, "ide", "steward")]}
+        quiet={quiet}
+        onPress={() => {}}
+      />,
+    );
+
+    const hand = screen.getByRole("button", { name: "1 chat needs you" });
+    expect(hand).not.toHaveClass("muted");
+    expect(hand).toHaveTextContent("1");
+  });
+
+  it("is not there at all when nothing asked and every chat can say so", () => {
+    render(<NeedsYouMenu items={[]} quiet={[]} onPress={() => {}} />);
+
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("keeps the faint hand, with the keyboard on it, when the last request is ignored", async () => {
+    const one = [needing("/a", 1, "ide", "steward")];
+    const { rerender } = render(<NeedsYouMenu items={one} quiet={quiet} onPress={() => {}} />);
+    screen.getByRole("button").focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByRole("menuitem")).toHaveFocus());
+    await userEvent.keyboard("{Delete}");
+
+    rerender(<NeedsYouMenu items={[]} quiet={quiet} onPress={() => {}} />);
+
+    await waitFor(() => expect(screen.getByRole("button")).toHaveClass("muted"));
+    await waitFor(() => expect(screen.getByRole("button")).toHaveFocus());
   });
 });
 
@@ -255,6 +353,12 @@ describe("the needs-you count's colours", () => {
   it("never writes the button's words in needs-you.base", () => {
     expect(rule(".needs-you-button")).toMatch(/(?:^|[;\s])color:\s*var\(--text-primary\)/);
     expect(rule(".needs-you-button")).not.toMatch(/(?:^|[;\s])color:\s*var\(--needs-you-base\)/);
+  });
+
+  it("draws the faint hand in the muted text token, and no colour of its own", () => {
+    expect(rule(".needs-you-button.muted,\n.needs-you-button.muted svg")).toMatch(
+      /^\s*color:\s*var\(--text-muted\);\s*$/,
+    );
   });
 
   it("draws no coloured border on the button or the list (charter-app#249)", () => {

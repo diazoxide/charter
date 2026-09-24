@@ -15,7 +15,25 @@ import { READY } from "../harness.js";
  * The title bar's needs-you button (charter-app#249), by what it is to the operator: the
  * control in the bar that opens a menu and is named for chats needing you.
  */
-const HAND = '[data-testid="title-bar"] [aria-haspopup="menu"][aria-label*="need"]';
+const HAND = '[data-testid="title-bar"] [aria-haspopup="menu"]';
+
+/** Waits until the hand's name says `want`, and says what it said instead if it never does. */
+async function untilTheHandSays(want: RegExp): Promise<WebdriverIO.Element> {
+  let last = "";
+  try {
+    await browser.waitUntil(
+      async () => {
+        const hand = await $(HAND);
+        last = (await hand.isExisting()) ? ((await hand.getAttribute("aria-label")) ?? "") : "";
+        return want.test(last);
+      },
+      { timeout: 20_000, interval: 200 },
+    );
+  } catch {
+    throw new Error(`the title bar's hand never said ${want}; it said ${JSON.stringify(last)}`);
+  }
+  return await $(HAND).getElement();
+}
 
 /** What a tab says its chat is doing, by the accessible name on its state mark. */
 async function doing(tab: WebdriverIO.Element): Promise<string> {
@@ -66,9 +84,17 @@ describe("what a chat is doing", () => {
   });
 
   it("shows the chat waiting on you once the harness's turn ends, and queues it", async () => {
-    // Nothing has ASKED for the operator while the turn is running, so the title bar has no
-    // needs-you button at all: hidden at zero (charter-app#249), never a "0".
-    expect(await $(HAND).isExisting()).toBe(false);
+    // Nothing has ASKED for the operator while the turn is running — and this run's profile
+    // is declared `codex`, so this chat is exactly the one charter-app#52 is about: it cannot
+    // say it has stopped mid-turn for an approval. So the title bar neither claims nothing
+    // needs you nor shows a count: a faint hand with no number, named for the chat (the
+    // operator's ruling on #249).
+    const faint = await untilTheHandSays(
+      /^Nothing has asked for you, but .+ can't tell charter it's waiting$/,
+    );
+    await expect(faint).toHaveElementClass("muted");
+    await expect(faint).toHaveAttribute("tabindex", "0");
+    await expect(faint).not.toHaveText(expect.stringMatching(/\d/));
 
     // Releasing the output is what lets the harness get to its `stop` hook.
     //
@@ -87,9 +113,9 @@ describe("what a chat is doing", () => {
     await until("waiting on you");
 
     // Queued, in the title bar: a hand and a count (charter-app#249).
-    const hand = await $('[data-testid="title-bar"] [aria-label="1 chat needs you"]');
-    await hand.waitForExist({ timeout: 20_000 });
-    await expect(hand).toHaveAttribute("aria-label", "1 chat needs you");
+    const hand = await untilTheHandSays(/^1 chat needs you$/);
+    await expect(hand).not.toHaveElementClass("muted");
+    await expect(hand).toHaveText("1");
     await expect(hand).toHaveAttribute("tabindex", "0");
   });
 
@@ -119,7 +145,7 @@ describe("what a chat is doing", () => {
     await expect(await theTab()).toHaveAttribute("aria-selected", "true");
   });
 
-  it("ignores the chat from the dropdown, and the button goes with it", async () => {
+  it("ignores the chat from the dropdown, and the hand goes faint again", async () => {
     await $(HAND).click();
     const ignore = await $('[role="menu"] [aria-label^="Ignore "]');
     await ignore.waitForDisplayed({ timeout: 10_000 });
@@ -128,11 +154,10 @@ describe("what a chat is doing", () => {
 
     // The core holds the ignore and answers with a queue without the chat; the chat itself
     // is still waiting, which is what an ignore is (charter-app#248).
-    await browser.waitUntil(async () => !(await $(HAND).isExisting()), {
-      timeout: 20_000,
-      interval: 200,
-      timeoutMsg: "the needs-you button outlived its last item",
-    });
+    // The hand does not go: this chat still cannot say whether it is waiting, so it is the
+    // faint hand again rather than the count.
+    const faint = await untilTheHandSays(/^Nothing has asked for you, but /);
+    await expect(faint).toHaveElementClass("muted");
     expect(await doing(await theTab())).toBe("waiting on you");
   });
 });
