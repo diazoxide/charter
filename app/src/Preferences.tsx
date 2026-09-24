@@ -27,7 +27,7 @@ import { atCreation } from "./windowprefs";
  */
 export function Preferences() {
   const sizes = useTextSizes();
-  const where = atCreation().layout.path || "charter's layout file";
+  const where = atCreation().layout.path || "the layout file";
   return (
     <div className="settings" data-testid="preferences">
       <p className="settings-who">{`This machine only, in every project. Kept in ${where}.`}</p>
@@ -42,8 +42,7 @@ export function Preferences() {
 
 /** Where each size's keys work, said under its slider. */
 function keysFor(which: Which): string {
-  const mod = onAMac() ? "⌘" : "Ctrl+";
-  const keys = `${mod}+ / ${mod}− / ${mod}0`;
+  const keys = onAMac() ? "⌘= / ⌘- / ⌘0" : "Ctrl+= / Ctrl+- / Ctrl+0";
   return which === "window"
     ? `Everything but the terminals. ${keys} change it from anywhere outside a terminal.`
     : `Every chat's terminal, refitted to the new size. ${keys} change it from inside one.`;

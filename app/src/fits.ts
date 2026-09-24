@@ -54,11 +54,10 @@
  * nobody had told it how wide it was would be a window with no tabs in it.
  */
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { DEFAULT_TEXT } from "./textSize";
 
 /**
- * The narrowest a tab of a given strip may be drawn, in pixels at the default window text size
- * — {@link leastAt} is what a strip fits by at the size in force.
+ * The narrowest a tab of a given strip may be drawn, in pixels at {@link LEAST_TUNED_AT} —
+ * {@link leastAt} is what a strip fits by at the window text size in force.
  *
  * **These are the numbers the stylesheet fits by, and it is given them from here** — each
  * strip sets `--least` from its own value and `App.css` reads it for `min-width`. Two copies
@@ -80,6 +79,9 @@ export const LEAST = {
 
 export type Least = (typeof LEAST)[keyof typeof LEAST];
 
+/** The window text size {@link LEAST} was measured at: the root was 13px until #283. */
+export const LEAST_TUNED_AT = 13;
+
 /**
  * A floor at the window text size in force (charter-app#283).
  *
@@ -90,7 +92,7 @@ export type Least = (typeof LEAST)[keyof typeof LEAST];
  * stylesheet is handed the same scaled number, for {@link LEAST}'s reason.
  */
 export function leastAt(least: number, windowText: number): number {
-  return Math.round((least * windowText) / DEFAULT_TEXT.window);
+  return Math.round((least * windowText) / LEAST_TUNED_AT);
 }
 
 /**

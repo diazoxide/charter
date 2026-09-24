@@ -724,12 +724,12 @@ on `Ctrl+Shift+Q`: a terminal app's own keys add `Shift` (GNOME Terminal, Konsol
 sends nothing for a `Ctrl+Shift` letter. `lifecycle::layout` is where that is decided, and its
 tests hold every accelerator it produces off macOS to this rule.
 
-**The text-size keys take nothing either** (charter-app#283, `textSize.sizeKey`). `⌘` or `Ctrl`
-with `=` or `+` makes the text in focus bigger, with `-` smaller, with `0` its default: a
-terminal pane's size inside a pane, the window's anywhere else. Measured in xterm.js 6.0.0,
-`Ctrl` is encoded with a letter, space, `3`–`8`, `[`, `\` and `]` — not `=`, `-` or `0` — so
-none of these is a shell's key, and either modifier is accepted on either platform, as `⌘K`
-is. The one neighbour a shell does own is `Ctrl+Shift+-`, whose `key` is `_` and which xterm
+**The text-size keys take nothing either** (charter-app#283, `textSize.sizeKey`). `⌘` on a Mac
+and `Ctrl` elsewhere, with `=` or `+`, makes the text in focus bigger, with `-` smaller, with `0`
+its default: a terminal pane's size inside a pane, the window's anywhere else. Measured in
+xterm.js 6.0.0, `Ctrl` is encoded with a letter, space, `3`–`8`, `[`, `\` and `]` — not `=`, `-`
+or `0` — so none of these is a shell's key. One modifier per platform, not both as `⌘K` has, so
+a Mac's `Ctrl` chords stay the terminal's whatever a later xterm.js sends for them. The one neighbour a shell does own is `Ctrl+Shift+-`, whose `key` is `_` and which xterm
 sends as `^_`, readline's `undo`: it is never matched, and reaches the shell unprevented. (A
 real xterm sends `^_` for a plain `Ctrl+-` too; xterm.js does not, and it is the terminal in
 every pane.) They are a capture listener on the window, like the palette's, and not menu

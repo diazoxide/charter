@@ -261,6 +261,7 @@ export function forgetThisLaunch(): void {
   changed = undefined;
   writing = Promise.resolve();
   forgetTextSizes();
+  clearTimeout(textWrite);
 }
 
 /**
@@ -321,8 +322,17 @@ const asDocument = (regions: Arrangement): Document => ({
   text: textSizes(),
 });
 
-// A text size changed: the file is rewritten with it, and with the arrangement as it stands.
-onTextSizes(() => remember(remembered()));
+/**
+ * A text size changed: the file is rewritten with it, and with the arrangement as it stands —
+ * **once the sizes settle**, not per step. A slider dragged from 10 to 24 is fourteen changes
+ * in a second, each drawn at once; the file only needs the last.
+ */
+export const TEXT_WRITE_SETTLES_MS = 300;
+let textWrite: ReturnType<typeof setTimeout> | undefined;
+onTextSizes(() => {
+  clearTimeout(textWrite);
+  textWrite = setTimeout(() => remember(remembered()), TEXT_WRITE_SETTLES_MS);
+});
 
 /** Every write, in the order the window made it. Tauri runs commands on a thread pool, and two
  *  writes that raced there could land the older one last. */

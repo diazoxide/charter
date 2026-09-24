@@ -580,6 +580,9 @@ function App() {
   const openerUp = inFront === undefined && launch !== undefined && !restoring;
   useLayoutEffect(() => {
     inFrontNow.current = inFront;
+    // A project arriving ends the stand-in: from here Preferences is a tab, and the opener a
+    // later close brings back must be the opener rather than a Preferences left behind.
+    if (inFront !== undefined) setPreferencesAlone(false);
   }, [inFront]);
   /** What the project in front last said about itself, when it has said anything yet. The
    *  palette lists its catalogue and runs its rows, so a row reaches that project's live

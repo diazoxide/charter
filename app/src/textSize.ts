@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { CHAT_KEYBOARD } from "./actions";
+import { onAMac } from "./tabKeys";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
@@ -169,10 +170,9 @@ export type SizeKey = "bigger" | "smaller" | "reset";
 /**
  * Whether this keystroke is a text-size key, and which.
  *
- * **`⌘` or `Ctrl`, with `=` or `+`, `-`, or `0`** — the zoom keys of every browser, of VS Code,
- * and of GNOME Terminal, Konsole and Windows Terminal. Either modifier on either platform,
- * which is the palette's rule for `⌘K` (`Palette.opensIt`): the wrong guess about the
- * platform is an app whose keys do nothing.
+ * **`⌘` on a Mac and `Ctrl` elsewhere, with `=` or `+`, `-`, or `0`** — the zoom keys of every
+ * browser, of VS Code, and of GNOME Terminal, Konsole and Windows Terminal. One modifier per
+ * platform, so a Mac's `Ctrl` chords stay the terminal's whatever a later xterm sends for them.
  *
  * **Taken from the chat, and that takes nothing** (`docs/ui-primitives.md`, #106, #187). A
  * `⌘` chord is nothing to xterm.js 6.0.0 but `⌘A`. With `Ctrl`, `evaluateKeyboardEvent` encodes
@@ -182,8 +182,9 @@ export type SizeKey = "bigger" | "smaller" | "reset";
  * xterm sends `^_` for a plain `Ctrl+-` as well; xterm.js does not, and xterm.js is the
  * terminal in every pane here.)
  */
-export function sizeKey(e: KeyboardEvent): SizeKey | undefined {
-  if (e.metaKey === e.ctrlKey || e.altKey) return undefined;
+export function sizeKey(e: KeyboardEvent, mac: boolean = onAMac()): SizeKey | undefined {
+  const held = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  if (!held || e.altKey) return undefined;
   if (e.key === "=" || e.key === "+") return "bigger";
   if (e.shiftKey) return undefined;
   if (e.key === "-") return "smaller";

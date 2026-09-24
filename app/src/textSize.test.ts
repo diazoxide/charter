@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { CHAT_KEYBOARD } from "./actions";
 import { forgetThisLaunch } from "./regions";
@@ -50,9 +50,6 @@ afterEach(() => {
   document.body.replaceChildren();
   document.documentElement.style.fontSize = "";
 });
-
-/** Lets the queued writes land. */
-const settled = () => new Promise((done) => setTimeout(done, 0));
 
 describe("the text sizes a machine has never been told about", () => {
   it("are 14px for the window and 13px for the terminal, a step bigger than both were", () => {
@@ -146,7 +143,7 @@ describe("changing a text size", () => {
     put({ version: 1, regions: REGIONS });
 
     stepText("terminal", 1);
-    await settled();
+    await vi.waitFor(() => expect(kept).toHaveLength(1));
 
     const last = kept.at(-1);
     expect(last?.text).toEqual({ window: 14, terminal: 14 });
@@ -157,11 +154,13 @@ describe("changing a text size", () => {
     expect(explorer?.side).toBe("right");
   });
 
-  it("is never written into a plane: the only write is the machine's layout file", async () => {
-    stepText("window", 1);
-    await settled();
+  it("is written once the sizes settle, not once per step of a drag", async () => {
+    for (let px = 11; px <= 24; px++) setTextSize("window", px);
 
+    await vi.waitFor(() => expect(kept).toHaveLength(1));
+    await new Promise((done) => setTimeout(done, 400));
     expect(kept).toHaveLength(1);
+    expect(kept[0].text).toEqual({ window: 24, terminal: 13 });
   });
 });
 
@@ -176,26 +175,34 @@ describe("the window's text size", () => {
 describe("the keys", () => {
   const press = (init: KeyboardEventInit) => new KeyboardEvent("keydown", init);
 
-  it("are ⌘ or Ctrl with =, + (bigger), - (smaller) and 0 (reset)", () => {
-    expect(sizeKey(press({ key: "=", metaKey: true }))).toBe("bigger");
-    expect(sizeKey(press({ key: "+", metaKey: true, shiftKey: true }))).toBe("bigger");
-    expect(sizeKey(press({ key: "-", metaKey: true }))).toBe("smaller");
-    expect(sizeKey(press({ key: "0", metaKey: true }))).toBe("reset");
-    expect(sizeKey(press({ key: "=", ctrlKey: true }))).toBe("bigger");
-    expect(sizeKey(press({ key: "-", ctrlKey: true }))).toBe("smaller");
-    expect(sizeKey(press({ key: "0", ctrlKey: true }))).toBe("reset");
+  it("are ⌘ on a Mac with =, + (bigger), - (smaller) and 0 (reset)", () => {
+    expect(sizeKey(press({ key: "=", metaKey: true }), true)).toBe("bigger");
+    expect(sizeKey(press({ key: "+", metaKey: true, shiftKey: true }), true)).toBe("bigger");
+    expect(sizeKey(press({ key: "-", metaKey: true }), true)).toBe("smaller");
+    expect(sizeKey(press({ key: "0", metaKey: true }), true)).toBe("reset");
   });
 
-  it("are not Ctrl+Shift+- (Ctrl+_), which xterm sends as readline's undo", () => {
-    expect(sizeKey(press({ key: "_", ctrlKey: true, shiftKey: true }))).toBeUndefined();
-    expect(sizeKey(press({ key: "-", ctrlKey: true, shiftKey: true }))).toBeUndefined();
+  it("are Ctrl everywhere else", () => {
+    expect(sizeKey(press({ key: "=", ctrlKey: true }), false)).toBe("bigger");
+    expect(sizeKey(press({ key: "-", ctrlKey: true }), false)).toBe("smaller");
+    expect(sizeKey(press({ key: "0", ctrlKey: true }), false)).toBe("reset");
   });
 
-  it("are nothing without exactly one of ⌘ and Ctrl, or with Alt", () => {
-    expect(sizeKey(press({ key: "=" }))).toBeUndefined();
-    expect(sizeKey(press({ key: "=", metaKey: true, ctrlKey: true }))).toBeUndefined();
-    expect(sizeKey(press({ key: "=", metaKey: true, altKey: true }))).toBeUndefined();
-    expect(sizeKey(press({ key: "9", metaKey: true }))).toBeUndefined();
+  it("leave a Mac's Ctrl chords and everyone else's ⌘ chords alone", () => {
+    expect(sizeKey(press({ key: "-", ctrlKey: true }), true)).toBeUndefined();
+    expect(sizeKey(press({ key: "=", metaKey: true }), false)).toBeUndefined();
+  });
+
+  it("are not Ctrl+Shift+- (Ctrl+_), which xterm.js sends as ^_, readline's undo", () => {
+    expect(sizeKey(press({ key: "_", ctrlKey: true, shiftKey: true }), false)).toBeUndefined();
+    expect(sizeKey(press({ key: "-", ctrlKey: true, shiftKey: true }), false)).toBeUndefined();
+  });
+
+  it("are nothing without the modifier, with both, or with Alt", () => {
+    expect(sizeKey(press({ key: "=" }), true)).toBeUndefined();
+    expect(sizeKey(press({ key: "=", metaKey: true, ctrlKey: true }), true)).toBeUndefined();
+    expect(sizeKey(press({ key: "=", metaKey: true, altKey: true }), true)).toBeUndefined();
+    expect(sizeKey(press({ key: "9", metaKey: true }), true)).toBeUndefined();
   });
 });
 
@@ -222,11 +229,12 @@ describe("which size a key changes", () => {
   });
 
   it("follows the focus: a key in a pane changes the terminal, elsewhere the window", () => {
+    // jsdom's platform is not a Mac's, so the modifier is Ctrl.
     const stop = listenForSizeKeys(window);
     const inPane = aPane();
     const elsewhere = aButton();
 
-    inPane.dispatchEvent(new KeyboardEvent("keydown", { key: "=", metaKey: true, bubbles: true }));
+    inPane.dispatchEvent(new KeyboardEvent("keydown", { key: "=", ctrlKey: true, bubbles: true }));
     elsewhere.dispatchEvent(
       new KeyboardEvent("keydown", { key: "-", ctrlKey: true, bubbles: true }),
     );
@@ -240,7 +248,7 @@ describe("which size a key changes", () => {
     setTextSize("terminal", 20);
     const stop = listenForSizeKeys(window);
 
-    aPane().dispatchEvent(new KeyboardEvent("keydown", { key: "0", metaKey: true, bubbles: true }));
+    aPane().dispatchEvent(new KeyboardEvent("keydown", { key: "0", ctrlKey: true, bubbles: true }));
     stop();
 
     expect(textSizes()).toEqual({ window: 20, terminal: DEFAULT_TEXT.terminal });
