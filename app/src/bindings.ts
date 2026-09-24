@@ -567,13 +567,6 @@ export const commands = {
 	vaultSecretRename: (plane: PlaneId, vault: string, from: string, to: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_rename", { plane, vault, from, to })),
 	/**  Delete a secret. No value crosses. */
 	vaultSecretDelete: (plane: PlaneId, vault: string, key: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_delete", { plane, vault, key })),
-	/**  One secret's value, to show in the window for a while ([`reveal`]). */
-	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
-	/**
-	 *  Put one secret's value on the clipboard ([`copy`]) and clear it a minute later
-	 *  ([`clear_later`]). The answer is nothing: the value never comes back to the window.
-	 */
-	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
 	/**
 	 *  Move a vault's identity token from the app's OWN environment into the keyring
 	 *  ([`move_identity`]). No value crosses to the window. Kept beside the paste path for an app
@@ -745,6 +738,13 @@ export const commands = {
 	 *  yet**. Answers whether it did, so the window knows the old key can go.
 	 */
 	adoptLayout: (text: string) => typedError<boolean, string>(__TAURI_INVOKE("adopt_layout", { text })),
+	/**  One secret's value, to show in the window for a while ([`reveal`]). */
+	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
+	/**
+	 *  Put one secret's value on the clipboard ([`copy`]) and clear it a minute later
+	 *  ([`clear_later`]). The answer is nothing: the value never comes back to the window.
+	 */
+	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
 };
 
 /* Types */

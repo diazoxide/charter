@@ -1,6 +1,10 @@
 //! The app's Rust side: what the UI can ask the core to do, as commands generated into
 //! TypeScript by `tauri-specta`, so no shape is written by hand on either side.
 
+// First, so its macros are defined for everything below.
+#[macro_use]
+mod ipc_commands;
+
 mod about;
 mod alerts;
 mod chats;
@@ -10,6 +14,7 @@ mod extensions;
 mod handoff;
 mod harness_plugins;
 mod hooks;
+mod ipc;
 mod lifecycle;
 mod opener;
 mod panels;
@@ -1176,107 +1181,22 @@ fn running_sessions(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<
     Ok(planes.held(&plane)?.chats().sessions().running())
 }
 
-/// Every command the UI can call, in one place: the source of both the handler and the
-/// TypeScript the UI imports.
+/// Hands `ipc_commands.rs`'s list, both classes of it, to `tauri-specta`.
+macro_rules! register {
+    (
+        value_free: [$($($free:ident)::+),* $(,)?],
+        vault_values: [$($($value:ident)::+),* $(,)?] $(,)?
+    ) => {
+        collect_commands![$($($free)::+,)* $($($value)::+),*]
+    };
+}
+
+/// Every command the UI can call, from the one list in `ipc_commands.rs`: the source of the
+/// handler, of the TypeScript the UI imports, and — through `build.rs` — of the allow-list that
+/// decides which window may call which (ADR 0052).
 fn commands() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
-        .commands(collect_commands![
-            first_frame,
-            title_bar_room,
-            plane_at_launch,
-            open_planes,
-            close_plane,
-            opener::recent_planes,
-            opener::pick_project,
-            opener::open_plane,
-            opener::approve_plane,
-            opener::planes_to_restore,
-            opener::relaunch_ask,
-            opener::relaunch,
-            opener::window_holds_planes,
-            opener::create_project,
-            open_session,
-            close_session,
-            ignore_needs_you,
-            send_input,
-            resize_session,
-            watch_session,
-            unwatch_session,
-            running_sessions,
-            chat_states,
-            opened_chats,
-            chats_that_would_not_start,
-            chat_in_front,
-            plane_pins,
-            pin_project,
-            pin_workspace,
-            pin_chat,
-            rename_chat,
-            ask_to_quit,
-            quit,
-            quit_cancelled,
-            hide_window,
-            window_showing,
-            plane_sidebar,
-            workspace_panels,
-            workspaces::workspace_create,
-            workspaces::workspace_at_risk,
-            workspaces::workspace_remove,
-            workspace_repos,
-            alerts_everywhere,
-            start_options,
-            approve_profile,
-            start_chat,
-            worktrees::worktree_of_chat,
-            worktrees::worktree_list,
-            worktrees::worktree_remove,
-            worktrees::worktree_merge,
-            updates::update_channel,
-            updates::set_update_channel,
-            updates::check_for_update,
-            updates::install_update,
-            updates::restart_to_update,
-            extensions::installed_extensions,
-            extensions::pick_extension,
-            extensions::install_extension,
-            extensions::approve_extension,
-            extensions::forget_extension,
-            extensions::extension_themes,
-            extensions::extension_panels,
-            vaults::vault_list,
-            vaults::vault_open,
-            vaults::vault_refresh,
-            vaults::vault_create,
-            vaults::vault_secret_add,
-            vaults::vault_secret_set,
-            vaults::vault_secret_rename,
-            vaults::vault_secret_delete,
-            vaults::vault_secret_reveal,
-            vaults::vault_secret_copy,
-            vaults::vault_identity_move,
-            vaults::vault_identity_put,
-            extensions::project_extensions,
-            extensions::extensions_on,
-            harness_plugins::project_harness_plugins,
-            extensions::project_theme,
-            extensions::project_theme_drawn,
-            views::extension_views,
-            views::extension_programs_run,
-            views::open_view,
-            views::reopened_views,
-            views::window_views,
-            doctor::plane_doctor,
-            settings::project_settings,
-            settings::save_project_settings,
-            settings::workspace_settings,
-            settings::save_workspace_settings,
-            usage::chat_usage,
-            pin::plane_pin,
-            about::about_charter,
-            clipath::install_cli_on_path,
-            windowprefs::write_layout,
-            windowprefs::adopt_layout,
-        ])
+        .commands(app_commands!(register))
         // What `update://checked` carries. It crosses on an event rather than a command, so it
         // is named here or the window would have to write the shape out by hand.
         .typ::<updates::Offer>()
