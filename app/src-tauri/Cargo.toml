@@ -71,6 +71,8 @@ workspace = true
 e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver", "charter-core/fenced"]
 
 [dev-dependencies]
+# Tauri's mock runtime, to invoke commands through the app's real ACL (`ipc.rs`, ADR 0052).
+tauri = { version = "2", features = ["test", "tray-icon"] }
 # Fenced for `cargo test --workspace`, which is the invocation that compiles and runs this
 # crate's tests — and the one named in charter-app#129.
 charter-core = { workspace = true, features = ["fenced"] }
