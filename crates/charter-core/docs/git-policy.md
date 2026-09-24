@@ -15,8 +15,9 @@ transports over HTTPS. `charter clone` applies it automatically to everything it
 
 A directory charter cannot read — `workspaces/` itself, one workspace, or a clone's `.git` —
 is named rather than skipped. `charter git-policy` warns about each one with what clears it,
-and does not count a repo it never reached. `charter doctor` has a `git auth` row, and in
-this version it says the policy is not checked there yet: run `charter git-policy`.
+and does not count a repo it never reached. `charter doctor`'s `git auth` row runs the same
+check, read-only: it reports which repos drifted and names `charter git-policy --apply`, and
+never applies anything itself.
 
 ## Why it is a rule and not a preference
 
