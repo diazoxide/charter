@@ -149,7 +149,7 @@ pub enum Owed {
     /// Nothing: the handoff was fire-and-forget.
     Nothing,
     /// One report, not yet sent.
-    Report,
+    Due,
     /// The report was sent. Another is owed only once the chat is prompted again.
     Sent,
 }
@@ -158,14 +158,14 @@ impl Owed {
     fn word(self) -> &'static str {
         match self {
             Self::Nothing => "",
-            Self::Report => "owed",
+            Self::Due => "owed",
             Self::Sent => "sent",
         }
     }
 
     fn of(word: &str) -> Self {
         match word {
-            "owed" => Self::Report,
+            "owed" => Self::Due,
             "sent" => Self::Sent,
             _ => Self::Nothing,
         }
@@ -2038,7 +2038,7 @@ mod tests {
             chat: 16,
             name: "steward 3".into(),
             workspace: "platform-next".into(),
-            report: Owed::Report,
+            report: Owed::Due,
         }
     }
 

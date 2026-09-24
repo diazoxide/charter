@@ -132,12 +132,23 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
         };
         let mut parts = charter_core::briefing::parts(&ask, piece);
         // Reports kept for this workspace because the chat that asked for them has closed
-        // (charter-app#259): the next chat to start here is the one that learns them.
+        // (charter-app#259): the next chat to START here is the one that learns them — never a
+        // chat already running that compacted or cleared, which would take them as a side
+        // effect of its own housekeeping.
+        let starting = hook
+            .payload
+            .get("source")
+            .and_then(|v| v.as_str())
+            .is_none_or(|source| source == "startup");
         let workspace = charter_core::briefing::workspace_of(&ask);
-        let kept = charter_core::handback::take(
-            hook.root,
-            charter_core::handback::For::Workspace(&workspace),
-        );
+        let kept = if starting {
+            charter_core::handback::take(
+                hook.root,
+                charter_core::handback::For::Workspace(&workspace),
+            )
+        } else {
+            Vec::new()
+        };
         if let Some(reports) = charter_core::handback::context(&kept, true) {
             parts.push(reports);
         }
@@ -160,7 +171,7 @@ pub fn userpromptsubmit(payload: &str, now: Option<&str>) {
         }
         // The app's number for this chat, which is what a report is left under. A chat the app
         // did not start has none, and nothing was left for it.
-        let Some(chat) = env(charter_core::active::SESSION_ID_ENV).and_then(|id| id.parse().ok())
+        let Some(chat) = env(charter_core::hookwire::CHAT_ENV).and_then(|id| id.parse().ok())
         else {
             return;
         };

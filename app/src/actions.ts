@@ -318,6 +318,9 @@ export type Now = {
   quiet?: readonly string[];
   /** What a chat is called, for a row that names one. */
   nameOf: (session: number) => string;
+  /** The chats that reported back to a chat in the queue, by name (charter-app#259), so its row
+   *  says what the operator is being asked to look at. */
+  reportsTo?: (session: number) => readonly string[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -615,7 +618,11 @@ export function catalogue(now: Now): Offer[] {
   );
   for (const session of now.needsYou) {
     const name = now.nameOf(session);
-    const title = `Show ${name}, which needs you`;
+    const reported = now.reportsTo?.(session) ?? [];
+    const title =
+      reported.length > 0
+        ? `Show ${name}: ${reported.join(", ")} reported back`
+        : `Show ${name}, which needs you`;
     offers.push(
       tabHolding(now.tabs, session) === undefined
         ? cannot(`needs.show:${session}`, title, "That chat has no tab in this window.", name)

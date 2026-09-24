@@ -1616,6 +1616,7 @@ export function PlaneView({
             needsYou: states.needsYou,
             quiet,
             nameOf,
+            reportsTo: (session) => states.reports[session] ?? [],
             // The projects' pins are the WINDOW's, and travel down with the projects: a
             // project that is not in front draws nothing, so its pin cannot be held here.
             pinned: {
@@ -1641,6 +1642,7 @@ export function PlaneView({
       quiet,
       report,
       states.needsYou,
+      states.reports,
       strips,
       tabs,
       views,

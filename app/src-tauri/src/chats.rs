@@ -478,7 +478,7 @@ impl Chats {
             .and_then(|one| one.chat.from.as_ref())
             .is_some_and(|from| from.report == charter_core::reopen::Owed::Sent);
         if sent {
-            self.owes(session, charter_core::reopen::Owed::Report);
+            self.owes(session, charter_core::reopen::Owed::Due);
         }
     }
 

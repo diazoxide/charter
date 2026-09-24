@@ -31,13 +31,30 @@ fn a_report(summary: &str) -> Handback {
 
 /// `charter hook <word>` in `plane`, as the app's chat `chat` runs it. Answers stdout.
 fn hook_as(plane: &std::path::Path, word: &str, chat: &str, env: &[(&str, &str)]) -> String {
+    hook_with(
+        plane,
+        word,
+        chat,
+        env,
+        r#"{"session_id":"s-1","prompt":"carry on","source":"startup"}"#,
+    )
+}
+
+/// The same, with `payload` on stdin.
+fn hook_with(
+    plane: &std::path::Path,
+    word: &str,
+    chat: &str,
+    env: &[(&str, &str)],
+    payload: &str,
+) -> String {
     let mut child = Command::new(CHARTER)
         .args(["hook", word])
         .current_dir(plane)
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("HOME", plane)
-        .env("CHARTER_SESSION_ID", chat)
+        .env(charter_core::hookwire::CHAT_ENV, chat)
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -48,7 +65,7 @@ fn hook_as(plane: &std::path::Path, word: &str, chat: &str, env: &[(&str, &str)]
         .stdin
         .take()
         .expect("stdin")
-        .write_all(br#"{"session_id":"s-1","prompt":"carry on"}"#)
+        .write_all(payload.as_bytes())
         .expect("the payload is written");
     let out = child.wait_with_output().expect("charter finishes");
     assert_eq!(out.status.code(), Some(0));
@@ -106,6 +123,27 @@ fn another_chats_turn_is_not_handed_it() {
     assert!(
         !hook_as(plane.path(), "userpromptsubmit", "3", &[]).is_empty(),
         "still waiting for 3"
+    );
+}
+
+#[test]
+fn a_chat_compacting_in_that_workspace_does_not_take_its_reports() {
+    let plane = a_plane();
+    handback::leave(plane.path(), For::Workspace("ops"), &a_report("done")).unwrap();
+
+    let out = hook_with(
+        plane.path(),
+        "sessionstart",
+        "9",
+        &[("CHARTER_WORKSPACE", "ops")],
+        r#"{"session_id":"s-1","source":"compact"}"#,
+    );
+
+    assert!(!out.contains("reported back"), "{out}");
+    assert_eq!(
+        handback::take(plane.path(), For::Workspace("ops")).len(),
+        1,
+        "still waiting for a chat that starts"
     );
 }
 

@@ -72,13 +72,13 @@ export function stateOf(states: ChatStates, session: number): State {
  * `0` for a chat nothing has been heard about — which sorts last, and is honest: a window
  * that has been told nothing about a chat knows nothing about when it last did something.
  */
+export function movedAt(states: ChatStates, session: number): number {
+  return states.movedAt[session] ?? 0;
+}
+
 /** The chats that reported back to `session` and have not been read yet, oldest first. */
 export function reportsTo(states: ChatStates, session: number): readonly string[] {
   return states.reports[session] ?? [];
-}
-
-export function movedAt(states: ChatStates, session: number): number {
-  return states.movedAt[session] ?? 0;
 }
 
 /**

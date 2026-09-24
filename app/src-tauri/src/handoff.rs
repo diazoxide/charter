@@ -158,7 +158,7 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
         )
     })?;
     match from.report {
-        Owed::Report => {}
+        Owed::Due => {}
         Owed::Nothing => {
             return Err(format!(
                 "the handoff that opened this chat did not ask for a report (it had no \
@@ -184,7 +184,14 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
         .chats()
         .shown_name(chat)
         .unwrap_or_else(|| child.name.clone());
-    let parent_open = chats.iter().any(|open| open.session == from.chat);
+    // A parent is reachable when its tab is open AND its program is still running: one that
+    // has ended will never fire the prompt its report waits for, so the report goes where the
+    // next chat to start will read it, as it does for a parent that has closed.
+    let parent_open = chats.iter().any(|open| open.session == from.chat)
+        && !matches!(
+            held.hooks().board().state(from.chat),
+            charter_core::state::State::Done | charter_core::state::State::Failed
+        );
     let to = if parent_open {
         held.chats()
             .shown_name(from.chat)
@@ -398,7 +405,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
             name: parent,
             workspace: left_from,
             report: if open.report {
-                Owed::Report
+                Owed::Due
             } else {
                 Owed::Nothing
             },
@@ -479,8 +486,11 @@ mod tests {
             let program = stand_in::program(
                 &root,
                 "claude-stand-in",
+                // And then stays running, as a harness does: a chat whose program has ended is
+                // one a report cannot reach, and the tests below are about one that is there.
                 &format!(
-                    "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> {argv:?}\n"
+                    "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> {argv:?}\n\
+                     sleep 10\n"
                 ),
             );
             std::fs::write(
