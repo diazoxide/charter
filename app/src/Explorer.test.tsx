@@ -415,7 +415,7 @@ describe("the explorer's tree guides", () => {
  */
 describe("the explorer is a WAI-ARIA tree", () => {
   const withAChat = () => draw({ chats: [chat(7, "seven", `${CUT}/one`)] });
-  const tree = () => screen.getByRole("tree", { name: "Explorer" });
+  const tree = () => screen.getByRole("tree", { name: "Repos and worktrees" });
   const item = (name: RegExp) => within(tree()).getByRole("treeitem", { name });
   /** A treeitem as its first word, its level and its place among its siblings. */
   const shape = (row: HTMLElement) =>
@@ -438,12 +438,16 @@ describe("the explorer is a WAI-ARIA tree", () => {
     ]);
   });
 
-  it("says on a clone whether it is open, and on nothing that cannot fold", async () => {
+  it("says on every parent whether it is open, and nothing on a leaf", async () => {
     withAChat();
 
+    // A clone folds, even one with no worktrees: what it opens onto is the note saying so.
     expect(item(/^svc/)).toHaveAttribute("aria-expanded", "true");
     expect(item(/^tool/)).toHaveAttribute("aria-expanded", "true");
-    for (const leaf of [/^alpha/, /^one/, /^seven/, /^two/]) {
+    // Parents that cannot fold are always open, and say so.
+    expect(item(/^alpha/)).toHaveAttribute("aria-expanded", "true");
+    expect(item(/^one/)).toHaveAttribute("aria-expanded", "true");
+    for (const leaf of [/^seven/, /^two/]) {
       expect(item(leaf)).not.toHaveAttribute("aria-expanded");
     }
 

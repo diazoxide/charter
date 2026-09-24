@@ -78,9 +78,9 @@ import { useTabStop } from "./roving";
  *   the DOM, because the rows are the buttons and a button cannot hold its children: the
  *   nesting a screen reader would otherwise infer runs through lists, `<details>` and wrappers
  *   that are there for the guides. {@link treeOf} is the one place the shape is decided.
- * - **`aria-expanded` on the rows that fold, which are the clones, and on nothing else.** The
- *   workspace row and a worktree with chats under it are parents that are always open; a row
- *   saying `expanded` promises Left will close it, and nothing here can.
+ * - **`aria-expanded` on every row with children**, as the pattern asks of a parent: a clone
+ *   says whether it is open, and the workspace row and a worktree with chats working in it say
+ *   `true`, because they are parents that are always open. A leaf says nothing.
  * - **Right** opens a closed clone, or moves to a row's first child. **Left** closes an open
  *   clone, or moves to the row's parent — which is also what it does on a parent that cannot
  *   close. The fold is the same state a click on the clone's heading changes.
@@ -144,17 +144,18 @@ export function Explorer({
 
   /** Whether a row is drawn. One inside a folded clone is still in the document, and the
    *  roving focus is told to pass it by: jsdom focuses it, and the arrows would stop on it. */
-  const isDrawn = (id: string) => drawn.some((row) => row.id === id);
+  const byId = new Map(tree.map((row) => [row.id, row]));
+  const isDrawn = (id: string) => byId.get(id)?.drawn ?? false;
 
   /** What a row says to a screen reader about where it is in the tree. */
-  const treeitem = (id: string) => {
-    const row = tree.find((one) => one.id === id);
+  const treeitem = (id: string): TreeItem => {
+    const row = byId.get(id);
     return {
       role: "treeitem",
       "aria-level": row?.level,
       "aria-posinset": row?.posinset,
       "aria-setsize": row?.setsize,
-      "aria-expanded": row?.fold?.open,
+      "aria-expanded": row?.fold?.open ?? (row?.parents ? true : undefined),
       "data-row": id,
     };
   };
@@ -164,10 +165,11 @@ export function Explorer({
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     const target = event.target as HTMLElement;
     const to = treeKey(drawn, target.dataset.row, event.key);
-    if (to === undefined) return;
+    if (to === "not-mine") return;
     event.preventDefault();
+    if (to === "stay") return;
     if ("fold" in to) fold(to.fold, to.open);
-    else if ("focus" in to)
+    else
       [...event.currentTarget.querySelectorAll<HTMLElement>("[data-row]")]
         .find((el) => el.dataset.row === to.focus)
         ?.focus();
@@ -191,24 +193,21 @@ export function Explorer({
   const { panels, pieces, piecesRefused } = state;
   const clones = panels?.repos ?? [];
   // The chats that are in no piece of this workspace: they work in the workspace itself or
-  // in a clone, and they are listed under the workspace row rather than dropped.
-  const inAPiece = new Set(
-    clones.flatMap((repo) =>
-      (pieces[repo] ?? []).flatMap((piece) =>
-        chats.filter((chat) => under(chat.cwd, piece.path)).map((chat) => chat.session),
-      ),
-    ),
-  );
+  // in a clone, and they are listed under the workspace row rather than dropped. `treeOf`
+  // decided which they are, and the render reads it rather than deciding a second time.
+  const atTheRoot = chats.filter((chat) => byId.get(chatRow(chat.session))?.parent === ROOT);
 
   return (
     <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
       <nav className="explorer" aria-label="Explorer" data-testid="explorer">
         {state.trouble && <Trouble>{state.trouble}</Trouble>}
 
-        {/* The tree is the rows and what holds them; the sentences about the region — the
+        {/* The tree is the rows and what holds them. The sentences about the whole region — the
           trouble above, the pending and empty notes and what charter would not read below —
-          are outside it, because a tree holds tree items and nothing else. */}
-        <div role="tree" aria-label="Explorer" onKeyDown={onTreeKey}>
+          are outside it. The ones about ONE clone (its worktrees could not be listed, are
+          still coming, or are none) stay inside that clone's `<details>`, beside the row they
+          explain, and so inside the tree: moving them out would take them away from it. */}
+        <div role="tree" aria-label="Repos and worktrees" onKeyDown={onTreeKey}>
           <RovingFocusGroup.Item asChild tabStopId={ROOT} active={spot === undefined}>
             <button
               type="button"
@@ -227,7 +226,7 @@ export function Explorer({
             </button>
           </RovingFocusGroup.Item>
           <ChatList
-            chats={chats.filter((chat) => !inAPiece.has(chat.session))}
+            chats={atTheRoot}
             states={states}
             onShow={onShowChat}
             treeitem={treeitem}
@@ -449,7 +448,7 @@ function ChatList({
   states: ChatStates;
   onShow: (session: number) => void;
   /** What a row says about its place in the tree. */
-  treeitem: (id: string) => object;
+  treeitem: (id: string) => TreeItem;
   /** Whether a row is drawn, and so whether the arrows stop on it. */
   isDrawn: (id: string) => boolean;
 }) {
@@ -534,6 +533,18 @@ type Row = {
   /** Whether it is drawn: a row inside a folded clone is not, so it cannot be the stop and
    *  no key moves to it. */
   drawn: boolean;
+  /** Whether it has children, drawn or not: a parent says `aria-expanded`, a leaf does not. */
+  parents: boolean;
+};
+
+/** The attributes a row carries as a `treeitem`, and the `data-row` the keys find it by. */
+type TreeItem = {
+  role: "treeitem";
+  "aria-level"?: number;
+  "aria-posinset"?: number;
+  "aria-setsize"?: number;
+  "aria-expanded"?: boolean;
+  "data-row": string;
 };
 
 /**
@@ -605,6 +616,7 @@ function treeOf(
       setsize: of,
       fold: node.fold,
       drawn,
+      parents: node.kids.length > 0,
     };
     rows.push(row);
     node.kids.forEach((kid, i) => walk(kid, row, drawn && node.shows, i, node.kids.length));
@@ -613,9 +625,10 @@ function treeOf(
   return rows;
 }
 
-/** Where a key moves the tree: to a row, a clone opened or closed, or nowhere — a key the tree
- *  takes and has nothing to do with, such as Right on a leaf. */
-type TreeMove = { focus: string } | { fold: string; open: boolean } | Record<string, never>;
+/** What a key does to the tree: move to a row, open or close a clone, `stay` — a key the tree
+ *  takes and has nothing to do with here, such as Right on a leaf — or `not-mine`, a key the
+ *  tree leaves to whoever else wants it. */
+type TreeMove = { focus: string } | { fold: string; open: boolean } | "stay" | "not-mine";
 
 /**
  * What a key does on a row of the tree, by the WAI-ARIA "Tree View" pattern — or nothing, for
@@ -624,30 +637,26 @@ type TreeMove = { focus: string } | { fold: string; open: boolean } | Record<str
  * @param drawn The rows drawn, in order.
  * @param from The row the key was pressed on.
  */
-function treeKey(
-  drawn: readonly Row[],
-  from: string | undefined,
-  key: string,
-): TreeMove | undefined {
+function treeKey(drawn: readonly Row[], from: string | undefined, key: string): TreeMove {
   const at = drawn.findIndex((row) => row.id === from);
-  if (at < 0) return undefined;
+  if (at < 0) return "not-mine";
   const row = drawn[at];
   if (key === "ArrowRight") {
     if (row.fold && !row.fold.open) return { fold: row.fold.key, open: true };
     // The next row drawn is the first child exactly when its parent is this one.
     const child = drawn[at + 1];
-    return child?.parent === row.id ? { focus: child.id } : {};
+    return child?.parent === row.id ? { focus: child.id } : "stay";
   }
   if (key === "ArrowLeft") {
     if (row.fold?.open) return { fold: row.fold.key, open: false };
-    return row.parent === undefined ? {} : { focus: row.parent };
+    return row.parent === undefined ? "stay" : { focus: row.parent };
   }
   // Type-ahead: one printable character, and never Space, which is a button's own.
-  if (!/^\S$/u.test(key)) return undefined;
+  if (!/^\S$/u.test(key)) return "not-mine";
   const wanted = key.toLocaleLowerCase();
   for (let step = 1; step < drawn.length; step++) {
     const next = drawn[(at + step) % drawn.length];
     if (next.name.toLocaleLowerCase().startsWith(wanted)) return { focus: next.id };
   }
-  return {};
+  return "stay";
 }

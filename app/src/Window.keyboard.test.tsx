@@ -548,6 +548,23 @@ describe("Delete on a focused tab", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  it("never fires in a text field: Delete and Backspace in the palette edit its words", async () => {
+    onA("MacIntel");
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{F2}");
+    const palette = await screen.findByRole("dialog", { name: "Command palette" });
+    await userEvent.keyboard("end{Backspace}{ArrowLeft}{Delete}");
+
+    expect(within(palette).getByRole("combobox")).toHaveValue("e");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // Under the modal palette the strip is hidden from a role query, so it is counted as markup.
+    expect(document.querySelectorAll('[aria-label="Tabs"] [role="tab"]')).toHaveLength(3);
+  });
+
   it("never fires in a terminal: Delete and Backspace there are the shell's", async () => {
     onA("MacIntel");
     const { asked } = core();

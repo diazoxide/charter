@@ -449,7 +449,7 @@ model and a select-on-`mousedown` this window's strips do not have:
   no longer `button`s to a role query, so a test reaches them by that role.
 - **Every other control says `tabIndex={0}`**, and a tab's `×` says `-1`: fifty closers would be
   fifty stops again. **Delete on a focused project or chat tab presses the row its `×` presses**
-  (charter-app#239, `closeOnDelete` in `app/src/roving.ts`), and so does Backspace on a Mac,
+  (charter-app#239, `closeOnDelete` in `app/src/tabKeys.ts`), and so does Backspace on a Mac,
   whose key marked "delete" sends it: ending a chat still asks first, a view tab still closes
   without asking, and the keyboard lands on the strip's stop afterwards. A new strip with a `×`
   (a vault tab's) calls it from its tab's `onKeyDown` with that `×`'s row. The palette and the
