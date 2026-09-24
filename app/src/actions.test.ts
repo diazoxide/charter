@@ -877,15 +877,15 @@ describe("the palette at fifty chats", () => {
       // stand in front of it. Inside each half the catalogue's own order stands.
       "Merge this chat's worktree into its clone",
       "Remove this chat's worktree",
-      // Then the rows about things that are not in front, in the catalogue's order: a rename
-      // per chat (charter-app#254) comes before the pieces, as the tab rows always have.
-      "Rename chat ide.1…",
-      "Rename chat charter.2…",
+      // Then the rows about things that are not in front, in the catalogue's order.
       // `ignore` has `re` in it, and it is charter's word, so the two queued chats' Ignore
-      // rows (charter-app#248) are verbs here too — ahead of the pieces' merges by the
-      // catalogue's own order, and still behind every row about what is in front.
+      // rows (charter-app#248) are verbs here too, and still behind every row about what is
+      // in front. Then a rename per chat (charter-app#254), before the pieces, as the tab
+      // rows always have.
       "Ignore chat 103 until it asks again",
       "Ignore chat 107 until it asks again",
+      "Rename chat ide.1…",
+      "Rename chat charter.2…",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);

@@ -235,7 +235,9 @@ describe("a terminal keeps its Tab", () => {
     core({ waiting: [3] });
     render(<App />);
     const terminal = await screen.findByLabelText("Terminal 2");
-    await within(await screen.findByTestId("panels")).findByRole("button", { name: /^three/ });
+    await within(await screen.findByTestId("panels")).findByRole("button", {
+      name: /^steward three/,
+    });
     terminal.focus();
 
     await userEvent.keyboard("{Control>}{Tab}{/Control}");
@@ -245,7 +247,7 @@ describe("a terminal keeps its Tab", () => {
     // And past it, with an ordinary Tab, the Attention region's queue.
     await userEvent.tab();
     expect(document.activeElement).toBe(
-      within(screen.getByTestId("panels")).getByRole("button", { name: /^three/ }),
+      within(screen.getByTestId("panels")).getByRole("button", { name: /^steward three/ }),
     );
 
     terminal.focus();
@@ -260,7 +262,9 @@ async function theWholeWindow() {
   core({ waiting: [3, 1] });
   render(<App />);
   await screen.findByTestId("piece-svc-one");
-  await within(await screen.findByTestId("panels")).findByRole("button", { name: /^three/ });
+  await within(await screen.findByTestId("panels")).findByRole("button", {
+    name: /^steward three/,
+  });
   await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
 }
 
