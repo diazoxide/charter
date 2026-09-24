@@ -1,4 +1,4 @@
-import { useEffect, useId, type ReactNode } from "react";
+import { useEffect, useId, type KeyboardEvent, type ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { menuRows, type Catalogued, type MenuOn, type Offer } from "./actions";
 
@@ -52,7 +52,9 @@ export function Menued({
   if (rows.above.length === 0 && rows.below.length === 0) return <>{children}</>;
   return (
     <ContextMenu.Root modal={false}>
-      <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
+      <ContextMenu.Trigger asChild onKeyDown={openFromTheKeyboard}>
+        {children}
+      </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content className="item-menu" collisionPadding={8}>
           {rows.above.map((offer) => (
@@ -67,6 +69,38 @@ export function Menued({
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+  );
+}
+
+/**
+ * Opens the menu from Shift+F10 or the menu key, on the element that has the keyboard
+ * (charter-app#174).
+ *
+ * **Whether the engine raises `contextmenu` for either key is the platform's, not charter's**
+ * — macOS has no such convention at all, so in the macOS WebView every menu in the window was
+ * a pointer's alone, including the explorer's rows, which the keyboard otherwise reaches only
+ * by arrows. This sends the event a right-click sends, at the element's lower-left corner, so
+ * Radix opens exactly the menu a pointer would and nothing here decides what is in it. The
+ * default is prevented; an engine that raises its own event as well only opens the same menu
+ * again. Radix already knows the keyboard is in use (the key was a keydown), so it puts the
+ * first row under the keyboard.
+ *
+ * **Only when the trigger ITSELF has the keyboard.** The panes' menu is on the box the
+ * terminals are in, and a program in a terminal may want Shift+F10; a key pressed inside a
+ * trigger belongs to what it was pressed in.
+ */
+function openFromTheKeyboard(event: KeyboardEvent<HTMLElement>) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+  event.preventDefault();
+  const at = event.currentTarget.getBoundingClientRect();
+  event.currentTarget.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: at.left,
+      clientY: at.bottom,
+    }),
   );
 }
 

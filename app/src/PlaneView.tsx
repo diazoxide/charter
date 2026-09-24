@@ -48,6 +48,7 @@ import {
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
+  type Clone,
   type Cut,
   type Doing,
   type Offer,
@@ -125,6 +126,11 @@ import { useTextSizes } from "./textSize";
 
 /** One empty list, so a prop left out is the same list at every render. */
 const NONE: readonly never[] = [];
+
+/** Where the picker's chat goes: a new tab — started in `in` when a row asked for one
+ *  directory for that tab alone (charter-app#174), else where the explorer's pick says — or a
+ *  split of the pane in front. */
+type Where = { tab: true; in?: string } | { split: Direction };
 
 /**
  * One project, with everything that belongs to it.
@@ -240,7 +246,7 @@ export function PlaneView({
    *  here, because both start a harness and ADR 0022 admits no path that does not pick. */
   const [picking, setPicking] = useState<{
     options: StartOptions;
-    where: { tab: true } | { split: Direction };
+    where: Where;
   }>();
   /** Why the last start did not happen, shown in the picker rather than behind it. */
   const [pickerTrouble, setPickerTrouble] = useState<string>();
@@ -764,11 +770,17 @@ export function PlaneView({
    */
   const spot = useMemo(() => {
     if (pickedSpot === undefined || pickedSpot.workspace !== ofWorkspace) return undefined;
-    const listed = workspaceState.pieces[pickedSpot.spot.repo];
-    if (listed !== undefined && !listed.some((one) => one.piece === pickedSpot.spot.piece))
-      return undefined;
+    const { repo, piece } = pickedSpot.spot;
+    // A picked CLONE (charter-app#174) stops standing the same way, one level up: when the
+    // plane is read again and the clone is not in it.
+    if (piece === undefined) {
+      const clones = workspaceState.panels?.repos;
+      return clones !== undefined && !clones.includes(repo) ? undefined : pickedSpot.spot;
+    }
+    const listed = workspaceState.pieces[repo];
+    if (listed !== undefined && !listed.some((one) => one.piece === piece)) return undefined;
     return pickedSpot.spot;
-  }, [ofWorkspace, pickedSpot, workspaceState.pieces]);
+  }, [ofWorkspace, pickedSpot, workspaceState.panels, workspaceState.pieces]);
 
   // Where a chat starts: **the spot the explorer picked**, and the focused workspace's own
   // directory when nothing is picked — so the sidebar can file it under that workspace.
@@ -940,7 +952,7 @@ export function PlaneView({
 
   /** Asks which profile and which persona. It starts nothing by itself. */
   const ask = useCallback(
-    async (where: { tab: true } | { split: Direction }) => {
+    async (where: Where) => {
       setPickerTrouble(undefined);
       const options = await commands
         .startOptions(plane)
@@ -955,6 +967,8 @@ export function PlaneView({
   );
 
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
+  /** A new tab whose chat starts in that directory — this one, and not the next. */
+  const newTabIn = useCallback((path: string) => void ask({ tab: true, in: path }), [ask]);
 
   /** A row was picked: the chat starts on that profile, with that persona, either drawing
    *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in
@@ -963,6 +977,9 @@ export function PlaneView({
     async (profile: string, persona: string | null, showFooter: boolean, label: string | null) => {
       const where = picking?.where;
       if (where === undefined) return;
+      // A tab asked for in one directory starts there; everything else starts where the
+      // explorer's pick says (charter-app#174).
+      const cwd = ("in" in where ? where.in : undefined) ?? startIn;
       const inFrontTab = now.current.inFront;
       // The tab's CHAT name, not the sentence the tab bar draws: the core is being told what
       // this chat is called, and a split's chat is called what the tab's chat is called. The
@@ -979,7 +996,7 @@ export function PlaneView({
           plane,
           profile,
           persona,
-          startIn,
+          cwd,
           name,
           label,
           showFooter,
@@ -999,7 +1016,7 @@ export function PlaneView({
       // Where charter put it, written down before the tab is drawn: the plane will say the
       // same thing a tick later, and until it does this is what keeps the tab on the strip
       // the operator is looking at.
-      const filed = startIn === null ? OUTSIDE : (focused ?? OUTSIDE);
+      const filed = cwd === null ? OUTSIDE : (focused ?? OUTSIDE);
       setStartedIn((was) => ({ ...was, [session]: filed }));
       if ("tab" in where) {
         const kind = picking?.options.profiles.find((one) => one.name === profile)?.kind;
@@ -1583,6 +1600,10 @@ export function PlaneView({
       createVault,
       removeWorktree,
       mergeWorktree,
+      // A clone picked from its menu is the explorer's own pick one level up: the same state,
+      // so the explorer marks it and `New tab` starts there (charter-app#174).
+      pickClone: (repo, path) => pickSpot({ repo, path }),
+      newChatIn: newTabIn,
       sendKey,
       openProject: windowDoes.openProject,
       createProject: windowDoes.createProject,
@@ -1606,6 +1627,8 @@ export function PlaneView({
       mergeWorktree,
       newTab,
       pickVault,
+      newTabIn,
+      pickSpot,
       pinTab,
       pinWorkspace,
       removeWorkspace,
@@ -1676,6 +1699,20 @@ export function PlaneView({
     [ofWorkspace, workspaceState.panels, workspaceState.pieces],
   );
 
+  /**
+   * The focused workspace's clones with the paths the core spelled (charter-app#174), for the
+   * two rows each clone's menu lists. Held on `panels`, which keeps its identity until the
+   * plane is read again, for the pieces' reason above.
+   */
+  const clones = useMemo<Clone[]>(() => {
+    const panels = workspaceState.panels;
+    if (ofWorkspace === undefined || panels === undefined) return [];
+    return panels.repos.flatMap((repo) => {
+      const path = panels.paths[repo];
+      return path === undefined ? [] : [{ repo, path }];
+    });
+  }, [ofWorkspace, workspaceState.panels]);
+
   /** The plane's personas, straight off the plane's own answer — the array, not a copy of it,
    *  so the catalogue is rebuilt when the plane is read again and not per render. */
   const personas = workspaceState.panels?.personas;
@@ -1704,6 +1741,8 @@ export function PlaneView({
             focused,
             worktree,
             pieces,
+            clones,
+            startsIn: spot?.path,
             personas,
             vaults: vaultNames,
             plane,
@@ -1728,6 +1767,7 @@ export function PlaneView({
             views,
           }),
     [
+      clones,
       focused,
       inFront,
       nameOf,
@@ -1741,6 +1781,7 @@ export function PlaneView({
       projects,
       quiet,
       report,
+      spot?.path,
       states.needsYou,
       states.reports,
       strips,
@@ -2268,7 +2309,14 @@ export function PlaneView({
               vaults={vaults}
             />
           ),
-          bottom: <BottomBar workspace={ofWorkspace} state={workspaceState} />,
+          bottom: (
+            <BottomBar
+              workspace={ofWorkspace}
+              state={workspaceState}
+              offers={found}
+              onPress={press}
+            />
+          ),
         }}
         centre={
           /* The centre is where a chat is, so its menu is the chat verbs the bar has: a new

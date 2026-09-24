@@ -3,10 +3,12 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ProjectSettings } from "./ProjectSettings";
+import { projectThemeChanged } from "./projectTheme";
 import { ViewPane } from "./Views";
 import { SETTINGS_TITLE, SETTINGS_VIEW } from "./tabs";
 import type {
   ProjectExtension,
+  ProjectTheme,
   ProjectSettings as Both,
   SettingsFile,
   SettingsSaved,
@@ -95,16 +97,34 @@ const NO_LOCAL: SettingsFile = {
   fields: [],
 };
 
+/** The theme `project_theme` answers for a project that picked none. */
+const NO_PICK: ProjectTheme = {
+  options: [
+    { value: "charter-dark", label: "charter-dark (built in)" },
+    { value: "charter-light", label: "charter-light (built in)" },
+    { value: "system", label: "Follow the system" },
+    { value: "solarized/Solarized Dark", label: "Solarized Dark (Solarized)" },
+  ],
+  picked: null,
+  file: null,
+  draws: null,
+  why: null,
+  ignored: [],
+};
+
 /** The core, as a mock: `project_settings` answers `both`, `project_extensions` answers
  *  `extensions`, and `save_project_settings` answers `saved` and records what it was sent. */
 function core(
   both: Both,
   saved?: (sent: Record<string, unknown>) => SettingsSaved,
   extensions: ProjectExtension[] = [],
+  theme: ProjectTheme | (() => ProjectTheme) = NO_PICK,
 ) {
+  const themeNow = () => (typeof theme === "function" ? theme() : theme);
   const sent: Record<string, unknown>[] = [];
   let reads = 0;
   let extensionReads = 0;
+  let themeAsks = 0;
   mockIPC((cmd, args) => {
     const given = (args ?? {}) as Record<string, unknown>;
     if (cmd === "project_settings") {
@@ -116,13 +136,23 @@ function core(
       return extensions;
     }
     if (cmd === "extensions_on") return [];
+    if (cmd === "project_theme") return themeNow();
+    if (cmd === "project_theme_drawn") {
+      themeAsks += 1;
+      return themeNow().draws;
+    }
     if (cmd === "save_project_settings") {
       sent.push(given);
       return saved?.(given) ?? { kind: "saved", file: both.shared };
     }
     return undefined;
   });
-  return { sent, reads: () => reads, extensionReads: () => extensionReads };
+  return {
+    sent,
+    reads: () => reads,
+    extensionReads: () => extensionReads,
+    themeAsks: () => themeAsks,
+  };
 }
 
 async function drawn() {
@@ -497,6 +527,114 @@ describe("the Extensions group (charter-app#253)", () => {
     expect(within(shared).getByRole("group", { name: "Extensions" })).toHaveTextContent(
       "No extension is installed on this machine or named by this project.",
     );
+  });
+});
+
+describe("the Theme group (charter-app#273)", () => {
+  const PICKS_SOLARIZED: Both = {
+    shared: {
+      ...SHARED,
+      fields: [
+        ...SHARED.fields,
+        {
+          path: [{ key: "theme" }, { key: "use" }],
+          value: { kind: "text", value: "solarized/Solarized Dark" },
+        },
+      ],
+    },
+    local: LOCAL,
+  };
+  const TURNED_OFF: ProjectTheme = {
+    ...NO_PICK,
+    picked: "solarized/Solarized Dark",
+    file: "charter.toml",
+    draws: "charter-dark",
+    why: "charter.toml picks “Solarized Dark” from solarized, but solarized is off in this project — so the built-in charter-dark is drawn",
+  };
+
+  it("offers the built-ins, following the system, and every approved extension's themes, in both sections", async () => {
+    core(PICKS_SOLARIZED, undefined, [], TURNED_OFF);
+    const { shared, local } = await drawn();
+
+    const sharedPick = await within(shared).findByLabelText("Theme");
+    expect(sharedPick).toHaveValue("solarized/Solarized Dark");
+    expect(within(local).getByLabelText("Theme")).toHaveValue("");
+    expect(
+      within(sharedPick)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual([
+      "not set — the window's own theme",
+      "charter-dark (built in)",
+      "charter-light (built in)",
+      "Follow the system",
+      "Solarized Dark (Solarized)",
+    ]);
+    expect(
+      within(within(local).getByLabelText("Theme")).getAllByRole("option")[0],
+    ).toHaveTextContent("not set — charter.toml's pick");
+  });
+
+  it("says why a pick whose extension is off is not drawn", async () => {
+    core(PICKS_SOLARIZED, undefined, [], TURNED_OFF);
+    const { shared } = await drawn();
+
+    const group = within(shared).getByRole("group", { name: "Theme" });
+    await waitFor(() =>
+      expect(group).toHaveTextContent(
+        "charter.toml picks “Solarized Dark” from solarized, but solarized is off in this project — so the built-in charter-dark is drawn",
+      ),
+    );
+  });
+
+  it("writes the pick to the section it is in, and not set removes it", async () => {
+    const { sent } = core(PICKS_SOLARIZED, undefined, [], TURNED_OFF);
+    const { shared, local } = await drawn();
+    const user = userEvent.setup();
+
+    await user.selectOptions(await within(local).findByLabelText("Theme"), "system");
+    await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0].change as { edits: unknown }).edits).toEqual([
+      { path: [{ key: "theme" }, { key: "use" }], value: { kind: "text", value: "system" } },
+    ]);
+
+    await user.selectOptions(within(shared).getByLabelText("Theme"), "");
+    await user.click(within(shared).getByRole("button", { name: "Save charter.toml" }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect((sent[1].change as { edits: unknown }).edits).toEqual([
+      { path: [{ key: "theme" }, { key: "use" }], value: null },
+    ]);
+  });
+
+  it("reads the theme again when what the window draws changes — an extension approved elsewhere", async () => {
+    let theme = TURNED_OFF;
+    core(PICKS_SOLARIZED, undefined, [], () => theme);
+    const { shared } = await drawn();
+    const group = within(shared).getByRole("group", { name: "Theme" });
+    await waitFor(() => expect(group).toHaveTextContent("solarized is off in this project"));
+
+    // The Extensions dialog approved or turned something on: it tells the window, not the tab.
+    theme = { ...TURNED_OFF, draws: "solarized/Solarized Dark", why: null };
+    projectThemeChanged(PLANE);
+
+    await waitFor(() => expect(group).not.toHaveTextContent("solarized is off in this project"));
+    expect(within(shared).getByLabelText("Theme")).toHaveAccessibleDescription(
+      "Drawn in this project: Solarized Dark (Solarized). The terminal follows the window.",
+    );
+  });
+
+  it("has the window ask the project's theme again after a save", async () => {
+    const { themeAsks } = core(PICKS_SOLARIZED, undefined, [], TURNED_OFF);
+    const { local } = await drawn();
+    const user = userEvent.setup();
+    // The tab asks once as it opens, for what the window draws.
+    await waitFor(() => expect(themeAsks()).toBe(1));
+
+    await user.selectOptions(await within(local).findByLabelText("Theme"), "charter-light");
+    await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
+
+    await waitFor(() => expect(themeAsks()).toBe(2));
   });
 });
 

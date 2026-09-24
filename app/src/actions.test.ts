@@ -77,6 +77,8 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`mergeWorktree:${cut.repo}/${cut.piece}`);
       return { ok: true as const };
     }),
+    pickClone: note("pickClone"),
+    newChatIn: note("newChatIn"),
     sendKey: vi.fn(async (key: string) => {
       calls.push(`sendKey:${key}`);
       return { ok: true as const };
@@ -488,6 +490,55 @@ describe("the one list of actions", () => {
 
     const nowhere = catalogue(now());
     expect(by(nowhere, "vault.create")?.available).toBe(false);
+  });
+
+  describe("a clone of the focused workspace (charter-app#174)", () => {
+    const SVC = { repo: "svc", path: "/plane/workspaces/alpha/svc" };
+
+    it("offers to start the next chats in it, carrying the path the core spelled", () => {
+      // The verb the issue named: a clone picked as the spot, one level up from a piece.
+      const offers = catalogue(now({ clones: [SVC] }));
+
+      expect(by(offers, "clone.pick:svc")?.title).toBe("Start new chats in svc");
+      expect(by(offers, "clone.pick:svc")?.name).toBe("svc");
+      expect(by(offers, "clone.pick:svc")?.does).toEqual({
+        verb: "pickClone",
+        repo: "svc",
+        path: "/plane/workspaces/alpha/svc",
+      });
+    });
+
+    it("offers a new tab in it, for that one tab, leaving the pick alone", async () => {
+      const hands = doing();
+      const offers = catalogue(now({ clones: [SVC] }));
+
+      expect(by(offers, "clone.chat:svc")?.title).toBe("New tab in svc");
+      await run(offers, "clone.chat:svc", hands);
+
+      // Not `pickClone`: that would make every later New tab start in the clone too, and then
+      // the two rows would be one row with two names (the #174 review).
+      expect(hands.calls).toEqual(["newChatIn:/plane/workspaces/alpha/svc"]);
+    });
+
+    it("greys the pick with a reason once new chats already start there", () => {
+      const offers = catalogue(now({ clones: [SVC], startsIn: SVC.path }));
+
+      expect(by(offers, "clone.pick:svc")?.available).toBe(false);
+      expect(by(offers, "clone.pick:svc")?.reason).toBe("New chats already start in svc.");
+      // Starting another one there is still something to do.
+      expect(by(offers, "clone.chat:svc")?.available).toBe(true);
+    });
+
+    it("has no row for a clone it was not told the path of", () => {
+      expect(by(catalogue(now()), "clone.pick:svc")).toBeUndefined();
+    });
+
+    it("lists the new tab, then the pick, and nothing below the line", () => {
+      expect(menuOn({ on: "clone", repo: "svc" })).toEqual({
+        above: ["clone.chat:svc", "clone.pick:svc"],
+        below: [],
+      });
+    });
   });
 
   it("offers every view an approved extension offers, by the same verb a persona's tab is opened by", () => {
@@ -911,6 +962,14 @@ describe("the palette at fifty chats", () => {
     return cut;
   }
 
+  /** The same ten clones, each with the path the core spelled. */
+  function tenClones() {
+    return Array.from({ length: 10 }, (_, repo) => ({
+      repo: `repo-${repo}`,
+      path: `/plane/workspaces/ide/repo-${repo}`,
+    }));
+  }
+
   const loaded = () =>
     catalogue(
       now({
@@ -920,6 +979,7 @@ describe("the palette at fifty chats", () => {
         plane: "/plane",
         worktree: PIECE,
         pieces: fiftyPieces(),
+        clones: tenClones(),
         personas: PERSONAS,
         needsYou: [103, 107],
         nameOf: (session) => `chat ${session}`,
@@ -1079,17 +1139,23 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
-    // 347 rows: 50 chats four times over, 6 workspaces THREE times, 50 pieces TWICE, 8
-    // personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248), and the
-    // verbs — with Preferences (charter-app#283) and the vault picker and New vault…
+    // Two rows per clone (charter-app#174, the second half): a new tab in it and the pick.
+    // Ten clones is twenty rows, on the shape above; `narrow` is held to the same rank with
+    // them and without them two tests up.
+    expect(offers.filter((row) => row.id.startsWith("clone.chat:"))).toHaveLength(10);
+    expect(offers.filter((row) => row.id.startsWith("clone.pick:"))).toHaveLength(10);
+    // 365 rows: 50 chats four times over, 6 workspaces THREE times, 50 pieces TWICE, 10
+    // clones TWICE, 8 personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248),
+    // and the sixteen verbs — the sixteenth is Preferences (charter-app#283) — plus the vault picker and New vault…
     // (charter-app#235; this plane has no vaults, so no `vault.open:` rows). It was 118 before the pins, 174 before
     // the extension list (ADR 0041), 175 before a workspace could be made and deleted
     // from the window, 183 before the explorer's rows had anything to offer, 291 before
     // the row that puts `charter` on a terminal's PATH, 292 before a queued chat could be
-    // ignored, and 294 before a chat could be renamed (charter-app#254). What the
+    // ignored, 294 before a chat could be renamed (charter-app#254), and 345 before a clone
+    // could be picked from its own menu. What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(347);
+    expect(offers).toHaveLength(367);
   });
 
   /**

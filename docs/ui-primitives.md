@@ -100,8 +100,9 @@ own tabs, so `n` tabs fit in `width` when `width / n >= least`. It replaced an
 a loop on a strip that collapses.
 
 And the **context menus** (`app/src/Menus.tsx`): `@radix-ui/react-context-menu`, on the project
-tabs, the workspace tabs, the chat tabs and the panes. Three things about them are decisions and
-not details:
+tabs, the workspace tabs, the chat tabs, the panes, the explorer's worktree and clone rows, the
+persona rows and the bottom bar's repo rows. Four things about them are decisions and not
+details:
 
 - **A menu is a third reader of `app/src/actions.ts`**, after the palette and the bar.
   `actions.menuRows` filters the one catalogue to the item the menu was opened on, and a row the
@@ -114,6 +115,11 @@ not details:
 - **A row's accessible name is the catalogue's title alone** (`aria-label`), and its note — what
   the row costs — is its `aria-describedby`. Left to the content, every row would announce as a
   paragraph: _"End chat 3 steward Ends the program it runs. There is no undo."_
+- **Shift+F10 and the menu key open it on the element that has the keyboard** (charter-app#174).
+  macOS has no keyboard convention for a context menu and its WebView raises no `contextmenu`
+  for either key, so `Menued` dispatches the one a right-click would — and only when the
+  trigger itself has focus, never a terminal inside the panes' trigger, whose program may want
+  the key.
 
 And with them, **the WebView's own menu is taken away from the whole window**
 (`useNoBrowserMenu`), because a shipped app that answers a right-click with `Reload` and

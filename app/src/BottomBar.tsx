@@ -13,6 +13,8 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { Piece, RepoState } from "./bindings";
+import { Menued } from "./Menus";
+import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useArrived } from "./lib/arrived";
 
@@ -27,22 +29,21 @@ import { useArrived } from "./lib/arrived";
  * every control in here and expects to find none. It is the one half of ADR 0038's reading
  * ("the bottom is where you read what is true and do not touch it") that a test can hold.
  *
- * **And that is why nothing in here has a context menu** (charter-app#174), which left one of
- * the three surfaces that issue names still without one. Two separate reasons, and both would
- * have to go:
+ * **A repo row has a context menu, and a menu is not a control** (charter-app#174). It is the
+ * explorer's clone menu — `New tab in <repo>` and `Start new chats in <repo>` — drawn from the
+ * same catalogue rows, now that the core says where a clone is (`Panels.paths`). The row gains
+ * no button and no Tab stop, the menu is drawn in a portal outside this region, and neither row
+ * touches the repo the region is reading: both are about where the next chat starts. So the
+ * spec that presses on everything in here still finds nothing to press. A pointer reaches it
+ * here; the keyboard reaches the same two rows on the explorer's clone heading and in the
+ * palette.
  *
- * - **A repo row has no verb to offer.** Nothing in `actions.ts` is about a clone, because
- *   nothing this window can do to one is: `workspace_panels` answers with clone NAMES, and a
- *   menu here would have to invent a verb — the second list `actions.ts` opens by refusing to
- *   have. The explorer records the same gap about the same rows.
- * - **The worktree rows under each repo DO have verbs now** — `worktree.merge:<repo>/<piece>`
- *   and `worktree.remove:<repo>/<piece>` exist, and the explorer's rows draw them. Putting
- *   them here would put `Remove worktree` in the region ADR 0038 says is for reading, under a
- *   spec that presses on everything in it expecting to find nothing. That is an amendment to
- *   ADR 0038, argued on its own, and not a defect fix.
- *
- * A right-click down here therefore answers with nothing rather than with the browser's own
- * menu, which `useNoBrowserMenu` covers for the whole window.
+ * **The worktree rows under each repo still have none, and that is a decision.** Their verbs
+ * exist — `worktree.merge:<repo>/<piece>` and `worktree.remove:<repo>/<piece>`, drawn on the
+ * explorer's rows — but putting `Remove worktree` under the pointer in the region ADR 0038
+ * says is for reading is an amendment to ADR 0038, argued on its own, and not a defect fix.
+ * A right-click there, and on a repo nobody cloned, answers with nothing rather than with the
+ * browser's own menu, which `useNoBrowserMenu` covers for the whole window.
  *
  * **Nothing here waits on a network.** The CI cell is what a forge refresher last wrote into
  * `.charter/cache/glstate.json`; charter-app reads that file and never fetches. A cell with
@@ -95,9 +96,14 @@ import { useArrived } from "./lib/arrived";
 export function BottomBar({
   workspace,
   state,
+  offers,
+  onPress,
 }: {
   workspace: string | undefined;
   state: WorkspaceState;
+  /** The catalogue by id, which is what a repo row's menu is drawn out of. */
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
 }) {
   if (workspace === undefined) {
     return (
@@ -139,6 +145,8 @@ export function BottomBar({
               pieces={pieces[name]}
               piecesRefused={piecesRefused[name]}
               reading={reading}
+              offers={offers}
+              onPress={onPress}
             />
           ))}
           {panels.absent.map((name) => (
@@ -206,52 +214,61 @@ function RepoRows({
   pieces,
   piecesRefused,
   reading,
+  offers,
+  onPress,
 }: {
   name: string;
   state: RepoState | undefined;
   pieces: Piece[] | undefined;
   piecesRefused: string | undefined;
   reading: boolean;
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
 }) {
   const tree = pieces !== undefined && pieces.length > 0;
   return (
     <tbody>
-      <tr className="repo-row" data-testid={`repo-${name}`}>
-        <th scope="row" className="repo">
-          <FolderGit2 className="node-icon" />
-          <span>{name}</span>
-        </th>
-        {state === undefined ? (
-          <td className="branch pending" colSpan={2}>
-            {reading ? "reading…" : "not read"}
-          </td>
-        ) : state.unreadable ? (
-          // Never "clean". A tree charter could not read is the one thing a panel must not
-          // round down, because the round-down says everything is fine. It takes both columns
-          // rather than leaving an empty "Changes" cell beside it — an empty cell in a table
-          // reads as "nothing", which is the round-down in another shape.
-          <td colSpan={2}>
-            <span className="branch unreadable" role="alert">
-              <TriangleAlert className="node-icon" />
-              {state.unreadable}
-            </span>
-          </td>
-        ) : (
-          <>
-            <td className="branch">
-              <GitBranch className="node-icon" />
-              <span>{headOf(state)}</span>
-              {state.upstream && <span className="upstream">{state.upstream}</span>}
-              {gapOf(state) && <span className="gap">{gapOf(state)}</span>}
+      {/* The clone's menu, on its row of columns and not on the `<tbody>`: the tree under it
+          is the pieces', which have no menu down here (see the docstring). `asChild`, so the
+          table gains no element. */}
+      <Menued on={{ on: "clone", repo: name }} offers={offers} onPress={onPress}>
+        <tr className="repo-row" data-testid={`repo-${name}`}>
+          <th scope="row" className="repo">
+            <FolderGit2 className="node-icon" />
+            <span>{name}</span>
+          </th>
+          {state === undefined ? (
+            <td className="branch pending" colSpan={2}>
+              {reading ? "reading…" : "not read"}
             </td>
-            <td className="dirt">{dirtOf(state)}</td>
-          </>
-        )}
-        <td className="worktrees" data-testid={`worktrees-${name}`}>
-          <Worktrees pieces={pieces} refused={piecesRefused} />
-        </td>
-        <CiCell name={name} state={state} reading={reading} />
-      </tr>
+          ) : state.unreadable ? (
+            // Never "clean". A tree charter could not read is the one thing a panel must not
+            // round down, because the round-down says everything is fine. It takes both columns
+            // rather than leaving an empty "Changes" cell beside it — an empty cell in a table
+            // reads as "nothing", which is the round-down in another shape.
+            <td colSpan={2}>
+              <span className="branch unreadable" role="alert">
+                <TriangleAlert className="node-icon" />
+                {state.unreadable}
+              </span>
+            </td>
+          ) : (
+            <>
+              <td className="branch">
+                <GitBranch className="node-icon" />
+                <span>{headOf(state)}</span>
+                {state.upstream && <span className="upstream">{state.upstream}</span>}
+                {gapOf(state) && <span className="gap">{gapOf(state)}</span>}
+              </td>
+              <td className="dirt">{dirtOf(state)}</td>
+            </>
+          )}
+          <td className="worktrees" data-testid={`worktrees-${name}`}>
+            <Worktrees pieces={pieces} refused={piecesRefused} />
+          </td>
+          <CiCell name={name} state={state} reading={reading} />
+        </tr>
+      </Menued>
       {tree && (
         <tr className="worktree-tree-row">
           {/* The whole width, because a tree indented inside one column of five would be

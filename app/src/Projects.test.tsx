@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
+import { BUILT_IN, DEFAULT_THEME, drawIn, inForce, onDrawn, type Theme } from "./theme/theme";
 
 /**
  * A window holding more than one project (ADR 0033, spec decision 23).
@@ -94,6 +95,8 @@ function core(
     launch?: string | null;
     restore?: { planes: string[]; active: number | null; dropped: string[] } | null;
     chats?: Record<string, OpenChat[]>;
+    /** What `project_theme_drawn` answers for each project, by its root (charter-app#273). */
+    themes?: Record<string, string | null>;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -123,6 +126,8 @@ function core(
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "recent_planes") return { planes: [], dropped: [], forgetful: null };
+    if (cmd === "extensions_on") return [];
+    if (cmd === "project_theme_drawn") return over.themes?.[plane ?? ""] ?? null;
     return null;
   });
   return {
@@ -360,6 +365,33 @@ describe("a window holding more than one project", () => {
 
     expect(within(screen.getByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
     expect(within(screen.getByTestId("panels")).queryByText(/need you/)).toBeNull();
+  });
+
+  it("draws each project's own theme while it is in front, in the window and every terminal", async () => {
+    // charter-app#273: the switch is live, and it reaches the terminal through `onDrawn` (#216).
+    core({ launch: ONE, themes: { [ONE]: "charter-light", [TWO]: null } });
+    const terminal: Theme[] = [];
+    const stop = onDrawn((theme) => terminal.push(theme));
+    try {
+      render(<App />);
+      await vi.waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
+
+      await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
+      await openByPath(TWO);
+      await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+      await vi.waitFor(() => expect(inForce()).toBe(DEFAULT_THEME));
+
+      await userEvent.click(projectTab("one"));
+      await vi.waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
+      expect(terminal.map((theme) => theme.name)).toEqual([
+        "charter-light",
+        "charter-dark",
+        "charter-light",
+      ]);
+    } finally {
+      stop();
+      drawIn(DEFAULT_THEME);
+    }
   });
 
   it("says on a project's tab when a chat over there needs you", async () => {

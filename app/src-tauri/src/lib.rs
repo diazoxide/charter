@@ -1249,6 +1249,8 @@ fn commands() -> Builder<tauri::Wry> {
             vaults::vault_identity_put,
             extensions::project_extensions,
             extensions::extensions_on,
+            extensions::project_theme,
+            extensions::project_theme_drawn,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,
