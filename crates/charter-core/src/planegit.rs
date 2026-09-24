@@ -502,12 +502,15 @@ fn land_via_branch(
 const WRITE: Duration = Duration::from_secs(120);
 
 /// How the rebase onto a remote that moved ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Rebased {
     /// The plane's commits were replayed onto the remote's.
     Replayed,
     /// git stopped on its own — the trees conflict, it refused, or it died.
     Conflict,
+    /// Asked to sign (`--sign`), git could not write a replayed commit: the signer refused.
+    /// Carries what the signer said (charter-app#267).
+    Unsigned(String),
     /// Still running at its deadline, and killed.
     OutOfTime,
 }
@@ -523,6 +526,12 @@ enum Rebased {
 /// replay is signed the way the commit was; putting it on would hand the remote an unsigned
 /// copy of a commit the operator asked to sign.
 ///
+/// **A signer that refuses is not a conflict** (charter-app#267). Under `--sign` a replay that
+/// cannot be signed stops the rebase exactly where a conflict would, with no conflict in it:
+/// git says `failed to write commit object` (in the C locale the runner pins) after the
+/// signer's own words, and a conflict never says that. What the signer said is kept for the
+/// operator; which signer, and why, only it knows.
+///
 /// A run with no exit code is out of time only once the deadline has passed: git killed by a
 /// signal of somebody else's has no code either, and that is not charter stopping it.
 fn rebase_onto_fetched(root: &Path, sign: bool, deadline: Duration) -> Rebased {
@@ -536,7 +545,32 @@ fn rebase_onto_fetched(root: &Path, sign: bool, deadline: Duration) -> Rebased {
     match git::run(root, &rebase, deadline) {
         Ok(run) if run.ok() => Rebased::Replayed,
         Ok(run) if run.code.is_none() && started.elapsed() >= deadline => Rebased::OutOfTime,
+        Ok(run) if sign && run.err.contains(UNWRITTEN) => Rebased::Unsigned(signer_said(&run.err)),
         _ => Rebased::Conflict,
+    }
+}
+
+/// What git's sequencer says when it cannot write a replayed commit — under `--sign`, because
+/// the signer refused. `sequencer.c`'s own message, read in the C locale.
+const UNWRITTEN: &str = "failed to write commit object";
+
+/// The signer's words out of a rebase that stopped on it: everything git printed before
+/// [`UNWRITTEN`], without its progress, its hints or its `error: ` prefixes.
+///
+/// git prints `Rebasing (1/1)` with a carriage return and no newline, so the line the signer's
+/// error lands on starts with it; a line is read from its last `\r`.
+fn signer_said(err: &str) -> String {
+    let before = err.split(UNWRITTEN).next().unwrap_or_default();
+    let said: Vec<&str> = before
+        .lines()
+        .map(|line| line.rsplit('\r').next().unwrap_or_default().trim())
+        .map(|line| line.strip_prefix("error: ").unwrap_or(line))
+        .filter(|line| !line.is_empty() && !line.starts_with("hint:") && *line != "error:")
+        .collect();
+    if said.is_empty() {
+        "the signer gave no reason".to_string()
+    } else {
+        said.join(" ")
     }
 }
 
@@ -551,6 +585,12 @@ fn rebase_onto_fetched(root: &Path, sign: bool, deadline: Duration) -> Rebased {
 /// `sign` is the `--sign` the commit was made under: a remote that moved sends HEAD through a
 /// rebase, and the commit it replays is signed exactly when the commit was.
 pub fn push_head(root: &Path, sign: bool, say: Sink) -> PushResult {
+    push_head_within(root, sign, WRITE, say)
+}
+
+/// [`push_head`], with the rebase given `deadline` rather than [`WRITE`] — so a test can drive
+/// a rebase that runs out of time without waiting out the real one.
+fn push_head_within(root: &Path, sign: bool, deadline: Duration, say: Sink) -> PushResult {
     let branch = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
@@ -638,7 +678,7 @@ pub fn push_head(root: &Path, sign: bool, say: Sink) -> PushResult {
                 "Could not reach origin to fetch, so the retry was skipped.".into(),
             ));
         } else {
-            match rebase_onto_fetched(root, sign, WRITE) {
+            match rebase_onto_fetched(root, sign, deadline) {
                 Rebased::Replayed => {}
                 Rebased::Conflict => {
                     let _ = git::run(root, &["rebase", "--abort"], WRITE);
@@ -649,6 +689,28 @@ pub fn push_head(root: &Path, sign: bool, say: Sink) -> PushResult {
                     ));
                     return record_push(root, PushResult::of(Outcome::Conflict, &branch), &head);
                 }
+                Rebased::Unsigned(signer) => {
+                    let _ = git::run(root, &["rebase", "--abort"], WRITE);
+                    // Stopped, not retried unsigned as the commit is: the commit stays on this
+                    // laptop, where re-signing it is the operator's to do, while a push is
+                    // public and final. The remote never gets an unsigned copy of a commit the
+                    // operator asked to sign.
+                    let detail = format!("the rebase could not sign the replayed commit: {signer}");
+                    say(Say::Warn(format!("Committed locally, but {detail}")));
+                    say(Say::Info(
+                        "  Nothing was pushed, so nothing unsigned reached the remote. Fix the \
+                         signer, then rebase onto the remote and push by hand."
+                            .into(),
+                    ));
+                    return record_push(
+                        root,
+                        PushResult {
+                            detail,
+                            ..PushResult::of(Outcome::Failed, &branch)
+                        },
+                        &head,
+                    );
+                }
                 Rebased::OutOfTime => {
                     let _ = git::run(root, &["rebase", "--abort"], WRITE);
                     // Not a conflict, and not called one: nothing says the trees disagree,
@@ -657,7 +719,7 @@ pub fn push_head(root: &Path, sign: bool, say: Sink) -> PushResult {
                     let detail = format!(
                         "the rebase onto the remote did not finish within {} seconds, so \
                          charter stopped it",
-                        WRITE.as_secs()
+                        deadline.as_secs()
                     );
                     say(Say::Warn(format!(
                         "Committed locally, but {detail} — rebase by hand, then `charter save`."
