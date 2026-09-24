@@ -514,6 +514,12 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
         })
         .map(|(rel, _)| rel.clone())
         .collect();
+    // The marker is left out here only because it is pushed after, and the second pass below
+    // registers `charter_owned` again, whole. So `!= MARKER` against `== MARKER` changes
+    // which of the two passes first lists a file charter already owns — which is to say what
+    // the exclude holds for the moment between them inside this one call — and nothing a
+    // caller can see afterwards: the same final block, the same rows, and the same worst of
+    // the two passes (measured case by case in the PR that excluded it; `.cargo/mutants.toml`).
     first_pass.extend(
         charter_owned(tree, &record)
             .into_iter()
@@ -1498,6 +1504,9 @@ fn already(text: &str) -> BTreeSet<String> {
     let Some((begin, after)) = span(&lines) else {
         return BTreeSet::new();
     };
+    // `begin + 1` skips the begin marker, which the filter below would drop anyway: it starts
+    // with `#`, neither `/` nor the temp glob. So `begin * 1`, which keeps it in the slice, is
+    // an equivalent mutant, excluded in `.cargo/mutants.toml` on that ground.
     lines[begin + 1..after]
         .iter()
         .filter(|line| line.starts_with('/') || **line == TEMP_PATTERN)
@@ -2029,5 +2038,185 @@ mod tests {
         ] {
             assert!(!key_ok(bad), "{bad}");
         }
+    }
+
+    fn layer_of(rows: Vec<Row>, block: Block) -> Wired {
+        Wired {
+            rows,
+            hidden: Hidden::InPlace,
+            block,
+        }
+    }
+
+    fn row_of(rel: &str, status: Status, why: &str) -> Row {
+        Row {
+            rel: rel.into(),
+            status,
+            why: why.into(),
+        }
+    }
+
+    #[test]
+    fn a_refusal_names_what_stopped_the_layer_and_nothing_when_nothing_did() {
+        let tree = Path::new("/w/alpha/.worktrees/app/fix");
+        let fine = row_of(".claude/settings.json", Status::Current, "");
+
+        assert_eq!(
+            layer_of(vec![fine.clone()], Block::Present).refusal(tree),
+            ""
+        );
+        assert!(
+            layer_of(vec![fine.clone()], Block::Blocked)
+                .refusal(tree)
+                .starts_with(
+                    "charter wrote its files in /w/alpha/.worktrees/app/fix and could not settle \
+                     the block"
+                )
+        );
+
+        let unrecorded = row_of(".charter-generated", Status::Unrecorded, "disk full");
+        assert_eq!(
+            layer_of(vec![fine.clone(), unrecorded], Block::Present).refusal(tree),
+            "charter could not publish its record in /w/alpha/.worktrees/app/fix first (disk \
+             full), so it wrote nothing and kept every exclude line it had — a chat there would \
+             run without the plane's layer."
+        );
+        let blocked = row_of(".claude/settings.json", Status::Blocked, "read-only");
+        assert_eq!(
+            layer_of(vec![blocked], Block::Present).refusal(tree),
+            "charter could not write .claude/settings.json in /w/alpha/.worktrees/app/fix \
+             (read-only), so a chat there would run without the plane's layer. Restore write \
+             access and start the chat again."
+        );
+    }
+
+    #[test]
+    fn a_file_with_no_block_and_nothing_to_add_is_handed_back_byte_for_byte() {
+        // Re-joining would add the newline this file does not end with — a write into
+        // somebody's repository for no reason at all.
+        assert_eq!(replace_block("# mine", ""), "# mine");
+        assert_eq!(replace_block("# mine\r\n/build", ""), "# mine\r\n/build");
+    }
+
+    #[test]
+    fn the_os_sentence_loses_only_the_suffix_rust_appends() {
+        assert_eq!(
+            strerror(&std::io::Error::from_raw_os_error(2)),
+            "No such file or directory"
+        );
+        // Not Rust's `(os error N)` suffix at the end: nothing is cut.
+        let said = std::io::Error::other("a (os error 5) b");
+        assert_eq!(strerror(&said), "a (os error 5) b");
+    }
+
+    #[test]
+    fn the_worse_of_two_passes_is_the_one_the_row_reports() {
+        let blocked = Wrote::Blocked("no".into());
+        for (a, b, want) in [
+            (&blocked, &Wrote::Unhidden, &blocked),
+            (&Wrote::Unhidden, &blocked, &blocked),
+            (&Wrote::Created, &Wrote::Unhidden, &Wrote::Unhidden),
+            (&Wrote::Refreshed, &Wrote::Created, &Wrote::Created),
+            (&Wrote::Present, &Wrote::Refreshed, &Wrote::Refreshed),
+            (&Wrote::Refreshed, &Wrote::Present, &Wrote::Refreshed),
+            (&Wrote::Present, &Wrote::Present, &Wrote::Present),
+        ] {
+            assert_eq!(&worst(a, b), want, "{a:?} and {b:?}");
+        }
+    }
+
+    #[test]
+    fn a_temp_charter_left_is_found_and_a_directory_that_is_gone_holds_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let with = dir.path().join("with");
+        let without = dir.path().join("without");
+        std::fs::create_dir_all(&with).unwrap();
+        std::fs::create_dir_all(&without).unwrap();
+        std::fs::write(with.join(".charter-generated.123.tmp"), "").unwrap();
+        // Half the pattern each is not the pattern.
+        std::fs::write(without.join(".charter-generated.123"), "").unwrap();
+        std::fs::write(without.join("other.tmp"), "").unwrap();
+        let gone = dir.path().join("gone");
+
+        assert_eq!(temps_left([without.clone(), with].into_iter()), Some(true));
+        assert_eq!(temps_left([without.clone(), gone].into_iter()), Some(false));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let shut = dir.path().join("shut");
+            std::fs::create_dir_all(&shut).unwrap();
+            std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let listed = std::fs::read_dir(&shut).is_ok();
+            let found = temps_left([without, shut.clone()].into_iter());
+            std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // Root reads through a mode of 000, and the question then does not arise.
+            if !listed {
+                assert_eq!(
+                    found, None,
+                    "a directory that cannot be listed is not an empty one"
+                );
+            }
+        }
+    }
+
+    fn git_in(dir: &Path, args: &[&str]) {
+        let run = crate::worktree::git::run(dir, args, crate::worktree::git::READ).unwrap();
+        assert!(run.ok(), "git {args:?}: {}", run.err);
+    }
+
+    #[test]
+    fn only_a_path_git_would_commit_is_committable() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = std::fs::canonicalize(dir.path()).unwrap();
+        git_in(&tree, &["init", "-q", "."]);
+        std::fs::write(tree.join(".gitignore"), "ignored*\n").unwrap();
+        std::fs::write(tree.join("tracked"), "one\n").unwrap();
+        git_in(&tree, &["add", ".gitignore", "tracked"]);
+        std::fs::write(tree.join("tracked"), "two\n").unwrap();
+        std::fs::write(tree.join("loose"), "").unwrap();
+        std::fs::write(tree.join("ignored-file"), "").unwrap();
+        std::fs::create_dir_all(tree.join("mixed")).unwrap();
+        std::fs::write(tree.join("mixed/loose"), "").unwrap();
+        std::fs::write(tree.join("mixed/ignored-too"), "").unwrap();
+
+        assert_eq!(path_state(&tree, "loose"), State::Committable);
+        assert_eq!(path_state(&tree, "tracked"), State::Other);
+        assert_eq!(path_state(&tree, "ignored-file"), State::Other);
+        assert_eq!(path_state(&tree, "absent"), State::Other);
+        // An ignored file beside an untracked one does not hide the untracked one.
+        assert_eq!(path_state(&tree, "mixed"), State::Committable);
+        // Not a repository at all: git fails, and a failure is not a pass.
+        let bare = tempfile::tempdir().unwrap();
+        std::fs::write(bare.path().join("loose"), "").unwrap();
+        assert_eq!(path_state(bare.path(), "loose"), State::Other);
+
+        assert!(yours_untracked(&tree, "loose"));
+        assert!(!yours_untracked(&tree, "absent"), "nothing there to hide");
+        assert!(
+            !yours_untracked(&tree, "tracked"),
+            "a tracked file shows anyway"
+        );
+    }
+
+    #[test]
+    fn a_link_to_a_directory_is_handed_back_and_never_walked_into() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("a/b/deep.md"), "").unwrap();
+        std::fs::write(root.join("top.md"), "").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("..", root.join("a/loop")).unwrap();
+
+        let mut found: Vec<String> = walk(root)
+            .into_iter()
+            .map(|p| p.strip_prefix(root).unwrap().display().to_string())
+            .collect();
+        found.sort();
+
+        #[cfg(unix)]
+        assert_eq!(found, ["a/b/deep.md", "a/loop", "top.md"]);
+        #[cfg(not(unix))]
+        assert_eq!(found, ["a/b/deep.md", "top.md"]);
     }
 }

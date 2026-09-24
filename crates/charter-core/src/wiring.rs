@@ -181,6 +181,11 @@ pub fn detect(p: &Profile, root: &Path) -> Wiring {
 
 /// Whether `program` names a place rather than a word to search for. Off unix a bare word is
 /// handed back unresolved ([`crate::programs::resolve`]), and it is not a missing file.
+///
+/// **A question only off unix**, and the mutation run excludes its two mutants on that
+/// ground (`.cargo/mutants.toml`). On unix `MAIN_SEPARATOR` is `/`, so `||` and `&&` between
+/// the two halves ask one question twice; and every program `resolve_argv` hands back on unix
+/// is absolute, so `true` is what this already answers there.
 fn names_a_place(program: &str) -> bool {
     program.contains('/') || program.contains(std::path::MAIN_SEPARATOR)
 }

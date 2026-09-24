@@ -117,6 +117,10 @@ pub struct State {
 ///
 /// The sigil goes with them, which is not obvious and is deliberate: an entry that names a
 /// change number the refresh could not read has nothing to put a `#` or a `!` in front of.
+///
+/// Equivalent to its own mutation `Default::default()`, which is exactly what it returns, and
+/// excluded from the mutation run for that reason (`.cargo/mutants.toml`). Kept as a name
+/// because every early return below reads as "Python's `_EMPTY`" with it.
 fn empty() -> State {
     State::default()
 }
@@ -416,7 +420,10 @@ pub fn refresh(plane: &Path, trees: &[PathBuf], now: f64) -> Map<String, Value> 
     let mut cache = load(plane);
     for tree in trees {
         let branch = branch_of(tree);
-        let state = if branch.is_empty() || branch == "?" {
+        // Python asks `branch and branch != "?"`; [`branch_of`] answers `?` for every way
+        // there is no branch to name and never the empty string, so `?` is the whole test.
+        // (Asking for emptiness as well gave the mutation run a condition no tree can reach.)
+        let state = if branch == "?" {
             empty()
         } else {
             state_for_repo(plane, tree, &branch)
@@ -530,6 +537,19 @@ mod tests {
         // number arm this is `Some(1)` and every repo grows a phantom `#1`.
         assert_eq!(taken("true"), None);
         assert_eq!(change_or_none(None), None);
+    }
+
+    /// `int()` of a string, each answer read off CPython: a separator only BETWEEN digits,
+    /// and a sign with no digits after it is no number.
+    #[test]
+    fn a_string_is_read_the_way_python_int_reads_it() {
+        assert_eq!(python_int("7"), Some(7));
+        assert_eq!(python_int(" -7 "), Some(-7));
+        assert_eq!(python_int("+7"), Some(7));
+        assert_eq!(python_int("1_000"), Some(1000));
+        for refused in ["", " ", "-", "+", "_1", "1_", "-_1", "1__0", "1.5", "٣x"] {
+            assert_eq!(python_int(refused), None, "{refused:?}");
+        }
     }
 
     #[test]

@@ -795,3 +795,269 @@ fn a_plane_file_over_the_bound_is_dropped_rather_than_mirrored_half() {
         "and the honest one beside it is still carried"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// A line never hides a file of yours next door (charter#1072)                             #
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_local_file_of_yours_in_the_clone_withholds_charters_and_keeps_its_line_out() {
+    // The clone and its piece read one `info/exclude`. A line for the machine-local file
+    // would hide the operator's own untracked copy in the clone, so the line is left out and
+    // charter withholds its own copy in the piece rather than leave the plane's private
+    // rules showing there. The red light for mutations that stop asking the other trees, or
+    // that take a missing or tracked file for one of yours.
+    let f = layered_plane("thing");
+    let theirs = "{\"permissions\": {\"allow\": [\"Bash(make *)\"]}}\n";
+    std::fs::create_dir_all(f.clone.join(".claude")).unwrap();
+    std::fs::write(f.clone.join(".claude/settings.local.json"), theirs).unwrap();
+
+    let added = cut(&f, "piece");
+    let wired = guest::wire(&f.plane, &added.path);
+
+    assert!(
+        !added.path.join(".claude/settings.local.json").exists(),
+        "charter's copy of the machine-local rules is withheld"
+    );
+    assert!(
+        added.path.join(".claude/settings.json").is_file(),
+        "and the shared file is still written, so the plane's rules are in force"
+    );
+    let exclude = exclude_of(&added.path);
+    assert!(
+        !exclude.contains("/.claude/settings.local.json"),
+        "no line hides the operator's own file: {exclude}"
+    );
+    assert!(exclude.contains("/.claude/settings.json"), "{exclude}");
+    assert_eq!(
+        std::fs::read_to_string(f.clone.join(".claude/settings.local.json")).unwrap(),
+        theirs
+    );
+    assert!(
+        f.status(&f.clone).contains(".claude/"),
+        "their file still shows in their own status: {}",
+        f.status(&f.clone)
+    );
+    assert_eq!(wired.block, guest::Block::Unhidden, "{wired:?}");
+    let local = wired
+        .rows
+        .iter()
+        .find(|r| r.rel == ".claude/settings.local.json")
+        .expect("a row for the withheld file");
+    assert_eq!(local.status, guest::Status::Withheld, "{wired:?}");
+    let said = guest::unhidden(&f.plane, &added.path);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains(".claude/settings.local.json"), "{said:?}");
+
+    // Moved aside, the next wire writes charter's copy and hides it.
+    std::fs::remove_file(f.clone.join(".claude/settings.local.json")).unwrap();
+    let again = guest::wire(&f.plane, &added.path);
+    assert!(added.path.join(".claude/settings.local.json").is_file());
+    assert!(exclude_of(&added.path).contains("/.claude/settings.local.json"));
+    assert!(again.complete(), "{again:?}");
+    assert_eq!(guest::unhidden(&f.plane, &added.path), Vec::<String>::new());
+}
+
+#[test]
+fn a_rewire_with_nothing_to_change_says_present_and_one_charter_owns_nothing_in_says_untouched() {
+    let f = layered_plane("thing");
+    let added = cut(&f, "piece");
+
+    assert_eq!(
+        guest::wire(&f.plane, &added.path).block,
+        guest::Block::Present
+    );
+
+    // A tree where every path charter wants holds a file of somebody else's, and no block:
+    // charter owns nothing there, writes no line, and says it left the exclude alone.
+    let bare = support::plane_with_clone("other");
+    let piece = worktree::add(&bare.plane, &bare.ws, &bare.repo, "piece", None).unwrap();
+    bare.give_the_plane_a_layer();
+    for rel in guest::want(&bare.plane).keys() {
+        let at = piece.path.join(rel);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, "mine\n").unwrap();
+    }
+
+    let wired = guest::wire(&bare.plane, &piece.path);
+
+    assert_eq!(wired.block, guest::Block::Untouched, "{wired:?}");
+    assert!(
+        !exclude_of(&piece.path).contains("# >>> charter"),
+        "{}",
+        exclude_of(&piece.path)
+    );
+}
+
+#[test]
+fn a_file_charter_recorded_but_somebody_rewrote_gets_no_line_back_once_it_is_gone() {
+    // A line for a file of somebody else's is never ADDED. The record still names
+    // `.claude/settings.json`, but its content is not charter's any more, so a wire that
+    // finds the line missing does not put it back. The red light for a mutation that trusts
+    // the record's word alone for a path charter does not co-write.
+    let f = layered_plane("thing");
+    let added = cut(&f, "piece");
+    std::fs::write(added.path.join(".claude/settings.json"), "{\"mine\": 1}\n").unwrap();
+    let common = f.clone.join(".git/info/exclude");
+    let text = std::fs::read_to_string(&common).unwrap();
+    std::fs::write(&common, text.replace("/.claude/settings.json\n", "")).unwrap();
+
+    guest::wire(&f.plane, &added.path);
+
+    let after = std::fs::read_to_string(&common).unwrap();
+    assert!(!after.contains("/.claude/settings.json\n"), "{after}");
+    assert!(
+        after.contains("/.claude/settings.local.json"),
+        "while charter's own files keep theirs: {after}"
+    );
+}
+
+#[test]
+fn the_record_read_back_is_what_charter_settled_and_nothing_else() {
+    let f = layered_plane("thing");
+    let added = cut(&f, "piece");
+
+    let record = guest::marker_at(&added.path);
+
+    let mut keys: Vec<&str> = record.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            ".claude/agents/steward.md",
+            ".claude/settings.json",
+            ".claude/settings.local.json"
+        ]
+    );
+    assert!(record.values().all(|h| h.len() >= 16), "{record:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_exclude_charter_can_write_but_not_read_is_never_taken_for_an_empty_one() {
+    // Write-only: the write would succeed, and it would replace every line of the
+    // operator's with charter's block. The red light for a mutation that reads any failure to
+    // read as "there is no file yet".
+    use std::os::unix::fs::PermissionsExt;
+    let f = layered_plane("thing");
+    let piece = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
+    let common = f.clone.join(".git/info/exclude");
+    std::fs::write(&common, "# mine\n/build\n").unwrap();
+    std::fs::set_permissions(&common, std::fs::Permissions::from_mode(0o200)).unwrap();
+    // Root reads through the mode, and the question then does not arise.
+    if std::fs::read_to_string(&common).is_ok() {
+        return;
+    }
+
+    let wired = guest::wire(&f.plane, &piece.path);
+
+    std::fs::set_permissions(&common, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!wired.complete(), "{wired:?}");
+    assert!(
+        matches!(wired.hidden, guest::Hidden::Blocked(..)),
+        "{wired:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&common).unwrap(),
+        "# mine\n/build\n"
+    );
+}
+
+#[test]
+fn only_the_machine_local_file_is_reported_as_left_out_over_a_file_next_door() {
+    // `unhidden` asks about charter's own files and the one the harness co-writes. The shared
+    // settings are a file charter WRITES whatever a sibling holds, so a sibling's untracked
+    // `.claude/settings.json` is not something `reinit` reports as withheld. The red light for
+    // a mutation that asks about every missing path rather than the co-written one.
+    let f = support::plane_with_clone("thing");
+    let piece = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
+    f.give_the_plane_a_layer();
+    std::fs::create_dir_all(f.clone.join(".claude")).unwrap();
+    std::fs::write(f.clone.join(".claude/settings.json"), "{\"mine\": 1}\n").unwrap();
+
+    assert_eq!(guest::unhidden(&f.plane, &piece.path), Vec::<String>::new());
+
+    // And the co-written one IS reported, which is what makes the assertion above mean
+    // something.
+    std::fs::write(
+        f.clone.join(".claude/settings.local.json"),
+        "{\"mine\": 1}\n",
+    )
+    .unwrap();
+    let said = guest::unhidden(&f.plane, &piece.path);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains(".claude/settings.local.json"), "{said:?}");
+}
+
+#[test]
+fn a_file_of_yours_in_a_wired_sibling_is_still_yours_and_keeps_its_line_out() {
+    // The sibling holds charter's record, and charter's record does not name this path: the
+    // file there is the operator's, so the line the next piece would add is left out. The red
+    // light for a mutation that takes "the record vouches for something" for "it vouches for
+    // this path".
+    let f = layered_plane("thing");
+    let first = cut(&f, "first");
+    std::fs::write(f.plane.join(".claude/agents/new.md"), "# new\n").unwrap();
+    std::fs::write(
+        first.path.join(".claude/agents/new.md"),
+        "# mine, not charter's\n",
+    )
+    .unwrap();
+
+    let second = cut(&f, "second");
+
+    assert_eq!(
+        std::fs::read_to_string(second.path.join(".claude/agents/new.md")).unwrap(),
+        "# new\n",
+        "charter's copy is still written where it is wanted"
+    );
+    let exclude = exclude_of(&second.path);
+    assert!(!exclude.contains("/.claude/agents/new.md"), "{exclude}");
+    assert!(
+        String::from_utf8_lossy(
+            &support::git(
+                &first.path,
+                &["status", "--porcelain", "--untracked-files=all"]
+            )
+            .stdout
+        )
+        .contains(".claude/agents/new.md"),
+        "and the operator's file still shows where it lives: {}",
+        f.status(&first.path)
+    );
+}
+
+#[test]
+fn charters_marker_line_is_added_even_beside_a_marker_charter_cannot_read() {
+    // An untracked `.charter-generated` is charter's even where it cannot be read, so the
+    // marker's own line is never withheld over one. The red light for a mutation that asks
+    // the siblings about the marker too.
+    let f = layered_plane("thing");
+    std::fs::write(f.clone.join(".charter-generated"), "not a record\n").unwrap();
+
+    let piece = cut(&f, "piece");
+
+    let exclude = exclude_of(&piece.path);
+    assert!(exclude.contains("/.charter-generated\n"), "{exclude}");
+}
+
+#[test]
+fn a_block_written_for_the_first_time_is_created_and_a_rewrite_of_it_refreshed() {
+    // The word the operator reads to tell "your files just became hidden" from "they
+    // already were". git's own template leaves comment lines in `info/exclude`, so a block
+    // written beside them is still a new one.
+    let f = support::plane_with_clone("thing");
+    let piece = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
+    f.give_the_plane_a_layer();
+
+    assert_eq!(
+        guest::wire(&f.plane, &piece.path).block,
+        guest::Block::Created
+    );
+
+    std::fs::write(f.plane.join(".claude/agents/new.md"), "# new\n").unwrap();
+    assert_eq!(
+        guest::wire(&f.plane, &piece.path).block,
+        guest::Block::Refreshed
+    );
+}

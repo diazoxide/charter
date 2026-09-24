@@ -975,3 +975,75 @@ fn a_session_in_a_clone_of_its_own_is_told_its_trust_is_its_own() {
         format!("{} — the plane", root.display())
     );
 }
+
+#[test]
+fn a_plane_format_up_to_this_charters_own_is_read_and_one_past_it_is_refused() {
+    for (schema, read) in [
+        ("", true),
+        ("schema = 1\n", true),
+        ("schema = 0\n", true),
+        ("schema = -3\n", true),
+        ("schema = 2\n", false),
+    ] {
+        let (_d, root) = plane(schema);
+        let config = Config::load(&root);
+        assert_eq!(config.table().is_some(), read, "{schema:?}: {config:?}");
+        assert_eq!(
+            matches!(config, Config::Refused(_)),
+            !read,
+            "{schema:?}: {config:?}"
+        );
+    }
+}
+
+#[test]
+fn a_path_is_shortened_to_the_home_it_is_under_and_never_to_one_it_names() {
+    let home = crate::profiles::home().expect("the test runs with a HOME");
+    assert_eq!(short_path(&home.join("plane/x")), "~/plane/x");
+    assert_eq!(short_path(&home), "~/.");
+    assert_eq!(
+        short_path(Path::new("/nowhere/near/home")),
+        "/nowhere/near/home"
+    );
+    // A segment starting `~` is a home to a shell, so such a path is never abbreviated.
+    assert_eq!(
+        short_path(&home.join("~odd")),
+        home.join("~odd").display().to_string()
+    );
+}
+
+#[test]
+fn a_toml_diagnostic_is_one_line_with_its_position_and_its_reason_and_no_drawing() {
+    let one = |text: &str| toml_error(&text.parse::<toml::Table>().unwrap_err());
+    assert_eq!(
+        one("schema = [\n"),
+        "TOML parse error at line 1, column 11: unclosed array, expected `]`"
+    );
+    assert_eq!(
+        one("a = 1\na = 2\n"),
+        "TOML parse error at line 2, column 1: duplicate key"
+    );
+    let (_d, root) = plane("a = 1\na = 2\n");
+    let Config::Malformed(why) = Config::load(&root) else {
+        panic!("a duplicate key is not TOML");
+    };
+    assert!(
+        why.ends_with(
+            "charter.toml is not valid TOML: TOML parse error at line 2, column 1: duplicate key"
+        ),
+        "{why}"
+    );
+}
+
+#[test]
+fn the_name_column_is_a_floor_and_a_wider_name_pushes_only_its_own_row() {
+    let r = Row::ok("git", "2.50");
+    // Narrower than the name: the name still gets its two spaces, as at exactly its width.
+    assert_eq!(render(&r, 0, false), render(&r, 5, false));
+    assert!(
+        render(&r, 0, false).ends_with("git  2.50"),
+        "{}",
+        render(&r, 0, false)
+    );
+    assert!(render(&r, 8, false).ends_with("git     2.50"));
+}
