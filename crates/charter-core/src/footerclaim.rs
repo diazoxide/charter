@@ -500,7 +500,7 @@ mod tests {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C")
             .arg(dir)
-            .args(crate::testgit::isolated(args))
+            .args(crate::testgit::unsigned(args))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_AUTHOR_NAME", "t")

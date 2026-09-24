@@ -86,8 +86,10 @@ pub(super) fn identity(d: &Doctor) -> Row {
 /// [`gitpolicy::check`]: crate::gitpolicy::check
 /// [`gitpolicy::apply`]: crate::gitpolicy::apply
 pub(super) fn git_auth(d: &Doctor) -> Row {
-    use crate::gitpolicy::{self, UNMANAGED_FORGE};
+    use crate::gitpolicy;
     const NAME: &str = "git auth";
+    /// How many drifted repos the detail names before it says `…`.
+    const NAMED: usize = 3;
     let listing = d.root.join("workspaces");
     let (scope, unseen) = gitpolicy::scan(&d.root, &listing);
     let bad: Vec<(&PathBuf, Vec<String>)> = scope
@@ -98,6 +100,10 @@ pub(super) fn git_auth(d: &Doctor) -> Row {
     // A directory under `workspaces/` charter could not look into is named with what clears
     // it, never left out of the count without a word. `workspaces/` itself, when it could not
     // be listed, is named as itself and is then the only entry.
+    //
+    // Not `fsx::beside_unread`, whose detail lists every path: Python's `check_ssh` counts them
+    // ("N director(ies) under workspaces/") and names each `<workspace>/<clone>`, and the
+    // recorded `doctor-*` scenarios hold this row to that wording.
     let base = |p: &Path| {
         p.file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -119,7 +125,13 @@ pub(super) fn git_auth(d: &Doctor) -> Row {
                 format!(
                     "{} cannot be checked — {}",
                     named(&u.path),
-                    super::fsx::uncheckable_fix(u.code, &u.path.display().to_string())
+                    super::fsx::uncheckable_fix(
+                        u.code,
+                        &crate::shown::readable(
+                            &u.path.display().to_string(),
+                            super::PATH_DISPLAY_LIMIT
+                        )
+                    )
                 )
             })
             .collect();
@@ -153,11 +165,11 @@ pub(super) fn git_auth(d: &Doctor) -> Row {
     // sending that repo to it could never be acted on: the two cases are told apart.
     let unmanaged = bad
         .iter()
-        .filter(|(_, drift)| drift.len() == 1 && drift[0] == UNMANAGED_FORGE)
+        .filter(|(_, drift)| gitpolicy::is_unmanaged(drift))
         .count();
     let fixable = bad.len() - unmanaged;
-    let names: Vec<String> = bad.iter().take(3).map(|(repo, _)| base(repo)).collect();
-    let more = if bad.len() > 3 { " …" } else { "" };
+    let names: Vec<String> = bad.iter().take(NAMED).map(|(repo, _)| base(repo)).collect();
+    let more = if bad.len() > NAMED { " …" } else { "" };
     let hint = if fixable == 0 {
         format!(
             "{unmanaged} repo(s) have an unrecognised forge — `charter git-policy --apply` \

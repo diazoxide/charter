@@ -26,16 +26,16 @@ pub(crate) const TEMPLATE: &str =
 /// `args` for `git`, with `init.templateDir` set on the command line, so any repository they
 /// create — by `init` or by `clone`, wherever it lands — is made from [`TEMPLATE`]. A verb that
 /// creates nothing never reads it.
-pub(crate) fn isolated(args: &[&str]) -> Vec<String> {
+pub(crate) fn unsigned(args: &[&str]) -> Vec<String> {
     let mut out = vec!["-c".to_string(), format!("init.templateDir={TEMPLATE}")];
     out.extend(args.iter().map(|a| (*a).to_string()));
     out
 }
 
 /// git in `dir` for a test's own setup, through the same runner the product uses, with any
-/// repository it creates isolated from the developer's signing.
+/// repository it creates unable to ask the developer's signer.
 pub(crate) fn run(dir: &Path, args: &[&str]) -> git::Run {
-    let argv = isolated(args);
+    let argv = unsigned(args);
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     git::run_untimed(dir, &argv).expect("git runs")
 }
@@ -114,7 +114,7 @@ mod tests {
         let repo = top.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
 
-        as_developer(&home, &repo, &isolated(&["init", "-q", "-b", "main", "."]));
+        as_developer(&home, &repo, &unsigned(&["init", "-q", "-b", "main", "."]));
         let commit = as_developer(
             &home,
             &repo,
@@ -144,7 +144,7 @@ mod tests {
         as_developer(
             &home,
             &top,
-            &isolated(&["clone", "-q", "origin.git", "copy"]),
+            &unsigned(&["clone", "-q", "origin.git", "copy"]),
         );
         let commit = as_developer(
             &home,

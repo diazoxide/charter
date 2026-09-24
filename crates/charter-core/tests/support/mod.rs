@@ -31,16 +31,18 @@ const WHO: [(&str, &str); 6] = [
 /// The template every fixture repository is made from: `commit.gpgsign` and `tag.gpgsign` off.
 pub const TEMPLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/git-template");
 
+/// `git`, with every repository it creates made from [`TEMPLATE`], so none asks a developer's
+/// signer (charter-app#191) — `src/testgit.rs`'s `unsigned`, for the integration tests.
+pub fn unsigned() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-c").arg(format!("init.templateDir={TEMPLATE}"));
+    cmd
+}
+
 /// git, for the test's own setup. Not the code under test.
 pub fn git(dir: &Path, args: &[&str]) -> std::process::Output {
-    let mut cmd = Command::new("git");
-    // Every repository a fixture creates is made from the template charter-core's own tests
-    // use (`src/testgit.rs`), so none asks a developer's signer (charter-app#191).
-    cmd.arg("-c")
-        .arg(format!("init.templateDir={TEMPLATE}"))
-        .arg("-C")
-        .arg(dir)
-        .args(args);
+    let mut cmd = unsigned();
+    cmd.arg("-C").arg(dir).args(args);
     for (k, v) in WHO {
         cmd.env(k, v);
     }

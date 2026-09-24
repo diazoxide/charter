@@ -19,6 +19,8 @@ use charter_core::cistate::{self, Reading};
 use charter_core::repos::{self, Head};
 use charter_core::{glrefresh, worktree::git};
 
+mod support;
+
 /// A plane with one workspace holding two clones, each on a branch of its own.
 ///
 /// The plane is a directory INSIDE the temporary one, so a test can put a link beside it
@@ -93,8 +95,13 @@ fn a_real_checkout_is_read_the_same_way_by_git_status_and_by_head() {
     let tree = at.join("workspaces/alpha/svc");
     std::fs::create_dir_all(&tree).unwrap();
     std::fs::write(at.join("charter.toml"), "schema = 1\n").unwrap();
-    let made = git::run(&tree, &["init", "-q", "-b", "release/1.2", "."], git::READ)
-        .expect("git runs in the test environment");
+    let template = format!("init.templateDir={}", support::TEMPLATE);
+    let made = git::run(
+        &tree,
+        &["-c", &template, "init", "-q", "-b", "release/1.2", "."],
+        git::READ,
+    )
+    .expect("git runs in the test environment");
     assert!(made.ok(), "git init said: {}", made.err);
 
     refresh_alpha(&at);

@@ -8,14 +8,11 @@
 //! in the operator's global config would otherwise be asked to sign fixture commits.
 
 use super::*;
-use crate::worktree::git::{READ, run};
 
 fn git(dir: &std::path::Path, args: &[&str]) {
     let mut full = vec!["-c", "user.name=t", "-c", "user.email=t@t"];
     full.extend_from_slice(args);
-    let full = crate::testgit::isolated(&full);
-    let full: Vec<&str> = full.iter().map(String::as_str).collect();
-    let r = run(dir, &full, READ).unwrap();
+    let r = crate::testgit::run(dir, &full);
     assert!(r.ok(), "git {args:?} failed: {}", r.err);
 }
 

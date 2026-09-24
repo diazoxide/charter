@@ -9,7 +9,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use charter_core::profiles;
 
@@ -17,9 +16,7 @@ mod support;
 
 fn git(dir: &Path, args: &[&str]) {
     let out = charter_core::forklock::output(
-        Command::new("git")
-            .arg("-c")
-            .arg(format!("init.templateDir={}", support::TEMPLATE))
+        support::unsigned()
             .args(args)
             .current_dir(dir)
             // Hermetic: the operator's own global config is not this test's business, and it

@@ -225,11 +225,17 @@ enum Item {
 /// is `Ctrl-C`, the interrupt; Undo `Ctrl-Z`, suspend; Select all `Ctrl-A`, beginning of line;
 /// Hide `Ctrl-H`, backspace. A terminal app keeps its own keys off them by adding `Shift`
 /// (GNOME Terminal and Konsole: `Ctrl+Shift+C`, `V`, `Q`), which xterm encodes as nothing. The
-/// Edit items could not be moved there, so they are left out rather than left on the chat's
-/// keys — and on Linux they gave nothing up for it: muda 0.19.3 draws Copy, Cut, Paste and
-/// Select all with the chord as a label only, sends the key through `libxdo` when clicked
-/// (a feature this build does not enable), and does not draw Undo, Redo or Hide at all. A
-/// text field in the webview keeps its own `Ctrl+C` and `Ctrl+V`, which it handles itself.
+/// Edit items could not be moved there — a predefined item's accelerator is fixed — so they are
+/// left out rather than left on the chat's keys. A text field in the webview keeps its own
+/// `Ctrl+C` and `Ctrl+V`, which the webview handles without any menu.
+///
+/// What leaving them out costs, **read from muda 0.19.3's source and not measured in a window**
+/// (nobody here has a Linux or Windows desktop to press the key in): on Windows the Edit items
+/// were real accelerators in the window's accelerator table, so there they really did take the
+/// key before the webview saw it, and the menu loses Undo to Select all. On Linux
+/// (`platform_impl/gtk`) Copy, Cut, Paste and Select all draw the chord as a label only and act
+/// through `libxdo` when clicked, a feature this build does not enable, and Undo, Redo and Hide
+/// are not drawn at all — so there the Edit menu did little but claim keys it did not use.
 fn layout(macos: bool) -> Vec<(&'static str, Vec<Item>)> {
     if !macos {
         return vec![("charter", vec![Item::Quit("Ctrl+Shift+Q")])];
