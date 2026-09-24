@@ -2,7 +2,7 @@ import { existsSync, realpathSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { THE_RUNS_TREE, anEmptyRecord, copyFixturePlane } from "../harness.js";
-import { answerTheAsk, pressAndStart } from "../opening.js";
+import { answerTheAsk, closeProject, pressAndStart } from "../opening.js";
 
 /**
  * A window holding more than one project, in the built app (ADR 0033, decision 23).
@@ -261,7 +261,7 @@ describe("a window holding more than one project", function () {
   });
 
   it("closes one project without disturbing the other", async () => {
-    await $(`${PROJECTS} button[aria-label="Close project ${basename(second)}"]`).click();
+    await closeProject(`${PROJECTS} button[aria-label="Close project ${basename(second)}"]`);
 
     await stripBecomes([{ path: first, front: true }]);
     expect(await ask<string[]>("open_planes")).toEqual([first]);
@@ -315,7 +315,7 @@ describe("a window holding more than one project", function () {
     ]);
     expect(existsSync(join(made, "charter.toml"))).toBe(true);
 
-    await $(`${PROJECTS} button[aria-label="Close project ${basename(made)}"]`).click();
+    await closeProject(`${PROJECTS} button[aria-label="Close project ${basename(made)}"]`);
     await stripBecomes([{ path: first, front: true }]);
   });
 });

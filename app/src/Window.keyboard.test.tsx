@@ -71,10 +71,15 @@ function chat(session: number, name: string, inFront = false) {
 }
 
 /** A plane with two workspaces, three chats in the first and one worktree cut there. */
-function core({ waiting = [] as number[] } = {}) {
-  const chats = [chat(1, "one"), chat(2, "two", true), chat(3, "three")];
+function core({
+  waiting = [] as number[],
+  chats = [chat(1, "one"), chat(2, "two", true), chat(3, "three")],
+} = {}) {
+  /** Every command the window sent, by name. */
+  const asked: string[] = [];
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
+    asked.push(cmd);
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "opened_chats") return chats;
     if (cmd === "plane_sidebar")
@@ -112,6 +117,7 @@ function core({ waiting = [] as number[] } = {}) {
     if (cmd === "alerts_everywhere") return [{ plane: PLANE, alerts: [], stopped: null }];
     return null;
   });
+  return { asked };
 }
 
 beforeEach(() => {
@@ -284,7 +290,7 @@ describe("the window's tab order", () => {
       "tab two steward",
       "button New tab",
       // The explorer, on the left by default: ONE stop, its current row.
-      "button alphathe workspace itself",
+      "treeitem alphathe workspace itself",
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.
       "separator",
       // The focused pane's own controls, drawn in its top corner, then its terminal. From
@@ -328,12 +334,12 @@ describe("a list is one Tab stop", () => {
     const rows = rowsIn(explorer);
     // The workspace row, three chats working in it, the clone, its one worktree.
     expect(rows.map(said)).toEqual([
-      expect.stringMatching(/^button alpha/),
-      expect.stringMatching(/^button one/),
-      expect.stringMatching(/^button two/),
-      expect.stringMatching(/^button three/),
-      "summary svc1",
-      "button one",
+      expect.stringMatching(/^treeitem alpha/),
+      expect.stringMatching(/^treeitem one/),
+      expect.stringMatching(/^treeitem two/),
+      expect.stringMatching(/^treeitem three/),
+      "treeitem svc1",
+      "treeitem one",
     ]);
     expect(rows.map((row) => row.getAttribute("tabindex"))).toEqual([
       "0",
@@ -353,14 +359,19 @@ describe("a list is one Tab stop", () => {
     await waitFor(() => expect(rows[4]).toHaveFocus());
     await userEvent.keyboard("{Home}");
     await waitFor(() => expect(rows[0]).toHaveFocus());
-    // Left and Right are not the explorer's: it is a list and not a tree (`Explorer.tsx`).
+    // And it is a tree (#238): Right goes into the workspace row, Left climbs back out. The
+    // rest of the tree's keys are `Explorer.test.tsx`'s.
     await userEvent.keyboard("{ArrowRight}");
-    expect(rows[0]).toHaveFocus();
+    await waitFor(() => expect(rows[1]).toHaveFocus());
+    await userEvent.keyboard("{ArrowLeft}");
+    await waitFor(() => expect(rows[0]).toHaveFocus());
   });
 
   it("the explorer: a picked worktree is where the keyboard comes back in", async () => {
     await theWholeWindow();
-    const piece = within(screen.getByTestId("piece-svc-one")).getByRole("button", { name: "one" });
+    const piece = within(screen.getByTestId("piece-svc-one")).getByRole("treeitem", {
+      name: "one",
+    });
     await userEvent.click(piece);
     await waitFor(() => expect(piece).toHaveAttribute("tabindex", "0"));
   });
@@ -425,5 +436,231 @@ describe("a pane's controls", () => {
     expect(focused?.body).toMatch(/visibility:\s*visible/);
     expect(focused?.body).toMatch(/opacity:\s*0\s*;/);
     expect(focused?.body).toMatch(/pointer-events:\s*none/);
+  });
+});
+
+/**
+ * **Delete closes the focused tab** (charter-app#239) — the optional key of the WAI-ARIA "Tabs"
+ * pattern, and on a Mac the only keyboard way to close a tab short of the palette: a tab's `×`
+ * is not a stop, and a Mac keyboard has no context-menu key to open the tab's menu with.
+ *
+ * It runs the row the `×` runs, so it asks what the `×` asks: ending a chat asks first, and a
+ * view tab closes without asking (`ViewTabs.test.tsx`).
+ */
+describe("Delete on a focused tab", () => {
+  /** Pretends the window runs on a Mac, or not, for the length of one test. */
+  const onA = (platform: string) =>
+    vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  afterEach(() => vi.restoreAllMocks());
+
+  it("asks before it ends the chat on the tab the keyboard is on, and Cancel keeps it", async () => {
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    const [, two] = tabsOf("Tabs");
+    two.focus();
+    await userEvent.keyboard("{ArrowLeft}");
+
+    await userEvent.keyboard("{Delete}");
+
+    // The tab the keyboard is on, not the one in front.
+    const asking = await screen.findByRole("alertdialog");
+    expect(asking).toHaveTextContent("End chat one");
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(tabsOf("Tabs")).toHaveLength(3);
+    // And the keyboard is back on the tab it pressed Delete on.
+    await waitFor(() => expect(tabsOf("Tabs")[0]).toHaveFocus());
+  });
+
+  it("ends it once the question is answered", async () => {
+    const { asked } = core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{Delete}");
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: /End/ }));
+
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(2));
+    expect(asked).toContain("close_session");
+    // The keyboard is not dropped on the page with the tab it was on: it is on the strip's stop,
+    // so the next Delete or arrow works.
+    await waitFor(() => expect(tabsOf("Tabs").find((tab) => tab.tabIndex === 0)).toHaveFocus());
+  });
+
+  it("closes a project from its tab, through the row its × runs", async () => {
+    // A project with nothing open closes without a question; one with chats asks
+    // ("closing a project" below).
+    const { asked } = core({ chats: [] });
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Projects")).toHaveLength(1));
+    await screen.findByRole("button", { name: "New tab" });
+    tabsOf("Projects")[0].focus();
+
+    await userEvent.keyboard("{Delete}");
+
+    await waitFor(() => expect(asked).toContain("close_plane"));
+  });
+
+  it("closes nothing on a workspace tab, which has no × and whose menu deletes it on disk", async () => {
+    const { asked } = core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Workspaces")).toHaveLength(2));
+    const [alpha] = tabsOf("Workspaces");
+    alpha.focus();
+
+    const del = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
+    alpha.dispatchEvent(del);
+
+    expect(del.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(tabsOf("Workspaces")).toHaveLength(2);
+    expect(asked.filter((cmd) => cmd.startsWith("delete"))).toEqual([]);
+  });
+
+  it("is also Backspace on a Mac, whose key marked delete sends it", async () => {
+    onA("MacIntel");
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{Backspace}");
+
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("End chat two");
+  });
+
+  it("is not Backspace anywhere else, where Backspace on a tab means nothing", async () => {
+    onA("Linux x86_64");
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{Backspace}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("is left alone with a modifier held", async () => {
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{Shift>}{Delete}{/Shift}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("never fires in a text field: Delete and Backspace in the palette edit its words", async () => {
+    onA("MacIntel");
+    core();
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    tabsOf("Tabs")[1].focus();
+
+    await userEvent.keyboard("{F2}");
+    const palette = await screen.findByRole("dialog", { name: "Command palette" });
+    await userEvent.keyboard("end{Backspace}{ArrowLeft}{Delete}");
+
+    expect(within(palette).getByRole("combobox")).toHaveValue("e");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // Under the modal palette the strip is hidden from a role query, so it is counted as markup.
+    expect(document.querySelectorAll('[aria-label="Tabs"] [role="tab"]')).toHaveLength(3);
+  });
+
+  it("never fires in a terminal: Delete and Backspace there are the shell's", async () => {
+    onA("MacIntel");
+    const { asked } = core();
+    render(<App />);
+    const terminal = await screen.findByLabelText("Terminal 2");
+    terminal.focus();
+
+    for (const key of ["Delete", "Backspace"]) {
+      const press = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      terminal.dispatchEvent(press);
+      expect(press.defaultPrevented).toBe(false);
+    }
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(tabsOf("Tabs")).toHaveLength(3);
+    expect(asked).not.toContain("close_session");
+  });
+});
+
+/**
+ * **Closing a project that has chats open asks first**, as ending one chat does. The project's
+ * `×` always ended every chat in it without a word, and #239 put that one key away — on a Mac,
+ * the ordinary delete key. The question is on the `project.close:<plane>` row's verb, so the
+ * `×`, Delete, the tab's menu and the palette all ask it.
+ */
+describe("closing a project", () => {
+  /** Waits for the project to have said what it has open: before that, it would be asked about. */
+  const settled = async () => {
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    return tabsOf("Projects")[0];
+  };
+
+  it("asks first when chats are open, naming how many end and in which workspaces", async () => {
+    const { asked } = core();
+    render(<App />);
+    await settled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close project plane" }));
+
+    const asking = await screen.findByRole("alertdialog");
+    expect(asking).toHaveAccessibleName("Close project plane and end 3 chats?");
+    expect(asking).toHaveTextContent("in alpha");
+    expect(within(asking).getAllByRole("listitem")).toHaveLength(3);
+    expect(asked).not.toContain("close_plane");
+    // Cancel is first and focused: a stray Return keeps everything.
+    expect(within(asking).getByRole("button", { name: "Cancel" })).toHaveFocus();
+  });
+
+  it("keeps everything on Cancel, and gives the keyboard back to the tab", async () => {
+    const { asked } = core();
+    render(<App />);
+    const project = await settled();
+    project.focus();
+
+    await userEvent.keyboard("{Delete}");
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(asked).not.toContain("close_plane");
+    expect(tabsOf("Tabs")).toHaveLength(3);
+    await waitFor(() => expect(tabsOf("Projects")[0]).toHaveFocus());
+  });
+
+  it("closes the project once the question is answered", async () => {
+    const { asked } = core();
+    render(<App />);
+    const project = await settled();
+    project.focus();
+
+    await userEvent.keyboard("{Delete}");
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: /end 3 chats/i }));
+
+    await waitFor(() => expect(asked).toContain("close_plane"));
+    expect(asked.filter((cmd) => cmd === "close_plane")).toHaveLength(1);
+  });
+
+  it("asks from the palette's row too, because the question is on the row's verb", async () => {
+    const { asked } = core();
+    render(<App />);
+    await settled();
+
+    await userEvent.keyboard("{F2}");
+    await screen.findByRole("dialog", { name: "Command palette" });
+    await userEvent.keyboard("Close project plane{Enter}");
+
+    expect(await screen.findByRole("alertdialog")).toHaveAccessibleName(
+      "Close project plane and end 3 chats?",
+    );
+    expect(asked).not.toContain("close_plane");
   });
 });
