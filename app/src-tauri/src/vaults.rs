@@ -2,8 +2,8 @@
 
 use charter_core::secrets::cmd::{self, Io, Say};
 use charter_core::secrets::keyring;
-use charter_core::secrets::vaultcmd;
 use charter_core::secrets::registry::{self, Vault};
+use charter_core::secrets::vaultcmd;
 use charter_core::secrets::{Ctx, Env, VaultError, env_overlay};
 
 use crate::planes::{PlaneId, Planes};
