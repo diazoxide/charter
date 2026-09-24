@@ -514,23 +514,26 @@ enum Rebased {
 
 /// Rebase the plane root onto `FETCH_HEAD`, giving up at `deadline`.
 ///
-/// **Unsigned, whatever the operator's global config says** (charter-app#242). A rebase
-/// REPLAYS commits and a replay is a commit, so it reads `commit.gpgsign`: the commit `save`
-/// made unsigned by `-c` came back out of the rebase asking the operator's signer — a
-/// 1Password prompt that blocks, or a signer that fails and turns a remote that merely moved
-/// into a reported conflict. `-c` on the command line beats every config file, as it does for
-/// the commit.
+/// **Signed exactly when the commit was** (charter-app#242). A rebase REPLAYS commits and a
+/// replay is a commit, so it reads `commit.gpgsign` as the commit did. Unless the operator
+/// asked for `--sign`, `-c commit.gpgsign=false` keeps it from the signer the commit was kept
+/// from — the commit `save` made unsigned came back out of the rebase asking for a 1Password
+/// prompt that blocks, or a signer that fails and turns a remote that merely moved into a
+/// reported conflict. With `--sign` the `-c` is left off, as it is for the commit, so the
+/// replay is signed the way the commit was; putting it on would hand the remote an unsigned
+/// copy of a commit the operator asked to sign.
 ///
 /// A run with no exit code is out of time only once the deadline has passed: git killed by a
 /// signal of somebody else's has no code either, and that is not charter stopping it.
-fn rebase_onto_fetched(root: &Path, deadline: Duration) -> Rebased {
+fn rebase_onto_fetched(root: &Path, sign: bool, deadline: Duration) -> Rebased {
     let started = std::time::Instant::now();
-    let rebased = git::run(
-        root,
-        &["-c", "commit.gpgsign=false", "rebase", "FETCH_HEAD"],
-        deadline,
-    );
-    match rebased {
+    let mut rebase: Vec<&str> = if sign {
+        Vec::new()
+    } else {
+        vec!["-c", "commit.gpgsign=false"]
+    };
+    rebase.extend(["rebase", "FETCH_HEAD"]);
+    match git::run(root, &rebase, deadline) {
         Ok(run) if run.ok() => Rebased::Replayed,
         Ok(run) if run.code.is_none() && started.elapsed() >= deadline => Rebased::OutOfTime,
         _ => Rebased::Conflict,
@@ -544,7 +547,10 @@ fn rebase_onto_fetched(root: &Path, deadline: Duration) -> Rebased {
 /// business making from a hook, and guessing it from the branch name is the unearned diagnosis
 /// ADR 0009 forbids. The rejection IS the evidence, and it arrives only after the commit
 /// exists — so the commit is made, and the OUTCOME is what gets reported honestly.
-pub fn push_head(root: &Path, say: Sink) -> PushResult {
+///
+/// `sign` is the `--sign` the commit was made under: a remote that moved sends HEAD through a
+/// rebase, and the commit it replays is signed exactly when the commit was.
+pub fn push_head(root: &Path, sign: bool, say: Sink) -> PushResult {
     let branch = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
@@ -632,7 +638,7 @@ pub fn push_head(root: &Path, say: Sink) -> PushResult {
                 "Could not reach origin to fetch, so the retry was skipped.".into(),
             ));
         } else {
-            match rebase_onto_fetched(root, WRITE) {
+            match rebase_onto_fetched(root, sign, WRITE) {
                 Rebased::Replayed => {}
                 Rebased::Conflict => {
                     let _ = git::run(root, &["rebase", "--abort"], WRITE);
@@ -1242,7 +1248,7 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
     // rc 1 only when the commit reached NOWHERE — a pull-request branch that also failed. An
     // ordinary push failure has been reported and stays rc 0: `charter save` having committed
     // successfully is not a failed command.
-    u8::from(push_head(root, say).outcome == Outcome::Stranded)
+    u8::from(push_head(root, request.sign, say).outcome == Outcome::Stranded)
 }
 
 #[cfg(test)]

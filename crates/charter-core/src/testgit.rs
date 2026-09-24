@@ -44,14 +44,30 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> git::Run {
 /// leaves a mark — the developer machine of charter-app#191, 1Password swapped for a script.
 /// Answers the home and the file the signer touches when it is asked.
 pub(crate) fn signing_home(at: &Path) -> (PathBuf, PathBuf) {
+    home_signing_through(at, |ran| {
+        format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display())
+    })
+}
+
+/// The same HOME with a signer that SIGNS: it answers git the way gpg does — the status line
+/// git looks for on stderr, an armoured signature on stdout — and appends one line to the
+/// mark per call, so a test can count how many commits were signed.
+pub(crate) fn home_that_signs(at: &Path) -> (PathBuf, PathBuf) {
+    home_signing_through(at, |ran| {
+        format!(
+            "#!/bin/sh\ncat >/dev/null\necho signed >> '{}'\n\
+             printf '\\n[GNUPG:] SIG_CREATED D 1 8 00 0 FIXTURE\\n' >&2\n\
+             printf -- '-----BEGIN PGP SIGNATURE-----\\n\\nZml4dHVyZQ==\\n-----END PGP SIGNATURE-----\\n'\n",
+            ran.display()
+        )
+    })
+}
+
+fn home_signing_through(at: &Path, signer: impl Fn(&Path) -> String) -> (PathBuf, PathBuf) {
     let home = at.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let ran = at.join("signer-ran");
-    let signer = stand_in::program(
-        at,
-        "gpg",
-        &format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display()),
-    );
+    let signer = stand_in::program(at, "gpg", &signer(&ran));
     std::fs::write(
         home.join(".gitconfig"),
         format!(

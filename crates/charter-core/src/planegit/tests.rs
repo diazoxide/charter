@@ -75,6 +75,36 @@ impl Fixture {
         bare
     }
 
+    /// [`Fixture::with_a_remote`], with this plane's commit on it and then somebody else's
+    /// commit on top — so the next save's push is refused and it has to rebase.
+    fn with_a_remote_that_moved(&self) -> PathBuf {
+        let bare = self.with_a_remote();
+        run(
+            &self.root,
+            &[
+                "push",
+                "-q",
+                &bare.display().to_string(),
+                "HEAD:refs/heads/main",
+            ],
+        );
+        let theirs = self.root.parent().unwrap().join("theirs");
+        run(
+            self.root.parent().unwrap(),
+            &[
+                "clone",
+                "-q",
+                &bare.display().to_string(),
+                &theirs.display().to_string(),
+            ],
+        );
+        std::fs::write(theirs.join("theirs.md"), "theirs").unwrap();
+        run(&theirs, &["add", "-A"]);
+        run(&theirs, &["commit", "-q", "-m", "theirs"]);
+        run(&theirs, &["push", "-q", "origin", "main"]);
+        bare
+    }
+
     fn save(&self, request: Request) -> (u8, String) {
         let mut said = String::new();
         let mut say = |line: Say| {
@@ -670,7 +700,7 @@ fn a_rebase_still_running_at_its_deadline_is_stopped_and_said_to_be_out_of_time(
     );
 
     let started = std::time::Instant::now();
-    let rebased = rebase_onto_fetched(&fixture.root, std::time::Duration::from_secs(1));
+    let rebased = rebase_onto_fetched(&fixture.root, false, std::time::Duration::from_secs(1));
 
     assert_eq!(rebased, Rebased::OutOfTime);
     assert!(
@@ -704,30 +734,7 @@ fn a_save_that_has_to_rebase_never_asks_the_signer_the_operators_home_names() {
             "true",
             "the control: the plane's git reads the signing home"
         );
-        let bare = fixture.with_a_remote();
-        run(
-            &fixture.root,
-            &[
-                "push",
-                "-q",
-                &bare.display().to_string(),
-                "HEAD:refs/heads/main",
-            ],
-        );
-        let theirs = fixture.root.parent().unwrap().join("theirs");
-        run(
-            fixture.root.parent().unwrap(),
-            &[
-                "clone",
-                "-q",
-                &bare.display().to_string(),
-                &theirs.display().to_string(),
-            ],
-        );
-        std::fs::write(theirs.join("theirs.md"), "theirs").unwrap();
-        run(&theirs, &["add", "-A"]);
-        run(&theirs, &["commit", "-q", "-m", "theirs"]);
-        run(&theirs, &["push", "-q", "origin", "main"]);
+        fixture.with_a_remote_that_moved();
         std::fs::write(fixture.root.join("mine.md"), "mine").unwrap();
 
         let (code, said) = fixture.just_save();
@@ -751,6 +758,56 @@ fn a_save_that_has_to_rebase_never_asks_the_signer_the_operators_home_names() {
     );
 
     assert!(!ran.exists(), "the signer was asked");
+}
+
+/// Set on the re-executed test binary: the path the signer appends to for every commit it signs.
+const SIGNED_CHILD: &str = "CHARTER_TEST_SIGNED_HOME_MARK";
+
+#[test]
+fn a_save_asked_to_sign_that_has_to_rebase_signs_the_commit_it_replays() {
+    // The other half of charter-app#242. `--sign` is the operator asking for a signed commit,
+    // and a rebase that replayed it under `-c commit.gpgsign=false` handed the remote an
+    // unsigned copy without a word. The replay follows the commit's own choice.
+    if let Some(ran) = std::env::var_os(SIGNED_CHILD) {
+        let ran = PathBuf::from(ran);
+        let fixture = Fixture::plane();
+        run(&fixture.root, &["config", "--unset", "commit.gpgsign"]);
+        fixture.with_a_remote_that_moved();
+        std::fs::write(fixture.root.join("mine.md"), "mine").unwrap();
+
+        let (code, said) = fixture.save(Request {
+            root: &fixture.root,
+            message: Some("a signed save"),
+            sign: true,
+            no_push: false,
+            cwd: &fixture.root,
+        });
+
+        assert_eq!(code, 0, "{said}");
+        assert!(said.contains("remote moved"), "it rebased: {said}");
+        assert!(said.contains("Pushed main via gh"), "{said}");
+        assert_eq!(fixture.head_subject(), "a signed save");
+        assert!(
+            ask(&fixture.root, &["cat-file", "commit", "HEAD"]).contains("\ngpgsig "),
+            "the commit the rebase replayed is unsigned"
+        );
+        let signed = std::fs::read_to_string(&ran).unwrap_or_default();
+        assert_eq!(
+            signed.lines().count(),
+            2,
+            "signed once for the commit and once for its replay"
+        );
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let top = dir.path().canonicalize().unwrap();
+    let (home, ran) = crate::testgit::home_that_signs(&top);
+
+    crate::testrun::rerun(
+        &["planegit::tests::a_save_asked_to_sign_that_has_to_rebase_signs_the_commit_it_replays"],
+        &[(SIGNED_CHILD, ran.as_os_str()), ("HOME", home.as_os_str())],
+    );
 }
 
 // --------------------------------------------------------------------------------------- //
