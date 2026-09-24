@@ -31,6 +31,7 @@ pub mod handed;
 pub mod handoff;
 pub mod handoffguard;
 pub mod harness;
+pub mod harness_plugin;
 pub mod heredoc;
 pub mod hookreg;
 pub mod hookstate;
