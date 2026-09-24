@@ -46,6 +46,7 @@ function chat(session: number): OpenChat {
     unreported: null,
     pinned: false,
     label: null,
+    from: null,
   };
 }
 
@@ -88,6 +89,86 @@ const selected = () =>
     .getAllByRole("tab")
     .filter((tab) => tab.getAttribute("aria-selected") === "true")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
+
+/** The tab whose name is `name`. */
+const tabNamed = (name: string) =>
+  within(strip())
+    .getAllByRole("tab")
+    .find((tab) => tab.querySelector(".tab-name")?.textContent === name);
+
+describe("a chat a handoff opened, named for its task (charter-app#258)", () => {
+  afterEach(() => {
+    cleanup();
+    clearMocks();
+  });
+
+  it("is called the task name the handoff gave it, and says where it came from by name", async () => {
+    const { arrive } = core([chat(1)]);
+    render(<App />);
+    await waitFor(() => expect(tabNames()).toEqual(["ide.1"]));
+
+    arrive({
+      plane: "/home/dev/plane",
+      session: 2,
+      name: "2",
+      label: "drop commons",
+      from: { name: "steward 3", workspace: "platform-next" },
+      workspace: "ide",
+      persona: null,
+      harness: "claude",
+    });
+
+    await waitFor(() => expect(tabNames()).toEqual(["ide.1", "drop commons"]));
+    expect(tabNamed("drop commons")).toHaveAttribute("title", "↳ from steward 3 · platform-next");
+  });
+
+  it("makes four handoffs from one chat four tabs that can be told apart", async () => {
+    // The operator's report: four handoffs, four tabs, every one "handoff from 16".
+    const { arrive } = core([chat(1)]);
+    render(<App />);
+    await waitFor(() => expect(tabNames()).toEqual(["ide.1"]));
+
+    for (const session of [2, 3, 4, 5])
+      arrive({
+        plane: "/home/dev/plane",
+        session,
+        name: String(session),
+        from: { name: "ide.1", workspace: "ide" },
+        workspace: "ide",
+        persona: "steward",
+      });
+
+    await waitFor(() =>
+      expect(tabNames()).toEqual(["ide.1", "steward 2", "steward 3", "steward 4", "steward 5"]),
+    );
+  });
+
+  it("comes back from the record still saying where it came from, in its tab and its pane", async () => {
+    core([
+      {
+        ...chat(1),
+        label: "drop commons",
+        from: { name: "steward 3", workspace: "platform-next" },
+      },
+    ]);
+    render(<App />);
+
+    await waitFor(() => expect(tabNames()).toEqual(["drop commons"]));
+    expect(tabNamed("drop commons")).toHaveAttribute("title", "↳ from steward 3 · platform-next");
+    expect(document.querySelector(".pane-from")).toHaveTextContent(
+      "↳ from steward 3 · platform-next",
+    );
+  });
+
+  it("says nothing of where a chat the operator opened came from", async () => {
+    core([chat(1)]);
+    render(<App />);
+
+    await waitFor(() => expect(tabNames()).toEqual(["ide.1"]));
+    expect(tabNamed("ide.1")).not.toHaveAttribute("title");
+    expect(document.querySelector(".pane-from")).toBeNull();
+  });
+});
 
 describe("a chat a handoff opened", () => {
   afterEach(() => {

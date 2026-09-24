@@ -430,6 +430,18 @@ mod tests {
     }
 
     #[test]
+    fn the_text_sizes_the_window_keeps_beside_the_regions_are_written_and_read_back() {
+        // charter-app#283: the window and terminal text sizes are in this file too, and what
+        // they mean is the window's (`textSize.ts`), so the envelope carries them untouched.
+        let home = home();
+        let with_text = r#"{"version":1,"regions":[],"text":{"window":16,"terminal":12}}"#;
+        write_layout(home.path(), with_text).expect("written");
+        let document = read_layout(home.path()).document.expect("in force");
+        assert_eq!(document["text"]["window"], 16);
+        assert_eq!(document["text"]["terminal"], 12);
+    }
+
+    #[test]
     fn a_layout_that_did_not_parse_is_replaced_by_the_next_change() {
         // The window drew the default and said so; the operator then moved something, and
         // that is theirs to keep.

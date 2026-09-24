@@ -80,6 +80,7 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
     unreported: null,
     pinned: false,
     label: null,
+    from: null,
     ...one,
   };
 }
@@ -328,6 +329,7 @@ describe("what the window is told about the chats", () => {
       queue,
       moved_at: 1,
       sequence: 1,
+      reports: [],
     };
   }
 
@@ -392,6 +394,7 @@ describe("being asked to quit", () => {
       queue: needsYou ? [session] : [],
       moved_at: 1,
       sequence: 1,
+      reports: [],
     };
   }
 

@@ -303,7 +303,21 @@ describe("the layout file", () => {
         { id: "aside", side: "right", order: 0, collapsed: false },
         { id: "bottom", side: "right", order: 1, collapsed: false },
       ],
+      // The two text sizes live in the same file (charter-app#283), and a change to the
+      // arrangement writes them as they stand.
+      text: { window: 14, terminal: 13 },
     });
+  });
+
+  it("keeps the text sizes the file held when the arrangement changes", async () => {
+    put({ version: 1, regions: [], text: { window: 18, terminal: 11 } });
+    const { result } = renderHook(() => useArrangement());
+
+    act(() => result.current.toggle("aside"));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const kept = JSON.parse((sent[0].args as { text: string }).text);
+    expect(kept.text).toEqual({ window: 18, terminal: 11 });
   });
 
   it("that could not be read is drawn as the default, and the drawer says why and where", async () => {

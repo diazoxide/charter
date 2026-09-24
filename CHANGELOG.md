@@ -71,6 +71,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
   the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
   ([#248](https://github.com/diazoxide/charter-app/issues/248))
+- A handed-off chat is named for its task. `charter handoff --name "<short task>"` names the new
+  chat's tab, and the handoff skill always writes one from the brief; without it the tab is the
+  ordinary `<persona> <N>`, so four handoffs from one chat are four tabs you can tell apart. The
+  chat it came from is shown by name, never by number — `↳ from steward 3 · platform-next` in the
+  tab's tooltip and the chat's corner, and in the new chat's first line.
+  ([#258](https://github.com/diazoxide/charter-app/issues/258))
+- A handoff can ask for an answer. With `charter handoff --report`, the new chat is told to
+  finish with `charter handoff report "<summary>"`, and the chat that asked gets a needs-you item
+  (`<chat> reported back`) and the report as context on its next turn — quoted as data, and never
+  typed into it. The report goes only to the chat that asked, and exactly once per handoff —
+  another needs another `--report` handoff; if that chat has closed, the next chat in its workspace learns it when
+  it starts. Without `--report`, nothing changes. ([#259](https://github.com/diazoxide/charter-app/issues/259))
 
 ### Changed
 

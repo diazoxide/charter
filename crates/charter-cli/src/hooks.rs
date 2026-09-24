@@ -123,26 +123,64 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
         if let Some(sid) = charter_core::hookstate::session(explicit, &env) {
             charter_core::personagate::snapshot(hook.root, &sid);
         }
-        let parts = charter_core::briefing::parts(
-            &charter_core::briefing::Ask {
-                root: hook.root,
-                cwd: hook.cwd,
-                payload: hook.payload,
-                env: &env,
-                now: hook.now,
-            },
-            piece,
-        );
+        let ask = charter_core::briefing::Ask {
+            root: hook.root,
+            cwd: hook.cwd,
+            payload: hook.payload,
+            env: &env,
+            now: hook.now,
+        };
+        let mut parts = charter_core::briefing::parts(&ask, piece);
+        // Reports kept for this workspace because the chat that asked for them has closed
+        // (charter-app#259): the next chat to START here is the one that learns them — never a
+        // chat already running that compacted or cleared, which would take them as a side
+        // effect of its own housekeeping.
+        let starting = hook
+            .payload
+            .get("source")
+            .and_then(|v| v.as_str())
+            .is_none_or(|source| source == "startup");
+        let workspace = charter_core::briefing::workspace_of(&ask);
+        let kept = if starting {
+            charter_core::handback::take(
+                hook.root,
+                charter_core::handback::For::Workspace(&workspace),
+            )
+        } else {
+            Vec::new()
+        };
+        if let Some(reports) = charter_core::handback::context(&kept, true) {
+            parts.push(reports);
+        }
         if let Some(line) = charter_core::briefing::emitted(&parts) {
             say(&line);
         }
     });
 }
 
-/// `userpromptsubmit`'s own work: the heartbeat. The rest of the Python handler — the roster,
-/// the commitment gate, the "control plane updated" note — is not ported (see the Hook help).
+/// `userpromptsubmit`'s own work: the heartbeat, and any report a chat this one handed work to
+/// has sent back (charter-app#259), handed to the turn that is starting as
+/// `additionalContext` — quoted as data, never typed into the chat. The rest of the Python
+/// handler — the roster, the commitment gate, the "control plane updated" note — is not
+/// ported (see the Hook help).
 pub fn userpromptsubmit(payload: &str, now: Option<&str>) {
-    with_hook(payload, now, |hook| hook.touch_piece());
+    with_hook(payload, now, |hook| {
+        hook.touch_piece();
+        if !hook.in_plane {
+            return;
+        }
+        // The app's number for this chat, which is what a report is left under. A chat the app
+        // did not start has none, and nothing was left for it.
+        let Some(chat) = env(charter_core::hookwire::CHAT_ENV).and_then(|id| id.parse().ok())
+        else {
+            return;
+        };
+        let reports =
+            charter_core::handback::take(hook.root, charter_core::handback::For::Chat(chat));
+        if let Some(text) = charter_core::handback::context(&reports, false) {
+            say(&charter_core::handback::emitted("UserPromptSubmit", &text));
+        }
+    });
 }
 
 /// `charter hook --list`.

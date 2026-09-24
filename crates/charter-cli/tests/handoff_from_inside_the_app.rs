@@ -58,9 +58,14 @@ fn root(tmp: &tempfile::TempDir) -> PathBuf {
 /// `charter handoff alpha` with the brief on a pipe, as a chat numbered [`ASKING`] runs it,
 /// with `app` naming the socket an app would have put in its environment.
 fn handoff(root: &Path, app: Option<&Path>) -> Output {
+    charter(root, app, &["handoff", "alpha"])
+}
+
+/// `charter <args>` with the brief on a pipe, as a chat numbered [`ASKING`] runs it.
+fn charter(root: &Path, app: Option<&Path>, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_charter"));
     command
-        .args(["handoff", "alpha"])
+        .args(args)
         .current_dir(root)
         .env("CHARTER_ROOT", root)
         // The app sets both to the same number (`sessions.rs`), which is what makes the
@@ -183,6 +188,15 @@ fn opens_as_nine(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
                 Err(why) => Answer::No { why },
             }
         }
+        Ask::Report(back) => {
+            match tickets.spend(back.chat, connection, &back.ticket, Instant::now()) {
+                Ok(()) => Answer::Reported {
+                    to: "steward 1".to_owned(),
+                    kept_for: None,
+                },
+                Err(why) => Answer::No { why },
+            }
+        }
     }
 }
 
@@ -217,7 +231,11 @@ fn a_chat_the_app_started_is_opened_in_the_app_on_one_ticket() {
         persona,
         message,
         ticket,
+        name,
+        report,
     } = &**open;
+    assert_eq!(name, &None, "no --name, no name");
+    assert!(!report, "no --report, no report owed");
     assert_eq!(*chat, ASKING);
     assert_eq!(workspace, "alpha");
     assert_eq!(create_vision, &None);
@@ -280,4 +298,153 @@ fn an_app_that_never_answers_does_not_hang_the_handoff() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(minute_masked(&text(&out.stderr)), WHAT_A_TERMINAL_IS_TOLD);
     held.join().expect("the mute app");
+}
+
+// ----- a name, and a report back (charter-app#258, #259) --------------------------------
+
+/// The open the stand-in app was sent, after its ticket.
+fn the_open(asked: &Asked) -> OpenChat {
+    let asked = asked.lock().unwrap().clone();
+    match asked.get(1) {
+        Some((_, Ask::Open(open))) => (**open).clone(),
+        other => panic!("an open second, not {other:?}"),
+    }
+}
+
+#[test]
+fn a_handoff_carries_its_task_name_and_whether_it_wants_an_answer() {
+    let tmp = daily();
+    let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
+
+    let out = charter(
+        &root(&tmp),
+        Some(&socket),
+        &[
+            "handoff",
+            "alpha",
+            "--name",
+            "  retry webhooks ",
+            "--report",
+        ],
+    );
+
+    assert_eq!(text(&out.stderr), "");
+    assert_eq!(out.status.code(), Some(0));
+    let open = the_open(&asked);
+    assert_eq!(open.name.as_deref(), Some("retry webhooks"), "trimmed");
+    assert!(open.report);
+}
+
+#[test]
+fn a_task_name_charter_would_not_draw_is_refused_before_anything_is_asked() {
+    let tmp = daily();
+    let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
+
+    let out = charter(
+        &root(&tmp),
+        Some(&socket),
+        &["handoff", "alpha", "--name", "retry\u{200b}webhooks"],
+    );
+
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("--name"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(text(&out.stderr).contains("Nothing was opened"));
+    assert!(asked.lock().unwrap().is_empty(), "the app was never asked");
+}
+
+#[test]
+fn a_report_back_goes_to_the_app_on_one_ticket_and_names_no_recipient() {
+    let tmp = daily();
+    let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
+
+    let out = charter(
+        &root(&tmp),
+        Some(&socket),
+        &["handoff", "report", "  Dropped it.\nTwo repos changed. "],
+    );
+
+    assert_eq!(text(&out.stderr), "");
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        text(&out.stdout).contains("sent to 'steward 1'"),
+        "{}",
+        text(&out.stdout)
+    );
+    let asked = asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2, "a ticket, then the report: {asked:?}");
+    let (minted_on, Ask::Ticket { chat }) = &asked[0] else {
+        panic!("a ticket first: {asked:?}")
+    };
+    assert_eq!(*chat, ASKING);
+    let (spent_on, Ask::Report(back)) = &asked[1] else {
+        panic!("the report second: {asked:?}")
+    };
+    assert_eq!(spent_on, minted_on);
+    assert_eq!(back.chat, ASKING, "the chat reporting, and nothing else");
+    assert_eq!(back.summary, "Dropped it.\nTwo repos changed.");
+}
+
+#[test]
+fn a_report_the_app_refuses_says_why_and_that_nothing_was_sent() {
+    let tmp = daily();
+    let (socket, _reading, _asked) = an_app(&tmp, |_, _, _| Answer::No {
+        why: "chat 3 was not opened by a handoff that asked for a report".to_owned(),
+    });
+
+    let out = charter(&root(&tmp), Some(&socket), &["handoff", "report", "done"]);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        "✗ charter handoff report: chat 3 was not opened by a handoff that asked for a report \
+         — nothing was sent.\n"
+    );
+}
+
+#[test]
+fn a_report_with_no_app_behind_it_sends_nothing_and_says_so() {
+    let tmp = daily();
+
+    let out = charter(&root(&tmp), None, &["handoff", "report", "done"]);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("nothing was sent"),
+        "{}",
+        text(&out.stderr)
+    );
+}
+
+#[test]
+fn a_report_charter_would_not_hand_back_is_refused_before_anything_is_asked() {
+    let tmp = daily();
+    let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
+
+    for bad in ["   ", "done\u{202e}enod", &"x".repeat(5000)] {
+        let out = charter(&root(&tmp), Some(&socket), &["handoff", "report", bad]);
+
+        assert_eq!(out.status.code(), Some(1), "{bad:?}");
+        assert!(text(&out.stderr).contains("nothing was sent"), "{bad:?}");
+    }
+    assert!(asked.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_handoff_into_a_workspace_called_report_is_still_a_handoff() {
+    // Without a summary after it, `report` is a workspace name as it always was — here one
+    // this plane does not have, which is the ordinary refusal.
+    let tmp = daily();
+
+    let out = charter(&root(&tmp), None, &["handoff", "report"]);
+
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("no workspace 'report'"),
+        "{}",
+        text(&out.stderr)
+    );
 }

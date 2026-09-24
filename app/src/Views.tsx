@@ -1,7 +1,16 @@
 import { useEffect, useState } from "react";
-import { ChartColumn, KeyRound, LoaderCircle, Puzzle, Settings2, UserRound } from "lucide-react";
+import {
+  ChartColumn,
+  KeyRound,
+  LoaderCircle,
+  Puzzle,
+  Settings2,
+  SlidersHorizontal,
+  UserRound,
+} from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import { PanelList } from "./PanelList";
+import { Preferences } from "./Preferences";
 import { ProjectSettings } from "./ProjectSettings";
 import {
   commands,
@@ -11,7 +20,7 @@ import {
   type PlaneId,
   type ViewAnswer,
 } from "./bindings";
-import { SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
+import { PREFERENCES_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
 
 /**
@@ -102,6 +111,7 @@ const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   persona: UserRound,
   vault: KeyRound,
   settings: Settings2,
+  preferences: SlidersHorizontal,
 };
 
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
@@ -219,6 +229,10 @@ export function ViewPane({
              form writes, and the panel vocabulary is for reading. Keyed by the plane, so a pane
              that comes to show another project's settings starts from its own read. */
           <ProjectSettings key={plane} plane={plane} />
+        ) : isPreferences(view) ? (
+          /* The machine's, not the plane's (charter-app#283): the same surface whichever
+             project's strip it was opened on. */
+          <Preferences />
         ) : (
           /* Keyed by the view, so a pane that comes to show another view starts from "asking"
              rather than drawing the last view's answer under the new one's title. */
@@ -232,6 +246,11 @@ export function ViewPane({
 /** Whether `view` is the Project settings view (charter-app#252). */
 function isSettings(view: ViewRef): boolean {
   return viewKey(view) === viewKey(SETTINGS_VIEW);
+}
+
+/** Whether `view` is the Preferences view (charter-app#283). */
+function isPreferences(view: ViewRef): boolean {
+  return viewKey(view) === viewKey(PREFERENCES_VIEW);
 }
 
 /** A view asked now, and its answer, its refusal, or the sentence saying its source has gone. */

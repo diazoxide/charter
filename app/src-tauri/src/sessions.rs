@@ -264,6 +264,14 @@ impl Sessions {
         self.opened.fetch_max(dealt, Ordering::Relaxed);
     }
 
+    /// A number no chat in this plane has had, taken now for a chat about to be started with
+    /// it — for a caller that has to NAME the chat by its number before it starts: a handed-off
+    /// chat with no task name is `<persona> <N>` (charter-app#258). Passed to [`Self::open`] as
+    /// the number wanted, it is the one the chat gets, because nothing else can be dealt it.
+    pub fn deal(&self) -> u32 {
+        self.opened.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
     /// The highest number this plane has dealt, for the record to keep.
     pub fn dealt(&self) -> u32 {
         self.opened.load(Ordering::Relaxed)

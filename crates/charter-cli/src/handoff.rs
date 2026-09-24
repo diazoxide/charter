@@ -61,7 +61,19 @@ pub struct Args {
     pub create: bool,
     pub vision: Option<String>,
     pub persona: Option<String>,
+    /// `--name`: what the new chat is called (charter-app#258).
+    pub name: Option<String>,
+    /// `--report`: the new chat owes this one a report (charter-app#259).
+    pub report: bool,
+    /// The word after `report` in `charter handoff report "<summary>"`.
+    pub summary: Option<String>,
 }
+
+/// The word that makes `charter handoff` a report back rather than a handoff.
+///
+/// **Only with a summary after it.** `charter handoff report <<'BRIEF'` is still a handoff
+/// into a workspace called `report`, as it always was.
+pub const REPORT: &str = "report";
 
 /// The most personas a refusal lists before it says how many it left out —
 /// `frame/switch._SOME`.
@@ -70,6 +82,19 @@ const SOME: usize = 5;
 pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     let root = here.plane.root();
     let ws = args.workspace.as_str();
+
+    if let Some(summary) = args.summary.as_deref() {
+        if ws == REPORT {
+            return report_back(summary);
+        }
+        voice::err(&format!(
+            "charter handoff: takes one workspace and its brief on stdin, and was given a \
+             second word after '{}' — nothing was opened. A report back is spelled: charter \
+             handoff report \"<summary>\"",
+            charter_core::personas::one_line(ws)
+        ));
+        return ExitCode::FAILURE;
+    }
 
     if !charter_core::contain::workspace_name_ok(ws) {
         voice::err(&format!(
@@ -133,6 +158,19 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // The name is a question answered without the brief, so it is asked before the read, and
+    // by the rule every name a chat has is held to.
+    let name = match args.name.as_deref().map(charter_core::reopen::label) {
+        None => None,
+        Some(Ok(name)) => name,
+        Some(Err(why)) => {
+            voice::err(&format!(
+                "charter handoff: --name: {why} Nothing was opened."
+            ));
+            return ExitCode::FAILURE;
+        }
+    };
+
     let brief = match read_brief() {
         Ok(brief) => brief,
         Err(refusal) => {
@@ -163,7 +201,12 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         &handoff::stamp(&source_chat, &source_ws, chrono::Local::now().naive_local()),
         &brief,
     );
-    if let Some(bad) = handoff::bad_message(&msg) {
+    // Measured as the chat will be sent it: with the report line when one is asked for, and
+    // with the stamp naming the chat that asks — which the app writes, by the name it shows.
+    // A name longer than this one's number can still take a message over the bound, and the
+    // app says so in that case; this is the refusal nearly every such brief gets.
+    let sent = handoff::delivered(&msg, &source_chat, args.report).unwrap_or_else(|| msg.clone());
+    if let Some(bad) = handoff::bad_message(&sent) {
         let mut said = format!("charter handoff: {}", bad.say());
         // Only the byte bound gets the note, and it is compared against the seam's own
         // sentence rather than re-deriving the bound here: two places counting bytes is how
@@ -178,7 +221,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
 
     // ---- the host: the app that started this chat, if one did ---------------------------
     let create_vision = vision.filter(|_| args.create);
-    let refused = match in_the_app(ws, &msg, create_vision, persona) {
+    let refused = match in_the_app(ws, &msg, create_vision, persona, name, args.report) {
         Host::Opened(chat) => {
             // `commands_handoff.OPENED`, word for word, on stdout where Python prints it.
             println!(
@@ -246,25 +289,20 @@ const AN_OPEN_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_sec
 /// failure after that (nothing listening, a deadline passed, a line that will not parse) is
 /// treated the same way, silently. `hookwire`'s own rule is that it can never break a turn,
 /// and the printed command is a handoff the operator can still carry out.
-fn in_the_app(ws: &str, msg: &str, create_vision: Option<&str>, persona: Option<&str>) -> Host {
-    use charter_core::hookwire::{Answer, Ask, Asking, CHAT_ENV, OpenChat, SOCKET_ENV};
+fn in_the_app(
+    ws: &str,
+    msg: &str,
+    create_vision: Option<&str>,
+    persona: Option<&str>,
+    name: Option<String>,
+    report: bool,
+) -> Host {
+    use charter_core::hookwire::{Answer, Ask, OpenChat};
 
-    let Some(socket) = std::env::var_os(SOCKET_ENV).filter(|s| !s.is_empty()) else {
-        return Host::None;
-    };
-    let Some(chat) = std::env::var(CHAT_ENV)
-        .ok()
-        .and_then(|chat| chat.parse::<u32>().ok())
-    else {
-        return Host::None;
-    };
-    let Ok(mut asking) = Asking::on(std::path::Path::new(&socket)) else {
-        return Host::None;
-    };
-    let ticket = match asking.ask(&Ask::Ticket { chat }, A_TICKET_TAKES_AT_MOST) {
-        Ok(Answer::Ticket { ticket }) => ticket,
-        Ok(Answer::No { why }) => return Host::Refused(why),
-        Ok(Answer::Opened { .. }) | Err(_) => return Host::None,
+    let (mut asking, chat, ticket) = match ticketed() {
+        Ticketed::Yes(asking, chat, ticket) => (asking, chat, ticket),
+        Ticketed::Refused(why) => return Host::Refused(why),
+        Ticketed::NoApp => return Host::None,
     };
     let open = OpenChat {
         chat,
@@ -273,12 +311,119 @@ fn in_the_app(ws: &str, msg: &str, create_vision: Option<&str>, persona: Option<
         persona: persona.map(str::to_owned),
         message: msg.to_owned(),
         ticket,
+        name,
+        report,
     };
     match asking.ask(&Ask::Open(Box::new(open)), AN_OPEN_TAKES_AT_MOST) {
         Ok(Answer::Opened { chat }) => Host::Opened(chat),
         Ok(Answer::No { why }) => Host::Refused(why),
-        Ok(Answer::Ticket { .. }) | Err(_) => Host::None,
+        Ok(Answer::Ticket { .. } | Answer::Reported { .. }) | Err(_) => Host::None,
     }
+}
+
+/// A ticket from the app that started this chat, on the connection it must be spent on.
+enum Ticketed {
+    Yes(charter_core::hookwire::Asking, u32, String),
+    /// The app answered, and would not mint one.
+    Refused(String),
+    /// No app to ask, or it did not answer.
+    NoApp,
+}
+
+/// The first of the two lines every ask on the socket is (charter-app#204): a ticket for the
+/// chat this process runs in, which `$CHARTER_CHAT` names.
+fn ticketed() -> Ticketed {
+    use charter_core::hookwire::{Answer, Ask, Asking, CHAT_ENV, SOCKET_ENV};
+
+    let Some(socket) = std::env::var_os(SOCKET_ENV).filter(|s| !s.is_empty()) else {
+        return Ticketed::NoApp;
+    };
+    let Some(chat) = std::env::var(CHAT_ENV)
+        .ok()
+        .and_then(|chat| chat.parse::<u32>().ok())
+    else {
+        return Ticketed::NoApp;
+    };
+    let Ok(mut asking) = Asking::on(std::path::Path::new(&socket)) else {
+        return Ticketed::NoApp;
+    };
+    match asking.ask(&Ask::Ticket { chat }, A_TICKET_TAKES_AT_MOST) {
+        Ok(Answer::Ticket { ticket }) => Ticketed::Yes(asking, chat, ticket),
+        Ok(Answer::No { why }) => Ticketed::Refused(why),
+        Ok(Answer::Opened { .. } | Answer::Reported { .. }) | Err(_) => Ticketed::NoApp,
+    }
+}
+
+/// `charter handoff report "<summary>"` — the one report a `--report` handoff asked for, sent
+/// back to the chat that asked (charter-app#259).
+///
+/// **It names no recipient.** The app sends it to the chat it recorded as this one's parent
+/// when it opened this one, and refuses it from any chat a `--report` handoff did not open —
+/// so the pairing is charter's, and nothing typed here can point a report at another chat.
+fn report_back(summary: &str) -> ExitCode {
+    use charter_core::hookwire::{Answer, Ask, ReportBack};
+
+    let summary = match handoff::report_summary(summary) {
+        Ok(summary) => summary,
+        Err(bad) => {
+            voice::err(&format!("charter handoff report: {}", bad.say()));
+            return ExitCode::FAILURE;
+        }
+    };
+    let (mut asking, chat, ticket) = match ticketed() {
+        Ticketed::Yes(asking, chat, ticket) => (asking, chat, ticket),
+        Ticketed::Refused(why) => return report_refused(&why),
+        Ticketed::NoApp => {
+            voice::err(
+                "charter handoff report: no charter app answered this call, so nothing was \
+                 sent. A report goes back only from a chat the app opened for a handoff that \
+                 asked for one (charter handoff --report).",
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let back = ReportBack {
+        chat,
+        summary,
+        ticket,
+    };
+    match asking.ask(&Ask::Report(Box::new(back)), A_TICKET_TAKES_AT_MOST) {
+        Ok(Answer::Reported { to, kept_for: None }) => {
+            println!(
+                "charter handoff report: sent to '{}'. It reaches that chat as context on its \
+                 next turn, and it is on its needs-you list now.",
+                charter_core::personas::one_line(&to)
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Answer::Reported {
+            to,
+            kept_for: Some(ws),
+        }) => {
+            println!(
+                "charter handoff report: '{}' has closed, so the report is kept for workspace \
+                 '{}'. The next chat that starts there reads it.",
+                charter_core::personas::one_line(&to),
+                charter_core::personas::one_line(&ws)
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Answer::No { why }) => report_refused(&why),
+        Ok(Answer::Ticket { .. } | Answer::Opened { .. }) | Err(_) => {
+            voice::err(
+                "charter handoff report: the charter app did not answer, so nothing was sent.",
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn report_refused(why: &str) -> ExitCode {
+    voice::err(&format!(
+        "charter handoff report: {} — nothing was sent.",
+        charter_core::personas::one_line(why)
+    ));
+    ExitCode::FAILURE
 }
 
 /// The brief on stdin, or why there is none.

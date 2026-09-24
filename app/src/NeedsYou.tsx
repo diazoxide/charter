@@ -98,6 +98,12 @@ export type Asking = {
   name: string;
   /** The workspace it is filed in, already said as the strip says it. */
   workspace: string;
+  /**
+   * The chats that have reported back to this one and not been read, by name (charter-app#259).
+   * Its row then says `<child> reported back` — what the operator is being asked to look at —
+   * and Go still opens THIS chat, the one that asked, whose next turn is handed the report.
+   */
+  reported?: readonly string[];
   /** The catalogue's `needs.show:<session>`: the chat to the front, its workspace with it. */
   go?: Offer;
   /** The catalogue's `needs.ignore:<session>`. */
@@ -257,7 +263,11 @@ export function NeedsYouMenu({
             >
               {items.map((item) => {
                 const press = (offer: Offer) => onPress(item.plane, offer);
-                const where = `${item.name} · ${item.workspace} · ${item.project}`;
+                const back =
+                  item.reported && item.reported.length > 0
+                    ? `${item.reported.join(", ")} reported back`
+                    : undefined;
+                const where = `${back ? `${item.name}: ${back}` : item.name} · ${item.workspace} · ${item.project}`;
                 return (
                   <Menu.Group
                     key={`${item.plane}#${item.session}`}
@@ -282,7 +292,7 @@ export function NeedsYouMenu({
                       }}
                       onKeyDown={(event) => ignoreOnDelete(event, item.ignore, press)}
                     >
-                      <span className="needs-you-name">{item.name}</span>
+                      <span className="needs-you-name">{back ?? item.name}</span>
                       <span className="needs-you-where">
                         {item.workspace} · {item.project}
                       </span>

@@ -999,6 +999,14 @@ export type IdentityHeld =
 /**  Nowhere: the vault cannot be read. */
 "unset";
 
+/**  Where a handed-off chat came from, as the window draws it. */
+export type HandedFromNote = {
+	/**  The chat it came from, by the name the operator saw it under. */
+	name: string,
+	/**  The workspace it came from. */
+	workspace: string,
+};
+
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
  *  later decision about extensions is read off.
@@ -1088,6 +1096,13 @@ export type Moved = {
 	 */
 	moved_at: number,
 	/**
+	 *  The chats that have reported back to this one and not been read yet, by the name the
+	 *  operator sees them under, oldest first (charter-app#259). Each is a needs-you item that
+	 *  says `<child> reported back` rather than only this chat's name. Empty for nearly every
+	 *  chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
+	 */
+	reports: string[],
+	/**
 	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
 	 * 
 	 *  **What lets the window put its events back in order.** Every `Moved` is built under the
@@ -1162,6 +1177,11 @@ export type OpenChat = {
 	 *  started with.
 	 */
 	label: string | null,
+	/**
+	 *  Where a handoff opened it from, where one did: the note its tab's tooltip and its header
+	 *  draw, `↳ from steward 3 · ops` (charter-app#258). Never the parent's number.
+	 */
+	from: HandedFromNote | null,
 };
 
 /**
