@@ -149,8 +149,12 @@ fn time_and_offset(t: &[u8]) -> Option<(Clock, chrono::Duration)> {
     } else {
         let off = hh_mm_ss_ff(zone).filter(|o| o.whole)?;
         let [h, m, s] = off.hms.map(i64::from);
-        let size = chrono::Duration::seconds(h * 3600 + m * 60 + s)
-            + chrono::Duration::microseconds(i64::from(off.micros));
+        let whole = h * 3600 + m * 60 + s;
+        // `tzinfo_from_isoformat_results`: a whole-second offset of zero is UTC, and the
+        // fraction written after it is dropped.
+        let micros = if whole == 0 { 0 } else { off.micros };
+        let size =
+            chrono::Duration::seconds(whole) + chrono::Duration::microseconds(i64::from(micros));
         // `timezone()` takes an offset strictly inside a day, and checks nothing else about it.
         if size >= chrono::Duration::days(1) {
             return None;
@@ -715,6 +719,20 @@ mod tests {
             Some("2026-03-04 15:00:00.250000")
         );
         assert_eq!(utc("+0530").as_deref(), Some("2026-03-04 04:30:00.000000"));
+        // A whole-second offset of zero is UTC and its fraction is dropped (`if (tzoffset == 0)
+        // return UTC`); any other keeps its fraction.
+        assert_eq!(
+            utc("+00:00:00.5").as_deref(),
+            Some("2026-03-04 10:00:00.000000")
+        );
+        assert_eq!(
+            utc("-00:00:00.5").as_deref(),
+            Some("2026-03-04 10:00:00.000000")
+        );
+        assert_eq!(
+            utc("+00:00:01.5").as_deref(),
+            Some("2026-03-04 09:59:58.500000")
+        );
         assert_eq!(utc("+24:00"), None);
         assert_eq!(utc("+5"), None);
         assert_eq!(utc("+05:"), None);
