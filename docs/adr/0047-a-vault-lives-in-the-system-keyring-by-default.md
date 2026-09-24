@@ -225,4 +225,6 @@ regression test that began as a proof the exploit worked.
 
 **A defence-in-depth gap is left open, tracked separately:** the app has no Tauri command
 allow-list, so only the webview CSP stands between a future cross-site-scripting bug and the
-reveal/copy commands. Filed as a follow-up.
+reveal/copy commands. Filed as a follow-up. *Closed by ADR 0052 (charter-app#276): every app
+command is on an allow-list, and reveal and copy are granted to the main window only, by a
+capability of their own.*

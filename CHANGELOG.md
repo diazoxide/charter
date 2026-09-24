@@ -155,6 +155,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   used to stay there until some other chat moved.
   ([#247](https://github.com/diazoxide/charter-app/issues/247))
 
+### Security
+
+- The window can only invoke the commands on the app's allow-list. Every command it calls is
+  now listed in one place and granted to the main window by name. Anything not on the list is
+  refused before it runs, and so is a call from any other window. A vault's reveal and copy
+  have a grant of their own and reach the main window only, so a window added later does not
+  get them by default. The Content-Security-Policy is tighter as well: the window loads no
+  plugins or frames, submits no forms, and accepts no `<base>`. The policy and the allow-list are
+  now separate guards on reveal and copy. Before, the policy was the only one.
+  ([#276](https://github.com/diazoxide/charter-app/issues/276))
+
 ## [0.1.1] - 2026-09-24
 
 0.1.1 brings back what 0.1.0 left out and a working plane still used: vault access through
