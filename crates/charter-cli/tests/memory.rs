@@ -297,9 +297,10 @@ fn a_persona_command_on_a_plane_with_no_front_door_exits_one_and_says_nothing() 
 }
 
 #[test]
-fn a_plane_that_commits_memory_is_told_this_charter_did_not() {
-    // `[memory] share = "commit"` means charter commits each memory as it is written. This
-    // binary does not; saying nothing would leave the operator to find it uncommitted.
+fn a_plane_that_commits_memory_is_told_the_memory_goes_with_the_next_save() {
+    // `[memory] share = "commit"` reads as `[plane] mode = "commit"` (ADR 0051): nothing
+    // commits a memory on its own, it travels with the plane's next save. Saying nothing
+    // would leave the operator to find it uncommitted (charter-app#293).
     let tmp = daily();
     let root = root(&tmp);
     let toml = std::fs::read_to_string(root.join("charter.toml")).unwrap();
@@ -313,7 +314,9 @@ fn a_plane_that_commits_memory_is_told_this_charter_did_not() {
 
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("does not commit memory"),
+        stderr(&out).contains(
+            "This plane's [plane] mode is commit: the memory goes with the plane's next save"
+        ),
         "{}",
         stderr(&out)
     );

@@ -8,6 +8,8 @@
 //! socket that has gone, a payload that will not parse. A harness whose turn fails because
 //! charter wanted to draw a spinner is worse than a spinner that is wrong.
 
+// Only the unix half reads and writes a socket; `off_unix` names its own.
+#[cfg(unix)]
 use std::io;
 
 use crate::state::{Detail, Ending, Event, Started};
@@ -528,21 +530,12 @@ impl Asking {
     }
 }
 
-/// [`Asking`]'s counterpart where there is no unix socket: it refuses, so a handoff there
-/// prints the command to run in a terminal, as it always has.
+/// Where there is no unix socket, [`Asking`], [`send`], [`Listener`] and [`Reading`] are the
+/// refusals in `off_unix`, kept in a file of their own because no unix build compiles them.
 #[cfg(not(unix))]
-pub enum Asking {}
-
+mod off_unix;
 #[cfg(not(unix))]
-impl Asking {
-    pub fn on(_path: &std::path::Path) -> io::Result<Self> {
-        Err(no_channel())
-    }
-
-    pub fn ask(&mut self, _ask: &Ask, _within: std::time::Duration) -> io::Result<Answer> {
-        match *self {}
-    }
-}
+pub use off_unix::{Asking, Listener, Reading, send};
 
 /// What the app answers an ask with, told which connection it came on.
 ///
@@ -550,27 +543,6 @@ impl Asking {
 /// how a ticket is bound to the connection that minted it without this module knowing what a
 /// ticket is.
 pub type Answerer = Box<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
-
-/// There is no channel to send on where charter has no unix socket.
-///
-/// The hook's own contract already covers this — every failure here is silent and fast, and
-/// `charter hook` drops the error on the floor — so a Windows hook costs its turn nothing.
-/// What it does NOT do is pretend: the error names the platform, so a `doctor` that asks
-/// gets an answer rather than a success that moved nothing.
-#[cfg(not(unix))]
-pub fn send(_path: &std::path::Path, _report: &Report) -> io::Result<()> {
-    Err(no_channel())
-}
-
-/// The one refusal both halves give, so the two cannot drift into two different stories.
-#[cfg(not(unix))]
-fn no_channel() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Unsupported,
-        "charter's hook channel is a unix socket with a 0600 mode on it, and neither has an \
-         answer on this platform yet (charter-app#95)",
-    )
-}
 
 /// The socket the app listens on for hook reports.
 #[cfg(unix)]
@@ -852,47 +824,6 @@ impl Drop for Reading {
         let _ = std::fs::remove_file(&self.path);
     }
 }
-
-/// The channel the app could not open, where there is no unix socket to open.
-///
-/// **An empty enum and not a struct with a stub in it.** Nothing can construct one, so
-/// [`Listener::path`] and [`Listener::each`] below are not "unimplemented" — they are
-/// unreachable, and the compiler is the one saying so. The only way in is [`Listener::bind`],
-/// and it refuses. An app that takes that refusal for what it is cannot end up holding a
-/// channel that quietly carries nothing.
-#[cfg(not(unix))]
-pub enum Listener {}
-
-#[cfg(not(unix))]
-impl Listener {
-    /// Refuses, with the reason. See the note at the top of this module.
-    pub fn bind(_within: &std::path::Path, _socket: &std::path::Path) -> io::Result<Self> {
-        Err(no_channel())
-    }
-
-    /// Unreachable: no `Listener` is ever constructed on this platform.
-    pub fn path(&self) -> &std::path::Path {
-        match *self {}
-    }
-
-    /// Unreachable, for the same reason.
-    pub fn each(self, _each: Box<dyn Fn(Report) + Send + Sync + 'static>) -> Reading {
-        match self {}
-    }
-
-    /// Unreachable, for the same reason.
-    pub fn each_answering(
-        self,
-        _each: Box<dyn Fn(Report) + Send + Sync + 'static>,
-        _answer: Answerer,
-    ) -> Reading {
-        match self {}
-    }
-}
-
-/// [`Reading`]'s counterpart on a platform with no channel, and empty for the same reason.
-#[cfg(not(unix))]
-pub enum Reading {}
 
 #[cfg(all(test, unix))]
 mod tests {
@@ -1558,6 +1489,42 @@ mod tests {
     }
 
     #[test]
+    fn a_socket_directory_that_cannot_be_made_is_refused_for_that_reason() {
+        // Not "already exists", which the checks after it judge: any other failure to make the
+        // directory is the answer, and the reason it gives is the one the operator reads.
+        let dir = tempfile::tempdir().expect("a directory");
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let refused = Listener::bind(dir.path(), &locked.join("app").join("hooks.sock"));
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let Err(err) = refused else {
+            panic!("bound inside a directory it could not make")
+        };
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    }
+
+    #[test]
+    fn something_that_is_not_a_socket_where_the_socket_goes_is_refused_as_it_is() {
+        // A stale socket is removed; a directory there is not, and the refusal is the removal's
+        // own — not the "address in use" that binding over it would say instead.
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("app").join("hooks.sock");
+        std::fs::create_dir_all(path.join("inside")).unwrap();
+
+        let Err(err) = Listener::bind(dir.path(), &path) else {
+            panic!("bound over a directory")
+        };
+        assert_ne!(err.kind(), io::ErrorKind::AddrInUse, "{err}");
+        assert!(
+            path.join("inside").is_dir(),
+            "the directory was left as it was"
+        );
+    }
+
+    #[test]
     fn a_socket_nothing_is_listening_on_refuses_rather_than_hangs() {
         // The app is not running, or has quit. The hook must find out at once and get out of
         // the harness's way.
@@ -1803,6 +1770,124 @@ mod tests {
         assert_ne!(one, two);
         assert_eq!(one.len(), 64);
         assert!(one.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn a_guess_as_long_as_the_ticket_or_a_prefix_of_it_opens_nothing() {
+        // The comparison needs the lengths equal AND every byte equal. A guess of the right
+        // length that differs in one byte, and the ticket cut short — whose every byte the
+        // zip does compare equal — are both refused.
+        let now = std::time::Instant::now();
+        for guess in [
+            |t: &str| {
+                let mut g = t.as_bytes().to_vec();
+                g[63] = if g[63] == b'0' { b'1' } else { b'0' };
+                String::from_utf8(g).unwrap()
+            },
+            |t: &str| t[..32].to_owned(),
+            |t: &str| format!("{t}0"),
+            // Two bytes wrong by the same bit: differences are OR-ed together, so a second
+            // one cannot cancel the first.
+            |t: &str| {
+                let mut g = t.as_bytes().to_vec();
+                g[0] ^= 1;
+                g[1] ^= 1;
+                String::from_utf8(g).unwrap()
+            },
+        ] {
+            let tickets = Tickets::default();
+            let ticket = tickets.mint(3, 1, now).expect("a ticket");
+            let wrong = guess(&ticket);
+            assert_ne!(wrong, ticket);
+            assert_eq!(
+                tickets.spend(3, 1, &wrong, now),
+                Err(NO_TICKET.to_owned()),
+                "{wrong}"
+            );
+        }
+    }
+
+    /// A listener whose every ask is answered with `answer`.
+    fn an_app_answering(
+        path: &std::path::Path,
+        within: &std::path::Path,
+        answer: Answer,
+    ) -> Reading {
+        Listener::bind(within, path)
+            .expect("a socket")
+            .each_answering(Box::new(|_| {}), Box::new(move |_, _| answer.clone()))
+    }
+
+    #[test]
+    fn an_answer_up_to_the_report_cap_is_read_whole_and_one_past_it_is_not() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let within = std::time::Duration::from_secs(5);
+        // `{"no":{"why":"…"}}` and its newline, sized to land exactly on the cap and one past.
+        let frame = serde_json::to_vec(&Answer::No { why: String::new() })
+            .unwrap()
+            .len()
+            + 1;
+        let cap = usize::try_from(A_REPORT_IS_AT_MOST).unwrap();
+        assert_eq!(cap, 65_536);
+
+        let whole = Answer::No {
+            why: "w".repeat(cap - frame),
+        };
+        let path = dir.path().join("whole.sock");
+        let _reading = an_app_answering(&path, dir.path(), whole.clone());
+        let got = Asking::on(&path)
+            .expect("connected")
+            .ask(&Ask::Ticket { chat: 3 }, within)
+            .expect("an answer exactly at the cap");
+        assert_eq!(got, whole);
+
+        let over = Answer::No {
+            why: "w".repeat(cap - frame + 2),
+        };
+        let path = dir.path().join("over.sock");
+        let _reading = an_app_answering(&path, dir.path(), over);
+        assert!(
+            Asking::on(&path)
+                .expect("connected")
+                .ask(&Ask::Ticket { chat: 3 }, within)
+                .is_err(),
+            "an answer past the cap was read"
+        );
+    }
+
+    #[test]
+    fn an_open_carrying_the_largest_first_message_arrives_and_a_longer_line_does_not() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let _reading = an_app_at(&path, dir.path());
+        let within = std::time::Duration::from_secs(5);
+
+        // The worst case the cap was sized for: a whole first message of a character JSON
+        // writes as six bytes.
+        let mut asking = Asking::on(&path).expect("connected");
+        let ticket = ticket_from(&mut asking);
+        let Ask::Open(mut open) = an_open(3, &ticket) else {
+            unreachable!()
+        };
+        open.message = "\u{1b}".repeat(crate::handoff::FIRST_MESSAGE_MAX_BYTES);
+        assert_eq!(
+            asking
+                .ask(&Ask::Open(open), within)
+                .expect("the largest first message is read"),
+            Answer::Opened { chat: 9 }
+        );
+
+        // A line longer than the cap is cut, and a cut line is no ask: the connection ends.
+        let mut asking = Asking::on(&path).expect("connected");
+        let ticket = ticket_from(&mut asking);
+        let Ask::Open(mut open) = an_open(3, &ticket) else {
+            unreachable!()
+        };
+        open.message = "m".repeat(usize::try_from(A_LINE_IS_AT_MOST).unwrap());
+        assert!(
+            asking.ask(&Ask::Open(open), within).is_err(),
+            "a line past the cap was read"
+        );
     }
 
     /// A listener at `path` whose answers are the ticket half and an open that always

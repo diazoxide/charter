@@ -1080,4 +1080,48 @@ mod tests {
         );
         assert_eq!(reason("charter handoff report"), Some(REASON_BRIEF_SOURCE));
     }
+
+    /// A row a quoted string covers from end to end is data and is stepped over, and the
+    /// search goes on to the rows after it (#311): the handoff two rows below a message is
+    /// found, and it is found on the row it is on.
+    #[test]
+    fn a_row_wholly_inside_a_string_is_skipped_and_the_rows_after_it_are_still_read() {
+        let cmd = "git commit -m 'first\nsecond\nthird'\ncharter handoff beta < brief.txt";
+        assert_eq!(
+            handoff_line(cmd),
+            Some(("charter handoff beta < brief.txt".to_owned(), false))
+        );
+        assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE));
+        // …and a message that only MENTIONS one, on a row of its own, is a message.
+        assert_eq!(
+            handoff_line("git commit -m 'first\ncharter handoff beta\nthird'"),
+            None
+        );
+    }
+
+    /// A continuation joins the next row to this one, from wherever this one is.
+    #[test]
+    fn a_continuation_after_the_first_row_joins_the_row_after_it() {
+        let cmd = "git status\ncharter \\\nhandoff beta < brief.txt";
+        assert_eq!(
+            handoff_line(cmd),
+            Some(("charter \\\nhandoff beta < brief.txt".to_owned(), false))
+        );
+    }
+
+    /// An apostrophe in a `#` comment opens a quote to `quote_map` and no token to the lexer,
+    /// so the row after it has no quoted head — even when that row BEGINS with a quoted word.
+    /// Reading the quoted word as the head would cut `'charter'` off the handoff (#311).
+    #[test]
+    fn a_quoted_word_that_starts_a_row_is_not_a_string_an_earlier_row_opened() {
+        let cmd = "# it's a comment\n'charter' handoff beta < brief.txt";
+        assert_eq!(
+            handoff_line(cmd),
+            Some(("'charter' handoff beta < brief.txt".to_owned(), false))
+        );
+        assert!(
+            reason(cmd).is_some(),
+            "the handoff after the comment was missed"
+        );
+    }
 }

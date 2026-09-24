@@ -383,7 +383,7 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[persona].default` | str | optional; blank = absent = `None` | The plane's front door persona. Written by `charter persona default`. | stable | `charter/instance.py:259` |
 | `[plane].worktrees` | str | optional; `None` = `workspaces/<ws>/.worktrees/` | Relocated worktree root. Relative resolves against ROOT; a committed value must satisfy `contain.plane_adjacent` or it is ignored (doctor warns). `$CHARTER_WORKTREES` overrides and is unrestricted. | stable | `charter/instance.py:488`, `charter/config.py:82` |
 | `[plane].mode` | str | optional; closed set `off`,`commit`,`push`,`pr`,`pr-merge`; absent = `[memory].share`'s alias when that is `commit` or `push`, else **ask once** (the Saving view asks before anything is pushed); a new plane is written with `push` | **charter-app only.** How far a save of the plane goes, as a ladder: `off` never commits; `commit` commits locally; `push` also pushes to `branch`; `pr` pushes to `save_branch` and opens or updates one PR/MR into `branch`; `pr-merge` also sets that PR to auto-merge. `pr`/`pr-merge` on an origin that is not a GitHub or GitLab forge charter knows is a config error (doctor, the settings tab) and saves fall back to `commit` with the plane **blocked**. Unknown value → refused by the settings tab, read as absent. | stable | ADR 0051 (accepted, not built) |
-| `[plane].branch` | str | optional; default the remote's default branch | **charter-app only.** The *target* branch the plane is saved into. | stable | ADR 0051 (accepted, not built) |
+| `[plane].branch` | str | optional; default the branch the plane has checked out | **charter-app only.** The *target* branch the plane is saved into. A save whose plane has another branch checked out commits and does not push: pushing would rebase that branch onto this one (ADR 0051). | stable | ADR 0051 (accepted, not built) |
 | `[plane].save_branch` | str | optional; default `charter/save/<host>` | **charter-app only.** The one rolling branch per machine that `pr`/`pr-merge` push to; one PR from it is kept open and updated by every save. Replaces the per-push `charter/<sha>` branch. | stable | ADR 0051 (accepted, not built) |
 | `[plane].sign` | bool | optional; default `false` | **charter-app only.** Sign save commits. A push refused for an unsigned commit tells the operator to set this. | stable | ADR 0051 (accepted, not built) |
 | `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051 (accepted, not built) |
@@ -3359,7 +3359,8 @@ charter-app. `charter save` keeps writing this record until its contract moves (
   lines.
 - **Status:** **internal**. Only the app and `charter save` write it, and only the Saving view
   reads it. Deleted ⇒ the Saving view's history starts empty.
-- **Written by:** `charter-core`'s save function (ADR 0051). Not built yet.
+- **Written by:** `crates/charter-core/src/planegit.rs` `save_as`, the one save function
+  (charter-app#293, ADR 0051), once per attempt, with `profiletrust::write_private`.
 - **Read by:** the Saving view (its last 50 entries).
 - **Git:** gitignored (under `/.charter/`).
 - **Fields:**

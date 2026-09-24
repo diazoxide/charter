@@ -206,15 +206,62 @@ pub(super) fn profile_rows(d: &Doctor) -> Vec<Row> {
                         }
                     },
                 };
-                let detail = counted(&w.detail, DISPLAY_LIMIT);
-                match w.state {
-                    State::Wired => Row::ok(&name, detail),
-                    State::Unknown if w.fix.is_empty() => {
-                        Row::warn(&name, detail, NOT_CHECKED_HINT)
-                    }
-                    State::Unknown => Row::warn(&name, detail, counted(&w.fix, DISPLAY_LIMIT)),
-                }
+                wiring_row(&name, &w)
             })
             .collect()
     })
+}
+
+/// The row a finished probe answers: green when wired, and otherwise a warning whose hint is
+/// the probe's own fix, or charter's "not checked" when the probe has none to give.
+fn wiring_row(name: &str, w: &wiring::Wiring) -> Row {
+    let detail = counted(&w.detail, DISPLAY_LIMIT);
+    match w.state {
+        State::Wired => Row::ok(name, detail),
+        State::Unknown if w.fix.is_empty() => Row::warn(name, detail, NOT_CHECKED_HINT),
+        State::Unknown => Row::warn(name, detail, counted(&w.fix, DISPLAY_LIMIT)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doctor::Status;
+
+    fn wiring(state: State, detail: &str, fix: &str) -> wiring::Wiring {
+        wiring::Wiring {
+            state,
+            detail: detail.to_owned(),
+            fix: fix.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_probe_that_could_not_tell_says_its_fix_or_that_it_was_not_checked() {
+        let row = wiring_row(
+            "profile x",
+            &wiring(State::Unknown, "no hook", "charter wire x"),
+        );
+        assert_eq!(row.status, Status::Warn);
+        assert_eq!(row.detail, "no hook");
+        assert_eq!(row.hint, "charter wire x");
+
+        let row = wiring_row("profile x", &wiring(State::Unknown, "could not look", ""));
+        assert_eq!(row.status, Status::Warn);
+        assert_eq!(row.hint, NOT_CHECKED_HINT);
+
+        let row = wiring_row("profile x", &wiring(State::Wired, "wired", ""));
+        assert_eq!(row.status, Status::Ok);
+        assert_eq!(row.detail, "wired");
+    }
+
+    #[test]
+    fn a_long_fix_is_counted_rather_than_drawn_whole() {
+        let fix = "f".repeat(DISPLAY_LIMIT + 3);
+        let row = wiring_row("profile x", &wiring(State::Unknown, "d", &fix));
+        assert_eq!(
+            row.hint,
+            format!("{}\u{2026} +3 not shown", "f".repeat(DISPLAY_LIMIT))
+        );
+    }
 }

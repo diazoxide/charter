@@ -294,7 +294,9 @@ fn a_scoped_stage_from_a_linked_worktree_is_still_allowed() {
             no_push: true,
             cwd: &worktree,
         },
+        &crate::planesave::Settings::read(&fixture.root).plane,
         &["add", "--", "personas/steward/memory/m.md"],
+        &mut Attempt::default(),
         &mut say,
     );
 
@@ -878,7 +880,7 @@ fn push_within(
         said.push_str(&line.to_string());
         said.push('\n');
     };
-    let pushed = push_head_within(&fixture.root, sign, deadline, &mut say);
+    let pushed = push_head_within(&fixture.root, None, sign, deadline, &mut say);
     (pushed, said)
 }
 
@@ -1395,4 +1397,405 @@ fn a_protected_branch_is_recognised_only_from_words_a_forge_actually_says() {
     ] {
         assert!(!is_protected_rejection(ordinary), "{ordinary}");
     }
+}
+
+// --------------------------------------------------------------------------------------- //
+// how far a save goes: `[plane] mode` (charter-app#293, ADR 0051)                            //
+// --------------------------------------------------------------------------------------- //
+
+impl Fixture {
+    /// Replace the plane's `charter.toml` — committed, so it is not itself the save's work.
+    fn with_settings(&self, toml: &str) {
+        std::fs::write(self.root.join("charter.toml"), toml).unwrap();
+        run(&self.root, &["commit", "-q", "-am", "settings"]);
+    }
+}
+
+#[test]
+fn a_plane_whose_mode_is_off_is_never_committed_and_is_told_why() {
+    let fixture = Fixture::plane();
+    fixture.with_settings("[plane]\nmode = \"off\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let before = fixture.commits();
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(fixture.commits(), before, "{said}");
+    assert!(
+        said.contains("[plane] mode is off (charter.toml), so charter commits nothing here"),
+        "{said}"
+    );
+    assert_eq!(
+        ask(&fixture.root, &["diff", "--cached", "--name-only"]).trim(),
+        "",
+        "and nothing was staged either"
+    );
+}
+
+#[test]
+fn a_plane_whose_mode_is_commit_is_committed_and_the_remote_is_left_where_it_was() {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    fixture.with_settings("[plane]\nmode = \"commit\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(fixture.head_subject(), "a save");
+    assert!(
+        said.contains("Not pushed: [plane] mode is commit (charter.toml)."),
+        "{said}"
+    );
+    assert_eq!(ask(&bare, &["log", "-1", "--format=%s", "main"]).trim(), "");
+}
+
+#[test]
+fn a_pr_mode_never_pushes_to_the_target_branch_before_charter_can_open_the_pr() {
+    // charter-app#298 builds the rolling save branch. Until then a PR mode commits and stops:
+    // pushing to the target branch is exactly what the operator chose a PR mode to prevent.
+    for mode in ["pr", "pr-merge"] {
+        let fixture = Fixture::plane();
+        let bare = fixture.with_a_remote();
+        fixture.with_settings(&format!("[plane]\nmode = \"{mode}\"\n"));
+        std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+        let (code, said) = fixture.just_save();
+
+        assert_eq!(code, 0, "{said}");
+        assert_eq!(fixture.head_subject(), "a save");
+        assert!(
+            said.contains(&format!(
+                "Not pushed: [plane] mode is {mode} (charter.toml), and this charter cannot \
+                 open the pull request yet."
+            )),
+            "{said}"
+        );
+        assert_eq!(
+            ask(&bare, &["for-each-ref", "--format=%(refname)"]).trim(),
+            "",
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn a_push_lands_on_the_target_branch_the_settings_name() {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    run(&fixture.root, &["checkout", "-q", "-b", "trunk"]);
+    fixture.with_settings("[plane]\nmode = \"push\"\nbranch = \"trunk\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("Pushed trunk via gh"), "{said}");
+    assert_eq!(
+        ask(&bare, &["log", "-1", "--format=%s", "trunk"]).trim(),
+        "a save"
+    );
+    assert_eq!(ask(&bare, &["log", "-1", "--format=%s", "main"]).trim(), "");
+}
+
+const SETTINGS_SIGN_CHILD: &str = "CHARTER_TEST_SETTINGS_SIGN_MARK";
+
+#[test]
+fn a_plane_that_says_sign_asks_the_signer_without_being_told_on_the_command_line() {
+    // Re-run in a child whose HOME signs every commit through a stand-in that SIGNS and counts
+    // (`testgit::home_that_signs`): the product's git keeps HOME, so run in this process the
+    // test would hand the developer's own signer — a 1Password prompt — a fixture's commit.
+    // The HOME's `commit.gpgsign = true` is the machine's default, and the repo turns it off,
+    // so only `[plane] sign` can be what asked the signer.
+    if let Some(ran) = std::env::var_os(SETTINGS_SIGN_CHILD) {
+        let ran = PathBuf::from(ran);
+        let fixture = Fixture::plane();
+        run(&fixture.root, &["config", "commit.gpgsign", "false"]);
+        fixture.with_settings("[plane]\nsign = true\n");
+        std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+        let (code, said) = fixture.save(Request {
+            root: &fixture.root,
+            message: Some("signed by the settings"),
+            sign: false,
+            no_push: true,
+            cwd: &fixture.root,
+        });
+
+        assert_eq!(code, 0, "{said}");
+        assert!(
+            ask(&fixture.root, &["cat-file", "commit", "HEAD"]).contains("\ngpgsig "),
+            "the commit is unsigned: {said}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&ran)
+                .unwrap_or_default()
+                .lines()
+                .count(),
+            1
+        );
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let top = dir.path().canonicalize().unwrap();
+    let (home, ran) = crate::testgit::home_that_signs(&top);
+
+    crate::testrun::rerun(
+        &[
+            "planegit::tests::a_plane_that_says_sign_asks_the_signer_without_being_told_on_the_command_line",
+        ],
+        &[
+            (SETTINGS_SIGN_CHILD, ran.as_os_str()),
+            ("HOME", home.as_os_str()),
+        ],
+    );
+}
+
+#[test]
+fn a_save_with_no_message_says_what_changed_in_the_planes_own_words() {
+    let fixture = Fixture::plane();
+    for path in [
+        "personas/steward/memory/a.md",
+        "personas/steward/memory/b.md",
+        "personas/_dispatch/2026-09.host.jsonl",
+        "workspaces/ide/todos/t.json",
+        "workspaces/ide/workspace.md",
+        "inventory/repos.json",
+    ] {
+        let file = fixture.root.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "x").unwrap();
+    }
+
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: None,
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        fixture.head_subject(),
+        "charter save: 6 files (steward memory 2, dispatch 1, ide todos 1, ide workspace 1, \
+         +1 more)"
+    );
+}
+
+#[test]
+fn one_file_is_one_file() {
+    let fixture = Fixture::plane();
+    std::fs::write(fixture.root.join("personas/steward/memory/a.md"), "x").unwrap();
+    let (_, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: None,
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+    assert_eq!(
+        fixture.head_subject(),
+        "charter save: 1 file (steward memory 1)",
+        "{said}"
+    );
+}
+
+// --------------------------------------------------------------------------------------- //
+// the save journal (charter-app#293)                                                        //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn every_save_attempt_is_one_line_of_the_journal_saying_how_it_ended() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+    let (code, said) = fixture.just_save();
+    assert_eq!(code, 0, "{said}");
+    let _ = fixture.just_save(); // nothing left to save
+
+    let lines = journal(&fixture.root);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    let saved = &lines[0];
+    assert_eq!(saved["target"], "plane");
+    assert_eq!(saved["trigger"], "cli");
+    assert_eq!(saved["mode"], "push");
+    assert_eq!(saved["files"], 1);
+    assert_eq!(
+        saved["commit"],
+        ask(&fixture.root, &["rev-parse", "HEAD"]).trim(),
+    );
+    assert_eq!(saved["outcome"], "saved");
+    assert!(saved["at"].as_f64().is_some_and(|at| at > 0.0));
+    assert!(saved["ms"].as_u64().is_some());
+    assert_eq!(lines[1]["outcome"], "skipped");
+    assert_eq!(lines[1]["commit"], serde_json::Value::Null);
+}
+
+#[test]
+fn a_secret_the_scan_caught_is_journalled_as_blocked_and_a_commit_mode_as_committed() {
+    let fixture = Fixture::plane();
+    std::fs::write(
+        fixture.root.join("personas/steward/memory/m.md"),
+        "token: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n",
+    )
+    .unwrap();
+    let _ = fixture.just_save();
+    assert_eq!(journal(&fixture.root)[0]["outcome"], "blocked");
+
+    let fixture = Fixture::plane();
+    fixture.with_settings("[plane]\nmode = \"commit\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let _ = fixture.just_save();
+    let line = &journal(&fixture.root)[0];
+    assert_eq!(
+        (line["mode"].as_str(), line["outcome"].as_str()),
+        (Some("commit"), Some("committed"))
+    );
+}
+
+#[test]
+fn the_journal_keeps_its_newest_five_hundred_lines() {
+    let fixture = Fixture::plane();
+    let path = journal_path(&fixture.root);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let old: String = (0..500).map(|n| format!("{{\"n\": {n}}}\n")).collect();
+    std::fs::write(&path, old).unwrap();
+
+    let _ = fixture.just_save();
+
+    let lines = journal(&fixture.root);
+    assert_eq!(lines.len(), 500);
+    assert_eq!(lines[0]["n"], 1, "the oldest went");
+    assert_eq!(lines[499]["outcome"], "skipped", "the newest came");
+}
+
+// --------------------------------------------------------------------------------------- //
+// review of #331                                                                            //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn a_target_branch_that_is_not_the_one_checked_out_is_never_pushed_to_or_rebased_onto() {
+    // Rebasing `main` onto a `trunk` that moved would replay main's history onto trunk and
+    // rewrite the local main: nothing rewrites anyone's history (ADR 0051).
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote_that_moved();
+    run(&bare, &["branch", "trunk", "main"]);
+    let remote_trunk = ask(&bare, &["rev-parse", "trunk"]);
+    fixture.with_settings("[plane]\nmode = \"push\"\nbranch = \"trunk\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        fixture.head_subject(),
+        "a save",
+        "committed on main: {said}"
+    );
+    assert!(
+        said.contains(
+            "Not pushed: this plane is on main, and [plane] branch is trunk (charter.toml)."
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("remote moved"), "it rebased: {said}");
+    assert_eq!(ask(&bare, &["rev-parse", "trunk"]), remote_trunk);
+    let line = &journal(&fixture.root)[0];
+    assert_eq!(line["outcome"], "blocked");
+    assert_eq!(
+        line["detail"],
+        "this plane is on main, and [plane] branch is trunk"
+    );
+}
+
+#[test]
+fn the_alias_is_named_as_itself_when_it_decided_the_mode() {
+    let fixture = Fixture::plane();
+    fixture.with_settings("[memory]\nshare = \"commit\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let (_, said) = fixture.just_save();
+    assert!(
+        said.contains("Not pushed: [memory] share is commit (charter.toml)."),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_refusal_is_journalled_in_its_own_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join("charter.toml"), "").unwrap();
+    let mut said = String::new();
+    let mut say = |line: Say| said.push_str(&format!("{line}\n"));
+    let code = save(
+        &Request {
+            root: &root,
+            message: None,
+            sign: false,
+            no_push: false,
+            cwd: &root,
+        },
+        &mut say,
+    );
+    assert_eq!(code, 1);
+    let line = &journal(&root)[0];
+    assert_eq!(line["outcome"], "failed");
+    assert!(
+        line["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("is not a git repository"),
+        "{line}"
+    );
+}
+
+const REFUSED_SIGN_CHILD: &str = "CHARTER_TEST_REFUSED_SIGN_MARK";
+
+#[test]
+fn a_save_asked_to_sign_whose_signer_refuses_commits_nothing_unsigned() {
+    // Run in a child whose HOME's signer FAILS (`testgit::signing_home`), never the
+    // developer's own. A save asked to sign — here by `[plane] sign` — that cannot sign stops:
+    // an unsigned commit is exactly what the operator asked not to make.
+    if std::env::var_os(REFUSED_SIGN_CHILD).is_some() {
+        let fixture = Fixture::plane();
+        fixture.with_a_remote();
+        run(&fixture.root, &["config", "commit.gpgsign", "false"]);
+        fixture.with_settings("[plane]\nsign = true\n");
+        std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+        let before = fixture.commits();
+
+        let (code, said) = fixture.just_save();
+
+        assert_eq!(code, 1, "{said}");
+        assert_eq!(
+            fixture.commits(),
+            before,
+            "an unsigned commit was made: {said}"
+        );
+        assert!(said.contains("could not sign the commit"), "{said}");
+        let line = &journal(&fixture.root)[0];
+        assert_eq!(line["outcome"], "failed");
+        assert!(
+            line["detail"]
+                .as_str()
+                .unwrap_or("")
+                .contains("could not sign"),
+            "{line}"
+        );
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let top = dir.path().canonicalize().unwrap();
+    let (home, ran) = crate::testgit::signing_home(&top);
+    crate::testrun::rerun(
+        &["planegit::tests::a_save_asked_to_sign_whose_signer_refuses_commits_nothing_unsigned"],
+        &[
+            (REFUSED_SIGN_CHILD, ran.as_os_str()),
+            ("HOME", home.as_os_str()),
+        ],
+    );
 }

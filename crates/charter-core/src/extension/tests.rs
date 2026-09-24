@@ -1906,3 +1906,62 @@ fn settings_with_no_program_to_hand_them_to_are_refused() {
         "{refused}"
     );
 }
+
+// ---- a view's edges: exactly at a bound is offered, one past it is not (#311) ----
+
+fn views(json: serde_json::Value) -> Result<Vec<View>, String> {
+    views_of(&json, Some("bin/x"))
+}
+
+fn a_view(id: &str, title: &str) -> serde_json::Value {
+    serde_json::json!({ "id": id, "title": title, "about": "personas" })
+}
+
+#[test]
+fn exactly_the_most_views_are_offered_and_one_more_is_refused() {
+    let listed: Vec<_> = (0..MOST_VIEWS)
+        .map(|n| a_view(&format!("v{n}"), "V"))
+        .collect();
+    assert_eq!(
+        views(serde_json::Value::Array(listed.clone()))
+            .expect("exactly the most views")
+            .len(),
+        MOST_VIEWS
+    );
+
+    let mut more = listed;
+    more.push(a_view("one-more", "V"));
+    let refused = views(serde_json::Value::Array(more)).expect_err("one view too many");
+    assert!(
+        refused.contains(&format!("at most {MOST_VIEWS}")),
+        "{refused}"
+    );
+
+    assert!(views(serde_json::json!([])).unwrap().is_empty());
+}
+
+#[test]
+fn a_view_id_may_hold_dashes_and_underscores_after_its_first_letter() {
+    for id in ["a-b_c", "9lives", "x_", "y-"] {
+        let got = views(serde_json::json!([a_view(id, "V")]))
+            .unwrap_or_else(|why| panic!("{id:?} is a view id: {why}"));
+        assert_eq!(got[0].id, id);
+    }
+    // One segment each, so only the charset or the first character refuses it.
+    for id in ["a.b", "a b", "_under", "-lead", "é", "", ".."] {
+        let refused = views(serde_json::json!([a_view(id, "V")])).expect_err(id);
+        assert!(refused.contains("view id"), "{id:?}: {refused}");
+    }
+}
+
+#[test]
+fn a_view_title_of_exactly_two_hundred_bytes_is_drawn_and_one_more_is_not() {
+    let longest = "t".repeat(200);
+    let got = views(serde_json::json!([a_view("v", &longest)])).expect("200 bytes");
+    assert_eq!(got[0].title, longest);
+
+    for title in ["t".repeat(201), "t".repeat(300), "a\u{7}b".to_owned()] {
+        let refused = views(serde_json::json!([a_view("v", &title)])).expect_err("refused");
+        assert!(refused.contains("will not draw on a button"), "{refused}");
+    }
+}

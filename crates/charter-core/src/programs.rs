@@ -205,16 +205,18 @@ pub fn file_names(program: &str, pathext: Option<&OsStr>) -> Vec<String> {
         .collect()
 }
 
-/// This process's `PATHEXT` for [`file_names`]: none on unix, where a name is only itself.
-#[cfg(unix)]
+/// This process's `PATHEXT` for [`file_names`]: none on unix, where a name is only itself, and
+/// off unix the variable, unset read as empty so the default applies.
+///
+/// One function and `cfg!`, not two under `#[cfg]`, so that a unix build compiles — and a unix
+/// test can pin — the answer unix gives. Its `None` mutation is this function on unix and
+/// changes only the half a unix build never takes; `.cargo/mutants.toml` says so.
 fn host_pathext() -> Option<std::ffi::OsString> {
-    None
-}
-
-/// This process's `PATHEXT` for [`file_names`], unset read as empty so the default applies.
-#[cfg(not(unix))]
-fn host_pathext() -> Option<std::ffi::OsString> {
-    Some(std::env::var_os("PATHEXT").unwrap_or_default())
+    if cfg!(unix) {
+        None
+    } else {
+        Some(std::env::var_os("PATHEXT").unwrap_or_default())
+    }
 }
 
 /// Does `program` name a place rather than a program — `./x`, `bin/x`, `/usr/bin/x`?

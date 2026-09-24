@@ -318,11 +318,10 @@ fn index_refusal(root: &Path, path: &Path) -> Option<String> {
     };
     let named = shown::readable(&spelled.to_string_lossy(), memstore::PATH_LIMIT);
     let unreadable = |why: &str| format!("'{named}' cannot be examined ({why})");
+    // A missing file is `strerror(ENOENT)`, "No such file or directory", like any other
+    // failure: no arm of its own, because it would say the same words.
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Some(unreadable("No such file or directory"));
-        }
         Err(e) => return Some(unreadable(&strerror(&e))),
     };
     let meta = if meta.file_type().is_symlink() {
@@ -333,9 +332,6 @@ fn index_refusal(root: &Path, path: &Path) -> Option<String> {
         }
         match std::fs::metadata(path) {
             Ok(meta) => meta,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Some(unreadable("No such file or directory"));
-            }
             Err(e) => return Some(unreadable(&strerror(&e))),
         }
     } else {
@@ -369,6 +365,8 @@ fn index_refusal(root: &Path, path: &Path) -> Option<String> {
 fn strerror(e: &std::io::Error) -> String {
     let text = e.to_string();
     match text.rfind(" (os error ") {
+        // An OS error's text always ENDS in its ` (os error N)`, so this guard only refuses a
+        // text charter never builds; `.cargo/mutants.toml` records that.
         Some(at) if text.ends_with(')') => text[..at].to_owned(),
         _ => text,
     }
@@ -465,10 +463,15 @@ fn memory_digest(root: &Path, name: &str) -> String {
 
 // ---- 3. unshared memory -------------------------------------------------------------------
 
-/// `_uncommitted_memory_nudge`: memory or refs sitting uncommitted, on a plane whose `share`
-/// says they should travel. Silent under `share = "local"`, where uncommitted is the point.
+/// `_uncommitted_memory_nudge`: memory or refs sitting uncommitted, on a plane whose
+/// `[plane] mode` says they should travel. Silent on a plane that names no mode, or `off`,
+/// where uncommitted is the point.
 fn uncommitted_memory_nudge(root: &Path) -> Option<String> {
-    if Plane::open(root).memory_share() == "local" {
+    use crate::planesave::Mode;
+    if matches!(
+        crate::planesave::Settings::read(root).plane.mode.value,
+        None | Some(Mode::Off)
+    ) {
         return None;
     }
     use crate::worktree::git;
@@ -579,10 +582,8 @@ fn last_active(root: &Path, name: &str) -> Option<f64> {
     let dir = root.join("workspaces").join(name);
     let mut best: Option<f64> = None;
     let mut bump = |seen: Option<f64>| {
-        if let Some(m) = seen
-            && best.is_none_or(|b| m > b)
-        {
-            best = Some(m);
+        if let Some(m) = seen {
+            best = Some(best.map_or(m, |b| b.max(m)));
         }
     };
     for file in ["workspace.md", "workspace.json"] {
