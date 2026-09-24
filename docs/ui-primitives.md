@@ -150,6 +150,11 @@ primitive's `Cancel`**, first and focused, so Escape and a stray Return both kee
 **"Start fresh" is a plain button, not the primitive's `Action`**: an `Action` also closes the
 dialog, and closing is this dialog's "Reopen all", so one press would send both answers.
 
+And the **ask before Restart to update** (`app/src/Updates.tsx`, charter-app#251): an
+`AlertDialog` naming each chat that is mid-turn or reports no state, in the quit warning's rows
+and words. **"Wait" is the primitive's `Cancel`**, first and focused; "Restart now" is a plain
+button, for the relaunch question's reason.
+
 And the **question before a chat ends** (`app/src/EndingChat.tsx`):
 `@radix-ui/react-alert-dialog`, the operator's _"closing session should ask confirmation"_. It is
 the first surface here that is **not** a `Dialog`, and the reason is the role: an

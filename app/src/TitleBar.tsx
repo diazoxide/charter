@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { commands, type TitleBarRoom } from "./bindings";
 import { AboutCharter } from "./About";
+import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
 import { NeedsYouMenu, type Needing } from "./NeedsYou";
 import type { Offer } from "./actions";
@@ -63,6 +64,7 @@ export function TitleBar({
   crumbs,
   updates,
   room,
+  chats,
   needing,
 }: {
   /** Where the window is, for the left-hand side. */
@@ -86,6 +88,12 @@ export function TitleBar({
    * and is corrected within a frame of the first paint on that one.
    */
   room?: TitleBarRoom;
+  /**
+   * Every chat the window holds, with its state — the list the quit warning is given. Restart
+   * to update ends them all, so it names the ones that are mid-turn before it does
+   * (charter-app#251).
+   */
+  chats?: readonly Ending[];
   /**
    * Every project's chats asking for the operator (charter-app#249) — the queue's one place.
    * Absent draws no button, which is also what an empty list draws.
@@ -112,7 +120,7 @@ export function TitleBar({
             not about the app — and it is nothing at all when nothing needs you. */}
         {needing && <NeedsYouMenu {...needing} />}
         <AboutCharter />
-        {updates && <UpdateItem updates={updates} />}
+        {updates && <UpdateItem updates={updates} chats={chats} />}
       </span>
     </header>
   );

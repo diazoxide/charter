@@ -923,6 +923,7 @@ function App() {
         crumbs={crumbs}
         updates={updates}
         room={titleBarRoom}
+        chats={ending}
         needing={{ items: needing, onPress: pressNeeding }}
       />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it

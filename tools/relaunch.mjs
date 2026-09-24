@@ -16,10 +16,24 @@
 // pressing a button in the window, through the WebDriver server a build with the `e2e` feature
 // carries (`tauri-plugin-wdio-webdriver`). Plain W3C WebDriver over `fetch`, one request per
 // step; nothing is evaluated inside the page.
+//
+// **And the launch a Restart to update restarts into** (charter-app#251). The restart itself
+// needs an update this build has really installed, so it is not driven here; what is driven is
+// what it leaves behind — each record saying a restart to update wrote it, and the
+// `restarted-to-update` word beside the machine store — and that the launch reading them says
+// so, with Reopen all as the answer in front, and spends the word.
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -121,7 +135,8 @@ const idOf = (element) => Object.values(element)[0];
  *
  * Before pressing, it waits `hold` ms with the question up and reports how many chats the
  * stand-in harness had seen started by then, which is the whole of "nothing starts while the
- * question is up".
+ * question is up" — and what the question said, and the text of the control that had the
+ * keyboard, which is the answer a stray Return would give.
  */
 function pressing(answer, argvFile, hold = 2_000) {
   return async (port, until) => {
@@ -143,11 +158,22 @@ function pressing(answer, argvFile, hold = 2_000) {
     }
     await new Promise((tick) => setTimeout(tick, hold));
     const startedWhileAsking = argvSeen(argvFile).length;
+    const textOf = (element) =>
+      webdriver(port, "GET", `/session/${session}/element/${idOf(element)}/text`);
+    const said = await textOf(
+      await webdriver(port, "POST", `/session/${session}/element`, {
+        using: "css selector",
+        value: '[role="alertdialog"]',
+      }),
+    );
+    const focused = await textOf(
+      await webdriver(port, "GET", `/session/${session}/element/active`),
+    );
     for (const button of await buttons()) {
-      const text = await webdriver(port, "GET", `/session/${session}/element/${idOf(button)}/text`);
+      const text = await textOf(button);
       if (text.trim() === answer) {
         await webdriver(port, "POST", `/session/${session}/element/${idOf(button)}/click`, {});
-        return { startedWhileAsking };
+        return { startedWhileAsking, said, focused: focused.trim() };
       }
     }
     throw new Error(`the launch's question has no "${answer}" button`);
@@ -265,6 +291,11 @@ const first = await theAppRuns(
   pressing("Reopen all sessions", argvFile),
 );
 check(
+  "an ordinary relaunch does not say it followed an update",
+  first.answered?.said !== undefined && !first.answered.said.includes("install an update"),
+  `the question said: ${JSON.stringify(first.answered?.said)}`,
+);
+check(
   "nothing starts while the launch's question is up",
   first.answered?.startedWhileAsking === 0,
   `${first.answered?.startedWhileAsking} chat(s) had started before the answer`,
@@ -359,6 +390,62 @@ check(
   cleared.dealt >= DEALT,
   `the record says dealt ${JSON.stringify(cleared.dealt)}`,
 );
+
+// The launch a Restart to update restarts into. The restart wrote the record with the flag and
+// left its word beside the machine store (`Planes::let_go_of_all_to_update`); both are written
+// here the way it writes them, because the restart itself needs a real installed update.
+const RESTARTED = join(CONFIG_HOME, "charter", "restarted-to-update");
+writeFileSync(
+  record,
+  JSON.stringify(
+    {
+      version: 1,
+      at: STAMPED,
+      chats: [
+        {
+          program: claude,
+          args: [],
+          cwd: plane,
+          name: "ide.7",
+          resume: CONVERSATION,
+          active: true,
+        },
+      ],
+      relaunch_after_update: true,
+    },
+    null,
+    2,
+  ),
+);
+mkdirSync(join(CONFIG_HOME, "charter"), { recursive: true, mode: 0o700 });
+writeFileSync(RESTARTED, "");
+const beforeRestart = argvSeen(argvFile).length;
+const fourth = await theAppRuns(
+  plane,
+  () => argvSeen(argvFile).length > beforeRestart,
+  pressing("Reopen all sessions", argvFile, 0),
+);
+check(
+  "the launch after a restart to update says why it is asking",
+  fourth.answered?.said?.includes("charter restarted to install an update.") === true,
+  `the question said: ${JSON.stringify(fourth.answered?.said)}`,
+);
+check(
+  "with Reopen all as the answer in front",
+  fourth.answered?.focused === "Reopen all sessions",
+  `the keyboard was on ${JSON.stringify(fourth.answered?.focused)}`,
+);
+check(
+  "and Reopen all resumes the chat the restart recorded",
+  fourth.ok && argvSeen(argvFile).at(-1)?.includes(`--resume ${CONVERSATION}`),
+  fourth.ok ? `it was given: ${JSON.stringify(argvSeen(argvFile).at(-1) ?? "")}` : fourth.output,
+);
+check(
+  "and the word of the restart is spent, so no later launch says it again",
+  !existsSync(RESTARTED),
+  `${RESTARTED} is still there`,
+);
+rmSync(RESTARTED, { force: true });
 
 console.log(failures.length === 0 ? "\nall good" : `\n${failures.length} failed`);
 process.exit(failures.length === 0 ? 0 : 1);
