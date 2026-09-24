@@ -55,6 +55,10 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
         <>
           <p className={`saving-stage saving-${saving.stage}`}>{stageText(saving)}</p>
           <p className="settings-who">{modeText(saving)}</p>
+          {saving.pushFailed !== null && (
+            <p className="settings-hint">{`The last push did not land: ${saving.pushFailed}`}</p>
+          )}
+          {saving.mode === null && <ModeQuestion plane={plane} branch={saving.branch} />}
           {saving.pr !== null && (
             <p className="settings-hint">
               {"Pull request: "}
@@ -118,6 +122,65 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
             </ul>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * **The question a project with no mode is asked once** (ADR 0051): how far its saves go. The
+ * answer is written as `[plane] mode` in `charter.toml` by the core's own writer, and until
+ * there is one, nothing saves the project by itself. The pull request modes are set in Project
+ * settings; this asks the three a person can answer without knowing the repository's rules.
+ */
+function ModeQuestion({ plane, branch }: { plane: PlaneId; branch: string }) {
+  const [refused, setRefused] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const choose = async (mode: string) => {
+    setBusy(true);
+    setRefused(null);
+    try {
+      const got = await commands.choosePlaneMode(plane, mode);
+      if (got.status === "error") setRefused(got.error);
+    } catch (err: unknown) {
+      setRefused(String(err));
+    } finally {
+      setBusy(false);
+      tellSaved();
+    }
+  };
+  const choices: { mode: string; label: string; says: string }[] = [
+    {
+      mode: "push",
+      label: `Push to ${branch || "the remote"}`,
+      says: "Every save is committed and pushed, so the team has it.",
+    },
+    {
+      mode: "commit",
+      label: "Commit only",
+      says: "Saves stay on this machine until you push them yourself.",
+    },
+    { mode: "off", label: "Off", says: "charter commits nothing here; you use git yourself." },
+  ];
+  return (
+    <div className="saving-question" role="group" aria-label="How should this project be saved?">
+      <p className="saving-stage">How should this project be saved?</p>
+      {choices.map((one) => (
+        <button
+          key={one.mode}
+          type="button"
+          className="panel-view"
+          tabIndex={0}
+          disabled={busy}
+          onClick={() => void choose(one.mode)}
+        >
+          {`${one.label} — ${one.says}`}
+        </button>
+      ))}
+      {refused !== null && (
+        <p className="trouble" role="alert">
+          {refused}
+        </p>
       )}
     </div>
   );
@@ -188,8 +251,13 @@ function savable(saving: PlaneSaving): boolean {
   );
 }
 
-/** The stage, as the view and the title bar say it. */
+/** The stage, as the view and the title bar say it, and what came in and was not pulled. */
 export function stageText(saving: PlaneSaving): string {
+  const said = stageWords(saving);
+  return saving.behind !== null && saving.behind > 0 ? `${said} · ${saving.behind} incoming` : said;
+}
+
+function stageWords(saving: PlaneSaving): string {
   switch (saving.stage) {
     case "blocked":
       return `Blocked: ${saving.blocked ?? "the last save could not finish"}`;

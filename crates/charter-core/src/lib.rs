@@ -3,6 +3,7 @@
 pub mod active;
 pub mod adopt;
 pub mod alerts;
+pub mod autosave;
 pub mod briefing;
 pub mod cistate;
 pub mod clipath;

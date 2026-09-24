@@ -48,6 +48,15 @@ export function usePlaneSaving(plane: PlaneId | undefined): {
     };
   }, [plane, asked, changed]);
 
+  // Coming back to the window is when the operator wants to know what came in: fetch, which the
+  // core does at most once a minute, and whose answer reaches here as a plane change.
+  useEffect(() => {
+    if (plane === undefined) return;
+    const fetch = () => void commands.planeFetch(plane).catch(() => undefined);
+    window.addEventListener("focus", fetch);
+    return () => window.removeEventListener("focus", fetch);
+  }, [plane]);
+
   useEffect(() => {
     const again = () => setAsked((n) => n + 1);
     window.addEventListener("focus", again);

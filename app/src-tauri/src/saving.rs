@@ -6,9 +6,7 @@
 //! save is [`planegit::save_as`] with [`Trigger::Manual`] — the same function `charter save`
 //! runs, so the button and the command cannot disagree about what a save does.
 
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::path::Path;
 
 use charter_core::planegit::{self, Trigger};
 use charter_core::planesave;
@@ -50,6 +48,11 @@ pub struct PlaneSaving {
     pub branch: String,
     /// Whether a save would push. When it would not, a commit is as far as a save goes.
     pub pushes: bool,
+    /// Commits the last fetch found on the remote that were not pulled; `null` when there is
+    /// nothing to count against.
+    pub behind: Option<u32>,
+    /// Why the last push did not land, when it failed rather than conflicted.
+    pub push_failed: Option<String>,
     /// `[plane] mode`, or `null` when the plane names none.
     pub mode: Option<String>,
     /// Where the mode came from: `charter.toml`, `charter.local.toml`, `[memory] share`, or
@@ -91,6 +94,48 @@ pub async fn save_plane(
         .map_err(|err| format!("the save did not finish: {err}"))?
 }
 
+/// Answer the question a plane with no mode is asked once (ADR 0051): how far its saves go.
+/// Written as `[plane] mode` into `charter.toml`, through the core's own writer, and answered
+/// with the plane's save standing as it now is.
+#[tauri::command]
+#[specta::specta]
+pub async fn choose_plane_mode(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    mode: String,
+) -> Result<PlaneSaving, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || choose_mode(&root, &mode))
+        .await
+        .map_err(|err| format!("choosing the mode did not finish: {err}"))?
+}
+
+/// [`choose_plane_mode`], without a runtime.
+pub fn choose_mode(root: &Path, mode: &str) -> Result<PlaneSaving, String> {
+    use charter_core::settings::{self, Edit, Step, Value, Which};
+    if planesave::Mode::parse(mode).is_none() {
+        return Err(format!(
+            "{mode} is not a mode — one of off, commit, push, pr, pr-merge"
+        ));
+    }
+    let read = settings::read(root, Which::Shared)?;
+    let text = settings::edited(
+        &read.text,
+        &[Edit {
+            path: vec![Step::Key("plane".into()), Step::Key("mode".into())],
+            value: Some(Value::Text(mode.to_owned())),
+        }],
+    )?;
+    settings::save(
+        root,
+        Which::Shared,
+        read.exists.then_some(read.text.as_str()),
+        &text,
+    )
+    .map_err(|reasons| reasons.join("\n"))?;
+    Ok(saving_of(root))
+}
+
 /// [`plane_saving`], without a runtime.
 pub fn saving_of(root: &Path) -> PlaneSaving {
     let standing = planegit::standing(root);
@@ -115,45 +160,26 @@ pub fn saving_of(root: &Path) -> PlaneSaving {
         blocked: standing.blocked,
         branch: standing.branch,
         pushes: standing.pushes,
+        behind: standing.behind,
+        push_failed: standing.push_failed,
         mode: plane.mode.value.map(|m| m.as_str().to_owned()),
         mode_from,
         journal,
     }
 }
 
-/// The planes a save is running in, so a second press waits its turn in words rather than
-/// racing the first for git's index lock (and journalling a failure that was only a race).
-static SAVING: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
-
-/// A save running in one plane, for as long as it is held.
-struct Claim(PathBuf);
-
-impl Claim {
-    /// The plane at `root`, unless a save is already running in it.
-    fn of(root: &Path) -> Option<Self> {
-        let mut running = SAVING
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        running
-            .insert(root.to_path_buf())
-            .then(|| Self(root.to_path_buf()))
-    }
-}
-
-impl Drop for Claim {
-    fn drop(&mut self) {
-        SAVING
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.0);
-    }
-}
-
 /// [`save_plane`], without a runtime.
 pub fn save(root: &Path, message: Option<&str>) -> Result<Vec<String>, String> {
-    let Some(_claim) = Claim::of(root) else {
-        return Err("A save of this project is already running — wait for it to finish.".into());
-    };
+    save_as(root, message, Trigger::Manual)
+}
+
+/// A save of the plane at `root`, started by `trigger` — the button, or auto-save
+/// (`autosave.rs`). One at a time per plane, whoever started it.
+pub fn save_as(
+    root: &Path,
+    message: Option<&str>,
+    trigger: Trigger,
+) -> Result<Vec<String>, String> {
     let message = message.map(str::trim).filter(|m| !m.is_empty());
     let mut said: Vec<Say> = Vec::new();
     let mut say = |line: Say| said.push(line);
@@ -165,7 +191,7 @@ pub fn save(root: &Path, message: Option<&str>) -> Result<Vec<String>, String> {
             no_push: false,
             cwd: root,
         },
-        Trigger::Manual,
+        trigger,
         &mut say,
     );
     crate::workspaces::ran(code, said)
@@ -275,14 +301,11 @@ mod tests {
     fn a_second_save_while_one_runs_is_refused_in_words_and_the_first_is_untouched() {
         let dir = plane("");
         std::fs::write(dir.path().join("note.md"), "n").unwrap();
-        let running = Claim::of(dir.path()).expect("the first save");
+        let running = planegit::Claim::of(dir.path()).expect("the first save");
 
         let err = save(dir.path(), None).expect_err("a second save");
 
-        assert_eq!(
-            err,
-            "A save of this project is already running — wait for it to finish."
-        );
+        assert_eq!(err, planegit::ALREADY_SAVING);
         assert_eq!(
             saving_of(dir.path()).changed,
             ["note.md"],
@@ -292,6 +315,46 @@ mod tests {
         assert!(
             save(dir.path(), None).is_ok(),
             "the next save, once the first is done"
+        );
+    }
+
+    #[test]
+    fn the_answer_to_how_a_project_is_saved_is_written_as_its_mode_keeping_the_rest_of_the_file() {
+        let dir = plane("# the team's settings\n[memory]\nshare = \"local\"\n");
+        assert_eq!(saving_of(dir.path()).mode, None, "not asked yet");
+
+        let got = choose_mode(dir.path(), "commit").expect("chosen");
+
+        assert_eq!(
+            (got.mode.as_deref(), got.mode_from.as_str()),
+            (Some("commit"), "charter.toml")
+        );
+        let text = std::fs::read_to_string(dir.path().join("charter.toml")).unwrap();
+        assert!(text.starts_with("# the team's settings\n"), "{text}");
+        assert!(text.contains("[plane]\nmode = \"commit\"\n"), "{text}");
+    }
+
+    #[test]
+    fn a_mode_charter_does_not_know_is_refused_and_nothing_is_written() {
+        let dir = plane("");
+        let err = choose_mode(dir.path(), "yolo").expect_err("refused");
+        assert_eq!(
+            err,
+            "yolo is not a mode — one of off, commit, push, pr, pr-merge"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("charter.toml")).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn what_came_in_and_was_not_pulled_is_counted() {
+        let dir = plane("");
+        assert_eq!(
+            saving_of(dir.path()).behind,
+            None,
+            "nothing to count against"
         );
     }
 

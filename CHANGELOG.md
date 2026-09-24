@@ -13,6 +13,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,
+  on by default) saves by itself: 30 seconds after the last change (`autosave_after`), as soon
+  as a chat in it ends, and when you quit. At quit it commits at once and gives the push a few
+  seconds; whatever did not get pushed is pushed the next time charter opens the project. It
+  pauses while a save is blocked, and a push that fails is retried every five minutes, not
+  every 30 seconds.
+- **What came in.** Every five minutes, and when the window comes back into focus, charter
+  fetches the project's branch. The title bar and the Saving tab say how many commits came in
+  (*2 incoming*). With auto-save on, a project with nothing unsaved is fast-forwarded onto
+  them. Otherwise they wait for your next save.
+- **One question per project.** A project that has never said how it is saved (no
+  `[plane] mode`, including every project whose `charter.toml` says `share = "local"`) is asked
+  in the Saving tab: *Push*, *Commit only* or *Off*. The answer is written into `charter.toml`,
+  and until there is one, nothing saves the project by itself.
+  ([#296](https://github.com/diazoxide/charter-app/issues/296))
 - **The title bar says what is not saved yet.** Beside the needs-you button, the project in
   front shows where its unsaved work sits: *3 changed*, *committed, not pushed*,
   *waiting on its pull request*, *blocked*, or *Saved*. A save button sits next to it while

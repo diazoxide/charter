@@ -7,6 +7,7 @@ mod ipc_commands;
 
 mod about;
 mod alerts;
+mod autosave;
 mod chats;
 mod clipath;
 mod doctor;
@@ -1434,6 +1435,8 @@ pub fn run() {
                 // Every plane, not "the" plane: each one writes its own record into itself
                 // and ends its own sessions. A failure is not worth refusing to exit over —
                 // the next launch of that plane reads no record and starts empty.
+                // Letting go of every plane also saves each one whose auto-save is on, and gives
+                // its push a few seconds (`Planes::let_go_of_every_plane`, ADR 0051).
                 app.state::<Planes>().let_go_of_all();
                 // A secret a vault's Copy put on the clipboard does not outlive the app: its
                 // clear was waiting on a timer that ends here.

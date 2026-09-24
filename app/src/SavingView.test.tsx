@@ -21,6 +21,8 @@ function standing(over: Partial<PlaneSaving> = {}): PlaneSaving {
     blocked: null,
     branch: "main",
     pushes: true,
+    behind: 0,
+    pushFailed: null,
     mode: "push",
     modeFrom: "charter.toml",
     journal: [],
@@ -44,14 +46,22 @@ function entry(over: Partial<SaveEntry> = {}): SaveEntry {
 
 type Asked = { cmd: string; args: Record<string, unknown> };
 
+/** The modes the view wrote, in order. */
+const chosen: string[] = [];
+
 /** The core: `plane_saving` answers each of `reads` in turn (the last one again after that),
  *  and `save_plane` answers `saved` — lines, or an `Error` whose message is the refusal. */
 function core(reads: PlaneSaving[], saved: string[] | Error = ["✓ Committed"]): Asked[] {
   const asked: Asked[] = [];
   let read = 0;
+  chosen.length = 0;
   mockIPC((cmd, args) => {
     asked.push({ cmd, args: args as Record<string, unknown> });
     if (cmd === "plane_saving") return reads[Math.min(read++, reads.length - 1)];
+    if (cmd === "choose_plane_mode") {
+      chosen.push((args as { mode: string }).mode);
+      return standing({ mode: (args as { mode: string }).mode });
+    }
     if (cmd === "save_plane") {
       if (saved instanceof Error) throw saved.message;
       return saved;
@@ -181,5 +191,37 @@ describe("SavingView", () => {
     expect(rows[1].textContent).toContain("saved");
     expect(rows[1].textContent).toContain("cli");
     expect(rows[1].textContent).toContain("1f488c6");
+  });
+
+  it("asks a project nobody has chosen a mode for how it is saved, once, and writes the answer", async () => {
+    core([standing({ mode: null, modeFrom: "default" }), standing({ mode: "commit" })]);
+    render(<SavingView plane={PLANE} />);
+
+    const question = await screen.findByRole("group", {
+      name: "How should this project be saved?",
+    });
+    await userEvent.click(within(question).getByRole("button", { name: /^Commit only/ }));
+
+    await waitFor(() => expect(chosen).toEqual(["commit"]));
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "How should this project be saved?" })).toBeNull(),
+    );
+  });
+
+  it("says how many commits came in and were not pulled", async () => {
+    core([standing({ behind: 2 })]);
+    render(<SavingView plane={PLANE} />);
+    expect(await screen.findByText("Saved · 2 incoming")).toBeTruthy();
+  });
+
+  it("says why the last push did not land, without calling the plane blocked", async () => {
+    core([
+      standing({ stage: "committed", ahead: 1, pushFailed: "Could not resolve host: github.com" }),
+    ]);
+    render(<SavingView plane={PLANE} />);
+    expect(
+      await screen.findByText("The last push did not land: Could not resolve host: github.com"),
+    ).toBeTruthy();
+    expect(screen.getByText("1 committed, not pushed")).toBeTruthy();
   });
 });
