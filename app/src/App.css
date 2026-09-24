@@ -4384,3 +4384,12 @@ button.show-more:focus-visible {
   font-size: 1em;
   color: var(--text-primary);
 }
+.saving-question {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}

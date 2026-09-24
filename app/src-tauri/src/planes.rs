@@ -180,6 +180,9 @@ pub struct Held {
     /// What tells the window the plane moved on disk (charter-app#264). None where the
     /// platform would not watch; the panels then read the plane when focused, as they did.
     watch: Mutex<Option<crate::planewatch::Watch>>,
+    /// The plane's auto-save worker (charter-app#296): saves it after a quiet period and when
+    /// a chat ends, and fetches what comes in. Stopped when the plane is let go of.
+    autosave: Mutex<Option<crate::autosave::Worker>>,
 }
 
 impl Held {
@@ -329,6 +332,24 @@ impl Held {
                 .unwrap_or_else(PoisonError::into_inner)
                 .take(),
         );
+        drop(
+            self.autosave
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
+    }
+
+    /// Tell the plane's auto-save worker something, if it has one.
+    pub fn poke_autosave(&self, poke: crate::autosave::Poke) {
+        if let Some(worker) = self
+            .autosave
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            let _ = worker.poker().send(poke);
+        }
     }
 }
 
@@ -977,6 +998,9 @@ impl Planes {
                 hooks::held_board(&board).closed(session);
             }));
         }
+        // Before a chat can end, so its end is one the worker hears.
+        let autosave =
+            crate::autosave::Worker::start(id.clone(), root.clone(), Arc::clone(&self.changes));
         // No hook can report a program dying (the process is gone), so the operating system
         // does. That is not charter reading a harness's output (ADR 0018) — it is the
         // process's own exit status, and the only honest source for `failed`.
@@ -984,6 +1008,7 @@ impl Planes {
             let board = hooks.shared_board();
             let tell = Arc::clone(&self.tell);
             let plane = id.clone();
+            let poke = std::sync::Mutex::new(autosave.poker());
             chats
                 .sessions()
                 .when_one_ends(Box::new(move |session, exit| {
@@ -991,6 +1016,11 @@ impl Planes {
                     if changed {
                         tell(hooks::now(&board, plane.clone(), session));
                     }
+                    // A chat that ended is the moment its work is done: auto-save hears it.
+                    let _ = poke
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .send(crate::autosave::Poke::SessionEnded);
                 }));
         }
 
@@ -1014,6 +1044,7 @@ impl Planes {
             chats,
             records,
             watch: Mutex::new(watch),
+            autosave: Mutex::new(Some(autosave)),
         }
     }
 

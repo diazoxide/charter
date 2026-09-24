@@ -325,11 +325,22 @@ export const commands = {
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
+	 *  The window came back into focus: fetch the plane's target branch, unless it was fetched a
+	 *  moment ago. Answers at once; what the fetch finds reaches the window as a plane change.
+	 */
+	planeFetch: (plane: PlaneId) => typedError<null, string>(__TAURI_INVOKE("plane_fetch", { plane })),
+	/**
 	 *  The plane's save standing.
 	 * 
 	 *  On a blocking thread: it asks git.
 	 */
 	planeSaving: (plane: PlaneId) => typedError<PlaneSaving, string>(__TAURI_INVOKE("plane_saving", { plane })),
+	/**
+	 *  Answer the question a plane with no mode is asked once (ADR 0051): how far its saves go.
+	 *  Written as `[plane] mode` into `charter.toml`, through the core's own writer, and answered
+	 *  with the plane's save standing as it now is.
+	 */
+	choosePlaneMode: (plane: PlaneId, mode: string) => typedError<PlaneSaving, string>(__TAURI_INVOKE("choose_plane_mode", { plane, mode })),
 	/**
 	 *  Save the plane, as the save button does: `message`, or the generated one when it is empty.
 	 *  Answers every line the save said, or its refusal.
@@ -1626,6 +1637,11 @@ export type PlaneSaving = {
 	branch: string,
 	/**  Whether a save would push. When it would not, a commit is as far as a save goes. */
 	pushes: boolean,
+	/**
+	 *  Commits the last fetch found on the remote that were not pulled; `null` when there is
+	 *  nothing to count against.
+	 */
+	behind: number | null,
 	/**  `[plane] mode`, or `null` when the plane names none. */
 	mode: string | null,
 	/**

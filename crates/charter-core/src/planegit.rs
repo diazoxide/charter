@@ -416,6 +416,9 @@ pub struct Standing {
     /// charter knows. When it would not, a commit is as far as a save goes, and a plane with
     /// nothing left to commit is saved.
     pub pushes: bool,
+    /// Commits the remote-tracking branch has that HEAD does not: what the last fetch brought
+    /// in and has not been fast-forwarded to. `None` when there is nothing to count against.
+    pub behind: Option<u32>,
 }
 
 /// Where the plane at `root`'s unsaved work sits.
@@ -436,24 +439,15 @@ pub fn standing(root: &Path) -> Standing {
             ),
             branch: String::new(),
             pushes: false,
+            behind: None,
         };
     };
     let branch = plane.branch.value.clone().unwrap_or(here);
     let pushes = matches!(plane.mode.value, None | Some(crate::planesave::Mode::Push))
         && origin_https(root).is_some();
     let changed = changed_paths(root);
-    let ahead = git::run(
-        root,
-        &[
-            "rev-list",
-            "--count",
-            &format!("refs/remotes/origin/{branch}..HEAD"),
-        ],
-        git::READ,
-    )
-    .ok()
-    .filter(git::Run::ok)
-    .and_then(|r| r.line().trim().parse().ok());
+    let ahead = count(root, &format!("refs/remotes/origin/{branch}..HEAD"));
+    let behind = count(root, &format!("HEAD..refs/remotes/origin/{branch}"));
     let record = unlanded(root);
     let said = |key: &str| {
         record
@@ -489,7 +483,118 @@ pub fn standing(root: &Path) -> Standing {
         blocked,
         branch,
         pushes,
+        behind,
     }
+}
+
+/// `git rev-list --count <range>`, or `None` when git cannot count it — a ref that is not there.
+fn count(root: &Path, range: &str) -> Option<u32> {
+    git::run(root, &["rev-list", "--count", range], git::READ)
+        .ok()
+        .filter(git::Run::ok)
+        .and_then(|r| r.line().trim().parse().ok())
+}
+
+/// What is unsaved in the plane, as one string that changes whenever it does: HEAD, the
+/// commits the remote lacks, and each changed file with its size and modification time — so a
+/// file written again is a change even when git's one-letter status for it is not.
+///
+/// Auto-save's quiet period is measured from the last time this changed
+/// ([`crate::autosave::Quiet`]).
+pub fn fingerprint(root: &Path) -> String {
+    let head = git::run(root, &["rev-parse", "HEAD"], git::READ)
+        .map(|r| r.line().trim().to_string())
+        .unwrap_or_default();
+    let mut out = head;
+    for path in changed_paths(root) {
+        let seen = std::fs::symlink_metadata(root.join(&path))
+            .ok()
+            .map(|meta| {
+                let at = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
+                (meta.len(), at)
+            });
+        out.push('\0');
+        out.push_str(&path);
+        out.push_str(&format!("{seen:?}"));
+    }
+    out
+}
+
+/// What a fetch of the plane's target branch found, and whether the plane was moved onto it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Incoming {
+    /// Commits the fetch found on the remote that the plane did not have.
+    pub behind: u32,
+    /// Whether the plane was fast-forwarded onto them.
+    pub moved: bool,
+}
+
+/// Fetch the plane's target branch, and — when `fast_forward` (auto-save is on) — move onto it
+/// when that cannot touch anyone's work (charter-app#296): a clean tree, on the target branch, with nothing of its own the
+/// remote lacks, and no merge or rebase in progress. Otherwise the plane is left exactly as it
+/// is, and the next save's rebase brings the commits in.
+///
+/// `Err` when there is nothing to fetch from — no origin on a forge charter knows — or the
+/// fetch failed, in git's words.
+pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
+    let https = origin_https(root).ok_or("origin is not on a forge charter knows")?;
+    let plane = crate::planesave::Settings::read(root).plane;
+    let here = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
+        .map(|r| r.line().trim().to_string())
+        .unwrap_or_default();
+    let branch = plane.branch.value.clone().unwrap_or_else(|| here.clone());
+    let forge = crate::gitpolicy::forge_for(root, root)
+        .unwrap_or_else(|| Forge::default_of(forge::DEFAULT_KIND));
+    let helper = forge::helper_for(&forge);
+    let fetched = git::run_network(
+        root,
+        Some(helper.as_str()),
+        &[
+            "fetch",
+            "--no-recurse-submodules",
+            &https,
+            &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"),
+        ],
+    )
+    .map_err(|unavailable| unavailable.to_string())?;
+    if !fetched.ok() {
+        return Err(tail(&fetched));
+    }
+    let behind = count(root, &format!("HEAD..refs/remotes/origin/{branch}")).unwrap_or(0);
+    let mine = count(root, &format!("refs/remotes/origin/{branch}..HEAD")).unwrap_or(0);
+    let git_dir = root.join(".git");
+    let can_move = fast_forward
+        && behind > 0
+        && here == branch
+        && mine == 0
+        && changed_paths(root).is_empty()
+        && crate::gitstate::find(&git_dir).is_none()
+        && ![
+            "MERGE_HEAD",
+            "REBASE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "rebase-merge",
+            "rebase-apply",
+        ]
+        .iter()
+        .any(|marker| git_dir.join(marker).exists());
+    let moved = can_move
+        // Untimed: a merge checks out a tree, and a killed one leaves it half-written.
+        && git::run_untimed(
+            root,
+            &[
+                "merge",
+                "--ff-only",
+                "--no-overwrite-ignore",
+                &format!("refs/remotes/origin/{branch}"),
+            ],
+        )
+        .is_ok_and(|run| run.ok());
+    Ok(Incoming { behind, moved })
 }
 
 /// `git status --porcelain=v1 -z`'s paths: what `git add -A` would take. `-z` for the same

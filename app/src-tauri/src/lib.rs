@@ -7,6 +7,7 @@ mod ipc_commands;
 
 mod about;
 mod alerts;
+mod autosave;
 mod chats;
 mod clipath;
 mod doctor;
@@ -1434,7 +1435,18 @@ pub fn run() {
                 // Every plane, not "the" plane: each one writes its own record into itself
                 // and ends its own sessions. A failure is not worth refusing to exit over —
                 // the next launch of that plane reads no record and starts empty.
-                app.state::<Planes>().let_go_of_all();
+                // The planes' roots before they are let go of, for the save at quit below.
+                let planes = app.state::<Planes>();
+                let roots: Vec<_> = planes
+                    .open_now()
+                    .iter()
+                    .filter_map(|plane| planes.held(plane).ok())
+                    .map(|held| held.root().to_path_buf())
+                    .collect();
+                planes.let_go_of_all();
+                // After the chats have ended, so what they last wrote is in it: each plane whose
+                // auto-save is on is committed, and its push given a few seconds (ADR 0051).
+                autosave::at_quit(roots);
                 // A secret a vault's Copy put on the clipboard does not outlive the app: its
                 // clear was waiting on a timer that ends here.
                 app.state::<vaults::SystemClipboard>().clear_at_exit();

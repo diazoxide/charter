@@ -1947,3 +1947,112 @@ fn a_plane_that_is_not_a_repository_is_blocked_and_says_why() {
         Some("this plane is not a git repository, so there is nothing to commit to")
     );
 }
+
+// --------------------------------------------------------------------------------------- //
+// auto-save's view of the plane, and what comes in (charter-app#296)                        //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn the_fingerprint_moves_when_what_is_unsaved_moves_and_only_then() {
+    let fixture = Fixture::plane();
+    let clean = fingerprint(&fixture.root);
+    assert_eq!(
+        fingerprint(&fixture.root),
+        clean,
+        "asked twice, nothing changed"
+    );
+
+    std::fs::write(fixture.root.join("a.md"), "one").unwrap();
+    let first = fingerprint(&fixture.root);
+    assert_ne!(first, clean);
+    std::fs::write(fixture.root.join("a.md"), "one and more").unwrap();
+    assert_ne!(
+        fingerprint(&fixture.root),
+        first,
+        "the same file, written again"
+    );
+}
+
+#[test]
+fn commits_on_the_remote_are_counted_as_incoming_and_a_clean_tree_is_fast_forwarded() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+    let before = ask(&fixture.root, &["rev-parse", "HEAD"]);
+
+    let got = fetch(&fixture.root, true).expect("fetched");
+
+    assert_eq!((got.behind, got.moved), (1, true), "{got:?}");
+    assert_ne!(ask(&fixture.root, &["rev-parse", "HEAD"]), before);
+    assert!(
+        fixture.root.join("theirs.md").is_file(),
+        "their file is here now"
+    );
+    assert_eq!(standing(&fixture.root).behind, Some(0));
+}
+
+#[test]
+fn a_tree_with_work_in_it_is_told_what_is_incoming_and_never_moved() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+    std::fs::write(fixture.root.join("mine.md"), "mine").unwrap();
+    let before = ask(&fixture.root, &["rev-parse", "HEAD"]);
+
+    let got = fetch(&fixture.root, true).expect("fetched");
+
+    assert_eq!((got.behind, got.moved), (1, false), "{got:?}");
+    assert_eq!(ask(&fixture.root, &["rev-parse", "HEAD"]), before);
+    assert_eq!(standing(&fixture.root).behind, Some(1));
+}
+
+#[test]
+fn quitting_commits_at_once_and_gives_a_push_that_never_answers_only_its_bound() {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    std::fs::create_dir_all(bare.join("hooks")).unwrap();
+    // A remote that takes the push and never answers.
+    stand_in::program(&bare, "hooks/pre-receive", "#!/bin/sh\nsleep 30\n");
+    fixture.with_settings("[plane]\nmode = \"push\"\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let before = fixture.commits();
+
+    let started = std::time::Instant::now();
+    let got = crate::autosave::at_quit(&fixture.root, Duration::from_secs(2));
+    let took = started.elapsed();
+
+    assert!(took < Duration::from_secs(6), "quit waited {took:?}");
+    assert_eq!(got, crate::autosave::AtQuit::CommittedPushStillRunning);
+    assert_eq!(fixture.commits(), before + 1, "the work was committed");
+    assert_eq!(journal(&fixture.root)[0]["trigger"], "quit");
+}
+
+#[test]
+fn quitting_a_plane_with_nothing_to_save_or_auto_save_off_does_nothing() {
+    let fixture = Fixture::plane();
+    fixture.with_settings("[plane]\nmode = \"push\"\n");
+    assert_eq!(
+        crate::autosave::at_quit(&fixture.root, Duration::from_secs(2)),
+        crate::autosave::AtQuit::Nothing
+    );
+
+    let fixture = Fixture::plane();
+    fixture.with_settings("[plane]\nmode = \"push\"\nautosave = false\n");
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let before = fixture.commits();
+    assert_eq!(
+        crate::autosave::at_quit(&fixture.root, Duration::from_secs(2)),
+        crate::autosave::AtQuit::Nothing
+    );
+    assert_eq!(fixture.commits(), before);
+}
+
+#[test]
+fn with_auto_save_off_incoming_commits_are_counted_and_never_pulled() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+    let before = ask(&fixture.root, &["rev-parse", "HEAD"]);
+
+    let got = fetch(&fixture.root, false).expect("fetched");
+
+    assert_eq!((got.behind, got.moved), (1, false), "{got:?}");
+    assert_eq!(ask(&fixture.root, &["rev-parse", "HEAD"]), before);
+}
