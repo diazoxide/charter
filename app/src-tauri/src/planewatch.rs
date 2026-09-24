@@ -18,7 +18,9 @@
 //!
 //! Not the plane recursively, because a workspace holds its clones: a recursive inotify watch
 //! would put one watch on every directory of every clone's `node_modules/` and `target/`, and
-//! run the machine out of watches. The set is re-read after every change, so a workspace made
+//! run the machine out of watches. (On macOS FSEvents streams the subtree regardless and notify
+//! drops what is not a direct child in-process, so there the narrow set is about what is
+//! REPORTED, not what is watched.) The set is re-read after every batch, so a workspace made
 //! in a terminal is watched from then on.
 //!
 //! # One event, debounced
@@ -38,6 +40,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use charter_core::workspaces::Plane;
+use notify::event::{MetadataKind, ModifyKind};
 use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 
@@ -46,7 +49,7 @@ use crate::planes::PlaneId;
 /// The event the window is sent.
 pub(crate) const CHANGED: &str = "plane-changed";
 
-/// What [`CHANGED`] carries: which plane moved. Every window filters on it, as it filters
+/// What `plane-changed` carries: which plane moved. Every window filters on it, as it filters
 /// `chat-moved`, because the app holds several planes and emits on the app.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct PlaneChanged {
@@ -91,8 +94,18 @@ impl Watch {
             }
             // The set first, so a workspace made in this batch is watched before the window
             // reads it, and a change inside it straight after is not missed.
-            if let Some(inner) = handle.upgrade() {
+            //
+            // **And nothing at all once the watch is dropped.** The debouncer's drop only asks
+            // its thread to stop; a batch it had already gathered still arrives here, and a
+            // plane that has been closed must not be reported.
+            {
+                let Some(inner) = handle.upgrade() else {
+                    return;
+                };
                 let mut inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
+                if inner.debouncer.is_none() {
+                    return;
+                }
                 for event in &events {
                     if matches!(event.kind, EventKind::Remove(_)) {
                         // Gone, so its watch is gone with it (inotify drops it on its own). A
@@ -118,8 +131,9 @@ impl Watch {
 
 impl Drop for Watch {
     fn drop(&mut self) {
-        // Taken out under the lock and dropped outside it: the watcher's thread takes the same
-        // lock, and a batch in flight must be able to finish.
+        // Taken out under the lock and dropped outside it, so the watcher's thread, which takes
+        // the same lock, never waits on a drop. An empty slot is also what tells a batch
+        // already in flight that nobody is listening any more.
         let debouncer = self
             .inner
             .lock()
@@ -165,9 +179,13 @@ impl Inner {
 }
 
 /// Whether an event is a change to the plane. Everything but an access is: reading a file
-/// changes nothing, and it is exactly what the window does when it is told.
+/// changes nothing, and it is exactly what the window does when it is told. An access time
+/// moving is the same read seen from inotify's `IN_ATTRIB` under `relatime`.
 fn matters(kind: &EventKind) -> bool {
-    !matches!(kind, EventKind::Access(_))
+    !matches!(
+        kind,
+        EventKind::Access(_) | EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime))
+    )
 }
 
 /// The directories the panels and the sidebar read, as they are on disk now. See the module's
@@ -259,20 +277,37 @@ mod tests {
         let root = plane.path().canonicalize().expect("canonical");
         let (_watch, told) = watching(&root);
 
+        let slugs = || {
+            let read = crate::panels::of(&root, "alpha").expect("the panels read");
+            let read = serde_json::to_value(read).expect("serialisable");
+            read["todos"]
+                .as_array()
+                .expect("todos")
+                .iter()
+                .map(|todo| todo["slug"].as_str().expect("a slug").to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(slugs(), ["m8-1", "m8-2"]);
+
         let started = Instant::now();
         std::fs::remove_file(root.join("workspaces/alpha/todos/m8-1.md")).expect("closed");
 
         let plane = told.recv_timeout(PATIENCE).expect("told the plane changed");
-        assert_eq!(plane, id(&root));
+        // #264's "within about a second": the debounce is a quarter of one, and two is the
+        // margin a loaded runner gets.
         assert!(
-            started.elapsed() < PATIENCE,
+            started.elapsed() < Duration::from_secs(2),
             "told after {:?}",
             started.elapsed()
         );
+        assert_eq!(plane, id(&root));
+        // And what the window reads when told — the same command the Todos panel draws from —
+        // no longer has the row.
+        assert_eq!(slugs(), ["m8-2"]);
     }
 
     #[test]
-    fn a_burst_of_changes_is_told_once() {
+    fn a_burst_of_changes_is_folded_rather_than_told_per_write() {
         let plane = plane_with_todos(&[]);
         let root = plane.path().canonicalize().expect("canonical");
         let (_watch, told) = watching(&root);
@@ -285,10 +320,14 @@ mod tests {
             .expect("a todo");
         }
 
-        told.recv_timeout(PATIENCE).expect("told once");
+        told.recv_timeout(PATIENCE).expect("told");
+        // Once, and twice at most on a loaded runner where the burst straddles a window —
+        // never once per write.
+        let more = std::iter::from_fn(|| told.recv_timeout(QUIET_FOR * 4).ok()).count();
         assert!(
-            told.recv_timeout(QUIET_FOR * 4).is_err(),
-            "a burst of ten writes was told more than once"
+            more <= 1,
+            "a burst of ten writes was told {} times",
+            more + 1
         );
     }
 
@@ -333,6 +372,9 @@ mod tests {
         ))));
         assert!(!matters(&EventKind::Access(AccessKind::Close(
             AccessMode::Read
+        ))));
+        assert!(!matters(&EventKind::Modify(ModifyKind::Metadata(
+            MetadataKind::AccessTime
         ))));
         assert!(matters(&EventKind::Remove(RemoveKind::File)));
         assert!(matters(&EventKind::Create(CreateKind::File)));

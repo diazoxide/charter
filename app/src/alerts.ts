@@ -61,7 +61,7 @@ export function useAlerts(planes: readonly PlaneId[]): {
   const [reading, setReading] = useState<AlertsReading>({ at: "reading" });
   const [asked, setAsked] = useState(0);
   const holding = planes.join("\n");
-  const onDisk = usePlaneChanged(planes);
+  const changesOnDisk = usePlaneChanged(planes);
 
   // Written as `Extensions`'s first read is: the command's own promise, a `gone` flag, and the
   // state set inside the callback — so an answer that lands after a newer ask began, or after
@@ -83,7 +83,7 @@ export function useAlerts(planes: readonly PlaneId[]): {
     return () => {
       gone = true;
     };
-  }, [holding, asked, onDisk]);
+  }, [holding, asked, changesOnDisk]);
 
   useEffect(() => {
     const again = () => setAsked((n) => n + 1);
