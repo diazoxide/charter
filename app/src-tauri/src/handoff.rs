@@ -21,13 +21,20 @@
 //! - **It lands on a strip, and it does not take the operator's screen.** The window is told
 //!   ([`ARRIVED`]) and draws a tab in the target workspace's strip without bringing it to the
 //!   front and without raising the window. See [`Arrived`] for why.
+//! - **It is named for its task** (charter-app#258): the `--name` the handoff carried, or the
+//!   ordinary `<persona> <N>`. And it says where it came from by the parent's NAME — in its
+//!   first message, and in the note its tab and header draw — never by the parent's number.
+//!
+//! And it answers the one ask a handed-off chat makes back: **a report** (charter-app#259).
+//! The chat it goes to is the parent the app recorded when it opened the chat, never one the
+//! reporting chat names, and only for a handoff that asked for one. See [`report_it`].
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use charter_core::engine::Size;
 use charter_core::hookwire::{Answer, Ask, OpenChat, Tickets};
-use charter_core::reopen::Chat;
+use charter_core::reopen::{Chat, HandedFrom, Owed};
 
 use crate::planes::{Held, PlaneId};
 
@@ -59,8 +66,13 @@ pub const ARRIVED: &str = "handoff-arrived";
 pub struct Arrived {
     pub plane: PlaneId,
     pub session: u32,
-    /// The chat's name, which is what the tab is labelled.
+    /// The chat's own name — its number, which the tab's default puts after the persona.
     pub name: String,
+    /// The task name the handoff gave it (`--name`), which the tab says instead of its default
+    /// (charter-app#258).
+    pub label: Option<String>,
+    /// Where it came from, for the note its tab and header draw.
+    pub from: Option<crate::HandedFromNote>,
     /// The workspace whose strip it is filed on.
     pub workspace: String,
     pub persona: Option<String>,
@@ -113,7 +125,107 @@ pub fn answer(
                 Err(why) => no(why),
             }
         }
+        Ask::Report(back) => {
+            // Spent first, for the open's reason.
+            if let Err(why) = tickets.spend(back.chat, connection, &back.ticket, now) {
+                return no(why);
+            }
+            report_it(held, back.chat, &back.summary).unwrap_or_else(no)
+        }
     }
+}
+
+/// Hands `summary` back from `chat` to the chat whose handoff opened it, or says why not
+/// (charter-app#259).
+///
+/// **The recipient is the app's record, never the request.** `chat` is the one this ticket was
+/// minted for, and the chat its report goes to is the parent the app wrote into that chat's own
+/// record when it opened it ([`HandedFrom`]). Nothing the reporting chat says can point it
+/// anywhere else.
+///
+/// It reaches the parent in two ways and neither types anything into it: a needs-you item
+/// (`<child> reported back`), and the report itself, left in the plane for the parent's next
+/// `UserPromptSubmit` hook to hand its turn as context (`charter_core::handback`). A parent
+/// that has closed gets neither; the report is kept for its workspace instead, and the next
+/// chat to start there reads it.
+fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
+    use charter_core::handback::{self, For, Handback};
+
+    let from = held.chats().handed_from(chat).ok_or_else(|| {
+        format!(
+            "chat {chat} was not opened by a handoff, so there is no chat waiting on a report \
+             from it"
+        )
+    })?;
+    match from.report {
+        Owed::Report => {}
+        Owed::Nothing => {
+            return Err(format!(
+                "the handoff that opened this chat did not ask for a report (it had no \
+                 --report), so '{}' is not waiting on one",
+                from.name
+            ));
+        }
+        Owed::Sent => {
+            return Err(format!(
+                "this chat has already reported back to '{}', and a handoff gets one report; \
+                 another is owed only once this chat is prompted again",
+                from.name
+            ));
+        }
+    }
+    let summary = charter_core::handoff::report_summary(summary).map_err(|bad| bad.say())?;
+    let chats = held.chats().open_now();
+    let child = chats
+        .iter()
+        .find(|open| open.session == chat)
+        .ok_or_else(|| format!("chat {chat} is not one this app has open"))?;
+    let child_name = held
+        .chats()
+        .shown_name(chat)
+        .unwrap_or_else(|| child.name.clone());
+    let parent_open = chats.iter().any(|open| open.session == from.chat);
+    let to = if parent_open {
+        held.chats()
+            .shown_name(from.chat)
+            .unwrap_or_else(|| from.name.clone())
+    } else {
+        from.name.clone()
+    };
+    let report = Handback {
+        from: child_name.clone(),
+        from_workspace: child
+            .cwd
+            .as_deref()
+            .and_then(|cwd| workspace_of(held.root(), cwd))
+            .unwrap_or_else(|| from.workspace.clone()),
+        to: to.clone(),
+        to_workspace: from.workspace.clone(),
+        summary,
+    };
+    let whose = if parent_open {
+        For::Chat(from.chat)
+    } else {
+        For::Workspace(&from.workspace)
+    };
+    handback::leave(held.root(), whose, &report)
+        .map_err(|why| format!("the report could not be kept ({why})"))?;
+    held.chats().owes(chat, Owed::Sent);
+    if parent_open {
+        held.hooks().reported_back(from.chat, &child_name);
+    }
+    Ok(Answer::Reported {
+        to,
+        kept_for: (!parent_open).then(|| from.workspace.clone()),
+    })
+}
+
+/// The workspace a chat standing in `cwd` works in: the directory under the plane's
+/// `workspaces/` it is in, where it is in one.
+fn workspace_of(root: &std::path::Path, cwd: &std::path::Path) -> Option<String> {
+    let inside = cwd.strip_prefix(root.join("workspaces")).ok()?;
+    let first = inside.components().next()?.as_os_str().to_str()?;
+    charter_core::contain::workspace_name_ok(first).then(|| first.to_owned())
 }
 
 fn no(why: String) -> Answer {
@@ -151,15 +263,37 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         .into_iter()
         .find(|chat| chat.session == from)
         .ok_or_else(|| format!("chat {from} is not one this app has open"))?;
-    if !handoff::is_stamped_from(&open.message, &from.to_string()) {
+    let Some(stamp) = handoff::stamped(&open.message).filter(|read| read.chat == from.to_string())
+    else {
         return Err(format!(
             "the first message does not open with the stamp of a handoff from chat {from}, \
              and a chat the app opens on request always says where it came from"
         ));
+    };
+    // The parent as the operator sees it, which is what the new chat and its tab are told —
+    // never its number (charter-app#258). A copy, so the note still reads once it is closed.
+    let parent = held
+        .chats()
+        .shown_name(from)
+        .ok_or_else(|| format!("chat {from} is not one this app has open"))?;
+    let left_from = stamp.workspace.to_owned();
+    if !charter_core::contain::workspace_name_ok(&left_from) {
+        return Err(format!(
+            "the stamp names '{}' as the workspace the handoff left from, which cannot be one",
+            charter_core::shown::short(&left_from)
+        ));
     }
+    // The command held the name to this rule already; held again because the request is what
+    // arrived here, and a name is drawn on a tab.
+    let label = match open.name.as_deref() {
+        Some(raw) => charter_core::reopen::label(raw)?,
+        None => None,
+    };
+    let message = handoff::delivered(&open.message, &parent, open.report)
+        .expect("the stamp was read a moment ago");
     // The command asked this already; asked again because these bytes are about to become a
     // harness's argv, and the bound and the NUL are facts about argv.
-    if let Some(bad) = handoff::bad_message(&open.message) {
+    if let Some(bad) = handoff::bad_message(&message) {
         return Err(bad.say());
     }
     let profile = asking.profile.clone().ok_or_else(|| {
@@ -212,7 +346,11 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         .persona
         .clone()
         .or_else(|| start::persona_for_a_new_chat(root));
-    let name = format!("handoff from {from}");
+    // Its own name is a number no chat in this plane has had, dealt now so the chat can be
+    // started under it: with no task name its tab says `<persona> <N>`, the ordinary default,
+    // and four handoffs from one chat are four different tabs (charter-app#258).
+    let number = held.chats().sessions().deal();
+    let name = number.to_string();
     let mut ready = start::ready(
         &start::Start {
             profile: Some(profile.clone()),
@@ -229,7 +367,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
     .map_err(stays)?;
     let Some(first) = ready
         .harness
-        .and_then(|harness| handoff::first_message_argv(harness.name(), &open.message))
+        .and_then(|harness| handoff::first_message_argv(harness.name(), &message))
     else {
         return Err(stays(format!(
             "profile '{profile}' runs a harness charter has not measured the first message of, \
@@ -253,8 +391,18 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         persona: persona.clone(),
         show_footer: false,
         pinned: false,
-        number: None,
-        label: None,
+        number: Some(number),
+        label: label.clone(),
+        from: Some(HandedFrom {
+            chat: from,
+            name: parent,
+            workspace: left_from,
+            report: if open.report {
+                Owed::Report
+            } else {
+                Owed::Nothing
+            },
+        }),
     };
     let session = held
         .chats()
@@ -264,6 +412,8 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         plane: plane.clone(),
         session,
         name,
+        label,
+        from: chat.from.as_ref().map(crate::HandedFromNote::from),
         workspace: ws.to_owned(),
         persona,
         harness: ready.harness.map(|harness| harness.name().to_owned()),
@@ -288,6 +438,16 @@ mod tests {
     }
 
     fn an_open(chat: u32, ticket: &str, message: String) -> Ask {
+        a_named_open(chat, ticket, message, None, false)
+    }
+
+    fn a_named_open(
+        chat: u32,
+        ticket: &str,
+        message: String,
+        name: Option<&str>,
+        report: bool,
+    ) -> Ask {
         Ask::Open(Box::new(OpenChat {
             chat,
             workspace: "alpha".to_owned(),
@@ -295,6 +455,8 @@ mod tests {
             persona: None,
             message,
             ticket: ticket.to_owned(),
+            name: name.map(str::to_owned),
+            report,
         }))
     }
 
@@ -376,6 +538,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
         held.chats()
             .start_ready(&chat, &ready, STARTING)
@@ -397,6 +560,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
         held.chats().start(&chat, STARTING).expect("it runs")
     }
@@ -442,7 +606,13 @@ mod tests {
             vec![Arrived {
                 plane: id.clone(),
                 session: chat,
-                name: format!("handoff from {asking}"),
+                // Its own number: the tab says `claude <N>`, the ordinary default.
+                name: chat.to_string(),
+                label: None,
+                from: Some(crate::HandedFromNote {
+                    name: "claude 1".to_owned(),
+                    workspace: "default".to_owned(),
+                }),
                 workspace: "alpha".to_owned(),
                 persona: None,
                 harness: Some("claude".to_owned()),
@@ -469,15 +639,348 @@ mod tests {
         );
         // The harness is handed the stamped brief as its last argument, which is Claude
         // Code's positional first message. The program runs on its own, so it is waited for.
+        let told = first_message_of(&plane);
+        assert!(
+            told.contains(
+                "⟨handoff from claude 1 · workspace default · 2026-05-04 11:32⟩\n\n# Ship it\nnow"
+            ),
+            "the brief was not the chat's first message, stamped with its parent's name: {told:?}"
+        );
+        assert!(
+            !told.contains(&format!("chat {asking}")),
+            "never the parent's number: {told:?}"
+        );
+    }
+
+    /// Everything the stand-in harness was started with, once a handoff has reached it.
+    fn first_message_of(plane: &Plane) -> String {
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
-        while !plane.argv().contains("⟨handoff from chat") && Instant::now() < deadline {
+        while !plane.argv().contains("⟨handoff from") && Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        plane.argv()
+    }
+
+    /// Opens a handoff from `asking` and answers the new chat's number.
+    fn hand_off(
+        held: &Held,
+        id: &PlaneId,
+        tickets: &Tickets,
+        asking: u32,
+        name: Option<&str>,
+        report: bool,
+    ) -> Result<(u32, Arrived), String> {
+        let ticket = ticket(held, id, tickets, asking);
+        let told = Mutex::new(None);
+        match answer(
+            held,
+            id,
+            tickets,
+            1,
+            a_named_open(asking, &ticket, stamped(asking), name, report),
+            &|arrived| *told.lock().unwrap() = Some(arrived),
+        ) {
+            Answer::Opened { chat } => Ok((chat, told.into_inner().unwrap().expect("told"))),
+            Answer::No { why } => Err(why),
+            other => panic!("opened or refused, not {other:?}"),
+        }
+    }
+
+    /// `child` reports `summary` back, on a ticket of its own.
+    fn report(held: &Held, id: &PlaneId, tickets: &Tickets, child: u32, summary: &str) -> Answer {
+        let ticket = ticket(held, id, tickets, child);
+        answer(
+            held,
+            id,
+            tickets,
+            1,
+            Ask::Report(Box::new(charter_core::hookwire::ReportBack {
+                chat: child,
+                summary: summary.to_owned(),
+                ticket,
+            })),
+            &nothing_opens,
+        )
+    }
+
+    // ----- named for its task (charter-app#258) -----
+
+    #[test]
+    fn a_handoff_with_a_task_name_opens_a_chat_called_that() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+
+        let (chat, arrived) = hand_off(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some(" drop commons "),
+            false,
+        )
+        .expect("opened");
+
+        assert_eq!(arrived.label.as_deref(), Some("drop commons"));
+        assert_eq!(
+            held.chats().shown_name(chat).as_deref(),
+            Some("drop commons")
+        );
+        assert_eq!(
+            held.chats()
+                .record()
+                .chats
+                .last()
+                .and_then(|c| c.label.clone())
+                .as_deref(),
+            Some("drop commons"),
+            "the name rides the record"
+        );
+    }
+
+    #[test]
+    fn four_handoffs_from_one_chat_are_four_distinguishable_tabs() {
+        // The operator's report: four handoffs, four tabs, every one "handoff from 16".
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+
+        let shown: Vec<String> = (0..4)
+            .map(|_| {
+                let (chat, _) =
+                    hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
+                held.chats().shown_name(chat).expect("open")
+            })
+            .collect();
+
+        let mut distinct = shown.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 4, "{shown:?}");
         assert!(
-            plane.argv().contains(&stamped(asking)),
-            "the brief was not the chat's first message: {:?}",
+            shown.iter().all(|name| name.starts_with("claude ")),
+            "the ordinary default, `<harness> <N>`: {shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_task_name_charter_would_not_draw_opens_nothing() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let before = held.chats().open_now().len();
+
+        let refused = hand_off(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            Some("drop\u{200b}commons"),
+            false,
+        )
+        .expect_err("refused");
+
+        assert!(refused.contains("invisible"), "{refused}");
+        assert_eq!(held.chats().open_now().len(), before);
+    }
+
+    #[test]
+    fn the_new_chat_knows_its_parent_by_the_name_the_operator_gave_it() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        held.chats().rename(asking, "platform steward").unwrap();
+
+        let (_, arrived) =
+            hand_off(&held, &id, &Tickets::default(), asking, None, false).expect("opened");
+
+        assert_eq!(
+            arrived.from,
+            Some(crate::HandedFromNote {
+                name: "platform steward".to_owned(),
+                workspace: "default".to_owned(),
+            })
+        );
+        assert!(first_message_of(&plane).contains("⟨handoff from platform steward · workspace"));
+    }
+
+    // ----- a report back (charter-app#259) -----
+
+    #[test]
+    fn a_handoff_that_wants_an_answer_tells_the_new_chat_how_to_give_one() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+
+        hand_off(&held, &id, &Tickets::default(), asking, None, true).expect("opened");
+
+        assert!(
+            first_message_of(&plane).contains(handoff_report_ask()),
+            "{:?}",
             plane.argv()
         );
+    }
+
+    fn handoff_report_ask() -> &'static str {
+        charter_core::handoff::REPORT_ASK
+    }
+
+    #[test]
+    fn a_report_reaches_the_chat_that_asked_as_a_needs_you_item_and_its_next_turn() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) =
+            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+
+        let said = report(&held, &id, &tickets, child, "Dropped it.");
+
+        assert_eq!(
+            said,
+            Answer::Reported {
+                to: "claude 1".to_owned(),
+                kept_for: None
+            }
+        );
+        assert_eq!(
+            held.hooks().board().reports(asking),
+            vec!["drop commons".to_owned()],
+            "`drop commons reported back`, on the chat that asked"
+        );
+        assert!(held.hooks().board().needs_you().contains(&asking));
+        let waiting =
+            charter_core::handback::take(held.root(), charter_core::handback::For::Chat(asking));
+        assert_eq!(waiting.len(), 1, "left for its next turn");
+        assert_eq!(waiting[0].summary, "Dropped it.");
+        assert_eq!(waiting[0].from, "drop commons");
+        assert_eq!(waiting[0].from_workspace, "alpha");
+    }
+
+    #[test]
+    fn a_chat_reports_once_until_the_operator_prompts_it_again() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+        report(&held, &id, &tickets, child, "first");
+
+        let again = report(&held, &id, &tickets, child, "second");
+        assert!(
+            matches!(&again, Answer::No { why } if why.contains("already reported")),
+            "{again:?}"
+        );
+
+        held.chats().prompted(child);
+        assert!(
+            matches!(
+                report(&held, &id, &tickets, child, "second"),
+                Answer::Reported { .. }
+            ),
+            "given more to do, it owes another"
+        );
+    }
+
+    #[test]
+    fn a_report_from_a_handoff_that_did_not_ask_is_refused_saying_why() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, false).expect("opened");
+
+        let said = report(&held, &id, &tickets, child, "done");
+
+        assert!(
+            matches!(&said, Answer::No { why } if why.contains("did not ask for a report")),
+            "{said:?}"
+        );
+        assert!(held.hooks().board().reports(asking).is_empty());
+    }
+
+    #[test]
+    fn a_chat_no_handoff_opened_has_nobody_to_report_to() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+
+        let said = report(&held, &id, &Tickets::default(), asking, "done");
+
+        assert!(
+            matches!(&said, Answer::No { why } if why.contains("not opened by a handoff")),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn a_report_charter_would_not_hand_back_is_refused_and_still_owed() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off(&held, &id, &tickets, asking, None, true).expect("opened");
+
+        let said = report(&held, &id, &tickets, child, "done\u{202e}enod");
+
+        assert!(matches!(&said, Answer::No { .. }), "{said:?}");
+        assert!(
+            matches!(
+                report(&held, &id, &tickets, child, "done"),
+                Answer::Reported { .. }
+            ),
+            "a refused report used up nothing"
+        );
+    }
+
+    #[test]
+    fn a_report_whose_parent_has_closed_is_kept_for_its_workspace() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) =
+            hand_off(&held, &id, &tickets, asking, Some("drop commons"), true).expect("opened");
+        held.chats().close(asking).unwrap();
+
+        let said = report(&held, &id, &tickets, child, "Dropped it.");
+
+        assert_eq!(
+            said,
+            Answer::Reported {
+                to: "claude 1".to_owned(),
+                kept_for: Some("default".to_owned()),
+            }
+        );
+        let kept = charter_core::handback::take(
+            held.root(),
+            charter_core::handback::For::Workspace("default"),
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].to, "claude 1");
     }
 
     #[test]

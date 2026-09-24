@@ -174,6 +174,41 @@ pub fn stamp(chat: &str, workspace: &str, when: chrono::NaiveDateTime) -> String
         .replace("{when}", &when.format("%Y-%m-%d %H:%M").to_string())
 }
 
+/// A first message read back: the stamp's facts, and the brief after the blank line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamped<'a> {
+    /// The chat the handoff left, as `charter handoff` wrote it: the app's number for it.
+    pub chat: &'a str,
+    /// The workspace it left from.
+    pub workspace: &'a str,
+    /// The minute it left, as the stamp wrote it.
+    pub when: &'a str,
+    /// Everything after the blank line: the brief, verbatim.
+    pub brief: &'a str,
+}
+
+/// `msg` read as a handoff's first message — [`STAMP`], a blank line, the brief — or `None`.
+///
+/// One line, closed by the only `⟩` on it, and the blank line after it: the shape
+/// [`first_message`] writes and nothing looser.
+pub fn stamped(msg: &str) -> Option<Stamped<'_>> {
+    let (head, _) = STAMP.split_once("{chat}")?;
+    let (line, rest) = msg.split_once('\n')?;
+    let brief = rest.strip_prefix('\n')?;
+    let inside = line.strip_prefix(head)?.strip_suffix('⟩')?;
+    if inside.contains('⟩') {
+        return None;
+    }
+    let (chat, tail) = inside.split_once(" · workspace ")?;
+    let (workspace, when) = tail.rsplit_once(" · ")?;
+    Some(Stamped {
+        chat,
+        workspace,
+        when,
+        brief,
+    })
+}
+
 /// Whether `msg` opens with the stamp of a handoff leaving `chat`, followed by the blank line
 /// [`first_message`] puts after it.
 ///
@@ -183,16 +218,101 @@ pub fn stamp(chat: &str, workspace: &str, when: chrono::NaiveDateTime) -> String
 /// so this refuses only a message that did not come through it: a process writing to the
 /// socket directly cannot open an unmarked chat, nor one marked as another chat's.
 pub fn is_stamped_from(msg: &str, chat: &str) -> bool {
-    let Some((head, _)) = STAMP.split_once("{chat}") else {
-        return false;
+    stamped(msg).is_some_and(|read| read.chat == chat)
+}
+
+/// The stamp the chat a handoff opened is actually sent: the same facts, with the chat it
+/// came from named the way the operator sees it (charter-app#258).
+///
+/// The number in [`STAMP`] is what the app matches the asking chat by, and it has done that
+/// job by the time this line is written; the chat reading it, and the operator scrolling back
+/// to its first message, want `steward 3`, not `chat 16`.
+pub const SHOWN_STAMP: &str = "⟨handoff from {from} · workspace {workspace} · {when}⟩";
+
+/// The line a handoff that wants an answer adds under the stamp (charter-app#259).
+///
+/// Facts and the one command, like the stamp: the chat is not told what to think, only that
+/// the chat that sent it is waiting on one report and how to send it.
+pub const REPORT_ASK: &str = "⟨the chat that handed this off wants an answer: when the work is \
+done, finish with `charter handoff report \"<summary>\"` — a few lines on what you did and what \
+you found. It reaches that chat once, as a report, the next time it is prompted⟩";
+
+/// The first message the new chat is actually sent: the wire message `msg` with its stamp
+/// naming the parent as `from`, and [`REPORT_ASK`] under it when `report` — or `None` for a
+/// message that is not stamped at all.
+pub fn delivered(msg: &str, from: &str, report: bool) -> Option<String> {
+    let read = stamped(msg)?;
+    let line = SHOWN_STAMP
+        .replace("{workspace}", read.workspace)
+        .replace("{when}", read.when)
+        // Last, so a name that happened to spell `{when}` is not filled in again.
+        .replace("{from}", from);
+    let ask = if report {
+        format!("\n{REPORT_ASK}")
+    } else {
+        String::new()
     };
-    let Some((line, rest)) = msg.split_once('\n') else {
-        return false;
-    };
-    line.starts_with(&format!("{head}{chat} · workspace "))
-        && line.ends_with('⟩')
-        && !line[..line.len() - '⟩'.len_utf8()].contains('⟩')
-        && rest.starts_with('\n')
+    Some(format!("{line}{ask}\n\n{}", read.brief))
+}
+
+// ----------------------------------------------------------------------------------------
+// a report back (charter-app#259)
+// ----------------------------------------------------------------------------------------
+
+/// The most a report may be, in bytes. It becomes context on another chat's turn, which is
+/// a summary's job and not a transcript's: a report that needs more names the file it wrote.
+pub const MOST_REPORT_BYTES: usize = 4096;
+
+/// A report charter will not hand back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BadReport {
+    /// Nothing but whitespace.
+    Empty,
+    /// Past [`MOST_REPORT_BYTES`], by this many bytes in all.
+    TooLong(usize),
+    /// A control character other than a line break, or an invisible formatting one.
+    Undrawable,
+}
+
+impl BadReport {
+    pub fn say(&self) -> String {
+        match self {
+            Self::Empty => "the report is empty — nothing was sent. Say what was done in a \
+                            few lines: charter handoff report \"<summary>\""
+                .to_owned(),
+            Self::TooLong(n) => format!(
+                "the report is {n} bytes, and a report is at most {MOST_REPORT_BYTES} — \
+                 nothing was sent. Summarise, and name any longer write-up by its path."
+            ),
+            Self::Undrawable => "the report holds a control character or an invisible \
+                                 formatting one, which charter will not hand to another chat \
+                                 — nothing was sent. Plain text and line breaks only."
+                .to_owned(),
+        }
+    }
+}
+
+/// A report as charter will hand it back: trimmed, bounded, and drawable — or why not.
+///
+/// **Refused, never stripped**, for [`crate::reopen::label`]'s reason: a character that makes
+/// text read as something else is not tidied into the text the chat meant. A line break is the
+/// one control character a summary may carry, because a summary of several lines is still
+/// plain text.
+pub fn report_summary(raw: &str) -> Result<String, BadReport> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Err(BadReport::Empty);
+    }
+    if text.len() > MOST_REPORT_BYTES {
+        return Err(BadReport::TooLong(text.len()));
+    }
+    if text
+        .chars()
+        .any(|c| c != '\n' && crate::panel::undrawable(c))
+    {
+        return Err(BadReport::Undrawable);
+    }
+    Ok(text.to_owned())
 }
 
 /// The whole of what the new chat is sent: the stamp, a blank line, the brief verbatim.
@@ -562,5 +682,109 @@ mod tests {
         assert_eq!(quote("plain"), "plain");
         assert_eq!(quote("a b"), "'a b'");
         assert_eq!(quote("it's"), "'it'\"'\"'s'");
+    }
+
+    // ----- what the chat it opens is told (charter-app#258, #259) --------------------------
+
+    fn wire() -> String {
+        first_message(
+            &stamp("16", "platform-next", at("2026-09-24T11:32:05")),
+            "# Drop account-console-commons\nbody",
+        )
+    }
+
+    #[test]
+    fn the_chat_it_opens_is_told_its_parent_by_name_and_never_by_number() {
+        let told = delivered(&wire(), "steward 3", false).expect("a stamped message");
+
+        assert_eq!(
+            told,
+            "⟨handoff from steward 3 · workspace platform-next · 2026-09-24 11:32⟩\n\n\
+             # Drop account-console-commons\nbody"
+        );
+        assert!(!told.contains("chat 16"), "{told}");
+    }
+
+    #[test]
+    fn a_handoff_that_wants_an_answer_tells_the_chat_how_to_give_one() {
+        let told = delivered(&wire(), "steward 3", true).expect("a stamped message");
+
+        let (stamp_line, rest) = told.split_once('\n').unwrap();
+        assert_eq!(
+            stamp_line,
+            "⟨handoff from steward 3 · workspace platform-next · 2026-09-24 11:32⟩"
+        );
+        let (ask, brief) = rest.split_once("\n\n").unwrap();
+        assert!(
+            ask.contains("charter handoff report \"<summary>\""),
+            "{ask}"
+        );
+        assert_eq!(brief, "# Drop account-console-commons\nbody");
+    }
+
+    #[test]
+    fn a_message_without_the_stamp_is_delivered_as_nothing() {
+        assert_eq!(delivered("# Goal\nbody", "steward 3", false), None);
+    }
+
+    #[test]
+    fn the_stamp_says_where_the_handoff_left_from() {
+        let msg = wire();
+        let read = stamped(&msg).expect("stamped");
+
+        assert_eq!(read.chat, "16");
+        assert_eq!(read.workspace, "platform-next");
+        assert_eq!(read.brief, "# Drop account-console-commons\nbody");
+    }
+
+    #[test]
+    fn a_report_is_trimmed_and_may_run_over_several_lines() {
+        assert_eq!(
+            report_summary("  Dropped it.\nTwo repos changed.\n"),
+            Ok("Dropped it.\nTwo repos changed.".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_empty_report_is_refused() {
+        assert_eq!(report_summary(" \n\t "), Err(BadReport::Empty));
+    }
+
+    #[test]
+    fn a_report_past_the_cap_is_refused_and_one_at_it_is_kept() {
+        let at_cap = "a".repeat(MOST_REPORT_BYTES);
+        assert_eq!(report_summary(&at_cap), Ok(at_cap.clone()));
+        assert_eq!(
+            report_summary(&format!("{at_cap}b")),
+            Err(BadReport::TooLong(MOST_REPORT_BYTES + 1))
+        );
+    }
+
+    #[test]
+    fn a_report_with_an_invisible_or_control_character_is_refused() {
+        for sneaky in [
+            "done\u{202e}enod",
+            "a\u{200b}b",
+            "bell\u{7}",
+            "cr\rlf",
+            "esc\u{1b}[2J",
+        ] {
+            assert_eq!(
+                report_summary(sneaky),
+                Err(BadReport::Undrawable),
+                "{sneaky:?} was let through"
+            );
+        }
+    }
+
+    #[test]
+    fn every_report_refusal_says_nothing_was_sent() {
+        for bad in [
+            BadReport::Empty,
+            BadReport::TooLong(5000),
+            BadReport::Undrawable,
+        ] {
+            assert!(bad.say().contains("nothing was sent"), "{bad:?}");
+        }
     }
 }

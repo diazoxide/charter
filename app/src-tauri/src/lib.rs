@@ -359,6 +359,27 @@ struct OpenChat {
     /// <N>` (charter-app#254). Charter's label only: `name` is still what its harness was
     /// started with.
     label: Option<String>,
+    /// Where a handoff opened it from, where one did: the note its tab's tooltip and its header
+    /// draw, `↳ from steward 3 · ops` (charter-app#258). Never the parent's number.
+    from: Option<HandedFromNote>,
+}
+
+/// Where a handed-off chat came from, as the window draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct HandedFromNote {
+    /// The chat it came from, by the name the operator saw it under.
+    pub name: String,
+    /// The workspace it came from.
+    pub workspace: String,
+}
+
+impl From<&charter_core::reopen::HandedFrom> for HandedFromNote {
+    fn from(from: &charter_core::reopen::HandedFrom) -> Self {
+        Self {
+            name: from.name.clone(),
+            workspace: from.workspace.clone(),
+        }
+    }
 }
 
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
@@ -738,6 +759,7 @@ fn start_chat(
         // deals it one that this plane has never used (charter-app#90).
         number: None,
         label: label.clone(),
+        from: None,
     };
     let session = held
         .chats()
@@ -790,6 +812,7 @@ fn open_session(
         // deals it one that this plane has never used (charter-app#90).
         number: None,
         label: None,
+        from: None,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
@@ -809,6 +832,9 @@ fn close_session(
 ) -> Result<(), String> {
     let held = planes.held(&plane)?;
     held.chats().close(session)?;
+    // Nothing will prompt it again, so a report waiting for its next turn goes to the
+    // workspace it asked from, where the next chat to start reads it (charter-app#259).
+    charter_core::handback::orphan(held.root(), session);
     // Off the board entirely, not merely ended: a report that arrives for it afterwards —
     // from a hook that outlived the harness by a moment — moves nothing.
     held.hooks().board().closed(session);
@@ -1011,6 +1037,7 @@ impl From<chats::Open> for OpenChat {
             in_front: open.in_front,
             pinned: open.pinned,
             label: open.label,
+            from: open.from.as_ref().map(HandedFromNote::from),
             resumed: match &open.how {
                 Reopened::Resumed(id) => Some(id.to_string()),
                 Reopened::Fresh(_) => None,

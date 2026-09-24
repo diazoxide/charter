@@ -43,6 +43,11 @@ pub struct Moved {
     /// export a `u64` and the app panics at startup in a debug build when one is reached
     /// for.
     pub moved_at: u32,
+    /// The chats that have reported back to this one and not been read yet, by the name the
+    /// operator sees them under, oldest first (charter-app#259). Each is a needs-you item that
+    /// says `<child> reported back` rather than only this chat's name. Empty for nearly every
+    /// chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
+    pub reports: Vec<String>,
 }
 
 /// The board, the socket, and the thread reading it — one plane's whole side of the channel.
@@ -65,7 +70,17 @@ pub struct Hooks {
     /// so the socket has to exist first. Until it is filled every ask is answered with a
     /// refusal, never with a silence an asker would have to wait out.
     answering: Arc<Mutex<Option<Answering>>>,
+    /// Who is told what the window now sees, when something other than a hook moves a chat —
+    /// a report back (charter-app#259). The same teller the socket's reports go to.
+    tell: Option<Teller>,
+    /// Told when a chat's own harness says the operator prompted it (charter-app#259): a
+    /// handed-off chat that has sent its report owes another once it is given more to do.
+    /// A slot filled after the fact, for [`Self::answering`]'s reason.
+    prompted: Arc<Mutex<Option<Prompted>>>,
 }
+
+/// Told the number of a chat the operator has just prompted.
+pub type Prompted = Arc<dyn Fn(u32) + Send + Sync + 'static>;
 
 /// What answers an ask, told which connection it came on.
 pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
@@ -180,6 +195,8 @@ impl Hooks {
             reading: Mutex::new(None),
             socket: None,
             answering: Arc::new(Mutex::new(None)),
+            tell: None,
+            prompted: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -193,12 +210,28 @@ impl Hooks {
         let socket = listener.path().to_path_buf();
         let board = Arc::new(Mutex::new(Board::new()));
         let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
+        let prompted: Arc<Mutex<Option<Prompted>>> = Arc::new(Mutex::new(None));
+        let tell = Arc::clone(&moved);
         let reading = listener.each_answering(
             {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
+                let prompted = Arc::clone(&prompted);
                 Box::new(move |report| {
                     if let Some(what) = apply(&board, &plane, &report) {
+                        // A prompt the board took is the chat's own harness saying the operator
+                        // gave it a turn — never a nested one, which the board refused.
+                        if report.event == charter_core::state::Event::UserPromptSubmit
+                            && what.state == "running"
+                        {
+                            let told = prompted
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .clone();
+                            if let Some(told) = told {
+                                told(report.chat);
+                            }
+                        }
                         moved(what);
                     }
                 })
@@ -227,6 +260,8 @@ impl Hooks {
             reading: Mutex::new(Some(reading)),
             socket: Some(socket),
             answering,
+            tell: Some(tell),
+            prompted,
         })
     }
 
@@ -259,6 +294,26 @@ impl Hooks {
             .answering
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(answering);
+    }
+
+    /// Who is told when a chat's own harness says the operator prompted it.
+    pub fn when_prompted(&self, prompted: Prompted) {
+        *self.prompted.lock().unwrap_or_else(PoisonError::into_inner) = Some(prompted);
+    }
+
+    /// A chat `session` handed work to, shown as `from`, has reported back to it
+    /// (charter-app#259): it is a needs-you item now, and the window is told so. The answer is
+    /// built under the same hold as the change, for [`apply`]'s reason.
+    pub fn reported_back(&self, session: u32, from: &str) -> Option<Moved> {
+        let mut board = held_board(&self.board);
+        let moved = board
+            .reported_back(session, from)
+            .then(|| seen_by(&board, &self.plane, session));
+        drop(board);
+        if let (Some(moved), Some(tell)) = (&moved, &self.tell) {
+            tell(moved.clone());
+        }
+        moved
     }
 
     pub fn socket(&self) -> Option<&Path> {
@@ -297,6 +352,7 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         needs_you: queue.contains(&session),
         queue,
         moved_at: board.moved_at(session),
+        reports: board.reports(session),
     }
 }
 

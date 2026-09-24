@@ -164,6 +164,11 @@ pub struct Chat {
     /// cannot be forged, and it already does this job: it overwrites whatever the board
     /// holds, so a dead chat can never look alive.
     ended: bool,
+    /// The chats that have reported back to this one since it was last prompted, by the name
+    /// the operator sees them under (charter-app#259). Each is a needs-you item of its own
+    /// kind — `<child> reported back` — and the report itself reaches this chat's next turn as
+    /// context, which is why the next prompt is what clears them.
+    reports: Vec<String>,
 }
 
 impl Chat {
@@ -173,6 +178,7 @@ impl Chat {
             state: State::Unknown,
             needs_you: false,
             ended: false,
+            reports: Vec::new(),
         }
     }
 
@@ -186,6 +192,26 @@ impl Chat {
         self.needs_you
     }
 
+    /// The chats that reported back to this one and have not been read yet, oldest first.
+    pub fn reports(&self) -> &[String] {
+        &self.reports
+    }
+
+    /// A chat this one handed work to, `from`, has reported back (charter-app#259). It needs
+    /// the operator whatever it is doing: the report waits for its next turn, and the queue is
+    /// how the operator learns there is one. Answers whether anything a reader can see changed.
+    ///
+    /// **Not its state.** A chat in the middle of a turn is still running; the report does not
+    /// end the turn and nothing is typed into it.
+    pub fn reported_back(&mut self, from: &str) -> bool {
+        if self.ended {
+            return false;
+        }
+        self.reports.push(from.to_owned());
+        self.needs_you = true;
+        true
+    }
+
     /// A hook reported `event`. Answers whether anything a reader can see changed.
     pub fn reported(&mut self, event: Event) -> bool {
         self.reported_from(event, Detail::default())
@@ -197,7 +223,7 @@ impl Chat {
         if self.ended {
             return false;
         }
-        let was = (self.state, self.needs_you);
+        let was = (self.state, self.needs_you, self.reports.len());
         match event {
             // A fresh chat, and every chat a relaunch puts back, wants a first prompt. It
             // has asked for nothing, and a launch that filled the queue would empty the
@@ -213,9 +239,12 @@ impl Chat {
             Event::SessionStart => {
                 self.state = State::Waiting;
             }
+            // The turn that begins now is the one a waiting report is handed to, as context
+            // (`handback`), so it is read and no longer waiting.
             Event::UserPromptSubmit => {
                 self.state = State::Running;
                 self.needs_you = false;
+                self.reports.clear();
             }
             // The turn has not ended, but it cannot go on without an answer.
             Event::Notification => {
@@ -250,7 +279,7 @@ impl Chat {
                 self.needs_you = false;
             }
         }
-        was != (self.state, self.needs_you)
+        was != (self.state, self.needs_you, self.reports.len())
     }
 
     /// The session's program exited. Answers whether anything a reader can see changed.
@@ -615,6 +644,25 @@ impl Board {
         self.chats
             .get(&number)
             .map_or(State::Unknown, |tracked| tracked.chat.state())
+    }
+
+    /// A chat `number` handed work to, `from`, has reported back to it (charter-app#259).
+    /// Answers whether anything a reader can see changed: nothing does for a chat the board
+    /// does not have, or one whose program is gone.
+    pub fn reported_back(&mut self, number: u32, from: &str) -> bool {
+        let changed = self
+            .chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.reported_back(from));
+        self.stamp(number, changed)
+    }
+
+    /// The chats that reported back to `number` and have not been read, oldest first.
+    pub fn reports(&self, number: u32) -> Vec<String> {
+        self.chats
+            .get(&number)
+            .map(|tracked| tracked.chat.reports().to_vec())
+            .unwrap_or_default()
     }
 
     /// Every chat waiting on the operator, in the order they were opened.
@@ -1511,5 +1559,65 @@ mod tests {
         let board = Board::new();
 
         assert_eq!(board.moved_at(7), 0);
+    }
+
+    // ----- a report back (charter-app#259) --------------------------------------------------
+
+    #[test]
+    fn a_report_back_puts_the_chat_that_asked_in_the_queue_without_ending_its_turn() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        assert!(board.reported_back(7, "drop commons"));
+
+        assert_eq!(board.state(7), State::Running, "nothing is typed into it");
+        assert_eq!(board.needs_you(), vec![7]);
+        assert_eq!(board.reports(7), vec!["drop commons".to_owned()]);
+    }
+
+    #[test]
+    fn the_next_prompt_reads_the_reports_and_takes_the_item_away() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::Stop, Some(A)));
+        board.reported_back(7, "drop commons");
+        board.reported_back(7, "retry hooks");
+
+        assert!(board.reported(&report(7, Event::UserPromptSubmit, Some(A))));
+
+        assert!(board.reports(7).is_empty());
+        assert!(board.needs_you().is_empty());
+    }
+
+    #[test]
+    fn a_report_back_to_a_chat_the_board_does_not_have_changes_nothing() {
+        let mut board = Board::new();
+
+        assert!(!board.reported_back(7, "drop commons"));
+        assert!(board.needs_you().is_empty());
+    }
+
+    #[test]
+    fn a_report_back_to_a_chat_whose_program_has_gone_changes_nothing() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.exited(7, Some(0));
+
+        assert!(!board.reported_back(7, "drop commons"));
+        assert!(board.reports(7).is_empty());
+    }
+
+    #[test]
+    fn a_report_back_is_a_move() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        claude_chat(&mut board, 8, Some(A));
+        let before = board.moved_at(7);
+
+        board.reported_back(7, "drop commons");
+
+        assert!(board.moved_at(7) > before);
+        assert!(board.moved_at(7) > board.moved_at(8));
     }
 }
