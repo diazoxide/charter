@@ -38,8 +38,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   installed and say their plugins are not supported yet, with the reason: Codex ignores a
   plugin's on/off given for one session, and charter does not start opencode chats yet.
   ([#274](https://github.com/diazoxide/charter-app/issues/274))
+- An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
+  counts on its project and workspace tabs at once, without touching the chat. It lasts until
+  that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
+  the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
 ### Fixed
+
+- A chat's report that raced a close, or an Ignore, can no longer put the chat back in the
+  needs-you queue: every update the window gets is numbered, and it keeps the newest.
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
 - On Linux and Windows the app menu no longer takes a key the chat's shell owns: `Ctrl-C` in a
   chat is the interrupt again, not Copy, and the same goes for `Ctrl-A`, `Ctrl-Z`, `Ctrl-Y`,

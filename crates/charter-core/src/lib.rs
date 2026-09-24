@@ -81,8 +81,11 @@ pub mod shown;
 pub mod skilluse;
 pub mod start;
 pub mod state;
+pub(crate) mod steer;
 #[cfg(test)]
 mod testgit;
+#[cfg(test)]
+mod testrun;
 pub mod toolgate;
 pub mod toolhooks;
 pub mod trace;

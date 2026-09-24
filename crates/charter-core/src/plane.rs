@@ -130,7 +130,7 @@ fn marked_above(start: &Path) -> Option<&Path> {
 /// `remember-from-a-worktree-…` and `save-from-a-worktree-…`, which run the two commands from
 /// the same directory and compare both answers against Python's.
 pub fn resolve(start: &Path) -> Result<PathBuf, PlaneError> {
-    match std::env::var_os("CHARTER_ROOT") {
+    match crate::steer::var_os("CHARTER_ROOT") {
         Some(root) if !root.is_empty() => {
             let root = PathBuf::from(root);
             // The variable is a pin, not an exemption: a fenced build that is pointed at a
@@ -171,7 +171,7 @@ pub struct Place {
 /// deletes (M2.23); `charter init` standing in a worktree of a plane now reports on the
 /// plane, which is what `charter doctor` standing beside it reports on.
 pub fn place(cwd: &Path) -> Place {
-    if let Some(named) = std::env::var_os("CHARTER_ROOT").filter(|v| !v.is_empty()) {
+    if let Some(named) = crate::steer::var_os("CHARTER_ROOT").filter(|v| !v.is_empty()) {
         let named = expand_user(Path::new(&named));
         if let Ok(root) = named.canonicalize()
             && root.join(MANIFEST).is_file()
@@ -239,7 +239,7 @@ pub fn standing_in_nested_plane(start: &Path) -> Option<PathBuf> {
 /// either caller because `save` WRITES the push record and `doctor` READS it, and a state
 /// directory the two disagree about is a record written where nothing looks for it.
 pub fn state_dir(root: &Path) -> PathBuf {
-    match std::env::var_os("CHARTER_HOME") {
+    match crate::steer::var_os("CHARTER_HOME") {
         Some(home) if !home.is_empty() => PathBuf::from(home),
         _ => root.join(".charter"),
     }

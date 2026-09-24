@@ -341,7 +341,16 @@ describe("the opener", () => {
       if (cmd === "open_plane") return { plane: "/home/dev/two", ask: null };
       if (cmd === "chat_states")
         return args.plane === "/home/dev/one"
-          ? [{ plane: args.plane, session: 1, state: "waiting", needs_you: true, queue: [1] }]
+          ? [
+              {
+                plane: args.plane,
+                session: 1,
+                state: "waiting",
+                needs_you: true,
+                queue: [1],
+                sequence: 1,
+              },
+            ]
           : // The second project never answers, so nothing can arrive to correct the screen.
             new Promise(() => undefined);
       // BOTH projects have a chat 1 — which is the whole point: a session number means
@@ -410,7 +419,16 @@ describe("the opener", () => {
       // The first project's chat 1 is waiting for the operator; the second project's is not.
       if (cmd === "chat_states")
         return showing === "/home/dev/one"
-          ? [{ plane: showing, session: 1, state: "waiting", needs_you: true, queue: [1] }]
+          ? [
+              {
+                plane: showing,
+                session: 1,
+                state: "waiting",
+                needs_you: true,
+                queue: [1],
+                sequence: 1,
+              },
+            ]
           : [];
       if (cmd === "close_plane") {
         showing = "/home/dev/two";

@@ -125,6 +125,31 @@ export const commands = {
 	 */
 	planesToRestore: () => typedError<Restore, string>(__TAURI_INVOKE("planes_to_restore")),
 	/**
+	 *  What this launch would put back, for the window to ask about — **or nothing, and then there
+	 *  is no question**: nothing was open, or the operator has already answered.
+	 * 
+	 *  Asked BEFORE the window restores anything, and nothing starts until [`relaunch`] has the
+	 *  answer. On a blocking thread for [`planes_to_restore`]'s reason, and because it reads one
+	 *  record per project.
+	 */
+	relaunchAsk: () => typedError<{
+	/**  Every project with something to put back, the launch's own first. */
+	projects: WaitingProject[],
+	/**
+	 *  Whether charter restarted itself to install an update, rather than the operator
+	 *  quitting it (charter-app#251). The question then says so.
+	 */
+	after_update: boolean,
+} | null, string>(__TAURI_INVOKE("relaunch_ask")),
+	/**
+	 *  The operator's answer to [`relaunch_ask`] — or `ReopenAll` from a window that had nothing to
+	 *  ask. **Every launch sends one**, because the launch's own project is put back here and
+	 *  nowhere else; a second answer, from a window that reloaded, changes nothing.
+	 * 
+	 *  On a blocking thread because the answer starts every chat the launch's project held.
+	 */
+	relaunch: (choice: RelaunchChoice) => typedError<null, string>(__TAURI_INVOKE("relaunch", { choice })),
+	/**
 	 *  A window says what it is holding: its projects as tabs, and which one is in front.
 	 * 
 	 *  Two things, in one call, because they are one fact. A notification about a chat in a
@@ -192,6 +217,11 @@ export const commands = {
 	openSession: (plane: PlaneId, program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { plane, program, args, cwd, name, columns, rows })),
 	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
 	closeSession: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { plane, session })),
+	/**
+	 *  Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
+	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
+	 */
+	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
 	/**  Sends what a pane typed to the session's program. */
 	sendInput: (plane: PlaneId, session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { plane, session, text })),
 	/**  Tells a session how big the pane showing it now is. */
@@ -216,8 +246,9 @@ export const commands = {
 	/**
 	 *  The chats the app already has open — at a launch, the ones put back from the record.
 	 * 
-	 *  The window asks this instead of opening its own: putting the record back happens before
-	 *  there is a window, so that a relaunch does not depend on a webview having run.
+	 *  The window asks this instead of opening its own: the core puts the record back, once the
+	 *  window has sent the operator's answer to the launch's question (`opener::relaunch`,
+	 *  charter-app#250), and a window that reloads asks again rather than starting a second copy.
 	 */
 	openedChats: (plane: PlaneId) => typedError<OpenChat[], string>(__TAURI_INVOKE("opened_chats", { plane })),
 	/**
@@ -241,6 +272,15 @@ export const commands = {
 	 *  and never in the machine store, which ADR 0034 forbids holding a chat's name.
 	 */
 	pinChat: (plane: PlaneId, session: number, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_chat", { plane, session, pinned })),
+	/**
+	 *  Gives one chat a name, or takes the one it was given off with a blank — and answers the name
+	 *  it now has, so the tab draws what charter holds rather than what was typed (charter-app#254).
+	 * 
+	 *  **Charter's label, never the harness's**: the program keeps the `--name` it was started
+	 *  with, so renaming a chat never disturbs one that is running. The name goes in the plane's
+	 *  own `.charter/app/reopen.json`, beside the chat's pin, so it comes back at a relaunch.
+	 */
+	renameChat: (plane: PlaneId, session: number, label: string) => typedError<string | null, string>(__TAURI_INVOKE("rename_chat", { plane, session, label })),
 	/**
 	 *  Asks the app to quit, the way the menu's Quit and the tray's do.
 	 * 
@@ -375,8 +415,12 @@ export const commands = {
 	 *  (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
 	 *  environment its harness was started with, and no later click can change it.
+	 * 
+	 *  `label` is the picker's optional Name field (charter-app#254): what the chat's tab says
+	 *  instead of its default. It is held to the same rule a rename is, and **a refusal comes back
+	 *  before anything starts**, so a name charter will not draw never costs a chat.
 	 */
-	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, showFooter, columns, rows })),
+	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, label: string | null, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, label, showFooter, columns, rows })),
 	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
@@ -1023,6 +1067,18 @@ export type Moved = {
 	 *  for.
 	 */
 	moved_at: number,
+	/**
+	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
+	 * 
+	 *  **What lets the window put its events back in order.** Every `Moved` is built under the
+	 *  board's lock, but it is SENT after the lock is let go, on whichever thread built it: a
+	 *  hook's report on the socket's thread, a close on the command's. So a report taken just
+	 *  before a close can reach the window just after it, and the window, which keeps the last
+	 *  queue it was told, would put the closed chat back. The window drops any snapshot older
+	 *  than the one it holds (`chatState.ts`), which it can do only because this is numbered
+	 *  in the order the board was read. [`sequence`] is the whole definition.
+	 */
+	sequence: number,
 };
 
 /**  One news entry, as the pin's dialog lists it. */
@@ -1080,6 +1136,12 @@ export type OpenChat = {
 	 *  record, so a pinned chat comes back pinned at the next launch.
 	 */
 	pinned: boolean,
+	/**
+	 *  The name the operator gave it, or none — then its tab says the default, `<persona>
+	 *  <N>` (charter-app#254). Charter's label only: `name` is still what its harness was
+	 *  started with.
+	 */
+	label: string | null,
 };
 
 /**
@@ -1351,6 +1413,14 @@ export type PlaneAlerts = {
 };
 
 /**
+ *  What `plane-changed` carries: which plane moved. Every window filters on it, as it filters
+ *  `chat-moved`, because the app holds several planes and emits on the app.
+ */
+export type PlaneChanged = {
+	plane: PlaneId,
+};
+
+/**
  *  What a plane would contribute, as the trust prompt draws it — **and the exact value the
  *  operator's approval is checked against.**
  * 
@@ -1542,6 +1612,20 @@ export type Refused = {
 	at_risk: AtRisk[],
 };
 
+/**  The operator's answer, as the window sends it. */
+export type RelaunchChoice = "ReopenAll" | "StartFresh";
+
+/**  What a launch asks before it puts anything back (charter-app#250). */
+export type RelaunchQuestion = {
+	/**  Every project with something to put back, the launch's own first. */
+	projects: WaitingProject[],
+	/**
+	 *  Whether charter restarted itself to install an update, rather than the operator
+	 *  quitting it (charter-app#251). The question then says so.
+	 */
+	after_update: boolean,
+};
+
 /**  One clone's git state, and what the forge cache last recorded for its branch. */
 export type RepoState = {
 	name: string,
@@ -1715,9 +1799,14 @@ export type StartOptions = {
 	declares_none: boolean,
 };
 
-/**  A chat that started: its session. */
+/**  A chat that started: its session, and the name it was given as charter holds it. */
 export type Started = {
 	session: number,
+	/**
+	 *  The picker's Name field as the core's rule left it — trimmed, and none when it was
+	 *  blank — so the tab draws what the record holds rather than what was typed.
+	 */
+	label: string | null,
 };
 
 /**  What the operating system has already spent of the window's own title bar. */
@@ -1787,6 +1876,14 @@ export type ViewTab = {
 	at: number,
 	active: boolean,
 	pinned: boolean,
+};
+
+/**  One project's share of the question: which, and how much of it would come back. */
+export type WaitingProject = {
+	/**  The project's root, which is also the id it is held by once it is open. */
+	plane: string,
+	chats: number,
+	views: number,
 };
 
 /**
