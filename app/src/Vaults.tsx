@@ -47,11 +47,7 @@ export function Vaults({
         vaults !== undefined && (
           <PanelList
             rows={vaults.map(rowOf)}
-            empty={{
-              headline: "No vaults on this plane",
-              body: "Make one with New vault… in the palette.",
-              offer: null,
-            }}
+            empty={NO_VAULTS}
             label="Vaults"
             testid="list-vaults"
             // No row opens a card: pressing one opens the vault's tab, which says the rest.
@@ -70,14 +66,25 @@ export function Vaults({
   );
 }
 
+/** How many secrets, in words: `1 secret`, `2 secrets`. The panel and a vault's tab both say it. */
+export function counted(n: number): string {
+  return `${n} ${n === 1 ? "secret" : "secrets"}`;
+}
+
+/** What a list of vaults says when the plane has none. */
+const NO_VAULTS = {
+  headline: "No vaults on this plane",
+  body: "Make one with New vault… in the palette.",
+  offer: null,
+};
+
 /**
  * One vault as a row: its name, then its provider and count. Pressing it runs the catalogue's
  * `vault.open:<name>`, which opens the vault's tab. A vault charter cannot read is marked, and
  * its tab says why — the card that used to say it would be a second surface for one vault.
  */
 function rowOf(vault: VaultSummary): PanelRow {
-  const count =
-    vault.count === null ? "" : ` · ${vault.count} ${vault.count === 1 ? "secret" : "secrets"}`;
+  const count = vault.count === null ? "" : ` · ${counted(vault.count)}`;
   return {
     key: vault.name,
     text: vault.name,
@@ -129,11 +136,7 @@ export function OpenVault({
           <div ref={list}>
             <PanelList
               rows={vaults.map(rowOf)}
-              empty={{
-                headline: "No vaults on this plane",
-                body: "Make one with New vault… in the palette.",
-                offer: null,
-              }}
+              empty={NO_VAULTS}
               label="Vaults to open"
               open={undefined}
               onOpen={() => undefined}

@@ -239,6 +239,7 @@ export function PlaneView({
    *  again after a write — a vault's own tab (charter-app#235). */
   const vaults = useVaults(plane);
   const vaultNames = useMemo(() => vaults.vaults?.map((one) => one.name), [vaults.vaults]);
+  const reloadVaults = vaults.reload;
   /** Whether the vault picker is up. */
   const [pickingVault, setPickingVault] = useState(false);
   /** Whether the new-vault dialog is up, why the last attempt made nothing, and whether
@@ -1179,10 +1180,10 @@ export function PlaneView({
       }
       setMakingVault(false);
       setVaultTrouble(undefined);
-      vaults.reload();
+      reloadVaults();
       showView({ from: null, view: "vault", key: answer.data.name }, answer.data.name);
     },
-    [plane, showView, vaults],
+    [plane, reloadVaults, showView],
   );
 
   /**
@@ -2029,7 +2030,7 @@ export function PlaneView({
                   offered={views}
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
-                  onVaultChanged={vaults.reload}
+                  onVaultChanged={reloadVaults}
                 />
               ) : tabs.order.length > 0 ? (
                 // Chats are running — just not in the workspace being looked at. Saying

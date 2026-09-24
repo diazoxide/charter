@@ -2,7 +2,7 @@ import { $, browser, expect } from "@wdio/globals";
 
 /**
  * **A vault in a tab of its own**, in the built app (charter-app#235): made from the palette's
- * New vault…, a secret added in its tab, and the table searched — through the real core, whose
+ * New vault…, a secret added in its tab, opened again through Open vault…, and the table searched — through the real core, whose
  * `e2e` build is fenced and so keeps a keyring vault's values in `<state>/keyring-stub.json`
  * under the copied fixture plane, never in this machine's Keychain (`secrets::keyring`).
  *
@@ -62,8 +62,9 @@ async function secretNames(): Promise<string[]> {
 async function add(key: string, value: string) {
   await $(TAB).$("button=Add").click();
   const asking = await dialog(`Add a secret to ${VAULT}`);
-  await asking.$("input:not([type])").setValue(key);
-  await asking.$('input[type="password"]').setValue(value);
+  // By the words a screen reader reads for each box, never by what it is made of.
+  await asking.$("aria/Name").setValue(key);
+  await asking.$("aria/Value").setValue(value);
   await asking.$("button=Add secret").click();
   await browser.waitUntil(async () => (await secretNames()).includes(key), {
     timeout: 20_000,
@@ -84,7 +85,7 @@ describe("a vault's tab", function () {
   it("is made from the palette's New vault…, and opens in front on an empty table", async () => {
     await fromThePalette("New vault");
     const asking = await dialog("New vault");
-    await asking.$("input").setValue(VAULT);
+    await asking.$("aria/Name").setValue(VAULT);
     await asking.$("button=Create vault").click();
 
     const tab = await $(TAB);
@@ -110,8 +111,23 @@ describe("a vault's tab", function () {
     expect(page).not.toContain(VALUE);
   });
 
+  it("is opened again, once its tab is closed, from the palette's Open vault…", async () => {
+    await $(`${TABS} button[aria-label="Close ${VAULT}"]`).click();
+    await $(TAB).waitForExist({ reverse: true, timeout: 20_000 });
+
+    await fromThePalette("Open vault…");
+    const picker = await dialog("Open vault");
+    await picker.$(`button*=${VAULT}`).click();
+
+    await browser.waitUntil(async () => (await secretNames()).length === 2, {
+      timeout: 20_000,
+      timeoutMsg: "the vault picked did not open on its two secrets",
+    });
+    expect(await $(`${TABS} [role="tab"][aria-selected="true"]`).getText()).toBe(VAULT);
+  });
+
   it("narrows the table to what is searched for", async () => {
-    const search = await $(TAB).$('input[type="search"]');
+    const search = await $(`[aria-label="Search secrets in ${VAULT}"]`);
     await search.setValue("api");
 
     await browser.waitUntil(async () => (await secretNames()).length === 1, {

@@ -232,8 +232,12 @@ pub(crate) async fn open_view(
     .map_err(|err| format!("asking that view did not finish: {err}"))?
 }
 
-/// charter's own views, by id. **One today**, the persona view, and the match is the whole of
-/// the registry: a built-in view is code in this process, so there is nothing to discover.
+/// charter's own views that answer in panel blocks, by id. **One today**, the persona view, and
+/// the match is the whole of the registry: a built-in view is code in this process, so there is
+/// nothing to discover. The vault view (`{ view: "vault", key: <vault> }`, charter-app#235) is
+/// charter's too, but the window draws it itself from the `vault_*` commands — a table the
+/// operator writes to is not something blocks can say — so it is never asked here, and a caller
+/// that did would be told this charter has no such block view.
 fn built_in(root: &std::path::Path, view: &str, key: &str) -> Result<ViewAnswer, String> {
     let began = std::time::Instant::now();
     match view {

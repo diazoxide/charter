@@ -7,6 +7,7 @@ import { Ellipsis, KeyRound, LoaderCircle, Plus, Search } from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import { commands, type PlaneId, type VaultContents } from "./bindings";
 import { useTabStop } from "./roving";
+import { counted } from "./Vaults";
 
 /**
  * **One vault, in a tab of its own** (charter-app#235): its name, its provider and how many
@@ -23,7 +24,7 @@ import { useTabStop } from "./roving";
  * answer looking for the values it wrote. The one way a value enters is a box the operator types
  * into, and that box is **uncontrolled**: React writes a controlled input's value into its
  * `value` attribute, which is markup — a copy of the page, a devtools snapshot, an accessibility
- * dump would all carry it. Read from the element once, at the press, and cleared once written.
+ * dump would all carry it. Read from the element once, at the press, and emptied there.
  *
  * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
  * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
@@ -65,9 +66,7 @@ export function VaultTab({
    * One write, answered: the vault as it now is replaces the table and the dialog closes, or the
    * core's sentence comes back for the dialog to show beside what the operator was doing.
    */
-  const write = async (
-    asked: ReturnType<typeof commands.vaultOpen>,
-  ): Promise<string | undefined> => {
+  const write = async (asked: Promise<VaultAnswer>): Promise<string | undefined> => {
     try {
       const answer = await asked;
       if (answer.status === "error") return answer.error;
@@ -233,16 +232,15 @@ export function VaultTab({
   );
 }
 
+/** What the core answers every vault command with: the vault as it now is, or its refusal. */
+type VaultAnswer = Awaited<ReturnType<typeof commands.vaultOpen>>;
+
 /** Which dialog the tab is asking in, and about which secret. */
 type Asking =
   | { doing: "add" }
   | { doing: "edit"; secret: string }
   | { doing: "rename"; secret: string }
   | { doing: "delete"; secret: string };
-
-function counted(n: number): string {
-  return `${n} ${n === 1 ? "secret" : "secrets"}`;
-}
 
 /**
  * When a secret was written, as the keys index records it (`2026-09-24T11:32:17Z`), to the
@@ -296,8 +294,8 @@ function SecretMenu({ secret, onAsk }: { secret: string; onAsk: (asking: Asking)
  * Asking for a value: a new secret's name and value, or a held secret's new value.
  *
  * **The value box is uncontrolled** — see `VaultTab`. What the component keeps is whether the
- * box has anything in it, so the button knows; the value itself is read at the press, handed
- * to the core, and the box is emptied once the core has written it.
+ * box has anything in it, so the button knows; the value itself is read at the press, the box
+ * is emptied, and the value is handed to the core.
  */
 function ValueDialog({
   title,
@@ -319,6 +317,7 @@ function ValueDialog({
   const [filled, setFilled] = useState(false);
   const [trouble, setTrouble] = useState<string>();
   const [writing, setWriting] = useState(false);
+  const busy = writing;
   const nameId = useId();
   const valueId = useId();
   const nameBox = useRef<HTMLInputElement>(null);
@@ -329,12 +328,14 @@ function ValueDialog({
   const submit = async () => {
     const box = valueBox.current;
     if (!ready || box === null) return;
+    // **Emptied at the press**, before the core has answered: the value is in the call now, and
+    // a refusal asks for it again rather than keeping it on the page for a retry.
+    const value = box.value;
+    box.value = "";
+    setFilled(false);
     setWriting(true);
-    const refused = await onWrite(key, box.value);
-    if (refused === undefined) {
-      box.value = "";
-      return;
-    }
+    const refused = await onWrite(key, value);
+    if (refused === undefined) return;
     setTrouble(refused);
     setWriting(false);
   };
@@ -343,7 +344,8 @@ function ValueDialog({
     <Dialog.Root
       open
       onOpenChange={(open) => {
-        if (!open) onCancel();
+        // Not while the core is writing: the answer would land on a dialog nobody is looking at.
+        if (!open && !busy) onCancel();
       }}
     >
       <Dialog.Portal>
@@ -384,7 +386,8 @@ function ValueDialog({
               id={valueId}
               ref={valueBox}
               type="password"
-              autoComplete="off"
+              // What keeps a password manager from filling it; WebKit ignores `off` here.
+              autoComplete="new-password"
               spellCheck={false}
               onChange={(event) => setFilled(event.target.value !== "")}
             />
@@ -400,7 +403,7 @@ function ValueDialog({
               <button type="submit" tabIndex={0} disabled={!ready}>
                 {doing}
               </button>
-              <button type="button" tabIndex={0} onClick={onCancel}>
+              <button type="button" tabIndex={0} disabled={busy} onClick={onCancel}>
                 Cancel
               </button>
             </div>
@@ -424,6 +427,7 @@ function RenameDialog({
   const [name, setName] = useState(secret);
   const [trouble, setTrouble] = useState<string>();
   const [writing, setWriting] = useState(false);
+  const busy = writing;
   const nameId = useId();
   const box = useRef<HTMLInputElement>(null);
   const to = name.trim();
@@ -442,7 +446,8 @@ function RenameDialog({
     <Dialog.Root
       open
       onOpenChange={(open) => {
-        if (!open) onCancel();
+        // Not while the core is writing: the answer would land on a dialog nobody is looking at.
+        if (!open && !busy) onCancel();
       }}
     >
       <Dialog.Portal>
@@ -482,7 +487,7 @@ function RenameDialog({
               <button type="submit" tabIndex={0} disabled={!ready}>
                 Rename
               </button>
-              <button type="button" tabIndex={0} onClick={onCancel}>
+              <button type="button" tabIndex={0} disabled={busy} onClick={onCancel}>
                 Cancel
               </button>
             </div>
@@ -510,12 +515,14 @@ function DeleteDialog({
 }) {
   const [trouble, setTrouble] = useState<string>();
   const [deleting, setDeleting] = useState(false);
+  const busy = deleting;
   const cancel = useRef<HTMLButtonElement>(null);
   return (
     <AlertDialog.Root
       open
       onOpenChange={(open) => {
-        if (!open) onCancel();
+        // Not while the core is writing: the answer would land on a dialog nobody is looking at.
+        if (!open && !busy) onCancel();
       }}
     >
       <AlertDialog.Portal>
@@ -556,7 +563,7 @@ function DeleteDialog({
               Delete
             </button>
             <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0} ref={cancel}>
+              <button type="button" tabIndex={0} disabled={busy} ref={cancel}>
                 Cancel
               </button>
             </AlertDialog.Cancel>

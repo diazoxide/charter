@@ -3494,8 +3494,9 @@ button.show-more:focus-visible {
 }
 
 /* The secrets: names on the left, the size band and when each was written muted beside them.
-   Rows are divided by the one hairline the window divides its layers with, and never by a
-   coloured edge. */
+   Rows are divided by the subtle rule, not `layer.divider` — that is the tab strips' own hairline
+   (`docs/design-system.md`) — and never by a coloured edge. The row under the pointer or the
+   keyboard takes `layer.selected`: "where you are", which is what it means on a strip too. */
 .vault-secrets {
   width: 100%;
   max-width: 60rem;
@@ -3505,7 +3506,7 @@ button.show-more:focus-visible {
 
 .vault-secrets th {
   padding: 0.3rem 0.5rem;
-  border-bottom: 1px solid var(--layer-divider);
+  border-bottom: 1px solid var(--border-subtle);
   color: var(--text-muted);
   font-size: 0.7rem;
   font-weight: 600;
@@ -3516,7 +3517,7 @@ button.show-more:focus-visible {
 
 .vault-secrets td {
   padding: 0.1rem 0.5rem;
-  border-bottom: 1px solid var(--layer-divider);
+  border-bottom: 1px solid var(--border-subtle);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

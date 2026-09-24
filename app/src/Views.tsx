@@ -96,17 +96,16 @@ export function aboutOf(view: ViewRef, offered: readonly ExtensionView[]): strin
   return offered.find((one) => one.extension === view.from && one.id === view.view)?.about;
 }
 
+/** charter's own views' glyphs, by view. */
+const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
+  persona: UserRound,
+  vault: KeyRound,
+};
+
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
  *  extension offers — which says *a plugin's* before any word is read. */
 export function ViewMark({ view }: { view: ViewRef }) {
-  const Mark =
-    view.from !== null
-      ? Puzzle
-      : view.view === "persona"
-        ? UserRound
-        : view.view === "vault"
-          ? KeyRound
-          : ChartColumn;
+  const Mark = view.from !== null ? Puzzle : (OWN_MARKS[view.view] ?? ChartColumn);
   return <Mark className="tab-mark" aria-hidden="true" />;
 }
 
@@ -142,7 +141,7 @@ export function ViewPane({
   /** The operator pressed to have a waiting view asked. */
   onAsk: () => void;
   /** A vault's tab wrote to its vault. */
-  onVaultChanged?: () => void;
+  onVaultChanged: () => void;
 }) {
   // **A vault is charter's own view, and the one a panel answer cannot draw**: a table the
   // operator writes to (charter-app#235). Same tab, same path, same record — its own drawing.
@@ -153,7 +152,7 @@ export function ViewPane({
         key={`${plane}\u0000${view.key}`}
         plane={plane}
         vault={view.key}
-        onChanged={onVaultChanged ?? (() => undefined)}
+        onChanged={onVaultChanged}
       />
     );
   }

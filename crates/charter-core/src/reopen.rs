@@ -1404,6 +1404,28 @@ mod tests {
     }
 
     #[test]
+    fn a_vault_s_tab_comes_back_under_any_name_charter_gives_a_vault() {
+        // charter-app#235: a vault's tab is `{ view: "vault", key: <vault> }`, and every name
+        // `registry::name_ok` accepts has to survive the record, or the tab silently stays shut.
+        let plane = tempfile::tempdir().unwrap();
+        let vault = |key: &str| View {
+            view: "vault".into(),
+            title: key.into(),
+            active: false,
+            ..persona_view(key)
+        };
+        let record = Record {
+            chats: Vec::new(),
+            views: vec![vault("ops"), vault("e2e-vault"), vault("team.prod_2")],
+            dealt: 0,
+        };
+
+        write(plane.path(), &record).expect("the record is written");
+
+        assert_eq!(read(plane.path()), record);
+    }
+
+    #[test]
     fn a_view_tab_comes_back_as_it_was_recorded() {
         let plane = tempfile::tempdir().unwrap();
         let record = Record {

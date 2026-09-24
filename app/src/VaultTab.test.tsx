@@ -183,7 +183,10 @@ describe("a vault's tab", () => {
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("already holds");
     expect(changed).not.toHaveBeenCalled();
-    expect(document.body.innerHTML).not.toContain(TYPED);
+    // The box was emptied at the press: the value went to the core and is not kept for a retry.
+    expect(within(dialog).getByLabelText("Value")).toHaveValue("");
+    expect(within(dialog).getByRole("button", { name: "Add secret" })).toBeDisabled();
+    noValueAnywhere(TYPED);
   });
 
   it("edits a value from the row's menu, and clears the box once it is written", async () => {

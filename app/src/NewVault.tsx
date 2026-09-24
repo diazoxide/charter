@@ -72,7 +72,9 @@ export function NewVault({
     <Dialog.Root
       open
       onOpenChange={(open) => {
-        if (!open) onCancel();
+        // Not while charter is making it: a vault made behind a closed dialog would open a tab
+        // nobody asked to see, and a refusal would land where nobody is looking.
+        if (!open && !making) onCancel();
       }}
     >
       <Dialog.Portal>
@@ -164,7 +166,7 @@ export function NewVault({
               <button type="submit" tabIndex={0} disabled={!ready}>
                 Create vault
               </button>
-              <button type="button" tabIndex={0} onClick={onCancel}>
+              <button type="button" tabIndex={0} disabled={making} onClick={onCancel}>
                 Cancel
               </button>
             </div>

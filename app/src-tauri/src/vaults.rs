@@ -265,9 +265,11 @@ pub(crate) fn delete(ctx: &Ctx, vault: &str, key: &str) -> Result<VaultContents,
 /// store (#232, decision 1).
 const DEFAULT_PROVIDER: &str = "keyring";
 
-/// `charter vault add`'s words, kept rather than printed, so a refusal reaches the window as the
-/// sentence a terminal would have shown. It is asked for names only, so there is no value here
-/// to keep, and it answers every question about a terminal with "no".
+/// `charter vault add`'s refusal, kept rather than printed, so it reaches the window as the
+/// sentences a terminal would have shown: the error, and the lines of advice that follow it. What
+/// it says on success is the CLI's own report and is dropped — the window answers with the vault.
+/// It is asked for names only, so there is no value here to keep, and it answers every question
+/// about a terminal with "no".
 #[derive(Default)]
 struct Kept {
     lines: Vec<String>,
@@ -275,8 +277,9 @@ struct Kept {
 
 impl Io for Kept {
     fn say(&mut self, line: Say) {
-        let (Say::Info(text) | Say::Ok(text) | Say::Warn(text) | Say::Err(text)) = line;
-        self.lines.push(text);
+        if let Say::Err(text) | Say::Info(text) = line {
+            self.lines.push(text);
+        }
     }
     fn out(&mut self, _bytes: &[u8]) {}
     fn err(&mut self, _bytes: &[u8]) {}
