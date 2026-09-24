@@ -385,7 +385,16 @@ pub struct ProjectExtension {
     pub source: String,
     pub settings: Vec<ProjectExtensionSetting>,
     /// Each value a file set that charter did not use, and why.
-    pub ignored: Vec<String>,
+    pub ignored: Vec<ProjectExtensionIgnored>,
+}
+
+/// A value a file set that charter did not use.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ProjectExtensionIgnored {
+    /// `charter.toml` or `charter.local.toml`: the section that says it.
+    pub file: String,
+    /// The core's sentence.
+    pub why: String,
 }
 
 /// Every extension this machine has installed, and every one this project's files name, with
@@ -452,7 +461,14 @@ fn project_rows(
                 name: it.name,
                 state: it.state.as_str().to_owned(),
                 source: it.source.as_str().to_owned(),
-                ignored: it.ignored,
+                ignored: it
+                    .ignored
+                    .into_iter()
+                    .map(|one| ProjectExtensionIgnored {
+                        file: one.source.file().unwrap_or_default().to_owned(),
+                        why: one.why,
+                    })
+                    .collect(),
             }
         })
         .collect()

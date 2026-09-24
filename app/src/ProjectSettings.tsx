@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { LoaderCircle } from "lucide-react";
 import { extensionsChanged } from "./extensionsOn";
@@ -35,18 +35,31 @@ import {
 export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [both, setBoth] = useState<Both | { trouble: string }>();
   const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  /** The newest read out: an answer to an older one — before a save, or for another plane — is
+   *  dropped rather than drawn over what came after it. */
+  const reading = useRef(0);
 
   const read = useCallback(() => {
+    const mine = ++reading.current;
+    const newest = () => reading.current === mine;
     void commands
       .projectSettings(plane)
-      .then((said) => setBoth(said.status === "ok" ? said.data : { trouble: said.error }))
-      .catch((err: unknown) => setBoth({ trouble: String(err) }));
+      .then((said) => {
+        if (newest()) setBoth(said.status === "ok" ? said.data : { trouble: said.error });
+      })
+      .catch((err: unknown) => {
+        if (newest()) setBoth({ trouble: String(err) });
+      });
     // What is in force is read with the files, so a save shows its effect. A refusal leaves the
     // list empty: the group then says there is nothing, and the files' forms still work.
     void commands
       .projectExtensions(plane)
-      .then((said) => setExtensions(said.status === "ok" ? (said.data ?? []) : []))
-      .catch(() => setExtensions([]));
+      .then((said) => {
+        if (newest()) setExtensions(said.status === "ok" ? (said.data ?? []) : []);
+      })
+      .catch(() => {
+        if (newest()) setExtensions([]);
+      });
   }, [plane]);
 
   useEffect(read, [read]);
@@ -340,7 +353,9 @@ const EXTENSIONS: Group = {
       ];
     }),
   notes: (file, extensions) =>
-    extensions.flatMap((it) => it.ignored.filter((why) => why.startsWith(`${file.file} `))),
+    extensions.flatMap((it) =>
+      it.ignored.filter((one) => one.file === file.file).map((one) => one.why),
+    ),
 };
 
 /** The harness kinds a profile may name — `profiles::KINDS`, in the registry's order. */

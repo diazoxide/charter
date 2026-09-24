@@ -375,7 +375,10 @@ const EXTENSIONS: ProjectExtension[] = [
       },
     ],
     ignored: [
-      "charter.local.toml sets extensions.stats.settings.nope, which stats does not declare — charter hands it nothing",
+      {
+        file: "charter.local.toml",
+        why: "charter.local.toml sets extensions.stats.settings.nope, which stats does not declare — charter hands it nothing",
+      },
     ],
   },
   { id: "solarized", name: "Solarized", state: "on", source: "default", settings: [], ignored: [] },

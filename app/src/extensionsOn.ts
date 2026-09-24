@@ -31,10 +31,16 @@ function ask(plane: PlaneId) {
   latest.set(plane, mine);
   void commands
     .extensionsOn(plane)
-    .then((said) => (said.status === "ok" ? (said.data ?? []) : []))
-    .catch((): string[] => [])
+    .then((said) => (said.status === "ok" ? (said.data ?? []) : undefined))
+    .catch(() => undefined)
     .then((ids) => {
       if (latest.get(plane) !== mine) return;
+      // A question that failed is not an answer: nothing is kept, so the next component to ask
+      // asks again rather than a project going without its extensions until something is saved.
+      if (ids === undefined) {
+        latest.delete(plane);
+        return;
+      }
       known.set(plane, new Set(ids));
       tell();
     });
@@ -50,18 +56,19 @@ export function extensionsOnIn(plane: PlaneId | undefined): ReadonlySet<string> 
   return plane === undefined ? undefined : known.get(plane);
 }
 
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 /** {@link extensionsOnIn}, for a component that redraws when it changes, asking once. */
 export function useExtensionsOn(plane: PlaneId | undefined): ReadonlySet<string> | undefined {
   useEffect(() => {
     if (plane !== undefined && !latest.has(plane)) ask(plane);
   }, [plane]);
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => extensionsOnIn(plane),
-  );
+  return useSyncExternalStore(subscribe, () => extensionsOnIn(plane));
 }
 
 /** For tests: forget every answer. */

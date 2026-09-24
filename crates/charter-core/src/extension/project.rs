@@ -54,6 +54,15 @@ pub enum Source {
 }
 
 impl Source {
+    /// The file this source is, or `None` for [`Source::Default`].
+    pub fn file(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::Shared => Some(COMMITTED_FILE),
+            Self::Local => Some(LOCAL_FILE),
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Default => "default",
@@ -230,8 +239,15 @@ pub struct Effective {
     pub source: Source,
     /// Every setting it declares, resolved.
     pub settings: Vec<Resolved>,
-    /// Each value a file set that charter did not use, and why, one sentence each.
-    pub ignored: Vec<String>,
+    /// Each value a file set that charter did not use, and why.
+    pub ignored: Vec<Ignored>,
+}
+
+/// A value a file set that charter did not use: which file, and the sentence that says why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ignored {
+    pub source: Source,
+    pub why: String,
 }
 
 impl Effective {
@@ -289,13 +305,19 @@ fn one(id: &str, here: Option<&Installed>, choices: &Choices) -> Effective {
         }
         // A key a file sets that the extension does not declare is said once per file: it
         // reaches nothing, and a form that silently dropped it would read as a value in force.
-        for (file, said) in [(LOCAL_FILE, local), (COMMITTED_FILE, shared)] {
+        for (source, file, said) in [
+            (Source::Local, LOCAL_FILE, local),
+            (Source::Shared, COMMITTED_FILE, shared),
+        ] {
             for key in said.map(|said| said.settings.keys()).into_iter().flatten() {
                 if !it.settings.iter().any(|declared| &declared.key == key) {
-                    ignored.push(format!(
-                        "{file} sets {TABLE}.{id}.{SETTINGS}.{key}, which {id} does not declare \
-                         — charter hands it nothing"
-                    ));
+                    ignored.push(Ignored {
+                        source,
+                        why: format!(
+                            "{file} sets {TABLE}.{id}.{SETTINGS}.{key}, which {id} does not \
+                             declare — charter hands it nothing"
+                        ),
+                    });
                 }
             }
         }
@@ -318,7 +340,7 @@ fn setting(
     declared: &Setting,
     shared: Option<&Said>,
     local: Option<&Said>,
-    ignored: &mut Vec<String>,
+    ignored: &mut Vec<Ignored>,
 ) -> Resolved {
     let key = &declared.key;
     let mut candidates = [
@@ -345,10 +367,13 @@ fn setting(
                     Some((_, next, _)) => format!("the value from {next}"),
                     None => "its default".to_owned(),
                 };
-                ignored.push(format!(
-                    "{file} sets {TABLE}.{id}.{SETTINGS}.{key} to {value}, {why} — so {instead} \
-                     is used"
-                ));
+                ignored.push(Ignored {
+                    source,
+                    why: format!(
+                        "{file} sets {TABLE}.{id}.{SETTINGS}.{key} to {value}, {why} — so \
+                         {instead} is used"
+                    ),
+                });
             }
         }
     }

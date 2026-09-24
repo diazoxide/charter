@@ -949,13 +949,15 @@ fn in_this_project(
     extension: &str,
     declared: &extension::Manifest,
 ) -> Result<Option<serde_json::Value>, String> {
-    use extension::project::{self, Source, State};
+    use extension::project::{self, State};
     let here = project::Installed {
         id: extension.to_owned(),
         name: declared.name.clone(),
         approved: true,
         settings: declared.settings.clone(),
     };
+    // `resolve` answers for every extension it is given, so the one asked about is always there;
+    // an empty answer would be a defect in it, and is refused rather than read as "on".
     let Some(effective) = project::resolve(&[here], project)
         .into_iter()
         .find(|it| it.id == extension)
@@ -965,10 +967,11 @@ fn in_this_project(
         ));
     };
     if effective.state == State::Off {
-        let file = match effective.source {
-            Source::Local => crate::profiles::LOCAL_FILE,
-            _ => crate::profiles::COMMITTED_FILE,
-        };
+        // Off is only ever decided by a file: with neither saying, an approved extension is on.
+        let file = effective
+            .source
+            .file()
+            .unwrap_or(crate::profiles::COMMITTED_FILE);
         return Err(format!(
             "'{extension}' is turned off in {file} for this project, so charter will not start \
              its program here. Turn it on in Project settings to use this view."

@@ -51,6 +51,23 @@ setting nothing reads is a control that does nothing — and its settings are li
 consent prompt, because a committed file choosing a value a program acts on is a channel the
 operator is owed a line about.
 
+### How a manifest declares settings
+
+A top-level `settings` array in `charter-extension.json`, at most 16 entries, each an object with
+exactly these keys:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `key` | yes | Letters, digits, `-` and `_`, starting with a letter or digit; unique in the manifest. The name under `[extensions.<id>.settings]`. |
+| `title` | no | What the form calls it; the key when absent. At most 200 bytes, nothing invisible. |
+| `type` | yes | `bool`, `text` (one line, at most 200 bytes), or `choice`. |
+| `choices` | for `choice` | The non-empty words it may be. |
+| `default` | no | A value the setting accepts; else `false`, empty text, or the first choice. |
+
+Any other key, a bad key or type, or a default the setting would not accept refuses the whole
+extension, as every other manifest refusal does. Being in the manifest, the declarations are
+inside the fingerprint.
+
 ## Where each consumer asks
 
 - **The Project settings tab** shows, in both sections, every extension this machine has
@@ -62,6 +79,12 @@ operator is owed a line about.
   the project's two files, no directory read — and keeps of the survey only what it has on. The
   theme is the window's, so it follows the project in front; with no project in front, it is
   drawn from every approved extension as before.
+  **Two inputs, one function.** The settings tab gives `resolve` what a survey found, so an
+  extension that changed since its yes counts as not approved; `extensions_on` gives it the
+  record alone, where a yes in the record counts. They can differ only for a changed extension,
+  and for that one the window holds nothing to filter — the survey left its panels, views and
+  themes out — and the executor re-takes the fingerprint at the press. So the cheap answer can
+  never put anything on screen or start anything the thorough one would not.
 - **The executor's gate** (ADR 0041 stage 2) reads the project's two files at the press, after
   this machine's record and before the fingerprint: a project that turned the extension off is
   refused with a sentence naming the file.

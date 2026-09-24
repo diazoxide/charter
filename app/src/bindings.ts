@@ -1375,7 +1375,15 @@ export type ProjectExtension = {
 	source: string,
 	settings: ProjectExtensionSetting[],
 	/**  Each value a file set that charter did not use, and why. */
-	ignored: string[],
+	ignored: ProjectExtensionIgnored[],
+};
+
+/**  A value a file set that charter did not use. */
+export type ProjectExtensionIgnored = {
+	/**  `charter.toml` or `charter.local.toml`: the section that says it. */
+	file: string,
+	/**  The core's sentence. */
+	why: string,
 };
 
 /**  One setting an extension declares, and what this project resolved it to. */

@@ -519,7 +519,12 @@ fn settings_of(value: &serde_json::Value, program: Option<&str>) -> Result<Vec<S
             let as_toml = match default {
                 serde_json::Value::Bool(b) => toml::Value::Boolean(*b),
                 serde_json::Value::String(text) => toml::Value::String(text.clone()),
-                _ => toml::Value::Array(Vec::new()),
+                _ => {
+                    return Err(format!(
+                        "declares the setting {key:?} with a default that is neither true, false \
+                         nor text"
+                    ));
+                }
             };
             setting.default = setting.accepts(&as_toml).map_err(|why| {
                 format!("declares the setting {key:?} with a default it would not accept, {why}")

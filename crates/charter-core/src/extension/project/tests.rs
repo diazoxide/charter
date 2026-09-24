@@ -236,12 +236,18 @@ fn a_value_the_extension_would_not_accept_falls_through_and_says_why() {
     assert_eq!(
         got.ignored,
         vec![
-            "charter.local.toml sets extensions.stats.settings.window to \"1y\", and it is one \
-             of 7d, 30d — so the value from charter.toml is used"
-                .to_owned(),
-            "charter.local.toml sets extensions.stats.settings.nope, which stats does not \
-             declare — charter hands it nothing"
-                .to_owned(),
+            Ignored {
+                source: Source::Local,
+                why: "charter.local.toml sets extensions.stats.settings.window to \"1y\", and it \
+                      is one of 7d, 30d — so the value from charter.toml is used"
+                    .to_owned(),
+            },
+            Ignored {
+                source: Source::Local,
+                why: "charter.local.toml sets extensions.stats.settings.nope, which stats does \
+                      not declare — charter hands it nothing"
+                    .to_owned(),
+            },
         ]
     );
 }
