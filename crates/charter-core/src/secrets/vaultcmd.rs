@@ -317,6 +317,18 @@ pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
                 req.name
             )));
         }
+        "keyring" => {
+            io.say(Say::Info(format!(
+                "  charter keeps each secret as one item in {}, and the key names — never the \
+                 values — in {}.",
+                super::keyring::STORE_NAME,
+                super::short_path(&ctx.root, &super::keyring::index_path(ctx, &v))
+            )));
+            io.say(Say::Info(format!(
+                "  add secrets with: charter secret set {} <key> --stdin",
+                req.name
+            )));
+        }
         "reference" => {
             io.say(Say::Info(
                 "  stores op:// or vault:// URIs; values are fetched at read time.".into(),
@@ -361,9 +373,7 @@ pub fn list(ctx: &Ctx, io: &mut dyn Io) -> i32 {
     let vs = registry::vaults(&doc);
     if vs.is_empty() {
         io.say(Say::Info(
-            "No vaults configured. Add one: charter vault add <name> --provider plain-file --file \
-             <path>"
-                .into(),
+            "No vaults configured. Add one: charter vault add <name>".into(),
         ));
         return 0;
     }
@@ -412,7 +422,9 @@ pub fn list(ctx: &Ctx, io: &mut dyn Io) -> i32 {
     );
     for row in &body {
         let detail = match registry::vault_in(&doc, &row[0])
-            .and_then(|v| super::env_overlay(ctx, &v).map(|_| v))
+            // Where the identity is, never the identity: a moved one is not read from the
+            // keyring to draw a row.
+            .and_then(|v| super::identity_missing(ctx, &v).map_or(Ok(v), Err))
         {
             Ok(v) => cmd::health(ctx, &v).1,
             Err(e) => e.message.split('\n').next().unwrap_or_default().to_string(),
@@ -500,12 +512,25 @@ pub fn verify(ctx: &Ctx, name: Option<&str>, io: &mut dyn Io) -> i32 {
 
 /// `cmd_vault_remove`: unregister; the file it pointed at stays on disk.
 pub fn remove(ctx: &Ctx, name: &str, io: &mut dyn Io) -> i32 {
+    // Read before it goes: a keyring vault's items outlive its registration, and registering
+    // the name again finds them through the index, which is worth saying.
+    let keyring = registry::vault(ctx, name)
+        .ok()
+        .filter(|v| v.provider == "keyring");
     match registry::remove_vault(ctx, name) {
         Ok(()) => {
             io.say(Say::Ok(format!(
                 "Vault '{name}' removed from the registry. (Any underlying file is left on disk \
                  untouched.)"
             )));
+            if let Some(v) = keyring {
+                io.say(Say::Info(format!(
+                    "  Its secrets stay in {}, named in {}; registering '{name}' again as a \
+                     keyring vault finds them.",
+                    super::keyring::STORE_NAME,
+                    super::short_path(&ctx.root, &super::keyring::index_path(ctx, &v))
+                )));
+            }
             0
         }
         Err(e) => {

@@ -496,13 +496,22 @@ fn a_persona_whose_directory_leaves_the_plane_is_refused() {
 /// What the app arms `harness` with for this session, as the app asks for it: the bundled
 /// plugin for Claude Code, the `-c` flags for Codex.
 fn armed(harness: Harness, root: &Path) -> Vec<String> {
+    armed_with(harness, root, &std::collections::BTreeMap::new())
+}
+
+/// The same, for a chat handed `plugins` — what `start::ready` put on the launch.
+fn armed_with(
+    harness: Harness,
+    root: &Path,
+    plugins: &std::collections::BTreeMap<String, bool>,
+) -> Vec<String> {
     let binary = root.join("charter");
     let plugin = root.join("plugin");
     let kit = charter_core::harness::Kit {
         binary: &binary,
         plugin: Some(&plugin),
     };
-    match harness.state_hooks(kit, Some(root)) {
+    match harness.state_hooks(kit, Some(root), plugins) {
         charter_core::harness::StateHooks::ThisSessionOnly { args, .. } => args,
         charter_core::harness::StateHooks::None => panic!("{harness:?} is armed"),
     }
@@ -586,4 +595,116 @@ fn a_codex_wrapper_resumes_after_its_own_words_and_the_apps_flags() {
     assert_eq!(line[0], "codex-work", "{line:?}");
     assert_eq!(line[1..1 + hooks.len()], hooks[..]);
     assert_eq!(line[1 + hooks.len()..], ["resume", id.as_str()]);
+}
+
+// -------------------------------------------------------------------------------------
+// The project's harness plugins (charter-app#274, ADR 0050)
+// -------------------------------------------------------------------------------------
+
+/// A Claude Code config directory, as a fixture, holding `installed`.
+fn claude_config(plane: &Plane, installed: &[&str]) -> PathBuf {
+    let dir = plane.root().join("claude-config");
+    fs::create_dir_all(dir.join("plugins")).unwrap();
+    let plugins: Vec<String> = installed
+        .iter()
+        .map(|id| format!("{id:?}: [{{\"scope\": \"user\"}}]"))
+        .collect();
+    fs::write(
+        dir.join("plugins/installed_plugins.json"),
+        format!(
+            "{{\"version\": 2, \"plugins\": {{{}}}}}",
+            plugins.join(", ")
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn a_claude_code_chat_is_started_with_exactly_the_plugins_its_project_chose() {
+    charter_core::unsteered!();
+    // Shared turns two off and one on, Local turns one of them back on; the one nobody names is
+    // left to Claude Code, and the one this machine has not installed is handed to nothing. The
+    // listing is read from the chat's own CLAUDE_CONFIG_DIR, so a profile on another account is
+    // listed against that account.
+    let plane = Plane::new();
+    let config = claude_config(
+        &plane,
+        &["figma@official", "serena@official", "humanizer@h"],
+    );
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[harness_plugins.claude]\n\"figma@official\" = false\n\"serena@official\" = false\n\
+         \"acme@corp\" = true\n",
+    )
+    .unwrap();
+    let bin = plane.harness();
+    plane.profile(
+        "claude",
+        &bin,
+        &format!(
+            "env = {{ CLAUDE_CONFIG_DIR = {:?} }}\n\n[harness_plugins.claude]\n\"serena@official\" = true\n",
+            config.display().to_string()
+        ),
+    );
+
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+    let line = ready.command_line(armed_with(
+        Harness::ClaudeCode,
+        plane.root(),
+        &ready.plugins,
+    ));
+
+    let at = line
+        .iter()
+        .position(|word| word == "--settings")
+        .expect("settings");
+    let settings: serde_json::Value = serde_json::from_str(&line[at + 1]).expect("JSON");
+    assert_eq!(
+        settings["enabledPlugins"],
+        serde_json::json!({
+            "charter-app@inline": true,
+            "charter@charter": false,
+            "figma@official": false,
+            "serena@official": true,
+        })
+    );
+}
+
+#[test]
+fn a_codex_chat_is_started_with_no_plugin_choice_whatever_its_project_says() {
+    charter_core::unsteered!();
+    // Codex's adapter cannot apply per chat (measured on 0.147.0), so the choice is shown in the
+    // settings tab as not supported yet and the launch carries nothing for it.
+    let plane = Plane::new();
+    let home = plane.root().join("codex-home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        home.join("config.toml"),
+        "[plugins.\"charter@charter\"]\nenabled = true\n",
+    )
+    .unwrap();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[harness_plugins.codex]\n\"charter@charter\" = false\n",
+    )
+    .unwrap();
+    let bin = plane.harness_as("codex");
+    plane.profile(
+        "codex",
+        &bin,
+        &format!(
+            "env = {{ CODEX_HOME = {:?} }}\n",
+            home.display().to_string()
+        ),
+    );
+
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+
+    assert!(ready.plugins.is_empty(), "{:?}", ready.plugins);
+    let line = ready.command_line(armed_with(Harness::Codex, plane.root(), &ready.plugins));
+    assert!(
+        line.iter().all(|word| !word.contains("plugins")),
+        "{line:?}"
+    );
 }

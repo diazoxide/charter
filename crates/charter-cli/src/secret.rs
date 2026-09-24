@@ -204,8 +204,8 @@ pub enum VaultCommand {
 #[derive(Args)]
 pub struct VaultAdd {
     name: String,
-    /// Vault backend (default: plain-file).
-    #[arg(long, default_value = "plain-file", value_parser = ["1password", "plain-file", "reference"])]
+    /// Vault backend (default: keyring — the system's own credential store).
+    #[arg(long, default_value = "keyring", value_parser = ["1password", "keyring", "plain-file", "reference"])]
     provider: String,
     /// File path for plain-file/reference vaults (default: .charter/vaults/<name>.json).
     #[arg(long)]

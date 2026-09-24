@@ -8,6 +8,7 @@ mod clipath;
 mod doctor;
 mod extensions;
 mod handoff;
+mod harness_plugins;
 mod hooks;
 mod lifecycle;
 mod opener;
@@ -21,6 +22,7 @@ mod settings;
 mod slowstart;
 mod updates;
 mod usage;
+mod vaults;
 mod views;
 mod windowprefs;
 mod workspaces;
@@ -1234,8 +1236,21 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::forget_extension,
             extensions::extension_themes,
             extensions::extension_panels,
+            vaults::vault_list,
+            vaults::vault_open,
+            vaults::vault_refresh,
+            vaults::vault_create,
+            vaults::vault_secret_add,
+            vaults::vault_secret_set,
+            vaults::vault_secret_rename,
+            vaults::vault_secret_delete,
+            vaults::vault_secret_reveal,
+            vaults::vault_secret_copy,
+            vaults::vault_identity_move,
+            vaults::vault_identity_put,
             extensions::project_extensions,
             extensions::extensions_on,
+            harness_plugins::project_harness_plugins,
             extensions::project_theme,
             extensions::project_theme_drawn,
             views::extension_views,
@@ -1384,6 +1399,9 @@ pub fn run() {
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
             app.manage(Showing::default());
+            // The clipboard a vault's Copy writes to, and what it wrote, for the clear a minute
+            // later and the one at exit.
+            app.manage(vaults::SystemClipboard::default());
 
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
             // reads `unknown` — never a hook pointed at a path that is not there. It is a
@@ -1487,6 +1505,9 @@ pub fn run() {
                 // and ends its own sessions. A failure is not worth refusing to exit over —
                 // the next launch of that plane reads no record and starts empty.
                 app.state::<Planes>().let_go_of_all();
+                // A secret a vault's Copy put on the clipboard does not outlive the app: its
+                // clear was waiting on a timer that ends here.
+                app.state::<vaults::SystemClipboard>().clear_at_exit();
             }
         });
 }

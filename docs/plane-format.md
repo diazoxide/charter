@@ -127,6 +127,8 @@ row), and the status of that field where it differs from its file's.
   - [`.charter/vaults/` (directory)](#chartervaults-directory)
   - [`.charter/vaults/<name>.json` — plain-file vault](#chartervaultsnamejson--plain-file-vault)
   - [`.charter/vaults/<name>.meta.json` — rotation sidecar](#chartervaultsnamemetajson--rotation-sidecar)
+  - [`.charter/vaults/<name>.keys.json` — keyring vault's keys index](#chartervaultsnamekeysjson--keyring-vaults-keys-index)
+  - [`.charter/keyring-stub.json` — a test build's keyring](#charterkeyring-stubjson--a-test-builds-keyring)
   - [`.charter/vaults/<name>.json` — reference vault (same path, different content)](#chartervaultsnamejson--reference-vault-same-path-different-content)
   - [Secret reference syntax](#secret-reference-syntax)
   - [`.charter/fingerprint.key`](#charterfingerprintkey)
@@ -325,7 +327,9 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   (`Choices::read`) for the Project settings tab, the window's filter on extension panels,
   views and themes, and the executor's gate (charter-app#253); its `[theme]` table by
   `crates/charter-core/src/extension/project/theme.rs` (`Said::read`) for the Project settings
-  tab and the window's theme (charter-app#273).
+  tab and the window's theme (charter-app#273). Its `[harness_plugins]` table is
+  read by `crates/charter-core/src/harness_plugin.rs` (`Choices::read`) for the Project settings
+  tab and for every chat `start::ready` launches (charter-app#274).
 - **Git:** committed (nothing ignores it; `_GITIGNORE_BASELINE` ignores its *local* sibling
   only, `charter/commands.py:1104`).
 - **Encoding details for a byte-identical writer:**
@@ -393,6 +397,8 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one. `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[extensions.<id>.settings].<key>` | bool or str | optional; absent = the extension's declared default | **charter-app only.** A value for a setting the extension's manifest declares (`bool`, `text` of at most 200 bytes, or one of a `choice`'s words), handed to its program with each question as `settings`. A key it does not declare, or a value it would not accept, is ignored with a sentence and the next file down is used. Overridden key by key by `charter.local.toml`. | stable | `crates/charter-core/src/extension/project.rs` `resolve`, `crates/charter-core/src/extension.rs` `Setting::accepts` |
 | any other key in `[extensions.<id>]` | — | — | Refused by the Project settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/extension/project.rs` `refusals` |
+| `[harness_plugins.<harness>]."<plugin id>"` | bool | optional; absent = not set (the harness decides, from its own settings) | **charter-app only** (charter-app#274, ADR 0050). Whether the chats charter starts in this project have that harness plugin on (`true`) or off (`false`). `<harness>` is a profile `kind`: `claude`, `opencode` or `codex`. `<plugin id>` is the harness's own id (`<name>@<marketplace>` for Claude Code and Codex), one line of at most 200 bytes. Only a plugin this machine has installed is handed on. `charter.local.toml`'s value overrides this one plugin by plugin. For Claude Code the value goes into the chat's `--settings` `enabledPlugins`. For Codex and opencode it is read, shown as *not supported yet*, and handed to nothing. `charter-app@inline` cannot be `false` and `charter@charter` cannot be `true` under `claude`: a save that says so is refused, and the reader ignores it with a sentence. | stable | `crates/charter-core/src/harness_plugin.rs` `resolve`, `chosen` |
+| any other shape under `[harness_plugins]` | — | — | A harness charter does not know, a value that is not a bool, or a `[harness_plugins]` or `[harness_plugins.<harness>]` that is not a table is refused by the Project settings tab's save and ignored by the reader. | stable | `crates/charter-core/src/harness_plugin.rs` `refusals` |
 | `[theme].use` | str | optional; absent = the window's own theme (the operator's `theme.json`, else the first theme from an extension the project has on, else `charter-dark`) | **charter-app only** (charter-app#273, ADR 0048). The theme the window and its terminals draw while this project is in front: `charter-dark`, `charter-light`, `system` (the built-in matching the operating system's appearance, followed live), or `<extension-id>/<theme name>` — split at the first `/`. An extension's theme is drawn only while the extension is on in this project and approved on this machine, and contributes that theme; otherwise the built-in `charter-dark` is drawn and the Project settings tab says why. A value of none of those shapes is ignored with a sentence and the next file down is used. `charter.local.toml`'s value overrides this one. | stable | `crates/charter-core/src/extension/project/theme.rs` `resolve` |
 | any other key in `[theme]`, or `theme` that is not a table | — | — | Refused by the Project settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/extension/project/theme.rs` `refusals` |
 
@@ -463,7 +469,9 @@ key refuses.
   (`charter/doctor.py:755`), the launcher/selector (`charter/frame/launcher.py:478`,
   `charter/frame/selector.py:25`). In charter-app, its `[extensions]` table is read by
   `crates/charter-core/src/extension/project.rs` as `charter.toml`'s is (charter-app#253), and
-  its `[theme]` by `crates/charter-core/src/extension/project/theme.rs` (charter-app#273).
+  its `[theme]` by `crates/charter-core/src/extension/project/theme.rs` (charter-app#273), and
+  its `[harness_plugins]` table by `crates/charter-core/src/harness_plugin.rs` as
+  `charter.toml`'s is (charter-app#274).
 - **Git:** gitignored — the baseline writes `/charter.local.toml`
   (`charter/commands.py:1104`), and `reinit` backfills it
   (`charter/commands.py:1821`). If git *would* carry it (tracked, committable, or git cannot
@@ -471,9 +479,10 @@ key refuses.
   `charter/profiles.py:456` `with_ignore_check`).
 - **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
   since charter-app#253 — `[extensions]` by `extension::project` and, since charter-app#273,
-  `[theme]` by `extension::project::theme` (ADR 0048); any other
+  `[theme]` by `extension::project::theme` (ADR 0048), and, since charter-app#274,
+  `[harness_plugins]` by `harness_plugin` (ADR 0050); any other
   top-level key is refused with a sentence (`charter/profiles.py:325`, and in charter-app
-  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names all three tables). In charter-app, `[plane]` and `[repos.<name>]` are also read, and override `charter.toml`'s values **key by key** (ADR 0051, on ADR 0048's overlay); every surface that shows one names the file that decided it. A missing file declares nothing and is not a refusal
+  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names all four tables). In charter-app, `[plane]` and `[repos.<name>]` are also read, and override `charter.toml`'s values **key by key** (ADR 0051, on ADR 0048's overlay); every surface that shows one names the file that decided it. A missing file declares nothing and is not a refusal
   (`charter/profiles.py:241`). Profile `env` is stored **sorted by name**
   (`charter/profiles.py:363`), and `~` in `command[0]` and in every `env` value is expanded
   only at launch (`charter/profiles.py:474`, `charter/profiles.py:480`) — never in the file
@@ -2137,7 +2146,7 @@ literal `fixture-not-a-secret`.
 |---|---|---|---|---|---|
 | `vaults` | object | defaulted to `{}` on read | name → entry | stable | `charter/secrets/registry.py:60` |
 | `vaults.<name>` | object | — | one vault. A non-object entry is dropped from the merged view and reported | stable | `charter/secrets/registry.py:92` |
-| `vaults.<name>.provider` | string | required | `plain-file` \| `reference` \| `1password` | stable | `charter/secrets/registry.py:39`, `:245` |
+| `vaults.<name>.provider` | string | required | `keyring` \| `plain-file` \| `reference` \| `1password`. `keyring` is charter-app's (ADR 0047), the default `vault add` writes; a Python charter reads it as an unknown provider | stable | `charter/secrets/registry.py:39`, `:245`; `crates/charter-core/src/secrets/registry.rs` (`PROVIDERS`) |
 | `vaults.<name>.persona` | string \| null | written always, `null` when no `--persona` | persona tag | stable | `charter/secrets/registry.py:299` |
 | `vaults.<name>.config` | object | written always (may be `{}`) | provider config, merged per key over the local half | stable | `charter/secrets/registry.py:113` |
 
@@ -2151,6 +2160,7 @@ literal `fixture-not-a-secret`.
 | `account` | string | `--account` | 1Password account pin — **LOCAL_ONLY, never written to the shared half** | stable | `charter/secrets/registry.py:50`, `:298`, `:317` |
 | `env` | object `{TARGET: SOURCE}` | `--env TARGET=SOURCE` / `--token-env X` | env var NAMES only (e.g. `{"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_TOKEN"}`); never a value | stable | `charter/commands_secrets.py:188`, `charter/commands_secrets.py:80`; read `charter/secrets/base.py:291` |
 | `version` | string | hand-written only | `browser://` resolver's npx package version | stable | `charter/secrets/reference.py:104` |
+| `identity` | object | the vault tab's token box / *Move…*, into the **local half only** | The moved-token record: `{"held":"keyring","bindings":{TARGET:SOURCE},"op_vault":…,"account":…,"op_cmd":…,"op_team":…,"ids":{SOURCE:<id>}}`. Each source is read from the keyring item `charter/@identity/<id>` (account the source name) first and the environment second, but **only while the vault's effective `env`/op-vault/account still equal `bindings`/`op_vault`/`account`** and the pinned `op_cmd`/`op_team` verify. **Read from `.charter/vaults.json` alone**; a committed one is ignored, so a commit cannot mark or redirect (#271 review, U2/U5). charter-app only (#237, ADR 0047 as amended); a Python charter ignores the key | stable | `crates/charter-core/src/secrets/identity.rs` (`MARK`, `record`, `record_matches`, `pinned_op`) |
 
 Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepassword.py:134`,
 `:149`) and never written.
@@ -2245,6 +2255,48 @@ Shape with placeholder values:
 ```json
 { "API_TOKEN": { "set_at": "2026-09-17" } }
 ```
+
+### `.charter/vaults/<name>.keys.json` — keyring vault's keys index
+
+charter-app only (ADR 0047); the Python charter has no keyring provider and never reads it.
+
+- **Format:** JSON object: `service` (string, or `null` before the vault's first write) and
+  `keys`, an object `key → {"size": <size band>, "updated": <RFC 3339 UTC, to the second>}`.
+  **Never a value.** `size` is `fingerprint::size_band` of the value (`1–15 bytes`,
+  `16–31 bytes`, … `1024+ bytes`), never its length.
+- **Status:** **stable** — it is the only record of which keys a keyring vault holds and of
+  the service its items live under: the keyring cannot be enumerated through the `keyring`
+  crate. Deleting it strands the vault's items in the keyring, still there and unnamed.
+- **Written by:** `crates/charter-core/src/secrets/keyring.rs` (`set_with`, `delete_with`),
+  after the keyring write succeeded, through the plain-file provider's `write_private` (0600,
+  settled on the descriptor first). Commands: `charter secret set`, `charter secret rm`.
+- **Read by:** the same module — `keys`, `listed`, `get`, `ages`, `health`. `secret list`,
+  `vault list` and `secret audit` read only this file and never the keyring.
+- **`service`:** `charter/<vault>/<8 lowercase hex>`, made randomly at the vault's first write
+  and written to this file BEFORE that first item is, so no item is ever under a service no
+  index records. A service that does not start `charter/` (or holds a control character) is refused
+  as corrupt: the file is on disk, and one pointing at another program's item would make
+  charter read it.
+- **Git / encoding:** under `.charter/`, so gitignored; indent 2, trailing newline, keys
+  sorted.
+
+```json
+{
+  "service": "charter/ops/3f9a2c1b",
+  "keys": {
+    "API_TOKEN": { "size": "16–31 bytes", "updated": "2026-09-24T11:32:17Z" }
+  }
+}
+```
+
+### `.charter/keyring-stub.json` — a test build's keyring
+
+In the state directory (`.charter/`, or `$CHARTER_HOME` when set). Written **only** by a fenced
+build (every `cargo test` build, and the app's `e2e` build — `crates/charter-core/src/fence.rs`),
+which keeps a keyring vault's values here instead of in the
+operating system's store, so no test can reach the operator's keychain. JSON object
+`"<service>\n<account>" → value`, 0600. **It holds values in plaintext**; a build anyone is
+given never writes it.
 
 ### `.charter/vaults/<name>.json` — reference vault (same path, different content)
 

@@ -655,6 +655,7 @@ describe("the Project settings view", () => {
         offered={[]}
         onOpenView={() => undefined}
         onAsk={() => undefined}
+        onVaultChanged={() => undefined}
       />,
     );
 
