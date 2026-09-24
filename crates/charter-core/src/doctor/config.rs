@@ -293,10 +293,16 @@ fn worktrees_finding(root: &Path, cfg: &toml::Table) -> Option<(String, String)>
 fn save_finding(root: &Path) -> Option<(String, String)> {
     use crate::planesave::{Source, refusals};
     use crate::settings::{Which, layer_text};
-    let shared = layer_text(root, Which::Shared).unwrap_or_default();
+    let shared = layer_text(root, Which::Shared)
+        .text()
+        .unwrap_or_default()
+        .to_owned();
     // This machine's file as every reader takes it: none at all when git would carry it, which
     // the profiles row already names.
-    let local = layer_text(root, Which::Local).unwrap_or_default();
+    let local = layer_text(root, Which::Local)
+        .text()
+        .unwrap_or_default()
+        .to_owned();
     // A key or value the settings tab would refuse is one nothing reads: say so first, in
     // either file, since profiles no longer refuses `[plane]` and `[repos]` in the local one.
     if let Some(why) = refusals(&shared, false, Which::Shared.file())
