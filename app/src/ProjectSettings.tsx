@@ -219,7 +219,7 @@ function envAt(name: string): Control {
       const after = new Map(
         entries(draft).map((line) => {
           const cut = line.indexOf("=");
-          return cut < 0 ? [line, ""] : [line.slice(0, cut).trim(), line.slice(cut + 1)];
+          return cut < 0 ? [line, ""] : [line.slice(0, cut).trim(), line.slice(cut + 1).trim()];
         }),
       );
       const gone: SettingsEdit[] = before
@@ -351,11 +351,13 @@ function Section({
   // A file that reads differently — after a save of it — starts every draft over, during the
   // render that sees it (React's pattern for state derived from a prop). By the text, so saving
   // the OTHER file, which reads this one again unchanged, loses nothing typed here.
+  // A file that no longer parses has no form to show, so it opens in the raw view.
   const [seen, setSeen] = useState(file.text);
   if (seen !== file.text) {
     setSeen(file.text);
     setDrafts({});
     setRaw(file.text);
+    if (!file.parsed) setMode("raw");
   }
 
   const controls = groups.map((group) => ({ group, controls: group.controls(file) }));
@@ -407,16 +409,11 @@ function Section({
       </header>
 
       {file.refusals.length > 0 && (
-        <div className="settings-standing">
-          <p className="note">charter does not take this from the file as it stands:</p>
-          <ul>
-            {file.refusals.map((why) => (
-              <li key={why} className="trouble">
-                {why}
-              </li>
-            ))}
-          </ul>
-        </div>
+        <Reasons
+          className="settings-standing"
+          lead="charter does not take this from the file as it stands:"
+          reasons={file.refusals}
+        />
       )}
 
       <RadioGroup.Root
@@ -426,10 +423,14 @@ function Section({
         onValueChange={(to) => setMode(to as Mode)}
         aria-label={`How to edit ${file.file}`}
       >
-        <ModeItem value="form" disabled={(mode === "raw" && dirty) || !file.parsed}>
+        <ModeItem
+          value="form"
+          disabled={(mode === "raw" && dirty) || !file.parsed}
+          onPick={setMode}
+        >
           Form
         </ModeItem>
-        <ModeItem value="raw" disabled={mode === "form" && dirty}>
+        <ModeItem value="raw" disabled={mode === "form" && dirty} onPick={setMode}>
           Raw TOML
         </ModeItem>
       </RadioGroup.Root>
@@ -442,7 +443,7 @@ function Section({
             {group.note && <p className="settings-hint">{group.note}</p>}
             {under.length === 0 && <p className="none">None in this file.</p>}
             {under.map((control) => (
-              <Field
+              <SettingControl
                 key={control.id}
                 control={control}
                 value={drafts[control.id] ?? control.read(file)}
@@ -476,34 +477,65 @@ function Section({
       </div>
 
       {refused && (
-        <div role="alert" className="settings-refused">
-          <p className="note">Nothing was saved:</p>
-          <ul>
-            {refused.map((why) => (
-              <li key={why} className="trouble">
-                {why}
-              </li>
-            ))}
-          </ul>
-        </div>
+        <Reasons className="settings-refused" lead="Nothing was saved:" reasons={refused} alert />
       )}
     </section>
   );
 }
 
+/** Sentences from the core, each drawn as it said it. By position: two may be the same words. */
+function Reasons({
+  className,
+  lead,
+  reasons,
+  alert = false,
+}: {
+  className: string;
+  lead: string;
+  reasons: readonly string[];
+  alert?: boolean;
+}) {
+  return (
+    <div className={className} role={alert ? "alert" : undefined}>
+      <p className="note">{lead}</p>
+      <ul>
+        {reasons.map((why, at) => (
+          <li key={at} className="trouble">
+            {why}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * One side of the Form / Raw TOML switch. **It picks itself on focus**, for `StartChat`'s
+ * reason (`docs/ui-primitives.md`): Radix learns an arrow key is down from a `document`
+ * listener that runs after React has already moved the focus, so without this the arrows move
+ * the ring and not the pick.
+ */
 function ModeItem({
   value,
   disabled,
+  onPick,
   children,
 }: {
   value: Mode;
   disabled: boolean;
+  onPick: (mode: Mode) => void;
   children: ReactNode;
 }) {
   const id = useId();
   return (
     <span className="choice">
-      <RadioGroup.Item className="dot" value={value} id={id} disabled={disabled}>
+      <RadioGroup.Item
+        className="dot"
+        value={value}
+        id={id}
+        disabled={disabled}
+        onFocus={() => onPick(value)}
+      >
         <RadioGroup.Indicator className="dot-mark" />
       </RadioGroup.Item>
       <label htmlFor={id}>{children}</label>
@@ -511,7 +543,7 @@ function ModeItem({
   );
 }
 
-function Field({
+function SettingControl({
   control,
   value,
   onChange,
@@ -529,6 +561,8 @@ function Field({
       {control.kind === "choice" ? (
         <select
           id={id}
+          // #190: WebKit leaves a control out of the Tab order without `tabIndex`.
+          tabIndex={0}
           value={value}
           aria-describedby={described}
           onChange={(event) => onChange(event.target.value)}

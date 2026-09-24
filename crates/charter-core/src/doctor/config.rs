@@ -206,7 +206,11 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
     };
     if let Some((summary, detail)) = worktrees_finding(&d.root, cfg)
         .or_else(|| forge_finding(cfg))
-        .or_else(|| default_finding(cfg, &crate::profiles::current(&d.root)))
+        // The profiles are read only when there is a default to look for, as they always were.
+        .or_else(|| {
+            refused_default(cfg)?;
+            default_finding(cfg, &crate::profiles::current(&d.root))
+        })
     {
         return Row::warn(NAME, summary, detail);
     }

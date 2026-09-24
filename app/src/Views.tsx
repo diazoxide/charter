@@ -99,15 +99,11 @@ export function aboutOf(view: ViewRef, offered: readonly ExtensionView[]): strin
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
  *  extension offers — which says *a plugin's* before any word is read. */
 export function ViewMark({ view }: { view: ViewRef }) {
-  const Mark =
-    view.from !== null
-      ? Puzzle
-      : view.view === "persona"
-        ? UserRound
-        : view.view === SETTINGS_VIEW.view
-          ? Settings2
-          : ChartColumn;
-  return <Mark className="tab-mark" aria-hidden="true" />;
+  const props = { className: "tab-mark", "aria-hidden": true } as const;
+  if (view.from !== null) return <Puzzle {...props} />;
+  if (view.view === "persona") return <UserRound {...props} />;
+  if (isSettings(view)) return <Settings2 {...props} />;
+  return <ChartColumn {...props} />;
 }
 
 /**

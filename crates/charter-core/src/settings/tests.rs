@@ -446,3 +446,45 @@ fn a_profiles_env_written_inline_is_edited_inline() {
         "[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\nenv = { CLAUDE_CONFIG_DIR = \"~/.b\"}\n"
     );
 }
+
+#[test]
+fn a_problem_the_file_already_has_does_not_stop_an_unrelated_edit_but_a_new_one_is_refused() {
+    let broken = "[[forge]]\nkind = \"bitbucket\"\n\n[memory]\nshare = \"local\"\n";
+    let dir = plane(broken);
+    let after = edited(
+        broken,
+        &[set(&["memory", "share"], Value::Text("push".into()))],
+    )
+    .unwrap();
+    save(dir.path(), Which::Shared, Some(broken), &after).unwrap();
+
+    let worse = format!("{after}\n[[forge]]\nkind = \"sourcehut\"\n");
+    let err = save(dir.path(), Which::Shared, Some(&after), &worse).unwrap_err();
+    assert_eq!(err.len(), 1, "{err:?}");
+    assert!(
+        err[0].starts_with("2 [[forge]] block(s) failed to resolve"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_secret_the_file_already_holds_still_stops_every_save() {
+    let held = "# password = hunter2hunter2\n";
+    let dir = plane(held);
+    let err = save(
+        dir.path(),
+        Which::Shared,
+        Some(held),
+        &format!("{held}schema = 1\n"),
+    )
+    .unwrap_err();
+    assert!(err[0].contains("credential assignment"), "{err:?}");
+}
+
+#[test]
+fn a_value_is_never_written_over_a_table() {
+    let err = edited(COMMENTED, &[set(&["memory"], Value::Text("push".into()))]).unwrap_err();
+    assert!(err.contains("memory is a table"), "{err}");
+    let err = edited(COMMENTED, &[set(&["forge"], Value::Text("x".into()))]).unwrap_err();
+    assert!(err.contains("forge is a table"), "{err}");
+}

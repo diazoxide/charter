@@ -285,13 +285,18 @@ pub fn builtins() -> Vec<Profile> {
 /// are [`current`]'s.
 pub fn derive(root: &Path) -> ProfileSet {
     let committed = std::fs::read_to_string(root.join(COMMITTED_FILE)).ok();
-    let local = match std::fs::read_to_string(root.join(LOCAL_FILE)) {
+    derive_from(committed.as_deref(), read_local(root))
+}
+
+/// The local file as [`derive_from`] takes it: its text, `None` when there is none, or the
+/// error that stopped the read.
+pub fn read_local(root: &Path) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(root.join(LOCAL_FILE)) {
         Ok(text) => Ok(Some(text)),
         // An absent file declares nothing and is not a refusal.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
-    };
-    derive_from(committed.as_deref(), local)
+    }
 }
 
 /// [`derive`] over the two files' TEXT rather than the plane's — what the files would say, so

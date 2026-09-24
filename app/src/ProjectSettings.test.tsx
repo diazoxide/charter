@@ -273,6 +273,47 @@ describe("the Project settings tab", () => {
     expect(within(shared).getByRole("radio", { name: "Form" })).toBeDisabled();
   });
 
+  it("moves between Form and Raw TOML with the arrow keys, and Tab reaches every control", async () => {
+    core({ shared: SHARED, local: LOCAL });
+    const { shared } = await drawn();
+    const user = userEvent.setup();
+
+    const form = within(shared).getByRole("radio", { name: "Form" });
+    form.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(within(shared).getByRole("radio", { name: "Raw TOML" })).toBeChecked();
+    expect(
+      within(shared).getByRole("textbox", { name: "charter.toml, as TOML" }),
+    ).toBeInTheDocument();
+    await user.keyboard("{ArrowLeft}");
+    expect(within(shared).getByRole("radio", { name: "Form" })).toBeChecked();
+
+    // WebKit leaves a control out of the Tab order unless it says `tabIndex` (#190).
+    for (const control of within(shared).getAllByRole("combobox"))
+      expect(control).toHaveAttribute("tabindex", "0");
+  });
+
+  it("goes to the raw view when a file read again no longer parses", async () => {
+    let both: Both = { shared: SHARED, local: LOCAL };
+    mockIPC((cmd) => {
+      if (cmd === "project_settings") return both;
+      if (cmd === "save_project_settings") {
+        both = { ...both, shared: { ...SHARED, text: "[memory\n", parsed: false, fields: [] } };
+        return { kind: "saved", file: both.shared };
+      }
+      return undefined;
+    });
+    const { shared } = await drawn();
+    const user = userEvent.setup();
+
+    await user.type(within(shared).getByLabelText("Default workspace"), "alpha");
+    await user.click(within(shared).getByRole("button", { name: "Save charter.toml" }));
+
+    expect(
+      await within(shared).findByRole("textbox", { name: "charter.toml, as TOML" }),
+    ).toHaveValue("[memory\n");
+  });
+
   it("points at vaults rather than either file for a secret", async () => {
     core({ shared: SHARED, local: LOCAL });
     await drawn();

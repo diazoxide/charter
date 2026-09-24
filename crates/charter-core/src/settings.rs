@@ -119,14 +119,49 @@ fn on_disk(root: &Path, which: Which) -> Result<(bool, String), String> {
 /// Everything charter would refuse in `text` as `which` of the plane at `root`, each as the
 /// sentence the reader that refuses it says. Empty when the text may be saved.
 pub fn refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
-    let mut out = match which {
+    let mut out = read_refusals(root, which, text);
+    out.extend(writer_refusals(root, which, text));
+    out
+}
+
+/// What the readers of the file refuse in `text`: the doctor's `charter.toml` row for Shared,
+/// the profiles loader for Local.
+fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
+    match which {
         Which::Shared => shared_refusals(root, text),
         Which::Local => local_refusals(root, text),
-    };
+    }
+}
+
+/// What only a writer can cause, and so what stops every save however long the file has held
+/// it: a Local file git would commit, and a secret in either file.
+fn writer_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if which == Which::Local {
+        let check = profiles::ignore_check_before_writing(root);
+        if !check.passes() {
+            out.push(check.reason);
+        }
+    }
     if let Some(kind) = crate::secretshape::secret_kind(text) {
         out.push(secret_refusal(which, kind));
     }
     out
+}
+
+/// The reasons the set refused a table or a profile in `file`, and the doctor's findings about
+/// `cfg`, as one sentence each — the finding's summary, then what to do.
+fn said(root: &Path, set: &profiles::ProfileSet, file: &str, cfg: &toml::Table) -> Vec<String> {
+    set.refused
+        .iter()
+        .filter(|refused| refused.source == file)
+        .map(|refused| refused.reason.clone())
+        .chain(
+            crate::doctor::config_findings(root, cfg, set)
+                .into_iter()
+                .map(|(summary, detail)| format!("{summary} — {detail}")),
+        )
+        .collect()
 }
 
 /// The Shared file's: the doctor's `charter.toml` row, every finding rather than the first,
@@ -138,52 +173,31 @@ fn shared_refusals(root: &Path, text: &str) -> Vec<String> {
             return vec![why];
         }
     };
-    let set = profiles::current_of(profiles::derive_from(Some(text), local_now(root)));
-    let mut out: Vec<String> = set
-        .refused
-        .iter()
-        .filter(|refused| refused.source == COMMITTED_FILE)
-        .map(|refused| refused.reason.clone())
-        .collect();
-    out.extend(
-        crate::doctor::config_findings(root, &cfg, &set)
-            .into_iter()
-            .map(|(summary, detail)| format!("{summary} — {detail}")),
-    );
-    out
+    let set = profiles::current_of(profiles::derive_from(
+        Some(text),
+        profiles::read_local(root),
+    ));
+    said(root, &set, COMMITTED_FILE, &cfg)
 }
 
-/// The Local file's: every profile the loader would refuse, a `default` that names none it
-/// keeps, and whether git would carry the file.
+/// The Local file's: every profile the loader would refuse, and a `default` that names none it
+/// keeps.
 fn local_refusals(root: &Path, text: &str) -> Vec<String> {
     let committed = std::fs::read_to_string(Which::Shared.path(root)).ok();
     let set = profiles::current_of(profiles::derive_from(
         committed.as_deref(),
         Ok(Some(text.to_owned())),
     ));
-    let mut out: Vec<String> = set
-        .refused
-        .iter()
-        .filter(|refused| refused.source == LOCAL_FILE)
-        .map(|refused| refused.reason.clone())
-        .collect();
-    if let Ok(cfg) = text.parse::<toml::Table>() {
-        out.extend(
-            crate::doctor::config_findings(root, &only_the_default(&cfg), &set)
-                .into_iter()
-                .map(|(summary, detail)| format!("{summary} — {detail}")),
-        );
-    }
-    let check = profiles::ignore_check_before_writing(root);
-    if !check.passes() {
-        out.push(check.reason);
-    }
-    out
+    let default = text
+        .parse::<toml::Table>()
+        .map(|cfg| only_the_default(&cfg))
+        .unwrap_or_default();
+    said(root, &set, LOCAL_FILE, &default)
 }
 
-/// Just `[harness] default` of `cfg`, so the doctor's findings are asked about that key alone:
-/// the Local file holds no `[plane]` and no `[[forge]]`, and the loader refuses them there by
-/// its own sentence.
+/// Just `[harness] default` of `cfg`, so the doctor's findings are asked about that key alone.
+/// Anything else at the top of the Local file is the profiles loader's to refuse, and it does,
+/// with its own sentence (`[<key>] in charter.local.toml is not read`).
 fn only_the_default(cfg: &toml::Table) -> toml::Table {
     let mut out = toml::Table::new();
     if let Some(default) = cfg
@@ -196,15 +210,6 @@ fn only_the_default(cfg: &toml::Table) -> toml::Table {
         out.insert("harness".to_owned(), toml::Value::Table(harness));
     }
     out
-}
-
-/// The Local file as the loader would read it now.
-fn local_now(root: &Path) -> std::io::Result<Option<String>> {
-    match std::fs::read_to_string(Which::Local.path(root)) {
-        Ok(text) => Ok(Some(text)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
 }
 
 /// A secret-shaped value, by its KIND and never its text: this sentence is drawn in the window,
@@ -331,12 +336,19 @@ fn apply(root: &mut toml_edit::Table, edit: &Edit) -> Result<(), String> {
             let mut fresh = to_edit(value);
             match table.get_mut(last) {
                 // In place, with the spacing and the comment the old value had.
-                Some(toml_edit::Item::Value(old)) => {
+                Some(toml_edit::Item::Value(old)) if !old.is_inline_table() => {
                     *fresh.decor_mut() = old.decor().clone();
                     *old = fresh;
                 }
-                _ => {
+                None | Some(toml_edit::Item::None) => {
                     table.insert(last, toml_edit::value(fresh));
+                }
+                // A whole section is never replaced by one value.
+                Some(_) => {
+                    return Err(format!(
+                        "{} is a table, so a form cannot set it to one value",
+                        dotted(&edit.path)
+                    ));
                 }
             }
         }
@@ -414,7 +426,19 @@ pub fn save(root: &Path, which: Which, base: Option<&str>, text: &str) -> Result
             which.file()
         )]);
     }
-    let refused = refusals(root, which, text);
+    // What the file already holds is not this save's to answer for: an edit to one key is not
+    // refused because another key was already being ignored. A secret and a Local file git
+    // would commit are, whatever the file held before.
+    let standing = if exists {
+        read_refusals(root, which, &now)
+    } else {
+        Vec::new()
+    };
+    let mut refused: Vec<String> = read_refusals(root, which, text)
+        .into_iter()
+        .filter(|why| !standing.contains(why))
+        .collect();
+    refused.extend(writer_refusals(root, which, text));
     if !refused.is_empty() {
         return Err(refused);
     }

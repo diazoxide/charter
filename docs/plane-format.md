@@ -305,10 +305,13 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   charter-app#252): the whole file, whole or not at all (a temp file beside it, then one
   rename), keeping the existing file's mode. A form's change is applied with `toml_edit`, so
   every comment, blank line, key order and spacing it did not touch is kept, and a replaced
-  value keeps the decoration it had. It refuses to write text the next read would refuse —
-  every finding of `charter doctor`'s `charter.toml` row, a `[harness.<name>]` table, and a
-  value `secretshape` calls a credential — in those readers' own words, and it refuses to
-  write over a file that changed on disk since the tab read it.
+  value keeps the decoration it had. It refuses to write text in which the next read would
+  refuse something the file on disk does not already have — a finding of `charter doctor`'s
+  `charter.toml` row, a `[harness.<name>]` table — in those readers' own words; it refuses a
+  value `secretshape` calls a credential whether or not the file already held it; and it
+  refuses to write over a file that changed on disk since the tab read it. (The file marks the
+  plane, so the tab is only ever open where it exists; were it deleted under the tab, a save
+  would create it at 0600.)
 - **Read by:** `charter/instance.py:105` `load` — and *only* there:
   `charter/config.py:719` (every command/hook, at import), plus direct re-reads in
   `charter/commands.py:211`, `charter/commands.py:3614`, `charter/hooks.py:7260`,
@@ -424,7 +427,7 @@ key refuses.
   Project settings tab and nothing else.
 - **Status:** **stable** — the operator edits it by hand, and two different processes read it
   (the CLI/`doctor`, and the frame launcher/selector on a launch).
-- **Written by:** the Python charter, nobody: `charter init`/`reinit` only add the
+- **Written by:** nothing in the Python charter — `charter init`/`reinit` only add the
   `.gitignore` line for it (`charter/commands.py:1803`, `charter/commands.py:1806`).
   charter-app's Project settings tab (`charter_core::settings::save`, charter-app#252) writes it
   as it writes `charter.toml` (above), and **creates it on the first save**, at mode 0600. It
