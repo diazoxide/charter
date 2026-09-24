@@ -484,7 +484,11 @@ export const commands = {
 	vaultList: (plane: PlaneId) => typedError<VaultSummary[], string>(__TAURI_INVOKE("vault_list", { plane })),
 	/**  One vault's secrets: names, size bands and when each was written. Never a value. */
 	vaultOpen: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_open", { plane, vault })),
-	/**  One vault read again, from the keys index for a keyring vault. Never a value. */
+	/**
+	 *  One vault read again, after something outside the window may have changed it — a
+	 *  `charter secret set` in a terminal. The same reading as `vault_open`, from the keys index for
+	 *  a keyring vault, so a refresh never makes the Keychain ask anything. Never a value.
+	 */
 	vaultRefresh: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_refresh", { plane, vault })),
 	/**  Store a new secret. The value comes in here and goes nowhere but the vault. */
 	vaultSecretAdd: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_add", { plane, vault, key, value })),

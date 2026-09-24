@@ -8,9 +8,9 @@ import {
   FileText,
   FolderGit2,
   GitBranch,
+  KeyRound,
   Search,
   Star,
-  KeyRound,
   TriangleAlert,
   UserRound,
 } from "lucide-react";

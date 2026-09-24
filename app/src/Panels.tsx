@@ -6,8 +6,8 @@ import {
   FileText,
   FolderGit2,
   GitBranch,
-  LoaderCircle,
   KeyRound,
+  LoaderCircle,
   TriangleAlert,
   UserRound,
 } from "lucide-react";
@@ -154,7 +154,7 @@ export function Panels({
         </>
       )}
 
-      {plane !== undefined && <Vaults plane={plane} />}
+      {plane !== undefined && <Vaults plane={plane} shownRow={shownRow} onShowRow={onShowRow} />}
     </aside>
   );
 }

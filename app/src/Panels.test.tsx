@@ -235,19 +235,22 @@ describe("the right-hand region", () => {
     expect(screen.getByTestId("panels").textContent).not.toMatch(/alert/i);
   });
 
-  it("draws the plane's vaults whichever workspace is focused, and with none", async () => {
-    // A vault is registered once per plane, so it is not one workspace's.
-    mockIPC((cmd) =>
-      cmd === "vault_list"
-        ? [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }]
-        : null,
-    );
-    draw({ workspace: undefined, plane: PLANE });
+  it.each([["alpha"], [undefined]])(
+    "draws the plane's vaults with workspace %s focused, since a vault is the plane's",
+    async (workspace) => {
+      // A vault is registered once per plane, so it is not one workspace's.
+      mockIPC((cmd) =>
+        cmd === "vault_list"
+          ? [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }]
+          : null,
+      );
+      draw({ workspace, plane: PLANE });
 
-    const vaults = await screen.findByTestId("panel-vaults");
-    expect(within(vaults).getByRole("heading")).toHaveTextContent("Vaults");
-    expect(await within(vaults).findByText("ops")).toBeInTheDocument();
-  });
+      const vaults = await screen.findByTestId("panel-vaults");
+      expect(within(vaults).getByRole("heading")).toHaveTextContent("Vaults");
+      expect(await within(vaults).findByText("ops")).toBeInTheDocument();
+    },
+  );
 
   it("draws no workspace answers when none is focused", () => {
     draw({ workspace: undefined });

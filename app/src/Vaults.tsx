@@ -14,9 +14,19 @@ import { commands, type PanelRow, type VaultSummary } from "./bindings";
  * **The plane's, not the workspace's.** A vault is registered once per plane, so this section
  * is drawn whichever workspace is focused, and with none.
  */
-export function Vaults({ plane }: { plane: string }) {
+export function Vaults({
+  plane,
+  shownRow,
+  onShowRow,
+}: {
+  plane: string;
+  /** The row whose card is open, as `<panel key>/<row key>` — the window's, so a vault's card
+   *  and another panel's are never open at once (`Panels.tsx`). */
+  shownRow: string | undefined;
+  onShowRow: (row: string | undefined) => void;
+}) {
   const { vaults, trouble } = useVaults(plane);
-  const [open, setOpen] = useState<string>();
+  const open = shownRow?.startsWith(`${KEY}/`) ? shownRow.slice(KEY.length + 1) : undefined;
 
   return (
     <section data-testid="panel-vaults">
@@ -42,13 +52,16 @@ export function Vaults({ plane }: { plane: string }) {
             label="Vaults"
             testid="list-vaults"
             open={open}
-            onOpen={setOpen}
+            onOpen={(key) => onShowRow(key === undefined ? undefined : `${KEY}/${key}`)}
           />
         )
       )}
     </section>
   );
 }
+
+/** What this section is called among the panels' open-row keys. */
+const KEY = "charter/vaults";
 
 /** One vault as a panel row: its name, then its provider and count, and its health in the card. */
 function rowOf(vault: VaultSummary): PanelRow {

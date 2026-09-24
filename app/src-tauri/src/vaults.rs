@@ -40,10 +40,19 @@ impl std::fmt::Debug for SecretValue {
     }
 }
 
-fn said(e: VaultError) -> String {
+/// A vault failure as the window receives it: the core's sentence, which never holds a value.
+fn message_of(e: VaultError) -> String {
     e.message
 }
 
+/// A count as the wire carries it. A vault never holds four billion secrets, and a number
+/// that could not say so would be the wrong one rather than a big one.
+fn counted(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// The provider's own health line, or — for a vault read through an identity variable that is
+/// unset — the first line of the core's sentence saying so.
 fn health(ctx: &Ctx, v: &Vault) -> VaultHealth {
     match env_overlay(ctx, v) {
         Err(e) => VaultHealth {
@@ -57,18 +66,21 @@ fn health(ctx: &Ctx, v: &Vault) -> VaultHealth {
     }
 }
 
+/// How many secrets the vault holds, where charter can say so without a network: the keys
+/// index for a keyring vault, the file for a plain-file or reference one. `None` for a
+/// 1Password vault, whose count is `op`'s to give and is not worth a round trip per panel draw.
 fn count(ctx: &Ctx, v: &Vault) -> Option<u32> {
     let n = match v.provider.as_str() {
         "keyring" => keyring::load_index(ctx, v).ok()?.keys.len(),
         "plain-file" | "reference" => cmd::keys(ctx, v).ok()?.len(),
         _ => return None,
     };
-    u32::try_from(n).ok()
+    Some(counted(n))
 }
 
 /// Every vault the plane registers, by name.
 pub(crate) fn list(ctx: &Ctx) -> Result<Vec<VaultSummary>, String> {
-    let doc = registry::load_registry(ctx).map_err(said)?;
+    let doc = registry::load_registry(ctx).map_err(message_of)?;
     let mut names: Vec<String> = registry::vaults(&doc).keys().cloned().collect();
     names.sort();
     Ok(names
@@ -113,10 +125,10 @@ pub(crate) struct VaultContents {
 
 /// One vault's secrets, by name.
 pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
-    let v = cmd::provider(ctx, vault).map_err(said)?;
+    let v = cmd::provider(ctx, vault).map_err(message_of)?;
     let secrets: Vec<VaultSecret> = if v.provider == "keyring" {
         keyring::listed(ctx, &v)
-            .map_err(said)?
+            .map_err(message_of)?
             .into_iter()
             .map(|l| VaultSecret {
                 key: l.key,
@@ -126,7 +138,7 @@ pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
             .collect()
     } else {
         cmd::keys(ctx, &v)
-            .map_err(said)?
+            .map_err(message_of)?
             .into_iter()
             .map(|key| VaultSecret {
                 key,
@@ -136,19 +148,12 @@ pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
             .collect()
     };
     Ok(VaultContents {
-        count: u32::try_from(secrets.len()).unwrap_or(u32::MAX),
+        count: counted(secrets.len()),
         health: health(ctx, &v),
         name: v.name,
         provider: v.provider,
         secrets,
     })
-}
-
-/// The vault read again, after something outside the window may have changed it — a
-/// `charter secret set` in a terminal. The same reading as [`open`]: from the keys index for a
-/// keyring vault, so a refresh never makes the Keychain ask the operator anything.
-pub(crate) fn refresh(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
-    open(ctx, vault)
 }
 
 /// Whether `key` can name a secret in every provider: not empty, not only spaces, no control
@@ -164,23 +169,33 @@ fn check_key(key: &str) -> Result<(), String> {
 
 /// The vault, ready to be written: registered, and not a plaintext file git would commit.
 fn writable(ctx: &Ctx, vault: &str) -> Result<Vault, String> {
-    let v = cmd::provider(ctx, vault).map_err(said)?;
-    cmd::plaintext_refusal(ctx, &v).map_err(said)?;
+    let v = cmd::provider(ctx, vault).map_err(message_of)?;
+    cmd::plaintext_refusal(ctx, &v).map_err(message_of)?;
     Ok(v)
 }
 
 /// Whether the vault holds `key`, read from its keys (the index, for a keyring vault).
 fn holds(ctx: &Ctx, v: &Vault, key: &str) -> Result<bool, String> {
-    Ok(cmd::keys(ctx, v).map_err(said)?.iter().any(|k| k == key))
+    Ok(cmd::keys(ctx, v)
+        .map_err(message_of)?
+        .iter()
+        .any(|k| k == key))
 }
 
-/// Write `value` under `key`, which must be new (`adding`) or must be held already.
+/// Which write the window asked for: a key that must be new, or one that must be held.
+#[derive(Clone, Copy)]
+enum Writing {
+    Add,
+    Edit,
+}
+
+/// Write `value` under `key`, refusing an add of a held key and an edit of a missing one.
 fn write(
     ctx: &Ctx,
     vault: &str,
     key: &str,
     value: &SecretValue,
-    adding: bool,
+    writing: Writing,
 ) -> Result<VaultContents, String> {
     check_key(key)?;
     if value.0.is_empty() {
@@ -190,18 +205,18 @@ fn write(
         ));
     }
     let v = writable(ctx, vault)?;
-    match (adding, holds(ctx, &v, key)?) {
-        (true, true) => {
+    match (writing, holds(ctx, &v, key)?) {
+        (Writing::Add, true) => {
             return Err(format!(
                 "vault '{vault}' already holds '{key}'. Edit its value instead of adding it again."
             ));
         }
-        (false, false) => {
+        (Writing::Edit, false) => {
             return Err(format!("secret '{key}' not found in vault '{vault}'"));
         }
         _ => {}
     }
-    cmd::set_value(ctx, &v, key, &value.0).map_err(said)?;
+    cmd::set_value(ctx, &v, key, &value.0).map_err(message_of)?;
     open(ctx, vault)
 }
 
@@ -212,7 +227,7 @@ pub(crate) fn add(
     key: &str,
     value: &SecretValue,
 ) -> Result<VaultContents, String> {
-    write(ctx, vault, key, value, true)
+    write(ctx, vault, key, value, Writing::Add)
 }
 
 /// Replace the value of a key the vault holds. A key it does not hold is refused.
@@ -222,7 +237,7 @@ pub(crate) fn set(
     key: &str,
     value: &SecretValue,
 ) -> Result<VaultContents, String> {
-    write(ctx, vault, key, value, false)
+    write(ctx, vault, key, value, Writing::Edit)
 }
 
 /// Move the secret under `from` to `to` ([`cmd::rename`]).
@@ -234,14 +249,14 @@ pub(crate) fn rename(
 ) -> Result<VaultContents, String> {
     check_key(to)?;
     let v = writable(ctx, vault)?;
-    cmd::rename(ctx, &v, from, to).map_err(said)?;
+    cmd::rename(ctx, &v, from, to).map_err(message_of)?;
     open(ctx, vault)
 }
 
 /// Delete the secret under `key`.
 pub(crate) fn delete(ctx: &Ctx, vault: &str, key: &str) -> Result<VaultContents, String> {
-    let v = cmd::provider(ctx, vault).map_err(said)?;
-    cmd::delete(ctx, &v, key).map_err(said)?;
+    let v = cmd::provider(ctx, vault).map_err(message_of)?;
+    cmd::delete(ctx, &v, key).map_err(message_of)?;
     open(ctx, vault)
 }
 
@@ -254,6 +269,7 @@ fn ctx_of(planes: &Planes, plane: &PlaneId) -> Result<Ctx, String> {
     Ok(Ctx::new(planes.held(plane)?.root(), Env::from_process()))
 }
 
+/// `work` on a blocking thread, answered on this one.
 async fn blocking<T: Send + 'static>(
     ctx: Ctx,
     work: impl FnOnce(&Ctx) -> Result<T, String> + Send + 'static,
@@ -284,7 +300,9 @@ pub(crate) async fn vault_open(
     blocking(ctx_of(&planes, &plane)?, move |ctx| open(ctx, &vault)).await
 }
 
-/// One vault read again, from the keys index for a keyring vault. Never a value.
+/// One vault read again, after something outside the window may have changed it — a
+/// `charter secret set` in a terminal. The same reading as `vault_open`, from the keys index for
+/// a keyring vault, so a refresh never makes the Keychain ask anything. Never a value.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn vault_refresh(
@@ -292,7 +310,7 @@ pub(crate) async fn vault_refresh(
     plane: PlaneId,
     vault: String,
 ) -> Result<VaultContents, String> {
-    blocking(ctx_of(&planes, &plane)?, move |ctx| refresh(ctx, &vault)).await
+    blocking(ctx_of(&planes, &plane)?, move |ctx| open(ctx, &vault)).await
 }
 
 /// Store a new secret. The value comes in here and goes nowhere but the vault.
@@ -378,18 +396,19 @@ mod tests {
             false,
         )
         .unwrap();
-        let mut file = serde_json::Map::new();
-        file.insert(
-            "file".into(),
-            serde_json::Value::String(
-                dir.path()
-                    .join(".charter/vaults/files.json")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-        );
-        registry::add_vault(&ctx, "files", "plain-file", file, None, false, false).unwrap();
+        register_file_vault(&ctx, "files", "plain-file");
         (dir, ctx)
+    }
+
+    /// Register `name` as a vault kept in a file under the state directory.
+    fn register_file_vault(ctx: &Ctx, name: &str, provider: &str) {
+        let file = ctx.vaults_dir().join(format!("{name}.json"));
+        let mut config = serde_json::Map::new();
+        config.insert(
+            "file".into(),
+            serde_json::Value::String(file.to_string_lossy().into_owned()),
+        );
+        registry::add_vault(ctx, name, provider, config, None, false, false).unwrap();
     }
 
     #[test]
@@ -412,8 +431,9 @@ mod tests {
             ]
         );
     }
+
     #[test]
-    fn opening_a_keyring_vault_lists_names_size_bands_and_times_without_reading_the_store() {
+    fn listing_or_opening_a_keyring_vault_reads_the_index_and_never_the_store() {
         let (dir, ctx) = plane();
         add(
             &ctx,
@@ -426,6 +446,7 @@ mod tests {
         std::fs::write(dir.path().join(".charter/keyring-stub.json"), "not json").unwrap();
 
         let opened = open(&ctx, "ops").unwrap();
+        let listed = list(&ctx).unwrap();
 
         assert_eq!(
             (opened.name.as_str(), opened.provider.as_str()),
@@ -442,6 +463,8 @@ mod tests {
             secret.updated.as_deref().is_some_and(|t| t.ends_with('Z')),
             "{secret:?}"
         );
+        let ops = listed.iter().find(|v| v.name == "ops").unwrap();
+        assert_eq!((ops.count, ops.health.ok), (Some(1), true), "{ops:?}");
     }
 
     #[test]
@@ -579,17 +602,7 @@ mod tests {
     #[test]
     fn no_list_open_refresh_or_write_ever_answers_with_a_value() {
         let (dir, ctx) = plane();
-        let mut refs = serde_json::Map::new();
-        refs.insert(
-            "file".into(),
-            serde_json::Value::String(
-                dir.path()
-                    .join(".charter/vaults/refs.json")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-        );
-        registry::add_vault(&ctx, "refs", "reference", refs, None, false, false).unwrap();
+        register_file_vault(&ctx, "refs", "reference");
         let v = |s: &str| SecretValue::from(s);
 
         let mut answers = vec![
@@ -609,7 +622,7 @@ mod tests {
         ];
         for vault in ["ops", "files", "refs"] {
             answers.push(wire(&open(&ctx, vault)));
-            answers.push(wire(&refresh(&ctx, vault)));
+            answers.push(wire(&open(&ctx, vault))); // what `vault_refresh` answers
         }
         answers.push(wire(&delete(&ctx, "ops", "TOKEN")));
         answers.push(wire(&delete(&ctx, "files", "DATABASE_URL")));

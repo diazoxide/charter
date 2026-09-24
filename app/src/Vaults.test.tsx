@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Vaults } from "./Vaults";
@@ -20,6 +21,15 @@ function vault(name: string, over: Partial<VaultSummary> = {}): VaultSummary {
     health: { ok: true, detail: "2 secret(s) in the system keyring" },
     ...over,
   };
+}
+
+/** The section, with the window's open-row state around it — which is where it lives. */
+function draw() {
+  function Window() {
+    const [shownRow, setShownRow] = useState<string>();
+    return <Vaults plane={PLANE} shownRow={shownRow} onShowRow={setShownRow} />;
+  }
+  render(<Window />);
 }
 
 /** The core, answering `vault_list` with `answer` and recording what it was asked. */
@@ -44,7 +54,7 @@ describe("the Vaults section", () => {
       vault("files", { provider: "plain-file", count: 1 }),
     ]);
 
-    render(<Vaults plane={PLANE} />);
+    draw();
 
     const list = await screen.findByRole("list", { name: "Vaults" });
     const rows = within(list)
@@ -60,7 +70,7 @@ describe("the Vaults section", () => {
 
   it("says a plane with no vaults has none, and how to make one", async () => {
     core([]);
-    render(<Vaults plane={PLANE} />);
+    draw();
     const empty = await screen.findByTestId("list-vaults-empty");
     expect(empty).toHaveTextContent("No vaults on this plane");
     expect(empty).toHaveTextContent("charter vault add <name>");
@@ -74,17 +84,17 @@ describe("the Vaults section", () => {
         health: { ok: false, detail: "op CLI not on PATH" },
       }),
     ]);
-    render(<Vaults plane={PLANE} />);
+    draw();
     const list = await screen.findByRole("list", { name: "Vaults" });
     const row = within(list).getByRole("listitem");
     expect(row).toHaveClass("is-trouble");
-    within(row).getByRole("button").click();
+    await userEvent.click(within(row).getByRole("button"));
     expect(await screen.findByTestId("row-detail-team")).toHaveTextContent("op CLI not on PATH");
   });
 
   it("draws the core's refusal rather than an empty list", async () => {
     core(new Error("vault registry vaults.json is corrupt: not a JSON object"));
-    render(<Vaults plane={PLANE} />);
+    draw();
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "vault registry vaults.json is corrupt",
     );
@@ -93,7 +103,7 @@ describe("the Vaults section", () => {
 
   it("is one Tab stop, and Up and Down move between vaults (charter-app#189)", async () => {
     core([vault("files", { provider: "plain-file", count: 1 }), vault("ops")]);
-    render(<Vaults plane={PLANE} />);
+    draw();
     const list = await screen.findByRole("list", { name: "Vaults" });
     const [first, second] = within(list).getAllByRole("button");
     expect([first, second].map((one) => one.getAttribute("tabindex"))).toEqual(["0", "-1"]);
@@ -106,8 +116,13 @@ describe("the Vaults section", () => {
   it("makes no rows out of an answer that is not a list", async () => {
     // Whole-window tests answer every command they do not care about with `null` or `[]`.
     const asked = core(null);
-    render(<Vaults plane={PLANE} />);
+    draw();
     await waitFor(() => expect(asked).toHaveLength(1));
+    // Let the answer land and React commit whatever it would draw from it.
+    await act(async () => {
+      await new Promise((settled) => setTimeout(settled, 0));
+    });
     expect(screen.queryByRole("list", { name: "Vaults" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("list-vaults-empty")).not.toBeInTheDocument();
   });
 });
