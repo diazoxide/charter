@@ -76,12 +76,18 @@ fn handoff(root: &Path, brief: &str) -> Output {
         command.env_remove(name);
     }
     let mut child = command.spawn().expect("the binary runs");
-    child
+    // A refusal can come before charter reads the brief, closing the pipe under this write;
+    // that is the refusal the caller asserts on, not a failure of the helper.
+    match child
         .stdin
         .take()
         .expect("a pipe")
         .write_all(brief.as_bytes())
-        .expect("the brief is written");
+    {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("the brief is written: {error}"),
+    }
     child.wait_with_output().expect("the binary finishes")
 }
 

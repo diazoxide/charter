@@ -42,7 +42,8 @@ says that every choice a file makes for it is ignored. No harness is left out wi
 `harness_plugin::Choices::read` takes the two files through `settings::layer_text`, so while
 `charter.local.toml` is tracked or not ignored its `[harness_plugins]` is not read and a chat is
 handed what Shared and the workspace chose. Choosing the plugins a chat loads is exactly what a
-committed copy must not do for every clone.
+committed copy must not do for every clone. Each harness's group in the settings tabs says so,
+in the check's own sentence (charter-app#319).
 
 **Precedence**, which is ADR 0048's, per plugin: Local over Shared — and, since charter-app#282,
 a workspace's layer between them (below). With neither file naming a

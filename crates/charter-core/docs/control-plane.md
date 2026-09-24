@@ -410,9 +410,12 @@ machine that pulls it. So charter reads profiles only from `charter.local.toml`,
 `charter.toml`'s `[harness]` keeps `default`; any other key there is ignored, as it always
 was. A `default` in the local file wins over the committed one.
 
-**The local file carries `[harness]` and nothing else.** Any other section in it is refused
-by name. An ignored file that could override `[[forge]]` — whose hosts steer the
-one-credential guard — would change plane policy with no trace in git.
+**The local file carries `[harness]`, `[extensions]`, `[theme]`, `[harness_plugins]`,
+`[plane]` and `[repos]`, and nothing else.** Any other section in it is refused by name. An
+ignored file that could override `[[forge]]` — whose hosts steer the one-credential guard —
+would change plane policy with no trace in git. And the file is read only while git would not
+carry it: if git tracks it or would commit it, charter reads nothing in it, and
+`charter.toml` and the workspace decide instead (charter-app#308).
 
 - `kind` — which harness program: `claude`, `codex` or `opencode` (read and listed, but
   starting an opencode chat is not in this version yet).
