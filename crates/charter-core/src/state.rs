@@ -253,6 +253,20 @@ impl Chat {
         was != (self.state, self.needs_you)
     }
 
+    /// The operator dismissed this chat's request without answering it (charter-app#248).
+    /// Answers whether anything a reader can see changed.
+    ///
+    /// **Only the request goes; the chat is still `Waiting`**, because it is: nothing was
+    /// typed into it. And that is what makes "until the chat asks again" free: the next `Stop`
+    /// or `Notification` sets `needs_you` again, and the pair it is compared on differs, so a
+    /// new request on a chat that never stopped waiting still counts as a change.
+    ///
+    /// Held nowhere but here, so a relaunch forgets it — and a relaunch starts with nothing
+    /// asking anyway (charter-app#247).
+    pub fn ignored(&mut self) -> bool {
+        std::mem::replace(&mut self.needs_you, false)
+    }
+
     /// The session's program exited. Answers whether anything a reader can see changed.
     ///
     /// No hook reports this and none can — the process is gone. An exit status is the
@@ -523,6 +537,17 @@ impl Board {
         }
         let changed = tracked.chat.reported_from(report.event, report.detail);
         self.stamp(report.chat, changed)
+    }
+
+    /// The operator ignored this chat's request (charter-app#248). Answers whether anything a
+    /// reader can see changed: `false` for a chat that was not asking, or is not on the board.
+    ///
+    /// **Not stamped as a move.** [`Board::moved_at`] orders chats by what THEY last did
+    /// (ADR 0039), and the operator dismissing a request is not something the chat did.
+    pub fn ignored(&mut self, number: u32) -> bool {
+        self.chats
+            .get_mut(&number)
+            .is_some_and(|tracked| tracked.chat.ignored())
     }
 
     /// The chat's program exited. Answers whether anything a reader can see changed.
@@ -1426,6 +1451,88 @@ mod tests {
 
         assert_eq!(board.state(7), State::Failed);
         assert!(board.needs_you().is_empty());
+    }
+
+    // ----- ignoring a chat that asked (charter-app#248) -----
+
+    #[test]
+    fn an_ignored_chat_leaves_the_queue_and_is_still_waiting() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(7, Event::Stop, Some(A)));
+        assert_eq!(board.needs_you(), vec![7]);
+
+        assert!(board.ignored(7), "ignoring a chat that asked is a change");
+
+        assert!(board.needs_you().is_empty());
+        assert_eq!(board.state(7), State::Waiting);
+    }
+
+    #[test]
+    fn an_ignored_chat_that_stops_again_asks_again() {
+        // "Until the chat asks again": the next turn's end is a new request, and it counts.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::Stop, Some(A)));
+        board.ignored(7);
+
+        assert!(
+            board.reported(&report(7, Event::Stop, Some(A))),
+            "a new stop on a chat still waiting was answered as no change"
+        );
+
+        assert_eq!(board.needs_you(), vec![7]);
+    }
+
+    #[test]
+    fn an_ignored_chat_that_asks_mid_turn_asks_again() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::Notification, Some(A)));
+        board.ignored(7);
+
+        assert!(board.reported(&report(7, Event::Notification, Some(A))));
+
+        assert_eq!(board.needs_you(), vec![7]);
+    }
+
+    #[test]
+    fn ignoring_a_chat_that_asked_for_nothing_changes_nothing() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+
+        assert!(!board.ignored(7));
+        assert!(!board.ignored(9), "a chat the board does not have");
+        assert_eq!(board.state(7), State::Running);
+    }
+
+    #[test]
+    fn ignoring_one_chat_leaves_the_others_asking() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 1, Some(A));
+        claude_chat(&mut board, 2, Some(A));
+        board.reported(&report(1, Event::Stop, Some(A)));
+        board.reported(&report(2, Event::Stop, Some(A)));
+
+        board.ignored(1);
+
+        assert_eq!(board.needs_you(), vec![2]);
+    }
+
+    #[test]
+    fn ignoring_a_chat_is_not_the_chat_doing_something() {
+        // The strip's overflow menu is in last-activity order (ADR 0039), and the operator
+        // dismissing a request is not activity of the chat's.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::Stop, Some(A)));
+        let before = board.moved_at(7);
+
+        board.ignored(7);
+
+        assert_eq!(board.moved_at(7), before);
     }
 
     // ----- when a chat last moved (ADR 0039) -----

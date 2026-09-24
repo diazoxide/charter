@@ -6,7 +6,16 @@ import type { Moved, OpenChat } from "./bindings";
 /** One plane, because these are about the reducer and not about telling planes apart. */
 const PLANE = "/home/dev/plane";
 
+/** How many snapshots the "board" below has taken. Each `doing` is the next one. */
+let taken = 0;
+
+/**
+ * One snapshot, numbered after every snapshot built before it — the order the core's board
+ * numbers them in (`Moved.sequence`). So the order a test BUILDS them in is the order the
+ * board read them in, and the order it folds them in is the order they reached the window.
+ */
 function doing(session: number, state: string, queue: number[] = [], movedAt = 0): Moved {
+  taken += 1;
   return {
     plane: PLANE,
     session,
@@ -14,6 +23,7 @@ function doing(session: number, state: string, queue: number[] = [], movedAt = 0
     needs_you: queue.includes(session),
     queue,
     moved_at: movedAt,
+    sequence: taken,
   };
 }
 
@@ -36,21 +46,74 @@ describe("what the window keeps about the chats", () => {
     // can fire while the question is in flight. Folding the older answer on top dropped the
     // chat back to `running` and out of the needs-you queue — and a chat that is waiting for
     // you has no next event to correct it with.
+    const answer = [doing(7, "running", [])];
     const arrived = moved(nothingKnown, doing(7, "waiting", [7]));
 
-    const settled = underneath(arrived, [doing(7, "running", [])]);
+    const settled = underneath(arrived, answer);
 
     expect(stateOf(settled, 7)).toBe("waiting");
     expect(settled.needsYou).toEqual([7]);
   });
 
   it("still takes the first answer for a chat no event has mentioned", () => {
+    const answer = [doing(9, "running", [])];
     const arrived = moved(nothingKnown, doing(7, "waiting", [7]));
 
-    const settled = underneath(arrived, [doing(9, "running", [])]);
+    const settled = underneath(arrived, answer);
 
     expect(stateOf(settled, 9)).toBe("running");
     expect(stateOf(settled, 7)).toBe("waiting");
+  });
+
+  // **Snapshots reach the window in any order (charter-app#248).** Each is numbered under the
+  // board's lock but sent after it is let go, on the thread that built it, so an older one can
+  // land after a newer one. The window keeps the newer.
+
+  it("keeps the newer queue when two snapshots land out of order", () => {
+    const older = doing(7, "waiting", [7]);
+    const newer = doing(7, "running", []);
+
+    const after = moved(moved(nothingKnown, newer), older);
+
+    expect(after.needsYou).toEqual([]);
+    expect(stateOf(after, 7)).toBe("running");
+  });
+
+  it("keeps a closed chat out of the queue when the report before the close lands after it", () => {
+    // #256 narrowed this and could not close it: a hook's report taken just before a close is
+    // sent on the socket's thread, unordered against the close's. The close is the newer fact.
+    const report = doing(7, "waiting", [7, 9]);
+    const close = doing(7, "unknown", [9]);
+
+    const after = moved(moved(nothingKnown, close), report);
+
+    expect(after.needsYou).toEqual([9]);
+    expect(stateOf(after, 7)).toBe("unknown");
+  });
+
+  it("still takes an older snapshot's news about a chat nothing newer has mentioned", () => {
+    // The queue is the whole board's and a newer one replaces it; a chat's state is only
+    // that chat's, and the snapshot that lost the race for the queue is still the newest
+    // word about the chat it was about.
+    const about7 = doing(7, "running", [], 4);
+    const about9 = doing(9, "waiting", [9], 5);
+
+    const after = moved(moved(nothingKnown, about9), about7);
+
+    expect(stateOf(after, 7)).toBe("running");
+    expect(movedAt(after, 7)).toBe(4);
+    expect(after.needsYou).toEqual([9]);
+  });
+
+  it("lowers the queue when a chat that asked is ignored", () => {
+    // Ignore is the core's (`ignore_needs_you`), and what the window gets is the next
+    // snapshot: the chat still waiting, and a queue without it.
+    const asked = moved(nothingKnown, doing(7, "waiting", [7, 9]));
+
+    const after = moved(asked, doing(7, "waiting", [9]));
+
+    expect(after.needsYou).toEqual([9]);
+    expect(stateOf(after, 7)).toBe("waiting");
   });
 
   it("takes the first answer whole when nothing has arrived yet", () => {
@@ -128,9 +191,10 @@ describe("when each chat last moved", () => {
   it("does not let the first answer overwrite a count an event already brought", () => {
     // The same race `bySession` has: `chatStates()` is asked once at startup and a hook can
     // fire while it is in flight. The older answer must not put a chat back down the menu.
+    const answer = [doing(7, "running", [], 2), doing(8, "running", [], 3)];
     const heard = moved(nothingKnown, doing(7, "waiting", [7], 9));
 
-    const after = underneath(heard, [doing(7, "running", [], 2), doing(8, "running", [], 3)]);
+    const after = underneath(heard, answer);
 
     expect(movedAt(after, 7)).toBe(9);
     expect(movedAt(after, 8)).toBe(3);

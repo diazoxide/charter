@@ -45,6 +45,10 @@ function doing(): Doing & { calls: string[] } {
     createWorkspace: note("createWorkspace"),
     removeWorkspace: note("removeWorkspace"),
     showChat: note("showChat"),
+    ignoreNeedsYou: vi.fn(async (session: number) => {
+      calls.push(`ignoreNeedsYou:${session}`);
+      return { ok: true as const };
+    }),
     pinTab: vi.fn(async (tab: number, pinned: boolean) => {
       calls.push(`pinTab:${tab},${pinned}`);
       return { ok: true as const };
@@ -284,6 +288,21 @@ describe("the one list of actions", () => {
     await run(offers, "needs.next", hands);
 
     expect(hands.calls).toEqual(["showChat:8"]);
+  });
+
+  it("ignores a chat in the queue until it asks again, one row for each (charter-app#248)", async () => {
+    const hands = doing();
+    const offers = catalogue(now({ needsYou: [8, 7], nameOf: (s) => (s === 7 ? "one" : "two") }));
+
+    const row = by(offers, "needs.ignore:7");
+    expect(row?.title).toBe("Ignore one until it asks again");
+    expect(row?.name).toBe("one");
+    // No tab is needed: ignoring a chat is about its request, not about showing it.
+    expect(row?.available).toBe(true);
+    expect(by(offers, "needs.ignore:9")).toBeUndefined();
+    await run(offers, "needs.ignore:7", hands);
+
+    expect(hands.calls).toEqual(["ignoreNeedsYou:7"]);
   });
 
   it("refuses the worktree rows with charter's reason when no chat is in front", () => {
@@ -674,6 +693,7 @@ describe("carrying out a row", () => {
         "split:row",
         "split:column",
         "showChat:8",
+        "ignoreNeedsYou:8",
         "selectTab:2",
         "focusWorkspace:beta",
         "closePane",
@@ -834,8 +854,11 @@ describe("the palette at fifty chats", () => {
       // stand in front of it. Inside each half the catalogue's own order stands.
       "Merge this chat's worktree into its clone",
       "Remove this chat's worktree",
-      "Merge worktree piece-0 into repo-0",
-      "Merge worktree piece-1 into repo-0",
+      // `ignore` has `re` in it, and it is charter's word, so the two queued chats' Ignore
+      // rows (charter-app#248) are verbs here too — ahead of the pieces' merges by the
+      // catalogue's own order, and still behind every row about what is in front.
+      "Ignore chat 103 until it asks again",
+      "Ignore chat 107 until it asks again",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -953,14 +976,16 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
-    // 292 rows: 50 chats three times over, 6 workspaces THREE times, 50 pieces TWICE, 8
-    // personas, 2 in the queue, and the fifteen verbs. It was 118 before the pins, 174 before
+    // 294 rows: 50 chats three times over, 6 workspaces THREE times, 50 pieces TWICE, 8
+    // personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248), and the
+    // fifteen verbs. It was 118 before the pins, 174 before
     // the extension list (ADR 0041), 175 before a workspace could be made and deleted
     // from the window, 183 before the explorer's rows had anything to offer, and 291 before
-    // the row that puts `charter` on a terminal's PATH. What the
+    // the row that puts `charter` on a terminal's PATH, and 292 before a queued chat could be
+    // ignored. What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(292);
+    expect(offers).toHaveLength(294);
   });
 
   /**

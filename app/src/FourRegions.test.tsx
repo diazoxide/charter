@@ -121,7 +121,7 @@ function core(
     if (cmd === "worktree_list") return a.workspace === "alpha" ? cut() : [];
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "chat_states")
-      return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
+      return waiting.map((session) => ({ session, state: "waiting", queue: waiting, sequence: 1 }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "alerts_everywhere") return alerts;

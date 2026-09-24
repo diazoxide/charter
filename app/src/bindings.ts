@@ -192,6 +192,11 @@ export const commands = {
 	openSession: (plane: PlaneId, program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { plane, program, args, cwd, name, columns, rows })),
 	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
 	closeSession: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { plane, session })),
+	/**
+	 *  Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
+	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
+	 */
+	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
 	/**  Sends what a pane typed to the session's program. */
 	sendInput: (plane: PlaneId, session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { plane, session, text })),
 	/**  Tells a session how big the pane showing it now is. */
@@ -952,6 +957,18 @@ export type Moved = {
 	 *  for.
 	 */
 	moved_at: number,
+	/**
+	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
+	 * 
+	 *  **What lets the window put its events back in order.** Every `Moved` is built under the
+	 *  board's lock, but it is SENT after the lock is let go, on whichever thread built it: a
+	 *  hook's report on the socket's thread, a close on the command's. So a report taken just
+	 *  before a close can reach the window just after it, and the window, which keeps the last
+	 *  queue it was told, would put the closed chat back. The window drops any snapshot older
+	 *  than the one it holds (`chatState.ts`), which it can do only because this is numbered
+	 *  in the order the board was read. [`sequence`] is the whole definition.
+	 */
+	sequence: number,
 };
 
 /**  One news entry, as the pin's dialog lists it. */

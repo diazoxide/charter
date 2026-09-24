@@ -1,10 +1,10 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { OpenChat } from "./bindings";
+import type { Moved, OpenChat } from "./bindings";
 
 /**
  * The workspace axis: **projects, then workspaces, then chats** (ADR 0036).
@@ -81,8 +81,15 @@ function core(opened: ReturnType<typeof chat>[] = [], waiting: number[] = []) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const chats = [...opened];
   let next = Math.max(0, ...chats.map((one) => one.session));
+  /** Every `chat-moved` handler the window registered, so a test can push a move. */
+  const moves: number[] = [];
   mockIPC((cmd, args) => {
     asked.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
+    if (cmd === "plugin:event|listen") {
+      const { event, handler } = args as { event: string; handler: number };
+      if (event === "chat-moved") moves.push(handler);
+      return 1;
+    }
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "opened_chats") return chats.filter((one) => opened.includes(one));
     if (cmd === "start_chat") {
@@ -122,12 +129,19 @@ function core(opened: ReturnType<typeof chat>[] = [], waiting: number[] = []) {
       };
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "chat_states")
-      return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
+      return waiting.map((session) => ({ session, state: "waiting", queue: waiting, sequence: 1 }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     return null;
   });
-  return { asked };
+  return {
+    asked,
+    /** Fires one `chat-moved`, the way the core pushes one. */
+    move(payload: Moved) {
+      for (const handler of moves)
+        window.__TAURI_INTERNALS__.runCallback(handler, { event: "chat-moved", id: 1, payload });
+    },
+  };
 }
 
 /** The workspaces, as the strip lists them. */
@@ -315,6 +329,35 @@ describe("the workspace strip", () => {
     // And not on a workspace where nothing is waiting: a mark on everything is a mark on
     // nothing.
     expect(alpha?.querySelector(".workspace-needs")).toBeNull();
+  });
+
+  it("takes the count off a workspace tab when its chat is ignored (charter-app#248)", async () => {
+    const { asked, move } = core([chat(5, "5", BETA)], [5]);
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
+    const needs = () =>
+      within(screen.getByRole("tablist", { name: "Workspaces" }))
+        .getAllByRole("tab")
+        .find((tab) => tab.querySelector(".workspace-name")?.textContent === "beta")
+        ?.querySelector(".workspace-needs")?.textContent;
+    await waitFor(() => expect(needs()).toBe("1"));
+
+    await userEvent.click(
+      within(screen.getByLabelText("Needs you")).getByRole("button", { name: /^Ignore / }),
+    );
+    await vi.waitFor(() => expect(asked.some((one) => one.cmd === "ignore_needs_you")).toBe(true));
+    // What the core answers an ignore with: the chat still waiting, and a queue without it.
+    move({
+      plane: PLANE,
+      session: 5,
+      state: "waiting",
+      needs_you: false,
+      queue: [],
+      moved_at: 1,
+      sequence: 2,
+    });
+
+    await waitFor(() => expect(needs()).toBeUndefined());
   });
 });
 

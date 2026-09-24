@@ -793,6 +793,19 @@ fn close_session(
     planes.held(&plane)?.close_chat(session)
 }
 
+/// Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
+/// (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
+#[tauri::command]
+#[specta::specta]
+fn ignore_needs_you(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<(), String> {
+    planes.held(&plane)?.ignore_needs_you(session);
+    Ok(())
+}
+
 /// The chats the app already has open — at a launch, the ones put back from the record.
 ///
 /// The window asks this instead of opening its own: putting the record back happens before
@@ -1111,6 +1124,7 @@ fn commands() -> Builder<tauri::Wry> {
             opener::create_project,
             open_session,
             close_session,
+            ignore_needs_you,
             send_input,
             resize_session,
             watch_session,
