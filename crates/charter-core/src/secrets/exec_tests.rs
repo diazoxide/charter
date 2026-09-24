@@ -216,13 +216,15 @@ fn a_binding_without_a_variable_name_is_refused_before_anything_runs() {
 #[test]
 fn a_file_binding_is_a_0600_temp_file_holding_the_value_and_removed_after() {
     let (_tmp, ctx) = plane(serde_json::json!({}), &[]);
+    // GNU `stat -c` first: GNU `stat -f` is a filesystem report that succeeds, while BSD
+    // `stat -c` is an unknown flag that fails and falls through to `-f %Lp`.
     let (code, rec) = run(
         &ctx,
         Request {
             file: vec!["TOKEN_FILE=TOKEN".into()],
             ..req(sh(r#"echo "$TOKEN_FILE"
 test "$(cat "$TOKEN_FILE")" = s3cret-value && echo same
-stat -f %Lp "$TOKEN_FILE" 2>/dev/null || stat -c %a "$TOKEN_FILE""#))
+stat -c %a "$TOKEN_FILE" 2>/dev/null || stat -f %Lp "$TOKEN_FILE""#))
         },
     );
     assert_eq!((code, rec.errors()), (0, vec![]));
