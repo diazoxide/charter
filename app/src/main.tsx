@@ -4,6 +4,7 @@ import App from "./App";
 import { attach } from "./bench";
 import { drawWhatIsInForce } from "./Extensions";
 import { settleLayout } from "./regions";
+import { drawWindowText, listenForSizeKeys, onTextSizes, textSizes } from "./textSize";
 import { DEFAULT_THEME, drawIn } from "./theme/theme";
 import { theirTheme } from "./windowprefs";
 
@@ -13,6 +14,15 @@ import { theirTheme } from "./windowprefs";
 // before the window existed and handed to it with the window (`windowprefs.ts`) — which is the
 // only arrangement ADR 0026's 2 s cold start can afford.
 drawIn(theirTheme() ?? DEFAULT_THEME);
+
+// The window's text size, for the same reason and from the same place: the layout file the
+// window was handed (`textSize.ts`, charter-app#283). The root's font size is what every `rem`
+// in the stylesheet is measured by, so the whole window is drawn at it from the first frame,
+// and again whenever it changes. The size keys — ⌘/Ctrl with =, - and 0 — are listened for on
+// the window from here on, so they work before any project is open.
+drawWindowText(textSizes().window);
+onTextSizes((sizes) => drawWindowText(sizes.window));
+listenForSizeKeys(window);
 
 // In a scenario-test build only, WebdriverIO's window-side plugin, which its Tauri service
 // looks for. `vite build --mode e2e` is the only build that sets this.

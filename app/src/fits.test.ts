@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capacity, fitting, LEAST } from "./fits";
+import { capacity, fitting, LEAST, leastAt } from "./fits";
 
 /**
  * The arithmetic that decides what a strip draws.
@@ -98,5 +98,21 @@ describe("the floors the three strips fit by", () => {
     // the same thing, which is what he was complaining about.
     expect(LEAST.project).toBeGreaterThan(LEAST.workspace);
     expect(LEAST.workspace).toBeGreaterThan(LEAST.chat);
+  });
+});
+
+describe("the floors at the window text size in force (charter-app#283)", () => {
+  it("are the floors themselves at the default size, and grow and shrink with the text", () => {
+    expect(leastAt(LEAST.chat, 14)).toBe(LEAST.chat);
+    expect(leastAt(LEAST.chat, 21)).toBe(LEAST.chat * 1.5);
+    expect(leastAt(LEAST.project, 10)).toBeLessThan(LEAST.project);
+  });
+
+  it("so a strip draws fewer, wider tabs when the text is bigger", () => {
+    const many = Array.from({ length: 20 }, (_, at) => at);
+    const width = 8 * LEAST.chat;
+    const atDefault = fitting(many, undefined, width, leastAt(LEAST.chat, 14)).shown;
+    const atBigger = fitting(many, undefined, width, leastAt(LEAST.chat, 21)).shown;
+    expect(atBigger.length).toBeLessThan(atDefault.length);
   });
 });

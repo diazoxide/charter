@@ -120,6 +120,6 @@ const watching = new WeakMap<HTMLElement, MutationObserver>();
  * `titleBarRoom`): that one decides a layout and has to be exact, and this decides one key,
  * where the platform string WebKit reports on the machine it runs on is the answer.
  */
-function onAMac(): boolean {
+export function onAMac(): boolean {
   return navigator.platform.startsWith("Mac");
 }

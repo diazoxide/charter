@@ -427,6 +427,8 @@ describe("the window the stored arrangement asks for", () => {
         { id: "aside", side: "right", order: 0, collapsed: false },
         { id: "bottom", side: "bottom", order: 0, collapsed: false },
       ],
+      // The machine's text sizes share the file (charter-app#283), written as they stand.
+      text: { window: 14, terminal: 13 },
     });
   });
 });

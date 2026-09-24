@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { commands } from "./bindings";
+import { forgetTextSizes, onTextSizes, textSizes, type TextSizes } from "./textSize";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
@@ -143,8 +144,10 @@ export const LEGACY_KEY = "charter.layout";
  *  any other before the window sees it. */
 export const VERSION = 1;
 
-/** The document, as it is written to the file. */
-type Document = { version: typeof VERSION; regions: Arrangement };
+/** The document, as it is written to the file. `text` is the two text sizes (`textSize.ts`,
+ *  charter-app#283), kept here because they are the same kind of preference — how one operator
+ *  likes their window — and this is the one writer of the file. */
+type Document = { version: typeof VERSION; regions: Arrangement; text: TextSizes };
 
 /** A document read field by field, and what had to be put right to read it. */
 export type Loaded = { regions: Arrangement; said: string[] };
@@ -257,6 +260,7 @@ let changed: Arrangement | undefined;
 export function forgetThisLaunch(): void {
   changed = undefined;
   writing = Promise.resolve();
+  forgetTextSizes();
 }
 
 /**
@@ -311,7 +315,14 @@ function sayWhatTheLayoutCost(path: string, started: ReturnType<typeof startingL
 
 const where = (path: string) => path || "the layout file";
 
-const asDocument = (regions: Arrangement): Document => ({ version: VERSION, regions });
+const asDocument = (regions: Arrangement): Document => ({
+  version: VERSION,
+  regions,
+  text: textSizes(),
+});
+
+// A text size changed: the file is rewritten with it, and with the arrangement as it stands.
+onTextSizes(() => remember(remembered()));
 
 /** Every write, in the order the window made it. Tauri runs commands on a thread pool, and two
  *  writes that raced there could land the older one last. */

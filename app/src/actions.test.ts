@@ -94,6 +94,7 @@ function doing(): Doing & { calls: string[] } {
     openSettings: vi.fn((plane: string) => {
       calls.push(`openSettings:${plane}`);
     }),
+    openPreferences: note("openPreferences"),
     quit: note("quit"),
   };
 }
@@ -270,6 +271,18 @@ describe("the one list of actions", () => {
     expect(hands.calls).toEqual(["openSettings:/p/two"]);
     // On the project tab's own menu, above the line: it opens a tab and ends nothing.
     expect(menuOn({ on: "project", plane: "/p/two" }).above).toContain("project.settings:/p/two");
+  });
+
+  it("offers Preferences everywhere, with no project open too, because it is the machine's", async () => {
+    // charter-app#283: the text sizes are this machine's, so the row does not wait for a plane.
+    for (const offers of [catalogue(now()), catalogue(now({ plane: "/p/one" }))]) {
+      const hands = doing();
+      const row = by(offers, "preferences.show");
+      expect(row?.title).toBe("Preferences…");
+      expect(row?.available).toBe(true);
+      await run(offers, "preferences.show", hands);
+      expect(hands.calls).toEqual(["openPreferences"]);
+    }
   });
 
   it("says nothing needs you rather than leaving the queue's row out", () => {
@@ -718,6 +731,7 @@ describe("carrying out a row", () => {
         "openProject",
         "createProject",
         "showExtensions",
+        "openPreferences",
         "installCli",
         "createWorkspace",
         "removeWorkspace:alpha",
@@ -871,6 +885,8 @@ describe("the palette at fifty chats", () => {
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",
+      // `preferences` has `re` in it, and it is charter's word (charter-app#283).
+      "Preferences…",
       // **Both of the chat in front's rows, then the pieces'.** `aboutWhatIsInFront` is the
       // second rule inside this group (charter-app#174): a row with no name in its id acts on
       // what the operator is looking at, and fifty rows about other worktrees do not get to
@@ -885,7 +901,6 @@ describe("the palette at fifty chats", () => {
       "Ignore chat 103 until it asks again",
       "Ignore chat 107 until it asks again",
       "Rename chat ide.1…",
-      "Rename chat charter.2…",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -945,8 +960,10 @@ describe("the palette at fifty chats", () => {
 
     it("is near the top of what was typed, and not fifty rows down it", () => {
       // The numbers themselves, so "unchanged" cannot be satisfied by both being bad.
-      expect(at("re", loaded())).toBe(4);
-      expect(at("r", loaded())).toBe(7);
+      // One further down for each since the Preferences row (charter-app#283), whose
+      // `preferences` holds both `re` and `r`.
+      expect(at("re", loaded())).toBe(5);
+      expect(at("r", loaded())).toBe(8);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1006,16 +1023,16 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
-    // 344 rows: 50 chats four times over, 6 workspaces THREE times, 50 pieces TWICE, 8
+    // 345 rows: 50 chats four times over, 6 workspaces THREE times, 50 pieces TWICE, 8
     // personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248), and the
-    // fifteen verbs. It was 118 before the pins, 174 before
+    // sixteen verbs — the sixteenth is Preferences (charter-app#283). It was 118 before the pins, 174 before
     // the extension list (ADR 0041), 175 before a workspace could be made and deleted
     // from the window, 183 before the explorer's rows had anything to offer, 291 before
     // the row that puts `charter` on a terminal's PATH, 292 before a queued chat could be
     // ignored, and 294 before a chat could be renamed (charter-app#254). What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(344);
+    expect(offers).toHaveLength(345);
   });
 
   /**

@@ -81,6 +81,8 @@ import {
   panesOf,
   putViewBack,
   refileViews,
+  PREFERENCES_TITLE,
+  PREFERENCES_VIEW,
   SETTINGS_TITLE,
   SETTINGS_VIEW,
   renameTab,
@@ -109,9 +111,10 @@ import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
-import { fitting, LEAST, useRoom } from "./fits";
+import { fitting, LEAST, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
+import { useTextSizes } from "./textSize";
 
 /**
  * One project, with everything that belongs to it.
@@ -154,6 +157,7 @@ export function PlaneView({
   contributed = [],
   views = [],
   settingsAsked,
+  preferencesAsked,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -182,6 +186,9 @@ export function PlaneView({
   /** A count that goes up each time the window is asked for THIS project's settings tab
    *  (`WindowDoing.openSettings`); `undefined` until it is. */
   settingsAsked?: number;
+  /** The same, for the Preferences tab (`WindowDoing.openPreferences`, charter-app#283): a
+   *  count that goes up each time the window asks for it on THIS project's strip. */
+  preferencesAsked?: number;
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
@@ -731,9 +738,13 @@ export function PlaneView({
    *  one level up, because the operator's complaint was about all of them: a strip that
    *  scrolls says nothing about what is past its edge. */
   const { strip: workspaceStrip, width: workspaceRoom } = useRoom(strips.length);
+  // The floors grow with the window's text (charter-app#283, `fits.leastAt`).
+  const windowText = useTextSizes().window;
+  const workspaceLeast = leastAt(LEAST.workspace, windowText);
+  const chatLeast = leastAt(LEAST.chat, windowText);
   const workspacesShown = useMemo(
-    () => fitting(strips, focused, workspaceRoom, LEAST.workspace),
-    [focused, strips, workspaceRoom],
+    () => fitting(strips, focused, workspaceRoom, workspaceLeast),
+    [focused, strips, workspaceRoom, workspaceLeast],
   );
 
   /**
@@ -814,8 +825,8 @@ export function PlaneView({
     [measured],
   );
   const { shown, hidden } = useMemo(
-    () => fitting(onStrip, tabs.inFront, room, LEAST.chat),
-    [onStrip, room, tabs.inFront],
+    () => fitting(onStrip, tabs.inFront, room, chatLeast),
+    [onStrip, room, tabs.inFront, chatLeast],
   );
 
   /**
@@ -1049,6 +1060,14 @@ export function PlaneView({
     handled.current = settingsAsked;
     showView(SETTINGS_VIEW, SETTINGS_TITLE);
   }, [settingsAsked, showView]);
+
+  /** The Preferences tab, opened the same way and for the same reason (charter-app#283). */
+  const preferencesHandled = useRef(preferencesAsked);
+  useEffect(() => {
+    if (preferencesAsked === undefined || preferencesHandled.current === preferencesAsked) return;
+    preferencesHandled.current = preferencesAsked;
+    showView(PREFERENCES_VIEW, PREFERENCES_TITLE);
+  }, [preferencesAsked, showView]);
 
   /**
    * Focuses a workspace: the strip below it shows that workspace's chats, and one of them
@@ -1468,6 +1487,7 @@ export function PlaneView({
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       openSettings: windowDoes.openSettings,
+      openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),
     [
@@ -1813,7 +1833,7 @@ export function PlaneView({
               role="tablist"
               aria-label="Workspaces"
               ref={workspaceStrip}
-              style={{ "--least": `${LEAST.workspace}px` } as CSSProperties}
+              style={{ "--least": `${workspaceLeast}px` } as CSSProperties}
             >
               {workspacesShown.shown.map((workspace) => {
                 const offer = by(`workspace.focus:${workspace}`);
@@ -1896,7 +1916,7 @@ export function PlaneView({
             role="tablist"
             aria-label="Tabs"
             ref={strip}
-            style={{ "--least": `${LEAST.chat}px` } as CSSProperties}
+            style={{ "--least": `${chatLeast}px` } as CSSProperties}
           >
             {shown.map((id) => (
               /* Right-click is the third reader of the catalogue (`Menus.tsx`). `asChild`, so
@@ -2304,6 +2324,9 @@ export type WindowDoing = {
    *  window's, because the project may not be the one in front, and only the window can bring
    *  it there. */
   openSettings: (plane: string) => void;
+  /** Opens the Preferences tab (charter-app#283) on the project in front, or draws it where the
+   *  opener is when there is none. The window's, because which project is in front is. */
+  openPreferences: () => void;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
    *  in front draws nothing, and its pin still has to be on that strip (ADR 0039). */
   pinProject: (plane: string, pinned: boolean) => Promise<Ran>;
