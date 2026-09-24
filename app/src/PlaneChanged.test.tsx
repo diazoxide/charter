@@ -187,3 +187,20 @@ describe("the panels, when the plane changes on disk", () => {
     expect(todoRows()).toHaveLength(2);
   });
 });
+
+describe("what a project has on, when its settings change on disk (charter-app#253)", () => {
+  it("is asked again, so an edit to charter.toml or charter.local.toml takes effect", async () => {
+    const { asked, changed } = core();
+    render(<App />);
+    await waitFor(() => expect(todoRows()).toHaveLength(2));
+    await waitFor(() => expect(asked).toContain("extensions_on"));
+    const before = asked.filter((cmd) => cmd === "extensions_on").length;
+
+    // `[extensions.x] enabled = false` written in an editor, or arriving with a `git pull`.
+    changed(PLANE);
+
+    await waitFor(() =>
+      expect(asked.filter((cmd) => cmd === "extensions_on").length).toBeGreaterThan(before),
+    );
+  });
+});
