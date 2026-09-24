@@ -151,6 +151,7 @@ fn tables(cmd: &str) -> Value {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
+    charter_core::unsteered!();
     let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
         .into_iter()
         .map(|r| (r.at, r.row))
@@ -276,6 +277,7 @@ fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
 /// having run with no prompt is asserted BY NAME, the way stages 1 to 4 did it.
 #[test]
 fn the_recording_still_covers_the_rules() {
+    charter_core::unsteered!();
     let rows = corpus();
     let recorded: Vec<String> = rows
         .iter()
