@@ -121,6 +121,10 @@ fn from_isoformat(raw: &str) -> Option<(NaiveDateTime, chrono::Duration)> {
     }
     let (clock, offset) = time_and_offset(rest.as_str().as_bytes())?;
     let [h, m, s] = clock.hms;
+    // `hour must be in 0..23` and its kin — Python's range checks on the time, not the offset —
+    // are chrono's too: it refuses an hour past 23 and a minute or second past 59 (a leap second
+    // is spelled in the micros, which stop at 999999 here). A check of our own before this line
+    // could not change an answer: cargo-mutants found every one of its six mutants survived.
     Some((date.and_hms_micro_opt(h, m, s, clock.micros)?, offset))
 }
 
@@ -132,11 +136,6 @@ fn from_isoformat(raw: &str) -> Option<(NaiveDateTime, chrono::Duration)> {
 fn time_and_offset(t: &[u8]) -> Option<(Clock, chrono::Duration)> {
     let at = t.iter().position(|b| matches!(b, b'Z' | b'+' | b'-'));
     let clock = hh_mm_ss_ff(&t[..at.unwrap_or(t.len())])?;
-    // `hour must be in 0..23` and its kin: Python's range checks, on the time and not the offset.
-    let [h, m, s] = clock.hms;
-    if h > 23 || m > 59 || s > 59 {
-        return None;
-    }
     let Some(at) = at else {
         return clock.whole.then_some((clock, chrono::Duration::zero()));
     };
