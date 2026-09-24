@@ -36,6 +36,7 @@ pub(crate) mod session;
 
 /// Python's truthiness of a TOML value, for `crate::alerts`, which reads the same manifest
 /// sections through the same `(cfg.get(name) or {})` idiom.
+pub(crate) use config::findings as config_findings;
 pub(crate) use config::truthy as config_truthy;
 
 use std::path::{Path, PathBuf};
@@ -158,6 +159,12 @@ impl Config {
         let Ok(raw) = std::fs::read(&path) else {
             return Self::Read(toml::Table::new());
         };
+        Self::parse(&path, raw)
+    }
+
+    /// [`Config::load`] of bytes that are, or are about to be, the file at `path` — so a
+    /// writer can ask what the next read would say before it writes (charter-app#252).
+    pub(crate) fn parse(path: &Path, raw: Vec<u8>) -> Self {
         let text = match String::from_utf8(raw) {
             Ok(text) => text,
             Err(e) => {
@@ -174,9 +181,12 @@ impl Config {
                 ));
             }
         };
+        // Python's `found > SCHEMA` is the refusal, so everything up to and including this
+        // charter's own version is read. (Spelled once, as `<= SCHEMA`: an arm for `1` ahead of
+        // one for `< 1` left the `<` with a boundary no input could reach.)
         match table.get("schema") {
-            None | Some(toml::Value::Integer(1)) => Self::Read(table),
-            Some(toml::Value::Integer(found)) if *found < 1 => Self::Read(table),
+            None => Self::Read(table),
+            Some(toml::Value::Integer(found)) if *found <= SCHEMA => Self::Read(table),
             Some(toml::Value::Integer(found)) => Self::Refused(format!(
                 "{} declares schema {found}, but this charter understands {SCHEMA}. Upgrade \
                  charter: update the app.",
@@ -290,7 +300,7 @@ impl Doctor {
     /// Where the two charters resolve differently — Python hops outward through an enclosing
     /// plane's `workspaces/`, this binary does not — the `nested plane` row says so.
     pub fn new(cwd: &Path, preflight: bool) -> Self {
-        let pinned = std::env::var_os("CHARTER_ROOT").is_some_and(|v| !v.is_empty());
+        let pinned = crate::steer::var_os("CHARTER_ROOT").is_some_and(|v| !v.is_empty());
         let root = crate::plane::resolve(cwd)
             .map(|p| canonical(&p))
             .unwrap_or_else(|_| canonical(cwd));

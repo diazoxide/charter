@@ -229,17 +229,22 @@ fn terminal_id(
     (!id.is_empty()).then_some(id)
 }
 
-/// The controlling terminal's device name, when stdin is one.
-#[cfg(unix)]
+/// The controlling terminal's device name, when stdin is one; off unix, never.
+///
+/// One function with the platform inside it rather than a `#[cfg(not(unix))]` twin: a twin
+/// no unix build compiles is code the mutation run changes and no test there can run, so it
+/// reported every change to it as untested.
 fn tty_name() -> Option<String> {
-    rustix::termios::ttyname(std::io::stdin(), Vec::new())
-        .ok()
-        .and_then(|name| name.into_string().ok())
-}
-
-#[cfg(not(unix))]
-fn tty_name() -> Option<String> {
-    None
+    #[cfg(unix)]
+    {
+        rustix::termios::ttyname(std::io::stdin(), Vec::new())
+            .ok()
+            .and_then(|name| name.into_string().ok())
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 /// Python's `str.strip()`: every Unicode whitespace character, from both ends.
@@ -1327,5 +1332,188 @@ mod tests {
     fn an_empty_pane_variable_is_skipped_for_the_next_one() {
         let map = env_of(&[("TERM_SESSION_ID", ""), ("TMUX_PANE", "%7")]);
         assert_eq!(Ids::of(&reader(&map)).terminal.as_deref(), Some("-7"));
+    }
+
+    /// Python's `str()` of each scalar `tomllib` hands back, read off CPython. (A float Rust
+    /// would print without an exponent where Python uses one, `1e20`, is left out on
+    /// purpose: the two disagree there, and it is not this test's to settle.)
+    #[test]
+    fn a_manifest_value_is_rendered_the_way_python_str_renders_it() {
+        let v = |text: &str| -> toml::Value {
+            let doc: toml::Table = format!("v = {text}").parse().unwrap();
+            doc["v"].clone()
+        };
+        assert_eq!(python_str(&v("\"alpha\"")).as_deref(), Some("alpha"));
+        assert_eq!(python_str(&v("7")).as_deref(), Some("7"));
+        assert_eq!(python_str(&v("-7")).as_deref(), Some("-7"));
+        assert_eq!(python_str(&v("true")).as_deref(), Some("True"));
+        assert_eq!(python_str(&v("false")).as_deref(), Some("False"));
+        assert_eq!(python_str(&v("2.0")).as_deref(), Some("2.0"));
+        assert_eq!(python_str(&v("1.5")).as_deref(), Some("1.5"));
+        assert_eq!(python_str(&v("inf")).as_deref(), Some("inf"));
+        assert_eq!(python_str(&v("[1]")), None);
+        assert_eq!(python_str(&v("{ a = 1 }")), None);
+    }
+
+    #[test]
+    fn the_planes_declared_default_is_what_python_would_name_or_else_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let with = |manifest: &str| {
+            fs::write(root.join(crate::plane::MANIFEST), manifest).unwrap();
+            plane_default_workspace(root)
+        };
+        assert_eq!(with("[workspace]\ndefault = \" alpha \"\n"), "alpha");
+        assert_eq!(with("[workspace]\ndefault = 7\n"), "7");
+        assert_eq!(with("[workspace]\ndefault = true\n"), "True");
+        assert_eq!(with("[workspace]\ndefault = \"../esc\"\n"), "default");
+        assert_eq!(with("[workspace]\ndefault = [\"a\"]\n"), "default");
+        assert_eq!(with(""), "default");
+    }
+
+    #[test]
+    fn a_default_workspace_says_when_nothing_can_persist_because_there_is_no_pane() {
+        let pane = Ids {
+            session: None,
+            terminal: Some("w0t1p0".into()),
+        };
+        let none = Ids::default();
+        for rung in [WorkspaceRung::PlaneDefault, WorkspaceRung::BuiltIn] {
+            assert_eq!(
+                workspace_source(&none, rung),
+                "default (no pane id — nothing persists between sessions)"
+            );
+            assert_eq!(workspace_source(&pane, rung), "default (nothing selected)");
+        }
+        assert_eq!(workspace_source(&none, WorkspaceRung::Flag), "--workspace");
+        assert_eq!(
+            workspace_source(&pane, WorkspaceRung::SessionPointer),
+            "session"
+        );
+    }
+
+    #[test]
+    fn a_rung_file_is_read_up_to_charters_size_bound_and_not_one_byte_past_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let at_bound = dir.path().join("at");
+        let past = dir.path().join("past");
+        let padded = |len: u64| {
+            let mut text = String::from("alpha");
+            text.push_str(&" ".repeat(usize::try_from(len).unwrap() - text.len()));
+            text
+        };
+        fs::write(&at_bound, padded(MAX_RUNG_BYTES)).unwrap();
+        fs::write(&past, padded(MAX_RUNG_BYTES + 1)).unwrap();
+
+        assert_eq!(read_a_name(&at_bound, false).as_deref(), Some("alpha"));
+        assert_eq!(read_a_name(&past, false), None);
+        assert_eq!(read_a_name(&past, true), None);
+        // Not a file at all.
+        assert_eq!(read_a_name(dir.path(), true), None);
+    }
+
+    #[test]
+    fn the_planes_own_default_persona_is_the_declared_one_else_the_committed_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        for who in ["declared", "committed"] {
+            fs::create_dir_all(root.join("personas").join(who)).unwrap();
+            fs::write(root.join("personas").join(who).join("persona.md"), "# p\n").unwrap();
+        }
+        fs::write(root.join("personas/.default"), "committed\n").unwrap();
+        assert_eq!(plane_default_persona(&root).as_deref(), Some("committed"));
+
+        fs::write(
+            root.join(crate::plane::MANIFEST),
+            "[persona]\ndefault = \"declared\"\n",
+        )
+        .unwrap();
+        assert_eq!(plane_default_persona(&root).as_deref(), Some("declared"));
+    }
+
+    /// Set in a child this test binary starts, which then prints what [`Ids::from_env`]
+    /// answered there and nothing else.
+    const IDS_CHILD: &str = "CHARTER_TEST_ACTIVE_IDS_CHILD";
+
+    /// Every variable a rung reads, so the child answers from what the test hands it and
+    /// never from whatever terminal the suite happens to run in.
+    const IDS_VARS: [&str; 6] = [
+        SESSION_ID_ENV,
+        CONVERSATION_ENV,
+        "TERM_SESSION_ID",
+        "TMUX_PANE",
+        "STY",
+        "SSH_TTY",
+    ];
+
+    const ASK_IDS: &str = "active::tests::this_process_is_asked_for_its_own_ids";
+
+    #[test]
+    fn this_process_is_asked_for_its_own_ids() {
+        if std::env::var_os(IDS_CHILD).is_some() {
+            let ids = Ids::from_env();
+            println!("ids<{:?}|{:?}>", ids.session, ids.terminal);
+            return;
+        }
+        // The process's own environment, and not a named one: `from_env` reads the real
+        // variables, which a test can only set by starting a process with them.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", ASK_IDS, "--nocapture", "--test-threads=1"])
+            .env(IDS_CHILD, "1")
+            .stdin(std::process::Stdio::null());
+        for name in IDS_VARS {
+            child.env_remove(name);
+        }
+        let out = crate::forklock::output(
+            child
+                .env(SESSION_ID_ENV, "frame 1")
+                .env("TERM_SESSION_ID", "w0t1p0"),
+        )
+        .unwrap();
+        let printed = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            printed.contains(r#"ids<Some("frame1")|Some("w0t1p0")>"#),
+            "{printed}"
+        );
+    }
+
+    /// With no pane variable at all, the pane is the controlling terminal's device — the
+    /// rung that answers under the app, which gives each chat a pty and sets none of them.
+    #[cfg(unix)]
+    #[test]
+    fn with_no_pane_variable_the_pane_is_the_terminal_the_process_reads() {
+        use crate::engine::{AlacrittyEngine, Size};
+        use crate::session::{Session, Spec};
+        const SIZE: Size = Size {
+            columns: 200,
+            rows: 24,
+        };
+        let mut spec = Spec::new(std::env::current_exe().unwrap(), SIZE).args([
+            "--exact",
+            ASK_IDS,
+            "--nocapture",
+            "--test-threads=1",
+        ]);
+        spec.env.push((IDS_CHILD.into(), "1".into()));
+        spec.env_without = IDS_VARS.iter().map(Into::into).collect();
+        let session =
+            Session::spawn(spec, Box::new(AlacrittyEngine::new(SIZE, 1000))).expect("a pty");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let lines = session.screen().lines;
+            if let Some(line) = lines.iter().find(|l| l.contains("ids<")) {
+                // `/dev/ttys003` on macOS, `/dev/pts/3` on Linux, with charter's `-` for
+                // every character it does not keep.
+                assert!(line.contains(r#"ids<None|Some("-dev-"#), "{lines:#?}");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child never answered: {lines:#?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }

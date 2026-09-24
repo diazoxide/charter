@@ -7,3 +7,9 @@
 	gpgsign = false
 [tag]
 	gpgsign = false
+# And a developer's global excludes file (core.excludesFile, or git's default
+# ~/.config/git/ignore) does not decide what a fixture's git calls ignored (charter-app#262):
+# one that lists .claude/settings.local.json made a test's own untracked file read as
+# charter's to replace. /dev/null is an excludes file with nothing in it.
+[core]
+	excludesFile = /dev/null

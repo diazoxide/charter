@@ -287,6 +287,9 @@ pub(crate) fn supported() -> io::Result<()> {
     Ok(())
 }
 
+/// Off unix only. On unix, where the mutation run happens, `supported` IS `Ok(())`, so the
+/// mutant that makes it so is excluded in `.cargo/mutants.toml`: the refusal below is code no
+/// unix build compiles, and the unix twin above already is the mutant.
 #[cfg(not(unix))]
 pub(crate) fn supported() -> io::Result<()> {
     Err(io::Error::new(
@@ -832,6 +835,12 @@ impl Store {
         let moved = entry.pinned != pinned;
         entry.pinned = pinned;
         // Unpinning puts the entry back under the recents bound, where it may now be past it.
+        //
+        // Only then, though `trim` would be harmless otherwise: every other change here keeps
+        // the store inside both bounds (a pin moves an entry from the recents count to the
+        // pinned one, and the check above keeps the pinned count within its bound), and a
+        // store inside its bounds is one `trim` leaves as it is. So `||` for this `&&` is an
+        // equivalent mutant, excluded in `.cargo/mutants.toml` on that ground.
         if moved && !pinned {
             self.trim();
         }
@@ -1767,7 +1776,12 @@ impl From<&Store> for OnDisk {
 
 /// The store keeps nothing off unix, so its tests are unix's. What the other platforms do
 /// instead is one refusal, and [`supported`] is where it is said.
-#[cfg(all(test, unix))]
+///
+/// Two attributes rather than `cfg(all(test, unix))`, because cargo-mutants recognises test
+/// code by a bare `#[cfg(test)]`: under the combined form it mutated this module's own
+/// helpers and reported a changed fixture as untested production code.
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
@@ -2093,6 +2107,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         }
     }
 
@@ -2471,6 +2486,7 @@ mod tests {
                     show_footer: false,
                     pinned: false,
                     number: None,
+                    label: None,
                 }],
             },
         )
@@ -3437,5 +3453,149 @@ mod tests {
         // (ADR 0031, charter-app#98) and this module's tests do not compile at all.
         // What that platform does is one sentence, and `supported` is where it is said.
         assert!(supported().is_ok());
+    }
+
+    #[test]
+    fn a_dropped_entry_says_which_bound_it_is_past() {
+        assert_eq!(
+            Room::why(true),
+            format!("is past the {MOST_PINNED} projects charter pins")
+        );
+        assert_eq!(
+            Room::why(false),
+            format!("is past the {MOST_RECENTS} planes charter remembers")
+        );
+    }
+
+    /// Set in a child this test binary starts, which answers from its own environment.
+    const ROOT_CHILD: &str = "CHARTER_TEST_MACHINE_ROOT_CHILD";
+
+    #[test]
+    fn the_config_home_is_read_from_this_processs_own_environment() {
+        if let Some(want) = std::env::var_os(ROOT_CHILD) {
+            assert_eq!(config_root(), Some(PathBuf::from(want)));
+            return;
+        }
+        // `config_root` reads the real variables, which a test can only set by starting a
+        // process with them; `rooted` above is the ladder, and this is the reading of it.
+        let home = machine();
+        let out = crate::forklock::output(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "machine::tests::the_config_home_is_read_from_this_processs_own_environment",
+                    "--test-threads=1",
+                ])
+                .env(ROOT_CHILD, home.path())
+                .env(HOME_VAR, home.path()),
+        )
+        .unwrap();
+        assert!(
+            out.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    #[test]
+    fn a_change_is_said_as_what_it_is_about_and_what_happened_to_it() {
+        assert_eq!(
+            Change::PluginAdded("market@repo".into()).to_string(),
+            "the plugin market@repo is new"
+        );
+        assert_eq!(
+            Change::EnvChanged("PATH".into()).to_string(),
+            "the environment variable PATH has a different value"
+        );
+        assert_eq!(Change::ProfileRemoved("work".into()).name(), "work");
+    }
+
+    #[test]
+    fn unpinning_is_never_refused_for_want_of_room_to_pin() {
+        let mut store = Store::default();
+        let planes: Vec<PathBuf> = (0..=MOST_PINNED)
+            .map(|i| PathBuf::from(format!("/planes/p{i}")))
+            .collect();
+        for (i, plane) in planes.iter().enumerate() {
+            store.remember(plane, 1_758_000_000 + i as u64);
+        }
+        for plane in &planes[..MOST_PINNED] {
+            assert_eq!(store.pin(plane, true), Ok(true));
+        }
+        let last = &planes[MOST_PINNED];
+        assert!(store.pin(last, true).is_err(), "no room to pin one more");
+        assert_eq!(
+            store.pin(last, false),
+            Ok(false),
+            "and asking to unpin what is not pinned is no change, not a refusal"
+        );
+    }
+
+    #[test]
+    fn a_file_beside_the_store_is_read_up_to_its_bound_and_not_one_byte_past() {
+        let machine = machine();
+        std::fs::create_dir_all(dir(machine.path())).unwrap();
+        std::fs::write(dir(machine.path()).join("five"), "12345").unwrap();
+        std::fs::write(dir(machine.path()).join("six"), "123456").unwrap();
+
+        assert_eq!(
+            read_beside(machine.path(), "five", 5, "a test file").unwrap(),
+            Some("12345".to_owned())
+        );
+        assert!(read_beside(machine.path(), "six", 5, "a test file").is_err());
+    }
+
+    #[test]
+    fn a_pinned_workspace_name_may_be_as_long_as_a_file_name_and_no_longer() {
+        assert!(usable_workspace(&"a".repeat(LONGEST_WORKSPACE_NAME)).is_ok());
+        assert!(usable_workspace(&"a".repeat(LONGEST_WORKSPACE_NAME + 1)).is_err());
+    }
+
+    #[test]
+    fn a_recent_that_is_not_an_object_is_not_an_entry_and_an_empty_one_is_an_empty_path() {
+        let mut dropped = Vec::new();
+        load(&serde_json::json!({"recents": [5, {}]}), &mut dropped);
+        assert_eq!(
+            dropped,
+            vec![
+                Dropped::Recent {
+                    plane: String::new(),
+                    why: "is not an entry charter wrote".into(),
+                },
+                Dropped::Recent {
+                    plane: String::new(),
+                    why: "is empty".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_lock_is_let_go_even_where_a_copy_of_its_descriptor_lives_on() {
+        // `flock` belongs to the open file description, so a descriptor a forked child
+        // inherited would hold it past the close. The unlock is what lets it go regardless.
+        let machine = machine();
+        let lock = Lock::on(machine.path());
+        let copy = lock
+            .0
+            .as_ref()
+            .expect("the lock was taken")
+            .try_clone()
+            .unwrap();
+
+        drop(lock);
+
+        let again = std::fs::File::open(dir(machine.path()).join(LOCK)).unwrap();
+        assert!(
+            rustix::fs::flock(&again, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok(),
+            "the lock is free once its holder is dropped"
+        );
+        drop(copy);
     }
 }

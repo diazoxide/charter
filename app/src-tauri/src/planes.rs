@@ -173,8 +173,13 @@ pub struct Held {
     id: PlaneId,
     root: PathBuf,
     hooks: Hooks,
+    /// The window, for a move no hook reports: a chat closed, or a request ignored.
+    tell: Teller,
     chats: Chats,
     records: Arc<Records>,
+    /// What tells the window the plane moved on disk (charter-app#264). None where the
+    /// platform would not watch; the panels then read the plane when focused, as they did.
+    watch: Mutex<Option<crate::planewatch::Watch>>,
 }
 
 impl Held {
@@ -252,6 +257,42 @@ impl Held {
         }
     }
 
+    /// Ends a chat and takes it off the board — the tab's ×, or ending its pane — and tells
+    /// the window.
+    ///
+    /// **The telling is the fix for charter-app#247.** The window's needs-you queue is the one
+    /// the last `chat-moved` carried, and nothing else ever corrects it. Taking a chat off the
+    /// board used to be silent, and the exit that follows a close cannot speak either: by the
+    /// time it lands the board no longer has the chat, so `Board::exited` answers "nothing
+    /// changed". A chat closed while it was asking for you therefore stayed in the queue, and
+    /// in the red counts on its project and workspace tabs, until some other chat moved.
+    ///
+    /// **Off the board first, and told last.** Off first, so a hook that fires while the
+    /// program is being ended finds no chat to move and tells nothing; told last, so a report
+    /// the board took just before is told before this, never after it with the chat still
+    /// asking. And off and told even when the session had already gone: either way the chat
+    /// is gone from the app, and a window left believing otherwise is the defect.
+    pub fn close_chat(&self, session: u32) -> Result<(), String> {
+        let gone = self.hooks.closed(session);
+        let closed = self.chats.close(session);
+        (self.tell)(gone);
+        closed
+    }
+
+    /// Drops a chat's request for the operator without answering it — the needs-you item's
+    /// Ignore — and tells the window (charter-app#248).
+    ///
+    /// **The core holds it, not the window.** The window's queue is the one the last
+    /// `chat-moved` carried and it is replaced whole on every move, so an ignore kept in the
+    /// window would be undone by the next move of any chat. On the board it lasts exactly as
+    /// long as the request does: the chat's next `Stop` or `Notification` asks again.
+    ///
+    /// The snapshot is built under the board's hold (`Hooks::ignored`), and numbered there,
+    /// so a report racing it is put in order by the window rather than by which thread won.
+    pub fn ignore_needs_you(&self, session: u32) {
+        (self.tell)(self.hooks.ignored(session));
+    }
+
     /// Writes the record, ends every session, and stops listening — everything a plane holds
     /// in this process, and nothing it has on disk.
     ///
@@ -271,6 +312,12 @@ impl Held {
         });
         self.chats.end_all();
         self.hooks.stop();
+        drop(
+            self.watch
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
     }
 }
 
@@ -289,6 +336,8 @@ pub struct Planes {
     open: Mutex<HashMap<PlaneId, Arc<Held>>>,
     /// Told when a handoff has opened a chat in any plane (charter-app#204).
     arrivals: crate::handoff::Arrivals,
+    /// Told when any plane changes on disk (charter-app#264).
+    changes: crate::planewatch::Changed,
     /// The launch's question and its answer — see [`Relaunching`].
     relaunching: Mutex<Relaunching>,
 }
@@ -347,6 +396,7 @@ impl Planes {
             // Nobody to tell yet. A registry with no window still opens a handed-off chat;
             // it simply has no strip to put it on until one asks what is open.
             arrivals: Arc::new(|_| {}),
+            changes: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
         }
     }
@@ -354,6 +404,13 @@ impl Planes {
     /// Tells `arrivals` whenever a handoff opens a chat, so the window can put it on a strip.
     pub fn telling_arrivals(mut self, arrivals: crate::handoff::Arrivals) -> Self {
         self.arrivals = arrivals;
+        self
+    }
+
+    /// Tells `changes` whenever a plane this registry holds changes on disk, so the window reads
+    /// it again (`crate::planewatch`).
+    pub fn telling_changes(mut self, changes: crate::planewatch::Changed) -> Self {
+        self.changes = changes;
         self
     }
 
@@ -921,12 +978,26 @@ impl Planes {
                 }));
         }
 
+        // Never fatal, as the socket above is not: a plane that cannot be watched still opens,
+        // and its panels read it when a workspace is focused.
+        let watch = crate::planewatch::Watch::start(id.clone(), &root, Arc::clone(&self.changes))
+            .map_err(|why| {
+                eprintln!(
+                    "charter: {} is not watched ({why}); its panels will not follow changes \
+                     made outside this window",
+                    root.display()
+                );
+            })
+            .ok();
+
         Held {
             id,
             root,
             hooks,
+            tell: Arc::clone(&self.tell),
             chats,
             records,
+            watch: Mutex::new(watch),
         }
     }
 
@@ -1672,6 +1743,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             }],
             dealt: 0,
             relaunch_after_update: false,
@@ -1702,6 +1774,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             })
             .collect();
         reopen::write(
@@ -2958,5 +3031,231 @@ mod tests {
             Restoring::from_args(["charter-app".to_owned(), "--no-restore-really".to_owned()])
                 .wanted()
         );
+    }
+
+    // **A needs-you item never outlives its chat (charter-app#247).** The window's queue is
+    // whatever the LAST `chat-moved` it was sent carried (`chatState.ts:moved`), so every way
+    // a chat can stop being open has to end with the window being told a queue without it.
+
+    /// A registry that keeps everything it would have told a window.
+    fn planes_telling() -> (Planes, Arc<Mutex<Vec<Moved>>>) {
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let tell = Arc::clone(&told);
+        let planes = Planes::telling(
+            Arc::new(move |moved: Moved| tell.lock().expect("the log").push(moved)),
+            crate::Shipped::default(),
+            None,
+        );
+        (planes, told)
+    }
+
+    /// The needs-you queue a window showing `plane` holds now: the newest one it was sent,
+    /// which is the one numbered last — the window drops a snapshot older than the one it
+    /// holds, whatever order they land in (`chatState.ts`, charter-app#248).
+    fn the_window_s_queue(told: &Mutex<Vec<Moved>>, plane: &PlaneId) -> Vec<u32> {
+        told.lock()
+            .expect("the log")
+            .iter()
+            .filter(|moved| moved.plane == *plane)
+            .max_by_key(|moved| moved.sequence)
+            .map(|moved| moved.queue.clone())
+            .unwrap_or_default()
+    }
+
+    /// Waits, up to a bound, for the window's queue to satisfy `wanted`.
+    fn the_window_s_queue_becomes(
+        told: &Mutex<Vec<Moved>>,
+        plane: &PlaneId,
+        wanted: impl Fn(&[u32]) -> bool,
+    ) -> Vec<u32> {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let queue = the_window_s_queue(told, plane);
+            if wanted(&queue) || std::time::Instant::now() > until {
+                return queue;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// A chat on `program` that has stopped and asked for the operator, over the real socket.
+    fn a_chat_asking_for_you(held: &Held, told: &Mutex<Vec<Moved>>, program: &str) -> u32 {
+        let session = held
+            .chats()
+            .start(&one_chat_on(program).chats[0], STARTING)
+            .expect("the chat starts");
+        a_stop_from(held, session);
+        assert_eq!(
+            the_window_s_queue_becomes(told, &held.id, |queue| queue.contains(&session)),
+            vec![session],
+            "the chat never asked for you, so nothing below is evidence"
+        );
+        session
+    }
+
+    /// The `Stop` a harness's hook sends when its turn ends.
+    fn a_stop_from(held: &Held, session: u32) {
+        charter_core::hookwire::send(
+            held.hooks().socket().expect("the plane is listening"),
+            &charter_core::hookwire::Report {
+                chat: session,
+                event: charter_core::state::Event::Stop,
+                conversation: charter_core::hookwire::Conversation::Unknown,
+                pid: None,
+                detail: charter_core::state::Detail::default(),
+            },
+        )
+        .expect("the hook reaches the plane");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closing_a_chat_that_needs_you_takes_it_out_of_the_window_s_queue() {
+        // The tab's ×, and ending the pane: both are `close_session`, which is this.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = a_chat_asking_for_you(&held, &told, "/bin/cat");
+
+        held.close_chat(session).expect("it closes");
+
+        assert_eq!(
+            the_window_s_queue(&told, &plane),
+            Vec::<u32>::new(),
+            "the chat is closed and the window still shows it needing you"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_whose_program_ends_by_itself_leaves_the_window_s_queue() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = a_chat_asking_for_you(&held, &told, "/bin/cat");
+
+        // End of input: `cat` exits 0 on its own, as a harness does on `/exit`.
+        held.chats()
+            .sessions()
+            .input(session, "\u{4}")
+            .expect("the chat takes input");
+
+        assert_eq!(
+            the_window_s_queue_becomes(&told, &plane, <[u32]>::is_empty),
+            Vec::<u32>::new(),
+            "the chat's program has ended and the window still shows it needing you"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_relaunch_never_puts_back_a_chat_needing_you() {
+        // Quit with a chat asking, then launch again: the record puts the chat back, and the
+        // chat has asked nothing of THIS run.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        {
+            let (planes, told) = planes_telling();
+            let plane = planes.open(&root);
+            let held = planes.held(&plane).expect("it is held");
+            held.reopen(STARTING, Ok(reopen::Record::default()), Choice::ReopenAll);
+            a_chat_asking_for_you(&held, &told, "/bin/cat");
+
+            planes.let_go_of_all();
+
+            assert_eq!(
+                the_window_s_queue_becomes(&told, &plane, <[u32]>::is_empty),
+                Vec::<u32>::new(),
+                "the quit ended the chat and the window still shows it needing you"
+            );
+        }
+
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        held.reopen(STARTING, reopen::read_or_refusal(&root), Choice::ReopenAll);
+        let back = held.chats().open_now();
+        assert_eq!(back.len(), 1, "the record did not put the chat back");
+
+        // What a window opening now is answered (`chat_states`), and what it has been told.
+        let snapshot: Vec<Moved> = back
+            .iter()
+            .map(|open| held.hooks().now(open.session))
+            .collect();
+        assert!(
+            snapshot
+                .iter()
+                .all(|moved| moved.queue.is_empty() && !moved.needs_you),
+            "a relaunch put back a chat needing you: {snapshot:?}"
+        );
+        let told = told.lock().expect("the log");
+        assert!(
+            told.iter()
+                .all(|moved| moved.queue.is_empty() && !moved.needs_you),
+            "a relaunch told the window a chat needs you: {told:?}"
+        );
+    }
+
+    // **Ignore lasts until the chat asks again (charter-app#248).**
+
+    #[cfg(unix)]
+    #[test]
+    fn ignoring_a_chat_that_needs_you_takes_it_out_of_the_window_s_queue() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = a_chat_asking_for_you(&held, &told, "/bin/cat");
+
+        held.ignore_needs_you(session);
+
+        assert_eq!(
+            the_window_s_queue(&told, &plane),
+            Vec::<u32>::new(),
+            "the chat was ignored and the window still shows it needing you"
+        );
+        assert_eq!(
+            held.hooks().now(session).state,
+            "waiting",
+            "ignoring a chat answered nothing in it"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ignored_chat_that_stops_again_is_back_in_the_window_s_queue() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = a_chat_asking_for_you(&held, &told, "/bin/cat");
+        held.ignore_needs_you(session);
+        assert!(the_window_s_queue(&told, &plane).is_empty());
+
+        a_stop_from(&held, session);
+
+        assert_eq!(
+            the_window_s_queue_becomes(&told, &plane, |queue| queue.contains(&session)),
+            vec![session],
+            "the chat asked again and the window was not told"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ignored_chat_is_still_ignored_when_a_window_asks_again() {
+        // A window reload asks `chat_states`, and the board is what answers it.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = a_chat_asking_for_you(&held, &told, "/bin/cat");
+
+        held.ignore_needs_you(session);
+
+        let asked = held.hooks().now(session);
+        assert!(asked.queue.is_empty() && !asked.needs_you, "{asked:?}");
     }
 }

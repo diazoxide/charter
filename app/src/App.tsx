@@ -35,8 +35,10 @@ import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { useContributedPanels } from "./Panels";
 import { useTabStop } from "./roving";
+import { closeOnDelete } from "./tabKeys";
 import { useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
+import { ClosingProject } from "./ClosingProject";
 import { QuitWarning, type Ending } from "./QuitWarning";
 import { RelaunchAsk } from "./RelaunchAsk";
 import { fitting, LEAST, useRoom } from "./fits";
@@ -129,6 +131,12 @@ function App() {
   /** Whether the extension list is up. The window's, not a project's: an extension is machine
    *  state, so it is the same list whichever project is in front. */
   const [extensions, setExtensions] = useState(false);
+  /**
+   * The last ask for a project's settings tab (charter-app#252): which project, and a count so
+   * that asking twice opens it twice — the second ask brings forward a tab the operator may
+   * have left behind. The project's own `PlaneView` opens it, because its tabs are its own.
+   */
+  const [settingsAsk, setSettingsAsk] = useState<{ plane: PlaneId; at: number }>();
   /** Why this launch took longer than the limit, when it did — and nothing when it did not
    *  (charter-app#24). The core decides that; the window only draws it. */
   const [slowStart, setSlowStart] = useState<string>();
@@ -331,8 +339,9 @@ function App() {
   }, []);
 
   /** Lets go of one project. Its chats end, its record is written into it, and its tab goes.
-   *  Nothing of the project on disk goes. */
-  const closeProject = useCallback(async (plane: string): Promise<Ran> => {
+   *  Nothing of the project on disk goes. Reached through {@link closeProject}, which asks
+   *  first when there is anything to end. */
+  const letGoOf = useCallback(async (plane: string): Promise<Ran> => {
     const answer = await commands
       .closePlane(plane)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -360,6 +369,36 @@ function App() {
     });
     return { ok: true, said: `charter let go of ${plane}. Nothing in it was changed.` };
   }, []);
+
+  /** The project whose close is waiting on the operator's answer (`ClosingProject`). */
+  const [closing, setClosing] = useState<string>();
+  /** Every project's report as of the last render, read when a close arrives rather than
+   *  closed over, so the verb below stays one function. */
+  const reportsNow = useRef(reports);
+  useLayoutEffect(() => {
+    reportsNow.current = reports;
+  });
+
+  /**
+   * The `project.close:<plane>` row's verb: **ask first when the project has chats open**, and
+   * let go of it at once when it has none — the operator's ruling on charter-app#239, where
+   * Delete on a project's tab put "end every chat in it" one key away.
+   *
+   * Here, where the row is carried out, and not on any one button, so the `×`, Delete, the
+   * tab's menu and the palette all ask it (`EndingChat` is the same rule one scope down). A
+   * project that has not yet said what it has open is asked about too: "no tabs" there is
+   * "not yet", the quit warning's rule. It answers `{ ok: true }` for a row it has only asked
+   * about, as `PlaneView`'s `run` does.
+   */
+  const closeProject = useCallback(
+    async (plane: string): Promise<Ran> => {
+      const said = reportsNow.current[plane];
+      if (said?.settled && said.ending.length === 0) return letGoOf(plane);
+      setClosing(plane);
+      return { ok: true };
+    },
+    [letGoOf],
+  );
 
   /**
    * Scaffolds a new project and takes it into this window — **through the same gate**.
@@ -411,6 +450,10 @@ function App() {
       selectProject: (plane: string) => setShowing({ at: "plane", plane }),
       closeProject,
       pinProject,
+      openSettings: (plane: string) => {
+        setShowing({ at: "plane", plane });
+        setSettingsAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
+      },
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
     [closeProject, pinProject],
@@ -646,6 +689,7 @@ function App() {
       closePane: () => undefined,
       closeTab: () => undefined,
       selectTab: () => undefined,
+      renameTab: () => undefined,
       focusWorkspace: () => undefined,
       // Both are rows the catalogue marks unavailable with no plane — there is nowhere to make
       // a workspace and no workspace to delete — so `perform` refuses them before either of
@@ -653,6 +697,8 @@ function App() {
       createWorkspace: () => undefined,
       removeWorkspace: () => undefined,
       showChat: () => undefined,
+      // The queue is a project's, and there is no project here to have one.
+      ignoreNeedsYou: async () => nowhere(),
       // A view is shown in a project's tab, and there is no project here. The rows that open one
       // do not exist without a plane, for the same reason the workspace rows above do not.
       openView: () => undefined,
@@ -668,6 +714,7 @@ function App() {
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
+      openSettings: windowDoes.openSettings,
       quit: windowDoes.quit,
     }),
     [windowDoes],
@@ -704,7 +751,14 @@ function App() {
    * does not react, and neither fact is written twice.
    */
   const stripOffers = useMemo(
-    () => [strip.open, strip.create, ...strip.switchTo, ...strip.pin, ...strip.close],
+    () => [
+      strip.open,
+      strip.create,
+      ...strip.switchTo,
+      ...strip.pin,
+      ...strip.settings,
+      ...strip.close,
+    ],
     [strip],
   );
 
@@ -873,6 +927,7 @@ function App() {
                       <button
                         role="tab"
                         aria-selected={project.plane === inFront}
+                        onKeyDown={(event) => closeOnDelete(event, strip.close[at], press)}
                         // The path, because two projects can share a directory name and the name is
                         // all the tab has room for.
                         title={project.plane}
@@ -985,6 +1040,7 @@ function App() {
           alerts={alerts}
           contributed={contributedPanels}
           views={extensionViews}
+          settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
         />
       ))}
 
@@ -1073,6 +1129,29 @@ function App() {
       {extensions && <Extensions onClose={() => setExtensions(false)} />}
 
       {asking && <QuitWarning chats={ending} onQuit={quit} onCancel={dontQuit} />}
+
+      {closing !== undefined && (
+        <ClosingProject
+          name={calledOn(closing)}
+          chats={reports[closing]?.ending ?? []}
+          heard={reports[closing]?.settled ?? false}
+          onClose={() => {
+            const plane = closing;
+            setClosing(undefined);
+            void letGoOf(plane).then((answer) =>
+              setReport(
+                answer.ok
+                  ? answer.said
+                    ? { from: `project.close:${plane}`, refused: false, words: answer.said }
+                    : undefined
+                  : { from: `project.close:${plane}`, refused: true, words: answer.refused },
+              ),
+            );
+          }}
+          onCancel={() => setClosing(undefined)}
+        />
+      )}
+
       {relaunchAsking && (
         <RelaunchAsk
           question={relaunchAsking.question}

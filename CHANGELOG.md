@@ -19,8 +19,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mid-turn is named first, and you choose to restart now or wait. If the restart does not come
   back, the next launch offers the same sessions.
   ([#251](https://github.com/diazoxide/charter-app/issues/251))
+- **Project settings**, a tab of its own: right-click a project's tab and choose *Project
+  settings…*, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
+  which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
+  this machine — each as a form over the keys charter documents and as raw TOML for everything
+  else. Saving keeps your comments and the order of your keys, and refuses what charter would
+  refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
+  in the committed file, a value that looks like a credential. Local is created on the first
+  save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
+- An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
+  counts on its project and workspace tabs at once, without touching the chat. It lasts until
+  that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
+  the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
 ### Fixed
+
+- A chat's report that raced a close, or an Ignore, can no longer put the chat back in the
+  needs-you queue: every update the window gets is numbered, and it keeps the newest.
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
 - On Linux and Windows the app menu no longer takes a key the chat's shell owns: `Ctrl-C` in a
   chat is the interrupt again, not Copy, and the same goes for `Ctrl-A`, `Ctrl-Z`, `Ctrl-Y`,
@@ -30,6 +47,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `charter git-policy` runs, instead of saying it is not checked. It only reads, and names
   `charter git-policy --apply` for a clone that drifted.
   ([#241](https://github.com/diazoxide/charter-app/pull/241))
+- Closing a chat that was asking for you, with the × on its tab or by ending its pane, takes it
+  out of the needs-you queue and out of the red counts on its project and workspace tabs. It
+  used to stay there until some other chat moved.
+  ([#247](https://github.com/diazoxide/charter-app/issues/247))
 
 ## [0.1.1] - 2026-09-24
 

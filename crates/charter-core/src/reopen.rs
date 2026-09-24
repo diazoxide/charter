@@ -108,6 +108,16 @@ pub struct Chat {
     /// was not: a bump drops every operator's open chats, and this field's absence reads as
     /// the behaviour every record without it was written under.
     pub number: Option<u32>,
+    /// The name the operator gave this chat, where they gave one (charter-app#254) — what its
+    /// tab says instead of the default `<persona> <N>`.
+    ///
+    /// **Charter's label and nothing else.** It is not [`Self::name`], which is what the
+    /// harness was started with (`--name`) and is told again at a resume: renaming a chat
+    /// never reaches a harness that is running, and a split still starts its chat under the
+    /// tab's chat name. Held to [`label`] wherever it comes from. `None` is "no name given",
+    /// which is what every record written before this field says — not a format change, for
+    /// [`Self::pinned`]'s reason.
+    pub label: Option<String>,
 }
 
 /// The most view tabs one record puts back. A window opens one per persona and per extension
@@ -561,6 +571,40 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     })
 }
 
+/// The longest name, in characters, an operator can give a chat.
+pub const MOST_LABEL: usize = 64;
+
+/// A name an operator gave a chat, as charter will hold it — or why it will not.
+///
+/// **One rule for every way a name arrives**: the picker's Name field, a rename on the tab, and
+/// a record read off disk. Trimmed, because a space at either end is never what was meant and
+/// draws as nothing. **Blank is `None`**, which is "no name given" — the tab says its default,
+/// so clearing a name is how the default comes back. Bounded, because it is drawn on a tab.
+/// And **refused, never stripped**, when it holds a control character or an invisible
+/// formatting one ([`crate::panel::undrawable`]): what those do is make two different names look
+/// like one on the strip, or turn the words around them backwards, and a name quietly changed
+/// into another is not the one the operator typed.
+pub fn label(raw: &str) -> Result<Option<String>, String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let length = text.chars().count();
+    if length > MOST_LABEL {
+        return Err(format!(
+            "That name is {length} characters long, and a chat's name is at most {MOST_LABEL}."
+        ));
+    }
+    if text.contains(crate::panel::undrawable) {
+        return Err(
+            "That name holds a control character or an invisible formatting one, which \
+             charter will not draw."
+                .to_owned(),
+        );
+    }
+    Ok(Some(text.to_owned()))
+}
+
 /// The record as JSON, and the only place this file's field names are written down.
 ///
 /// It is deliberately a shape apart from `Record`: every field is the plainest type JSON
@@ -723,6 +767,12 @@ struct ChatOnDisk {
     /// counts from one.
     #[serde(default)]
     number: u32,
+    /// The name the operator gave the chat, or absent — see [`Chat::label`]. Absent in every
+    /// record written before a chat could have one, and whenever none was given, so a plane
+    /// that never renamed a chat writes the record it always wrote. Held to [`label`] on the
+    /// way in, and a value it refuses reads as absent: the chat comes back under its default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    label: String,
 }
 
 impl From<&Record> for OnDisk {
@@ -760,6 +810,7 @@ impl From<&Record> for OnDisk {
                     },
                     pinned: chat.pinned,
                     number: chat.number.unwrap_or_default(),
+                    label: chat.label.clone().unwrap_or_default(),
                 })
                 .collect(),
             dealt: highest_dealt(record),
@@ -805,6 +856,7 @@ impl From<ChatOnDisk> for Chat {
             // that `contain::segment_ok` would pass for any integer, and a record that names
             // a number no chat here holds costs at most a gap in the counting.
             number: (chat.number > 0).then_some(chat.number),
+            label: label(&chat.label).ok().flatten(),
         }
     }
 }
@@ -827,6 +879,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         }
     }
 
@@ -1155,6 +1208,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             }],
         }
     }
@@ -1788,6 +1842,115 @@ mod tests {
         .chosen(Choice::StartFresh);
 
         assert!(!fresh.relaunch_after_update);
+    }
+
+    // ----- the name the operator gave a chat (charter-app#254) ----------------------------
+
+    #[test]
+    fn a_chat_comes_back_under_the_name_the_operator_gave_it() {
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![Chat {
+                label: Some("billing bug".into()),
+                ..claude("3", None)
+            }],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        assert_eq!(
+            read(plane.path()).chats[0].label.as_deref(),
+            Some("billing bug")
+        );
+    }
+
+    #[test]
+    fn a_record_written_before_chats_had_names_reads_as_the_default_one() {
+        // Not a format change, for `Chat::pinned`'s reason: a missing key reads as "no name
+        // given", which is what was true of every record written before a chat could have one.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[{"program":"claude","name":"3"}]}"#,
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        assert_eq!(back.chats.len(), 1);
+        assert_eq!(back.chats[0].label, None);
+    }
+
+    #[test]
+    fn a_chat_with_no_name_given_writes_no_label_key() {
+        // So the record a plane that never renamed a chat writes is the one it always wrote.
+        let plane = tempfile::tempdir().unwrap();
+        write(plane.path(), &one_chat()).unwrap();
+
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+
+        assert!(!text.contains("\"label\""), "{text}");
+    }
+
+    #[test]
+    fn a_label_off_disk_charter_would_refuse_reads_as_no_name_given() {
+        // The file is writable by whoever can write the plane's state directory, and the label
+        // is drawn on a tab: a line that would draw as something else keeps its chat and loses
+        // only the name.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            "{\"version\":1,\"at\":0,\"chats\":[{\"program\":\"claude\",\"name\":\"3\",\
+             \"label\":\"pay\u{202e}lanigiro\"}]}",
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        assert_eq!(back.chats.len(), 1);
+        assert_eq!(back.chats[0].label, None);
+    }
+
+    #[test]
+    fn a_label_is_trimmed() {
+        assert_eq!(label("  billing bug \t"), Ok(Some("billing bug".into())));
+    }
+
+    #[test]
+    fn a_blank_label_is_no_name_given() {
+        assert_eq!(label(""), Ok(None));
+        assert_eq!(label("   "), Ok(None));
+    }
+
+    #[test]
+    fn a_label_of_the_longest_length_is_kept_and_one_longer_is_refused() {
+        let longest = "é".repeat(MOST_LABEL);
+        assert_eq!(label(&longest), Ok(Some(longest.clone())));
+
+        let refused = label(&format!("{longest}x")).unwrap_err();
+        assert!(refused.contains(&MOST_LABEL.to_string()), "{refused}");
+    }
+
+    #[test]
+    fn a_label_with_a_control_character_is_refused() {
+        assert!(label("two\nlines").is_err());
+        assert!(label("bell\u{7}").is_err());
+    }
+
+    #[test]
+    fn a_label_with_an_invisible_character_is_refused() {
+        // Each makes two different names look like one on the strip, or turns the words
+        // around it backwards.
+        for sneaky in ["pay\u{202e}lanigiro", "a\u{200b}b", "\u{feff}steward"] {
+            assert!(label(sneaky).is_err(), "{sneaky:?} was let through");
+        }
+    }
+
+    #[test]
+    fn a_space_inside_a_label_is_content() {
+        assert_eq!(label("steward 1"), Ok(Some("steward 1".into())));
     }
 
     #[test]

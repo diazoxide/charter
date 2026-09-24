@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import * as Alert from "@radix-ui/react-alert-dialog";
 import { ENDS_IT, type Offer } from "./actions";
 
@@ -74,6 +74,7 @@ export function EndingChat({
 }) {
   // Focused by the dialog itself rather than by `autoFocus`: see `StartChat` for why.
   const cancel = useRef<HTMLButtonElement>(null);
+  const handBack = useFocusBack();
   return (
     <Alert.Root
       open
@@ -98,6 +99,7 @@ export function EndingChat({
             event.preventDefault();
             cancel.current?.focus();
           }}
+          onCloseAutoFocus={handBack}
         >
           <Alert.Title>{offer.title}?</Alert.Title>
           {/* The catalogue's own sentence, not a second one written here. It is the same
@@ -124,4 +126,25 @@ export function EndingChat({
       </Alert.Portal>
     </Alert.Root>
   );
+}
+
+/**
+ * **Where the focus was when a question arrived, handed back when it goes** — for an
+ * `AlertDialog` that has no `Trigger`, as a dialog the window raises on the operator's behalf
+ * does not.
+ *
+ * Radix returns the focus to the dialog's trigger, and with none it returns it nowhere: the
+ * page. That was invisible while these questions came from a click on a `×`. Since
+ * charter-app#239 they also come from Delete on a focused tab, and a Cancel that dropped the
+ * keyboard on the page would leave the operator nowhere with nothing ended. So the element
+ * that had the focus as the dialog opened gets it back — when it is still there. When it is not
+ * (the tab it was on has just closed), the focus is left for whoever put it there to place:
+ * `tabKeys.ts` puts it back on the strip.
+ */
+export function useFocusBack() {
+  const [had] = useState(() => document.activeElement);
+  return (event: Event) => {
+    event.preventDefault();
+    if (had instanceof HTMLElement && had.isConnected) had.focus();
+  };
 }

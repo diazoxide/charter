@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ChartColumn, LoaderCircle, Puzzle, UserRound } from "lucide-react";
+import { ChartColumn, LoaderCircle, Puzzle, Settings2, UserRound } from "lucide-react";
 import { EmptyState } from "./EmptyState";
 import { PanelList } from "./PanelList";
+import { ProjectSettings } from "./ProjectSettings";
 import {
   commands,
   type ExtensionView,
@@ -10,7 +11,7 @@ import {
   type PlaneId,
   type ViewAnswer,
 } from "./bindings";
-import { viewKey, type ViewRef } from "./tabs";
+import { SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 
 /**
  * **Views: what a tab shows when it does not show a chat** — ADR 0043 as amended
@@ -98,8 +99,11 @@ export function aboutOf(view: ViewRef, offered: readonly ExtensionView[]): strin
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
  *  extension offers — which says *a plugin's* before any word is read. */
 export function ViewMark({ view }: { view: ViewRef }) {
-  const Mark = view.from === null ? (view.view === "persona" ? UserRound : ChartColumn) : Puzzle;
-  return <Mark className="tab-mark" aria-hidden="true" />;
+  const props = { className: "tab-mark", "aria-hidden": true } as const;
+  if (view.from !== null) return <Puzzle {...props} />;
+  if (view.view === "persona") return <UserRound {...props} />;
+  if (isSettings(view)) return <Settings2 {...props} />;
+  return <ChartColumn {...props} />;
 }
 
 /**
@@ -188,6 +192,12 @@ export function ViewPane({
             }
             testid="view-waits"
           />
+        ) : isSettings(view) ? (
+          /* **The one built-in view that is not an answer.** Opened, filed, deduplicated and
+             put back at a launch exactly as every other view is; what differs is its body: a
+             form writes, and the panel vocabulary is for reading. Keyed by the plane, so a pane
+             that comes to show another project's settings starts from its own read. */
+          <ProjectSettings key={plane} plane={plane} />
         ) : (
           /* Keyed by the view, so a pane that comes to show another view starts from "asking"
              rather than drawing the last view's answer under the new one's title. */
@@ -196,6 +206,11 @@ export function ViewPane({
       </div>
     </section>
   );
+}
+
+/** Whether `view` is the Project settings view (charter-app#252). */
+function isSettings(view: ViewRef): boolean {
+  return viewKey(view) === viewKey(SETTINGS_VIEW);
 }
 
 /** A view asked now, and its answer, its refusal, or the sentence saying its source has gone. */

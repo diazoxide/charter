@@ -27,4 +27,34 @@ exclude_re = [
     # `rev-parse --show-toplevel` (nothing on stdout) nor an empty line can equal a real
     # directory. Equivalent over git's behaviour; the site says so.
     'src/scaffold/mod\.rs:\d+:\d+: replace \|\| with && in is_repo_top_level$',
+    # `glrefresh::empty` IS `State::default()`, so its `Default::default()` mutant is the
+    # function itself.
+    'src/glrefresh\.rs:\d+:\d+: replace empty -> State with Default::default\(\)$',
+    # `guest::already` slices from `begin + 1` to skip the begin marker; `begin * 1` keeps the
+    # marker in the slice, and the filter after it drops the marker either way (it starts
+    # with `#`).
+    'src/guest\.rs:\d+:\d+: replace \+ with \* in already$',
+    # `machine::supported` is `Ok(())` on unix and a refusal only off unix, which no unix
+    # build compiles: the one mutant, `Ok(())`, is the unix function itself and a change to
+    # code this platform does not build.
+    'src/machine\.rs:\d+:\d+: replace supported -> io::Result<\(\)> with Ok\(\(\)\)$',
+    # `worktree::head_of`'s `!sha.ok() || sha.line().is_empty()` against `&&`: a failed
+    # `git rev-parse --short HEAD` writes nothing on stdout and a successful one always writes
+    # a sha (measured, null-sha HEAD included), so the halves never differ. Equivalent over
+    # git's behaviour, as `commit_at` above; the site says so.
+    'src/worktree/mod\.rs:\d+:\d+: replace \|\| with && in head_of$',
+    # `wiring::names_a_place` is a question only off unix: there `MAIN_SEPARATOR` is `/`, so
+    # both halves of the `||` are one test, and every program `resolve_argv` answers with is
+    # absolute, so `true` is what it already returns. The site says so.
+    'src/wiring\.rs:\d+:\d+: replace \|\| with && in names_a_place$',
+    'src/wiring\.rs:\d+:\d+: replace names_a_place -> bool with true$',
+    # `guest::wire`'s first pass takes `charter_owned` less the marker, and the second pass
+    # registers `charter_owned` whole: with `== MARKER` instead, an owned file's line is
+    # listed by the second pass rather than the first, inside the same call. The final block,
+    # the rows and the worse of the two passes are the same either way. The site says so.
+    'src/guest\.rs:\d+:\d+: replace != with == in wire$',
+    # `machine::Store::pin` trims only after an unpin; with `||` it also trims after a pin or
+    # after an unpin that changed nothing, and in both of those the store is already inside
+    # both bounds, which `trim` leaves as it is. The site says why.
+    'src/machine\.rs:\d+:\d+: replace && with \|\| in Store::pin$',
 ]

@@ -217,6 +217,11 @@ export const commands = {
 	openSession: (plane: PlaneId, program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { plane, program, args, cwd, name, columns, rows })),
 	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
 	closeSession: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { plane, session })),
+	/**
+	 *  Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
+	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
+	 */
+	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
 	/**  Sends what a pane typed to the session's program. */
 	sendInput: (plane: PlaneId, session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { plane, session, text })),
 	/**  Tells a session how big the pane showing it now is. */
@@ -267,6 +272,15 @@ export const commands = {
 	 *  and never in the machine store, which ADR 0034 forbids holding a chat's name.
 	 */
 	pinChat: (plane: PlaneId, session: number, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_chat", { plane, session, pinned })),
+	/**
+	 *  Gives one chat a name, or takes the one it was given off with a blank — and answers the name
+	 *  it now has, so the tab draws what charter holds rather than what was typed (charter-app#254).
+	 * 
+	 *  **Charter's label, never the harness's**: the program keeps the `--name` it was started
+	 *  with, so renaming a chat never disturbs one that is running. The name goes in the plane's
+	 *  own `.charter/app/reopen.json`, beside the chat's pin, so it comes back at a relaunch.
+	 */
+	renameChat: (plane: PlaneId, session: number, label: string) => typedError<string | null, string>(__TAURI_INVOKE("rename_chat", { plane, session, label })),
 	/**
 	 *  Asks the app to quit, the way the menu's Quit and the tray's do.
 	 * 
@@ -401,8 +415,12 @@ export const commands = {
 	 *  (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
 	 *  environment its harness was started with, and no later click can change it.
+	 * 
+	 *  `label` is the picker's optional Name field (charter-app#254): what the chat's tab says
+	 *  instead of its default. It is held to the same rule a rename is, and **a refusal comes back
+	 *  before anything starts**, so a name charter will not draw never costs a chat.
 	 */
-	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, showFooter, columns, rows })),
+	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, label: string | null, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, label, showFooter, columns, rows })),
 	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
@@ -567,6 +585,19 @@ export const commands = {
 	 *  waited on that would stop drawing.
 	 */
 	planeDoctor: (plane: PlaneId, full: boolean) => typedError<DoctorReport, string>(__TAURI_INVOKE("plane_doctor", { plane, full })),
+	/**
+	 *  Both of this plane's settings files, and what charter says about each.
+	 * 
+	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
+	 */
+	projectSettings: (plane: PlaneId) => typedError<ProjectSettings, string>(__TAURI_INVOKE("project_settings", { plane })),
+	/**
+	 *  Write one file: checked with the core's rules, written with its `toml_edit` writer.
+	 * 
+	 *  `base` is the text the window read (`null`: the file was not there), so a file changed on
+	 *  disk since is refused rather than overwritten.
+	 */
+	saveProjectSettings: (plane: PlaneId, which: SettingsWhich, base: string | null, change: SettingsChange) => typedError<SettingsSaved, string>(__TAURI_INVOKE("save_project_settings", { plane, which, base, change })),
 	/**
 	 *  What one chat's recorded usage says, or nothing.
 	 * 
@@ -985,6 +1016,18 @@ export type Moved = {
 	 *  for.
 	 */
 	moved_at: number,
+	/**
+	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
+	 * 
+	 *  **What lets the window put its events back in order.** Every `Moved` is built under the
+	 *  board's lock, but it is SENT after the lock is let go, on whichever thread built it: a
+	 *  hook's report on the socket's thread, a close on the command's. So a report taken just
+	 *  before a close can reach the window just after it, and the window, which keeps the last
+	 *  queue it was told, would put the closed chat back. The window drops any snapshot older
+	 *  than the one it holds (`chatState.ts`), which it can do only because this is numbered
+	 *  in the order the board was read. [`sequence`] is the whole definition.
+	 */
+	sequence: number,
 };
 
 /**  One news entry, as the pin's dialog lists it. */
@@ -1042,6 +1085,12 @@ export type OpenChat = {
 	 *  record, so a pinned chat comes back pinned at the next launch.
 	 */
 	pinned: boolean,
+	/**
+	 *  The name the operator gave it, or none — then its tab says the default, `<persona>
+	 *  <N>` (charter-app#254). Charter's label only: `name` is still what its harness was
+	 *  started with.
+	 */
+	label: string | null,
 };
 
 /**
@@ -1313,6 +1362,14 @@ export type PlaneAlerts = {
 };
 
 /**
+ *  What `plane-changed` carries: which plane moved. Every window filters on it, as it filters
+ *  `chat-moved`, because the app holds several planes and emits on the app.
+ */
+export type PlaneChanged = {
+	plane: PlaneId,
+};
+
+/**
  *  What a plane would contribute, as the trust prompt draws it — **and the exact value the
  *  operator's approval is checked against.**
  * 
@@ -1377,6 +1434,12 @@ export type ProfileRow = {
 	 *  runs; absent when charter has already recorded running exactly this.
 	 */
 	approval: string | null,
+};
+
+/**  Both files. */
+export type ProjectSettings = {
+	shared: SettingsFile,
+	local: SettingsFile,
 };
 
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
@@ -1539,6 +1602,65 @@ export type Restore = {
 	dropped: string[],
 };
 
+/**  What a save is: the raw view's whole text, or a form's changes to the text it was read as. */
+export type SettingsChange = { kind: "raw"; text: string } | { kind: "edits"; edits: SettingsEdit[] };
+
+/**  Set the key at `path` to `value`, or remove it when `value` is `null`. */
+export type SettingsEdit = {
+	path: SettingsStep[],
+	value: SettingsValue | null,
+};
+
+/**  One value in a file, and where it is. */
+export type SettingsField = {
+	path: SettingsStep[],
+	value: SettingsValue,
+};
+
+/**  One file, as the tab draws it. */
+export type SettingsFile = {
+	which: SettingsWhich,
+	/**  `charter.toml` or `charter.local.toml`. */
+	file: string,
+	/**  Whether it is there. A Local file that is not is created by the first save. */
+	exists: boolean,
+	/**
+	 *  Its text, for the raw view — and what a save is checked against, so an edit made
+	 *  elsewhere since is never written over.
+	 */
+	text: string,
+	/**  What charter refuses in it as it stands, in the core's words. */
+	refusals: string[],
+	/**  Whether it is TOML. When it is not, `fields` is empty and only the raw view can mend it. */
+	parsed: boolean,
+	/**  Every value in it, in file order. */
+	fields: SettingsField[],
+};
+
+/**  What a save answered: the file as it now stands, or every reason nothing was written. */
+export type SettingsSaved = { kind: "saved"; file: SettingsFile } | { kind: "refused"; reasons: string[] };
+
+/**  One step of the way to a key: a table's key, or a block's place in `[[forge]]`. */
+export type SettingsStep = ({ key: string }) & { index?: never } | ({ index: number }) & { key?: never };
+
+/**
+ *  A value, as a form reads and writes it. `other` is one no form writes — a float, a date, a
+ *  list that is not all text — shown as TOML and changed only in the raw view.
+ */
+export type SettingsValue = { kind: "text"; value: string } | 
+/**
+ *  Whole numbers only; TOML's range is `i64` and a form writes no more than a JS number
+ *  carries exactly, so it travels as one.
+ */
+{ kind: "integer"; value: number | null } | { kind: "bool"; value: boolean } | { kind: "list"; value: string[] } | { kind: "other"; value: string };
+
+/**  Which file: the committed one or this machine's. */
+export type SettingsWhich = 
+/**  `charter.toml` — committed; the team sees it. */
+"shared" | 
+/**  `charter.local.toml` — gitignored; this machine only. */
+"local";
+
 /**
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's
  *  persona and todos.
@@ -1589,9 +1711,14 @@ export type StartOptions = {
 	declares_none: boolean,
 };
 
-/**  A chat that started: its session. */
+/**  A chat that started: its session, and the name it was given as charter holds it. */
 export type Started = {
 	session: number,
+	/**
+	 *  The picker's Name field as the core's rule left it — trimmed, and none when it was
+	 *  blank — so the tab draws what the record holds rather than what was typed.
+	 */
+	label: string | null,
 };
 
 /**  What the operating system has already spent of the window's own title bar. */

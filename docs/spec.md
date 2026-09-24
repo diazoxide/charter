@@ -54,7 +54,8 @@ When two choices conflict, the higher priority wins.
 
 1. **One window.**
    - **Left:** a sidebar listing every workspace with its chats, and each chat's live state.
-   - **Top:** a global "needs you" queue, plus OS notifications.
+   - **Top:** a global "needs you" queue, plus OS notifications. An item can be ignored, which
+     lasts until its chat asks again (charter-app#248).
    - **Center:** tabs and free split panes.
    - **Right:** panels for the focused workspace: repos, branches, CI, todos, personas.
    - **Palette:** the command palette is the primary input, keyboard first.

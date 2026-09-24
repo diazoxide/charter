@@ -31,9 +31,28 @@ export type ChatStates = {
    * A session that is not here has never been heard from, and reads `0`.
    */
   readonly movedAt: Readonly<Record<number, number>>;
+  /**
+   * Which snapshot the queue came from (`Moved.sequence`), and which one each chat's state
+   * came from (charter-app#248).
+   *
+   * **Snapshots reach the window in any order.** The core numbers each one under its board's
+   * lock and sends it after letting go, on whichever thread built it, so a hook's report
+   * taken just before a close can land just after it. Kept apart because they are different
+   * facts: the queue is the whole board's, so only a newer snapshot replaces it; a chat's
+   * state is only that chat's, so a snapshot that lost the race for the queue is still the
+   * newest word about the chat it was about. `0` is "nothing yet"; the core numbers from 1.
+   */
+  readonly queueFrom: number;
+  readonly heardAt: Readonly<Record<number, number>>;
 };
 
-export const nothingKnown: ChatStates = { bySession: {}, needsYou: [], movedAt: {} };
+export const nothingKnown: ChatStates = {
+  bySession: {},
+  needsYou: [],
+  movedAt: {},
+  queueFrom: 0,
+  heardAt: {},
+};
 
 /** The state of one chat, which is `unknown` until something says otherwise. */
 export function stateOf(states: ChatStates, session: number): State {
@@ -66,18 +85,32 @@ export function quietOnes(chats: readonly OpenChat[], states: ChatStates): strin
     .map((chat) => chat.name);
 }
 
-/** Applies one move. Exported so a test can drive the reducer without a window. */
+/**
+ * Applies one move, unless what it says is older than what is already known. Exported so a
+ * test can drive the reducer without a window.
+ *
+ * **Older is strictly older.** A snapshot numbered the same as the one held is taken: the core
+ * stops counting at the top of a `u32` rather than wrapping, and from there the window goes
+ * back to taking snapshots in the order they land instead of refusing every one.
+ */
 export function moved(states: ChatStates, move: Moved): ChatStates {
+  const newerQueue = move.sequence >= states.queueFrom;
+  const newerChat = move.sequence >= (states.heardAt[move.session] ?? 0);
+  if (!newerQueue && !newerChat) return states;
   return {
-    bySession: { ...states.bySession, [move.session]: move.state as State },
+    bySession: newerChat
+      ? { ...states.bySession, [move.session]: move.state as State }
+      : states.bySession,
     // The whole queue travels on every move rather than being assembled here from a series
     // of edges: a window that missed one event would otherwise keep a chat in the queue, or
     // out of it, for as long as the app ran.
-    needsYou: move.queue,
+    needsYou: newerQueue ? move.queue : states.needsYou,
     // **Only the chat this event is about.** The count is per-chat and the event carries
     // one chat's, so folding it over the whole map would be writing this chat's number onto
     // every other chat — every tab would then read as having moved at once.
-    movedAt: { ...states.movedAt, [move.session]: move.moved_at },
+    movedAt: newerChat ? { ...states.movedAt, [move.session]: move.moved_at } : states.movedAt,
+    queueFrom: newerQueue ? move.sequence : states.queueFrom,
+    heardAt: newerChat ? { ...states.heardAt, [move.session]: move.sequence } : states.heardAt,
   };
 }
 
@@ -193,24 +226,12 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
 /**
  * Folds a first snapshot under what has already arrived.
  *
- * A session an event has already touched keeps what the event said; the queue is the
- * snapshot's only if no event has landed at all, because an event's queue is newer than any
- * answer to a question asked before it.
+ * **Under, because it is older**, and the numbers are what say so: the answer to
+ * `chat_states` was read before any event that landed while it was in flight, so every part of
+ * it that an event has since said something newer about is dropped by `moved` itself. This
+ * used to be a guess from whether anything had been heard at all, which let a first answer's
+ * queue stand over an event about a different chat.
  */
 export function underneath(states: ChatStates, known: readonly Moved[]): ChatStates {
-  const heard = Object.keys(states.bySession).length > 0;
-  const bySession = { ...states.bySession };
-  // Under whatever has already arrived here too, and per session for the same reason: an
-  // event that landed while the snapshot was in flight is the newer fact about ITS chat,
-  // and says nothing about any other.
-  const movedAt = { ...states.movedAt };
-  for (const one of known) {
-    if (!(one.session in bySession)) bySession[one.session] = one.state as State;
-    if (!(one.session in movedAt)) movedAt[one.session] = one.moved_at;
-  }
-  return {
-    bySession,
-    needsYou: heard ? states.needsYou : (known[known.length - 1]?.queue ?? []),
-    movedAt,
-  };
+  return known.reduce(moved, states);
 }

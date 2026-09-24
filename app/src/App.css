@@ -15,8 +15,15 @@
   -webkit-text-size-adjust: 100%;
 }
 
+/* **Nothing in the window rubber-bands** — the operator: *"our charter app scroll now bouncing -
+   lets disable scroll bouncing"*. macOS's WebView overscrolls the page and every scroll
+   container with an elastic bounce, which in an app shell pulls the whole window's chrome down
+   and off its edges. `none` on every element stops the bounce and stops a scroll chaining out
+   of a panel into the page, which a desktop app wants too: a region scrolls, the window never
+   does. */
 * {
   box-sizing: border-box;
+  overscroll-behavior: none;
 }
 
 body {
@@ -514,6 +521,35 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+/* A chat tab's name, open for editing in the tab's place (charter-app#254, `TabRename.tsx`).
+   It fills the cell the button did, so the strip does not move while a name is typed. */
+.tabs .tab-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  margin: 0.15rem;
+  padding: 0 0.4rem;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.tabs .tab-rename:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.tabs .tab-rename[aria-invalid="true"] {
+  border-color: var(--danger-base);
+}
+
+/* Why the core would not hold the name: under the box, and read before it is changed. */
+.tab-rename-refused {
+  border-inline-start: 2px solid var(--danger-base);
 }
 
 /* The mark on something the operator pinned (ADR 0039). A dot and not a `📌`: an
@@ -1834,7 +1870,12 @@ button.show-more:focus-visible {
   padding: 0;
   list-style: none;
 }
-.needs-you li button {
+/* A chat asking, and its Ignore beside it (charter-app#248). */
+.needs-you li {
+  display: flex;
+  align-items: stretch;
+}
+.needs-you li button:not(.needs-you-ignore) {
   display: flex;
   gap: 0.35rem;
   align-items: center;
@@ -1855,6 +1896,23 @@ button.show-more:focus-visible {
 .needs-you li button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
+}
+/* Flat and muted like a view tab's `×`: ignoring ends nothing, so it hovers as a control does
+   and never as a danger — the chat is still there, still waiting. */
+.needs-you-ignore {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0 0.35rem;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: var(--text-muted);
+  line-height: 1;
+  cursor: default;
+}
+.needs-you-ignore:hover {
+  color: var(--text-primary);
 }
 
 /* **The count of chats waiting for the operator, drawn as the most important thing in the
@@ -3819,4 +3877,153 @@ button.show-more:focus-visible {
 
 .state-waiting.arrived {
   animation: charter-call var(--motion-duration-settle) var(--motion-easing-standard) 2;
+}
+
+/* **Project settings** (charter-app#252): two files, one above the other, each a heading that
+   says which file and who sees it, a Form / Raw TOML switch, and the form or the text. Minimal
+   on purpose — the same surfaces, rules and marks the rest of the window uses, and no border
+   carries a colour of its own: a section is set apart by space and a hairline, not a frame. */
+.settings {
+  max-width: 48rem;
+}
+
+.settings-file {
+  padding: 0.75rem 0 1rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.settings-who,
+.settings-hint {
+  margin: 0.2rem 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.settings-mode {
+  display: flex;
+  gap: 1rem;
+  margin: 0.6rem 0 0.2rem;
+}
+
+/* The switch's two rows sit side by side, so the hairline `.choice + .choice` draws between
+   stacked rows would be a stray tick here. */
+.settings-mode .choice {
+  display: inline-grid;
+  padding: 0;
+}
+
+.settings-mode .choice + .choice {
+  border-top: 0;
+}
+
+.settings-mode .dot[data-disabled] + label {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.settings-group {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-group legend {
+  padding: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.settings-field {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0.5rem 0;
+}
+
+.settings-field label {
+  font-weight: 500;
+}
+
+.settings-field input,
+.settings-field select,
+.settings-field textarea,
+.settings-raw textarea {
+  padding: 0.3rem 0.5rem;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.settings-field textarea,
+.settings-raw textarea {
+  resize: vertical;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.settings-raw {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.6rem 0 0;
+}
+
+.settings-field input:focus-visible,
+.settings-field select:focus-visible,
+.settings-field textarea:focus-visible,
+.settings-raw textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+}
+
+.settings-actions button {
+  padding: 0.25rem 0.7rem;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-actions button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.settings-actions button:disabled {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.settings-actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.settings-standing ul,
+.settings-refused ul {
+  margin: 0.25rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-standing .trouble,
+.settings-refused .trouble {
+  margin: 0.2rem 0;
+  border-bottom: 0;
+  border-radius: 3px;
 }

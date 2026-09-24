@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -309,6 +309,12 @@ describe("the opener", () => {
     // The `×` on the project's own tab, which IS the catalogue's row — one per project, the
     // way a chat tab's close is one per tab.
     await person.click(await screen.findByRole("button", { name: "Close project plane" }));
+    // It has a chat open, so it asks first (charter-app#239's ruling), and this answers it.
+    await person.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: /^Close and end/,
+      }),
+    );
 
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
       "You have not opened a project yet",
@@ -335,7 +341,16 @@ describe("the opener", () => {
       if (cmd === "open_plane") return { plane: "/home/dev/two", ask: null };
       if (cmd === "chat_states")
         return args.plane === "/home/dev/one"
-          ? [{ plane: args.plane, session: 1, state: "waiting", needs_you: true, queue: [1] }]
+          ? [
+              {
+                plane: args.plane,
+                session: 1,
+                state: "waiting",
+                needs_you: true,
+                queue: [1],
+                sequence: 1,
+              },
+            ]
           : // The second project never answers, so nothing can arrive to correct the screen.
             new Promise(() => undefined);
       // BOTH projects have a chat 1 — which is the whole point: a session number means
@@ -366,6 +381,12 @@ describe("the opener", () => {
       expect(screen.getByRole("img", { name: "waiting on you" })).toBeInTheDocument(),
     );
     await person.click(await screen.findByRole("button", { name: "Close project one" }));
+    // It has a chat open, so it asks first (charter-app#239's ruling), and this answers it.
+    await person.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: /^Close and end/,
+      }),
+    );
     await openByPath("/home/dev/two");
 
     await vi.waitFor(() => expect(screen.getByText("/home/dev/two")).toBeInTheDocument());
@@ -398,7 +419,16 @@ describe("the opener", () => {
       // The first project's chat 1 is waiting for the operator; the second project's is not.
       if (cmd === "chat_states")
         return showing === "/home/dev/one"
-          ? [{ plane: showing, session: 1, state: "waiting", needs_you: true, queue: [1] }]
+          ? [
+              {
+                plane: showing,
+                session: 1,
+                state: "waiting",
+                needs_you: true,
+                queue: [1],
+                sequence: 1,
+              },
+            ]
           : [];
       if (cmd === "close_plane") {
         showing = "/home/dev/two";
@@ -413,6 +443,12 @@ describe("the opener", () => {
       expect(screen.getByRole("img", { name: "waiting on you" })).toBeInTheDocument(),
     );
     await person.click(await screen.findByRole("button", { name: "Close project one" }));
+    // It has a chat open, so it asks first (charter-app#239's ruling), and this answers it.
+    await person.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: /^Close and end/,
+      }),
+    );
     await openByPath("/home/dev/two");
 
     await vi.waitFor(() =>
