@@ -206,6 +206,9 @@ export function UpdateItem({ updates }: { updates: Updates }) {
         <button
           type="button"
           className={`status-update update-${state.kind}`}
+          // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+          // down (`docs/ui-primitives.md`, charter-app#189).
+          tabIndex={0}
           data-testid="status-update"
           aria-label={label}
           title={label}
@@ -331,6 +334,9 @@ export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) 
         <button
           type="button"
           className="status-pin"
+          // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+          // down (`docs/ui-primitives.md`, charter-app#189).
+          tabIndex={0}
           data-testid="status-pin"
           aria-label={label}
           title={label}

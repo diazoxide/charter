@@ -107,8 +107,10 @@ export function Opener({
         </>
       )}
 
+      {/* Every button here says `tabIndex={0}`: WebKit leaves a `<button>` out of the tab
+          sequence unless it is written down (`docs/ui-primitives.md`, charter-app#189). */}
       <div className="doing">
-        <button type="button" onClick={pick}>
+        <button type="button" tabIndex={0} onClick={pick}>
           Open Project…
         </button>
       </div>
@@ -132,7 +134,7 @@ export function Opener({
           placeholder="/path/to/project"
           onChange={(event) => setTyped(event.target.value)}
         />
-        <button type="submit" disabled={!typed.trim()}>
+        <button type="submit" tabIndex={0} disabled={!typed.trim()}>
           Open
         </button>
       </form>
@@ -152,7 +154,7 @@ export function Opener({
           <ul className="recents">
             {recents?.planes?.map((plane) => (
               <li key={plane.path}>
-                <button type="button" onClick={() => onOpen(plane.path)}>
+                <button type="button" tabIndex={0} onClick={() => onOpen(plane.path)}>
                   <span className="tab-name">{plane.name}</span>
                   <code className="where">{plane.path}</code>
                 </button>

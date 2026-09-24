@@ -255,6 +255,9 @@ export function RegionToggle({
     <button
       type="button"
       className="region-toggle"
+      // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+      // down (`docs/ui-primitives.md`, charter-app#189).
+      tabIndex={0}
       aria-pressed={shown}
       aria-label={name}
       title={shown ? `Put the ${name} region away` : `Bring the ${name} region back`}

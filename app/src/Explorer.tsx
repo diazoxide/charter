@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
   ChevronRight,
   FolderGit2,
@@ -16,6 +17,7 @@ import { WorktreeMark } from "./Worktree";
 import { stateOf, type ChatStates } from "./chatState";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
+import { useTabStop } from "./roving";
 
 /**
  * The left region: the repo and worktree **explorer** (ADR 0038).
@@ -72,6 +74,14 @@ import type { WorkspaceState } from "./workspaceState";
  * half a tree widget is worse for a screen reader than the list and `<details>` that are here
  * — which already say "collapsible" and already say which row is current. That is its own
  * ticket, and it is a behaviour change rather than a visual one.
+ *
+ * **It is ONE Tab stop, and Up, Down, Home and End move between its rows** (charter-app#189):
+ * the half of the "Tree View" keyboard pattern that needs no tree semantics, through the same
+ * roving focus the strips use (`roving.ts`). The stop at rest is the current row — the picked
+ * worktree, or the workspace itself — and Enter or Space on a clone's heading opens or closes
+ * it, which `<summary>` does natively. **Left and Right are not taken**: in a tree they open,
+ * close and climb, and promising that on something that does not say it is a tree is the half
+ * a widget warned about above. They wait for that ticket, charter-app#238.
  */
 export function Explorer({
   workspace,
@@ -98,13 +108,25 @@ export function Explorer({
   offers: Catalogued;
   onPress: (offer: Offer) => void;
 }) {
+  /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
+   *  it cannot be where the keyboard comes back in. */
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  const rows = rowsOf(workspace, state, chats, folded);
+  const picked = spot === undefined ? ROOT : pieceRow(spot.repo, spot.piece);
+  const stop = useTabStop(picked, rows);
+
   if (workspace === undefined) {
     return (
-      <nav className="explorer" aria-label="Explorer" data-testid="explorer">
-        {/* The strip for chats outside every workspace is not a workspace on the plane, so
+      // Inside the same roving group as the full explorer below, so that the `nav` is the SAME
+      // element when a workspace arrives: a different parent would have React remount it, and
+      // everything holding the old one — a scenario, a screen reader's place — would lose it.
+      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+        <nav className="explorer" aria-label="Explorer" data-testid="explorer">
+          {/* The strip for chats outside every workspace is not a workspace on the plane, so
             there is no directory to explore and nothing honest to draw. */}
-        <p className="empty">No workspace focused, so there is nothing to explore.</p>
-      </nav>
+          <p className="empty">No workspace focused, so there is nothing to explore.</p>
+        </nav>
+      </RovingFocusGroup.Root>
     );
   }
 
@@ -121,69 +143,91 @@ export function Explorer({
   );
 
   return (
-    <nav className="explorer" aria-label="Explorer" data-testid="explorer">
-      {state.trouble && <Trouble>{state.trouble}</Trouble>}
+    <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+      <nav className="explorer" aria-label="Explorer" data-testid="explorer">
+        {state.trouble && <Trouble>{state.trouble}</Trouble>}
 
-      <button
-        type="button"
-        className="spot spot-root"
-        // Not `aria-selected`: that belongs to a tab, and the three tablists in this window
-        // are the axis (ADR 0036). This is the current item of a list, which is what
-        // `aria-current` is for, and it is what the old sidebar's workspace rows used.
-        aria-current={spot === undefined ? "true" : undefined}
-        onClick={() => onPick(undefined)}
-      >
-        <Folders className="node-icon" />
-        <span className="spot-name">{workspace}</span>
-        <span className="spot-what">the workspace itself</span>
-      </button>
-      <ChatList
-        chats={chats.filter((chat) => !inAPiece.has(chat.session))}
-        states={states}
-        onShow={onShowChat}
-      />
+        <RovingFocusGroup.Item asChild tabStopId={ROOT} active={spot === undefined}>
+          <button
+            type="button"
+            className="spot spot-root"
+            // Not `aria-selected`: that belongs to a tab, and the three tablists in this window
+            // are the axis (ADR 0036). This is the current item of a list, which is what
+            // `aria-current` is for, and it is what the old sidebar's workspace rows used.
+            aria-current={spot === undefined ? "true" : undefined}
+            onClick={() => onPick(undefined)}
+          >
+            <Folders className="node-icon" />
+            <span className="spot-name">{workspace}</span>
+            <span className="spot-what">the workspace itself</span>
+          </button>
+        </RovingFocusGroup.Item>
+        <ChatList
+          chats={chats.filter((chat) => !inAPiece.has(chat.session))}
+          states={states}
+          onShow={onShowChat}
+        />
 
-      {panels === undefined ? (
-        <Pending>Reading the plane…</Pending>
-      ) : clones.length === 0 ? (
-        <p className="none">No repos in this workspace</p>
-      ) : (
-        // The clones are the workspace row's children, and the wrapper is what lets them be
-        // drawn as such — the tree lines hang off it, one level in from the root row.
-        <div className="clones">
-          {clones.map((repo) => (
-            // `<details>` and not a primitive: the browser has a collapsible and
-            // `docs/ui-primitives.md` says native HTML that already does the job is not what
-            // the Radix rule is about. Open by default — a closed explorer explores nothing.
-            <details className="clone" key={repo} data-testid={`clone-${repo}`} open>
-              <summary>
-                {/* The twisty says which way the disclosure goes, which the default marker
+        {panels === undefined ? (
+          <Pending>Reading the plane…</Pending>
+        ) : clones.length === 0 ? (
+          <p className="none">No repos in this workspace</p>
+        ) : (
+          // The clones are the workspace row's children, and the wrapper is what lets them be
+          // drawn as such — the tree lines hang off it, one level in from the root row.
+          <div className="clones">
+            {clones.map((repo) => (
+              // `<details>` and not a primitive: the browser has a collapsible and
+              // `docs/ui-primitives.md` says native HTML that already does the job is not what
+              // the Radix rule is about. Open by default — a closed explorer explores nothing.
+              <details
+                className="clone"
+                key={repo}
+                data-testid={`clone-${repo}`}
+                open
+                onToggle={(event) => {
+                  const open = event.currentTarget.open;
+                  const key = foldKey(workspace, repo);
+                  setFolded((was) => {
+                    if (open === !was.has(key)) return was;
+                    const now = new Set(was);
+                    if (open) now.delete(key);
+                    else now.add(key);
+                    return now;
+                  });
+                }}
+              >
+                <RovingFocusGroup.Item asChild tabStopId={cloneRow(repo)}>
+                  <summary>
+                    {/* The twisty says which way the disclosure goes, which the default marker
                     said in the platform's own glyph at the platform's own size. It turns
                     with `[open]`, and the turn is the one motion here that is a direct
                     answer to a click — `prefers-reduced-motion` stops it all the same. */}
-                <ChevronRight className="twisty" />
-                <FolderGit2 className="node-icon" />
-                <span className="repo">{repo}</span>
-                <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
-              </summary>
-              {piecesRefused[repo] ? (
-                // Said, never swallowed: a clone with no rows otherwise reads as a clone
-                // nobody has cut a worktree in.
-                <Trouble>
-                  charter could not list the worktrees of <code>{repo}</code>: {piecesRefused[repo]}
-                </Trouble>
-              ) : pieces[repo] === undefined ? (
-                <Pending>Asking git…</Pending>
-              ) : pieces[repo].length === 0 ? (
-                <p className="none">No worktrees cut here</p>
-              ) : (
-                <ul className="pieces">
-                  {pieces[repo].map((piece) => {
-                    const here = chats.filter((chat) => under(chat.cwd, piece.path));
-                    const picked = spot?.repo === repo && spot.piece === piece.piece;
-                    return (
-                      <li key={piece.piece} data-testid={`piece-${repo}-${piece.piece}`}>
-                        {/* **Right-click is what these rows were missing** (charter-app#174).
+                    <ChevronRight className="twisty" />
+                    <FolderGit2 className="node-icon" />
+                    <span className="repo">{repo}</span>
+                    <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
+                  </summary>
+                </RovingFocusGroup.Item>
+                {piecesRefused[repo] ? (
+                  // Said, never swallowed: a clone with no rows otherwise reads as a clone
+                  // nobody has cut a worktree in.
+                  <Trouble>
+                    charter could not list the worktrees of <code>{repo}</code>:{" "}
+                    {piecesRefused[repo]}
+                  </Trouble>
+                ) : pieces[repo] === undefined ? (
+                  <Pending>Asking git…</Pending>
+                ) : pieces[repo].length === 0 ? (
+                  <p className="none">No worktrees cut here</p>
+                ) : (
+                  <ul className="pieces">
+                    {pieces[repo].map((piece) => {
+                      const working = chats.filter((chat) => under(chat.cwd, piece.path));
+                      const isPicked = spot?.repo === repo && spot.piece === piece.piece;
+                      return (
+                        <li key={piece.piece} data-testid={`piece-${repo}-${piece.piece}`}>
+                          {/* **Right-click is what these rows were missing** (charter-app#174).
                             The menu is the catalogue filtered to this piece — merge above the
                             line, remove below it, and the discard row that only exists while
                             the core has refused THIS removal. Nothing here says what those
@@ -192,70 +236,79 @@ export function Explorer({
                             On the button and not on the `<li>`: the `<li>` also holds the
                             chats running in this piece, and each of those is its own row with
                             its own identity. `asChild`, so the row gains no element. */}
-                        <Menued
-                          on={{ on: "worktree", repo, piece: piece.piece }}
-                          offers={offers}
-                          onPress={onPress}
-                        >
-                          <button
-                            type="button"
-                            className="spot"
-                            aria-current={picked ? "true" : undefined}
-                            // The whole path, because two clones in one workspace can hold a
-                            // piece of the same name and the row has room for one word.
-                            title={piece.path}
-                            onClick={() => onPick({ repo, piece: piece.piece, path: piece.path })}
+                          <Menued
+                            on={{ on: "worktree", repo, piece: piece.piece }}
+                            offers={offers}
+                            onPress={onPress}
                           >
-                            <GitBranch className="node-icon" />
-                            <span className="spot-name">{piece.piece}</span>
-                          </button>
-                        </Menued>
-                        {/* The branch, and the two states the operator has to see BEFORE they
+                            <RovingFocusGroup.Item
+                              asChild
+                              tabStopId={pieceRow(repo, piece.piece)}
+                              active={isPicked}
+                            >
+                              <button
+                                type="button"
+                                className="spot"
+                                aria-current={isPicked ? "true" : undefined}
+                                // The whole path, because two clones in one workspace can hold a
+                                // piece of the same name and the row has room for one word.
+                                title={piece.path}
+                                onClick={() =>
+                                  onPick({ repo, piece: piece.piece, path: piece.path })
+                                }
+                              >
+                                <GitBranch className="node-icon" />
+                                <span className="spot-name">{piece.piece}</span>
+                              </button>
+                            </RovingFocusGroup.Item>
+                          </Menued>
+                          {/* The branch, and the two states the operator has to see BEFORE they
                           start a chat in a tree: `unwired` and `stale`. The same component
                           the palette's worktree rows are written against. */}
-                        <WorktreeMark
-                          worktree={{
-                            workspace,
-                            repo,
-                            piece: piece.piece,
-                            branch: piece.branch,
-                            wired: piece.wired,
-                            stale: piece.stale,
-                          }}
-                        />
-                        <ChatList chats={here} states={states} onShow={onShowChat} />
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </details>
-          ))}
-        </div>
-      )}
-
-      {(panels?.absent.length ?? 0) > 0 && (
-        <section className="absent" data-testid="absent">
-          <h2>Not cloned here</h2>
-          <ul>
-            {panels?.absent.map((name) => (
-              // Membership without a clone. There is nothing to explore in it and nothing
-              // to start a chat in, so it is named and not made a heading.
-              <li key={name}>
-                <FolderX className="node-icon" />
-                {name}
-              </li>
+                          <WorktreeMark
+                            worktree={{
+                              workspace,
+                              repo,
+                              piece: piece.piece,
+                              branch: piece.branch,
+                              wired: piece.wired,
+                              stale: piece.stale,
+                            }}
+                          />
+                          <ChatList chats={working} states={states} onShow={onShowChat} />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </details>
             ))}
-          </ul>
-        </section>
-      )}
+          </div>
+        )}
 
-      {panels?.refused.map(([name, why]) => (
-        <Trouble key={`refused-${name}`}>
-          charter will not read <code>{name}</code>: {why}
-        </Trouble>
-      ))}
-    </nav>
+        {(panels?.absent.length ?? 0) > 0 && (
+          <section className="absent" data-testid="absent">
+            <h2>Not cloned here</h2>
+            <ul>
+              {panels?.absent.map((name) => (
+                // Membership without a clone. There is nothing to explore in it and nothing
+                // to start a chat in, so it is named and not made a heading.
+                <li key={name}>
+                  <FolderX className="node-icon" />
+                  {name}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {panels?.refused.map(([name, why]) => (
+          <Trouble key={`refused-${name}`}>
+            charter will not read <code>{name}</code>: {why}
+          </Trouble>
+        ))}
+      </nav>
+    </RovingFocusGroup.Root>
   );
 }
 
@@ -326,27 +379,29 @@ function ChatList({
     <ul className="here">
       {chats.map((chat) => (
         <li key={chat.session}>
-          <button type="button" className="chat" onClick={() => onShow(chat.session)}>
-            {/* What tells a chat leaf from a worktree leaf at a glance. The tree has two
+          <RovingFocusGroup.Item asChild tabStopId={chatRow(chat.session)}>
+            <button type="button" className="chat" onClick={() => onShow(chat.session)}>
+              {/* What tells a chat leaf from a worktree leaf at a glance. The tree has two
                 kinds of leaf under one kind of parent, and at fifty chats the indent alone
                 stopped being enough to tell them apart. */}
-            <SquareTerminal className="node-icon" />
-            <span className="session">{chat.name}</span>
-            <ChatState state={stateOf(states, chat.session)} />
-            {/* The PROFILE where there is one, and the harness otherwise. A profile is what
+              <SquareTerminal className="node-icon" />
+              <span className="session">{chat.name}</span>
+              <ChatState state={stateOf(states, chat.session)} />
+              {/* The PROFILE where there is one, and the harness otherwise. A profile is what
                 the operator picked and what a relaunch looks up again; the kind is what the
                 plane calls the harness. Showing the profile alone would hide which harness
                 it runs, and showing the kind alone would hide which account. */}
-            {chat.profile ? (
-              <span className="harness">
-                {chat.profile}
-                {chat.harness && <span className="kind"> ({chat.harness})</span>}
-              </span>
-            ) : (
-              chat.harness && <span className="harness">{chat.harness}</span>
-            )}
-            {chat.persona && <span className="persona">{chat.persona}</span>}
-          </button>
+              {chat.profile ? (
+                <span className="harness">
+                  {chat.profile}
+                  {chat.harness && <span className="kind"> ({chat.harness})</span>}
+                </span>
+              ) : (
+                chat.harness && <span className="harness">{chat.harness}</span>
+              )}
+              {chat.persona && <span className="persona">{chat.persona}</span>}
+            </button>
+          </RovingFocusGroup.Item>
           {/* What its harness cannot tell charter, on the chat itself (#27). A Codex chat
               reads `unknown` until its first prompt and never says it is waiting on an
               approval; without this it looks like charter is broken. */}
@@ -365,4 +420,46 @@ function under(cwd: string | null, path: string): boolean {
   if (cwd === null) return false;
   if (cwd === path) return true;
   return cwd.startsWith(`${path}/`) || cwd.startsWith(`${path}\\`);
+}
+
+/** The workspace's own row, as a stop in the explorer's roving focus. */
+const ROOT = "root";
+const chatRow = (session: number) => `chat:${session}`;
+const cloneRow = (repo: string) => `clone:${repo}`;
+const pieceRow = (repo: string, piece: string) => `piece:${repo}/${piece}`;
+/** A folded clone, by workspace as well as name: two workspaces can each clone `svc`. */
+const foldKey = (workspace: string, repo: string) => `${workspace}/${repo}`;
+
+/**
+ * Every row the explorer draws right now, for `useTabStop` — the rows inside a folded clone
+ * are not drawn, so they are not listed.
+ *
+ * **The same walk the render does, and it has to stay so**: a row missing here can never be
+ * the stop, and a row listed here that is not drawn could be the only one, which would leave
+ * the explorer with no stop at all.
+ */
+function rowsOf(
+  workspace: string | undefined,
+  state: WorkspaceState,
+  chats: readonly OpenChat[],
+  folded: ReadonlySet<string>,
+): string[] {
+  if (workspace === undefined) return [];
+  const { panels, pieces, piecesRefused } = state;
+  const inAPiece = new Set<number>();
+  const drawn: string[] = [];
+  for (const repo of panels?.repos ?? []) {
+    drawn.push(cloneRow(repo));
+    const shown = !folded.has(foldKey(workspace, repo)) && !piecesRefused[repo];
+    for (const piece of pieces[repo] ?? []) {
+      if (shown) drawn.push(pieceRow(repo, piece.piece));
+      for (const chat of chats) {
+        if (!under(chat.cwd, piece.path)) continue;
+        inAPiece.add(chat.session);
+        if (shown) drawn.push(chatRow(chat.session));
+      }
+    }
+  }
+  const atTheRoot = chats.filter((chat) => !inAPiece.has(chat.session));
+  return [ROOT, ...atTheRoot.map((chat) => chatRow(chat.session)), ...drawn];
 }

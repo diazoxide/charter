@@ -218,6 +218,9 @@ export function Health({ doctor }: { doctor: DoctorState }) {
         <button
           type="button"
           className={`status-doctor doctor-tone-${tone}`}
+          // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+          // down (`docs/ui-primitives.md`, charter-app#189).
+          tabIndex={0}
           data-testid="status-doctor"
           aria-label={label}
           title={label}

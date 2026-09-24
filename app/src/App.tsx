@@ -8,6 +8,7 @@ import {
   type CSSProperties,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
+import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import "./styles.css";
 import { commands, type Ask, type PlaneId } from "./bindings";
 import {
@@ -27,6 +28,7 @@ import { ApprovePlane } from "./ApprovePlane";
 import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { useContributedPanels } from "./Panels";
+import { useTabStop } from "./roving";
 import { useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
@@ -683,6 +685,10 @@ function App() {
       ),
     [drawn, inFront, room],
   );
+  const projectStop = useTabStop(
+    inFront,
+    projectsShown.shown.map((project) => project.plane),
+  );
 
   /** What a project is drawn as, on the strip and in the menu of what the strip had no room
    *  for. One definition, because they are the same project. */
@@ -790,45 +796,54 @@ function App() {
           back to the opener. Named, because the chat tabs and the workspaces are tablists
           too and a query for `role="tab"` across the whole window would mix all three. */}
       {planes.length > 0 && (
-        <nav
-          className="projects"
-          role="tablist"
-          aria-label="Projects"
-          ref={projectStrip}
-          style={{ "--least": `${LEAST.project}px` } as CSSProperties}
-        >
-          {projectsShown.shown.map((project) => {
-            const at = drawn.indexOf(project);
-            return (
-              /* Right-click is the third reader of the same catalogue (`Menus.tsx`). `asChild`,
+        // One Tab stop for the strip, the project in front, and the arrows along it
+        // (charter-app#189, `roving.ts`). Its own controls after the tabs are stops of their own.
+        <RovingFocusGroup.Root asChild orientation="horizontal" {...projectStop}>
+          <nav
+            className="projects"
+            role="tablist"
+            aria-label="Projects"
+            ref={projectStrip}
+            style={{ "--least": `${LEAST.project}px` } as CSSProperties}
+          >
+            {projectsShown.shown.map((project) => {
+              const at = drawn.indexOf(project);
+              return (
+                /* Right-click is the third reader of the same catalogue (`Menus.tsx`). `asChild`,
                  so the strip gains no wrapper element: this IS the `span` it always was — which
                  is what #171's `flex: 1 1 0` cells require. */
-              <Menued
-                key={project.plane}
-                on={{ on: "project", plane: project.plane }}
-                offers={stripFound}
-                onPress={press}
-              >
-                <span className="project">
-                  <button
-                    role="tab"
-                    aria-selected={project.plane === inFront}
-                    // The path, because two projects can share a directory name and the name is
-                    // all the tab has room for.
-                    title={project.plane}
-                    onClick={() => {
-                      const offer = strip.switchTo[at];
-                      if (offer.available) press(offer);
-                    }}
-                  >
-                    {projectMarks(project)}
-                  </button>
-                  <Closer offer={strip.close[at]} onPress={press} />
-                </span>
-              </Menued>
-            );
-          })}
-          {/* The strip's own controls, and the one part of this strip that never collapses.
+                <Menued
+                  key={project.plane}
+                  on={{ on: "project", plane: project.plane }}
+                  offers={stripFound}
+                  onPress={press}
+                >
+                  <span className="project">
+                    <RovingFocusGroup.Item
+                      asChild
+                      tabStopId={project.plane}
+                      active={project.plane === inFront}
+                    >
+                      <button
+                        role="tab"
+                        aria-selected={project.plane === inFront}
+                        // The path, because two projects can share a directory name and the name is
+                        // all the tab has room for.
+                        title={project.plane}
+                        onClick={() => {
+                          const offer = strip.switchTo[at];
+                          if (offer.available) press(offer);
+                        }}
+                      >
+                        {projectMarks(project)}
+                      </button>
+                    </RovingFocusGroup.Item>
+                    <Closer offer={strip.close[at]} onPress={press} />
+                  </span>
+                </Menued>
+              );
+            })}
+            {/* The strip's own controls, and the one part of this strip that never collapses.
               They are inside the tablist because a `role="tab"` has to be owned by the
               tablist it belongs to, so `useRoom` is told to take their width off the room
               the tabs get rather than leaving the tabs to be squeezed under them.
@@ -851,20 +866,21 @@ function App() {
 
               And the projects there was no room for, in the same component the chat strip
               uses, so an operator learns one control for all three strips. */}
-          <span className="strip-doing" ref={projectControls}>
-            <Doer offer={strip.open} onPress={press} iconOnly />
-            <Doer offer={strip.create} onPress={press} iconOnly />
-            <ShowMore
-              noun="project"
-              hidden={projectsShown.hidden.map((project) => ({
-                key: project.plane,
-                offer: strip.switchTo[drawn.indexOf(project)],
-                children: projectMarks(project),
-              }))}
-              onPress={press}
-            />
-          </span>
-        </nav>
+            <span className="strip-doing" ref={projectControls}>
+              <Doer offer={strip.open} onPress={press} iconOnly />
+              <Doer offer={strip.create} onPress={press} iconOnly />
+              <ShowMore
+                noun="project"
+                hidden={projectsShown.hidden.map((project) => ({
+                  key: project.plane,
+                  offer: strip.switchTo[drawn.indexOf(project)],
+                  children: projectMarks(project),
+                }))}
+                onPress={press}
+              />
+            </span>
+          </nav>
+        </RovingFocusGroup.Root>
       )}
 
       {/* What the last action answered. Said here only while the palette is down: it is modal
@@ -888,7 +904,12 @@ function App() {
       {slowStart && (
         <p className="came-back trouble" role="status">
           {slowStart}{" "}
-          <button type="button" className="dismiss" onClick={() => setSlowStart(undefined)}>
+          <button
+            type="button"
+            className="dismiss"
+            tabIndex={0}
+            onClick={() => setSlowStart(undefined)}
+          >
             Dismiss
           </button>
         </p>

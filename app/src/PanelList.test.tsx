@@ -289,3 +289,29 @@ describe("the cut", () => {
     expect(shorten("x".repeat(SHORTEST + 1))).toHaveLength(SHORTEST + 1);
   });
 });
+
+describe("the keyboard in a list (charter-app#189)", () => {
+  it("is one Tab stop: the first row that does something, and Up and Down move", async () => {
+    draw([row("a", "first"), row("b", "read only", { detail: null }), row("c", "third")]);
+    const list = screen.getByRole("list", { name: "Todos" });
+    const [first, third] = within(list).getAllByRole("button");
+    // A row that does nothing is a `<span>` and no stop at all; of the two that do, one is.
+    expect([first, third].map((one) => one.getAttribute("tabindex"))).toEqual(["0", "-1"]);
+
+    first.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    await waitFor(() => expect(third).toHaveFocus());
+    expect(third).toHaveAttribute("tabindex", "0");
+  });
+
+  it("comes back in on the row whose card is open", async () => {
+    draw([row("a", "first"), row("b", "second")]);
+    const list = screen.getByRole("list", { name: "Todos" });
+    const [, second] = within(list).getAllByRole("button");
+    await userEvent.click(second);
+    await screen.findByTestId("row-detail-b");
+    // The card has the keyboard now, and the list's stop is the row it came from.
+    await waitFor(() => expect(second).toHaveAttribute("tabindex", "0"));
+    expect(within(list).getAllByRole("button")[0]).toHaveAttribute("tabindex", "-1");
+  });
+});

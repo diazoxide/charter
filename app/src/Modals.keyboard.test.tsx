@@ -17,6 +17,7 @@ import { Palette } from "./Palette";
 import { QuitWarning } from "./QuitWarning";
 import { StartChat } from "./StartChat";
 import { PinItem, UpdateItem } from "./Updates";
+import { sequenceIn } from "./tabSequence";
 
 /**
  * **What a keyboard can reach in each of the window's modal surfaces — one file, because the
@@ -75,7 +76,7 @@ import { PinItem, UpdateItem } from "./Updates";
  * in `picker.e2e.ts`: that the attribute the engine's rule needs survives the build and is on
  * the element in the shipped app, which is the one thing jsdom cannot see. What is left
  * unproven anywhere is the step between the two — that WebKit, handed the attribute, then tabs
- * to it. That is {@link inWebKitsTabSequence}, it is read from the engine's source rather than
+ * to it. That is `inWebKitsTabSequence` (`tabSequence.ts`), it is read from the engine's source rather than
  * measured in a running one, and it is the one assumption in this file worth attacking.
  */
 
@@ -84,35 +85,8 @@ afterEach(() => {
   clearMocks();
 });
 
-/** The `<input>` types WebKit tabs to with full keyboard access off (`TextFieldInputType`). */
-const TEXT_ENTRY = new Set(["text", "search", "url", "tel", "email", "password", "number"]);
-
-/**
- * Whether WebKit puts this element in the tab sequence, with full keyboard access off.
- *
- * Written from the engine's own decision rather than from a description of it, so that the one
- * thing this whole file rests on is a claim a reviewer can check against WebKit's source:
- *
- * - **an explicit `tabindex` ends the question** — `HTMLFormControlElement::isKeyboardFocusable`
- *   hands straight over to `Element::isKeyboardFocusable`, which asks only whether the element
- *   is focusable and the index is not negative;
- * - **a form control without one is skipped** — that is the `tabsToAllFormControls` gate, and
- *   it is off unless macOS's full keyboard access is on;
- * - **except a text field**, which `TextFieldInputType::isKeyboardFocusable` answers for
- *   itself and never consults the gate — which is why Tab moves between text boxes in Safari
- *   and between nothing else;
- * - **anything else focusable is in**: a link, a `<summary>`, a `div` that was given an index.
- */
-function inWebKitsTabSequence(el: HTMLElement): boolean {
-  if (el.hasAttribute("disabled")) return false;
-  if (el.tabIndex < 0) return false;
-  if (el.hasAttribute("tabindex")) return true;
-  const tag = el.tagName.toLowerCase();
-  if (tag === "a") return el.hasAttribute("href");
-  if (tag === "input") return TEXT_ENTRY.has((el as HTMLInputElement).type);
-  if (tag === "button" || tag === "select") return false;
-  return true;
-}
+// `inWebKitsTabSequence` — the engine's rule written down — lives in `tabSequence.ts` since
+// charter-app#189, because a terminal's Ctrl+Tab walks the same sequence in the shipped window.
 
 /** The surface the keyboard is inside — the focus scope, which is what Radix acts on. */
 function scopeOf(el: Element): HTMLElement | null {
@@ -121,7 +95,7 @@ function scopeOf(el: Element): HTMLElement | null {
 
 /** Everything in this surface that WebKit would stop at, in the order it would stop. */
 function engineSequence(scope: HTMLElement): HTMLElement[] {
-  return [...scope.querySelectorAll<HTMLElement>("*")].filter(inWebKitsTabSequence);
+  return sequenceIn(scope);
 }
 
 /**
@@ -664,7 +638,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // The one modal in the window that needed nothing. Its only tabbable is a text `<input>`,
     // and `TextFieldInputType::isKeyboardFocusable` answers for itself without ever consulting
     // full keyboard access — which is exactly why Tab moves between text boxes in Safari and
-    // between nothing else. It is the control case for {@link inWebKitsTabSequence}: if this
+    // between nothing else. It is the control case for `inWebKitsTabSequence` (`tabSequence.ts`): if this
     // test ever needs a `tabindex` to pass, the model above has drifted from the engine.
     render(<Palette offers={[]} onRun={() => ({ ok: true }) as const} />);
     await userEvent.keyboard("{F2}");
