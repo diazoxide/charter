@@ -169,3 +169,345 @@ fn nothing_that_holds_a_value_prints_it_in_debug() {
         assert!(!shown.contains("debug-leak-value"), "{shown}");
     }
 }
+
+/// A plane with one vault registered locally, and the context to reach it.
+fn plane_with(provider: &str) -> (tempfile::TempDir, Ctx, registry::Vault) {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let mut config = serde_json::Map::new();
+    if provider != "keyring" {
+        config.insert(
+            "file".into(),
+            serde_json::Value::String(
+                tmp.path()
+                    .join(".charter/vaults/ops.json")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+    }
+    registry::add_vault(&ctx, "ops", provider, config, None, false, false).unwrap();
+    let v = registry::vault(&ctx, "ops").unwrap();
+    (tmp, ctx, v)
+}
+
+#[test]
+fn renaming_a_secret_moves_its_value_to_the_new_key_and_the_old_one_is_gone() {
+    for provider in ["keyring", "plain-file"] {
+        let (_tmp, ctx, v) = plane_with(provider);
+        cmd::set_value(&ctx, &v, "OLD", "rename-value-7c1e").unwrap();
+
+        cmd::rename(&ctx, &v, "OLD", "NEW").unwrap();
+
+        assert_eq!(
+            cmd::keys(&ctx, &v).unwrap(),
+            vec!["NEW".to_string()],
+            "{provider}"
+        );
+        assert_eq!(
+            cmd::get_value(&ctx, &v, "NEW").unwrap(),
+            "rename-value-7c1e"
+        );
+    }
+}
+
+#[test]
+fn a_rename_onto_a_key_that_exists_is_refused_and_both_are_left_as_they_were() {
+    let (_tmp, ctx, v) = plane_with("keyring");
+    cmd::set_value(&ctx, &v, "A", "value-of-a-19f").unwrap();
+    cmd::set_value(&ctx, &v, "B", "value-of-b-2d8").unwrap();
+
+    let err = cmd::rename(&ctx, &v, "A", "B").unwrap_err();
+
+    assert!(err.message.contains("'B'"), "{}", err.message);
+    assert!(!err.message.contains("value-of"), "{}", err.message);
+    assert_eq!(cmd::get_value(&ctx, &v, "A").unwrap(), "value-of-a-19f");
+    assert_eq!(cmd::get_value(&ctx, &v, "B").unwrap(), "value-of-b-2d8");
+}
+
+#[test]
+fn a_rename_of_a_key_the_vault_does_not_hold_is_not_found() {
+    let (_tmp, ctx, v) = plane_with("keyring");
+    let err = cmd::rename(&ctx, &v, "MISSING", "NEW").unwrap_err();
+    assert_eq!(err.kind, Kind::NotFound);
+}
+
+#[test]
+fn renaming_in_a_reference_vault_moves_the_reference_and_never_resolves_it() {
+    // No `op` on this PATH: a rename that resolved the reference would fail, and one that
+    // then stored what it resolved would turn a pointer into a plaintext.
+    let (_tmp, ctx, v) = plane_with("reference");
+    cmd::set_value(&ctx, &v, "OLD", "op://Eng/deploy/token").unwrap();
+
+    cmd::rename(&ctx, &v, "OLD", "NEW").unwrap();
+
+    assert_eq!(
+        reference::reference_for(&ctx, &v, "NEW").unwrap(),
+        serde_json::json!("op://Eng/deploy/token")
+    );
+    assert!(reference::reference_for(&ctx, &v, "OLD").is_err());
+}
+
+// ---------------------------------------------------------------------------------------
+// A vault's identity, moved into the keyring (#237). A test build's keyring is the stub under
+// the plane's state directory, so none of this reaches the operator's.
+
+/// Each identity variable of `v` and where it is held, as `(source, held)`.
+fn held_at(ctx: &Ctx, v: &registry::Vault) -> Vec<(String, identity::Held)> {
+    identity::held(ctx, v)
+        .into_iter()
+        .map(|b| (b.source, b.held))
+        .collect()
+}
+
+const MOVED_TOKEN: &str = "ops_fixture-moved-identity-2b7e91";
+
+/// A plane with a 1Password vault `team` read through `$OP_TEAM_TOKEN`.
+fn team_plane() -> (tempfile::TempDir, registry::Vault) {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Fixture"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
+    );
+    registry::add_vault(&ctx, "team", "1password", config, None, false, false).unwrap();
+    let v = registry::vault(&ctx, "team").unwrap();
+    (tmp, v)
+}
+
+#[test]
+fn a_moved_identity_is_read_from_the_keyring_when_the_environment_no_longer_has_it() {
+    let (tmp, v) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+
+    assert_eq!(
+        identity::move_to_keyring(&carrying, &v).unwrap(),
+        ["OP_TEAM_TOKEN"]
+    );
+
+    // A chat, or a plain terminal, that never had the variable.
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = registry::vault(&bare, "team").unwrap();
+    assert_eq!(
+        env_overlay(&bare, &v).unwrap(),
+        vec![(
+            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+            MOVED_TOKEN.to_string()
+        )]
+    );
+}
+
+#[test]
+fn once_moved_the_keyring_is_read_before_the_environment() {
+    let (tmp, v) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+    identity::move_to_keyring(&carrying, &v).unwrap();
+
+    let stale = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", "a-stale-export")]));
+    let v = registry::vault(&stale, "team").unwrap();
+
+    assert_eq!(env_overlay(&stale, &v).unwrap()[0].1, MOVED_TOKEN);
+}
+
+#[test]
+fn a_vault_whose_identity_was_never_moved_does_not_ask_the_keyring() {
+    let (tmp, v) = team_plane();
+    // A store that cannot be read: a lookup that asked it would fail.
+    std::fs::write(tmp.path().join(".charter/keyring-stub.json"), "not json").unwrap();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", "from-the-env-44")]));
+
+    assert_eq!(env_overlay(&carrying, &v).unwrap()[0].1, "from-the-env-44");
+    assert_eq!(
+        held_at(&carrying, &v),
+        [("OP_TEAM_TOKEN".to_string(), identity::Held::Environment)]
+    );
+}
+
+#[test]
+fn a_moved_identity_that_the_keyring_lost_falls_back_to_the_environment_then_says_both() {
+    let (tmp, v) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+    identity::move_to_keyring(&carrying, &v).unwrap();
+    std::fs::remove_file(tmp.path().join(".charter/keyring-stub.json")).unwrap();
+
+    let v = registry::vault(&carrying, "team").unwrap();
+    assert_eq!(env_overlay(&carrying, &v).unwrap()[0].1, MOVED_TOKEN);
+
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let err = env_overlay(&bare, &v).unwrap_err();
+    assert!(err.message.contains("$OP_TEAM_TOKEN"), "{}", err.message);
+    assert!(err.message.contains("keyring"), "{}", err.message);
+}
+
+#[test]
+fn moving_an_identity_that_is_not_set_is_refused_and_marks_nothing() {
+    let (tmp, v) = team_plane();
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+
+    let err = identity::move_to_keyring(&bare, &v).unwrap_err();
+
+    assert!(err.message.contains("OP_TEAM_TOKEN"), "{}", err.message);
+    assert_eq!(
+        held_at(&bare, &v),
+        [("OP_TEAM_TOKEN".to_string(), identity::Held::Unset)]
+    );
+    assert!(!tmp.path().join(".charter/keyring-stub.json").exists());
+}
+
+#[test]
+fn a_committed_registry_cannot_mark_an_identity_as_held_in_the_keyring() {
+    // The keyring is this machine's, and so is the mark: a `vaults.json` that arrives by
+    // `git pull` saying "read this from the keyring" would make charter hand a keyring item to
+    // whatever `op` it runs.
+    let (tmp, v) = team_plane();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", "from-the-env-55")]));
+    identity::move_to_keyring(&ctx, &v).unwrap();
+    // Move the mark from the local half into the committed one.
+    let mut local = registry::load_local(&ctx).unwrap();
+    let entry = local["vaults"]["team"].clone();
+    local["vaults"].as_object_mut().unwrap().remove("team");
+    registry::save_local(&ctx, &local).unwrap();
+    let mut shared = registry::load_shared(&ctx).unwrap();
+    shared["vaults"]
+        .as_object_mut()
+        .unwrap()
+        .insert("team".into(), entry);
+    registry::save_shared(&ctx, &shared).unwrap();
+
+    let v = registry::vault(&ctx, "team").unwrap();
+    assert_eq!(env_overlay(&ctx, &v).unwrap()[0].1, "from-the-env-55");
+    assert_eq!(held_at(&ctx, &v)[0].1, identity::Held::Environment);
+}
+
+#[test]
+fn no_refusal_or_debug_of_an_identity_move_carries_the_token() {
+    let (tmp, v) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+    // A keyring that cannot be read, so the move fails after the token was read.
+    std::fs::write(tmp.path().join(".charter/keyring-stub.json"), "not json").unwrap();
+
+    let err = identity::move_to_keyring(&carrying, &v).unwrap_err();
+
+    for shown in [
+        err.message.clone(),
+        format!("{err:?}"),
+        format!("{carrying:?}"),
+    ] {
+        assert!(!shown.contains(MOVED_TOKEN), "{shown}");
+    }
+    assert_eq!(held_at(&carrying, &v)[0].1, identity::Held::Environment);
+}
+
+// Regression tests for the #271 adversarial review (U5, U6). Fabricated values only. Each began
+// as a proof that the exploit worked; the assertion is now that it does not.
+
+#[test]
+fn a_committed_env_binding_cannot_redirect_a_locally_marked_vault_to_another_token() {
+    // #271 review U5. The operator moved two tokens; `team` is committed with its binding in the
+    // shared half and only the local mark beside it. A teammate's commit that rewrites team's
+    // committed source to prod's variable must not make team hand out prod's token.
+    let (tmp, team) = team_plane();
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Prod"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_PROD_TOKEN"}),
+    );
+    registry::add_vault(
+        &Ctx::new(tmp.path(), Env::of(&[])),
+        "prod",
+        "1password",
+        config,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let prod = registry::vault(&Ctx::new(tmp.path(), Env::of(&[])), "prod").unwrap();
+    let carrying = Ctx::new(
+        tmp.path(),
+        Env::of(&[
+            ("OP_TEAM_TOKEN", "ops_fixture-team-1"),
+            ("OP_PROD_TOKEN", "ops_fixture-prod-2"),
+        ]),
+    );
+    identity::move_to_keyring(&carrying, &team).unwrap();
+    identity::move_to_keyring(&carrying, &prod).unwrap();
+
+    // Put team's binding in the committed half and leave only its (full) local record beside it,
+    // as a shared vault whose token was moved locally looks.
+    let mut local = registry::load_local(&carrying).unwrap();
+    let record = local["vaults"]["team"]["config"]["identity"].clone();
+    let mut shared_entry = local["vaults"]["team"].clone();
+    shared_entry["config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("identity");
+    local["vaults"]["team"] = serde_json::json!({"config": {"identity": record}});
+    registry::save_local(&carrying, &local).unwrap();
+    let mut shared = registry::load_shared(&carrying).unwrap();
+    shared
+        .entry("vaults")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .unwrap()
+        .insert("team".into(), shared_entry);
+    registry::save_shared(&carrying, &shared).unwrap();
+
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = registry::vault(&bare, "team").unwrap();
+    assert_eq!(env_overlay(&bare, &v).unwrap()[0].1, "ops_fixture-team-1");
+
+    // The hostile commit: team's committed source becomes prod's variable.
+    let mut shared = registry::load_shared(&bare).unwrap();
+    shared["vaults"]["team"]["config"]["env"] =
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_PROD_TOKEN"});
+    registry::save_shared(&bare, &shared).unwrap();
+
+    // The recorded binding no longer matches, so the mark is not honoured: team reads from the
+    // environment (empty here) and is refused, rather than handing out prod's moved token.
+    let v = registry::vault(&bare, "team").unwrap();
+    let err = env_overlay(&bare, &v).unwrap_err();
+    assert!(err.message.contains("$OP_PROD_TOKEN"), "{}", err.message);
+    assert!(
+        !err.message.contains("ops_fixture-prod-2"),
+        "{}",
+        err.message
+    );
+    assert_eq!(identity::held(&bare, &v)[0].held, identity::Held::Unset);
+}
+
+#[test]
+fn a_declared_identity_source_is_stripped_and_the_op_prefix_is_case_insensitive() {
+    // #271 review U6. `OP_` is matched case-insensitively, and a source of another spelling
+    // (`--token-env PROD_1P_TOKEN`) is caught by NAME through `identity_vars`, which the chat
+    // builder unions with the prefix strip.
+    use std::ffi::OsStr;
+    assert!(identity::kept_from_chats(OsStr::new("OP_TEAM_TOKEN")));
+    assert!(identity::kept_from_chats(OsStr::new("op_team_token")));
+    assert!(identity::kept_from_chats(OsStr::new("Op_Mixed")));
+    assert!(!identity::kept_from_chats(OsStr::new("PROD_1P_TOKEN")));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Prod"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "PROD_1P_TOKEN"}),
+    );
+    registry::add_vault(&ctx, "p", "1password", config, None, false, false).unwrap();
+    // The declared source is listed, so the chat builder strips it though it has no OP_ prefix.
+    let doc = registry::load_registry(&ctx).unwrap();
+    let names: Vec<String> = registry::identity_vars(&doc)
+        .into_iter()
+        .flat_map(|(_, v)| v)
+        .collect();
+    assert!(names.contains(&"PROD_1P_TOKEN".to_string()), "{names:?}");
+    assert!(
+        names.contains(&"OP_SERVICE_ACCOUNT_TOKEN".to_string()),
+        "{names:?}"
+    );
+}

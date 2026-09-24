@@ -27,6 +27,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
   in the committed file, a value that looks like a credential. Local is created on the first
   save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
+- A vault can live in your system's own credential store: the Keychain on macOS, the Secret
+  Service on Linux. `charter vault add <name>` makes one by default, and every `charter secret`
+  and `charter vault` command works on it as on the other kinds. Each secret is its own
+  Keychain item, and on macOS only the charter program that stored it can read it without the
+  Keychain asking you first. A plaintext vault file is now something you ask for, with
+  `--provider plain-file`. ([#233](https://github.com/diazoxide/charter-app/issues/233))
+- **Vaults in the app.** A Vaults section in the Attention panel lists each vault with its
+  provider and how many secrets it holds. Clicking one opens the vault in a tab of its own, as a
+  persona opens, and the tab comes back at the next launch. The tab has a search box, **Add**,
+  and a table of name, size and when each secret was written. Each row's menu has Edit value,
+  Rename, Copy and Delete. The palette has *Open vault…* and *New vault…*, and a new vault is a
+  keyring one unless you pick another kind. Nothing the window lists or writes ever carries a
+  value back. ([#234](https://github.com/diazoxide/charter-app/issues/234),
+  [#235](https://github.com/diazoxide/charter-app/issues/235))
+- **Reveal and copy.** A secret's eye shows its value for 30 seconds, until you press it again,
+  or until you press Escape. **Copy** puts the value on the clipboard without it reaching the
+  window, marked for clipboard histories to skip. charter clears the clipboard a minute later, or
+  when it quits, but only if the clipboard still holds that value. Each reveal and copy writes
+  the trace event `charter secret get --reveal` writes, `secret-reveal`, with a `to` field saying
+  `window` or `clipboard`. ([#236](https://github.com/diazoxide/charter-app/issues/236))
+- **1Password tokens go into the Keychain, not your chats.** A 1Password vault's tab has a box
+  to paste its service-account token straight into the system keyring; the token never enters
+  charter's own environment. From then on every `charter secret` command reads it from the keyring,
+  so the vault works in a chat and in a terminal that exports nothing. charter runs only the `op`
+  it pinned when the token was stored, verified by path and code-signing team, so a chat cannot
+  redirect the token to an `op` of its own; the keyring item is random per vault and machine, and
+  the binding it was stored against is pinned locally, so a committed registry change cannot steer
+  it. No chat the app starts is given any `OP_*` variable (case insensitively) or any other
+  identity variable a vault declares. A tab can also move a token an app was launched with, and
+  then warns to relaunch charter so the export leaves its process.
+  ([#237](https://github.com/diazoxide/charter-app/issues/237))
 - **Extensions per project.** Each project can turn an installed extension on or off, and set
   what it declares, in either section of Project settings: Shared for the team, Local for you,
   and Local wins key by key. The tab shows every extension with what it is in this project —

@@ -20,6 +20,36 @@ use charter_core::harness::StateHooks;
 
 use crate::sessions::{Opening, Reporting, Sessions};
 
+/// Every identity variable a vault of the plane at `cwd` declares — both halves of each `env`
+/// binding — so a chat is started without any of them (#271 review, U6). A `cwd` outside a
+/// plane, or a registry that cannot be read, yields none: the chat still loses every `OP_*` by
+/// prefix. Read on the thread that starts the chat; it is a small JSON read, once per start.
+///
+/// **Skipped in a fenced build.** Resolving the plane walks up from `cwd` and, in a fenced test
+/// build, that walk aborts the moment it names a plane outside the fixture fence
+/// (`charter_core::fence`, charter-app#129) — which a unit test's `cwd` routinely does. A test
+/// build therefore strips only by the `OP_` prefix; the declared-name strip is exercised at the
+/// session builder ([`crate::sessions`] tests pass `env_strip` directly) and in the core.
+fn declared_identity_vars(cwd: Option<&std::path::Path>) -> Vec<String> {
+    if charter_core::fence::FENCED {
+        return Vec::new();
+    }
+    let Some(root) = cwd.and_then(|c| charter_core::plane::find_root(c).ok()) else {
+        return Vec::new();
+    };
+    let ctx = charter_core::secrets::Ctx::new(&root, charter_core::secrets::Env::from_process());
+    let Ok(doc) = charter_core::secrets::registry::load_registry(&ctx) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = charter_core::secrets::registry::identity_vars(&doc)
+        .into_iter()
+        .flat_map(|(_, vars)| vars)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// One chat the app has open, as the UI and the quit warning see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Open {
@@ -330,6 +360,10 @@ impl Chats {
                     cwd: chat.cwd.as_ref().map(|cwd| cwd.display().to_string()),
                     size,
                     env,
+                    // Every identity variable a vault of this chat's plane declares, so none
+                    // reaches the chat even when it is not `OP_`-prefixed (#271 review, U6). Read
+                    // from the plane the chat starts in; a chat outside a plane declares none.
+                    env_strip: declared_identity_vars(chat.cwd.as_deref()),
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);

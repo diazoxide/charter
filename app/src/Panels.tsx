@@ -6,12 +6,14 @@ import {
   FileText,
   FolderGit2,
   GitBranch,
+  KeyRound,
   LoaderCircle,
   TriangleAlert,
   UserRound,
 } from "lucide-react";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
+import { Vaults, type VaultsSaid } from "./Vaults";
 import { Chart, Facts } from "./Views";
 import { commands, type ExtensionView, type PanelView } from "./bindings";
 import type { Catalogued, Offer } from "./actions";
@@ -52,6 +54,7 @@ export function Panels({
   views = [],
   shownRow,
   onShowRow,
+  vaults,
 }: {
   /** The focused workspace, whose todos these are. */
   workspace: string | undefined;
@@ -77,6 +80,9 @@ export function Panels({
    */
   shownRow: string | undefined;
   onShowRow: (row: string | undefined) => void;
+  /** The plane's vaults, drawn under the workspace's panels (`useVaults`, which the window
+   *  holds). A vault is the plane's, so they are drawn with no workspace focused too. */
+  vaults?: Pick<VaultsSaid, "vaults" | "trouble">;
 }) {
   const { panels, trouble } = state;
 
@@ -128,6 +134,8 @@ export function Panels({
           )}
         </>
       )}
+
+      {vaults !== undefined && <Vaults said={vaults} offers={offers} onPress={onPress} />}
     </aside>
   );
 }
@@ -175,6 +183,7 @@ const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   piece: GitBranch,
   note: FileText,
   trouble: TriangleAlert,
+  vault: KeyRound,
   dot: Circle,
 };
 

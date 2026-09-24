@@ -131,6 +131,7 @@ function draw(
       offered={on.offered ?? []}
       onOpenView={on.onOpenView ?? (() => {})}
       onAsk={on.onAsk ?? (() => {})}
+      onVaultChanged={() => {}}
     />
   );
   render(on.strict ? <StrictMode>{pane}</StrictMode> : pane);

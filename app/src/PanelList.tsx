@@ -8,6 +8,7 @@ import {
   FileText,
   FolderGit2,
   GitBranch,
+  KeyRound,
   Search,
   Star,
   TriangleAlert,
@@ -79,6 +80,7 @@ const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   piece: GitBranch,
   note: FileText,
   trouble: TriangleAlert,
+  vault: KeyRound,
   dot: Circle,
 };
 

@@ -7,7 +7,13 @@ import { clearMocks } from "@tauri-apps/api/mocks";
 import { Panels } from "./Panels";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
-import type { ExtensionView, PanelRow, PanelView, Panels as PanelsModel } from "./bindings";
+import type {
+  ExtensionView,
+  PanelRow,
+  PanelView,
+  Panels as PanelsModel,
+  VaultSummary,
+} from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
 afterEach(() => {
@@ -166,6 +172,7 @@ function draw(
     onPress?: (offer: Offer) => void;
     contributed?: PanelView[];
     views?: ExtensionView[];
+    vaults?: VaultSummary[];
   } = {},
 ) {
   function Window() {
@@ -180,6 +187,7 @@ function draw(
         views={on.views ?? []}
         shownRow={shownRow}
         onShowRow={setShownRow}
+        vaults={on.vaults === undefined ? undefined : { vaults: on.vaults }}
       />
     );
   }
@@ -207,6 +215,21 @@ describe("the right-hand region", () => {
 
     expect(screen.getByTestId("panels").textContent).not.toMatch(/alert/i);
   });
+
+  it.each([["alpha"], [undefined]])(
+    "draws the plane's vaults with workspace %s focused, since a vault is the plane's",
+    async (workspace) => {
+      // A vault is registered once per plane, so it is not one workspace's.
+      draw({
+        workspace,
+        vaults: [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }],
+      });
+
+      const vaults = await screen.findByTestId("panel-vaults");
+      expect(within(vaults).getByRole("heading")).toHaveTextContent("Vaults");
+      expect(await within(vaults).findByText("ops")).toBeInTheDocument();
+    },
+  );
 
   it("draws no workspace answers when none is focused", () => {
     draw({ workspace: undefined });

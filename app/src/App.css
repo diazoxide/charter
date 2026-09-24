@@ -3570,6 +3570,192 @@ button.show-more:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* ---- A vault's tab (charter-app#235) ------------------------------------------------- */
+
+/* The search box and Add on one line above the table: the box takes the room, Add keeps its
+   own width. */
+.vault-tools {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  max-width: 60rem;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.vault-tools .panel-search {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+/* The secrets: names on the left, the size band and when each was written muted beside them.
+   Rows are divided by the subtle rule, not `layer.divider` — that is the tab strips' own hairline
+   (`docs/design-system.md`) — and never by a coloured edge. The row under the pointer or the
+   keyboard takes `layer.selected`: "where you are", which is what it means on a strip too. */
+.vault-secrets {
+  width: 100%;
+  max-width: 60rem;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.vault-secrets th {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.vault-secrets td {
+  padding: 0.1rem 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.vault-secrets td:first-child {
+  width: 100%;
+  padding-inline-start: 0;
+}
+
+.vault-secrets tbody tr {
+  transition: background-color var(--motion-duration-quick) var(--motion-easing-standard);
+}
+
+.vault-secrets tbody tr:hover,
+.vault-secrets tbody tr:focus-within {
+  background: var(--layer-selected);
+}
+
+/* A secret's name is the row's one control: pressing it opens the row's menu. The glyph says
+   there is one, and is quiet until the row is under the pointer or the keyboard. */
+.vault-secret {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.vault-secret:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.vault-secret-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vault-secret .node-icon {
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--motion-duration-quick) var(--motion-easing-standard);
+}
+
+.vault-secrets tr:hover .vault-secret .node-icon,
+.vault-secret:focus-visible .node-icon,
+.vault-secret[data-state="open"] .node-icon {
+  opacity: 1;
+}
+
+/* The eye (charter-app#236): quiet until its row is under the pointer or the keyboard, and
+   plain while it is pressed, so a value on the page always has its hide button showing. */
+.vault-reveal {
+  display: flex;
+  align-items: center;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-muted);
+  cursor: default;
+  /* No easing: a row's hover is not animated (`docs/design-system.md`, motion). */
+  opacity: 0;
+}
+
+.vault-secrets tr:hover .vault-reveal,
+.vault-secrets tr:focus-within .vault-reveal,
+.vault-reveal[aria-pressed="true"] {
+  opacity: 1;
+}
+
+.vault-reveal:hover {
+  background: var(--control-hover);
+}
+
+.vault-reveal:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* A revealed value, under its name: the only place one is ever drawn, for 30 seconds. It wraps
+   rather than widening the table, and is selectable, because reading it is what it is for. */
+.vault-value {
+  display: block;
+  margin: 0 0 0.25rem 0.5rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: var(--control-base);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* What a copy said. Takes no room while it says nothing, but stays in the page: a live region
+   that is not drawn is not announced when it starts to speak. */
+.vault-note {
+  max-width: 60rem;
+  margin: 0 0 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.vault-note:empty {
+  margin: 0;
+}
+
+/* Where the vault's identity token is, and how to put it into the Keychain (#237, hardened after
+   the #271 review): the note's size and colour, and a paste box with its buttons below the
+   sentence. */
+.vault-identity {
+  max-width: 60rem;
+  margin: 0 0 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.vault-identity p {
+  margin: 0 0 0.4rem;
+}
+
+.vault-identity-put {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.vault-identity-put input {
+  flex: 1 1 16rem;
+  min-width: 12rem;
+}
+
 /* A list in a view has the pane's height to use, not a side region's. */
 .view-body .panel-list {
   margin-top: 0.6rem;

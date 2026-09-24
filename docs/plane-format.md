@@ -127,6 +127,8 @@ row), and the status of that field where it differs from its file's.
   - [`.charter/vaults/` (directory)](#chartervaults-directory)
   - [`.charter/vaults/<name>.json` — plain-file vault](#chartervaultsnamejson--plain-file-vault)
   - [`.charter/vaults/<name>.meta.json` — rotation sidecar](#chartervaultsnamemetajson--rotation-sidecar)
+  - [`.charter/vaults/<name>.keys.json` — keyring vault's keys index](#chartervaultsnamekeysjson--keyring-vaults-keys-index)
+  - [`.charter/keyring-stub.json` — a test build's keyring](#charterkeyring-stubjson--a-test-builds-keyring)
   - [`.charter/vaults/<name>.json` — reference vault (same path, different content)](#chartervaultsnamejson--reference-vault-same-path-different-content)
   - [Secret reference syntax](#secret-reference-syntax)
   - [`.charter/fingerprint.key`](#charterfingerprintkey)
@@ -2137,7 +2139,7 @@ literal `fixture-not-a-secret`.
 |---|---|---|---|---|---|
 | `vaults` | object | defaulted to `{}` on read | name → entry | stable | `charter/secrets/registry.py:60` |
 | `vaults.<name>` | object | — | one vault. A non-object entry is dropped from the merged view and reported | stable | `charter/secrets/registry.py:92` |
-| `vaults.<name>.provider` | string | required | `plain-file` \| `reference` \| `1password` | stable | `charter/secrets/registry.py:39`, `:245` |
+| `vaults.<name>.provider` | string | required | `keyring` \| `plain-file` \| `reference` \| `1password`. `keyring` is charter-app's (ADR 0047), the default `vault add` writes; a Python charter reads it as an unknown provider | stable | `charter/secrets/registry.py:39`, `:245`; `crates/charter-core/src/secrets/registry.rs` (`PROVIDERS`) |
 | `vaults.<name>.persona` | string \| null | written always, `null` when no `--persona` | persona tag | stable | `charter/secrets/registry.py:299` |
 | `vaults.<name>.config` | object | written always (may be `{}`) | provider config, merged per key over the local half | stable | `charter/secrets/registry.py:113` |
 
@@ -2151,6 +2153,7 @@ literal `fixture-not-a-secret`.
 | `account` | string | `--account` | 1Password account pin — **LOCAL_ONLY, never written to the shared half** | stable | `charter/secrets/registry.py:50`, `:298`, `:317` |
 | `env` | object `{TARGET: SOURCE}` | `--env TARGET=SOURCE` / `--token-env X` | env var NAMES only (e.g. `{"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_TOKEN"}`); never a value | stable | `charter/commands_secrets.py:188`, `charter/commands_secrets.py:80`; read `charter/secrets/base.py:291` |
 | `version` | string | hand-written only | `browser://` resolver's npx package version | stable | `charter/secrets/reference.py:104` |
+| `identity` | object | the vault tab's token box / *Move…*, into the **local half only** | The moved-token record: `{"held":"keyring","bindings":{TARGET:SOURCE},"op_vault":…,"account":…,"op_cmd":…,"op_team":…,"ids":{SOURCE:<id>}}`. Each source is read from the keyring item `charter/@identity/<id>` (account the source name) first and the environment second, but **only while the vault's effective `env`/op-vault/account still equal `bindings`/`op_vault`/`account`** and the pinned `op_cmd`/`op_team` verify. **Read from `.charter/vaults.json` alone**; a committed one is ignored, so a commit cannot mark or redirect (#271 review, U2/U5). charter-app only (#237, ADR 0047 as amended); a Python charter ignores the key | stable | `crates/charter-core/src/secrets/identity.rs` (`MARK`, `record`, `record_matches`, `pinned_op`) |
 
 Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepassword.py:134`,
 `:149`) and never written.
@@ -2245,6 +2248,48 @@ Shape with placeholder values:
 ```json
 { "API_TOKEN": { "set_at": "2026-09-17" } }
 ```
+
+### `.charter/vaults/<name>.keys.json` — keyring vault's keys index
+
+charter-app only (ADR 0047); the Python charter has no keyring provider and never reads it.
+
+- **Format:** JSON object: `service` (string, or `null` before the vault's first write) and
+  `keys`, an object `key → {"size": <size band>, "updated": <RFC 3339 UTC, to the second>}`.
+  **Never a value.** `size` is `fingerprint::size_band` of the value (`1–15 bytes`,
+  `16–31 bytes`, … `1024+ bytes`), never its length.
+- **Status:** **stable** — it is the only record of which keys a keyring vault holds and of
+  the service its items live under: the keyring cannot be enumerated through the `keyring`
+  crate. Deleting it strands the vault's items in the keyring, still there and unnamed.
+- **Written by:** `crates/charter-core/src/secrets/keyring.rs` (`set_with`, `delete_with`),
+  after the keyring write succeeded, through the plain-file provider's `write_private` (0600,
+  settled on the descriptor first). Commands: `charter secret set`, `charter secret rm`.
+- **Read by:** the same module — `keys`, `listed`, `get`, `ages`, `health`. `secret list`,
+  `vault list` and `secret audit` read only this file and never the keyring.
+- **`service`:** `charter/<vault>/<8 lowercase hex>`, made randomly at the vault's first write
+  and written to this file BEFORE that first item is, so no item is ever under a service no
+  index records. A service that does not start `charter/` (or holds a control character) is refused
+  as corrupt: the file is on disk, and one pointing at another program's item would make
+  charter read it.
+- **Git / encoding:** under `.charter/`, so gitignored; indent 2, trailing newline, keys
+  sorted.
+
+```json
+{
+  "service": "charter/ops/3f9a2c1b",
+  "keys": {
+    "API_TOKEN": { "size": "16–31 bytes", "updated": "2026-09-24T11:32:17Z" }
+  }
+}
+```
+
+### `.charter/keyring-stub.json` — a test build's keyring
+
+In the state directory (`.charter/`, or `$CHARTER_HOME` when set). Written **only** by a fenced
+build (every `cargo test` build, and the app's `e2e` build — `crates/charter-core/src/fence.rs`),
+which keeps a keyring vault's values here instead of in the
+operating system's store, so no test can reach the operator's keychain. JSON object
+`"<service>\n<account>" → value`, 0600. **It holds values in plaintext**; a build anyone is
+given never writes it.
 
 ### `.charter/vaults/<name>.json` — reference vault (same path, different content)
 
