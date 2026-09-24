@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -119,6 +120,9 @@ import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
+import { projectThemeChanged } from "./projectTheme";
+import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
+import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, leastAt, useRoom } from "./fits";
@@ -274,7 +278,11 @@ export function PlaneView({
   // editor, from a `git pull` — is one of these, and what this project has on may have moved
   // with it (charter-app#253). Not at the mount: `useExtensionsOn` asks then.
   useEffect(() => {
-    if (changesOnDisk > 0) extensionsChanged(plane);
+    if (changesOnDisk === 0) return;
+    extensionsChanged(plane);
+    // And the theme it draws, which the same two files and each `workspace.json` pick
+    // (charter-app#273, #281).
+    projectThemeChanged(plane);
   }, [changesOnDisk, plane]);
   /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now. */
@@ -833,6 +841,23 @@ export function PlaneView({
   );
 
   /**
+   * **Each workspace's colour** (charter-app#281), as the core read it out of its
+   * `workspace.json` with the sidebar — so it is read again whenever the plane changes on disk,
+   * a save in the Workspace settings tab included. `null` for a workspace with none, for the
+   * chats outside every workspace, which have no file to hold one, and for a grey `#rrggbb`,
+   * which has no hue to tint with: no mark is drawn for a colour that tints nothing (the
+   * Workspace settings tab says why).
+   */
+  const colourOf = (workspace: string | undefined): string | null =>
+    colourWithHue(sidebar?.workspaces.find((ws) => ws.name === workspace)?.colour);
+  /** The theme the window draws, which a colour is a hue shift of: a tab's tint follows it. */
+  const drawnTheme = useSyncExternalStore(followTheme, inForce);
+  /** What a workspace's own tab and its chat strip put on themselves: its colour, on the tab
+   *  shades and the accent (`theme.TINTED_TABS`). Nothing for a workspace with no colour. */
+  const tintOf = (workspace: string | undefined) =>
+    tintVariables(drawnTheme, colourOf(workspace), TINTED_TABS) as CSSProperties;
+
+  /**
    * What a workspace is drawn as: its name, its pin, and the two counts.
    *
    * **One definition, used by the strip and by the menu of what the strip has no room for.**
@@ -853,8 +878,15 @@ export function PlaneView({
     const waiting = states.needsYou.filter((session) => filedIn(session) === workspace).length;
     const here = tabsIn(tabs, workspace, filedIn).length;
     const called = workspace === OUTSIDE ? OUTSIDE_TITLE : workspace;
+    const colour = colourOf(workspace);
     return (
       <>
+        {/* Its colour, as a mark in its own accent (charter-app#281) — on the strip and in the
+            menu of what the strip has no room for, which is why it is here and not a style of
+            the tab alone. Hidden from a screen reader: the name says which workspace. */}
+        {colour !== null && (
+          <span className="workspace-mark" aria-hidden="true" style={tintOf(workspace)} />
+        )}
         <span className="workspace-name">{called}</span>
         <Pin held={pinnedWorkspaces.includes(workspace)} what="workspace" />
         {/* How many chats are open over there. With the strip below showing one workspace's
@@ -1977,8 +2009,12 @@ export function PlaneView({
       // opposite ends of the window.
       read: sidebar !== undefined,
       where: focused === OUTSIDE ? OUTSIDE_TITLE : focused,
+      // Which workspace, by name, and its colour: the window draws that workspace's theme and
+      // tints its accent with that colour while this project is in front (charter-app#281).
+      workspace: ofWorkspace,
+      colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
     }),
-    [asking, ending, focused, offers, quiet, report, run, settled, sidebar],
+    [asking, ending, focused, ofWorkspace, offers, quiet, report, run, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2049,6 +2085,10 @@ export function PlaneView({
                         role="tab"
                         aria-selected={workspace === focused}
                         title={offer?.title}
+                        // Its own colour, in front or not (charter-app#281): its shade and its
+                        // mark are its tint, set on the tab and nowhere else.
+                        data-colour={colourOf(workspace) ?? undefined}
+                        style={tintOf(workspace)}
                         onClick={() => {
                           if (offer?.available) press(offer);
                         }}
@@ -2097,7 +2137,9 @@ export function PlaneView({
         </div>
       )}
 
-      <header className="bar">
+      {/* The chat strip is the focused workspace's, so it is drawn in that workspace's colour
+          (charter-app#281): its shade, its selected tab and its accent. */}
+      <header className="bar" style={tintOf(ofWorkspace)}>
         {/* The chats of the FOCUSED WORKSPACE (ADR 0036), which is what the tmux frame's
             sessions-under-a-workspace was. Named, because the projects and the workspaces
             above are tablists too and a query for `role="tab"` across the whole window
@@ -2506,6 +2548,17 @@ export function PlaneView({
 }
 
 /** What this project told the window about itself. */
+/** Redraws a component when the theme in force changes: what a workspace's tint is taken from
+ *  (charter-app#281). */
+function followTheme(changed: () => void): () => void {
+  return onDrawn(() => changed());
+}
+
+/** A workspace's colour when it has a hue to tint with, else `null` (charter-app#281). */
+function colourWithHue(colour: string | null | undefined): string | null {
+  return hueOf(colour) === undefined ? null : (colour ?? null);
+}
+
 export type PlaneReport = {
   /** Every chat it has open, with what each one is doing — what a quit would end. */
   ending: Ending[];
@@ -2531,6 +2584,12 @@ export type PlaneReport = {
   /** The workspace it is on, already read as it should be said — `undefined` when it is on
    *  none. The title bar's second segment (`TitleBar.tsx`). */
   where: string | undefined;
+  /** The workspace it is on by its name, `undefined` outside every workspace: whose
+   *  `workspace.json` is a layer of the theme the window draws (charter-app#281). */
+  workspace?: string;
+  /** That workspace's colour, a palette name or `#rrggbb`, or `null`: what the window's accent
+   *  and focus ring are tinted with while it is in front (charter-app#281). */
+  colour?: string | null;
 };
 
 /** What a project asks the WINDOW to do, because the window is what holds projects. */

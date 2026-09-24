@@ -221,7 +221,7 @@ impl Choices {
 }
 
 /// Where `[extensions]` sits in a workspace's `workspace.json`, as a path names it.
-const WORKSPACE_AT: &str = "settings.";
+pub(crate) const WORKSPACE_AT: &str = "settings.";
 
 /// One layer of [`Choices`]: which it is, the file a sentence names, where the table sits in
 /// it, and what it says.

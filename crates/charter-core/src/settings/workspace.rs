@@ -8,7 +8,9 @@
 //! TOML table it mirrors ([`table_in`]) and handed to the same reader,
 //! `extension::project`, which refuses it in the same words. A table a later reader takes is
 //! one more name in [`READ`] and one more reader asked here: `harness_plugins`
-//! (charter-app#282) is read by `harness_plugin`, whose `Choices::read_in` takes this layer.
+//! (charter-app#282) is read by `harness_plugin`, whose `Choices::read_in` takes this layer, and
+//! `theme` (charter-app#281) by `extension::project::theme`, which also reads the workspace's
+//! colour from it.
 //!
 //! **A save keeps the manifest the operator has.** Only `settings` changes; every other key keeps
 //! its place and its value (`serde_json`'s `preserve_order`). A manifest charter wrote is stamped
@@ -33,7 +35,11 @@ pub const FILE: &str = "workspace.json";
 pub const KEY: &str = "settings";
 
 /// The tables a workspace's settings may hold: the ones something reads.
-pub const READ: &[&str] = &[project::TABLE, crate::harness_plugin::TABLE];
+pub const READ: &[&str] = &[
+    project::TABLE,
+    crate::harness_plugin::TABLE,
+    project::theme::TABLE,
+];
 
 /// The file as a sentence names it: `workspaces/<ws>/workspace.json`.
 pub fn named(workspace: &str) -> String {
@@ -50,7 +56,7 @@ pub fn table_in(manifest: &str) -> Option<toml::Table> {
 }
 
 /// [`table_in`], of a manifest already read.
-fn table_of(doc: &Json) -> Option<toml::Table> {
+pub(crate) fn table_of(doc: &Json) -> Option<toml::Table> {
     match doc.get(KEY).and_then(to_toml)? {
         toml::Value::Table(table) => Some(table),
         _ => None,
@@ -125,6 +131,8 @@ pub fn refusals(text: &str, workspace: &str) -> Vec<String> {
             &file,
             "settings.",
         ));
+        // And `theme` (charter-app#281), by the one reader of a theme.
+        out.extend(project::theme::refusals_in_workspace(&table, &file));
     }
     out
 }

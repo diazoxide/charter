@@ -333,10 +333,31 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* **A workspace's colour** (charter-app#281): a small dot in its own accent before its name,
+   on its tab whether or not it is in front, and in the show-more menu. The tab sets the tinted
+   `--accent-base` on itself (`theme.tintVariables`), so this rule names only the token. A dot
+   and not a bar or a stripe: the operator turned down coloured rules on the strips (#193), and
+   a mark the size of a letter is the least that tells two workspaces apart at a glance. */
+.workspace-mark {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-base);
+}
+
+/* **And its shade**: a coloured workspace's tab is drawn on its own tinted `--layer-workspace`
+   — the strip's shade turned to its hue, at the same luminance — so a tab behind the one in
+   front still says which colour it is. Not under the pointer: hover is drawn as on every tab. */
+.workspaces-strip [role="tab"][data-colour]:not([aria-selected="true"], :hover) {
+  background: var(--layer-workspace);
+}
+
 /* And how many of them are asking for you, which is the hole scoping the chats would
    otherwise open. The same mark the project tabs carry one scope up — **the count of chats
    waiting for the operator is the one thing in this window that exists to be seen**, so it is
-   the only mark on a strip drawn in a colour of its own, and it is drawn in the weight of a
+   the only mark on a strip drawn in a colour charter chose — a workspace's own colour is the
+   operator's (above) — and it is drawn in the weight of a
    number rather than the weight of a label. */
 .workspace-needs,
 .project-needs {
@@ -3107,6 +3128,18 @@ button.show-more:focus-visible {
   min-width: 2.5rem;
   color: var(--text-primary);
   font-weight: 600;
+}
+
+/* The workspace in front's colour, before its name (charter-app#281): the window's accent is
+   tinted with it while that workspace is in front, so the dot needs no colour of its own. The
+   same size as the tab's mark, so the two read as one thing. */
+.crumb-mark {
+  flex: none;
+  align-self: center;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--accent-base);
 }
 
 .crumb-workspace {

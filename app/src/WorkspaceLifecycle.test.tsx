@@ -358,6 +358,9 @@ describe("deleting a workspace", () => {
     // them writes anything.
     const READS = [
       "extensions_on",
+      // The workspace in front changed, and its theme is a layer of what the window draws
+      // (charter-app#281).
+      "project_theme_drawn",
       "plane_sidebar",
       "plane_pins",
       "workspace_panels",
