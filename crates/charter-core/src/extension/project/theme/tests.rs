@@ -310,7 +310,22 @@ fn a_workspaces_extension_theme_falls_back_when_the_workspace_turned_that_extens
         got.why.as_deref(),
         Some(
             "workspaces/alpha/workspace.json picks “Solarized Dark” from solarized, but \
-             solarized is off in this project — so the built-in charter-dark is drawn"
+             solarized is off in this workspace — so the built-in charter-dark is drawn"
+        )
+    );
+    // And the project's pick, when the workspace turned its extension off, says the same.
+    let got = in_alpha(
+        &[approved("solarized")],
+        Some(&offered()),
+        PICKS_SOLARIZED,
+        r#"{"settings": {"extensions": {"solarized": {"enabled": false}}}}"#,
+        "",
+    );
+    assert_eq!(
+        got.why.as_deref(),
+        Some(
+            "charter.toml picks “Solarized Dark” from solarized, but solarized is off in this \
+             workspace — so the built-in charter-dark is drawn"
         )
     );
 }
@@ -446,10 +461,10 @@ fn a_workspaces_theme_is_read_from_its_manifest_on_disk() {
         said.workspace_file().as_deref(),
         Some("workspaces/alpha/workspace.json")
     );
-    assert_eq!(
-        colour_of(dir.path(), "alpha"),
-        Some(Colour::Palette("pink"))
-    );
+    let alpha = crate::workspaces::Plane::open(dir.path())
+        .workspace("alpha")
+        .unwrap();
+    assert_eq!(colour_of(&alpha), Some(Colour::Palette("pink")));
     // Outside every workspace there is no workspace layer.
     let got = resolve(&[], None, &Said::read_in(dir.path(), None));
     assert_eq!((got.draws, got.colour), (None, None));

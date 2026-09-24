@@ -470,7 +470,7 @@ fn plane_sidebar(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sid
                 .map(|todo| todo.title)
                 .collect(),
             chats: filed.remove(&name).unwrap_or_default(),
-            colour: charter_core::extension::project::theme::colour_of(root, &name)
+            colour: charter_core::extension::project::theme::colour_of(&ws)
                 .as_ref()
                 .map(charter_core::extension::project::theme::Colour::value),
             name,

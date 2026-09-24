@@ -306,12 +306,17 @@ fn colour(said: &Said, file: &str, ignored: &mut Vec<Ignored>) -> Option<Colour>
     colour
 }
 
-/// The colour of the workspace `workspace` of the plane at `root`, as [`resolve`] reads it —
-/// for the window's workspace tabs, which each show their own. `None` for a workspace with no
-/// colour, or one charter does not read.
-pub fn colour_of(root: &std::path::Path, workspace: &str) -> Option<Colour> {
-    let said = Said::default()
-        .with_workspace(workspace, crate::settings::workspace::read(root, workspace));
+/// The colour of the workspace `ws`, as [`resolve`] reads it — for the window's workspace tabs,
+/// which each show their own. `None` for a workspace with no colour, or one charter does not
+/// read. Handed the workspace the caller already opened, so a listing of every workspace reads
+/// each manifest once.
+pub fn colour_of(ws: &crate::workspaces::Workspace) -> Option<Colour> {
+    let settings = ws
+        .manifest()
+        .0
+        .as_ref()
+        .and_then(crate::settings::workspace::table_of);
+    let said = Said::default().with_workspace(ws.name(), settings);
     colour(&said, "", &mut Vec::new())
 }
 
@@ -334,8 +339,9 @@ fn unavailable(
     let Pick::Extension { id, name } = pick else {
         return None;
     };
-    let because = match extensions.iter().find(|it| &it.id == id).map(|it| it.state) {
-        Some(State::On) => {
+    let it = extensions.iter().find(|it| &it.id == id);
+    let because = match it.map(|it| (it.state, it.source)) {
+        Some((State::On, _)) => {
             let contributes =
                 offered.is_none_or(|all| all.iter().any(|one| &one.id == id && &one.name == name));
             if contributes {
@@ -343,9 +349,13 @@ fn unavailable(
             }
             format!("{id} contributes no theme called “{name}”")
         }
-        Some(State::Off) => format!("{id} is off in this project"),
-        Some(State::NeedsApproval) => format!("this machine has not approved {id}"),
-        Some(State::NotInstalled) | None => format!("{id} is not installed on this machine"),
+        // Off in the workspace's layer is off there, not in the project (charter-app#281).
+        Some((State::Off, Source::Workspace)) => format!("{id} is off in this workspace"),
+        Some((State::Off, _)) => format!("{id} is off in this project"),
+        Some((State::NeedsApproval, _)) => format!("this machine has not approved {id}"),
+        Some((State::NotInstalled, _)) | None => {
+            format!("{id} is not installed on this machine")
+        }
     };
     Some(format!(
         "{file} picks “{name}” from {id}, but {because} — so the built-in {FALLBACK} is drawn"

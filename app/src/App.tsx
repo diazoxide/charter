@@ -595,12 +595,16 @@ function App() {
   /** The workspace the project in front is on, when it is on one (charter-app#281): its
    *  `workspace.json` is a layer of the theme the window draws, between the project's two files. */
   const workspaceInFront = saying?.workspace;
+  /** The project in front once it knows which workspace it is on — its plane read — and not
+   *  before: asked for the project alone first, the window would draw the project's theme and
+   *  then repaint in the workspace's a moment later, a flash at every launch. */
+  const settledInFront = saying?.read === true ? inFront : undefined;
   /** What the project in front has on in that workspace (charter-app#253, #280), for the one
    *  thing that is the window's and not a project's to draw: the theme. */
-  const onInFront = useExtensionsOn(inFront, workspaceInFront);
+  const onInFront = useExtensionsOn(settledInFront, workspaceInFront);
   /** The theme the project in front picked there (charter-app#273, #281): `null` when nothing
    *  picked one. */
-  const pickInFront = useProjectTheme(inFront, workspaceInFront);
+  const pickInFront = useProjectTheme(settledInFront, workspaceInFront);
   // The theme the project and workspace in front have, drawn once they have said what they have
   // on and what they picked — and every approved extension's with no project in front, which is
   // what the window drew before projects had a say (ADR 0048). After the first frame, like every

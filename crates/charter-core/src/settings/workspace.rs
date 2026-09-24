@@ -50,7 +50,7 @@ pub fn table_in(manifest: &str) -> Option<toml::Table> {
 }
 
 /// [`table_in`], of a manifest already read.
-fn table_of(doc: &Json) -> Option<toml::Table> {
+pub(crate) fn table_of(doc: &Json) -> Option<toml::Table> {
     match doc.get(KEY).and_then(to_toml)? {
         toml::Value::Table(table) => Some(table),
         _ => None,

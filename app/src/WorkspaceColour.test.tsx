@@ -62,7 +62,12 @@ function core() {
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,
-        workspaces: [workspace("alpha", "teal"), workspace("beta", null)],
+        workspaces: [
+          workspace("alpha", "teal"),
+          workspace("beta", null),
+          // A grey `#rrggbb`: the core reads it, and it has no hue to tint with.
+          workspace("gamma", DEFAULT_THEME.values["text.muted"]),
+        ],
         personas: ["steward"],
         persona: "steward",
         unfiled: [],
@@ -171,6 +176,9 @@ describe("a workspace's theme and colour", () => {
     const beta = workspaceTab("beta");
     expect(beta).not.toHaveAttribute("data-colour");
     expect(beta.querySelector(".workspace-mark")).toBeNull();
+    // A grey tints nothing, so it draws no mark that would say it did.
+    expect(workspaceTab("gamma")).not.toHaveAttribute("data-colour");
+    expect(workspaceTab("gamma").querySelector(".workspace-mark")).toBeNull();
   });
 
   it("marks the title bar's workspace while a coloured workspace is in front", async () => {

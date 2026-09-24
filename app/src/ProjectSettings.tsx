@@ -4,7 +4,7 @@ import { LoaderCircle } from "lucide-react";
 import { extensionsChanged } from "./extensionsOn";
 import { projectThemeChanged, useProjectThemeAnswers } from "./projectTheme";
 import { BUILT_IN, DEFAULT_THEME, inForce, SYSTEM } from "./theme/theme";
-import { PALETTE } from "./theme/tint";
+import { hueOf, PALETTE } from "./theme/tint";
 import {
   commands,
   type HarnessPlugin,
@@ -638,9 +638,13 @@ function themeGroup(unset: string, here: "project" | "workspace" = "project"): G
         theme?.draws == null
           ? `the window's own theme — your theme.json, else the first theme from an extension this ${here} has on, else charter-dark`
           : (labels[theme.draws] ?? theme.draws);
-      // In a workspace, which of the three files the theme drawn here came from: its own, or
-      // the project's that it did not override (charter-app#281).
-      const from = here === "workspace" && theme?.file != null ? `, from ${theme.file}` : "";
+      // In a workspace, which of the three files picked the theme drawn here: its own, or the
+      // project's that it did not override (charter-app#281). Not when the pick fell back: the
+      // file picked something else, and the sentence under the group says what and why.
+      const from =
+        here === "workspace" && theme?.file != null && theme.why === null
+          ? `, picked in ${theme.file}`
+          : "";
       return [
         {
           ...textAt(path, "Theme", {
@@ -656,9 +660,17 @@ function themeGroup(unset: string, here: "project" | "workspace" = "project"): G
     },
     notes: (file, _extensions, theme) => {
       if (theme === undefined) return [];
+      // A workspace's tab is one section, and what is drawn in the workspace is its answer
+      // whichever file made the pick; a project's says it under the file that made it.
+      const why = here === "workspace" || theme.file === file.file ? theme.why : null;
       return [
-        ...(theme.why !== null && theme.file === file.file ? [theme.why] : []),
+        ...(why === null ? [] : [why]),
         ...theme.ignored.filter((one) => one.file === file.file).map((one) => one.why),
+        ...(here === "workspace" && theme.colour !== null && hueOf(theme.colour) === undefined
+          ? [
+              `${theme.colour} is a grey, which has no hue to tint with — so this workspace is drawn without a colour. Pick one of the eight, or a custom colour that is not grey.`,
+            ]
+          : []),
       ];
     },
   };
@@ -1121,7 +1133,10 @@ function ColourControl({
   onChange: (to: string) => void;
 }) {
   const well = useId();
-  const custom = value.startsWith("#");
+  // A `#rrggbb`: what the colour well can hold. Anything else the file holds that is not a
+  // palette name — `#fff`, say — is shown as held, below, rather than as a custom colour the
+  // well would silently turn black.
+  const custom = /^#[0-9a-fA-F]{6}$/.test(value);
   /** Where a new custom colour starts: the accent the window is drawn in, as `#rrggbb`. */
   const start = () =>
     /^#[0-9a-fA-F]{6}/.exec(inForce().values["accent.base"])?.[0] ??

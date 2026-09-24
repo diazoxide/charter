@@ -122,6 +122,7 @@ import type { ExtensionView, PanelView } from "./bindings";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
 import { projectThemeChanged } from "./projectTheme";
 import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
+import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, leastAt, useRoom } from "./fits";
@@ -842,11 +843,13 @@ export function PlaneView({
   /**
    * **Each workspace's colour** (charter-app#281), as the core read it out of its
    * `workspace.json` with the sidebar — so it is read again whenever the plane changes on disk,
-   * a save in the Workspace settings tab included. `null` for a workspace with none, and for the
-   * chats outside every workspace, which have no file to hold one.
+   * a save in the Workspace settings tab included. `null` for a workspace with none, for the
+   * chats outside every workspace, which have no file to hold one, and for a grey `#rrggbb`,
+   * which has no hue to tint with: no mark is drawn for a colour that tints nothing (the
+   * Workspace settings tab says why).
    */
   const colourOf = (workspace: string | undefined): string | null =>
-    sidebar?.workspaces.find((ws) => ws.name === workspace)?.colour ?? null;
+    colourWithHue(sidebar?.workspaces.find((ws) => ws.name === workspace)?.colour);
   /** The theme the window draws, which a colour is a hue shift of: a tab's tint follows it. */
   const drawnTheme = useSyncExternalStore(followTheme, inForce);
   /** What a workspace's own tab and its chat strip put on themselves: its colour, on the tab
@@ -2009,7 +2012,7 @@ export function PlaneView({
       // Which workspace, by name, and its colour: the window draws that workspace's theme and
       // tints its accent with that colour while this project is in front (charter-app#281).
       workspace: ofWorkspace,
-      colour: sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour ?? null,
+      colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
     }),
     [asking, ending, focused, ofWorkspace, offers, quiet, report, run, settled, sidebar],
   );
@@ -2549,6 +2552,11 @@ export function PlaneView({
  *  (charter-app#281). */
 function followTheme(changed: () => void): () => void {
   return onDrawn(() => changed());
+}
+
+/** A workspace's colour when it has a hue to tint with, else `null` (charter-app#281). */
+function colourWithHue(colour: string | null | undefined): string | null {
+  return hueOf(colour) === undefined ? null : (colour ?? null);
 }
 
 export type PlaneReport = {

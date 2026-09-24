@@ -14,6 +14,12 @@ import { commands, type PlaneId } from "./bindings";
  * `null` is an answer: nothing picked a theme, and the window keeps its own. A question that
  * failed is read as that too — a project whose theme cannot be asked must not hold the window's
  * theme back.
+ *
+ * **Only what something on screen asks about is kept.** The window asks for the workspace in
+ * front and a settings tab for its own, so the pairs change with every workspace switch, and a
+ * workspace can be deleted. Each hook says it is interested while it is mounted; a pair nothing
+ * is interested in any more is forgotten, so a change on disk re-asks what is on screen and not
+ * every workspace ever focused.
  */
 
 type Where = { plane: PlaneId; workspace: string | undefined };
@@ -22,9 +28,11 @@ const whereOf = new Map<string, Where>();
 const known = new Map<string, string | null>();
 /** The newest question out per project and workspace: an answer to an older one is dropped. */
 const latest = new Map<string, number>();
-/** How many answers each project has had, in any workspace: what the settings tabs re-read their
- *  own on, since an approval in the Extensions dialog tells this store and not the tab. */
-const answers = new Map<PlaneId, number>();
+/** How many answers each pair has had: what a settings tab re-reads its own sentence on, since
+ *  an approval in the Extensions dialog tells this store and not the tab. */
+const answers = new Map<string, number>();
+/** How many mounted hooks are asking about each pair. */
+const interest = new Map<string, number>();
 const listeners = new Set<() => void>();
 
 function keyOf(plane: PlaneId, workspace: string | undefined): string {
@@ -43,23 +51,40 @@ function ask(plane: PlaneId, workspace: string | undefined) {
     .then((drawn) => {
       if (latest.get(key) !== mine) return;
       known.set(key, drawn);
-      answers.set(plane, (answers.get(plane) ?? 0) + 1);
+      answers.set(key, (answers.get(key) ?? 0) + 1);
       for (const listener of listeners) listener();
     });
 }
 
-/** Ask `plane` again, in every workspace it was asked about — after its settings or a
- *  workspace's were saved, the plane changed on disk, or an extension was approved or removed.
- *  With no plane, every one. */
+/** Ask `plane` again, in every workspace something on screen asks about — after its settings
+ *  or a workspace's were saved, the plane changed on disk, or an extension was approved or
+ *  removed. With no plane, every one. */
 export function projectThemeChanged(plane?: PlaneId) {
-  let asked = false;
-  for (const where of [...whereOf.values()]) {
-    if (plane === undefined || where.plane === plane) {
-      ask(where.plane, where.workspace);
-      asked = true;
-    }
-  }
-  if (!asked && plane !== undefined) ask(plane, undefined);
+  for (const where of [...whereOf.values()])
+    if (plane === undefined || where.plane === plane) ask(where.plane, where.workspace);
+}
+
+/** Says a hook is asking about `plane` in `workspace` while it is mounted, and asks once; the
+ *  answer is forgotten when nothing asks about it any more. */
+function useInterest(plane: PlaneId | undefined, workspace: string | undefined) {
+  useEffect(() => {
+    if (plane === undefined) return;
+    const key = keyOf(plane, workspace);
+    interest.set(key, (interest.get(key) ?? 0) + 1);
+    if (!latest.has(key)) ask(plane, workspace);
+    return () => {
+      const left = (interest.get(key) ?? 1) - 1;
+      if (left > 0) {
+        interest.set(key, left);
+        return;
+      }
+      interest.delete(key);
+      whereOf.delete(key);
+      known.delete(key);
+      latest.delete(key);
+      answers.delete(key);
+    };
+  }, [plane, workspace]);
 }
 
 function subscribe(listener: () => void) {
@@ -75,22 +100,18 @@ export function useProjectTheme(
   plane: PlaneId | undefined,
   workspace?: string,
 ): string | null | undefined {
-  useEffect(() => {
-    if (plane !== undefined && !latest.has(keyOf(plane, workspace))) ask(plane, workspace);
-  }, [plane, workspace]);
+  useInterest(plane, workspace);
   return useSyncExternalStore(subscribe, () =>
     plane === undefined ? undefined : known.get(keyOf(plane, workspace)),
   );
 }
 
-/** How many times `plane` has answered, in any workspace, asking once for `workspace`: a number
- *  that changes whenever what the window draws for it was asked again — after a save, an
- *  approval or a removal. */
+/** How many times `plane` has answered in `workspace`, asking once: a number that changes
+ *  whenever what the window draws there was asked again — after a save, an approval or a
+ *  removal, or a change on disk. */
 export function useProjectThemeAnswers(plane: PlaneId, workspace?: string): number {
-  useEffect(() => {
-    if (!latest.has(keyOf(plane, workspace))) ask(plane, workspace);
-  }, [plane, workspace]);
-  return useSyncExternalStore(subscribe, () => answers.get(plane) ?? 0);
+  useInterest(plane, workspace);
+  return useSyncExternalStore(subscribe, () => answers.get(keyOf(plane, workspace)) ?? 0);
 }
 
 /** For tests: forget every answer. */
@@ -99,4 +120,5 @@ export function forgetProjectThemes() {
   known.clear();
   latest.clear();
   answers.clear();
+  interest.clear();
 }

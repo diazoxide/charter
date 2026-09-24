@@ -247,7 +247,7 @@ describe("the Theme group (charter-app#281)", () => {
     );
     await waitFor(() =>
       expect(pick).toHaveAccessibleDescription(
-        "Drawn in this workspace: charter-light (built in), from workspaces/alpha/workspace.json. The terminal follows the window.",
+        "Drawn in this workspace: charter-light (built in), picked in workspaces/alpha/workspace.json. The terminal follows the window.",
       ),
     );
     // Asked as the tab opens, and again when the window's answer for this workspace arrives.
@@ -266,9 +266,64 @@ describe("the Theme group (charter-app#281)", () => {
 
     await waitFor(() =>
       expect(within(section).getByLabelText("Theme")).toHaveAccessibleDescription(
-        "Drawn in this workspace: Follow the system, from charter.toml. The terminal follows the window.",
+        "Drawn in this workspace: Follow the system, picked in charter.toml. The terminal follows the window.",
       ),
     );
+  });
+
+  it("says why the project's pick falls back here, without naming its file as the one drawn", async () => {
+    const why =
+      "charter.toml picks “Solarized Dark” from solarized, but solarized is off in this workspace — so the built-in charter-dark is drawn";
+    core(ALPHA, undefined, {
+      ...NO_THEME,
+      picked: "solarized/Solarized Dark",
+      file: "charter.toml",
+      draws: "charter-dark",
+      why,
+    });
+    const section = await drawn();
+
+    const group = within(section).getByRole("group", { name: "Theme" });
+    await waitFor(() => expect(group).toHaveTextContent(why));
+    expect(within(section).getByLabelText("Theme")).toHaveAccessibleDescription(
+      "Drawn in this workspace: charter-dark (built in). The terminal follows the window.",
+    );
+  });
+
+  it("says a grey colour tints nothing", async () => {
+    const grey = BUILT_IN["charter-dark"].values["text.muted"];
+    core(
+      {
+        ...ALPHA,
+        fields: [
+          { path: [{ key: "theme" }, { key: "colour" }], value: { kind: "text", value: grey } },
+        ],
+      },
+      undefined,
+      { ...NO_THEME, colour: grey },
+    );
+    const section = await drawn();
+
+    const group = within(section).getByRole("group", { name: "Theme" });
+    await waitFor(() =>
+      expect(group).toHaveTextContent(
+        `${grey} is a grey, which has no hue to tint with — so this workspace is drawn without a colour.`,
+      ),
+    );
+  });
+
+  it("shows a value that is neither a name nor #rrggbb as held, not as a custom colour", async () => {
+    const short = BUILT_IN["charter-dark"].values["text.muted"].slice(0, 4);
+    core({
+      ...ALPHA,
+      fields: [
+        { path: [{ key: "theme" }, { key: "colour" }], value: { kind: "text", value: short } },
+      ],
+    });
+    const section = await drawn();
+
+    expect(await within(section).findByLabelText("Colour")).toHaveValue(short);
+    expect(within(section).queryByLabelText("Custom colour")).toBeNull();
   });
 
   it("offers the eight colours and a custom one, and says what a colour tints", async () => {
