@@ -318,11 +318,10 @@ fn index_refusal(root: &Path, path: &Path) -> Option<String> {
     };
     let named = shown::readable(&spelled.to_string_lossy(), memstore::PATH_LIMIT);
     let unreadable = |why: &str| format!("'{named}' cannot be examined ({why})");
+    // A missing file is `strerror(ENOENT)`, "No such file or directory", like any other
+    // failure: no arm of its own, because it would say the same words.
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Some(unreadable("No such file or directory"));
-        }
         Err(e) => return Some(unreadable(&strerror(&e))),
     };
     let meta = if meta.file_type().is_symlink() {
@@ -333,9 +332,6 @@ fn index_refusal(root: &Path, path: &Path) -> Option<String> {
         }
         match std::fs::metadata(path) {
             Ok(meta) => meta,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Some(unreadable("No such file or directory"));
-            }
             Err(e) => return Some(unreadable(&strerror(&e))),
         }
     } else {
