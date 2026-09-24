@@ -4,7 +4,6 @@
 //! file is the wire: one group per harness, every one of them, including a harness whose adapter
 //! cannot apply, which carries the sentence that says so.
 
-use charter_core::extension::project::Source;
 use charter_core::harness_plugin;
 
 /// One harness's plugins in one project.
@@ -71,14 +70,6 @@ pub async fn project_harness_plugins(
     .map_err(|err| format!("reading this project's harness plugins did not finish: {err}"))
 }
 
-/// The file a source is, as a section of a settings tab names it: a workspace's by its path.
-fn file_of(source: Source, choices: &harness_plugin::Choices) -> String {
-    match (source, choices.workspace_file()) {
-        (Source::Workspace, Some(file)) => file,
-        (source, _) => source.file().unwrap_or_default().to_owned(),
-    }
-}
-
 /// [`project_harness_plugins`] without a runtime.
 fn groups(
     survey: Vec<harness_plugin::Group>,
@@ -112,7 +103,7 @@ fn groups(
                         .ignored
                         .into_iter()
                         .map(|one| crate::extensions::ProjectExtensionIgnored {
-                            file: file_of(one.source, choices),
+                            file: crate::extensions::file_of(one.source, choices.workspace_file()),
                             why: one.why,
                         })
                         .collect(),

@@ -13,8 +13,9 @@
 //! workspace's `workspace.json` (charter-app#282, [`Choices::read_in`]), the layer between the
 //! project's two files, through the same reader. With no layer naming a plugin it is **not
 //! set**. Not set means the harness decides the way it always did, from its own user and project
-//! settings. This is the one place it differs from an extension, which is on by default. A harness plugin is not charter's to turn on: it is the
-//! operator's own install, and charter says nothing about it until a project does.
+//! settings. This is the one place it differs from an extension, which is on by default. A
+//! harness plugin is not charter's to turn on: it is the operator's own install, and charter says
+//! nothing about it until a project does.
 //!
 //! **What this machine has installed comes first**, the way this machine's approval comes first
 //! for an extension. A file that names a plugin this machine does not have is listed as such and
