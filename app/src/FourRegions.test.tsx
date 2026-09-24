@@ -315,13 +315,13 @@ describe("the four regions", () => {
     expect(startedIn(asked)).toEqual([ALPHA]);
   });
 
-  it("puts the needs-you queue on the right, not on the bar", async () => {
-    core([]);
+  it("puts the needs-you queue in the title bar, and not on the right (charter-app#249)", async () => {
+    core([7]);
     render(<App />);
 
-    const queue = await screen.findByLabelText("Needs you");
-    expect(within(screen.getByTestId("panels")).getByLabelText("Needs you")).toBe(queue);
-    expect(document.querySelector("header.bar .needs-you")).toBeNull();
+    const hand = await screen.findByRole("button", { name: "1 chat needs you" });
+    expect(screen.getByTestId("title-bar")).toContainElement(hand);
+    expect(within(await screen.findByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
   });
 
   it("puts a region away and brings it back", async () => {
@@ -478,6 +478,8 @@ describe("the window the stored arrangement asks for", () => {
         { id: "aside", side: "right", order: 0, collapsed: false },
         { id: "bottom", side: "bottom", order: 0, collapsed: false },
       ],
+      // The machine's text sizes share the file (charter-app#283), written as they stand.
+      text: { window: 14, terminal: 13 },
     });
   });
 });

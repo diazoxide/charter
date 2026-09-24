@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { moved, movedAt, nothingKnown, quietOnes, stateOf, underneath } from "./chatState";
+import {
+  moved,
+  movedAt,
+  nothingKnown,
+  quietOnes,
+  reportsTo,
+  stateOf,
+  underneath,
+} from "./chatState";
 import type { Moved, OpenChat } from "./bindings";
 
 /** One plane, because these are about the reducer and not about telling planes apart. */
@@ -14,7 +22,13 @@ let taken = 0;
  * numbers them in (`Moved.sequence`). So the order a test BUILDS them in is the order the
  * board read them in, and the order it folds them in is the order they reached the window.
  */
-function doing(session: number, state: string, queue: number[] = [], movedAt = 0): Moved {
+function doing(
+  session: number,
+  state: string,
+  queue: number[] = [],
+  movedAt = 0,
+  reports: string[] = [],
+): Moved {
   taken += 1;
   return {
     plane: PLANE,
@@ -24,8 +38,27 @@ function doing(session: number, state: string, queue: number[] = [], movedAt = 0
     queue,
     moved_at: movedAt,
     sequence: taken,
+    reports,
   };
 }
+
+describe("a report back (charter-app#259)", () => {
+  it("knows which chats reported back to a chat, and forgets them with its next snapshot", () => {
+    const reported = moved(nothingKnown, doing(3, "running", [3], 0, ["drop commons"]));
+    expect(reportsTo(reported, 3)).toEqual(["drop commons"]);
+    expect(reportsTo(reported, 4)).toEqual([]);
+
+    const prompted = moved(reported, doing(3, "running", [], 0, []));
+    expect(reportsTo(prompted, 3)).toEqual([]);
+  });
+
+  it("does not let an older snapshot bring a read report back", () => {
+    const older = doing(3, "running", [3], 0, ["drop commons"]);
+    const newer = doing(3, "running", [], 0, []);
+
+    expect(reportsTo(moved(moved(nothingKnown, newer), older), 3)).toEqual([]);
+  });
+});
 
 describe("what the window keeps about the chats", () => {
   it("knows nothing about a chat it has not heard of", () => {
@@ -139,6 +172,7 @@ function open(session: number, unreported: string | null): OpenChat {
     unreported,
     pinned: false,
     label: null,
+    from: null,
   };
 }
 

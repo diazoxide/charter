@@ -47,6 +47,7 @@ function chat(session: number, name: string, cwd: string, on: Partial<OpenChat> 
     unreported: null,
     pinned: false,
     label: null,
+    from: null,
     ...on,
   };
 }

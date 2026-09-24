@@ -2108,6 +2108,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         }
     }
 
@@ -2487,6 +2488,7 @@ mod tests {
                     pinned: false,
                     number: None,
                     label: None,
+                    from: None,
                 }],
             },
         )

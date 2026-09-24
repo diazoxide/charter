@@ -184,7 +184,8 @@ has it; nothing reads the key after that.
     },
     { "id": "aside", "side": "left", "order": 0, "collapsed": false },
     { "id": "bottom", "side": "bottom", "order": 0, "collapsed": true }
-  ]
+  ],
+  "text": { "window": 15, "terminal": 14 }
 }
 ```
 
@@ -201,6 +202,12 @@ has it; nothing reads the key after that.
   height, for the bottom slot — above 0 and at most 100; leave it out for the default. Keep it
   inside the slot's own bounds, which a drag is held to as well: the left slot is 8–45%, the
   right 10–45%, the bottom 6–50% (`SLOTS` in `regions.ts`).
+- **`text`** is the two text sizes, in px (charter-app#283): **`window`**, the root font size
+  every `rem` in the stylesheet is measured by, and **`terminal`**, every chat's terminal. Each
+  is a whole number from 10 to 24; leave one out for its default, 14 and 13. A size that is
+  not one is its default, and the alerts drawer says so. The Preferences tab and the size keys
+  (`⌘`/`Ctrl` with `=`, `-`, `0`, `app/src/textSize.ts`) write it; it is in this file and not in
+  a plane because a size is this machine's, and a plane would carry it to every clone.
 - **The file is read once, as the window is created.** Edit it while charter is not running,
   or expect the next change made in the window to replace your edit.
 - **Nothing in it can stop the window.** A file that is not JSON, is not a layout, is a link or

@@ -80,6 +80,7 @@ function putBack(session: number, name: string, label: string | null): OpenChat 
     unreported: null,
     pinned: false,
     label,
+    from: null,
   };
 }
 

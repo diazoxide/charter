@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render as renderBare, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { Extensions } from "./Extensions";
+import { drawThemeFor, Extensions } from "./Extensions";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce } from "./theme/theme";
 
 /**
@@ -334,5 +334,39 @@ describe("a theme an extension contributes", () => {
       inForce().values["text.primary"],
       "a value that is not a colour reached the document",
     ).toBe(DEFAULT_THEME.values["text.primary"]);
+  });
+});
+
+describe("a theme, per project (charter-app#253)", () => {
+  const SOLARIZED = {
+    extension: "solarized",
+    name: "Solarized Dark",
+    text: JSON.stringify({
+      name: "Solarized Dark",
+      appearance: "dark",
+      tokens: { "surface.base": OTHER },
+    }),
+  };
+
+  it("is drawn while the project in front has its extension on", async () => {
+    core({ themes: [SOLARIZED] });
+    await drawThemeFor(new Set(["solarized"]));
+    expect(inForce().name).toBe("Solarized Dark");
+  });
+
+  it("is not drawn for a project that turned its extension off, and the built-in comes back", async () => {
+    core({ themes: [SOLARIZED] });
+    await drawThemeFor(new Set(["solarized"]));
+    expect(inForce().name).toBe("Solarized Dark");
+
+    await drawThemeFor(new Set());
+
+    expect(inForce()).toBe(DEFAULT_THEME);
+  });
+
+  it("is drawn from every approved extension when no project is in front", async () => {
+    core({ themes: [SOLARIZED] });
+    await drawThemeFor("every");
+    expect(inForce().name).toBe("Solarized Dark");
   });
 });

@@ -44,6 +44,9 @@ pub struct Open {
     /// The name the operator gave it, where they gave one (charter-app#254). It rides the
     /// record too; see [`charter_core::reopen::Chat::label`].
     pub label: Option<String>,
+    /// The chat a handoff opened it from, where one did (charter-app#258). It rides the
+    /// record; see [`charter_core::reopen::Chat::from`].
+    pub from: Option<charter_core::reopen::HandedFrom>,
 }
 
 /// The most chats one record may start at a launch. The product's scale is fifty (the
@@ -432,6 +435,40 @@ impl Chats {
         Ok(label)
     }
 
+    /// The name `session` is shown under — the one it was given, or its default — or `None`
+    /// for a chat charter does not have open (charter-app#258).
+    pub fn shown_name(&self, session: u32) -> Option<String> {
+        let open = lock(&self.open);
+        let one = open.get(&session)?;
+        Some(charter_core::reopen::shown_name(
+            &one.chat,
+            one.harness.map(Harness::name),
+        ))
+    }
+
+    /// The handoff `session` was opened by, where one opened it.
+    pub fn handed_from(&self, session: u32) -> Option<charter_core::reopen::HandedFrom> {
+        lock(&self.open).get(&session)?.chat.from.clone()
+    }
+
+    /// Records what `session` owes the chat that handed it off, and writes the record so it
+    /// holds across a relaunch (charter-app#259). Nothing for a chat no handoff opened.
+    pub fn owes(&self, session: u32, owed: charter_core::reopen::Owed) {
+        let mut open = lock(&self.open);
+        let Some(from) = open
+            .get_mut(&session)
+            .and_then(|one| one.chat.from.as_mut())
+        else {
+            return;
+        };
+        if from.report == owed {
+            return;
+        }
+        from.report = owed;
+        drop(open);
+        self.write_it_down();
+    }
+
     /// What the window says its view tabs are now. Written down when it differs from what was
     /// held, and not otherwise — for [`Self::pin`]'s reason: every write is a fingerprint the
     /// machine store then has to vouch for.
@@ -482,6 +519,7 @@ impl Chats {
                     how: running.how.clone(),
                     pinned: chat.pinned,
                     label: chat.label.clone(),
+                    from: chat.from.clone(),
                 })
             })
             .collect()
@@ -660,6 +698,7 @@ mod tests {
                     pinned: false,
                     number: None,
                     label: None,
+                    from: None,
                 },
                 Size {
                     columns: 80,
@@ -723,6 +762,7 @@ mod tests {
                     pinned: false,
                     number: None,
                     label: None,
+                    from: None,
                 },
                 Size {
                     columns: 80,
@@ -771,6 +811,7 @@ mod tests {
                 pinned: false,
                 number: None,
                 label: None,
+                from: None,
             },
             Size {
                 columns: 80,
@@ -820,6 +861,7 @@ mod tests {
                     pinned: false,
                     number: None,
                     label: None,
+                    from: None,
                 },
                 Size {
                     columns: 80,
@@ -882,6 +924,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         }
     }
 
@@ -2041,6 +2084,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
 
         let session = chats
@@ -2081,6 +2125,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2148,6 +2193,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2244,6 +2290,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         };
         let session = chats.start_ready(&chat, &ready, SIZE).expect("it runs");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

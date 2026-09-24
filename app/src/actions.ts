@@ -205,6 +205,9 @@ export type Does =
    *  front first when it is not. It writes nothing by itself: a save is the tab's, through the
    *  core's own checks. */
   | { verb: "openSettings"; plane: string }
+  /** Opens the Preferences tab (charter-app#283) — this machine's text sizes — on the project
+   *  in front. It writes nothing by itself: a size is changed on the tab, or by its keys. */
+  | { verb: "openPreferences" }
   | { verb: "quit" }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
@@ -337,6 +340,9 @@ export type Now = {
   quiet?: readonly string[];
   /** What a chat is called, for a row that names one. */
   nameOf: (session: number) => string;
+  /** The chats that reported back to a chat in the queue, by name (charter-app#259), so its row
+   *  says what the operator is being asked to look at. */
+  reportsTo?: (session: number) => readonly string[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -387,6 +393,8 @@ export type Doing = {
   closeProject: (plane: string) => Promise<Ran>;
   /** Brings that project to the front and opens its Project settings tab. */
   openSettings: (plane: string) => void;
+  /** Opens the Preferences tab, or brings forward the one already open. */
+  openPreferences: () => void;
   quit: () => void;
 };
 
@@ -639,26 +647,7 @@ export function catalogue(now: Now): Offer[] {
       ? cannot("needs.next", "Show the chat that needs you", nothingSaidSoFar(now.quiet ?? []))
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
-  for (const session of now.needsYou) {
-    const name = now.nameOf(session);
-    const title = `Show ${name}, which needs you`;
-    offers.push(
-      tabHolding(now.tabs, session) === undefined
-        ? cannot(`needs.show:${session}`, title, "That chat has no tab in this window.", name)
-        : can(`needs.show:${session}`, title, { verb: "showChat", session }, name),
-    );
-    // **Ignore, until the chat asks again** (charter-app#248): the item's `✕`, Delete on it,
-    // and this row in the palette are one row. Always available — ignoring is about the
-    // request, and a chat asking from a tab this window does not hold is still asking.
-    offers.push(
-      can(
-        ignoreId(session),
-        `Ignore ${name} until it asks again`,
-        { verb: "ignoreNeedsYou", session },
-        name,
-      ),
-    );
-  }
+  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs, now.reportsTo));
 
   const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
 
@@ -763,6 +752,13 @@ export function catalogue(now: Now): Offer[] {
     ...projects.pin,
     ...projects.settings,
   );
+  // **This machine's preferences, beside the projects' settings** (charter-app#283): the text
+  // sizes are the machine's and not a project's, so the row is there with no project open too,
+  // as `extensions.show` is.
+  offers.push({
+    ...can("preferences.show", "Preferences…", { verb: "openPreferences" }),
+    note: "This machine's window and terminal text sizes.",
+  });
 
   // **The plane's personas, one row each** (charter-app#174). What the row opens is the
   // persona's view — its own tab — and this is the whole of what charter can do to a persona today:
@@ -1095,12 +1091,58 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openSettings":
       doing.openSettings(does.plane);
       return DID;
+    case "openPreferences":
+      doing.openPreferences();
+      return DID;
     case "quit":
       doing.quit();
       return DID;
     case "nothing":
       return DID;
   }
+}
+
+/**
+ * A queued chat's two rows: `needs.show:<session>`, the chat to the front, and its Ignore.
+ *
+ * The catalogue's, and ALSO asked on its own: the catalogue is built only for the project in
+ * front, and the title bar's list (charter-app#249) holds every project's queue — so a project
+ * behind the one on screen reports these rows for its chats without building the other 117.
+ */
+export function needsYouRows(
+  needsYou: readonly number[],
+  nameOf: (session: number) => string,
+  tabs: Tabs,
+  /** The chats that reported back to each chat asking (charter-app#259), so its row says so. */
+  reportsTo: (session: number) => readonly string[] = () => [],
+): Offer[] {
+  return needsYou.flatMap((session) => {
+    const name = nameOf(session);
+    const reported = reportsTo(session);
+    const title =
+      reported.length > 0
+        ? `Show ${name}: ${reported.join(", ")} reported back`
+        : `Show ${name}, which needs you`;
+    return [
+      tabHolding(tabs, session) === undefined
+        ? cannot(showId(session), title, "That chat has no tab in this window.", name)
+        : can(showId(session), title, { verb: "showChat", session }, name),
+      // **Ignore, until the chat asks again** (charter-app#248): the item's `✕`, Delete on
+      // it, and this row in the palette are one row. Always available — ignoring is about
+      // the request, and a chat asking from a tab this window does not hold is still asking.
+      can(
+        ignoreId(session),
+        `Ignore ${name} until it asks again`,
+        { verb: "ignoreNeedsYou", session },
+        name,
+      ),
+    ];
+  });
+}
+
+/** The catalogue's id for a queued chat's Go row, for a surface drawing that row. */
+export function showId(session: number): string {
+  return `needs.show:${session}`;
 }
 
 /** The catalogue's id for a queued chat's Ignore row, for a surface drawing that row. */

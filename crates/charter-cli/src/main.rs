@@ -305,10 +305,23 @@ enum Command {
     /// opened and charter says to open the app. Every refusal in front of that is the
     /// point: charter refuses every shape the permission prompt in front of this command
     /// cannot stand in front of (`charter_core::handoff`).
+    ///
+    /// `charter handoff report "<summary>"`, from a chat a `--report` handoff opened, sends
+    /// its one report back to the chat that opened it.
     Handoff {
         /// Where the chat opens — an existing workspace, or a new one with --create. Always
-        /// named, this workspace included.
+        /// named, this workspace included. `report`, followed by a summary, is a report back.
         workspace: String,
+        /// With `report` as the first word: the report, a few lines on what was done.
+        summary: Option<String>,
+        /// A short name for the task, which the new chat is called instead of its default
+        /// (`drop account-console-commons`). At most 64 characters.
+        #[arg(long)]
+        name: Option<String>,
+        /// Ask the new chat to report back when it is done, with `charter handoff report`.
+        /// The report reaches this chat as context on its next turn.
+        #[arg(long)]
+        report: bool,
         /// Make the workspace first (LOCAL, never LIVE). Needs --vision.
         #[arg(long)]
         create: bool,
@@ -2350,6 +2363,9 @@ fn main() -> ExitCode {
     // `handoff` says one refusal and exits 1; it never returns 0 in this charter.
     if let Command::Handoff {
         workspace,
+        summary,
+        name,
+        report,
         create,
         vision,
         persona,
@@ -2369,6 +2385,9 @@ fn main() -> ExitCode {
                 create: *create,
                 vision: vision.clone(),
                 persona: persona.clone(),
+                name: name.clone(),
+                report: *report,
+                summary: summary.clone(),
             },
         );
     }

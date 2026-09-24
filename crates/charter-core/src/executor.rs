@@ -190,9 +190,22 @@ pub struct Answer {
 /// group each one is in.** That is what lets it refuse a second question to a program still
 /// answering the first, and what lets [`Self::stop_all`] kill every one of them when the window
 /// goes, so that no program an extension was asked to run outlives the app that asked.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Executor {
     table: Mutex<Table>,
+    /// How long each program has. [`DEADLINE`] for every executor charter makes; only a test
+    /// gives an executor another (charter-app#303), so that a test whose subject is not the
+    /// deadline is not failed by a busy machine taking five seconds to start its program.
+    deadline: Duration,
+}
+
+impl Default for Executor {
+    fn default() -> Self {
+        Self {
+            table: Mutex::default(),
+            deadline: DEADLINE,
+        }
+    }
 }
 
 /// What [`Executor`] guards with its one lock.
@@ -209,6 +222,15 @@ struct Table {
 }
 
 impl Executor {
+    /// An executor whose programs have `deadline` instead of [`DEADLINE`] — for a test.
+    #[cfg(test)]
+    pub(crate) fn with_deadline(deadline: Duration) -> Self {
+        Self {
+            deadline,
+            ..Self::default()
+        }
+    }
+
     /// Ask `extension`'s program about `view`, or say why charter will not.
     ///
     /// `hand` builds what the program is given, from the view's subject. It is called once the
@@ -220,12 +242,20 @@ impl Executor {
     /// `focus` is the one thing on screen the operator opened it from, when there is one (a
     /// persona's card), and is handed as a name.
     ///
+    /// `project` is what the plane the view was opened in says about extensions
+    /// ([`extension::project::Choices::read`], ADR 0048). It is asked **after** this machine's
+    /// record, so no project file can stand in for the operator's yes: a project that turned the
+    /// extension off is refused, and an extension that declares settings is handed the project's
+    /// resolved values as `settings` in the question. One that declares none is asked exactly
+    /// the question it was approved under.
+    ///
     /// **Every `Err` is a sentence the operator can act on**, naming the extension and saying
     /// what to do: open Extensions and approve it again, make the file runnable, look at what
     /// the program printed. None of them is a stack trace and none is silence.
     pub fn ask(
         &self,
         config_root: &Path,
+        project: &extension::project::Choices,
         extension: &str,
         view: &str,
         focus: Option<&str>,
@@ -234,11 +264,16 @@ impl Executor {
         supported()?;
         let began = Instant::now();
         // The record alone first: whether this is an extension the operator said yes to at all.
+        // **Before the project is asked anything**, so that no project file can stand in for this
+        // machine's yes (ADR 0048).
         let loaded = extension::read(config_root);
         let entry = approved(&loaded, extension)?;
         // Then only its manifest, for which view was asked and what that view is about.
         let declared =
             extension::manifest_at(&entry.path).map_err(|why| could_not_reread(extension, &why))?;
+        // Then the project the view was opened in: whether it has this extension on, and what it
+        // set for it — `project::resolve`, the one answer every consumer takes.
+        let settings = in_this_project(project, extension, &declared)?;
         let asked = declared_view(extension, &declared, view)?;
         let before_hand = began.elapsed();
 
@@ -246,7 +281,7 @@ impl Executor {
         // plane, which is the slow part, and every moment between the fingerprint and the start
         // is a moment in which a write is run without having been hashed.
         let handing = Instant::now();
-        let request = request_line(extension, &asked, focus, hand(asked.about))?;
+        let request = request_line(extension, &asked, focus, hand(asked.about), settings)?;
         let handed_in = handing.elapsed();
 
         // **The gate, re-taken now over the whole tree**, and held to the view the question was
@@ -328,7 +363,7 @@ impl Executor {
             return Err(format!(
                 "'{extension}' is still answering the last thing it was asked. charter asks an \
                  extension one thing at a time; this one has at most {} left.",
-                DEADLINE.as_secs()
+                self.deadline.as_secs()
             ));
         }
         // Zero until the program exists: `stop_all` never signals a group of 0, which would be
@@ -434,7 +469,7 @@ impl Executor {
         // an answer, a refusal, an error on the way, a panic — stops it: its group killed and it
         // reaped, in the order `stop_all` relies on.
         let mut running = Running::new(self, extension, child);
-        let until = Instant::now() + DEADLINE;
+        let until = Instant::now() + self.deadline;
 
         // Its stderr is drained while it runs — a program that logs more than a socket buffer
         // would otherwise stall on its own diagnostics and read as hung — and only the tail is
@@ -494,7 +529,7 @@ impl Executor {
             Heard::TooLate => Err(format!(
                 "'{extension}' did not answer within {} seconds, so charter stopped it. It was \
                  asked one question{}.{}",
-                DEADLINE.as_secs(),
+                self.deadline.as_secs(),
                 if wrote {
                     ""
                 } else {
@@ -926,6 +961,47 @@ fn fingerprinted(
     Ok(found)
 }
 
+/// Whether the project this view was opened in has `extension` on, and the settings it chose
+/// for it when it declares any — or the sentence for a project that turned it off.
+///
+/// The machine's yes was already checked by [`approved`], so it is `approved: true` here; the
+/// fingerprint is re-taken after this, by [`fingerprinted`].
+fn in_this_project(
+    project: &extension::project::Choices,
+    extension: &str,
+    declared: &extension::Manifest,
+) -> Result<Option<serde_json::Value>, String> {
+    use extension::project::{self, State};
+    let here = project::Installed {
+        id: extension.to_owned(),
+        name: declared.name.clone(),
+        approved: true,
+        settings: declared.settings.clone(),
+    };
+    // `resolve` answers for every extension it is given, so the one asked about is always there;
+    // an empty answer would be a defect in it, and is refused rather than read as "on".
+    let Some(effective) = project::resolve(&[here], project)
+        .into_iter()
+        .find(|it| it.id == extension)
+    else {
+        return Err(format!(
+            "charter could not say whether this project has '{extension}' on"
+        ));
+    };
+    if effective.state == State::Off {
+        // Off is only ever decided by a file: with neither saying, an approved extension is on.
+        let file = effective
+            .source
+            .file()
+            .unwrap_or(crate::profiles::COMMITTED_FILE);
+        return Err(format!(
+            "'{extension}' is turned off in {file} for this project, so charter will not start \
+             its program here. Turn it on in Project settings to use this view."
+        ));
+    }
+    Ok((!declared.settings.is_empty()).then(|| effective.settings_json()))
+}
+
 fn could_not_reread(extension: &str, why: &str) -> String {
     format!(
         "charter could not re-read '{extension}' just now, so it will not start anything from \
@@ -1015,6 +1091,7 @@ fn request_line(
     view: &extension::View,
     focus: Option<&str>,
     given: serde_json::Value,
+    settings: Option<serde_json::Value>,
 ) -> Result<Vec<u8>, String> {
     let mut doc = serde_json::Map::new();
     doc.insert("charter".into(), PROTOCOL.into());
@@ -1026,6 +1103,11 @@ fn request_line(
         focus.map_or(serde_json::Value::Null, Into::into),
     );
     doc.insert("given".into(), given);
+    // Only for an extension that declares settings, so the question every other program is
+    // asked is the one it was approved under, byte for byte.
+    if let Some(settings) = settings {
+        doc.insert("settings".into(), settings);
+    }
     let mut line = serde_json::to_vec(&serde_json::Value::Object(doc))
         .map_err(|why| format!("charter could not write the question for '{extension}': {why}"))?;
     line.push(b'\n');
