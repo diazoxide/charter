@@ -84,6 +84,20 @@ fn in_a_child(filter: &str, bin_name: &str) {
     stand_in::program(&bin, "glab", STAND_IN);
     let home = scratch.1.join("home");
     std::fs::create_dir_all(home.join("hosts")).unwrap();
+    // **Each stand-in is run once here, with no deadline, before anything times it**
+    // (charter-app#306). macOS checks a program file the first time it runs, and on a busy
+    // machine that check queues: measured beside `cargo test -p charter-core --lib`, every
+    // question that reached a new `gh` before its first run had finished waited ~30 s, and
+    // the auth checks and best-effort calls, on `STATUS_TIMEOUT`'s 10 s, were cut off.
+    // Every later call took 20–60 ms. With no `--hostname` a stand-in exits 97 and writes
+    // nothing, so this run has no side effects.
+    for cli in ["gh", "glab"] {
+        let ran = charter_core::forklock::output(
+            Command::new(bin.join(cli)).env_clear().env("HOME", &home),
+        )
+        .unwrap_or_else(|e| panic!("the stand-in {cli} runs: {e}"));
+        assert_eq!(ran.status.code(), Some(97), "the stand-in {cli}: {ran:?}");
+    }
 
     let out = charter_core::forklock::output(
         Command::new(std::env::current_exe().expect("the test binary"))
