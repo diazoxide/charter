@@ -36,7 +36,7 @@ pub struct HarnessPlugin {
     pub origin: String,
     /// `on`, `off` or `not-set`.
     pub state: String,
-    /// `default`, `shared` or `local`: which file decided `state`.
+    /// `default`, `shared`, `workspace` or `local`: which layer decided `state`.
     pub source: String,
     pub installed: bool,
     /// Why charter fixes it whatever a file says, in the core's words ("<id> is always on: …"),
@@ -47,24 +47,34 @@ pub struct HarnessPlugin {
 }
 
 /// Every harness charter knows, with what it has installed on this machine and what this
-/// project has each plugin at. Read from the harness's own files, never written; asked when the
-/// tab opens and after it saves.
+/// project has each plugin at — in `workspace`, when one is named, with that workspace's
+/// settings as the layer between Shared and Local (charter-app#282): what the Workspace settings
+/// tab shows. Read from the harness's own files, never written; asked when the tab opens and
+/// after it saves.
 #[tauri::command]
 #[specta::specta]
 pub async fn project_harness_plugins(
     planes: tauri::State<'_, crate::planes::Planes>,
     plane: crate::planes::PlaneId,
+    workspace: Option<String>,
 ) -> Result<Vec<HarnessPlugins>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {
-        groups(harness_plugin::survey(&root, &harness_plugin::Env::of(&[])))
+        let choices = harness_plugin::Choices::read_in(&root, workspace.as_deref());
+        groups(
+            harness_plugin::survey(&choices, &harness_plugin::Env::of(&[])),
+            &choices,
+        )
     })
     .await
     .map_err(|err| format!("reading this project's harness plugins did not finish: {err}"))
 }
 
 /// [`project_harness_plugins`] without a runtime.
-fn groups(survey: Vec<harness_plugin::Group>) -> Vec<HarnessPlugins> {
+fn groups(
+    survey: Vec<harness_plugin::Group>,
+    choices: &harness_plugin::Choices,
+) -> Vec<HarnessPlugins> {
     survey
         .into_iter()
         .map(|group| HarnessPlugins {
@@ -93,7 +103,7 @@ fn groups(survey: Vec<harness_plugin::Group>) -> Vec<HarnessPlugins> {
                         .ignored
                         .into_iter()
                         .map(|one| crate::extensions::ProjectExtensionIgnored {
-                            file: one.source.file().unwrap_or_default().to_owned(),
+                            file: crate::extensions::file_of(one.source, choices.workspace_file()),
                             why: one.why,
                         })
                         .collect(),
@@ -133,7 +143,8 @@ mod tests {
             process: false,
         };
 
-        let got = groups(harness_plugin::survey(plane.path(), &env));
+        let choices = harness_plugin::Choices::read(plane.path());
+        let got = groups(harness_plugin::survey(&choices, &env), &choices);
 
         let titles: Vec<(&str, bool)> = got
             .iter()
@@ -177,5 +188,45 @@ mod tests {
             "{:?}",
             got[2].unsupported
         );
+    }
+
+    #[test]
+    fn in_a_workspace_a_plugin_says_the_workspace_decided_it_and_names_its_manifest() {
+        // charter-app#282: the Workspace settings tab asks with its workspace, and each plugin
+        // says which layer decided it; a value the workspace set and charter ignored names the
+        // workspace's own file, so the tab draws it under that section.
+        let plane = tempfile::tempdir().expect("a plane");
+        let ws = plane.path().join("workspaces/alpha");
+        std::fs::create_dir_all(&ws).expect("the workspace");
+        std::fs::write(
+            ws.join("workspace.json"),
+            r#"{"settings": {"harness_plugins": {"claude": {"figma@official": false, "charter-app@inline": false}}}}"#,
+        )
+        .expect("workspace.json");
+        let empty = tempfile::tempdir().expect("an empty home");
+        let env = harness_plugin::Env {
+            chat: &[],
+            home: Some(empty.path().to_path_buf()),
+            process: false,
+        };
+        let choices = harness_plugin::Choices::read_in(plane.path(), Some("alpha"));
+
+        let got = groups(harness_plugin::survey(&choices, &env), &choices);
+
+        let claude = &got[0].plugins;
+        let figma = claude
+            .iter()
+            .find(|it| it.id == "figma@official")
+            .expect("listed");
+        assert_eq!(
+            (figma.state.as_str(), figma.source.as_str()),
+            ("off", "workspace")
+        );
+        let own = claude
+            .iter()
+            .find(|it| it.id == "charter-app@inline")
+            .expect("the pin is listed");
+        assert_eq!(own.ignored.len(), 1, "{:?}", own.ignored);
+        assert_eq!(own.ignored[0].file, "workspaces/alpha/workspace.json");
     }
 }

@@ -604,10 +604,12 @@ export const commands = {
 	extensionsOn: (plane: PlaneId, workspace: string | null) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane, workspace })),
 	/**
 	 *  Every harness charter knows, with what it has installed on this machine and what this
-	 *  project has each plugin at. Read from the harness's own files, never written; asked when the
-	 *  tab opens and after it saves.
+	 *  project has each plugin at — in `workspace`, when one is named, with that workspace's
+	 *  settings as the layer between Shared and Local (charter-app#282): what the Workspace settings
+	 *  tab shows. Read from the harness's own files, never written; asked when the tab opens and
+	 *  after it saves.
 	 */
-	projectHarnessPlugins: (plane: PlaneId) => typedError<HarnessPlugins[], string>(__TAURI_INVOKE("project_harness_plugins", { plane })),
+	projectHarnessPlugins: (plane: PlaneId, workspace: string | null) => typedError<HarnessPlugins[], string>(__TAURI_INVOKE("project_harness_plugins", { plane, workspace })),
 	/**
 	 *  This project's theme, with every theme it may pick — in `workspace`, when one is named, whose
 	 *  `workspace.json` is a layer too (charter-app#281): what the Workspace settings tab shows. It takes a survey, as
@@ -1038,7 +1040,7 @@ export type HarnessPlugin = {
 	origin: string,
 	/**  `on`, `off` or `not-set`. */
 	state: string,
-	/**  `default`, `shared` or `local`: which file decided `state`. */
+	/**  `default`, `shared`, `workspace` or `local`: which layer decided `state`. */
 	source: string,
 	installed: boolean,
 	/**

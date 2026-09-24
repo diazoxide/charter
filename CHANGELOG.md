@@ -47,6 +47,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   its own colour whether or not it is in front, and switching workspaces switches the theme and
   the tint live — the window's theme now follows the workspace in front, not only the project.
   ([#281](https://github.com/diazoxide/charter-app/issues/281))
+- A workspace can also turn each harness's plugins on or off, in **Workspace settings**: one
+  **Harness plugins** group per harness, as in Project settings, with each plugin saying whether
+  `charter.toml`, the workspace's `workspace.json` or `charter.local.toml` decided it, or that
+  nothing did. A Claude Code chat started in the workspace gets that set; Codex and opencode say
+  their plugins are not supported yet, for a workspace as for a project. charter's own plugin
+  stays on and the old one stays off whatever a workspace says.
+  ([#282](https://github.com/diazoxide/charter-app/issues/282))
 - A vault can live in your system's own credential store: the Keychain on macOS, the Secret
   Service on Linux. `charter vault add <name>` makes one by default, and every `charter secret`
   and `charter vault` command works on it as on the other kinds. Each secret is its own

@@ -160,7 +160,9 @@ precedence matrix in `crates/charter-core/src/extension/project/tests.rs` has th
 JSON. It is read as the TOML table it mirrors and handed to the same reader, so a workspace's
 value is refused, and ignored, in the same words as a file's. `null` reads as not set. #281 and
 #282 add their tables (`theme`, `harness_plugins`) the same way: one more name the workspace's
-settings may hold (`settings::workspace::READ`), one more reader handed the same table.
+settings may hold (`settings::workspace::READ`), one more reader handed the same table. #282
+did so for `harness_plugins`: `harness_plugin::Choices::read_in` takes the layer, and ADR 0050
+says what it means for a chat started in the workspace.
 
 **Old manifests read as before.** A `workspace.json` with no `settings` — every one written
 before this — is a workspace that says nothing, so its answer is the project's. Every writer of

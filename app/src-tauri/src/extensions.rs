@@ -469,7 +469,7 @@ fn project_rows(
                     .ignored
                     .into_iter()
                     .map(|one| ProjectExtensionIgnored {
-                        file: file_of(one.source, choices),
+                        file: file_of(one.source, choices.workspace_file()),
                         why: one.why,
                     })
                     .collect(),
@@ -478,9 +478,14 @@ fn project_rows(
         .collect()
 }
 
-/// The file a source is, as a section of a settings tab names it: a workspace's by its path.
-fn file_of(source: extension::project::Source, choices: &extension::project::Choices) -> String {
-    match (source, choices.workspace_file()) {
+/// The file a source is, as a section of a settings tab names it: a workspace's by its path
+/// (`workspace_file`, which a reader's `Choices::workspace_file` gives). The extensions and the
+/// harness plugins commands both name it here, so their sentences land in the same section.
+pub(crate) fn file_of(
+    source: extension::project::Source,
+    workspace_file: Option<String>,
+) -> String {
+    match (source, workspace_file) {
         (extension::project::Source::Workspace, Some(file)) => file,
         (source, _) => source.file().unwrap_or_default().to_owned(),
     }

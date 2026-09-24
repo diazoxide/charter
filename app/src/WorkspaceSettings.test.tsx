@@ -6,6 +6,8 @@ import { WorkspaceSettings } from "./ProjectSettings";
 import { ViewPane } from "./Views";
 import { workspaceSettingsTitle, workspaceSettingsView } from "./tabs";
 import type {
+  HarnessPlugin,
+  HarnessPlugins,
   ProjectExtension,
   ProjectTheme,
   WorkspaceSettings as Settings,
@@ -88,6 +90,72 @@ const NO_THEME: ProjectTheme = {
   ignored: [],
 };
 
+const OWN_WHY =
+  "charter-app@inline is always on: it is charter's own plugin, and it carries charter's hooks and the Bash guard";
+
+/** What the core says is in force for each harness in this workspace (charter-app#282). */
+const HARNESSES: HarnessPlugins[] = [
+  {
+    harness: "claude",
+    title: "Claude Code",
+    unsupported: null,
+    record: "/home/dev/.claude/plugins/installed_plugins.json",
+    trouble: null,
+    plugins: [
+      {
+        id: "charter-app@inline",
+        name: "charter-app",
+        origin: "",
+        state: "on",
+        source: "default",
+        installed: false,
+        pinned: OWN_WHY,
+        ignored: [
+          {
+            file: "workspaces/alpha/workspace.json",
+            why: `workspaces/alpha/workspace.json sets settings.harness_plugins.claude."charter-app@inline" to false, and ${OWN_WHY}`,
+          },
+          { file: "charter.toml", why: "a Shared sentence that is not this section's" },
+        ],
+      },
+      plugin("figma@official", "off", "workspace"),
+      plugin("humanizer@h", "on", "local"),
+      plugin("serena@official", "on", "shared"),
+      plugin("stripe@official", "not-set", "default"),
+    ],
+  },
+  {
+    harness: "opencode",
+    title: "opencode",
+    record: "/home/dev/.config/opencode",
+    unsupported:
+      "plugins for opencode are not supported yet — charter does not start opencode chats yet",
+    trouble: null,
+    plugins: [],
+  },
+  {
+    harness: "codex",
+    title: "Codex",
+    record: "/home/dev/.codex/config.toml",
+    unsupported: "plugins for Codex are not supported yet — Codex 0.147.0 ignores -c",
+    trouble: null,
+    plugins: [],
+  },
+];
+
+function plugin(id: string, state: string, source: string): HarnessPlugin {
+  return {
+    id,
+    name: id.split("@")[0],
+    origin: "official, user",
+    state,
+    source,
+    installed: true,
+    pinned: null,
+    ignored: [],
+  };
+}
+
 function core(
   settings: Settings = ALPHA,
   saved?: (sent: Record<string, unknown>) => WorkspaceSettingsSaved,
@@ -100,6 +168,7 @@ function core(
     asked.push([cmd, given]);
     if (cmd === "workspace_settings") return settings;
     if (cmd === "project_extensions") return EXTENSIONS;
+    if (cmd === "project_harness_plugins") return HARNESSES;
     if (cmd === "extensions_on") return [];
     if (cmd === "project_theme") return theme;
     if (cmd === "project_theme_drawn") return theme.draws;
@@ -423,6 +492,57 @@ describe("the Theme group (charter-app#281)", () => {
 
     await waitFor(() => expect(asked("project_theme_drawn")).toHaveLength(2));
     expect(asked("project_theme_drawn")[1]).toEqual({ plane: PLANE, workspace: "alpha" });
+  });
+});
+
+describe("the Harness plugins groups in a workspace (charter-app#282)", () => {
+  it("draws one group per harness, each plugin saying which layer decided it", async () => {
+    const { asked } = core();
+    const section = await drawn();
+
+    const claude = within(section).getByRole("group", { name: "Harness plugins: Claude Code" });
+    await waitFor(() =>
+      expect(claude).toHaveTextContent("off in this workspace — from workspace.json"),
+    );
+    expect(claude).toHaveTextContent("on in this workspace — from charter.local.toml");
+    expect(claude).toHaveTextContent("on in this workspace — from charter.toml");
+    expect(claude).toHaveTextContent("not set — Claude Code decides, from its own settings");
+    expect(within(section).getByLabelText("Claude Code: figma@official")).toHaveValue("");
+    // charter's own plugin is a line, never a control.
+    expect(claude).toHaveTextContent(OWN_WHY);
+    expect(within(section).queryByLabelText("Claude Code: charter-app@inline")).toBeNull();
+    // Only this section's sentences.
+    expect(claude).toHaveTextContent(
+      'workspaces/alpha/workspace.json sets settings.harness_plugins.claude."charter-app@inline" to false',
+    );
+    expect(claude).not.toHaveTextContent("a Shared sentence");
+    for (const title of ["opencode", "Codex"]) {
+      expect(
+        within(section).getByRole("group", { name: `Harness plugins: ${title}` }),
+      ).toHaveTextContent(`plugins for ${title} are not supported yet`);
+    }
+    expect(asked("project_harness_plugins")).toEqual([{ plane: PLANE, workspace: "alpha" }]);
+  });
+
+  it("saves a plugin toggle as that one key under settings, and asks again", async () => {
+    const { sent, asked } = core();
+    const section = await drawn();
+    const user = userEvent.setup();
+
+    await waitFor(() =>
+      expect(within(section).getByLabelText("Claude Code: serena@official")).toBeInTheDocument(),
+    );
+    await user.selectOptions(within(section).getByLabelText("Claude Code: serena@official"), "off");
+    await user.click(within(section).getByRole("button", { name: "Save workspace.json" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].edits).toEqual([
+      {
+        path: [{ key: "harness_plugins" }, { key: "claude" }, { key: "serena@official" }],
+        value: { kind: "bool", value: false },
+      },
+    ]);
+    await waitFor(() => expect(asked("project_harness_plugins")).toHaveLength(2));
   });
 });
 
