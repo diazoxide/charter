@@ -16,7 +16,7 @@ const GSC_LINE: &str = "run uvx gsc-mcp==0.3.0  type \"stdio\"  secret_files \
 
 fn sha256(line: &str) -> String {
     use sha2::Digest as _;
-    format!("{:x}", sha2::Sha256::digest(line.as_bytes()))
+    crate::extension::hex(&sha2::Sha256::digest(line.as_bytes()))
 }
 
 #[test]

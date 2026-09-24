@@ -303,7 +303,9 @@ pub fn fingerprint(vault: Option<&str>, entry: &Value) -> Option<String> {
     if line.is_empty() {
         return None;
     }
-    Some(format!("{:x}", sha2::Sha256::digest(line.as_bytes())))
+    Some(crate::extension::hex(&sha2::Sha256::digest(
+        line.as_bytes(),
+    )))
 }
 
 /// `mcpseen._name`: one part of a label, escaped and clipped.

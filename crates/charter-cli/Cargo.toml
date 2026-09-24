@@ -27,10 +27,10 @@ stand-in.workspace = true
 tempfile.workspace = true
 # The recorded-behaviour replay (ADR 0046): the scenarios' masks, and the file contents they
 # carry compressed and by hash.
-base64 = "0.22"
+base64 = "0.23"
 flate2 = "1"
 regex = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Every scenario the Python differential ran, replayed against this build's `charter` and
 # compared with what was recorded (ADR 0046). Its own runner rather than libtest's, so one

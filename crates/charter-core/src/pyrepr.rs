@@ -201,8 +201,41 @@ pub fn repr_toml(value: &toml::Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        toml::Value::Datetime(d) => d.to_string(),
+        toml::Value::Datetime(d) => as_toml_09(d).to_string(),
     }
+}
+
+/// `value` with every datetime in it spelled as `toml` 0.9 spelled one.
+///
+/// `toml` 1.x keeps whether a time wrote its seconds and its fraction, and prints them back
+/// only if it did — so `12:30:00.000` now reads back as `12:30:00.0`, and TOML 1.1's
+/// `12:30` as `12:30`. Charter printed both as `12:30:00` before the upgrade, and a value
+/// charter quotes back does not change spelling because a dependency did.
+pub fn toml_09_datetimes(value: &toml::Value) -> toml::Value {
+    match value {
+        toml::Value::Datetime(d) => toml::Value::Datetime(as_toml_09(d)),
+        toml::Value::Array(items) => {
+            toml::Value::Array(items.iter().map(toml_09_datetimes).collect())
+        }
+        toml::Value::Table(pairs) => toml::Value::Table(
+            pairs
+                .iter()
+                .map(|(k, v)| (k.clone(), toml_09_datetimes(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// One datetime as [`toml_09_datetimes`] spells it: seconds always, a fraction only when it
+/// is not zero.
+fn as_toml_09(d: &toml::value::Datetime) -> toml::value::Datetime {
+    let mut d = *d;
+    if let Some(time) = d.time.as_mut() {
+        time.second = Some(time.second.unwrap_or(0));
+        time.nanosecond = time.nanosecond.filter(|n| *n != 0);
+    }
+    d
 }
 
 /// `str(value)` for a `tomllib` value — [`repr_toml`] but for a bare string, as with JSON.
@@ -326,5 +359,25 @@ mod tests {
         assert_eq!(at("h"), "1e+300");
         assert_eq!(at("i"), "\"it's\"");
         assert_eq!(str_toml(&table["i"]), "it's");
+    }
+
+    /// Pinned to what `toml` 0.9 printed, the version charter shipped with: `toml` 1.x keeps
+    /// how a time was written, and would print `12:30:00.0` and `12:30` here.
+    #[test]
+    fn a_toml_datetime_reads_back_as_it_did_before_toml_1() {
+        let table: toml::Table = "a = 12:30:00.000\nb = 12:30\nc = 1979-05-27T00:32:00.500Z\n\
+                                  d = 1979-05-27\ne = [1979-05-27T07:32:00.000-08:00]\n"
+            .parse()
+            .unwrap();
+        let at = |k: &str| repr_toml(&table[k]);
+        assert_eq!(at("a"), "12:30:00");
+        assert_eq!(at("b"), "12:30:00");
+        assert_eq!(at("c"), "1979-05-27T00:32:00.5Z");
+        assert_eq!(at("d"), "1979-05-27");
+        assert_eq!(at("e"), "[1979-05-27T07:32:00-08:00]");
+        assert_eq!(
+            toml_09_datetimes(&table["e"]).to_string(),
+            "[1979-05-27T07:32:00-08:00]"
+        );
     }
 }

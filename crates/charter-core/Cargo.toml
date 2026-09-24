@@ -14,7 +14,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # `home_dir`, for the last rung of the config-home ladder `machine` shares with
 # `charter/report.py:consent_path`. Already in this workspace's lockfile — Tauri depends on
 # it — so this adds no crate to the tree and no licence to review.
-dirs = "6"
+dirs = "7"
 # The same searcher vte uses to find these sequences in the same bytes.
 memchr = "2"
 portable-pty = "0.9"
@@ -26,21 +26,21 @@ serde = { workspace = true, features = ["derive"] }
 # `arbitrary_precision` keeps an integer beyond `u64` exact, which the default turns into an
 # `f64` at PARSE time — the digest would then be taken over a number the file never held.
 serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precision"] }
-sha2 = "0.10"
+sha2 = "0.11"
 # The keyed fingerprint `secret get` prints (`charter/secrets/fingerprint.py`): HMAC-SHA256 over
 # `sha2`, and 32 random bytes for the plane's key. Both already in this workspace's lockfile.
-hmac = "0.12"
+hmac = "0.13"
 # The `keyring` vault provider (ADR 0047): the operating system's own credential store — the
 # macOS Keychain, the Secret Service on Linux, the Windows Credential Manager — through the
 # standard crate every Rust program that keeps a password there uses. Its default `v1`
 # feature is the one-entry API charter needs and picks the platform's store itself.
 keyring = "4"
-getrandom = "0.3"
+getrandom = "0.4"
 # `secret exec --file`/`--dotenv`: a 0600 temp file, created with a random name that cannot
 # collide or be pre-planted. Already a dev-dependency here and in the lockfile.
 tempfile.workspace = true
 thiserror.workspace = true
-toml = { version = "0.9", features = ["preserve_order"] }
+toml = { version = "1.1", features = ["preserve_order"] }
 # The Project settings tab's writer (charter-app#252): an edit to `charter.toml` or
 # `charter.local.toml` keeps every comment, blank line and key order the operator wrote. The
 # version already in this workspace's lockfile, so it adds no crate to the tree.

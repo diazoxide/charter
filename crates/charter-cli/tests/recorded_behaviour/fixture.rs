@@ -107,7 +107,10 @@ impl Blobs {
     }
 
     pub fn put(&mut self, bytes: &[u8]) -> String {
-        let sha = format!("{:x}", Sha256::digest(bytes));
+        let sha: String = Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         if !self.by_sha.contains_key(&sha) {
             self.by_sha.insert(sha.clone(), bytes.to_vec());
             self.changed = true;

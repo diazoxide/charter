@@ -79,7 +79,7 @@ pub fn digest(text: &str) -> String {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     hasher.update(text.as_bytes());
-    format!("{:x}", hasher.finalize())
+    crate::extension::hex(&hasher.finalize())
 }
 
 /// Whether `key` is a name charter could have recorded: a relative path naming a file inside
@@ -580,6 +580,25 @@ pub(crate) fn inside(base: &Path, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The digest a marker records is plain lowercase-hex SHA-256, pinned to values computed
+    /// outside this crate (`hashlib.sha256(...).hexdigest()` in Python): every marker already
+    /// on disk was written this way, and a dependency bump must not respell it.
+    #[test]
+    fn a_marker_digest_is_the_known_sha256_of_the_text() {
+        assert_eq!(
+            digest(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            digest("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            digest("charter wrote this\n"),
+            "98c856e3f0b5aedddd335e4ed9992ecc8639aad2a112b902b2d4090291d685ef"
+        );
+    }
 
     #[test]
     fn a_settled_entry_reads_back_as_the_one_digest_it_names() {
