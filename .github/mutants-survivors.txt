@@ -29,27 +29,13 @@
 # run that finishes the whole crate WILL report a large batch of genuinely untested mutants.
 # That run's summary attaches the full set as `mutants-survivors.current.txt`; re-seeding from
 # it is a copy, and it is a decision to make deliberately rather than a chore to automate.
+#
+# M8.1 (2026-09-24) measured every mutant in the eleven files the old runs flagged outside
+# #218's brief — forge, gitpolicy, doctor/mod, glrefresh, curate, guest, machine, gitstate,
+# active, worktree/mod and wiring — and each one is now caught by a test or excluded as
+# equivalent in `.cargo/mutants.toml`, with the proof at its site. No line for those files is
+# left here, and one that comes back is news.
 
-crates/charter-core/src/active.rs: delete ! in python_str
-crates/charter-core/src/active.rs: delete match arm toml::Value::Boolean(false) in python_str
-crates/charter-core/src/active.rs: delete match arm toml::Value::Boolean(true) in python_str
-crates/charter-core/src/active.rs: delete match arm toml::Value::Float(f) in python_str
-crates/charter-core/src/active.rs: delete match arm toml::Value::Integer(n) in python_str
-crates/charter-core/src/active.rs: replace && with || in python_str
-crates/charter-core/src/active.rs: replace > with == in read_a_name
-crates/charter-core/src/active.rs: replace > with >= in read_a_name
-crates/charter-core/src/active.rs: replace Ids::from_env -> Self with Default::default()
-crates/charter-core/src/active.rs: replace from_env -> Option<String> with None
-crates/charter-core/src/active.rs: replace from_env -> Option<String> with Some("xyzzy".into())
-crates/charter-core/src/active.rs: replace from_env -> Option<String> with Some(String::new())
-crates/charter-core/src/active.rs: replace match guard ids.terminal.is_none() with false in workspace_source
-crates/charter-core/src/active.rs: replace match guard ids.terminal.is_none() with true in workspace_source
-crates/charter-core/src/active.rs: replace tty_name -> Option<String> with None
-crates/charter-core/src/active.rs: replace tty_name -> Option<String> with Some("xyzzy".into())
-crates/charter-core/src/active.rs: replace tty_name -> Option<String> with Some(String::new())
-crates/charter-core/src/active.rs: replace workspace_source -> String with "xyzzy".into()
-crates/charter-core/src/active.rs: replace workspace_source -> String with String::new()
-crates/charter-core/src/active.rs: replace || with && in read_a_name
 crates/charter-core/src/adopt.rs: replace build_version -> &'static str with ""
 crates/charter-core/src/adopt.rs: replace build_version -> &'static str with "xyzzy"
 crates/charter-core/src/cistate.rs: replace && with || in Cache::age_of
@@ -59,35 +45,8 @@ crates/charter-core/src/cistate.rs: replace > with >= in read
 crates/charter-core/src/cistate.rs: replace match guard why.kind() == std::io::ErrorKind::NotFound with true in read
 crates/charter-core/src/contain.rs: replace nofollow -> &mut std::fs::OpenOptions with Box::leak(Box::new(Default::default()))
 crates/charter-core/src/contain.rs: replace | with ^ in nofollow
-crates/charter-core/src/curate.rs: delete ! in pending_auto
-crates/charter-core/src/curate.rs: delete ! in proposals
-crates/charter-core/src/curate.rs: delete ! in report
-crates/charter-core/src/curate.rs: replace && with || in report
-crates/charter-core/src/curate.rs: replace - with + in pending_auto
-crates/charter-core/src/curate.rs: replace - with / in pending_auto
-crates/charter-core/src/curate.rs: replace == with != in report
-crates/charter-core/src/curate.rs: replace > with < in pending_auto
-crates/charter-core/src/curate.rs: replace > with < in report
-crates/charter-core/src/curate.rs: replace > with == in pending_auto
-crates/charter-core/src/curate.rs: replace > with == in report
-crates/charter-core/src/curate.rs: replace >= with < in report
-crates/charter-core/src/curate.rs: replace apply_safe -> Result<Vec<String>, Unread> with Ok(vec!["xyzzy".into()])
-crates/charter-core/src/curate.rs: replace apply_safe -> Result<Vec<String>, Unread> with Ok(vec![String::new()])
-crates/charter-core/src/curate.rs: replace name_of -> String with String::new()
-crates/charter-core/src/curate.rs: replace pending_auto -> Vec<String> with vec!["xyzzy".into()]
-crates/charter-core/src/curate.rs: replace pending_auto -> Vec<String> with vec![String::new()]
-crates/charter-core/src/curate.rs: replace pending_auto -> Vec<String> with vec![]
-crates/charter-core/src/curate.rs: replace proposals -> Vec<String> with vec!["xyzzy".into()]
-crates/charter-core/src/curate.rs: replace proposals -> Vec<String> with vec![]
-crates/charter-core/src/curate.rs: replace report -> Result<Report, Unread> with Ok(Default::default())
-crates/charter-core/src/curate.rs: replace || with && in py_float
-crates/charter-core/src/curate.rs: replace || with && in report
 crates/charter-core/src/dispatch.rs: delete ! in truthy
 crates/charter-core/src/docsrc.rs: replace source -> String with String::new()
-crates/charter-core/src/doctor/mod.rs: replace < with <= in Config::load
-crates/charter-core/src/doctor/mod.rs: replace < with == in Config::load
-crates/charter-core/src/doctor/mod.rs: replace match guard *found < 1 with false in Config::load
-crates/charter-core/src/doctor/mod.rs: replace short_path -> String with String::new()
 crates/charter-core/src/hookwire.rs: replace * with +
 crates/charter-core/src/hookwire.rs: replace Listener::bind -> io::Result<Self> with Ok(Default::default())
 crates/charter-core/src/hookwire.rs: replace Listener::each -> Reading with Default::default()
@@ -113,16 +72,6 @@ crates/charter-core/src/leakguard.rs: replace > with >= in glob_selects_inside
 crates/charter-core/src/leakguard.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in guarded_state_entries
 crates/charter-core/src/leakguard.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in guarded_state_entries
 crates/charter-core/src/leakguard.rs: replace || with && in walks_directories
-crates/charter-core/src/machine.rs: delete ! in load
-crates/charter-core/src/machine.rs: replace && with || in load
-crates/charter-core/src/machine.rs: replace <impl std::fmt::Display for Change>::fmt -> std::fmt::Result with Ok(Default::default())
-crates/charter-core/src/machine.rs: replace > with >= in read_text
-crates/charter-core/src/machine.rs: replace Change::name -> &str with ""
-crates/charter-core/src/machine.rs: replace Change::name -> &str with "xyzzy"
-crates/charter-core/src/machine.rs: replace config_root -> Option<PathBuf> with None
-crates/charter-core/src/machine.rs: replace config_root -> Option<PathBuf> with Some(Default::default())
-crates/charter-core/src/machine.rs: replace supported -> io::Result<()> with Ok(())
-crates/charter-core/src/machine.rs: replace tests::one_plane -> Store with Default::default()
 crates/charter-core/src/workspaces.rs: delete ! in Plane::is_live
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::remember_titled
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::scaffold_memory
@@ -149,11 +98,6 @@ crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::Error
 crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with false in Plane::read_workspaces
 crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with true in Plane::read_workspaces
 crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with true in read_dir_sorted
-crates/charter-core/src/worktree/mod.rs: replace && with || in list
-crates/charter-core/src/worktree/mod.rs: replace && with || in remove
-crates/charter-core/src/worktree/mod.rs: replace unwired_warning -> String with "xyzzy".into()
-crates/charter-core/src/worktree/mod.rs: replace unwired_warning -> String with String::new()
-crates/charter-core/src/worktree/mod.rs: replace || with && in head_of
 crates/charter-core/src/wscmd/mod.rs: delete ! in git_user
 crates/charter-core/src/wscmd/mod.rs: replace && with || in live_line
 crates/charter-core/src/wscmd/mod.rs: replace && with || in work_at_risk

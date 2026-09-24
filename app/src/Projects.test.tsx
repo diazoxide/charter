@@ -309,6 +309,14 @@ describe("a window holding more than one project", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Close project two" }));
 
+    // It has a chat open, so it asks first (charter-app#239's ruling), and this answers it.
+
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: /^Close and end/,
+      }),
+    );
+
     await vi.waitFor(() => expect(projectTabs()).toEqual(["one*"]));
     // The core was told to let go of THAT project and no other, and the tab beside it came
     // to the front — `closeTab`'s rule, one scope up.

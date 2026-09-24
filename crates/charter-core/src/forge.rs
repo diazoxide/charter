@@ -304,12 +304,15 @@ fn url_path(scheme: &str, url: &str) -> String {
     let Some((_, after)) = cleaned.split_once("://") else {
         return String::new();
     };
-    // The netloc runs to the first `/`, `?` or `#`; everything from a `/` onwards is the path.
-    let rest = match after.find(['/', '?', '#']) {
-        Some(i) if after.as_bytes()[i] == b'/' => &after[i..],
-        // No path at all: `https://host?q`, `https://host`.
-        _ => return String::new(),
+    // The netloc runs to the first `/`, `?` or `#`, and the path from there to the first `?`
+    // or `#`. So `https://host` has no path, and neither has `https://host?q` nor
+    // `https://host#f`: what follows the netloc starts with the character the path is cut
+    // at. (A guard that asked for a `/` there said the same thing twice, and no input could
+    // tell it from `true`.)
+    let Some(netloc_end) = after.find(['/', '?', '#']) else {
+        return String::new();
     };
+    let rest = &after[netloc_end..];
     let path = &rest[..rest.find(['?', '#']).unwrap_or(rest.len())];
     // Bound outside the condition: a temporary borrowed inside an `if` chain is dropped at a
     // point the 2024 edition moved, and this reads the same either way.
@@ -1255,6 +1258,8 @@ mod tests {
             "git.internal",
             "gitlab.example.com:8443",
             "a-b.c1",
+            // Five digits is the longest port Python's `:\d{1,5}` takes.
+            "host:12345",
         ] {
             assert!(host_ok(good), "{good}");
         }
@@ -1288,6 +1293,123 @@ mod tests {
         assert_eq!(host_of("file:///srv/forge/acme/x.git"), "");
         assert_eq!(host_of("/srv/forge/x"), "");
         assert_eq!(host_of(""), "");
+    }
+
+    /// Python's `_URL_HOST_RE` and `_SCP_HOST_RE`, each value below read off
+    /// `registry._host_of` itself.
+    #[test]
+    fn the_host_is_what_pythons_two_patterns_match_and_nothing_else() {
+        for (url, host) in [
+            // A scheme starts with a letter, so this is not one — and not scp-like either,
+            // because its colon is followed by `//`.
+            ("1ab://host/x", ""),
+            ("user@host://x", ""),
+            // Userinfo is `[^@/\s]+@`: a `/` or a space in it, or nothing before the `@`,
+            // and the host is whatever runs up to the first `/`, `:` or space.
+            ("a/b@host:x", ""),
+            ("a b@host:x", ""),
+            ("x@a/b:c", ""),
+            ("@host:path", "@host"),
+            ("ab@c@host:x", "c@host"),
+            // scp-like needs a host AND the colon after it.
+            ("abc", ""),
+            (":path", ""),
+            ("a:b", "a"),
+            ("h:/x", "h"),
+            (" git@Host:x ", "host"),
+        ] {
+            assert_eq!(host_of(url), host, "{url:?}");
+        }
+    }
+
+    /// `registry.namespace_of`, which is `urllib.parse.urlparse(url).path` for a URL with a
+    /// scheme — each value read off Python.
+    #[test]
+    fn the_namespace_is_the_path_python_parses_out_of_the_remote() {
+        for (url, namespace) in [
+            (
+                "https://gitlab.com/group/sub/repo.git",
+                Some("group/sub/repo"),
+            ),
+            ("git@gitlab.com:group/repo.git", Some("group/repo")),
+            ("git@h:/a/b/", Some("a/b")),
+            ("", None),
+            ("   ", None),
+            ("noslash", None),
+            ("https://h/", None),
+            ("git@h:", None),
+            // No path at all: the netloc is cut at the query or the fragment.
+            ("https://host", None),
+            ("https://host?q=/x", None),
+            ("https://host#/a/b", None),
+            // `;params` come off the LAST segment, for the schemes that use them.
+            ("https://h/a/b;x", Some("a/b")),
+            ("https://h/a/b;x/c;y", Some("a/b;x/c")),
+            ("ftp://h/a;b", Some("a")),
+            ("git://h/a;b", Some("a;b")),
+            ("https://h/a/b?page=2#top", Some("a/b")),
+            // `urlsplit` drops tabs and newlines before it parses.
+            ("https://h/a\tb/c.git", Some("ab/c")),
+        ] {
+            assert_eq!(namespace_of(url).as_deref(), namespace, "{url:?}");
+        }
+    }
+
+    #[test]
+    fn a_plane_format_newer_than_this_charter_or_not_a_number_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |schema: &str| {
+            std::fs::write(dir.path().join("charter.toml"), schema).unwrap();
+            load_config(dir.path())
+        };
+        assert!(at("").unwrap().is_empty());
+        assert_eq!(at("schema = 1\n").unwrap()["schema"].as_integer(), Some(1));
+        assert!(
+            at("schema = 0\n").is_ok(),
+            "an older format is still placed"
+        );
+        let newer = at("schema = 2\n").unwrap_err();
+        assert!(
+            newer.ends_with("declares schema 2, but this charter understands 1. Upgrade charter."),
+            "{newer}"
+        );
+        assert!(at("schema = 3\n").is_err());
+        let word = at("schema = \"one\"\n").unwrap_err();
+        assert!(
+            word.contains("which is not a plane format version this charter can compare"),
+            "{word}"
+        );
+        assert!(at("schema = [").unwrap_err().contains("is not valid TOML"));
+        let none = tempfile::tempdir().unwrap();
+        assert_eq!(load_config(none.path()), Ok(toml::Table::new()));
+    }
+
+    #[test]
+    fn a_forge_entry_that_is_not_a_table_costs_only_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("charter.toml"),
+            "forge = [\"junk\", { kind = \"github\", host = \"ghe.internal\" }]\n",
+        )
+        .unwrap();
+
+        let known = known(dir.path());
+        assert_eq!(
+            known.get("ghe.internal"),
+            Some(&Forge::build("github", Some("ghe.internal")).unwrap())
+        );
+        assert_eq!(known.len(), 3, "{known:?}");
+        let ordered: Vec<String> = known_ordered(dir.path())
+            .into_iter()
+            .map(|f| f.host)
+            .collect();
+        assert_eq!(ordered, ["gitlab.com", "github.com", "ghe.internal"]);
+    }
+
+    #[test]
+    fn a_change_is_numbered_with_its_forges_own_sigil() {
+        assert_eq!(Kind::GitHub.change_sigil(), "#");
+        assert_eq!(Kind::GitLab.change_sigil(), "!");
     }
 
     #[test]

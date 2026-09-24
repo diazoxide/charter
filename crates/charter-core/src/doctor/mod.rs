@@ -181,9 +181,12 @@ impl Config {
                 ));
             }
         };
+        // Python's `found > SCHEMA` is the refusal, so everything up to and including this
+        // charter's own version is read. (Spelled once, as `<= SCHEMA`: an arm for `1` ahead of
+        // one for `< 1` left the `<` with a boundary no input could reach.)
         match table.get("schema") {
-            None | Some(toml::Value::Integer(1)) => Self::Read(table),
-            Some(toml::Value::Integer(found)) if *found < 1 => Self::Read(table),
+            None => Self::Read(table),
+            Some(toml::Value::Integer(found)) if *found <= SCHEMA => Self::Read(table),
             Some(toml::Value::Integer(found)) => Self::Refused(format!(
                 "{} declares schema {found}, but this charter understands {SCHEMA}. Upgrade \
                  charter: update the app.",

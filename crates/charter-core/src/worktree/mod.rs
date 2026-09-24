@@ -235,6 +235,13 @@ fn head_of(tree: &Path) -> Result<Base, Refusal> {
     let sha = git::run(tree, &["rev-parse", "--short", "HEAD"], git::READ)?;
     // A failed `rev-parse` used to become `Detached("")`, which `merge` then reported as
     // "on a detached HEAD at " — an empty sha and the wrong diagnosis for a broken tree.
+    //
+    // `||` against `&&` here cannot be told apart through git, and the mutation run excludes
+    // it on that ground (`.cargo/mutants.toml`): a failed `rev-parse --short HEAD` writes
+    // nothing to stdout (measured outside a repository and on an unborn branch, git 2.50),
+    // and one that succeeds always writes a sha — even for a HEAD holding the null sha. So
+    // the two halves are never apart. Equivalent over git's behaviour, not its contract;
+    // `repos::commit_at` rests on the same measurement.
     if !sha.ok() || sha.line().is_empty() {
         return Err(Refusal::Unreadable {
             what: tree.display().to_string(),
@@ -940,6 +947,52 @@ mod locate_tests {
         assert_eq!(
             locate(&root, &root.join("workspaces/alpha/.worktrees/thing")),
             None
+        );
+    }
+
+    #[test]
+    fn four_levels_deep_in_the_clone_is_still_in_no_piece() {
+        // The shape of a piece's path, but under the clone rather than under `.worktrees/`.
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let deep = root.join("workspaces/alpha/thing/src/module");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        assert_eq!(locate(&root, &deep), None);
+    }
+
+    #[test]
+    fn a_plane_that_moves_its_worktree_root_is_refused_by_name() {
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        assert!(
+            relocation_refusal(&root).is_ok(),
+            "no charter.toml says anything"
+        );
+        std::fs::write(root.join("charter.toml"), "[plane]\nname = \"x\"\n").unwrap();
+        assert!(relocation_refusal(&root).is_ok());
+        std::fs::write(
+            root.join("charter.toml"),
+            "[plane]\nworktrees = \"/elsewhere\"\n",
+        )
+        .unwrap();
+        match relocation_refusal(&root) {
+            Err(Refusal::Relocated(to)) => assert_eq!(to, "/elsewhere"),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            list(&root, "alpha", "thing"),
+            Err(Refusal::Relocated(_))
+        ));
+    }
+
+    #[test]
+    fn a_cut_without_its_layer_says_what_the_tree_lacks_and_why() {
+        assert_eq!(
+            unwired_warning("The guest layer could not be written: disk full."),
+            "this worktree has no charter layer: no persona agents, no ask/deny rules, no \
+             $CHARTER_HARNESS. A harness started here runs without them. The guest layer \
+             could not be written: disk full."
         );
     }
 }
