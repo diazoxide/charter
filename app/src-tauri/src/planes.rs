@@ -52,6 +52,14 @@ impl PlaneId {
     }
 }
 
+#[cfg(test)]
+impl PlaneId {
+    /// An id for a test that holds no registry — a worker, a teller — never for a command.
+    pub fn for_tests(root: &Path) -> Self {
+        Self::of(root)
+    }
+}
+
 /// The operator's yes to acting on one plane's record.
 ///
 /// **`.charter/app/reopen.json` is an execution input.** Putting a record back STARTS the
@@ -320,6 +328,14 @@ impl Held {
     /// through the same gated [`Records::write`] as every other, so a plane whose record this
     /// launch never put back is left exactly as it was.
     fn let_go(&self, to_update: bool) {
+        // Auto-save first: ending the chats below tells the worker each one ended, and a plane
+        // being let go of is saved once, at quit, not by a worker racing that save.
+        drop(
+            self.autosave
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
         self.records.write(&reopen::Record {
             relaunch_after_update: to_update,
             ..self.chats.record()
@@ -328,12 +344,6 @@ impl Held {
         self.hooks.stop();
         drop(
             self.watch
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take(),
-        );
-        drop(
-            self.autosave
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .take(),
@@ -1116,9 +1126,14 @@ impl Planes {
     /// Empties the registry, then lets go of each plane it held. See [`Self::let_go_of_all`].
     fn let_go_of_every_plane(&self, to_update: bool) {
         let all: Vec<_> = self.map().drain().map(|(_, held)| held).collect();
+        let roots: Vec<_> = all.iter().map(|held| held.root.clone()).collect();
         for held in all {
             held.let_go(to_update);
         }
+        // Every way out of the app lets go of every plane here — a quit, and a restart to
+        // update — so this is where each is saved: after its chats have ended, so what they
+        // last wrote is in it (ADR 0051).
+        crate::autosave::at_quit(roots);
     }
 
     /// The registry, whether or not a thread panicked while holding it. What it holds is

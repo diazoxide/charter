@@ -1642,6 +1642,8 @@ export type PlaneSaving = {
 	 *  nothing to count against.
 	 */
 	behind: number | null,
+	/**  Why the last push did not land, when it failed rather than conflicted. */
+	pushFailed: string | null,
 	/**  `[plane] mode`, or `null` when the plane names none. */
 	mode: string | null,
 	/**

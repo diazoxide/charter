@@ -2056,3 +2056,67 @@ fn with_auto_save_off_incoming_commits_are_counted_and_never_pulled() {
     assert_eq!((got.behind, got.moved), (1, false), "{got:?}");
     assert_eq!(ask(&fixture.root, &["rev-parse", "HEAD"]), before);
 }
+
+// --------------------------------------------------------------------------------------- //
+// review of #335                                                                            //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn a_push_that_failed_leaves_the_plane_committed_and_says_why_rather_than_blocked() {
+    // Offline is not blocked: auto-save tries again later, and a conflict is what stops it.
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    let head = ask(&fixture.root, &["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(fixture.root.join(".charter")).unwrap();
+    std::fs::write(
+        push_record_path(&fixture.root),
+        format!(
+            r#"{{"outcome": "failed", "branch": "main", "head": "{}", "detail": "Could not resolve host: github.com"}}"#,
+            head.trim()
+        ),
+    )
+    .unwrap();
+
+    let got = standing(&fixture.root);
+
+    assert_eq!(got.stage, Stage::Committed, "{got:?}");
+    assert_eq!(got.blocked, None);
+    assert_eq!(
+        got.push_failed.as_deref(),
+        Some("Could not resolve host: github.com")
+    );
+}
+
+#[test]
+fn a_second_save_of_a_plane_while_one_runs_is_refused_and_leaves_no_journal_line() {
+    let fixture = Fixture::plane();
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let running = Claim::of(&fixture.root).expect("the first save");
+    let before = fixture.commits();
+
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("A save of this plane is already running"),
+        "{said}"
+    );
+    assert_eq!(fixture.commits(), before);
+    assert!(journal(&fixture.root).is_empty());
+    drop(running);
+    assert_eq!(
+        fixture.just_save().0,
+        0,
+        "the next save, once the first is done"
+    );
+}
+
+#[test]
+fn a_fetch_waits_its_turn_behind_a_running_save() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+    let running = Claim::of(&fixture.root).expect("a save");
+    assert!(fetch(&fixture.root, true).is_err());
+    drop(running);
+    assert!(fetch(&fixture.root, true).is_ok());
+}

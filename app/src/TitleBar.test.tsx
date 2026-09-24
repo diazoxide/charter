@@ -371,6 +371,7 @@ describe("the save indicator (charter-app#294)", () => {
       branch: "main",
       pushes: true,
       behind: 0,
+      pushFailed: null,
       mode: "push",
       modeFrom: "charter.toml",
       journal: [],

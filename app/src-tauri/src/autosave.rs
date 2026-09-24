@@ -16,6 +16,8 @@
 //! for every held plane at once.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -43,22 +45,39 @@ pub enum Poke {
     Fetch,
 }
 
-/// A plane's auto-save worker. Dropping it stops the loop.
+/// A plane's auto-save worker. Dropping it stops the loop at its next look: the flag is
+/// what stops it, because a chat's end still holds a sender, and a channel alone would keep a
+/// let-go plane's worker looking until the last of those was gone.
 pub struct Worker {
     poke: Sender<Poke>,
+    stop: Arc<AtomicBool>,
+    /// Never joined: a worker mid-save is left to finish rather than holding a plane's close
+    /// open. Kept so a test can see the loop end.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read only by the stop test"))]
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Wake it now rather than at its next look; a worker mid-save finishes that save.
+        let _ = self.poke.send(Poke::Fetch);
+    }
 }
 
 impl Worker {
     /// Start looking at the plane at `root`. `changed` tells the window it moved.
     pub fn start(plane: PlaneId, root: PathBuf, changed: crate::planewatch::Changed) -> Self {
         let (poke, poked) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
         let spawned = std::thread::Builder::new()
             .name("charter-autosave".into())
-            .spawn(move || run(&root, &poked, &|| changed(plane.clone())));
-        if let Err(why) = spawned {
-            eprintln!("charter: auto-save did not start ({why}); save by hand");
-        }
-        Self { poke }
+            .spawn(move || run(&root, &poked, &stopping, &|| changed(plane.clone())));
+        let thread = spawned
+            .map_err(|why| eprintln!("charter: auto-save did not start ({why}); save by hand"))
+            .ok();
+        Self { poke, stop, thread }
     }
 
     /// Something for the worker to act on at its next look.
@@ -67,12 +86,14 @@ impl Worker {
     }
 }
 
-/// The loop: a look every [`LOOK_EVERY`] or at a poke, until the worker is dropped — which
-/// drops the last sender, and ends the loop at its next wait.
-fn run(root: &Path, poked: &Receiver<Poke>, tell: &dyn Fn()) {
+/// The loop: a look every [`LOOK_EVERY`] or at a poke, until the worker is dropped.
+fn run(root: &Path, poked: &Receiver<Poke>, stop: &AtomicBool, tell: &dyn Fn()) {
     let mut state = State::default();
     let mut poke = None;
     loop {
+        if stop.load(Ordering::SeqCst) {
+            return;
+        }
         if state.look(root, Instant::now(), poke) {
             tell();
         }
@@ -110,6 +131,10 @@ impl State {
                 did |= incoming.behind > 0;
             }
         }
+        // Off: what came in is still fetched and shown, and nothing else costs a git process.
+        if !autosave::on(&plane) {
+            return did;
+        }
 
         let standing = planegit::standing(root);
         let trigger = if !self.launched {
@@ -126,7 +151,7 @@ impl State {
             None
         };
         let trigger = trigger.or_else(|| {
-            let seen = planegit::fingerprint(root);
+            let seen = planegit::fingerprint_of(root, &standing);
             (self.quiet.tick(now, &plane, &standing, &seen) == Decision::Save)
                 .then_some(Trigger::Quiet)
         });
@@ -151,16 +176,43 @@ pub fn plane_fetch(
     Ok(())
 }
 
-/// Save every plane in `roots` as the app quits, all at once, giving each push
-/// [`QUIT_BOUND`] (ADR 0051). Returns when each has committed and its push finished or ran out
-/// of time.
+/// Save every plane in `roots` as the app quits, all at once (ADR 0051), and return within
+/// [`QUIT_BOUND`] and a moment more whatever happens: a commit that waits on a signer or a
+/// slow hook is left to finish on its own rather than holding the app open.
 pub fn at_quit(roots: Vec<PathBuf>) {
-    let waits: Vec<_> = roots
-        .into_iter()
-        .map(|root| std::thread::spawn(move || autosave::at_quit(&root, QUIT_BOUND)))
-        .collect();
-    for wait in waits {
-        let _ = wait.join();
+    let (done, finished) = mpsc::channel();
+    let started = roots.len();
+    for root in roots {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            autosave::at_quit(&root, QUIT_BOUND);
+            let _ = done.send(());
+        });
+    }
+    let until = Instant::now() + QUIT_BOUND + Duration::from_secs(1);
+    for _ in 0..started {
+        let left = until.saturating_duration_since(Instant::now());
+        if finished.recv_timeout(left).is_err() {
+            return;
+        }
+    }
+}
+
+#[cfg(test)]
+impl Worker {
+    /// Drop it and wait up to `bound` for its thread to end: whether it did.
+    fn stop_within(mut self, bound: Duration) -> bool {
+        let thread = self.thread.take();
+        drop(self);
+        let until = Instant::now() + bound;
+        let Some(thread) = thread else { return true };
+        while Instant::now() < until {
+            if thread.is_finished() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
     }
 }
 
@@ -263,5 +315,22 @@ mod tests {
             Some(Poke::SessionEnded),
         );
         assert!(planegit::journal(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_worker_let_go_of_stops_even_while_a_chats_end_still_holds_its_sender() {
+        let dir = plane("[plane]\nmode = \"commit\"\n");
+        let worker = Worker::start(
+            PlaneId::for_tests(dir.path()),
+            dir.path().to_path_buf(),
+            Arc::new(|_| {}),
+        );
+        let held_by_a_chat = worker.poker();
+
+        assert!(
+            worker.stop_within(Duration::from_secs(5)),
+            "the worker kept looking"
+        );
+        drop(held_by_a_chat);
     }
 }

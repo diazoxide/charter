@@ -22,6 +22,7 @@ function standing(over: Partial<PlaneSaving> = {}): PlaneSaving {
     branch: "main",
     pushes: true,
     behind: 0,
+    pushFailed: null,
     mode: "push",
     modeFrom: "charter.toml",
     journal: [],
@@ -211,5 +212,16 @@ describe("SavingView", () => {
     core([standing({ behind: 2 })]);
     render(<SavingView plane={PLANE} />);
     expect(await screen.findByText("Saved · 2 incoming")).toBeTruthy();
+  });
+
+  it("says why the last push did not land, without calling the plane blocked", async () => {
+    core([
+      standing({ stage: "committed", ahead: 1, pushFailed: "Could not resolve host: github.com" }),
+    ]);
+    render(<SavingView plane={PLANE} />);
+    expect(
+      await screen.findByText("The last push did not land: Could not resolve host: github.com"),
+    ).toBeTruthy();
+    expect(screen.getByText("1 committed, not pushed")).toBeTruthy();
   });
 });

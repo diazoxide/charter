@@ -55,6 +55,9 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
         <>
           <p className={`saving-stage saving-${saving.stage}`}>{stageText(saving)}</p>
           <p className="settings-who">{modeText(saving)}</p>
+          {saving.pushFailed !== null && (
+            <p className="settings-hint">{`The last push did not land: ${saving.pushFailed}`}</p>
+          )}
           {saving.mode === null && <ModeQuestion plane={plane} branch={saving.branch} />}
           {saving.pr !== null && (
             <p className="settings-hint">

@@ -17,6 +17,7 @@ fn standing(stage: Stage, changed: &[&str], pushes: bool) -> Standing {
         branch: "main".into(),
         pushes,
         behind: Some(0),
+        push_failed: None,
     }
 }
 

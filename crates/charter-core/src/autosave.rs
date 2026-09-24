@@ -115,8 +115,13 @@ pub fn at_quit(root: &std::path::Path, bound: Duration) -> AtQuit {
     if !on(&plane) || standing.stage == Stage::Blocked || !worth_saving(&standing) {
         return AtQuit::Nothing;
     }
+    // Whatever else is saving this plane — the worker's last save — finishes first, within the
+    // bound; the commit and the push below then hold the plane, as every save does.
+    let Some(claim) = crate::planegit::Claim::within(root, bound) else {
+        return AtQuit::Nothing;
+    };
     if !standing.changed.is_empty() {
-        let code = crate::planegit::save_as(
+        let code = crate::planegit::save_claimed(
             &crate::planegit::Request {
                 root,
                 message: None,
@@ -125,6 +130,7 @@ pub fn at_quit(root: &std::path::Path, bound: Duration) -> AtQuit {
                 cwd: root,
             },
             crate::planegit::Trigger::Quit,
+            &claim,
             &mut |_| {},
         );
         if code != 0 {
@@ -139,6 +145,8 @@ pub fn at_quit(root: &std::path::Path, bound: Duration) -> AtQuit {
     let target = plane.branch.value.clone();
     let sign = plane.sign.value;
     std::thread::spawn(move || {
+        // The claim goes with the push, and is let go of when the push ends.
+        let _claim = claim;
         let pushed = crate::planegit::push_head(&at, target.as_deref(), sign, &mut |_| {});
         let _ = told.send(pushed.outcome == crate::planegit::Outcome::Pushed);
     });
