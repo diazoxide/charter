@@ -500,9 +500,23 @@ fn a_program_that_escapes_its_group_outlives_the_question_and_cannot_hold_charte
     // **The honest limit, pinned rather than hidden.** A helper that leaves the process group
     // is not killed with it — the operator declined a sandbox, and running as him it can do
     // that. What charter guarantees is narrower and is what this holds: the question still
-    // ends on time, and the escaped helper writing to stderr for ever does not hold the
-    // blocking thread or the extension's slot. Perl, because `setsid(1)` is not on macOS and
-    // perl is on every machine this runs on.
+    // ends, and the escaped helper writing to stderr for ever does not hold the blocking
+    // thread or the extension's slot. Perl, because `setsid(1)` is not on macOS and perl is on
+    // every machine this runs on.
+    //
+    // **The evidence is an order, not a clock** (charter-app#287). This used to assert the
+    // question took under 3 s, and a loaded Mac took longer without charter holding anything
+    // up: `spawn` measured under 1 ms and charter's part after the answer ~100 ms
+    // ([`STDERR_AFTER_STOP`]); the rest was the program starting and answering, which queued
+    // first-run assessments stretch without limit. So the helper now runs until the test lets
+    // it go, and the question returning while it is still alive is the proof that charter did
+    // not wait for it. The watchdog only turns a regression into a sentence instead of a run
+    // that never ends; it is generous because the question's own bound is one [`DEADLINE`]
+    // from the spawn plus [`STDERR_AFTER_STOP`], and a return past that is charter waiting.
+    //
+    // **The program answers only once the helper has left the group.** Otherwise, under load,
+    // charter's group kill can land before perl reaches `setpgrp` and kill a helper that never
+    // escaped — a race, not the limit.
     //
     // **It ignores SIGPIPE, or the test measures a race instead of the limit.** Once charter
     // stops draining stderr and closes its end, the helper's next write raises SIGPIPE, which
@@ -511,29 +525,48 @@ fn a_program_that_escapes_its_group_outlives_the_question_and_cannot_hold_charte
     // helper that shrugs off the closed pipe is the one this limit is about.
     let rig = Rig::new();
     let escaped = rig.marker("escaped");
+    let release = rig.marker("release");
     rig.approved(&format!(
-        "#!/bin/sh\nperl -e '$SIG{{PIPE}}=\"IGNORE\"; setpgrp(0,0); open(F,\">{}\"); print F $$; close F; \
-         $|=1; while(1){{print STDERR \"x\"; select(undef,undef,undef,0.001)}}' &\n\
+        "#!/bin/sh\nperl -e '$SIG{{PIPE}}=\"IGNORE\"; setpgrp(0,0); open(F,\">{escaped}\"); \
+         print F $$; close F; $|=1; \
+         until(-e \"{release}\"){{print STDERR \"x\"; select(undef,undef,undef,0.001)}}' &\n\
+         while [ ! -s '{escaped}' ]; do sleep 0.01; done\n\
          read line\nprintf '%s\\n' '{ANSWER}'\n",
-        escaped.display()
+        escaped = escaped.display(),
+        release = release.display(),
     ));
     let executor = Executor::default();
+    let watchdog = DEADLINE * 4;
 
-    let began = Instant::now();
-    rig.ask(&executor).expect("the answer");
-    let took = began.elapsed();
+    let (returned, has_returned) = std::sync::mpsc::channel();
+    let (answer, outlived) = std::thread::scope(|scope| {
+        let asking = scope.spawn(|| {
+            let answer = rig.ask(&executor);
+            // Asked before the helper is let go, so this is "alive when the question returned".
+            let outlived = alive_from(&escaped).is_some_and(crate::process::alive);
+            let _ = returned.send(());
+            (answer, outlived)
+        });
+        let in_time = has_returned.recv_timeout(watchdog).is_ok();
+        // Let the helper go whatever happened, so a charter that waits for it still returns
+        // and the scope can end.
+        std::fs::write(&release, "").expect("the release");
+        let said = asking.join().expect("the asking thread");
+        assert!(
+            in_time,
+            "the question did not return within {watchdog:?} while an escaped helper held its \
+             stderr — charter waited for a process that left the group"
+        );
+        said
+    });
 
-    wait_for(&escaped);
-    let pid = alive_from(&escaped).expect("the escaped helper's pid");
-    let outlived = crate::process::alive(pid);
-    // Killed by the pid this test itself caused to exist, never by name.
-    if let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0)) {
-        let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
+    if let Some(pid) = alive_from(&escaped).filter(|&pid| !gone(pid)) {
+        // Killed by the pid this test itself caused to exist, never by name.
+        if let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0)) {
+            let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
+        }
     }
-    assert!(
-        took < Duration::from_secs(3),
-        "an escaped helper held the question for {took:?}"
-    );
+    answer.expect("the answer");
     assert!(executor.running().is_empty(), "the slot was never released");
     assert!(
         outlived,
