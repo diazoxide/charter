@@ -1574,6 +1574,7 @@ mod tests {
             chats: Vec::new(),
             views: vec![vault("ops"), vault("e2e-vault"), vault("team.prod_2")],
             dealt: 0,
+            relaunch_after_update: false,
         };
 
         write(plane.path(), &record).expect("the record is written");
