@@ -144,6 +144,7 @@ function core(
       return {
         workspace: "alpha",
         repos: [],
+        paths: {},
         absent: [],
         refused: [],
         todos: [],

@@ -97,6 +97,7 @@ function core({
       return {
         workspace: a.workspace,
         repos: a.workspace === "alpha" ? ["svc"] : [],
+        paths: {},
         absent: [],
         refused: [],
         todos: [],

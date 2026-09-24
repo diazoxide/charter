@@ -19,8 +19,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mid-turn is named first, and you choose to restart now or wait. If the restart does not come
   back, the next launch offers the same sessions.
   ([#251](https://github.com/diazoxide/charter-app/issues/251))
-- **Project settings**, a tab of its own: right-click a project's tab and choose *Project
-  settings…*, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
+- **Project settings**, a tab of its own: right-click a project's tab and choose _Project
+  settings…_, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
   which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
   this machine — each as a form over the keys charter documents and as raw TOML for everything
   else. Saving keeps your comments and the order of your keys, and refuses what charter would
@@ -32,6 +32,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
   the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
   ([#248](https://github.com/diazoxide/charter-app/issues/248))
+- Right-click a repo — its heading in the explorer, or its row in the bottom bar — for **New tab
+  in** it, which starts that one tab's chat in the clone, and **Start new chats in** it, which
+  makes the clone where every new chat starts until you pick somewhere else, as picking a
+  worktree does one level down, and the explorer marks it.
+  Shift+F10 or the menu key opens any of charter's menus on the row the keyboard is on.
+  ([#174](https://github.com/diazoxide/charter-app/issues/174))
 
 ### Fixed
 
@@ -69,7 +75,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   says so instead of passing silently. ([#228](https://github.com/diazoxide/charter-app/pull/228))
 - `charter secret`, `charter persona secret` and `charter vault` are back. A chat that runs
   `charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl …` or `charter secret list
-  <vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without
+<vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without
   them; they now answer as the Python charter did, with the plain-file, reference and 1Password
   providers, and a value still never reaches the chat: `list` prints names, `get` a size band
   and a keyed fingerprint, and `exec` hands values to the command's environment or to 0600 temp
@@ -187,7 +193,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pane rather than taking a row from it, and a very light line divides one tab from the next.
   ([#214](https://github.com/diazoxide/charter-app/pull/214))
 - The project, workspace and chat strips nest, and tabs that do not fit collapse into a
-  *N more* button instead of scrolling. ([#139](https://github.com/diazoxide/charter-app/pull/139),
+  _N more_ button instead of scrolling. ([#139](https://github.com/diazoxide/charter-app/pull/139),
   [#171](https://github.com/diazoxide/charter-app/pull/171))
 - Closing the window hides it to the tray. Quitting says which chats it will end, and the next
   launch puts back the projects and chats you had open.

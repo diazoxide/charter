@@ -95,6 +95,7 @@ function core(): {
       return {
         workspace: a.workspace,
         repos: [],
+        paths: {},
         absent: [],
         refused: [],
         todos: [...disk].map(([slug, title]) => ({ slug, title, stamp: "" })),

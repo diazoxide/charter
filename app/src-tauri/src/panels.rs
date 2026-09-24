@@ -15,6 +15,7 @@
 //! says why in full. A panel that fetched would put a forge token in the process that draws
 //! the window and hold that window for as long as `gh` takes.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use charter_core::cistate::{self, Reading};
@@ -232,6 +233,13 @@ pub(crate) struct Panels {
     workspace: String,
     /// The clones on disk, by name, in the order the directory lists them.
     repos: Vec<String>,
+    /// Where each clone in `repos` is, by name: the path `repos::clones` **checked**, so the
+    /// window never joins one together (charter-app#174). It is what lets a clone be picked as
+    /// where the next chat starts, from the explorer's heading and the bottom bar's row.
+    ///
+    /// Beside `repos` rather than in place of it, so the order the directory lists them in and
+    /// every reader of the names stay as they are.
+    paths: BTreeMap<String, String>,
     /// Repos `workspace.json` names that are not cloned here. Membership, not presence.
     absent: Vec<String>,
     /// What charter would not look at, by name and reason. Shown, never dropped: a row that
@@ -377,6 +385,11 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
     let plane = Plane::open(root);
     let found = repos::clones(root, workspace).map_err(|why| why.to_string())?;
     let here: Vec<String> = found.repos.iter().map(|repo| repo.name.clone()).collect();
+    let paths = found
+        .repos
+        .iter()
+        .map(|repo| (repo.name.clone(), repo.path.display().to_string()))
+        .collect();
     let absent = repos::declared(&plane, workspace)
         .into_iter()
         .filter(|name| !here.contains(name))
@@ -408,6 +421,7 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
     Ok(Panels {
         workspace: workspace.to_string(),
         repos: here,
+        paths,
         absent,
         refused: found.refused,
         todos,
@@ -1124,6 +1138,26 @@ mod tests {
             std::fs::read_to_string(beside.path().join("ran")).unwrap_or_default(),
             once,
             "the second focus started another refresh"
+        );
+    }
+
+    #[test]
+    fn a_clone_comes_with_the_path_the_core_checked_so_the_window_never_joins_one() {
+        // charter-app#174: a clone row can be picked as where the next chat starts only if the
+        // window holds a path for it that the core spelled.
+        let (_plane, root) = plane_with_a_clone();
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        assert_eq!(drawn.repos, vec!["svc".to_string()]);
+        assert_eq!(
+            drawn.paths.get("svc").map(String::as_str),
+            Some(
+                root.join("workspaces/alpha/svc")
+                    .display()
+                    .to_string()
+                    .as_str()
+            ),
         );
     }
 

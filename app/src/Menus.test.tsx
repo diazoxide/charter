@@ -218,6 +218,67 @@ describe("a menu on screen", () => {
   });
 });
 
+describe("a menu from the keyboard (charter-app#174)", () => {
+  /** A focusable row with a menu, and a text box inside a second trigger — a pane's terminal
+   *  takes its keys the same way. */
+  function rows() {
+    const pressed: string[] = [];
+    const offers = catalogue(
+      now({ tabs: openTab(noTabs(), 7, "3 steward"), clones: [{ repo: "svc", path: "/svc" }] }),
+    );
+    render(
+      <>
+        <Menued
+          on={{ on: "clone", repo: "svc" }}
+          offers={catalogued(offers)}
+          onPress={(offer) => pressed.push(offer.id)}
+        >
+          <button type="button">svc</button>
+        </Menued>
+        <Menued on={{ on: "chat", tab: 1 }} offers={catalogued(offers)} onPress={() => {}}>
+          <div data-testid="panes">
+            <textarea aria-label="terminal" />
+          </div>
+        </Menued>
+      </>,
+    );
+    return pressed;
+  }
+
+  for (const key of [{ key: "F10", shiftKey: true }, { key: "ContextMenu" }]) {
+    it(`opens on ${key.shiftKey ? "Shift+F10" : "the menu key"} on the row that has the keyboard`, async () => {
+      // macOS has no keyboard convention for a context menu, so its WebView raises no
+      // `contextmenu` for either key; without this a menu there is a pointer's alone.
+      const pressed = rows();
+      const row = screen.getByRole("button", { name: "svc" });
+      row.focus();
+
+      fireEvent.keyDown(row, key);
+
+      const menu = await screen.findByRole("menu");
+      expect(
+        within(menu)
+          .getAllByRole("menuitem")
+          .map((item) => item.textContent),
+      ).toEqual(["New tab in svc", "Start new chats in svc"]);
+      await userEvent.keyboard("{Enter}");
+      expect(pressed).toEqual(["clone.chat:svc"]);
+    });
+  }
+
+  it("leaves Shift+F10 to whatever inside the trigger has the keyboard", () => {
+    // The panes' menu is on the box the terminals are in, and a program in a terminal may want
+    // the key. Only the trigger itself having the keyboard opens its menu.
+    rows();
+    const terminal = screen.getByRole("textbox", { name: "terminal" });
+    terminal.focus();
+
+    fireEvent.keyDown(terminal, { key: "F10", shiftKey: true });
+
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
 describe("the browser's own menu", () => {
   function Window() {
     useNoBrowserMenu();

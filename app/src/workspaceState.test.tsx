@@ -16,6 +16,7 @@ const PLANE = "/home/dev/plane";
 const PANELS: PanelsModel = {
   workspace: "alpha",
   repos: ["svc", "tool"],
+  paths: {},
   absent: [],
   refused: [],
   todos: [],
