@@ -289,7 +289,10 @@ tabs ask for carries it (`project_extensions`, `project_theme`, and each harness
 group say it once, in Project settings' Shared section and in every Workspace settings tab. It is
 the same sentence, from the same `git status`, as the Local section's refusal: there is one
 wording, and the window writes none of it. The Local section's own groups leave it to that
-section's head, which already says it once.
+section's head, which already says it once. **Only where the file would have decided something:**
+a reader keeps the sentence only when the left-out file says something in its own table — an
+extension, a theme pick, a plugin of that harness (`LayerText::left_out_where`) — so a Local file
+that holds only profiles does not put the sentence in five groups that had nothing to lose.
 
 **The cost** is one `git status` of one path per read, and only when the file exists; a plane with
 no `charter.local.toml` runs no git. Rejected: caching the answer, since a file is ignored or

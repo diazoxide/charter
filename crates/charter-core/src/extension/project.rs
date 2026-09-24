@@ -170,19 +170,26 @@ impl Choices {
     /// (charter-app#308).
     pub fn read(root: &Path) -> Self {
         use crate::settings::{Which, layer_text};
-        let local = layer_text(root, Which::Local);
-        Self::from_text(layer_text(root, Which::Shared).text(), local.text())
-            .with_local_left_out(local.left_out())
+        Self::from_layers(
+            &layer_text(root, Which::Shared),
+            &layer_text(root, Which::Local),
+        )
     }
 
-    /// The same, told why `charter.local.toml` was left out of them — `None`: it was not.
-    pub fn with_local_left_out(mut self, why: Option<&str>) -> Self {
-        self.local_left_out = why.map(str::to_owned);
-        self
+    /// The two files as [`crate::settings::layer_text`] hands them — [`Self::from_text`], and,
+    /// when the Local file was left out having said something here, why (charter-app#319).
+    pub fn from_layers(
+        shared: &crate::settings::LayerText,
+        local: &crate::settings::LayerText,
+    ) -> Self {
+        Self {
+            local_left_out: local.left_out_where(|top| !said_in(top).is_empty()),
+            ..Self::from_text(shared.text(), local.text())
+        }
     }
 
-    /// Why `charter.local.toml` is not among the choices, when it is there and git would carry it:
-    /// the ignore check's sentence, which the Project settings tab's Local section says too
+    /// Why `charter.local.toml` is not among the choices, when it is there, git would carry it,
+    /// and it said something here: the ignore check's sentence, which the Project settings tab's Local section says too
     /// (charter-app#319). A settings tab says it in every group that shows these in force, so a
     /// value set in Local and not applied is never shown without its reason.
     pub fn local_left_out(&self) -> Option<&str> {

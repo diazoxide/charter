@@ -291,7 +291,8 @@ describe("the Harness plugins groups (charter-app#274)", () => {
       expect(
         within(within(shared).getByRole("group", { name })).getAllByText(LEFT_OUT),
       ).toHaveLength(1);
-      // The Local section says it once, at its head, from the file's own refusals.
+      // The Local section's groups leave it to the section's head, which says it from the file's
+      // own refusals (held in ProjectSettings.test.tsx).
       expect(within(local).getByRole("group", { name })).not.toHaveTextContent(LEFT_OUT);
     }
   });

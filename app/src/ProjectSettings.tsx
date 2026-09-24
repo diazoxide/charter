@@ -52,10 +52,11 @@ import {
  * `[harness_plugins.<harness>]` — the core's `harness_plugin::survey`, asked with
  * `project_harness_plugins`. A harness whose adapter cannot apply says so and has no control.
  *
- * **Each of those groups says it once when Local was left out** (charter-app#319): the value in
- * force beside a control is not the one Local set, and the group says why in the sentence the
- * core's answer carries — the ignore check's, the one the Local section says at its head, so there
- * is one wording. The Local section's own groups leave it to that head.
+ * **Each of those groups says it once when Local was left out having set something in it**
+ * (charter-app#319): the value in force beside a control is not the one Local set, and the group
+ * says why in the sentence the core's answer carries — the ignore check's, the one the Local
+ * section says at its head, so there is one wording. The Local section's own groups leave it to
+ * that head.
  */
 export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [both, setBoth] = useState<Both | { trouble: string }>();

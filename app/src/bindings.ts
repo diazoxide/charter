@@ -1076,10 +1076,10 @@ export type HarnessPlugins = {
 	trouble: string | null,
 	plugins: HarnessPlugin[],
 	/**
-	 *  The ignore check's sentence while git would carry `charter.local.toml` — the one the
-	 *  Project settings tab's Local section says — so this group says why a plugin set there is
-	 *  not applied (charter-app#319). The core's `Choices::local_left_out`, the same for every
-	 *  harness: each is a group of its own.
+	 *  The ignore check's sentence while git would carry `charter.local.toml` and it names a
+	 *  plugin of this harness — the one the Project settings tab's Local section says — so this
+	 *  group says why a plugin set there is not applied (charter-app#319). The core's
+	 *  `Choices::local_left_out`, asked for this harness.
 	 */
 	local_left_out: string | null,
 };
@@ -1669,9 +1669,9 @@ export type ProjectExtensionSetting = {
 export type ProjectExtensions = {
 	extensions: ProjectExtension[],
 	/**
-	 *  The ignore check's sentence while git would carry `charter.local.toml` — the one the
-	 *  Project settings tab's Local section says — so the Extensions group says why a value set
-	 *  there is not applied. The core's `Choices::local_left_out`.
+	 *  The ignore check's sentence while git would carry `charter.local.toml` and it sets an
+	 *  extension — the one the Project settings tab's Local section says — so the Extensions
+	 *  group says why a value set there is not applied. The core's `Choices::local_left_out`.
 	 */
 	local_left_out: string | null,
 };
@@ -1711,8 +1711,9 @@ export type ProjectTheme = {
 	/**  Each value a file set that charter did not use, and why. */
 	ignored: ProjectExtensionIgnored[],
 	/**
-	 *  Why `charter.local.toml` had no say in the theme, as [`ProjectExtensions::local_left_out`]
-	 *  says it for extensions (charter-app#319): the core's `Said::local_left_out`.
+	 *  Why `charter.local.toml` had no say in the theme when it picks one, as
+	 *  [`ProjectExtensions::local_left_out`] says it for extensions (charter-app#319): the core's
+	 *  `Said::local_left_out`.
 	 */
 	local_left_out: string | null,
 };

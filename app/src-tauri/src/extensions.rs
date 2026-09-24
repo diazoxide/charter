@@ -393,9 +393,9 @@ pub struct ProjectExtension {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct ProjectExtensions {
     pub extensions: Vec<ProjectExtension>,
-    /// The ignore check's sentence while git would carry `charter.local.toml` — the one the
-    /// Project settings tab's Local section says — so the Extensions group says why a value set
-    /// there is not applied. The core's `Choices::local_left_out`.
+    /// The ignore check's sentence while git would carry `charter.local.toml` and it sets an
+    /// extension — the one the Project settings tab's Local section says — so the Extensions
+    /// group says why a value set there is not applied. The core's `Choices::local_left_out`.
     pub local_left_out: Option<String>,
 }
 
@@ -506,6 +506,36 @@ pub(crate) fn file_of(
     }
 }
 
+/// A plane for a test (charter-app#319): a git repository with `shared` as its `charter.toml`,
+/// `local` as its `charter.local.toml` — which `.gitignore` ignores when `ignored` says, and which
+/// git would commit otherwise — and a workspace `alpha`. Made from charter-core's fixture template
+/// (charter-app#262), so the developer's global excludes file does not decide what git would do.
+#[cfg(test)]
+pub(crate) fn test_plane(shared: &str, local: &str, ignored: bool) -> tempfile::TempDir {
+    let plane = tempfile::tempdir().expect("a plane");
+    let root = plane.path();
+    std::fs::write(root.join("charter.toml"), shared).expect("charter.toml");
+    std::fs::write(root.join("charter.local.toml"), local).expect("charter.local.toml");
+    if ignored {
+        std::fs::write(root.join(".gitignore"), "/charter.local.toml\n").expect(".gitignore");
+    }
+    std::fs::create_dir_all(root.join("workspaces/alpha")).expect("the workspace");
+    let template = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/charter-core/tests/support/git-template"
+    );
+    let init = charter_core::forklock::output(
+        std::process::Command::new("git").arg("-C").arg(root).args([
+            "init",
+            "-q",
+            &format!("--template={template}"),
+        ]),
+    )
+    .expect("git runs in a test");
+    assert!(init.status.success(), "{init:?}");
+    plane
+}
+
 fn as_text(value: &extension::SettingValue) -> String {
     match value {
         extension::SettingValue::Bool(b) => b.to_string(),
@@ -583,8 +613,9 @@ pub struct ProjectTheme {
     pub colour: Option<String>,
     /// Each value a file set that charter did not use, and why.
     pub ignored: Vec<ProjectExtensionIgnored>,
-    /// Why `charter.local.toml` had no say in the theme, as [`ProjectExtensions::local_left_out`]
-    /// says it for extensions (charter-app#319): the core's `Said::local_left_out`.
+    /// Why `charter.local.toml` had no say in the theme when it picks one, as
+    /// [`ProjectExtensions::local_left_out`] says it for extensions (charter-app#319): the core's
+    /// `Said::local_left_out`.
     pub local_left_out: Option<String>,
 }
 
@@ -1011,32 +1042,9 @@ mod tests {
         assert_eq!(theme.ignored[0].file, "workspaces/alpha/workspace.json");
     }
 
-    /// A plane that is a git repository whose `charter.local.toml` git would commit, with a
-    /// workspace `alpha` (charter-app#319).
-    fn a_plane_git_would_carry_the_local_file_of() -> tempfile::TempDir {
-        let plane = tempfile::tempdir().expect("a plane");
-        let root = plane.path();
-        std::fs::write(
-            root.join("charter.toml"),
-            "[theme]\nuse = \"charter-light\"\n",
-        )
-        .expect("charter.toml");
-        std::fs::write(
-            root.join("charter.local.toml"),
-            "[extensions.solarized]\nenabled = false\n\n[theme]\nuse = \"charter-dark\"\n",
-        )
-        .expect("charter.local.toml");
-        std::fs::create_dir_all(root.join("workspaces/alpha")).expect("the workspace");
-        let init = charter_core::forklock::output(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(root)
-                .args(["init", "-q"]),
-        )
-        .expect("git runs in a test");
-        assert!(init.status.success());
-        plane
-    }
+    const SHARED: &str = "[theme]\nuse = \"charter-light\"\n";
+    const LOCAL: &str =
+        "[extensions.solarized]\nenabled = false\n\n[theme]\nuse = \"charter-dark\"\n";
 
     #[test]
     fn extensions_and_theme_carry_why_the_local_file_was_left_out_in_project_and_workspace() {
@@ -1045,7 +1053,7 @@ mod tests {
         let (_dir, at, config) = made();
         let found = extension::install(&config, &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
-        let plane = a_plane_git_would_carry_the_local_file_of();
+        let plane = test_plane(SHARED, LOCAL, false);
         let root = plane.path();
         let why = charter_core::profiles::ignore_check(root).reason;
         assert!(why.contains("charter reads nothing in it"), "{why}");
@@ -1071,21 +1079,30 @@ mod tests {
     }
 
     #[test]
-    fn a_local_file_that_is_read_leaves_nothing_out() {
-        let (_dir, _at, config) = made();
-        let choices = extension::project::Choices::from_text(
-            None,
-            Some("[extensions.solarized]\nenabled = false\n"),
-        );
-        let said = extension::project::theme::Said::default();
+    fn a_local_file_that_is_read_leaves_nothing_out_and_decides() {
+        let (_dir, at, config) = made();
+        let found = extension::install(&config, &at).expect("installed");
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        let plane = test_plane(SHARED, LOCAL, true);
+        let root = plane.path();
 
-        assert_eq!(
-            project_rows(&extension::survey(&config), &choices).local_left_out,
-            None
-        );
-        assert_eq!(
-            project_theme_of(&extension::survey(&config), &choices, &said).local_left_out,
-            None
-        );
+        for workspace in [None, Some("alpha")] {
+            let choices = extension::project::Choices::read_in(root, workspace);
+            let said = extension::project::theme::Said::read_in(root, workspace);
+
+            let rows = project_rows(&extension::survey(&config), &choices);
+            assert_eq!(rows.local_left_out, None, "{workspace:?}");
+            assert_eq!(
+                (
+                    rows.extensions[0].state.as_str(),
+                    rows.extensions[0].source.as_str()
+                ),
+                ("off", "local"),
+                "{workspace:?}"
+            );
+            let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+            assert_eq!(theme.local_left_out, None, "{workspace:?}");
+            assert_eq!(theme.picked.as_deref(), Some("charter-dark"));
+        }
     }
 }

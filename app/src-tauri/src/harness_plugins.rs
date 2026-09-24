@@ -24,10 +24,10 @@ pub struct HarnessPlugins {
     /// Why the harness's own record of what it installed could not be read, if it could not.
     pub trouble: Option<String>,
     pub plugins: Vec<HarnessPlugin>,
-    /// The ignore check's sentence while git would carry `charter.local.toml` — the one the
-    /// Project settings tab's Local section says — so this group says why a plugin set there is
-    /// not applied (charter-app#319). The core's `Choices::local_left_out`, the same for every
-    /// harness: each is a group of its own.
+    /// The ignore check's sentence while git would carry `charter.local.toml` and it names a
+    /// plugin of this harness — the one the Project settings tab's Local section says — so this
+    /// group says why a plugin set there is not applied (charter-app#319). The core's
+    /// `Choices::local_left_out`, asked for this harness.
     pub local_left_out: Option<String>,
 }
 
@@ -114,7 +114,9 @@ fn groups(
                         .collect(),
                 })
                 .collect(),
-            local_left_out: choices.local_left_out().map(str::to_owned),
+            local_left_out: choices
+                .local_left_out(group.adapter.harness())
+                .map(str::to_owned),
         })
         .collect()
 }
@@ -241,26 +243,17 @@ mod tests {
     }
 
     #[test]
-    fn every_group_says_why_the_local_file_was_left_out_in_project_and_workspace() {
-        // charter-app#319: each harness is a group of its own in the settings tabs, and each
-        // carries the ignore check's sentence — the Local section's — while git would carry the
-        // file, so a plugin Local turned off and still on says why.
-        let plane = tempfile::tempdir().expect("a plane");
-        let root = plane.path();
-        std::fs::write(
-            root.join("charter.local.toml"),
+    fn the_group_of_a_harness_the_left_out_local_file_names_says_why_in_project_and_workspace() {
+        // charter-app#319: each harness is a group of its own in the settings tabs, and the one
+        // whose plugins the Local file set carries the ignore check's sentence — the Local
+        // section's — while git would carry the file, so a plugin Local turned off and still on
+        // says why. A harness the file does not name has nothing that was not applied.
+        let plane = crate::extensions::test_plane(
+            "",
             "[harness_plugins.claude]\n\"figma@official\" = false\n",
-        )
-        .expect("charter.local.toml");
-        std::fs::create_dir_all(root.join("workspaces/alpha")).expect("the workspace");
-        let init = charter_core::forklock::output(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(root)
-                .args(["init", "-q"]),
-        )
-        .expect("git runs in a test");
-        assert!(init.status.success());
+            false,
+        );
+        let root = plane.path();
         let why = charter_core::profiles::ignore_check(root).reason;
         assert!(why.contains("charter reads nothing in it"), "{why}");
         let empty = tempfile::tempdir().expect("an empty home");
@@ -274,15 +267,19 @@ mod tests {
             let choices = harness_plugin::Choices::read_in(root, workspace);
             let got = groups(harness_plugin::survey(&choices, &env), &choices);
 
-            assert_eq!(got.len(), 3, "{workspace:?}");
-            for group in &got {
-                assert_eq!(
-                    group.local_left_out.as_deref(),
-                    Some(why.as_str()),
-                    "{workspace:?}: {}",
-                    group.title
-                );
-            }
+            let said: Vec<(&str, Option<&str>)> = got
+                .iter()
+                .map(|group| (group.harness.as_str(), group.local_left_out.as_deref()))
+                .collect();
+            assert_eq!(
+                said,
+                [
+                    ("claude", Some(why.as_str())),
+                    ("opencode", None),
+                    ("codex", None)
+                ],
+                "{workspace:?}"
+            );
         }
     }
 }
