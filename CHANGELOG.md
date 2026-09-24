@@ -22,7 +22,8 @@ it reaching a chat, and a 1Password token moves into the keyring and out of ever
 environment. Text size has a Preferences tab, the needs-you queue moves into the title bar, a
 handoff is named for its task and can report back, and a relaunch or an update asks before it
 reopens your sessions. Repos have right-click menus. The window can invoke only the commands an
-allow-list grants it, and a `charter.local.toml` that git would carry no longer decides anything.
+allow-list grants it, and a `charter.local.toml` that git would carry no longer decides anything,
+and every settings group that it would have changed says so.
 
 ### Added
 
@@ -256,8 +257,9 @@ allow-list grants it, and a `charter.local.toml` that git would carry no longer 
   `/charter.local.toml` to `.gitignore` (`charter reinit` does that), or, if git already tracks
   it, `git rm --cached` it first. ([#308](https://github.com/diazoxide/charter-app/issues/308))
   The Extensions, Theme and Harness plugins groups say it too, in the same words, in Project
-  settings and in every Workspace settings tab, wherever the file set something. Before, a value you set in Local showed as
-  decided by `charter.toml` or the workspace, with no reason given.
+  settings and in every Workspace settings tab, wherever the file set something. Before, a
+  value you set in Local showed as decided by `charter.toml` or the workspace, with no reason
+  given.
   ([#319](https://github.com/diazoxide/charter-app/issues/319))
 
 ## [0.1.1] - 2026-09-24
