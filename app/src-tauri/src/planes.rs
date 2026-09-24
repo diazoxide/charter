@@ -1701,6 +1701,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             }],
             dealt: 0,
             relaunch_after_update: false,
@@ -1731,6 +1732,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             })
             .collect();
         reopen::write(
@@ -3004,7 +3006,7 @@ mod tests {
             let (planes, told) = planes_telling();
             let plane = planes.open(&root);
             let held = planes.held(&plane).expect("it is held");
-            held.reopen(STARTING, Ok(reopen::Record::default()));
+            held.reopen(STARTING, Ok(reopen::Record::default()), Choice::ReopenAll);
             a_chat_asking_for_you(&held, &told, "/bin/cat");
 
             planes.let_go_of_all();
@@ -3019,7 +3021,7 @@ mod tests {
         let (planes, told) = planes_telling();
         let plane = planes.open(&root);
         let held = planes.held(&plane).expect("it is held");
-        held.reopen(STARTING, reopen::read_or_refusal(&root));
+        held.reopen(STARTING, reopen::read_or_refusal(&root), Choice::ReopenAll);
         let back = held.chats().open_now();
         assert_eq!(back.len(), 1, "the record did not put the chat back");
 

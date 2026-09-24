@@ -46,7 +46,9 @@ const TWO = "/home/dev/two";
 function chat(one: Partial<OpenChat> & { session: number; name: string }): OpenChat {
   return {
     cwd: null,
-    harness: "claude",
+    // No harness and no persona, so its tab is its own name alone and the assertions below read
+    // the names they gave it (the default before the name is charter-app#254's, tested there).
+    harness: null,
     in_front: true,
     resumed: null,
     fresh: null,
@@ -54,6 +56,7 @@ function chat(one: Partial<OpenChat> & { session: number; name: string }): OpenC
     persona: null,
     unreported: null,
     pinned: false,
+    label: null,
     ...one,
   };
 }

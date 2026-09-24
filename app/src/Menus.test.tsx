@@ -85,7 +85,11 @@ describe("what a menu lists", () => {
   it("puts everything that destroys something below the line and nothing else", () => {
     const chat = titles({ on: "chat", tab: 1 }, { tabs: openTab(noTabs(), 7, "3 steward") });
 
-    expect(chat.above).toEqual(["Switch to tab 3 steward", "Pin chat 3 steward"]);
+    expect(chat.above).toEqual([
+      "Switch to tab 3 steward",
+      "Rename chat 3 steward…",
+      "Pin chat 3 steward",
+    ]);
     expect(chat.below).toEqual(["End chat 3 steward"]);
   });
 
@@ -187,6 +191,7 @@ describe("a menu on screen", () => {
         .map((row) => row.textContent),
     ).toEqual([
       "Switch to tab 3 steward",
+      "Rename chat 3 steward…",
       "Pin chat 3 stewardDraws it first on its strip. Yours, on this machine only.",
       "End chat 3 stewardEnds the program it runs. There is no undo.",
     ]);

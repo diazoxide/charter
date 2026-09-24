@@ -273,6 +273,15 @@ export const commands = {
 	 */
 	pinChat: (plane: PlaneId, session: number, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_chat", { plane, session, pinned })),
 	/**
+	 *  Gives one chat a name, or takes the one it was given off with a blank — and answers the name
+	 *  it now has, so the tab draws what charter holds rather than what was typed (charter-app#254).
+	 * 
+	 *  **Charter's label, never the harness's**: the program keeps the `--name` it was started
+	 *  with, so renaming a chat never disturbs one that is running. The name goes in the plane's
+	 *  own `.charter/app/reopen.json`, beside the chat's pin, so it comes back at a relaunch.
+	 */
+	renameChat: (plane: PlaneId, session: number, label: string) => typedError<string | null, string>(__TAURI_INVOKE("rename_chat", { plane, session, label })),
+	/**
 	 *  Asks the app to quit, the way the menu's Quit and the tray's do.
 	 * 
 	 *  It is the same function they call, so what this goes through is the real path: the ask
@@ -406,8 +415,12 @@ export const commands = {
 	 *  (ADR 0029). It reaches the harness as an environment variable set at the exec, so
 	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
 	 *  environment its harness was started with, and no later click can change it.
+	 * 
+	 *  `label` is the picker's optional Name field (charter-app#254): what the chat's tab says
+	 *  instead of its default. It is held to the same rule a rename is, and **a refusal comes back
+	 *  before anything starts**, so a name charter will not draw never costs a chat.
 	 */
-	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, showFooter, columns, rows })),
+	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, label: string | null, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, label, showFooter, columns, rows })),
 	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
@@ -1052,6 +1065,12 @@ export type OpenChat = {
 	 *  record, so a pinned chat comes back pinned at the next launch.
 	 */
 	pinned: boolean,
+	/**
+	 *  The name the operator gave it, or none — then its tab says the default, `<persona>
+	 *  <N>` (charter-app#254). Charter's label only: `name` is still what its harness was
+	 *  started with.
+	 */
+	label: string | null,
 };
 
 /**
@@ -1672,9 +1691,14 @@ export type StartOptions = {
 	declares_none: boolean,
 };
 
-/**  A chat that started: its session. */
+/**  A chat that started: its session, and the name it was given as charter holds it. */
 export type Started = {
 	session: number,
+	/**
+	 *  The picker's Name field as the core's rule left it — trimmed, and none when it was
+	 *  blank — so the tab draws what the record holds rather than what was typed.
+	 */
+	label: string | null,
 };
 
 /**  What the operating system has already spent of the window's own title bar. */

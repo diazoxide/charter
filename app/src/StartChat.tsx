@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as RadioGroup from "@radix-ui/react-radio-group";
@@ -41,6 +41,11 @@ const NO_PERSONA = "";
  * command inherits the environment its harness was exec'd with: a toggle on a live chat would
  * appear to work and would not.
  *
+ * **The Name field is optional** (charter-app#254). Empty is the default — the persona and the
+ * chat's number, `steward 3` — and a name typed here is what the tab says instead. It is
+ * charter's label for the chat, not the harness's own name, and the core is what refuses one
+ * it will not draw: its refusal comes back into this dialog, before anything has started.
+ *
  * **Every control here is a Radix primitive** (`docs/ui-primitives.md`). It was hand-rolled
  * markup, and the hand-rolling is what broke it: five spans in one `<label>` with no rule to
  * lay them out ran together into `claudeclaudeclaudebuilt-indefault`, and the accessible name
@@ -73,11 +78,23 @@ export function StartChat({
   options: StartOptions;
   /** Why the last attempt did not start, if it did not. */
   trouble?: string;
-  onStart: (profile: string, persona: string | null, showFooter: boolean) => void;
+  /** `label` is the Name field, or `null` when it was left empty. */
+  onStart: (
+    profile: string,
+    persona: string | null,
+    showFooter: boolean,
+    label: string | null,
+  ) => void;
   /** The profile, the persona, the footer choice, and the exact line the operator read — so
    *  the approval is for what was on screen and not for whatever the file says by the time
-   *  it is clicked. */
-  onApprove: (profile: string, persona: string | null, showFooter: boolean, shown: string) => void;
+   *  it is clicked — and the Name field, as `onStart` has it. */
+  onApprove: (
+    profile: string,
+    persona: string | null,
+    showFooter: boolean,
+    shown: string,
+    label: string | null,
+  ) => void;
   onCancel: () => void;
 }) {
   const [profile, setProfile] = useState<string | undefined>(
@@ -95,6 +112,11 @@ export function StartChat({
   // there is no plane-wide or machine-wide setting for it, and a box that silently stayed
   // ticked would be one.
   const [showFooter, setShowFooter] = useState(false);
+  // What the Name field says. Sent as typed — the core trims it and holds it to its rule — and
+  // as nothing at all when there is nothing in it but spaces, which is "the default".
+  const [name, setName] = useState("");
+  const label = name.trim() === "" ? null : name;
+  const nameId = useId();
   const picked = options.profiles.find((p) => p.name === profile);
   // Cancel, so the dialog can put the keyboard on it itself. React's `autoFocus` and the
   // focus trap's own opening move both aim at mount, and which of them lands last is not
@@ -244,6 +266,24 @@ export function StartChat({
             </div>
           </div>
 
+          <h3 className="choices-name">
+            <label htmlFor={nameId}>Name</label>
+          </h3>
+          <div className="asks">
+            <input
+              id={nameId}
+              value={name}
+              autoComplete="off"
+              spellCheck={false}
+              aria-describedby={`${nameId}-why`}
+              onChange={(event) => setName(event.target.value)}
+            />
+            <p className="came-back" id={`${nameId}-why`}>
+              Optional. Left empty, the chat is named after its persona, or its harness, and its
+              number. You can rename it from its tab later.
+            </p>
+          </div>
+
           {options.refused.length > 0 && (
             <details className="refused">
               {/* A missing profile is a row that is not in the list — easy to miss in a way a
@@ -289,7 +329,7 @@ export function StartChat({
               <button
                 className="ends-it"
                 tabIndex={0}
-                onClick={() => onApprove(picked.name, persona, showFooter, picked.shown)}
+                onClick={() => onApprove(picked.name, persona, showFooter, picked.shown, label)}
                 disabled={!picked}
               >
                 Approve and start
@@ -297,7 +337,7 @@ export function StartChat({
             ) : (
               <button
                 tabIndex={0}
-                onClick={() => profile && onStart(profile, persona, showFooter)}
+                onClick={() => profile && onStart(profile, persona, showFooter, label)}
                 disabled={!profile}
               >
                 Start

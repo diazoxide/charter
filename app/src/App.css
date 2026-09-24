@@ -523,6 +523,35 @@ body {
   min-width: 0;
 }
 
+/* A chat tab's name, open for editing in the tab's place (charter-app#254, `TabRename.tsx`).
+   It fills the cell the button did, so the strip does not move while a name is typed. */
+.tabs .tab-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  margin: 0.15rem;
+  padding: 0 0.4rem;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.tabs .tab-rename:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.tabs .tab-rename[aria-invalid="true"] {
+  border-color: var(--danger-base);
+}
+
+/* Why the core would not hold the name: under the box, and read before it is changed. */
+.tab-rename-refused {
+  border-inline-start: 2px solid var(--danger-base);
+}
+
 /* The mark on something the operator pinned (ADR 0039). A dot and not a `📌`: an
    emoji is drawn by the operating system at a size and a colour this window does not
    choose, and next to a state dot of charter's own it reads as a second, louder thing. What

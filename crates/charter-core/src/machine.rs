@@ -2107,6 +2107,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         }
     }
 
@@ -2485,6 +2486,7 @@ mod tests {
                     show_footer: false,
                     pinned: false,
                     number: None,
+                    label: None,
                 }],
             },
         )
