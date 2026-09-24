@@ -865,8 +865,17 @@ fn a_descriptor_charter_holds_without_close_on_exec_does_not_reach_the_program()
     let seen = rig.marker("fds");
     rig.approved(&listing_fds(&seen));
     let file = std::fs::File::create(rig.marker("held")).expect("a file");
-    let held = rustix::io::dup(&file).expect("dup");
+    // **Held at 100 or above, where the program's own descriptors never are.** The program
+    // lists what it has with `ls /dev/fd`, and `ls` opens descriptors of its own (3, 4) to do
+    // it. A `dup` takes the LOWEST free number, which in a process where other tests have
+    // already run can be 4, and then the listing shows `ls`'s own descriptor under the
+    // number charter held, and the test reports a leak that is not there. It did, on macOS,
+    // in a serial run of this module. Duplicated high, then CLOEXEC cleared, because that
+    // is the case under test: a descriptor charter holds WITHOUT close-on-exec.
+    let held = rustix::io::fcntl_dupfd_cloexec(&file, 100).expect("dup above 100");
+    rustix::io::fcntl_setfd(&held, rustix::io::FdFlags::empty()).expect("CLOEXEC cleared");
     let number = std::os::fd::AsRawFd::as_raw_fd(&held);
+    assert!(number >= 100, "held at {number}");
 
     rig.ask(&Executor::default()).expect("an answer");
 
