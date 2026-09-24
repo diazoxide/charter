@@ -63,7 +63,7 @@ One test cannot live among them — the app ended and started again, because Web
 service keeps one app process for a whole run and a spec that quits takes the run with it:
 
 ```bash
-npm run e2e:relaunch          # in app/, with the app already built
+npm run e2e:relaunch          # in app/, with the app already built with the `e2e` feature
 ```
 
 CI also runs clippy on the app crate (`--workspace`), after creating an empty `app/dist` so it

@@ -216,7 +216,7 @@ describe("the palette reaching what the window can do", () => {
         "Split right",
         "Split down",
         "End this pane's chat",
-        "End chat 1 steward",
+        "End chat steward 1",
         "Focus workspace beta",
         "Merge this chat's worktree into its clone",
         "Remove this chat's worktree",
@@ -252,7 +252,7 @@ describe("the palette reaching what the window can do", () => {
     expect(await screen.findByRole("dialog", { name: /Start a chat/i })).toBeInTheDocument();
     expect(asked.map(({ cmd }) => cmd)).not.toContain("start_chat");
     await userEvent.click(await screen.findByRole("button", { name: "Start" }));
-    expect(tabNames()).toEqual(["1 steward"]);
+    expect(tabNames()).toEqual(["steward 1"]);
   });
 
   it("switches tab", async () => {
@@ -262,7 +262,7 @@ describe("the palette reaching what the window can do", () => {
     await openAChat();
     expect(screen.getAllByTestId("pane").map((pane) => pane.textContent)).toEqual(["session 2"]);
 
-    await runFromPalette("switch to tab 1");
+    await runFromPalette("switch to tab steward 1");
 
     expect(screen.getAllByTestId("pane").map((pane) => pane.textContent)).toEqual(["session 1"]);
   });
@@ -285,8 +285,8 @@ describe("the palette reaching what the window can do", () => {
     render(<App />);
     await openAChat();
 
-    await runFromPalette("end chat 1 steward");
-    await answerTheAsk("End chat 1 steward");
+    await runFromPalette("end chat steward 1");
+    await answerTheAsk("End chat steward 1");
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
@@ -414,7 +414,7 @@ describe("one list, two surfaces", () => {
       "Split right",
       "Split down",
       "End this pane's chat",
-      "End chat 1 steward",
+      "End chat steward 1",
     ]) {
       expect(rows).toContain(words);
       expect(screen.getByRole("button", { name: words })).toBeInTheDocument();

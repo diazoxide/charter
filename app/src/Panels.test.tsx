@@ -206,7 +206,7 @@ describe("the right-hand region", () => {
     const shown: number[] = [];
     draw({ queue: [7], showChat: (session) => shown.push(session) });
 
-    await userEvent.click(screen.getByRole("button", { name: /ide\.7/ }));
+    await userEvent.click(screen.getByRole("button", { name: "ide.7" }));
 
     expect(shown).toEqual([7]);
   });

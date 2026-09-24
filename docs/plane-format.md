@@ -3007,8 +3007,12 @@ down rather than read off the code.
 - **Written by:** `app/src-tauri/src/lib.rs` (charter-app) — whenever what is open changes
   (a chat started, closed, or brought to front), and again on the way out. Not only on the
   way out: an app that is killed, or crashes, runs no exit handler.
-- **Read by:** `app/src-tauri/src/lib.rs`, in Tauri's `setup`, before there is a window —
-  so a relaunch does not depend on a webview having run.
+- **Read by:** `app/src-tauri/src/planes.rs`, at a launch, twice: once for the counts the
+  launch's question names (how many chats and view tabs, in which projects), and once when the
+  operator has answered it and the record is put back (charter-app#250). **Nothing it names
+  starts before that answer.** "Start fresh" rewrites it holding no chat and no view tab, and
+  keeps `dealt`; Esc, closing the question, or a window that never answers all mean "Reopen
+  all", and the file is left as it was until then.
 - **Git:** gitignored already, by the plane's own `/.charter/` line.
 - **No lock** — one app per plane (Tauri's single-instance plugin), and last writer wins.
 
@@ -3026,6 +3030,8 @@ down rather than read off the code.
 | `chats[].profile` | str | default `""` (absent) | the harness profile the chat started on, by NAME — never its command or its environment, so an edit to `charter.local.toml` takes effect at the reopen and the account it names never reaches this file (ADR 0022). Held to a name charter would mint; anything else reads as empty |
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
+| `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
+| `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. Nothing writes `true` yet; charter-app#251 is to |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
 record cannot disagree with what is about to be started. Only a harness charter has
