@@ -11,21 +11,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-25
+
+0.2.0 is about settings that belong to a project or a workspace rather than to the machine, and
+about vaults you can work with in the window. Project settings and Workspace settings are tabs of
+their own, over `charter.toml`, a workspace's `workspace.json` and `charter.local.toml`, and they
+choose the extensions, the theme, a workspace's colour and each harness's plugins. A vault can
+live in the system keyring and opens in a tab of its own, which reveals or copies a value without
+it reaching a chat, and a 1Password token moves into the keyring and out of every chat's
+environment. Text size has a Preferences tab, the needs-you queue moves into the title bar, a
+handoff is named for its task and can report back, and a relaunch or an update asks before it
+reopens your sessions. Repos have right-click menus. The window can invoke only the commands an
+allow-list grants it, and a `charter.local.toml` that git would carry no longer decides anything,
+and every settings group that it would have changed says so.
+
 ### Added
 
-- `charter.toml` and `charter.local.toml` accept a `[plane]` section and a `[repos.<name>]`
-  table for each repo, which say how far a save goes: `mode` (`off`, `commit`, `push`, `pr`
-  or `pr-merge`), `branch`, `save_branch`, `sign`, `autosave` and `autosave_after`. The local
-  file overrides the shared one key by key. Nothing saves by these settings yet. For now,
-  `charter doctor` and the Project settings tab check them, and the doctor names
-  `[memory] share` as the deprecated way of saying `mode`.
-  ([#292](https://github.com/diazoxide/charter-app/issues/292))
-- When an update is installed, the title bar says **Restart to update**. It restarts charter
-  into the new version and offers every chat and view tab back, with **Reopen all** as the
-  answer in front and a line saying charter restarted to install an update. A chat that is
-  mid-turn is named first, and you choose to restart now or wait. If the restart does not come
-  back, the next launch offers the same sessions.
-  ([#251](https://github.com/diazoxide/charter-app/issues/251))
 - **Project settings**, a tab of its own: right-click a project's tab and choose _Project
   settings…_, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
   which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
@@ -34,6 +35,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
   in the committed file, a value that looks like a credential. Local is created on the first
   save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
+- **Extensions per project.** Each project can turn an installed extension on or off, and set
+  what it declares, in either section of Project settings: Shared for the team, Local for you,
+  and Local wins key by key. The tab shows every extension with what it is in this project —
+  on, off, _needs approval here_, or _not installed here_ — and which file decided it. Approval
+  stays with this machine: a project that enables an extension you have not approved leaves it
+  off until you approve it in Extensions. A project that says nothing keeps every approved
+  extension on, as before. Panels, views and themes follow the project in front, and a view
+  refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter-app/issues/253))
+- **Harness plugins per project.** Project settings has a *Harness plugins* group for each
+  harness charter knows, in Shared and in Local. For Claude Code it lists the plugins installed
+  on this machine, and each one can be on, off or not set for the chats charter starts in the
+  project. Local wins plugin by plugin, and not set leaves the plugin to Claude Code's own
+  settings. charter's own plugin is always on and the old `charter@charter` always off. No file
+  can change either, and a save that tries is refused. Codex and opencode list what they have
+  installed and say their plugins are not supported yet, with the reason: Codex ignores a
+  plugin's on/off given for one session, and charter does not start opencode chats yet.
+  ([#274](https://github.com/diazoxide/charter-app/issues/274))
+- **A theme per project.** Project settings has a Theme select in Shared and in Local: charter's
+  dark or light theme, *Follow the system*, or any theme an extension you approved contributes.
+  Local wins over Shared. While that project is in front the window and every terminal draw its
+  theme, and switching projects switches it live. A pick whose extension is off in the project,
+  or not approved on this machine, draws the built-in dark theme, and the tab says why. A
+  project's pick wins over your `theme.json`; a project that picks nothing keeps it. ([#273](https://github.com/diazoxide/charter-app/issues/273))
 - **Workspace settings**, a tab of its own for each workspace: right-click a workspace's tab and
   choose _Workspace settings…_, or find it in the palette. A workspace can turn an extension on
   or off and set what it declares, for everyone who works in it: it is kept in the workspace's
@@ -61,6 +85,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   their plugins are not supported yet, for a workspace as for a project. charter's own plugin
   stays on and the old one stays off whatever a workspace says.
   ([#282](https://github.com/diazoxide/charter-app/issues/282))
+- `charter.toml` and `charter.local.toml` accept a `[plane]` section and a `[repos.<name>]`
+  table for each repo, which say how far a save goes: `mode` (`off`, `commit`, `push`, `pr`
+  or `pr-merge`), `branch`, `save_branch`, `sign`, `autosave` and `autosave_after`. The local
+  file overrides the shared one key by key. Nothing saves by these settings yet. For now,
+  `charter doctor` and the Project settings tab check them, and the doctor names
+  `[memory] share` as the deprecated way of saying `mode`.
+  ([#292](https://github.com/diazoxide/charter-app/issues/292))
 - A vault can live in your system's own credential store: the Keychain on macOS, the Secret
   Service on Linux. `charter vault add <name>` makes one by default, and every `charter secret`
   and `charter vault` command works on it as on the other kinds. Each secret is its own
@@ -92,34 +123,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   identity variable a vault declares. A tab can also move a token an app was launched with, and
   then warns to relaunch charter so the export leaves its process.
   ([#237](https://github.com/diazoxide/charter-app/issues/237))
-- **Extensions per project.** Each project can turn an installed extension on or off, and set
-  what it declares, in either section of Project settings: Shared for the team, Local for you,
-  and Local wins key by key. The tab shows every extension with what it is in this project —
-  on, off, _needs approval here_, or _not installed here_ — and which file decided it. Approval
-  stays with this machine: a project that enables an extension you have not approved leaves it
-  off until you approve it in Extensions. A project that says nothing keeps every approved
-  extension on, as before. Panels, views and themes follow the project in front, and a view
-  refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter-app/issues/253))
-- **Harness plugins per project.** Project settings has a *Harness plugins* group for each
-  harness charter knows, in Shared and in Local. For Claude Code it lists the plugins installed
-  on this machine, and each one can be on, off or not set for the chats charter starts in the
-  project. Local wins plugin by plugin, and not set leaves the plugin to Claude Code's own
-  settings. charter's own plugin is always on and the old `charter@charter` always off. No file
-  can change either, and a save that tries is refused. Codex and opencode list what they have
-  installed and say their plugins are not supported yet, with the reason: Codex ignores a
-  plugin's on/off given for one session, and charter does not start opencode chats yet.
-  ([#274](https://github.com/diazoxide/charter-app/issues/274))
-- **A theme per project.** Project settings has a Theme select in Shared and in Local: charter's
-  dark or light theme, *Follow the system*, or any theme an extension you approved contributes.
-  Local wins over Shared. While that project is in front the window and every terminal draw its
-  theme, and switching projects switches it live. A pick whose extension is off in the project,
-  or not approved on this machine, draws the built-in dark theme, and the tab says why. A
-  project's pick wins over your `theme.json`; a project that picks nothing keeps it. ([#273](https://github.com/diazoxide/charter-app/issues/273))
+- **Text size and Preferences.** The window's text and the terminal's each have a size, kept
+  per machine, and a change applies at once. Cmd with `=`, `-` or `0` (Ctrl off macOS) makes
+  whichever has focus larger, smaller or back to its default; `Ctrl+Shift+-` is left to the
+  shell. The defaults are one step larger than before: 14px in the window, 13 in the terminal.
+  The sizes live in a **Preferences** tab, which opens from the app menu (`Cmd+,`, or `Ctrl+,`
+  off macOS), the palette, and the opener when no project is open.
+  ([#283](https://github.com/diazoxide/charter-app/issues/283))
 - An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
   counts on its project and workspace tabs at once, without touching the chat. It lasts until
   that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
   the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
   ([#248](https://github.com/diazoxide/charter-app/issues/248))
+- A launch that has sessions to put back asks first: **Reopen all sessions**, or **Start
+  fresh**, naming how many chats and view tabs each project had. Start fresh puts nothing back.
+  Escape, closing the question, or no answer at all reopens them, as before.
+  ([#250](https://github.com/diazoxide/charter-app/issues/250))
+- When an update is installed, the title bar says **Restart to update**. It restarts charter
+  into the new version and offers every chat and view tab back, with **Reopen all** as the
+  answer in front and a line saying charter restarted to install an update. A chat that is
+  mid-turn is named first, and you choose to restart now or wait. If the restart does not come
+  back, the next launch offers the same sessions.
+  ([#251](https://github.com/diazoxide/charter-app/issues/251))
+- A chat is named for its persona and a number, such as `steward 1`, or for its harness, such as
+  `claude 4`, when it has no persona. The picker has an optional Name field, and a chat's tab
+  renames by a double-click, F2, its menu's Rename row or the palette. A blank name gives the
+  default back. The name is charter's label only, so a rename never touches the running program,
+  and it comes back with the chat after a relaunch.
+  ([#254](https://github.com/diazoxide/charter-app/issues/254))
 - A handed-off chat is named for its task. `charter handoff --name "<short task>"` names the new
   chat's tab, and the handoff skill always writes one from the brief; without it the tab is the
   ordinary `<persona> <N>`, so four handoffs from one chat are four tabs you can tell apart. The
@@ -138,6 +169,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   worktree does one level down, and the explorer marks it.
   Shift+F10 or the menu key opens any of charter's menus on the row the keyboard is on.
   ([#174](https://github.com/diazoxide/charter-app/issues/174))
+- The explorer is a tree to a screen reader and to the keyboard: Right opens a clone or moves to
+  a row's first child, Left closes it or moves to its parent, and a typed letter moves to the
+  next row starting with it. ([#238](https://github.com/diazoxide/charter-app/issues/238))
+- Delete on a focused project or chat tab closes it, as its × does, and so does Backspace on a
+  Mac. Ending a chat still asks first, and closing a project that has chats open now asks too,
+  from the ×, Delete, the tab's menu and the palette, naming each chat it would end.
+  ([#239](https://github.com/diazoxide/charter-app/issues/239))
 
 ### Changed
 
@@ -152,12 +190,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are unchanged. From the keyboard, Tab reaches the button, Enter opens the list, the arrows
   move, Delete ignores, and Escape closes it.
   ([#249](https://github.com/diazoxide/charter-app/issues/249))
+- Tab reaches the whole window, in the order it is drawn. Each strip and each list is one stop,
+  and the arrows, Home and End move inside it. A terminal keeps Tab for its shell, and
+  Ctrl+Tab and Ctrl+Shift+Tab leave it. A pane's split and close controls show on hover and when
+  the keyboard is on them, not all the time on the pane you are typing in.
+  ([#189](https://github.com/diazoxide/charter-app/issues/189))
+- Nothing in the window rubber-bands on macOS any more. A panel scrolls and the window does not,
+  and a scroll no longer carries out of a panel into the page.
+  ([#263](https://github.com/diazoxide/charter-app/pull/263))
 
 ### Fixed
-
-- A chat's report that raced a close, or an Ignore, can no longer put the chat back in the
-  needs-you queue: every update the window gets is numbered, and it keeps the newest.
-  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
 - On Linux and Windows the app menu no longer takes a key the chat's shell owns: `Ctrl-C` in a
   chat is the interrupt again, not Copy, and the same goes for `Ctrl-A`, `Ctrl-Z`, `Ctrl-Y`,
@@ -171,6 +213,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   out of the needs-you queue and out of the red counts on its project and workspace tabs. It
   used to stay there until some other chat moved.
   ([#247](https://github.com/diazoxide/charter-app/issues/247))
+- A chat's report that raced a close, or an Ignore, can no longer put the chat back in the
+  needs-you queue: every update the window gets is numbered, and it keeps the newest.
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 - A persona's card names the vault `charter persona list` names. A persona whose definition has
   no `vault:` line but that `vaults.json` tags a vault to used to be shown as "not declared in
   its definition"; the card now shows that vault's name and says it came from the vault
@@ -183,6 +228,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   minute or second. Any one character between the date and the time, a comma before the
   fraction and an offset with seconds all read as Python read them.
   ([#315](https://github.com/diazoxide/charter-app/issues/315))
+- The panels follow the plane on disk. A todo closed with `charter ws todo done` in a terminal
+  leaves the Todos panel and its count at once, and a workspace made in a terminal is watched
+  from then on. Before, a panel changed only when you focused another workspace and came back.
+  ([#264](https://github.com/diazoxide/charter-app/issues/264))
+- `charter save` against a remote that moved no longer waits on a signer that never answers.
+  The rebase that replays its commit has a two-minute deadline, as the commit itself does, and a
+  rebase stopped at it is reported as out of time, not as a conflict. `charter save --sign`
+  replays its commit signed, and a save without `--sign` never asks a signer.
+  ([#242](https://github.com/diazoxide/charter-app/issues/242))
 
 ### Security
 
@@ -203,8 +257,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/charter.local.toml` to `.gitignore` (`charter reinit` does that), or, if git already tracks
   it, `git rm --cached` it first. ([#308](https://github.com/diazoxide/charter-app/issues/308))
   The Extensions, Theme and Harness plugins groups say it too, in the same words, in Project
-  settings and in every Workspace settings tab, wherever the file set something. Before, a value you set in Local showed as
-  decided by `charter.toml` or the workspace, with no reason given.
+  settings and in every Workspace settings tab, wherever the file set something. Before, a
+  value you set in Local showed as decided by `charter.toml` or the workspace, with no reason
+  given.
   ([#319](https://github.com/diazoxide/charter-app/issues/319))
 
 ## [0.1.1] - 2026-09-24
@@ -383,6 +438,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - No program charter starts can hold a chat's terminal open after the chat ends.
   ([#105](https://github.com/diazoxide/charter-app/pull/105))
 
-[Unreleased]: https://github.com/diazoxide/charter-app/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/diazoxide/charter-app/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/diazoxide/charter-app/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/diazoxide/charter-app/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/diazoxide/charter-app/releases/tag/v0.1.0

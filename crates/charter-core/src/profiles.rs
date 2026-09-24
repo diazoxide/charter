@@ -341,8 +341,8 @@ pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String
         }
     }
 
-    // 2. The local file: only `[harness]` is read here (`[extensions]`, `[theme]` and
-    //    `[harness_plugins]` are let through).
+    // 2. The local file: only `[harness]` is read here (`[extensions]`, `[theme]`,
+    //    `[harness_plugins]`, `[plane]` and `[repos]` are let through).
     let local = match local {
         Ok(Some(text)) => match text.parse::<toml::Table>() {
             Ok(table) => Some(table),
