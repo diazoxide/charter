@@ -160,7 +160,7 @@ impl Ids {
 }
 
 fn from_env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+    crate::steer::var(name)
 }
 
 /// `charter/session.py:current` — `$CHARTER_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`.
