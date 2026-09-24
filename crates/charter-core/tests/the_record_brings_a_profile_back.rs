@@ -27,6 +27,7 @@ fn a_chat_on(profile: &str, persona: Option<&str>) -> Chat {
         show_footer: false,
         pinned: false,
         number: None,
+        label: None,
     }
 }
 
