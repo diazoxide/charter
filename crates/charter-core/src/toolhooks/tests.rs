@@ -528,11 +528,13 @@ fn what_recording_a_memory_does_is_said_for_each_share() {
     let p = Plane::new();
     assert!(memory_share_note(&p.root).starts_with("It stays on THIS MACHINE"));
     for (share, opens) in [
+        // `share` is the deprecated alias of `[plane] mode`, and a memory travels with the
+        // plane's next save — nothing commits or pushes it on its own (charter-app#293).
         (
             "commit",
-            "It is committed locally straight away, but NOT pushed",
+            "It is committed with the plane's next save, but NOT pushed",
         ),
-        ("push", "It is committed and pushed immediately"),
+        ("push", "It reaches the team with the plane's next save"),
     ] {
         std::fs::write(
             p.root.join("charter.toml"),
