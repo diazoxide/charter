@@ -8,6 +8,7 @@ mod clipath;
 mod doctor;
 mod extensions;
 mod handoff;
+mod harness_plugins;
 mod hooks;
 mod lifecycle;
 mod opener;
@@ -1156,6 +1157,7 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::extension_panels,
             extensions::project_extensions,
             extensions::extensions_on,
+            harness_plugins::project_harness_plugins,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,

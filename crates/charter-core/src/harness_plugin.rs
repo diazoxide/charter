@@ -100,11 +100,7 @@ impl<'a> Env<'a> {
             .rev()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.clone())
-            .or_else(|| {
-                self.process
-                    .then(|| std::env::var(name).ok())
-                    .flatten()
-            })
+            .or_else(|| self.process.then(|| std::env::var(name).ok()).flatten())
             .filter(|value| !value.is_empty())
     }
 
@@ -644,7 +640,9 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
             continue;
         };
         let Some(plugins) = plugins.as_table() else {
-            out.push(format!("{TABLE}.{harness} in {file} is not a table — {shape}"));
+            out.push(format!(
+                "{TABLE}.{harness} in {file} is not a table — {shape}"
+            ));
             continue;
         };
         for (id, on) in plugins {

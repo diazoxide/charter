@@ -589,7 +589,10 @@ fn claude_config(plane: &Plane, installed: &[&str]) -> PathBuf {
         .collect();
     fs::write(
         dir.join("plugins/installed_plugins.json"),
-        format!("{{\"version\": 2, \"plugins\": {{{}}}}}", plugins.join(", ")),
+        format!(
+            "{{\"version\": 2, \"plugins\": {{{}}}}}",
+            plugins.join(", ")
+        ),
     )
     .unwrap();
     dir

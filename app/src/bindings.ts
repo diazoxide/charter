@@ -500,6 +500,12 @@ export const commands = {
 	 */
 	extensionsOn: (plane: PlaneId) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane })),
 	/**
+	 *  Every harness charter knows, with what it has installed on this machine and what this
+	 *  project has each plugin at. Read from the harness's own files, never written; asked when the
+	 *  tab opens and after it saves.
+	 */
+	projectHarnessPlugins: (plane: PlaneId) => typedError<HarnessPlugins[], string>(__TAURI_INVOKE("project_harness_plugins", { plane })),
+	/**
 	 *  Every view an approved extension offers this window.
 	 * 
 	 *  An extension that is new, changed or unreadable offers nothing — the registry's one job, as
@@ -882,6 +888,46 @@ export type ExtensionView = {
 
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
+
+/**  One plugin, in one project. */
+export type HarnessPlugin = {
+	/**  The harness's own id for it. */
+	id: string,
+	name: string,
+	/**  Where charter found it installed; empty when this machine has not installed it. */
+	origin: string,
+	/**  `on`, `off` or `not-set`. */
+	state: string,
+	/**  `default`, `shared` or `local`: which file decided `state`. */
+	source: string,
+	installed: boolean,
+	/**
+	 *  Why charter fixes it whatever a file says, in the core's words ("<id> is always on: …"),
+	 *  or none for a plugin a project may choose. No control is drawn for a fixed one.
+	 */
+	pinned: string | null,
+	/**  Each value a file set that charter did not use, and why. */
+	ignored: ProjectExtensionIgnored[],
+};
+
+/**  One harness's plugins in one project. */
+export type HarnessPlugins = {
+	/**
+	 *  The plane's word for the harness (`claude`, `opencode`, `codex`): the key under
+	 *  `[harness_plugins]`.
+	 */
+	harness: string,
+	/**  What a person calls it. */
+	title: string,
+	/**
+	 *  "plugins for <harness> are not supported yet — <why>", or none where charter applies
+	 *  a project's choice to the chats it starts.
+	 */
+	unsupported: string | null,
+	/**  Why the harness's own record of what it installed could not be read, if it could not. */
+	trouble: string | null,
+	plugins: HarnessPlugin[],
+};
 
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every

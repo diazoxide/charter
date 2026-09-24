@@ -4,6 +4,8 @@ import { LoaderCircle } from "lucide-react";
 import { extensionsChanged } from "./extensionsOn";
 import {
   commands,
+  type HarnessPlugin,
+  type HarnessPlugins,
   type PlaneId,
   type ProjectExtension,
   type ProjectSettings as Both,
@@ -31,10 +33,16 @@ import {
  * one group in either section: each extension with what it is in this project and which file
  * decided it — the core's `extension::project::resolve`, asked with `project_extensions` — and
  * a control per key that writes `[extensions.<id>]` in the section it is in.
+ *
+ * **Harness plugins** (charter-app#274, ADR 0050) is one group per harness charter knows, in
+ * either section: each plugin that harness has installed, on, off or not set, writing
+ * `[harness_plugins.<harness>]` — the core's `harness_plugin::survey`, asked with
+ * `project_harness_plugins`. A harness whose adapter cannot apply says so and has no control.
  */
 export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [both, setBoth] = useState<Both | { trouble: string }>();
   const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   /** The newest read out: an answer to an older one — before a save, or for another plane — is
    *  dropped rather than drawn over what came after it. */
   const reading = useRef(0);
@@ -59,6 +67,14 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
       })
       .catch(() => {
         if (newest()) setExtensions([]);
+      });
+    void commands
+      .projectHarnessPlugins(plane)
+      .then((said) => {
+        if (newest()) setHarnesses(said.status === "ok" ? (said.data ?? []) : []);
+      })
+      .catch(() => {
+        if (newest()) setHarnesses([]);
       });
   }, [plane]);
 
@@ -97,7 +113,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         file={both.shared}
         title="Shared"
         who="Committed; your team sees this."
-        groups={SHARED}
+        groups={[...SHARED, ...harnessPluginGroups(harnesses)]}
         extensions={extensions}
         onSaved={saved}
       />
@@ -106,7 +122,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         file={both.local}
         title="Local"
         who="This machine only. Gitignored; charter will not write it anywhere git would commit it."
-        groups={LOCAL}
+        groups={[...LOCAL, ...harnessPluginGroups(harnesses)]}
         extensions={extensions}
         onSaved={saved}
       />
@@ -357,6 +373,55 @@ const EXTENSIONS: Group = {
       it.ignored.filter((one) => one.file === file.file).map((one) => one.why),
     ),
 };
+
+/** What a harness plugin is in this project, and why, in a sentence under its control. */
+function pluginStanding(it: HarnessPlugin, harness: string): string {
+  const file = it.source === "local" ? "charter.local.toml" : "charter.toml";
+  if (!it.installed)
+    return `not installed on this machine — named in ${file}, so no chat is handed it`;
+  const where = it.origin === "" ? "" : ` Installed: ${it.origin}.`;
+  if (it.state === "not-set") return `not set — ${harness} decides, from its own settings.${where}`;
+  return `${it.state} in this project — from ${file}.${where}`;
+}
+
+/**
+ * **Harness plugins, one group per harness, in either section** (charter-app#274, ADR 0050).
+ * Local overrides Shared plugin by plugin; not set leaves a plugin to the harness. A plugin
+ * charter fixes is a line and not a control, and a harness whose adapter cannot apply is its
+ * "not supported yet" sentence, with what it has installed listed under it.
+ */
+function harnessPluginGroups(harnesses: readonly HarnessPlugins[]): Group[] {
+  return harnesses.map((harness) => {
+    const chosen = harness.unsupported === null ? harness.plugins.filter((it) => !it.pinned) : [];
+    return {
+      title: `Harness plugins: ${harness.title}`,
+      note: harness.unsupported ?? undefined,
+      empty:
+        harness.unsupported === null
+          ? `${harness.title} has no plugin installed on this machine.`
+          : "Nothing to choose here.",
+      controls: () =>
+        chosen.map((it) =>
+          onOffAt(
+            key("harness_plugins", harness.harness, it.id),
+            `${harness.title}: ${it.id}`,
+            pluginStanding(it, harness.title),
+            "not set",
+          ),
+        ),
+      notes: (file) => [
+        ...(harness.trouble === null ? [] : [harness.trouble]),
+        ...harness.plugins.flatMap((it) => (it.pinned === null ? [] : [it.pinned])),
+        ...(harness.unsupported === null
+          ? []
+          : harness.plugins.map((it) => `Installed: ${it.id} (${it.origin})`)),
+        ...harness.plugins.flatMap((it) =>
+          it.ignored.filter((one) => one.file === file.file).map((one) => one.why),
+        ),
+      ],
+    };
+  });
+}
 
 /** The harness kinds a profile may name — `profiles::KINDS`, in the registry's order. */
 const KINDS = ["claude", "opencode", "codex"] as const;

@@ -48,11 +48,17 @@ fn shared_turns_a_plugin_on_or_off() {
         "",
     );
     assert_eq!(
-        (row(&all, "figma@official").wanted, row(&all, "figma@official").source),
+        (
+            row(&all, "figma@official").wanted,
+            row(&all, "figma@official").source
+        ),
         (Some(false), Source::Shared)
     );
     assert_eq!(
-        (row(&all, "serena@official").wanted, row(&all, "serena@official").source),
+        (
+            row(&all, "serena@official").wanted,
+            row(&all, "serena@official").source
+        ),
         (Some(true), Source::Shared)
     );
 }
@@ -65,11 +71,17 @@ fn local_overrides_shared_in_both_directions() {
         "[harness_plugins.claude]\n\"figma@official\" = true\n\"serena@official\" = false\n",
     );
     assert_eq!(
-        (row(&all, "figma@official").wanted, row(&all, "figma@official").source),
+        (
+            row(&all, "figma@official").wanted,
+            row(&all, "figma@official").source
+        ),
         (Some(true), Source::Local)
     );
     assert_eq!(
-        (row(&all, "serena@official").wanted, row(&all, "serena@official").source),
+        (
+            row(&all, "serena@official").wanted,
+            row(&all, "serena@official").source
+        ),
         (Some(false), Source::Local)
     );
 }
@@ -84,7 +96,10 @@ fn local_naming_one_plugin_leaves_shared_in_charge_of_the_others() {
         "[harness_plugins.claude]\n\"serena@official\" = true\n",
     );
     assert_eq!(
-        (row(&all, "figma@official").wanted, row(&all, "figma@official").source),
+        (
+            row(&all, "figma@official").wanted,
+            row(&all, "figma@official").source
+        ),
         (Some(false), Source::Shared)
     );
 }
@@ -105,7 +120,10 @@ fn a_plugin_a_file_names_that_is_not_installed_is_listed_and_handed_to_nothing()
     let it = row(&all, "acme@corp");
     assert!(!it.installed);
     assert_eq!((it.wanted, it.source), (Some(true), Source::Shared));
-    assert_eq!(chosen(&CLAUDE_CODE, &all), BTreeMap::from(pins(&CLAUDE_CODE)));
+    assert_eq!(
+        chosen(&CLAUDE_CODE, &all),
+        BTreeMap::from(pins(&CLAUDE_CODE))
+    );
 }
 
 // -------------------------------------------------------------------------------------
@@ -433,8 +451,10 @@ fn a_file_is_refused_a_harness_charter_does_not_know_a_value_that_is_not_bool_an
 fn a_harness_plugins_that_is_not_a_table_is_refused() {
     assert_eq!(
         refusals("harness_plugins = 3\n", "charter.toml"),
-        ["harness_plugins in charter.toml is not a table — each harness is \
+        [
+            "harness_plugins in charter.toml is not a table — each harness is \
           [harness_plugins.<harness>], holding \"<plugin id>\" = true or false"
-            .to_owned()]
+                .to_owned()
+        ]
     );
 }

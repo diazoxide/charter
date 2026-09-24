@@ -753,10 +753,7 @@ mod tests {
         else {
             panic!("armed per session");
         };
-        assert!(
-            args.iter().all(|arg| !arg.contains("plugins")),
-            "{args:?}"
-        );
+        assert!(args.iter().all(|arg| !arg.contains("plugins")), "{args:?}");
     }
 
     #[test]
