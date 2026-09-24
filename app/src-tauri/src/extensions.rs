@@ -388,6 +388,17 @@ pub struct ProjectExtension {
     pub ignored: Vec<ProjectExtensionIgnored>,
 }
 
+/// Every extension in one project, and why `charter.local.toml` had no say in them when it had
+/// none (charter-app#319).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ProjectExtensions {
+    pub extensions: Vec<ProjectExtension>,
+    /// The ignore check's sentence while git would carry `charter.local.toml` — the one the
+    /// Project settings tab's Local section says — so the Extensions group says why a value set
+    /// there is not applied. The core's `Choices::local_left_out`.
+    pub local_left_out: Option<String>,
+}
+
 /// A value a file set that charter did not use.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct ProjectExtensionIgnored {
@@ -412,7 +423,7 @@ pub async fn project_extensions(
     planes: tauri::State<'_, crate::planes::Planes>,
     plane: crate::planes::PlaneId,
     workspace: Option<String>,
-) -> Result<Vec<ProjectExtension>, String> {
+) -> Result<ProjectExtensions, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let config = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -429,9 +440,9 @@ pub async fn project_extensions(
 fn project_rows(
     seen: &extension::Survey,
     choices: &extension::project::Choices,
-) -> Vec<ProjectExtension> {
+) -> ProjectExtensions {
     let installed = extension::project::Installed::from_survey(seen);
-    extension::project::resolve(&installed, choices)
+    let extensions = extension::project::resolve(&installed, choices)
         .into_iter()
         .map(|it| {
             let declared = installed
@@ -475,7 +486,11 @@ fn project_rows(
                     .collect(),
             }
         })
-        .collect()
+        .collect();
+    ProjectExtensions {
+        extensions,
+        local_left_out: choices.local_left_out().map(str::to_owned),
+    }
 }
 
 /// The file a source is, as a section of a settings tab names it: a workspace's by its path
@@ -568,6 +583,9 @@ pub struct ProjectTheme {
     pub colour: Option<String>,
     /// Each value a file set that charter did not use, and why.
     pub ignored: Vec<ProjectExtensionIgnored>,
+    /// Why `charter.local.toml` had no say in the theme, as [`ProjectExtensions::local_left_out`]
+    /// says it for extensions (charter-app#319): the core's `Said::local_left_out`.
+    pub local_left_out: Option<String>,
 }
 
 /// This project's theme, with every theme it may pick — in `workspace`, when one is named, whose
@@ -658,6 +676,7 @@ fn project_theme_of(
                 why: one.why,
             })
             .collect(),
+        local_left_out: said.local_left_out().map(str::to_owned),
     }
 }
 
@@ -838,7 +857,7 @@ mod tests {
             Some("[extensions.solarized]\nenabled = false\n"),
         );
 
-        let rows = project_rows(&extension::survey(&config), &choices);
+        let rows = project_rows(&extension::survey(&config), &choices).extensions;
         assert_eq!(
             rows.iter()
                 .map(|row| (row.id.as_str(), row.state.as_str(), row.source.as_str()))
@@ -872,7 +891,7 @@ mod tests {
             ),
         );
 
-        let rows = project_rows(&extension::survey(&config), &choices);
+        let rows = project_rows(&extension::survey(&config), &choices).extensions;
         assert_eq!(
             (rows[0].state.as_str(), rows[0].source.as_str()),
             ("off", "workspace")
@@ -890,7 +909,7 @@ mod tests {
             None,
         );
 
-        let rows = project_rows(&extension::survey(&config), &choices);
+        let rows = project_rows(&extension::survey(&config), &choices).extensions;
         assert_eq!(
             (rows[0].state.as_str(), rows[0].source.as_str()),
             ("needs-approval", "shared")
@@ -990,5 +1009,83 @@ mod tests {
         let theme = project_theme_of(&extension::survey(&config), &choices, &said);
         assert_eq!(theme.draws.as_deref(), Some("charter-light"));
         assert_eq!(theme.ignored[0].file, "workspaces/alpha/workspace.json");
+    }
+
+    /// A plane that is a git repository whose `charter.local.toml` git would commit, with a
+    /// workspace `alpha` (charter-app#319).
+    fn a_plane_git_would_carry_the_local_file_of() -> tempfile::TempDir {
+        let plane = tempfile::tempdir().expect("a plane");
+        let root = plane.path();
+        std::fs::write(
+            root.join("charter.toml"),
+            "[theme]\nuse = \"charter-light\"\n",
+        )
+        .expect("charter.toml");
+        std::fs::write(
+            root.join("charter.local.toml"),
+            "[extensions.solarized]\nenabled = false\n\n[theme]\nuse = \"charter-dark\"\n",
+        )
+        .expect("charter.local.toml");
+        std::fs::create_dir_all(root.join("workspaces/alpha")).expect("the workspace");
+        let init = charter_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["init", "-q"]),
+        )
+        .expect("git runs in a test");
+        assert!(init.status.success());
+        plane
+    }
+
+    #[test]
+    fn extensions_and_theme_carry_why_the_local_file_was_left_out_in_project_and_workspace() {
+        // charter-app#319: a value set in Local and not applied is never shown without its
+        // reason, so each answer carries the ignore check's sentence — the Local section's.
+        let (_dir, at, config) = made();
+        let found = extension::install(&config, &at).expect("installed");
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        let plane = a_plane_git_would_carry_the_local_file_of();
+        let root = plane.path();
+        let why = charter_core::profiles::ignore_check(root).reason;
+        assert!(why.contains("charter reads nothing in it"), "{why}");
+
+        for workspace in [None, Some("alpha")] {
+            let choices = extension::project::Choices::read_in(root, workspace);
+            let said = extension::project::theme::Said::read_in(root, workspace);
+
+            let rows = project_rows(&extension::survey(&config), &choices);
+            assert_eq!(rows.local_left_out.as_deref(), Some(why.as_str()));
+            assert_eq!(
+                (
+                    rows.extensions[0].state.as_str(),
+                    rows.extensions[0].source.as_str()
+                ),
+                ("on", "default"),
+                "{workspace:?}: Local's off was applied"
+            );
+            let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+            assert_eq!(theme.local_left_out.as_deref(), Some(why.as_str()));
+            assert_eq!(theme.picked.as_deref(), Some("charter-light"));
+        }
+    }
+
+    #[test]
+    fn a_local_file_that_is_read_leaves_nothing_out() {
+        let (_dir, _at, config) = made();
+        let choices = extension::project::Choices::from_text(
+            None,
+            Some("[extensions.solarized]\nenabled = false\n"),
+        );
+        let said = extension::project::theme::Said::default();
+
+        assert_eq!(
+            project_rows(&extension::survey(&config), &choices).local_left_out,
+            None
+        );
+        assert_eq!(
+            project_theme_of(&extension::survey(&config), &choices, &said).local_left_out,
+            None
+        );
     }
 }

@@ -98,7 +98,7 @@ function core(
           })),
       };
     if (cmd === "workspace_at_risk") return atRisk;
-    if (cmd === "project_extensions") return [];
+    if (cmd === "project_extensions") return { extensions: [], local_left_out: null };
     if (cmd === "extensions_on") return [];
     if (cmd === "workspace_settings")
       return {

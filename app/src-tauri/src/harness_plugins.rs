@@ -24,6 +24,11 @@ pub struct HarnessPlugins {
     /// Why the harness's own record of what it installed could not be read, if it could not.
     pub trouble: Option<String>,
     pub plugins: Vec<HarnessPlugin>,
+    /// The ignore check's sentence while git would carry `charter.local.toml` — the one the
+    /// Project settings tab's Local section says — so this group says why a plugin set there is
+    /// not applied (charter-app#319). The core's `Choices::local_left_out`, the same for every
+    /// harness: each is a group of its own.
+    pub local_left_out: Option<String>,
 }
 
 /// One plugin, in one project.
@@ -109,6 +114,7 @@ fn groups(
                         .collect(),
                 })
                 .collect(),
+            local_left_out: choices.local_left_out().map(str::to_owned),
         })
         .collect()
 }
@@ -228,5 +234,55 @@ mod tests {
             .expect("the pin is listed");
         assert_eq!(own.ignored.len(), 1, "{:?}", own.ignored);
         assert_eq!(own.ignored[0].file, "workspaces/alpha/workspace.json");
+        assert_eq!(
+            got[0].local_left_out, None,
+            "there is no local file to leave out"
+        );
+    }
+
+    #[test]
+    fn every_group_says_why_the_local_file_was_left_out_in_project_and_workspace() {
+        // charter-app#319: each harness is a group of its own in the settings tabs, and each
+        // carries the ignore check's sentence — the Local section's — while git would carry the
+        // file, so a plugin Local turned off and still on says why.
+        let plane = tempfile::tempdir().expect("a plane");
+        let root = plane.path();
+        std::fs::write(
+            root.join("charter.local.toml"),
+            "[harness_plugins.claude]\n\"figma@official\" = false\n",
+        )
+        .expect("charter.local.toml");
+        std::fs::create_dir_all(root.join("workspaces/alpha")).expect("the workspace");
+        let init = charter_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["init", "-q"]),
+        )
+        .expect("git runs in a test");
+        assert!(init.status.success());
+        let why = charter_core::profiles::ignore_check(root).reason;
+        assert!(why.contains("charter reads nothing in it"), "{why}");
+        let empty = tempfile::tempdir().expect("an empty home");
+        let env = harness_plugin::Env {
+            chat: &[],
+            home: Some(empty.path().to_path_buf()),
+            process: false,
+        };
+
+        for workspace in [None, Some("alpha")] {
+            let choices = harness_plugin::Choices::read_in(root, workspace);
+            let got = groups(harness_plugin::survey(&choices, &env), &choices);
+
+            assert_eq!(got.len(), 3, "{workspace:?}");
+            for group in &got {
+                assert_eq!(
+                    group.local_left_out.as_deref(),
+                    Some(why.as_str()),
+                    "{workspace:?}: {}",
+                    group.title
+                );
+            }
+        }
     }
 }

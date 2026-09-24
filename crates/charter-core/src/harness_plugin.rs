@@ -461,6 +461,9 @@ pub struct Choices {
     local: Said,
     /// The workspace these were read in, when they were.
     workspace_name: Option<String>,
+    /// Why `charter.local.toml` is not among these layers, when it is there and git would carry
+    /// it (charter-app#319).
+    local_left_out: Option<String>,
 }
 
 impl Choices {
@@ -499,10 +502,23 @@ impl Choices {
     /// (charter-app#308).
     pub fn read(root: &Path) -> Self {
         use crate::settings::{Which, layer_text};
-        Self::from_text(
-            layer_text(root, Which::Shared).as_deref(),
-            layer_text(root, Which::Local).as_deref(),
-        )
+        let local = layer_text(root, Which::Local);
+        Self::from_text(layer_text(root, Which::Shared).text(), local.text())
+            .with_local_left_out(local.left_out())
+    }
+
+    /// The same, told why `charter.local.toml` was left out of them — `None`: it was not.
+    pub fn with_local_left_out(mut self, why: Option<&str>) -> Self {
+        self.local_left_out = why.map(str::to_owned);
+        self
+    }
+
+    /// Why `charter.local.toml` is not among the choices, when it is there and git would carry it:
+    /// the ignore check's sentence, which the Project settings tab's Local section says too
+    /// (charter-app#319). A settings tab says it in every group that shows these in force, so a
+    /// value set in Local and not applied is never shown without its reason.
+    pub fn local_left_out(&self) -> Option<&str> {
+        self.local_left_out.as_deref()
     }
 
     /// [`Self::read`], in `workspace` when there is one — the same reader

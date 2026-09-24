@@ -59,8 +59,38 @@ impl Which {
     }
 }
 
-/// The text of `which` as every reader of its layer takes it: `None` when the file says nothing
-/// charter may use (charter-app#308, ADR 0048).
+/// One layer as its readers are handed it by [`layer_text`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayerText {
+    /// The file's text.
+    Text(String),
+    /// No file, or one that cannot be read: it says nothing, and there is nothing to say about it.
+    Nothing,
+    /// A Local file git would carry, left out: [`profiles::ignore_check`]'s sentence, which is
+    /// also what the Project settings tab's Local section says about it ([`read`]).
+    LeftOut(String),
+}
+
+impl LayerText {
+    /// The text a reader reads, or `None`.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Nothing | Self::LeftOut(_) => None,
+        }
+    }
+
+    /// Why the file is there and was not read, when that is so.
+    pub fn left_out(&self) -> Option<&str> {
+        match self {
+            Self::LeftOut(why) => Some(why),
+            Self::Text(_) | Self::Nothing => None,
+        }
+    }
+}
+
+/// The text of `which` as every reader of its layer takes it — [`LayerText::Text`] only when the
+/// file says something charter may use (charter-app#308, ADR 0048).
 ///
 /// A file that is not there, or cannot be read, says nothing. **And so does a Local file git
 /// would carry** — tracked, or not ignored, or one git could not say about
@@ -73,15 +103,22 @@ impl Which {
 /// **Every reader of the two files reads them here**, and nowhere else, so a reader added later
 /// cannot forget the check. The Project settings tab shows the file's text whatever this says,
 /// with the check's sentence among its refusals ([`read`]), so what is not applied is said there
-/// with its fix.
+/// with its fix. **And a reader keeps that sentence** ([`LayerText::LeftOut`], charter-app#319):
+/// every group of a settings tab that shows what is in force says it, so a value set in Local and
+/// not applied is never shown without its reason — in the same words, from the same check.
 ///
 /// A Local file that is there costs one `git status` of that one path; an absent one costs none.
-pub fn layer_text(root: &Path, which: Which) -> Option<String> {
-    let text = std::fs::read_to_string(which.path(root)).ok()?;
-    if which == Which::Local && !profiles::ignore_check(root).passes() {
-        return None;
+pub fn layer_text(root: &Path, which: Which) -> LayerText {
+    let Ok(text) = std::fs::read_to_string(which.path(root)) else {
+        return LayerText::Nothing;
+    };
+    if which == Which::Local {
+        let check = profiles::ignore_check(root);
+        if !check.passes() {
+            return LayerText::LeftOut(check.reason);
+        }
     }
-    Some(text)
+    LayerText::Text(text)
 }
 
 /// One settings file as it stands, and what charter says about it now.
