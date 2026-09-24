@@ -623,6 +623,89 @@ fn the_signer_is_never_asked_even_when_the_operator_signs_every_commit() {
     assert!(!ran.exists(), "the signer was run");
 }
 
+/// Set on the re-executed test binary: the path the signer touches when it is asked.
+const SIGNING_CHILD: &str = "CHARTER_TEST_SIGNING_HOME_MARK";
+
+#[test]
+fn a_save_that_has_to_rebase_never_asks_the_signer_the_operators_home_names() {
+    // charter-app#242. The commit `save` makes is unsigned by `-c`, but a remote that moved
+    // sends it through `git rebase FETCH_HEAD`, which replays that commit — and a replay is a
+    // commit, so it read the operator's global `commit.gpgsign = true` and asked the signer:
+    // a 1Password prompt that blocks, or a signer that fails and turns an ordinary moved
+    // remote into a reported conflict. The product's git keeps only `HOME` of the environment
+    // it runs in, so the signing HOME is given to a CHILD: this test re-runs itself.
+    if let Some(ran) = std::env::var_os(SIGNING_CHILD) {
+        let ran = PathBuf::from(ran);
+        let fixture = Fixture::plane();
+        // A plane charter never applied its policy to, which is any plane an operator cloned
+        // or made by hand: the template's `commit.gpgsign = false` is taken out, so the
+        // signing HOME is what governs it.
+        run(&fixture.root, &["config", "--unset", "commit.gpgsign"]);
+        assert_eq!(
+            ask(&fixture.root, &["config", "--get", "commit.gpgsign"]).trim(),
+            "true",
+            "the control: the plane's git reads the signing home"
+        );
+        let bare = fixture.with_a_remote();
+        run(
+            &fixture.root,
+            &[
+                "push",
+                "-q",
+                &bare.display().to_string(),
+                "HEAD:refs/heads/main",
+            ],
+        );
+        let theirs = fixture.root.parent().unwrap().join("theirs");
+        run(
+            fixture.root.parent().unwrap(),
+            &[
+                "clone",
+                "-q",
+                &bare.display().to_string(),
+                &theirs.display().to_string(),
+            ],
+        );
+        std::fs::write(theirs.join("theirs.md"), "theirs").unwrap();
+        run(&theirs, &["add", "-A"]);
+        run(&theirs, &["commit", "-q", "-m", "theirs"]);
+        run(&theirs, &["push", "-q", "origin", "main"]);
+        std::fs::write(fixture.root.join("mine.md"), "mine").unwrap();
+
+        let (code, said) = fixture.just_save();
+
+        assert_eq!(code, 0, "{said}");
+        assert!(said.contains("remote moved"), "it rebased: {said}");
+        assert!(said.contains("Pushed main via gh"), "{said}");
+        assert!(!ran.exists(), "the signer was asked");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let top = dir.path().canonicalize().unwrap();
+    let (home, ran) = crate::testgit::signing_home(&top);
+    let out = crate::forklock::output(
+        std::process::Command::new(std::env::current_exe().expect("the test binary"))
+            .args([
+                "--exact",
+                "planegit::tests::a_save_that_has_to_rebase_never_asks_the_signer_the_operators_home_names",
+                "--nocapture",
+            ])
+            .env(SIGNING_CHILD, &ran)
+            .env("HOME", &home),
+    )
+    .expect("the test binary re-runs");
+    let said = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(out.status.success(), "{said}");
+    assert!(said.contains("test result: ok. 1 passed"), "{said}");
+    assert!(!ran.exists(), "the signer was asked");
+}
+
 // --------------------------------------------------------------------------------------- //
 // the origin, and the credential that is not in it                                          //
 // --------------------------------------------------------------------------------------- //

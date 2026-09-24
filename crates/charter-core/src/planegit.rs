@@ -53,7 +53,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::forge::{self, Forge};
 use crate::gitstate;
@@ -490,6 +490,47 @@ fn land_via_branch(
     }
 }
 
+/// The deadline for the rebase a moved remote sends `save` through, and for its abort.
+///
+/// Not [`git::READ`]: a rebase checks out a tree, and a killed one leaves a rebase in
+/// progress for the abort to clear. But not untimed either, which it was until charter-app#242:
+/// a git that waits — on a signer, on a lock, on anything — held `charter save`, and the hook
+/// that ran it, for ever. A plane replays one commit onto a handful of others, so two minutes
+/// is ample and still ends.
+const REBASE: Duration = Duration::from_secs(120);
+
+/// How the rebase onto a remote that moved ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rebased {
+    /// The plane's commits now sit on the remote's.
+    Onto,
+    /// git stopped on its own — the trees conflict, or it refused.
+    Conflict,
+    /// Still running at [`REBASE`], and killed.
+    OutOfTime,
+}
+
+/// Rebase the plane root onto `FETCH_HEAD`.
+///
+/// **Unsigned, whatever the operator's global config says** (charter-app#242). A rebase
+/// REPLAYS commits and a replay is a commit, so it reads `commit.gpgsign`: the commit `save`
+/// made unsigned by `-c` came back out of the rebase asking the operator's signer — a
+/// 1Password prompt that blocks, or a signer that fails and turns a remote that merely moved
+/// into a reported conflict. `-c` on the command line beats every config file, as it does for
+/// the commit.
+fn rebase_onto_fetched(root: &Path) -> Rebased {
+    let rebased = git::run(
+        root,
+        &["-c", "commit.gpgsign=false", "rebase", "FETCH_HEAD"],
+        REBASE,
+    );
+    match rebased {
+        Ok(run) if run.ok() => Rebased::Onto,
+        Ok(run) if run.code.is_none() => Rebased::OutOfTime,
+        _ => Rebased::Conflict,
+    }
+}
+
 /// Push the plane root's HEAD to its own branch on origin — **the one pusher**.
 ///
 /// **The branch is never predicted.** Nothing here asks the forge whether the branch is
@@ -584,14 +625,35 @@ pub fn push_head(root: &Path, say: Sink) -> PushResult {
             say(Say::Warn(
                 "Could not reach origin to fetch, so the retry was skipped.".into(),
             ));
-        } else if !git::run_untimed(root, &["rebase", "FETCH_HEAD"]).is_ok_and(|r| r.ok()) {
-            let _ = git::run_untimed(root, &["rebase", "--abort"]);
-            say(Say::Warn(
-                "Committed locally, but rebase hit a conflict — resolve manually, then \
-                 `charter save`."
-                    .into(),
-            ));
-            return record_push(root, PushResult::of(Outcome::Conflict, &branch), &head);
+        } else if let failed @ (Rebased::Conflict | Rebased::OutOfTime) = rebase_onto_fetched(root)
+        {
+            let _ = git::run(root, &["rebase", "--abort"], REBASE);
+            if failed == Rebased::Conflict {
+                say(Say::Warn(
+                    "Committed locally, but rebase hit a conflict — resolve manually, then \
+                     `charter save`."
+                        .into(),
+                ));
+                return record_push(root, PushResult::of(Outcome::Conflict, &branch), &head);
+            }
+            // Not a conflict, and not called one: nothing says the trees disagree, only that
+            // git did not finish. The push that started this is what failed to land.
+            let detail = format!(
+                "the rebase onto the remote did not finish within {} seconds, so charter \
+                 stopped it",
+                REBASE.as_secs()
+            );
+            say(Say::Warn(format!(
+                "Committed locally, but {detail} — rebase by hand, then `charter save`."
+            )));
+            return record_push(
+                root,
+                PushResult {
+                    detail,
+                    ..PushResult::of(Outcome::Failed, &branch)
+                },
+                &head,
+            );
         } else {
             // The rebase rewrote it, so the commit the record names is a different one now.
             head = git::run(root, &["rev-parse", "HEAD"], git::READ)

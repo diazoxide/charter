@@ -15,7 +15,7 @@
 //!
 //! The product's own git calls are untouched: this module exists only under `cfg(test)`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::worktree::git;
 
@@ -40,34 +40,35 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> git::Run {
     git::run_untimed(dir, &argv).expect("git runs")
 }
 
+/// A `HOME` whose `.gitconfig` signs every commit and tag with a signer that fails and
+/// leaves a mark — the developer machine of charter-app#191, 1Password swapped for a script.
+/// Answers the home and the file the signer touches when it is asked.
+pub(crate) fn signing_home(at: &Path) -> (PathBuf, PathBuf) {
+    let home = at.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let ran = at.join("signer-ran");
+    let signer = stand_in::program(
+        at,
+        "gpg",
+        &format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display()),
+    );
+    std::fs::write(
+        home.join(".gitconfig"),
+        format!(
+            "[user]\n\tname = Dev\n\temail = dev@example.invalid\n\
+             [commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n\
+             [gpg]\n\tprogram = {}\n",
+            signer.display()
+        ),
+    )
+    .unwrap();
+    (home, ran)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::process::Command;
-
-    /// A `HOME` whose `.gitconfig` signs every commit and tag with a signer that fails and
-    /// leaves a mark — the developer machine of charter-app#191, 1Password swapped for a script.
-    fn signing_home(at: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
-        let home = at.join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        let ran = at.join("signer-ran");
-        let signer = stand_in::program(
-            at,
-            "gpg",
-            &format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display()),
-        );
-        std::fs::write(
-            home.join(".gitconfig"),
-            format!(
-                "[user]\n\tname = Dev\n\temail = dev@example.invalid\n\
-                 [commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n\
-                 [gpg]\n\tprogram = {}\n",
-                signer.display()
-            ),
-        )
-        .unwrap();
-        (home, ran)
-    }
 
     /// git as a developer with `home` runs it: that home's global config, no system config.
     fn as_developer(home: &Path, dir: &Path, args: &[String]) -> std::process::Output {
