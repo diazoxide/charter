@@ -32,9 +32,13 @@ import {
  *   per clone".
  *
  * **And once more each time the window says it changed the workspace** — `again` below
- * (charter-app#174). That is the only thing that re-runs any of this short of focusing
- * elsewhere, and what moves it is a worktree row the operator ran, which is not a per-render
- * or per-keystroke event.
+ * (charter-app#174). What moves it is a worktree row the operator ran, which is not a
+ * per-render or per-keystroke event.
+ *
+ * **And `workspace_panels` alone once more each time the plane changes on disk** — `changed`
+ * below (charter-app#264). A todo closed in a terminal used to stay on the panel until the
+ * workspace was focused again, because nothing else re-ran this. The core debounces what it
+ * reports, and the git asks do not follow it.
  *
  * A late answer for a workspace that is no longer focused is dropped three times over — by
  * the cleanup, by the name the answer itself carries, and by the state being keyed on the
@@ -74,6 +78,21 @@ type Answer = {
 
 const NOTHING_YET = { pieces: {}, piecesRefused: {} };
 
+/** What merges one answer onto what is already known about THIS workspace, and onto nothing
+ *  when what is held belongs to another one. */
+function merging(
+  setAnswer: (update: (was: Answer | undefined) => Answer | undefined) => void,
+  workspace: string,
+): (what: Partial<Answer>) => void {
+  return (what) => {
+    setAnswer((was) => ({
+      ...(was?.workspace === workspace ? was : NOTHING_YET),
+      workspace,
+      ...what,
+    }));
+  };
+}
+
 export function useWorkspaceState(
   plane: PlaneId,
   workspace: string | undefined,
@@ -92,21 +111,24 @@ export function useWorkspaceState(
    * the wrong one on anything that happens per keystroke.
    */
   again = 0,
+  /**
+   * Bumped when the core says the plane changed on disk (`planeChanged.ts`, charter-app#264)
+   * — a todo closed in a terminal, a workspace's manifest edited.
+   *
+   * **Only the plane read runs again on it, never git.** The watch is on the stores the panels
+   * read and not inside the clones, so what it reports is a todo or a manifest; a `git status`
+   * per clone, five seconds each at worst, is not the price of a todo closed elsewhere. The
+   * pieces follow when the clone NAMES change, which is the only thing about them a plane read
+   * can move.
+   */
+  changed = 0,
 ): WorkspaceState {
   const [answer, setAnswer] = useState<Answer>();
 
   useEffect(() => {
     if (workspace === undefined) return;
     let gone = false;
-    // Merged onto what is already known about THIS workspace, and onto nothing when what is
-    // held belongs to another one.
-    const told = (what: Partial<Answer>) => {
-      setAnswer((was) => ({
-        ...(was?.workspace === workspace ? was : NOTHING_YET),
-        workspace,
-        ...what,
-      }));
-    };
+    const told = merging(setAnswer, workspace);
 
     void commands
       .workspacePanels(plane, workspace)
@@ -123,6 +145,16 @@ export function useWorkspaceState(
       .catch((err: unknown) => {
         if (!gone) told({ trouble: String(err) });
       });
+
+    return () => {
+      gone = true;
+    };
+  }, [again, changed, plane, workspace]);
+
+  useEffect(() => {
+    if (workspace === undefined) return;
+    let gone = false;
+    const told = merging(setAnswer, workspace);
 
     void commands
       .workspaceRepos(plane, workspace)
@@ -154,11 +186,19 @@ export function useWorkspaceState(
    * the pieces are asked for once per focused workspace.
    */
   const clones = mine?.panels?.repos;
+  /**
+   * The same clones by value. The plane is read again whenever it changes on disk
+   * (`changed`), and each read is a fresh array — so an effect keyed on the array would run
+   * `git worktree list` per clone for every todo closed in a terminal. Keyed on the names, it
+   * runs when a clone arrives or goes and not otherwise. `\n` cannot be in a clone's name,
+   * which is a directory name charter has already checked.
+   */
+  const cloneNames = clones?.join("\n");
 
   useEffect(() => {
-    if (workspace === undefined || clones === undefined) return;
+    if (workspace === undefined || cloneNames === undefined) return;
     let gone = false;
-    for (const repo of clones) {
+    for (const repo of cloneNames === "" ? [] : cloneNames.split("\n")) {
       void commands
         .worktreeList(plane, workspace, repo)
         .then((said) => {
@@ -185,7 +225,7 @@ export function useWorkspaceState(
     return () => {
       gone = true;
     };
-  }, [again, clones, plane, workspace]);
+  }, [again, cloneNames, plane, workspace]);
 
   return {
     panels: mine?.panels,

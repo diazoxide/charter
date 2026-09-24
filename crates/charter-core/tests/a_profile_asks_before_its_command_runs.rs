@@ -30,6 +30,7 @@ fn work(root: &std::path::Path) -> Profile {
 
 #[test]
 fn a_declared_profile_nothing_has_recorded_asks_because_it_is_new() {
+    charter_core::unsteered!();
     let dir = plane(WORK);
 
     assert_eq!(
@@ -40,6 +41,7 @@ fn a_declared_profile_nothing_has_recorded_asks_because_it_is_new() {
 
 #[test]
 fn a_built_in_never_asks_because_its_command_is_charters_own() {
+    charter_core::unsteered!();
     // Its command comes out of charter's registry rather than out of a file, so what a chat
     // could have written decides nothing about it — and a question that never carries risk
     // is one an operator learns to answer yes to without reading.
@@ -52,6 +54,7 @@ fn a_built_in_never_asks_because_its_command_is_charters_own() {
 
 #[test]
 fn a_profile_declared_with_a_built_ins_name_asks_with_the_rest() {
+    charter_core::unsteered!();
     // The name is the built-in's and the command is the file's, so it is a declaration.
     let dir = plane("[harness.claude]\nkind = \"claude\"\ncommand = [\"~/bin/claude\"]\n");
     let declared = profiles::current(dir.path()).get("claude").unwrap().clone();
@@ -64,6 +67,7 @@ fn a_profile_declared_with_a_built_ins_name_asks_with_the_rest() {
 
 #[test]
 fn a_profile_recorded_exactly_as_it_is_now_runs_without_asking_again() {
+    charter_core::unsteered!();
     let dir = plane(WORK);
     let p = work(dir.path());
 
@@ -74,6 +78,7 @@ fn a_profile_recorded_exactly_as_it_is_now_runs_without_asking_again() {
 
 #[test]
 fn a_command_that_changed_since_it_was_approved_asks_again() {
+    charter_core::unsteered!();
     let dir = plane(WORK);
     let p = work(dir.path());
     profiletrust::record_launched(dir.path(), &p.name, &profiletrust::fingerprint(&p)).unwrap();
@@ -93,6 +98,7 @@ fn a_command_that_changed_since_it_was_approved_asks_again() {
 
 #[test]
 fn an_environment_that_changed_since_it_was_approved_asks_again() {
+    charter_core::unsteered!();
     // The variable is how a second account is selected in the first place, so a change to
     // it is a change to which account the click reaches.
     let dir = plane(WORK);
@@ -114,6 +120,7 @@ fn an_environment_that_changed_since_it_was_approved_asks_again() {
 
 #[test]
 fn a_record_that_cannot_be_read_asks_again_rather_than_letting_the_command_run() {
+    charter_core::unsteered!();
     let dir = plane(WORK);
     let p = work(dir.path());
     profiletrust::record_launched(dir.path(), &p.name, &profiletrust::fingerprint(&p)).unwrap();
@@ -132,6 +139,7 @@ fn a_record_that_cannot_be_read_asks_again_rather_than_letting_the_command_run()
 
 #[test]
 fn what_is_recorded_is_the_tilde_as_written_and_never_where_it_points() {
+    charter_core::unsteered!();
     // A home directory that moved would otherwise make every profile read as CHANGED and
     // ask again about a command nobody touched.
     let dir = plane(WORK);
@@ -161,6 +169,7 @@ fn record(root: &std::path::Path) -> std::path::PathBuf {
 #[cfg(unix)]
 #[test]
 fn a_record_that_is_a_link_out_of_the_plane_is_not_this_planes_consent() {
+    charter_core::unsteered!();
     // An approval is per PLANE. A `.charter/harness-profiles-launched.json` pointing at a
     // file somewhere else answers with somebody else's yes — and that answer is what skips
     // the question in front of a command out of a gitignored file.
@@ -193,6 +202,7 @@ fn a_record_that_is_a_link_out_of_the_plane_is_not_this_planes_consent() {
 #[cfg(unix)]
 #[test]
 fn a_fifo_where_the_record_goes_asks_again_instead_of_never_returning() {
+    charter_core::unsteered!();
     // `approval_needed` runs on the app's startup path, so a read that blocks is an app
     // with no window and no tray, killable only from a terminal. The same hazard, and the
     // same answer, as the launch record ADR 0028 fixed one file over.
@@ -226,6 +236,7 @@ fn a_fifo_where_the_record_goes_asks_again_instead_of_never_returning() {
 
 #[test]
 fn a_record_larger_than_the_bound_asks_again_rather_than_being_read_whole() {
+    charter_core::unsteered!();
     let dir = plane(WORK);
     let p = work(dir.path());
     profiletrust::record_launched(dir.path(), &p.name, &profiletrust::fingerprint(&p)).unwrap();

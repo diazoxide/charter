@@ -523,6 +523,35 @@ body {
   min-width: 0;
 }
 
+/* A chat tab's name, open for editing in the tab's place (charter-app#254, `TabRename.tsx`).
+   It fills the cell the button did, so the strip does not move while a name is typed. */
+.tabs .tab-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  margin: 0.15rem;
+  padding: 0 0.4rem;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.tabs .tab-rename:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.tabs .tab-rename[aria-invalid="true"] {
+  border-color: var(--danger-base);
+}
+
+/* Why the core would not hold the name: under the box, and read before it is changed. */
+.tab-rename-refused {
+  border-inline-start: 2px solid var(--danger-base);
+}
+
 /* The mark on something the operator pinned (ADR 0039). A dot and not a `📌`: an
    emoji is drawn by the operating system at a size and a colour this window does not
    choose, and next to a state dot of charter's own it reads as a second, louder thing. What
@@ -1823,91 +1852,128 @@ button.show-more:focus-visible {
   border-radius: 2px;
 }
 
-/* The needs-you queue, now in the right region rather than on the bar (ADR 0038).
-   A column, because it has a side to itself and a queue that has to work at fifty chats was
-   sharing one line with six other things. */
-.needs-you {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  padding-bottom: 0.4rem;
-  border-bottom: 1px solid var(--border-subtle);
+/* **The needs-you queue, in the title bar** (charter-app#249): a hand and a count, and the list
+   it drops. It was the Attention panel's; that region is one project's and the queue is every
+   project's. Minimal, as the bar is: no border of its own, and the colour is the count's alone. */
+.needs-you-anchor {
+  display: contents;
 }
-.needs-you ul {
+.needs-you-button {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.needs-you li button {
-  display: flex;
-  gap: 0.35rem;
+  gap: 0.3rem;
   align-items: center;
-  width: 100%;
-  text-align: left;
-  padding: 0.15rem 0.35rem;
+  padding: 0.05rem 0.3rem;
   border: none;
-  border-inline-start: 2px solid var(--needs-you-base);
-  border-radius: 2px;
-  color: inherit;
-  background: var(--control-base);
+  border-radius: 4px;
+  background: none;
+  color: var(--text-primary);
   font: inherit;
-  cursor: default;
+  cursor: pointer;
 }
-.needs-you li button:hover {
+.needs-you-button:hover {
   background: var(--control-hover);
 }
-.needs-you li button:focus-visible {
+.needs-you-button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
-}
-
-/* **The count of chats waiting for the operator, drawn as the most important thing in the
-   window.** It is what charter-app is for: at fifty sessions nothing else on screen is worth
-   looking up for, and it was a 0.85rem line in the same grey as the todos under it.
-
-   The number carries the emphasis and the sentence carries the meaning — "3 need you" is still
-   one phrase to a screen reader, because the emphasis is markup inside it rather than a badge
-   beside it. */
-.needs-you-count {
-  display: flex;
-  gap: 0.4rem;
-  align-items: center;
-  font-weight: 600;
-  color: var(--text-primary);
 }
 /* The mark may be `needs-you.base`; the WORDS may not. `#b85050` on `surface.base` measures
    3.64:1 in charter-dark, which is under AA for text and over the 3:1 an icon is held to —
    the same distinction that split `needs-you` from `danger` in the first place. The number
-   below is loud by being filled, on the one pair the contrast test already measures. */
-.needs-you-count .node-icon {
+   is loud by being filled, on the one pair the contrast test already measures. */
+.needs-you-button svg {
+  width: 1em;
+  height: 1em;
   color: var(--needs-you-base);
 }
+/* **The faint hand** (charter-app#52, the operator's ruling on #249): nothing has asked, but a
+   chat that cannot say so is open. No number, and none of the count's colour — the muted text
+   token, so it reads as "charter cannot vouch for this" and never as a request. */
+.needs-you-button.muted,
+.needs-you-button.muted svg {
+  color: var(--text-muted);
+}
 .needs-you-number {
-  min-width: 1.6rem;
-  padding: 0.05rem 0.4rem;
+  min-width: 1.3rem;
+  padding: 0 0.32rem;
   border-radius: 999px;
   background: var(--needs-you-base);
   color: var(--needs-you-text);
-  font-size: 1.15rem;
-  line-height: 1.25;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
-.needs-you-empty .node-icon {
-  color: var(--state-success);
-  margin-inline-end: 0.35rem;
+
+/* The list: the show-more menu's surface and rows (`.more-menu`, `.more-tab`), wider, one row
+   per chat. */
+.needs-you-menu {
+  min-width: 16rem;
+  max-width: 28rem;
 }
-/* The fade is on the reassuring words alone. The note beside them is the half of the answer
-   the app cannot vouch for, and it must not fade with them (#27). */
-.needs-you-empty > span:not(.needs-you-quiet) {
-  opacity: 0.55;
-}
-.needs-you-quiet {
+/* The chats that cannot say they are waiting, under the ones that asked. Words, not items:
+   there is nothing to do to them from here, and the button's own name already says them. */
+.needs-you-quiet p {
+  margin: 0.2rem 0.45rem 0.1rem;
+  color: var(--text-secondary);
   font-style: italic;
+}
+/* A chat asking, its Go, and its Ignore beside it. */
+.needs-you-row {
+  display: flex;
+  align-items: stretch;
+}
+.needs-you-go {
+  flex: 1;
+  min-width: 0;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+/* A chat with no tab here: still in the list, so Delete reaches its Ignore, and dimmed as a
+   row that cannot run is. */
+.needs-you-go[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+.needs-you-name {
+  flex: none;
+  font-weight: 600;
+}
+.needs-you-where {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.needs-you-word {
+  flex: none;
+  color: var(--text-secondary);
+}
+.needs-you-go[data-highlighted] .needs-you-word {
+  color: var(--text-primary);
+}
+/* Flat and muted like a view tab's `×`: ignoring ends nothing, so it hovers as a control does
+   and never as a danger — the chat is still there, still waiting. */
+.needs-you-ignore {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0 0.35rem;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  line-height: 1;
+  cursor: pointer;
+}
+.needs-you-ignore:hover {
+  color: var(--text-primary);
+  background: var(--control-hover);
+}
+.needs-you-ignore svg {
+  width: 0.9em;
+  height: 0.9em;
 }
 .mid-turn {
   font-weight: 600;
@@ -1946,8 +2012,8 @@ button.show-more:focus-visible {
   padding-inline-start: 1.1rem;
 }
 
-/* The right region: what is asking for you (ADR 0038) — the needs-you queue, the
-   alerts sentence, the workspace's todos and the plane's personas. */
+/* The right region (ADR 0038): the workspace's todos, the plane's personas and whatever an
+   extension contributes. The needs-you queue is the title bar's (charter-app#249). */
 .panels {
   height: 100%;
   overflow: auto;
@@ -3755,6 +3821,12 @@ button.show-more:focus-visible {
    is what says the tabs went somewhere. Only when the strip STARTED collapsing while on screen
    (`ShowMore`'s `arrived`); a count that changes as the window is resized does not move. */
 .show-more.arrived {
+  animation: charter-appear var(--motion-duration-enter) var(--motion-easing-enter);
+}
+
+/* The title bar's needs-you button, appearing when the first chat asks while the window is
+   up — not at launch, where a restored queue was already there (`NeedsYouMenu`'s `arrived`). */
+.needs-you-button.arrived {
   animation: charter-appear var(--motion-duration-enter) var(--motion-easing-enter);
 }
 

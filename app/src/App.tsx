@@ -10,7 +10,13 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import "./styles.css";
-import { commands, type Ask, type PlaneId } from "./bindings";
+import {
+  commands,
+  type Ask,
+  type PlaneId,
+  type RelaunchChoice,
+  type RelaunchQuestion,
+} from "./bindings";
 import {
   catalogue,
   catalogued,
@@ -36,6 +42,7 @@ import { useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
 import { ClosingProject } from "./ClosingProject";
 import { QuitWarning, type Ending } from "./QuitWarning";
+import { RelaunchAsk } from "./RelaunchAsk";
 import { fitting, LEAST, useRoom } from "./fits";
 import { Menued, useNoBrowserMenu } from "./Menus";
 import { NewProject } from "./NewProject";
@@ -50,6 +57,7 @@ import {
 } from "./PlaneView";
 import type { Alerts } from "./StatusLine";
 import { TitleBar, runningIn, useTitleBarRoom, type Crumbs } from "./TitleBar";
+import type { Needing, Quiet } from "./NeedsYou";
 import { useUpdates } from "./Updates";
 import { noTabs } from "./tabs";
 
@@ -142,6 +150,20 @@ function App() {
    *  finished saying which projects it holds, so neither the quit nor the arrangement it
    *  writes down may act on what it holds so far. */
   const [restoring, setRestoring] = useState(true);
+  /** The launch's question, while it waits for the operator (charter-app#250): what would be
+   *  put back, and how the answer reaches the restore that is waiting on it. */
+  const [relaunchAsking, setRelaunchAsking] = useState<{
+    question: RelaunchQuestion;
+    answer: (choice: RelaunchChoice) => void;
+  }>();
+  /** Settled when the cold-launch restore is over, so a second launch's directory waits for
+   *  it: opening a project starts its chats, and nothing may start while the launch's
+   *  question is up. */
+  const restoreOver = useMemo(() => {
+    let settle = () => {};
+    const done = new Promise<void>((resolve) => (settle = resolve));
+    return { done, settle };
+  }, []);
   /** Whether this window has ever held a project.
    *
    *  After it has, the opener is no longer the launch reporting what it could not resolve:
@@ -469,7 +491,14 @@ function App() {
    * dialog.** The core decides that; this draws the lines.
    *
    * Run once, after the launch has answered, and only then — the launch's own project is
-   * opened by the core before there is a window, and its tab has to be the first one.
+   * attached by the core before there is a window, and its tab has to be the first one.
+   *
+   * **And not before the operator has answered the launch's question** (charter-app#250):
+   * reopen every session, or start fresh. The core holds the launch's own project back until
+   * `relaunch` has the answer, and the projects below are opened only after it, so nothing
+   * starts while the question is up. A launch with nothing to put back asks nothing and
+   * answers "Reopen all" itself — which is also what a question the core could not read
+   * answers, because the other answer is the one that throws work away.
    */
   const restored = useRef(false);
   useEffect(() => {
@@ -477,8 +506,25 @@ function App() {
     restored.current = true;
     void (async () => {
       try {
-        // The launch's own project, which the core already opened and put the record back
-        // for. Its tab is first and it is the one in front: the operator ran charter THERE.
+        const asked = await commands
+          .relaunchAsk()
+          .catch(() => ({ status: "error" as const, error: "" }));
+        const question = asked.status === "ok" ? asked.data : null;
+        const choice: RelaunchChoice = question
+          ? await new Promise<RelaunchChoice>((answer) =>
+              setRelaunchAsking({
+                question,
+                answer: (chosen) => {
+                  setRelaunchAsking(undefined);
+                  answer(chosen);
+                },
+              }),
+            )
+          : "ReopenAll";
+        // Awaited, so the launch's project has its chats before its tab asks what it holds.
+        await commands.relaunch(choice).catch(() => undefined);
+        // The launch's own project, which the core already opened and has now put the record
+        // back for. Its tab is first and it is the one in front: the operator ran charter THERE.
         const opened = launch.plane;
         if (opened !== null) {
           setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
@@ -503,9 +549,10 @@ function App() {
         // never write its arrangement down and would warn on every quit for the rest of the
         // day, which is a worse failure than the one that caused it.
         setRestoring(false);
+        restoreOver.settle();
       }
     })();
-  }, [launch, openInto]);
+  }, [launch, openInto, restoreOver]);
 
   // Nothing is ever drawn on a project this window does not hold. `showing` is set from
   // several places — a close, a restore, an approval — and a plane that went in between
@@ -558,10 +605,10 @@ function App() {
   // tab rather than being said on screen, which is what tabs were the missing half of.
   useEffect(() => {
     const listening = listen<string>("open-plane", (event) => {
-      void openInto(event.payload, true);
+      void restoreOver.done.then(() => openInto(event.payload, true));
     }).catch(() => undefined);
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
-  }, [openInto]);
+  }, [openInto, restoreOver]);
 
   // Cold start ends when a person can see the window, which is the frame after the one this
   // paints in. The core answers with why that took as long as it did, when it took longer
@@ -660,6 +707,7 @@ function App() {
       closePane: () => undefined,
       closeTab: () => undefined,
       selectTab: () => undefined,
+      renameTab: () => undefined,
       focusWorkspace: () => undefined,
       // Both are rows the catalogue marks unavailable with no plane — there is nowhere to make
       // a workspace and no workspace to delete — so `perform` refuses them before either of
@@ -667,6 +715,8 @@ function App() {
       createWorkspace: () => undefined,
       removeWorkspace: () => undefined,
       showChat: () => undefined,
+      // The queue is a project's, and there is no project here to have one.
+      ignoreNeedsYou: async () => nowhere(),
       // A view is shown in a project's tab, and there is no project here. The rows that open one
       // do not exist without a plane, for the same reason the workspace rows above do not.
       openView: () => undefined,
@@ -766,13 +816,13 @@ function App() {
       <Pin held={pinnedProjects.includes(project.plane)} what="project" />
       {/* What is waiting for you over there. It is the reason a project behind the one on
           screen goes on listening rather than being torn down. */}
-      {(reports[project.plane]?.needsYou ?? 0) > 0 && (
+      {(reports[project.plane]?.asking.length ?? 0) > 0 && (
         <span
           className="project-needs"
-          data-needs={reports[project.plane]?.needsYou}
-          aria-label={`${reports[project.plane]?.needsYou} chats need you in ${project.name}`}
+          data-needs={reports[project.plane]?.asking.length}
+          aria-label={`${reports[project.plane]?.asking.length} chats need you in ${project.name}`}
         >
-          {reports[project.plane]?.needsYou}
+          {reports[project.plane]?.asking.length}
         </span>
       )}
     </>
@@ -852,13 +902,56 @@ function App() {
     [inFront, launch, restoring, saying],
   );
 
+  /**
+   * **Every project's chats asking, for the title bar's list** (charter-app#249), in the order
+   * the project strip draws the projects and each project's queue in its own order.
+   *
+   * Out of the reports the window already holds, so the list costs no command of its own —
+   * and a project behind the one on screen, which draws nothing, still reports its queue.
+   */
+  const needing = useMemo<Needing[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (reports[plane]?.asking ?? []).map((one) => ({ ...one, plane, project: calledOn(plane) })),
+      ),
+    [planes, reports],
+  );
+
+  /** And the chats that can be waiting without saying so, for the faint hand (charter-app#52). */
+  const quiet = useMemo<Quiet[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (reports[plane]?.quiet ?? []).map((name) => ({ name, project: calledOn(plane) })),
+      ),
+    [planes, reports],
+  );
+
+  /**
+   * A row off that list, carried out by the project it is about — through that project's own
+   * `run`, so a Go and an Ignore are exactly the palette's rows.
+   *
+   * **A row that shows a chat shows its project first.** Go is "that chat, in front", and the
+   * chat is only in front when its project is: the project's own `showChat` brings the tab and
+   * its workspace forward, and this brings the project.
+   */
+  const pressNeeding = useCallback((plane: string, offer: Offer) => {
+    if (offer.does.verb === "showChat") setShowing({ at: "plane", plane });
+    void reportsNow.current[plane]?.run(offer);
+  }, []);
+
   return (
     <main className="window">
       {/* The window's own title bar. Above the project strip, because on
           macOS it IS the title bar — the system's traffic lights float over it — and on every
           other platform it is the window's first row under the system's own bar.
           `TitleBar.tsx` argues the shape, the drag region and what moved here. */}
-      <TitleBar crumbs={crumbs} updates={updates} room={titleBarRoom} />
+      <TitleBar
+        crumbs={crumbs}
+        updates={updates}
+        room={titleBarRoom}
+        chats={ending}
+        needing={{ items: needing, quiet, onPress: pressNeeding }}
+      />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
           holds any — including one, because `+` is how it gets a second and `×` is the way
           back to the opener. Named, because the chat tabs and the workspaces are tablists
@@ -1117,6 +1210,14 @@ function App() {
             );
           }}
           onCancel={() => setClosing(undefined)}
+        />
+      )}
+
+      {relaunchAsking && (
+        <RelaunchAsk
+          question={relaunchAsking.question}
+          nameOf={calledOn}
+          onAnswer={relaunchAsking.answer}
         />
       )}
     </main>

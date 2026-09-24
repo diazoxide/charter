@@ -107,7 +107,9 @@ function chat(session: number): OpenChat {
     session,
     name: `ide.${session}`,
     cwd: "/home/dev/plane/workspaces/ide",
-    harness: "claude",
+    // No harness and no persona, so its tab is its own name alone and the assertions below read
+    // the names they gave it (the default before the name is charter-app#254's, tested there).
+    harness: null,
     in_front: session === 1,
     resumed: null,
     fresh: null,
@@ -115,6 +117,7 @@ function chat(session: number): OpenChat {
     persona: null,
     unreported: null,
     pinned: false,
+    label: null,
   };
 }
 
@@ -169,6 +172,8 @@ function moving(session: number, at: number): Moved {
     needs_you: false,
     queue: [],
     moved_at: at,
+    // The board numbers a snapshot at least as late as the move it reports.
+    sequence: at,
   };
 }
 

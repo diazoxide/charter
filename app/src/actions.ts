@@ -85,6 +85,18 @@ export const PASS_THROUGH_BYTES = "\u001bOQ";
 export const CHAT_KEYBOARD = "data-chat-keyboard";
 
 /**
+ * The mark a chat's tab puts on itself to say `F2` renames it there (charter-app#254).
+ *
+ * `F2` is the platform's rename key for a focused item — and it is also the palette's, claimed
+ * on the window, capture-phase, from anywhere (`Palette.opensIt`). **A focused chat tab is the
+ * one place the palette stands back**, for the reason `CHAT_KEYBOARD` gives about a pane: the
+ * key means something else where it landed. The palette is still `⌘K` from the tab, and `F2`
+ * from anywhere else. The rename box carries it too, so `F2` typed into a name opens nothing. An attribute rather than the tab's role, because the role is what the tab
+ * IS and this is what the key MEANS on it: a view's tab is a tab too, and has no rename.
+ */
+export const RENAMES_ON_F2 = "data-renames-on-f2";
+
+/**
  * The strip a chat working outside every workspace appears on.
  *
  * The sidebar has always shown those chats rather than dropping them, and a strip that shows
@@ -111,6 +123,8 @@ export type Does =
   | { verb: "closePane"; ends: boolean }
   | { verb: "closeTab"; tab: number; ends: boolean }
   | { verb: "selectTab"; tab: number }
+  /** Opens the name of a chat's tab for editing, in place on the strip (charter-app#254). */
+  | { verb: "renameTab"; tab: number }
   /** Pins or unpins a chat, a workspace or a project (ADR 0039).
    *
    *  Three verbs and not one, because they are three stores: a project's pin and a
@@ -132,6 +146,9 @@ export type Does =
    *  discards work with nobody warned — the same objection `worktree.discard` records. */
   | { verb: "removeWorkspace"; workspace: string }
   | { verb: "showChat"; session: number }
+  /** Drops a chat's request for the operator until it asks again (charter-app#248). The chat
+   *  itself is untouched; the core holds the ignore, so the window's queue is told, not kept. */
+  | { verb: "ignoreNeedsYou"; session: number }
   /** Opens a view in a tab of its own, or brings forward the tab already showing it.
    *
    *  **One verb for charter's views and an extension's** — the persona view is
@@ -310,6 +327,9 @@ export type Doing = {
   closePane: () => void;
   closeTab: (tab: number) => void;
   selectTab: (tab: number) => void;
+  /** Brings the tab forward with its name open for editing. Nothing is renamed until the
+   *  operator says the name, so it answers no `Ran`. */
+  renameTab: (tab: number) => void;
   /** Each answers a `Ran`, because a pin can be refused: the stores are bounded, and
    *  "charter pins at most 32 projects — unpin one first" is a sentence the operator can act
    *  on and must therefore reach them. */
@@ -324,6 +344,8 @@ export type Doing = {
    *  core's guard. */
   removeWorkspace: (workspace: string) => void;
   showChat: (session: number) => void;
+  /** Answers a `Ran`, because it is a command the core can refuse — a project closed meanwhile. */
+  ignoreNeedsYou: (session: number) => Promise<Ran>;
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
@@ -591,15 +613,7 @@ export function catalogue(now: Now): Offer[] {
       ? cannot("needs.next", "Show the chat that needs you", nothingSaidSoFar(now.quiet ?? []))
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
-  for (const session of now.needsYou) {
-    const name = now.nameOf(session);
-    const title = `Show ${name}, which needs you`;
-    offers.push(
-      tabHolding(now.tabs, session) === undefined
-        ? cannot(`needs.show:${session}`, title, "That chat has no tab in this window.", name)
-        : can(`needs.show:${session}`, title, { verb: "showChat", session }, name),
-    );
-  }
+  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs));
 
   const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
 
@@ -637,6 +651,15 @@ export function catalogue(now: Now): Offer[] {
       ),
       note: held ? UNPIN_NOTE : PIN_NOTE,
     });
+  }
+
+  // **Renaming is a row, so the tab's menu and the palette are one surface** (charter-app#254),
+  // and a double-click on the tab's name runs the same thing. Above the line: it ends nothing.
+  // A tab that opened on a view is named after what it shows, and has none.
+  for (const tab of now.tabs.order) {
+    if (chatOf(now.tabs, tab) === undefined) continue;
+    const name = now.tabs.byId[tab].name;
+    offers.push(can(`tab.rename:${tab}`, `Rename chat ${name}…`, { verb: "renameTab", tab }, name));
   }
 
   // The workspaces of this project, which is the axis the tmux frame had and the port lost
@@ -953,6 +976,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "selectTab":
       doing.selectTab(does.tab);
       return DID;
+    case "renameTab":
+      doing.renameTab(does.tab);
+      return DID;
     case "pinTab":
       return doing.pinTab(does.tab, does.pinned);
     case "pinWorkspace":
@@ -971,6 +997,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "showChat":
       doing.showChat(does.session);
       return DID;
+    case "ignoreNeedsYou":
+      return doing.ignoreNeedsYou(does.session);
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
@@ -1005,6 +1033,48 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "nothing":
       return DID;
   }
+}
+
+/**
+ * A queued chat's two rows: `needs.show:<session>`, the chat to the front, and its Ignore.
+ *
+ * The catalogue's, and ALSO asked on its own: the catalogue is built only for the project in
+ * front, and the title bar's list (charter-app#249) holds every project's queue — so a project
+ * behind the one on screen reports these rows for its chats without building the other 117.
+ */
+export function needsYouRows(
+  needsYou: readonly number[],
+  nameOf: (session: number) => string,
+  tabs: Tabs,
+): Offer[] {
+  return needsYou.flatMap((session) => {
+    const name = nameOf(session);
+    const title = `Show ${name}, which needs you`;
+    return [
+      tabHolding(tabs, session) === undefined
+        ? cannot(showId(session), title, "That chat has no tab in this window.", name)
+        : can(showId(session), title, { verb: "showChat", session }, name),
+      // **Ignore, until the chat asks again** (charter-app#248): the item's `✕`, Delete on
+      // it, and this row in the palette are one row. Always available — ignoring is about
+      // the request, and a chat asking from a tab this window does not hold is still asking.
+      can(
+        ignoreId(session),
+        `Ignore ${name} until it asks again`,
+        { verb: "ignoreNeedsYou", session },
+        name,
+      ),
+    ];
+  });
+}
+
+/** The catalogue's id for a queued chat's Go row, for a surface drawing that row. */
+export function showId(session: number): string {
+  return `needs.show:${session}`;
+}
+
+/** The catalogue's id for a queued chat's Ignore row, for a surface drawing that row. */
+export function ignoreId(session: number): string {
+  return `needs.ignore:${session}`;
 }
 
 /**
@@ -1211,7 +1281,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
   switch (what.on) {
     case "chat":
       return {
-        above: [`tab.select:${what.tab}`, `tab.pin:${what.tab}`],
+        above: [`tab.select:${what.tab}`, `tab.rename:${what.tab}`, `tab.pin:${what.tab}`],
         below: [`tab.close:${what.tab}`],
       };
     case "workspace":

@@ -1,10 +1,10 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { OpenChat } from "./bindings";
+import type { Moved, OpenChat } from "./bindings";
 
 /**
  * The workspace axis: **projects, then workspaces, then chats** (ADR 0036).
@@ -81,8 +81,15 @@ function core(opened: ReturnType<typeof chat>[] = [], waiting: number[] = []) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const chats = [...opened];
   let next = Math.max(0, ...chats.map((one) => one.session));
+  /** Every `chat-moved` handler the window registered, so a test can push a move. */
+  const moves: number[] = [];
   mockIPC((cmd, args) => {
     asked.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
+    if (cmd === "plugin:event|listen") {
+      const { event, handler } = args as { event: string; handler: number };
+      if (event === "chat-moved") moves.push(handler);
+      return 1;
+    }
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "opened_chats") return chats.filter((one) => opened.includes(one));
     if (cmd === "start_chat") {
@@ -122,12 +129,19 @@ function core(opened: ReturnType<typeof chat>[] = [], waiting: number[] = []) {
       };
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "chat_states")
-      return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
+      return waiting.map((session) => ({ session, state: "waiting", queue: waiting, sequence: 1 }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     return null;
   });
-  return { asked };
+  return {
+    asked,
+    /** Fires one `chat-moved`, the way the core pushes one. */
+    move(payload: Moved) {
+      for (const handler of moves)
+        window.__TAURI_INTERNALS__.runCallback(handler, { event: "chat-moved", id: 1, payload });
+    },
+  };
 }
 
 /** The workspaces, as the strip lists them. */
@@ -185,7 +199,7 @@ describe("the workspace strip", () => {
     await openAChat();
 
     expect(asked.find(({ cmd }) => cmd === "start_chat")?.args).toMatchObject({ cwd: ALPHA });
-    expect(chatTabs()).toEqual(["1 steward"]);
+    expect(chatTabs()).toEqual(["steward 1"]);
   });
 
   it("shows the focused workspace's chats and no others", async () => {
@@ -196,12 +210,12 @@ describe("the workspace strip", () => {
     await focus("beta");
     await openAChat();
 
-    expect(chatTabs()).toEqual(["2 steward"]);
+    expect(chatTabs()).toEqual(["steward 2"]);
     expect(panes()).toEqual(["session 2"]);
 
     await focus("alpha");
 
-    expect(chatTabs()).toEqual(["1 steward"]);
+    expect(chatTabs()).toEqual(["steward 1"]);
     expect(panes()).toEqual(["session 1"]);
   });
 
@@ -245,7 +259,7 @@ describe("the workspace strip", () => {
   });
 
   it("follows a chat to its own workspace when something else brings it forward", async () => {
-    // The palette and the needs-you queue both show a chat by bringing its tab to the front,
+    // The palette and the title bar's needs-you list both show a chat by bringing its tab to the front,
     // and that chat can be anywhere. A strip left on another workspace would be drawing a
     // pane whose tab it says is not there.
     core();
@@ -256,7 +270,7 @@ describe("the workspace strip", () => {
     await openAChat();
 
     await userEvent.keyboard("{F2}");
-    await userEvent.type(screen.getByRole("combobox"), "switch to tab 1 steward");
+    await userEvent.type(screen.getByRole("combobox"), "switch to tab steward 1");
     await userEvent.keyboard("{Enter}");
 
     expect(focused()).toEqual(["alpha"]);
@@ -273,7 +287,7 @@ describe("the workspace strip", () => {
     await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta", "Outside every workspace"]));
     // And the window opens on it, because that is where the chat in front is.
     expect(focused()).toEqual(["Outside every workspace"]);
-    expect(chatTabs()).toEqual(["stray steward"]);
+    expect(chatTabs()).toEqual(["steward stray"]);
   });
 
   it("opens on the workspace of the chat that was in front at the last quit", async () => {
@@ -283,7 +297,7 @@ describe("the workspace strip", () => {
     render(<App />);
 
     await vi.waitFor(() => expect(focused()).toEqual(["beta"]));
-    expect(chatTabs()).toEqual(["5 steward"]);
+    expect(chatTabs()).toEqual(["steward 5"]);
   });
 
   it("says how many chats are in a workspace that is not on screen", async () => {
@@ -316,6 +330,79 @@ describe("the workspace strip", () => {
     // nothing.
     expect(alpha?.querySelector(".workspace-needs")).toBeNull();
   });
+
+  it("goes to a chat in another workspace from the title bar, and its workspace with it (charter-app#249)", async () => {
+    core([chat(5, "5", BETA), chat(6, "6", ALPHA, { in_front: true })], [5]);
+    render(<App />);
+    await waitFor(() => expect(focused()).toEqual(["alpha"]));
+
+    await userEvent.click(await screen.findByRole("button", { name: "1 chat needs you" }));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: /^Go to steward 5 · beta · / }),
+    );
+
+    await waitFor(() => expect(focused()).toEqual(["beta"]));
+    expect(panes()).toEqual(["session 5"]);
+  });
+
+  it("shows a faint hand in the title bar for a chat that cannot say it is waiting (charter-app#249)", async () => {
+    // The operator's ruling: nothing has asked, but a chat that cannot report is open, so the
+    // bar neither claims nothing needs you nor shows a count — a muted hand, named for the chat.
+    const { move } = core([
+      chat(5, "5", BETA, { unreported: "a shell cannot say it is waiting" }),
+      chat(6, "6", ALPHA, { in_front: true }),
+    ]);
+    render(<App />);
+
+    const hand = await screen.findByRole("button", {
+      name: "Nothing has asked for you, but steward 5 can't tell charter it's waiting",
+    });
+    expect(hand).toHaveClass("muted");
+    expect(screen.getByTestId("title-bar")).toContainElement(hand);
+
+    // And a real request is the ordinary hand with its count.
+    move({
+      plane: PLANE,
+      session: 6,
+      state: "waiting",
+      needs_you: true,
+      queue: [6],
+      moved_at: 1,
+      sequence: 1,
+    });
+    const asking = await screen.findByRole("button", { name: "1 chat needs you" });
+    expect(asking).not.toHaveClass("muted");
+  });
+
+  it("takes the count off a workspace tab when its chat is ignored (charter-app#248)", async () => {
+    const { asked, move } = core([chat(5, "5", BETA)], [5]);
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
+    const needs = () =>
+      within(screen.getByRole("tablist", { name: "Workspaces" }))
+        .getAllByRole("tab")
+        .find((tab) => tab.querySelector(".workspace-name")?.textContent === "beta")
+        ?.querySelector(".workspace-needs")?.textContent;
+    await waitFor(() => expect(needs()).toBe("1"));
+
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("button", { name: /^Ignore / }),
+    );
+    await vi.waitFor(() => expect(asked.some((one) => one.cmd === "ignore_needs_you")).toBe(true));
+    // What the core answers an ignore with: the chat still waiting, and a queue without it.
+    move({
+      plane: PLANE,
+      session: 5,
+      state: "waiting",
+      needs_you: false,
+      queue: [],
+      moved_at: 1,
+      sequence: 2,
+    });
+
+    await waitFor(() => expect(needs()).toBeUndefined());
+  });
 });
 
 describe("the chat strip at fifty chats (charter-app#130)", () => {
@@ -326,7 +413,7 @@ describe("the chat strip at fifty chats (charter-app#130)", () => {
 
     await openAChat();
 
-    expect(chatTabs()).toEqual(["1 steward"]);
+    expect(chatTabs()).toEqual(["steward 1"]);
   });
 
   it("says on the close button that it ends the chat, because nothing else does", async () => {
@@ -338,7 +425,7 @@ describe("the chat strip at fifty chats (charter-app#130)", () => {
     await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
     await openAChat();
 
-    const closer = screen.getByRole("button", { name: "End chat 1 steward" });
+    const closer = screen.getByRole("button", { name: "End chat steward 1" });
 
     expect(closer).toHaveAttribute("title", expect.stringContaining("There is no undo"));
     expect(screen.queryByRole("button", { name: /Close tab/ })).toBeNull();
@@ -449,16 +536,16 @@ describe("the strip that is drawn", () => {
     render(<App />);
     await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
     expect(focused()).toEqual(["alpha"]);
-    expect(chatTabs()).toEqual(["one steward", "two steward"]);
+    expect(chatTabs()).toEqual(["steward one", "steward two"]);
 
     // The plane gains a workspace at chat one's own directory, so chat one is `gamma`'s now.
     // Nothing the window did moved it, and no handler runs on the way: the strip is re-read
     // because the tabs changed, and what changed is the OTHER chat closing.
     plane.addGamma();
-    await userEvent.click(screen.getByRole("button", { name: "End chat two steward" }));
+    await userEvent.click(screen.getByRole("button", { name: "End chat steward two" }));
     await userEvent.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "End chat two steward",
+        name: "End chat steward two",
       }),
     );
 
@@ -466,6 +553,6 @@ describe("the strip that is drawn", () => {
     // The pane on screen is chat one's, so the strip drawn has to be chat one's too.
     expect(panes()).toEqual(["session 1"]);
     expect(focused()).toEqual(["gamma"]);
-    expect(chatTabs()).toEqual(["one steward"]);
+    expect(chatTabs()).toEqual(["steward one"]);
   });
 });

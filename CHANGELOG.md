@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- When an update is installed, the title bar says **Restart to update**. It restarts charter
+  into the new version and offers every chat and view tab back, with **Reopen all** as the
+  answer in front and a line saying charter restarted to install an update. A chat that is
+  mid-turn is named first, and you choose to restart now or wait. If the restart does not come
+  back, the next launch offers the same sessions.
+  ([#251](https://github.com/diazoxide/charter-app/issues/251))
 - **Project settings**, a tab of its own: right-click a project's tab and choose *Project
   settings…*, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
   which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
@@ -35,8 +41,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   theme, and switching projects switches it live. A pick whose extension is off in the project,
   or not approved on this machine, draws the built-in dark theme, and the tab says why. A
   project's pick wins over your `theme.json`; a project that picks nothing keeps it. ([#273](https://github.com/diazoxide/charter-app/issues/273))
+- An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
+  counts on its project and workspace tabs at once, without touching the chat. It lasts until
+  that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
+  the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
+
+### Changed
+
+- The needs-you queue is in the title bar now, and nowhere else. A hand and a count sit left of
+  About when anything needs you. When nothing has asked but a chat that can't report is open — a
+  shell, or a harness without charter's hooks — it is a faint hand with no number, and its
+  tooltip and list name those chats ("shell 2 can't tell charter it's waiting"). With neither,
+  nothing is there. Pressing it lists every
+  chat asking in every open project — its name, then its workspace and project — each with
+  **Go**, which brings that chat to the front and switches project and workspace to get there,
+  and **✕**, which ignores it. The Attention panel no longer has the queue; its other sections
+  are unchanged. From the keyboard, Tab reaches the button, Enter opens the list, the arrows
+  move, Delete ignores, and Escape closes it.
+  ([#249](https://github.com/diazoxide/charter-app/issues/249))
 
 ### Fixed
+
+- A chat's report that raced a close, or an Ignore, can no longer put the chat back in the
+  needs-you queue: every update the window gets is numbered, and it keeps the newest.
+  ([#248](https://github.com/diazoxide/charter-app/issues/248))
 
 - On Linux and Windows the app menu no longer takes a key the chat's shell owns: `Ctrl-C` in a
   chat is the interrupt again, not Copy, and the same goes for `Ctrl-A`, `Ctrl-Z`, `Ctrl-Y`,

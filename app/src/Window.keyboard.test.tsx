@@ -111,7 +111,7 @@ function core({
         ? [{ piece: "one", path: `${CUT}/one`, branch: "one", wired: true, stale: false }]
         : [];
     if (cmd === "chat_states")
-      return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
+      return waiting.map((session) => ({ session, state: "waiting", queue: waiting, sequence: 1 }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "alerts_everywhere") return [{ plane: PLANE, alerts: [], stopped: null }];
@@ -235,18 +235,12 @@ describe("a terminal keeps its Tab", () => {
     core({ waiting: [3] });
     render(<App />);
     const terminal = await screen.findByLabelText("Terminal 2");
-    await within(await screen.findByTestId("panels")).findByRole("button", { name: /three/ });
     terminal.focus();
 
     await userEvent.keyboard("{Control>}{Tab}{/Control}");
     // The next stop the window draws after the panes: the handle that resizes the centre
     // against the Attention region, which `react-resizable-panels` makes a keyboard control.
     await waitFor(() => expect(document.activeElement).toHaveAttribute("role", "separator"));
-    // And past it, with an ordinary Tab, the Attention region's queue.
-    await userEvent.tab();
-    expect(document.activeElement).toBe(
-      within(screen.getByTestId("panels")).getByRole("button", { name: /three/ }),
-    );
 
     terminal.focus();
     await userEvent.keyboard("{Control>}{Shift>}{Tab}{/Shift}{/Control}");
@@ -260,7 +254,7 @@ async function theWholeWindow() {
   core({ waiting: [3, 1] });
   render(<App />);
   await screen.findByTestId("piece-svc-one");
-  await within(await screen.findByTestId("panels")).findByRole("button", { name: /three/ });
+  await screen.findByRole("button", { name: "2 chats need you" });
   await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
 }
 
@@ -276,7 +270,8 @@ describe("the window's tab order", () => {
     await theWholeWindow();
     const stops = sequenceIn(document.body).map(said);
     expect(stops).toEqual([
-      // The title bar.
+      // The title bar: the needs-you button first (charter-app#249), then the app's own two.
+      "button 2 chats need you",
       "button About Charter — what this version brought",
       "button Updates — … channel, nothing new known",
       // The project strip: ONE stop for its tabs, then its own controls.
@@ -287,7 +282,7 @@ describe("the window's tab order", () => {
       "tab alpha32",
       "button New workspace…",
       // The chat strip: the selected chat's tab, and the `+`. A tab's `×` is not a stop.
-      "tab two steward",
+      "tab steward two",
       "button New tab",
       // The explorer, on the left by default: ONE stop, its current row.
       "treeitem alphathe workspace itself",
@@ -300,8 +295,8 @@ describe("the window's tab order", () => {
       "button End this pane's chat",
       "textarea Terminal 2",
       "separator",
-      // Attention, on the right: the needs-you queue as ONE stop, its oldest chat.
-      "button three steward",
+      // Attention, on the right, has no stop of its own here: its panels are empty, and the
+      // needs-you queue went to the title bar (charter-app#249).
       // The handle above the bottom region, which has no controls of its own.
       "separator",
       // The status line: the region toggles at its left, then Alerts and the doctor.
@@ -335,9 +330,9 @@ describe("a list is one Tab stop", () => {
     // The workspace row, three chats working in it, the clone, its one worktree.
     expect(rows.map(said)).toEqual([
       expect.stringMatching(/^treeitem alpha/),
-      expect.stringMatching(/^treeitem one/),
-      expect.stringMatching(/^treeitem two/),
-      expect.stringMatching(/^treeitem three/),
+      expect.stringMatching(/^treeitem steward one/),
+      expect.stringMatching(/^treeitem steward two/),
+      expect.stringMatching(/^treeitem steward three/),
       "treeitem svc1",
       "treeitem one",
     ]);
@@ -376,15 +371,27 @@ describe("a list is one Tab stop", () => {
     await waitFor(() => expect(piece).toHaveAttribute("tabindex", "0"));
   });
 
-  it("the needs-you queue: the oldest chat asking is the stop, and the arrows move", async () => {
+  it("the needs-you list: its button is the stop, and the arrows move in the list it opens", async () => {
     await theWholeWindow();
-    const queue = within(screen.getByLabelText("Needs you")).getAllByRole("button");
-    expect(queue.map((row) => row.textContent)).toEqual(["three steward", "one steward"]);
-    expect(queue.map((row) => row.getAttribute("tabindex"))).toEqual(["0", "-1"]);
+    const hand = within(screen.getByTestId("title-bar")).getByRole("button", {
+      name: "2 chats need you",
+    });
+    expect(hand).toHaveAttribute("tabindex", "0");
 
-    queue[0].focus();
+    hand.focus();
+    await userEvent.keyboard("{Enter}");
+    const items = await screen.findAllByRole("menuitem");
+    // The oldest chat asking first, and the chats alone: their Ignore is no item (#248).
+    expect(items.map((item) => item.querySelector(".needs-you-name")?.textContent)).toEqual([
+      "steward three",
+      "steward one",
+    ]);
+    await waitFor(() => expect(items[0]).toHaveFocus());
     await userEvent.keyboard("{ArrowDown}");
-    await waitFor(() => expect(queue[1]).toHaveFocus());
+    await waitFor(() => expect(items[1]).toHaveFocus());
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(hand).toHaveFocus());
   });
 });
 
@@ -465,7 +472,7 @@ describe("Delete on a focused tab", () => {
 
     // The tab the keyboard is on, not the one in front.
     const asking = await screen.findByRole("alertdialog");
-    expect(asking).toHaveTextContent("End chat one");
+    expect(asking).toHaveTextContent("End chat steward one");
     await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(tabsOf("Tabs")).toHaveLength(3);
@@ -529,7 +536,7 @@ describe("Delete on a focused tab", () => {
 
     await userEvent.keyboard("{Backspace}");
 
-    expect(await screen.findByRole("alertdialog")).toHaveTextContent("End chat two");
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("End chat steward two");
   });
 
   it("is not Backspace anywhere else, where Backspace on a tab means nothing", async () => {
@@ -562,7 +569,8 @@ describe("Delete on a focused tab", () => {
     await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
     tabsOf("Tabs")[1].focus();
 
-    await userEvent.keyboard("{F2}");
+    // ⌘K, because F2 on a chat tab renames it (charter-app#254).
+    await userEvent.keyboard("{Meta>}k{/Meta}");
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
     await userEvent.keyboard("end{Backspace}{ArrowLeft}{Delete}");
 

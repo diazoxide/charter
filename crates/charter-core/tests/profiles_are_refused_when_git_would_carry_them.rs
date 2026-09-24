@@ -52,6 +52,7 @@ fn repo(ignore: &str) -> tempfile::TempDir {
 
 #[test]
 fn a_plane_that_is_not_a_git_repository_has_nothing_to_commit_to_and_passes() {
+    charter_core::unsteered!();
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join(profiles::LOCAL_FILE), "").unwrap();
 
@@ -60,6 +61,7 @@ fn a_plane_that_is_not_a_git_repository_has_nothing_to_commit_to_and_passes() {
 
 #[test]
 fn a_plane_with_no_local_file_declares_nothing_and_passes() {
+    charter_core::unsteered!();
     let dir = repo("/charter.local.toml\n");
     fs::remove_file(dir.path().join(profiles::LOCAL_FILE)).unwrap();
 
@@ -68,6 +70,7 @@ fn a_plane_with_no_local_file_declares_nothing_and_passes() {
 
 #[test]
 fn an_ignored_untracked_local_file_is_the_state_the_feature_wants_and_passes() {
+    charter_core::unsteered!();
     let dir = repo("/charter.local.toml\n");
 
     assert!(profiles::ignore_check(dir.path()).passes());
@@ -75,6 +78,7 @@ fn an_ignored_untracked_local_file_is_the_state_the_feature_wants_and_passes() {
 
 #[test]
 fn a_local_file_git_would_commit_refuses_every_profile_in_it() {
+    charter_core::unsteered!();
     // No `.gitignore` line: git reports it as `??`, which means the next `git add .` takes
     // it, and then every clone has it.
     let dir = repo("");
@@ -91,6 +95,7 @@ fn a_local_file_git_would_commit_refuses_every_profile_in_it() {
 
 #[test]
 fn a_tracked_local_file_is_refused_and_told_that_reinit_alone_will_not_fix_it() {
+    charter_core::unsteered!();
     // One fix per state: `charter reinit` adds the ignore line, and an ignore rule does not
     // apply to a path git already tracks.
     let dir = repo("/charter.local.toml\n");
@@ -113,6 +118,7 @@ fn a_tracked_local_file_is_refused_and_told_that_reinit_alone_will_not_fix_it() 
 
 #[test]
 fn a_file_staged_for_removal_but_not_yet_committed_is_still_tracked() {
+    charter_core::unsteered!();
     // `git rm --cached` leaves `D ` beside `!!` until the removal is committed, and the file
     // is in HEAD until then — so a clone still carries it.
     let dir = repo("/charter.local.toml\n");
@@ -130,6 +136,7 @@ fn a_file_staged_for_removal_but_not_yet_committed_is_still_tracked() {
 
 #[test]
 fn an_answer_git_could_not_give_refuses_because_an_unknown_is_not_a_pass() {
+    charter_core::unsteered!();
     // ADR 0009. There is no git on the PATH this check is given, so it cannot look — which
     // is not the same as looking and finding the file ignored.
     let dir = repo("/charter.local.toml\n");
@@ -154,6 +161,7 @@ fn an_answer_git_could_not_give_refuses_because_an_unknown_is_not_a_pass() {
 
 #[test]
 fn a_refusing_check_moves_every_declared_profile_to_refused_and_leaves_the_built_ins() {
+    charter_core::unsteered!();
     // Each of the three sentences says "the profiles in it are refused", so a surface that
     // asked must show them refused — not as ordinary rows with a warning underneath.
     let dir = repo("");
@@ -184,6 +192,7 @@ fn a_refusing_check_moves_every_declared_profile_to_refused_and_leaves_the_built
 
 #[test]
 fn a_replacement_refused_by_the_git_check_does_not_let_its_built_in_stand_in() {
+    charter_core::unsteered!();
     // Ruling 19: the operator said how `claude` runs here, and the built-in standing in
     // would run the command they replaced.
     let dir = repo("");
@@ -220,6 +229,7 @@ fn a_git_that(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
 
 #[test]
 fn a_git_that_refuses_the_repository_is_not_taken_for_one_that_found_none() {
+    charter_core::unsteered!();
     // Only git's own "not a git repository" at exit 128 is a plane with nothing to commit
     // to. Exit 128 is also what git answers when it refuses to look — a repository owned by
     // someone else, `safe.directory` unset — and that is an unknown, not a pass. Turning the
@@ -247,6 +257,7 @@ fn a_git_that_refuses_the_repository_is_not_taken_for_one_that_found_none() {
 
 #[test]
 fn a_status_line_charter_cannot_read_is_an_unknown_and_not_a_tracked_file() {
+    charter_core::unsteered!();
     // A status code outside the ones that mean "tracked" is git saying something charter has
     // not measured. It refuses either way — but as an UNKNOWN, with git's own line quoted
     // and the fix that goes with it, not as "git tracks charter.local.toml" and a
@@ -271,6 +282,7 @@ fn a_status_line_charter_cannot_read_is_an_unknown_and_not_a_tracked_file() {
 
 #[test]
 fn a_git_that_never_answers_refuses_too_because_a_hang_is_not_a_pass() {
+    charter_core::unsteered!();
     // The unknown branch was only ever driven by a git that EXITS. A git that hangs is the
     // one that would turn "an unknown is not a pass" into a pass, and it was unexercised —
     // found in review. It waits two seconds rather than the real thirty: at thirty it was half

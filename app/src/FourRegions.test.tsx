@@ -121,7 +121,7 @@ function core(
     if (cmd === "worktree_list") return a.workspace === "alpha" ? cut() : [];
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "chat_states")
-      return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
+      return waiting.map((session) => ({ session, state: "waiting", queue: waiting, sequence: 1 }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "alerts_everywhere") return alerts;
@@ -264,13 +264,13 @@ describe("the four regions", () => {
     expect(startedIn(asked)).toEqual([ALPHA]);
   });
 
-  it("puts the needs-you queue on the right, not on the bar", async () => {
-    core([]);
+  it("puts the needs-you queue in the title bar, and not on the right (charter-app#249)", async () => {
+    core([7]);
     render(<App />);
 
-    const queue = await screen.findByLabelText("Needs you");
-    expect(within(screen.getByTestId("panels")).getByLabelText("Needs you")).toBe(queue);
-    expect(document.querySelector("header.bar .needs-you")).toBeNull();
+    const hand = await screen.findByRole("button", { name: "1 chat needs you" });
+    expect(screen.getByTestId("title-bar")).toContainElement(hand);
+    expect(within(await screen.findByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
   });
 
   it("puts a region away and brings it back", async () => {

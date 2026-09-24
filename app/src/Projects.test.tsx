@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -47,7 +47,9 @@ const TWO = "/home/dev/two";
 function chat(one: Partial<OpenChat> & { session: number; name: string }): OpenChat {
   return {
     cwd: null,
-    harness: "claude",
+    // No harness and no persona, so its tab is its own name alone and the assertions below read
+    // the names they gave it (the default before the name is charter-app#254's, tested there).
+    harness: null,
     in_front: true,
     resumed: null,
     fresh: null,
@@ -55,6 +57,7 @@ function chat(one: Partial<OpenChat> & { session: number; name: string }): OpenC
     persona: null,
     unreported: null,
     pinned: false,
+    label: null,
     ...one,
   };
 }
@@ -195,6 +198,14 @@ const chatTabs = () =>
     .getAllByRole("tab")
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
 
+/** What the chat tab called `name` says its chat is doing. */
+const stateOnTab = (name: string) =>
+  within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getAllByRole("tab")
+    .find((tab) => tab.querySelector(".tab-name")?.textContent === name)
+    ?.querySelector("[data-state]")
+    ?.getAttribute("data-state");
+
 /** Opens a project by typing its path into the opener. */
 async function openByPath(path: string) {
   const person = userEvent.setup();
@@ -249,6 +260,110 @@ describe("a window holding more than one project", () => {
     expect(asked.filter((one) => one.cmd === "opened_chats").length).toBe(asksSoFar);
   });
 
+  it("ignores a chat from the queue, and its project's count goes down with it (charter-app#248)", async () => {
+    const { move, asked } = core({
+      launch: ONE,
+      chats: { [ONE]: [chat({ session: 1, name: "one.1" }), chat({ session: 2, name: "one.2" })] },
+    });
+    render(<App />);
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
+    const asking = { plane: ONE, state: "waiting", moved_at: 1 };
+    move({ ...asking, session: 1, needs_you: true, queue: [1, 2], sequence: 1 });
+    move({ ...asking, session: 2, needs_you: true, queue: [1, 2], sequence: 2 });
+    const count = () => projectTab("one").querySelector(".project-needs")?.textContent;
+    await waitFor(() => expect(count()).toBe("2"));
+
+    await userEvent.click(screen.getByRole("button", { name: "2 chats need you" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu", { name: "2 chats need you" })).getByRole("button", {
+        name: "Ignore one.1 until it asks again",
+      }),
+    );
+
+    // The core holds the ignore, and answers it the way it answers every move.
+    await vi.waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "ignore_needs_you").map((one) => one.args)).toEqual([
+        { plane: ONE, session: 1 },
+      ]),
+    );
+    move({ ...asking, session: 1, needs_you: false, queue: [2], sequence: 10 });
+    await waitFor(() => expect(count()).toBe("1"));
+
+    // A report the board took before the ignore, landing after it, does not bring it back.
+    // The one after it is older than the ignore too, but it is the newest word about chat 2 —
+    // so chat 2's tab changing is proof that both had been taken in when the count is read.
+    move({ ...asking, session: 1, needs_you: true, queue: [1, 2], sequence: 3 });
+    move({ ...asking, session: 2, state: "running", needs_you: false, queue: [1], sequence: 4 });
+    await waitFor(() => expect(stateOnTab("one.2")).toBe("running"));
+    expect(count()).toBe("1");
+    expect(screen.getByRole("button", { name: "1 chat needs you" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Go to one\.1 / })).toBeNull();
+  });
+
+  it("goes from the title bar to a chat in a project behind the one in front (charter-app#249)", async () => {
+    const { move } = core({
+      launch: ONE,
+      chats: {
+        [ONE]: [
+          chat({ session: 1, name: "one.1", in_front: false }),
+          chat({ session: 2, name: "one.2", in_front: true }),
+        ],
+        [TWO]: [chat({ session: 1, name: "two.1" })],
+      },
+    });
+    render(<App />);
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
+    await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
+    await openByPath(TWO);
+    await waitFor(() => expect(chatTabs()).toEqual(["two.1"]));
+    // Project ONE's chat 1 asks while TWO is in front — and ONE's chat 2 was the tab in front
+    // over there, so Go has to change the tab as well as the project.
+    move({
+      plane: ONE,
+      session: 1,
+      state: "waiting",
+      needs_you: true,
+      queue: [1],
+      moved_at: 1,
+      sequence: 1,
+    });
+    const hand = await screen.findByRole("button", { name: "1 chat needs you" });
+    expect(
+      within(screen.getByTestId("title-bar")).getByRole("button", { name: "1 chat needs you" }),
+    ).toBe(hand);
+
+    await userEvent.click(hand);
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Go to one.1 · Outside every workspace · one" }),
+    );
+
+    await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
+    expect(
+      within(screen.getByRole("tablist", { name: "Tabs" }))
+        .getByRole("tab", { selected: true })
+        .querySelector(".tab-name")?.textContent,
+    ).toBe("one.1");
+  });
+
+  it("draws no queue in the Attention panel any more (charter-app#249)", async () => {
+    const { move } = core({ launch: ONE, chats: { [ONE]: [chat({ session: 1, name: "one.1" })] } });
+    render(<App />);
+    await waitFor(() => expect(chatTabs()).toEqual(["one.1"]));
+    move({
+      plane: ONE,
+      session: 1,
+      state: "waiting",
+      needs_you: true,
+      queue: [1],
+      moved_at: 1,
+      sequence: 1,
+    });
+    await screen.findByRole("button", { name: "1 chat needs you" });
+
+    expect(within(screen.getByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
+    expect(within(screen.getByTestId("panels")).queryByText(/need you/)).toBeNull();
+  });
+
   it("draws each project's own theme while it is in front, in the window and every terminal", async () => {
     // charter-app#273: the switch is live, and it reaches the terminal through `onDrawn` (#216).
     core({ launch: ONE, themes: { [ONE]: "charter-light", [TWO]: null } });
@@ -294,7 +409,15 @@ describe("a window holding more than one project", () => {
 
     // Project ONE's chat 1, while project TWO is on screen. Both projects have a chat 1, so
     // a window that ignored the plane on the event would mark the wrong tab.
-    move({ plane: ONE, session: 1, state: "waiting", needs_you: true, queue: [1], moved_at: 1 });
+    move({
+      plane: ONE,
+      session: 1,
+      state: "waiting",
+      needs_you: true,
+      queue: [1],
+      moved_at: 1,
+      sequence: 1,
+    });
 
     await vi.waitFor(() =>
       expect(projectTab("one").querySelector(".project-needs")?.textContent).toBe("1"),

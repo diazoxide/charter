@@ -150,6 +150,8 @@ describe("App", () => {
       if (cmd === "plane_at_launch")
         return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
+      // Nothing to put back, so no question (charter-app#250) — `[]` is not an answer to it.
+      if (cmd === "relaunch_ask") return null;
       return [];
     });
 
@@ -291,7 +293,7 @@ describe("App", () => {
     await openAChat();
 
     expect(await screen.findByTestId("pane")).toHaveTextContent("session 1");
-    expect(tabs()).toEqual(["1 steward"]);
+    expect(tabs()).toEqual(["steward 1"]);
     // `start_chat` and not `open_session`: a chat now starts on the profile that was
     // picked, and the command that opens a bare shell is not in this path at all.
     const started = asked.find(({ cmd }) => cmd === "start_chat");
@@ -315,7 +317,7 @@ describe("App", () => {
 
     await openAChat();
 
-    expect(tabs()).toEqual(["1 steward", "2 steward"]);
+    expect(tabs()).toEqual(["steward 1", "steward 2"]);
     expect(panes()).toEqual(["session 2"]);
   });
 
@@ -338,7 +340,7 @@ describe("App", () => {
     await openAChat();
     await splitInto("Split right");
 
-    await endChat("End chat 1 steward");
+    await endChat("End chat steward 1");
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     // The plane travels with the session, because a session number alone names a chat in
@@ -410,7 +412,7 @@ describe("App", () => {
     render(<App />);
     await openAChat();
 
-    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await userEvent.click(screen.getByRole("button", { name: "End chat steward 1" }));
     const asking = await screen.findByRole("alertdialog");
     await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
 
@@ -441,13 +443,13 @@ describe("App", () => {
     render(<App />);
     await openAChat();
 
-    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await userEvent.click(screen.getByRole("button", { name: "End chat steward 1" }));
     const asking = await screen.findByRole("alertdialog");
 
     // Read off the DOM rather than asked for by name: "the only two, in this order" is the
     // claim, and `getByRole` for each would pass with a third between them.
     const answers = within(asking).getAllByRole("button");
-    expect(answers.map((answer) => answer.textContent)).toEqual(["Cancel", "End chat 1 steward"]);
+    expect(answers.map((answer) => answer.textContent)).toEqual(["Cancel", "End chat steward 1"]);
     // Cancel first, so a Return pressed by reflex cancels. The dialog itself is not in the
     // sequence — Radix gives the content `tabIndex={-1}`.
     expect(answers[0]).toHaveFocus();
@@ -474,11 +476,11 @@ describe("App", () => {
     render(<App />);
     await openAChat();
 
-    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await userEvent.click(screen.getByRole("button", { name: "End chat steward 1" }));
     const asking = await screen.findByRole("alertdialog");
     // To the confirm and no further, by the key Radix handles at the scope's first edge.
     await userEvent.tab({ shift: true });
-    expect(within(asking).getByRole("button", { name: "End chat 1 steward" })).toHaveFocus();
+    expect(within(asking).getByRole("button", { name: "End chat steward 1" })).toHaveFocus();
 
     await userEvent.keyboard("{Enter}");
 
@@ -497,7 +499,7 @@ describe("App", () => {
     render(<App />);
     await openAChat();
 
-    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await userEvent.click(screen.getByRole("button", { name: "End chat steward 1" }));
     await screen.findByRole("alertdialog");
     await userEvent.keyboard("{Escape}");
 
@@ -536,7 +538,7 @@ describe("App", () => {
     // `×` the only way there is — by leaving the picker first. Escape does not call the start
     // back; it is already in flight, which is exactly the race this test is about.
     await userEvent.keyboard("{Escape}");
-    await endChat("End chat 1 steward");
+    await endChat("End chat steward 1");
     letTheSecondSessionStart();
 
     await vi.waitFor(() =>

@@ -36,14 +36,49 @@ export function closeOnDelete(
   offer: Offer | undefined,
   onPress: (offer: Offer) => void,
 ) {
-  if (offer === undefined || event.target !== event.currentTarget) return;
-  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-  if (event.key !== "Delete" && !(event.key === "Backspace" && onAMac())) return;
+  if (offer === undefined || !deletes(event)) return;
   event.preventDefault();
   const tab = event.currentTarget;
   const strip = tab.closest<HTMLElement>('[role="tablist"]');
   onPress(offer);
   if (strip) backOnTheStripWhenGone(tab, strip);
+}
+
+/**
+ * Whether this key, pressed on the element handling it, is the platform's delete: Delete, or
+ * Backspace on a Mac, with no modifier. `closeOnDelete` says why each of those.
+ *
+ * Shared with the needs-you queue's Ignore (charter-app#248, `NeedsYou.ignoreOnDelete`), which
+ * is the same key doing the same kind of thing to a list item.
+ */
+export function deletes(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.target !== event.currentTarget) return false;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  return event.key === "Delete" || (event.key === "Backspace" && onAMac());
+}
+
+/**
+ * **F2 on a focused chat tab opens its name for editing** (charter-app#254): the platform's
+ * rename key for a focused item, called from the same `onKeyDown` as {@link closeOnDelete}.
+ *
+ * It presses the row the tab's menu and the palette list (`tab.rename:<id>`), so it does what
+ * they do. The palette, which claims `F2` from the whole window, stands back on a tab marked
+ * `RENAMES_ON_F2` (`Palette.theTabRenamesOnIt`); this is the other half of that. Never with a
+ * modifier, and only on the tab itself, for `closeOnDelete`'s reasons.
+ *
+ * @param offer The tab's `tab.rename:<id>` row. A view's tab has none, and F2 there is the
+ *   palette's as everywhere else.
+ */
+export function renameOnF2(
+  event: KeyboardEvent<HTMLElement>,
+  offer: Offer | undefined,
+  onPress: (offer: Offer) => void,
+) {
+  if (offer === undefined || event.target !== event.currentTarget) return;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (event.key !== "F2") return;
+  event.preventDefault();
+  onPress(offer);
 }
 
 /**

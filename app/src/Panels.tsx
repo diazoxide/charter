@@ -10,7 +10,6 @@ import {
   TriangleAlert,
   UserRound,
 } from "lucide-react";
-import { NeedsYou } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
 import { Chart, Facts } from "./Views";
@@ -30,33 +29,23 @@ import type { WorkspaceState } from "./workspaceState";
  *
  * # What changed: this file stopped being the panels and became the thing that draws them
  *
- * The needs-you queue, the workspace's todos and the plane's personas. **Two of those three are
- * no longer written here.** Todos and personas are *contributions* — `charter_core::panel`
- * values produced in `app/src-tauri/src/panels.rs` and drawn by the loop below, through the
- * same seam an extension's declared panel arrives on. This component knows what a panel is; it
- * does not know what a todo is.
+ * The workspace's todos and the plane's personas, and **neither is written here**. They are
+ * *contributions* — `charter_core::panel` values produced in `app/src-tauri/src/panels.rs` and
+ * drawn by the loop below, through the same seam an extension's declared panel arrives on. This
+ * component knows what a panel is; it does not know what a todo is.
  *
  * That is the point, and it is testable rather than aspirational: an approved extension's panel
  * appears in this region with a search box, a bound, a load-more and a card on every row,
  * because `PanelList` gives every list those and this file gives every panel a `PanelList`.
  *
- * **The queue is the one thing that is still written here, and that is a decision.** It is not
- * a contribution and must not become one: ADR 0038 says this region must never compete with it,
- * a contributed panel is sorted among the others by an `order` the contributor chooses, and a
- * queue that could be pushed below a stranger's panel is the one arrangement this region is not
- * allowed to have. So it is above them all, always, and the vocabulary has no way to say
- * otherwise.
- *
- * **Not read-only any more, and the queue is the reason.** Every chat in it is a button that
- * brings that chat forward. What stayed read-only is the bottom bar.
+ * **The needs-you queue is not here any more** (charter-app#249). It sat above every panel,
+ * because ADR 0038 says nothing in this region may compete with it — and then it left the
+ * region altogether, for the title bar: this region is one project's and one workspace's, and
+ * the queue is every project's. `NeedsYou.NeedsYouMenu` is where it is.
  */
 export function Panels({
   workspace,
   state,
-  queue,
-  quiet,
-  nameOf,
-  showChat,
   offers,
   onPress,
   contributed,
@@ -64,15 +53,9 @@ export function Panels({
   shownRow,
   onShowRow,
 }: {
-  /** The focused workspace, whose todos these are. The queue is not its — it is every
-   *  workspace's, because a chat asking for you in a workspace nobody is looking at is
-   *  exactly the one that must not be hidden. */
+  /** The focused workspace, whose todos these are. */
   workspace: string | undefined;
   state: WorkspaceState;
-  queue: readonly number[];
-  quiet: readonly string[];
-  nameOf: (session: number) => string;
-  showChat: (session: number) => void;
   /** The catalogue by id, which is what a row's verb is looked up in. */
   offers: Catalogued;
   onPress: (offer: Offer) => void;
@@ -115,8 +98,6 @@ export function Panels({
       aria-label={workspace === undefined ? "Attention" : `Attention · ${workspace}`}
       data-testid="panels"
     >
-      <NeedsYou queue={queue} quiet={quiet} nameOf={nameOf} show={showChat} />
-
       {workspace === undefined ? (
         <p className="empty">No workspace focused.</p>
       ) : (
