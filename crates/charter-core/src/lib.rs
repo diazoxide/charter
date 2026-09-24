@@ -79,6 +79,8 @@ pub mod shown;
 pub mod skilluse;
 pub mod start;
 pub mod state;
+#[cfg(test)]
+mod testgit;
 pub mod toolgate;
 pub mod toolhooks;
 pub mod trace;

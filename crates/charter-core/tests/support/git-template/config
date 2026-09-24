@@ -1,0 +1,9 @@
+# The template every fixture repo a charter-core test creates is made from (charter-app#191).
+#
+# A repository's own config beats the developer's global one, and it is read by EVERY git that
+# touches the repository, the code under test included. So a developer whose ~/.gitconfig
+# signs every commit does not have a signer asked, or a 1Password prompt raised, by a test.
+[commit]
+	gpgsign = false
+[tag]
+	gpgsign = false

@@ -199,40 +199,105 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// One entry of the application menu, before it is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Item {
+    /// charter's own Quit, with the accelerator it carries.
+    Quit(&'static str),
+    Hide,
+    Separator,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+/// The application menu's submenus, by title, for macOS or for everything else.
+///
+/// **On macOS it is the `⌘` menu every Mac app has**, and it has to be: without an Edit menu
+/// carrying the predefined items, `⌘C` and `⌘V` do nothing in a text field. No `⌘` chord is a
+/// key a terminal encodes, so nothing here is taken from a chat.
+///
+/// **Everywhere else, only Quit, on `Ctrl+Shift+Q` (#187).** muda's predefined items there are
+/// `Ctrl` chords it does not let charter change, and each is a key the chat's shell owns: Copy
+/// is `Ctrl-C`, the interrupt; Undo `Ctrl-Z`, suspend; Select all `Ctrl-A`, beginning of line;
+/// Hide `Ctrl-H`, backspace. A terminal app keeps its own keys off them by adding `Shift`
+/// (GNOME Terminal and Konsole: `Ctrl+Shift+C`, `V`, `Q`), which xterm encodes as nothing. The
+/// Edit items could not be moved there — a predefined item's accelerator is fixed — so they are
+/// left out rather than left on the chat's keys. A text field in the webview keeps its own
+/// `Ctrl+C` and `Ctrl+V`, which the webview handles without any menu.
+///
+/// What leaving them out costs, **read from muda 0.19.3's source and not measured in a window**
+/// (nobody here has a Linux or Windows desktop to press the key in): on Windows the Edit items
+/// were real accelerators in the window's accelerator table, so there they really did take the
+/// key before the webview saw it, and the menu loses Undo to Select all. On Linux
+/// (`platform_impl/gtk`) Copy, Cut, Paste and Select all draw the chord as a label only and act
+/// through `libxdo` when clicked, a feature this build does not enable, and Undo, Redo and Hide
+/// are not drawn at all — so there the Edit menu did little but claim keys it did not use.
+fn layout(macos: bool) -> Vec<(&'static str, Vec<Item>)> {
+    if !macos {
+        return vec![("charter", vec![Item::Quit("Ctrl+Shift+Q")])];
+    }
+    vec![
+        (
+            "charter",
+            vec![Item::Hide, Item::Separator, Item::Quit("CmdOrCtrl+Q")],
+        ),
+        // Copy, paste and select-all are the predefined items a text field needs to behave;
+        // on macOS nothing works without an Edit menu carrying them.
+        (
+            "Edit",
+            vec![
+                Item::Undo,
+                Item::Redo,
+                Item::Separator,
+                Item::Cut,
+                Item::Copy,
+                Item::Paste,
+                Item::SelectAll,
+            ],
+        ),
+    ]
+}
+
 /// The application menu, which is where Quit lives on every platform.
 ///
 /// Tauri's own default menu has a predefined Quit that ends the process where it is clicked.
 /// This replaces it with one of charter's own, so that quitting goes through the window and
 /// the operator is told what is about to be ended.
 pub fn menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let quit = MenuItem::with_id(app, QUIT, "Quit charter", true, Some("CmdOrCtrl+Q"))?;
-    let app_menu = Submenu::with_items(
-        app,
-        "charter",
-        true,
-        &[
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )?;
-    // Copy, paste and select-all are the predefined items a text field needs to behave; on
-    // macOS nothing works without an Edit menu carrying them.
-    let edit = Submenu::with_items(
-        app,
-        "Edit",
-        true,
-        &[
-            &PredefinedMenuItem::undo(app, None)?,
-            &PredefinedMenuItem::redo(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-        ],
-    )?;
-    Menu::with_items(app, &[&app_menu, &edit])
+    let mut submenus = Vec::new();
+    for (title, items) in layout(cfg!(target_os = "macos")) {
+        let mut built: Vec<Box<dyn tauri::menu::IsMenuItem<Wry>>> = Vec::new();
+        for item in items {
+            built.push(match item {
+                Item::Quit(accelerator) => Box::new(MenuItem::with_id(
+                    app,
+                    QUIT,
+                    "Quit charter",
+                    true,
+                    Some(accelerator),
+                )?),
+                Item::Hide => Box::new(PredefinedMenuItem::hide(app, None)?),
+                Item::Separator => Box::new(PredefinedMenuItem::separator(app)?),
+                Item::Undo => Box::new(PredefinedMenuItem::undo(app, None)?),
+                Item::Redo => Box::new(PredefinedMenuItem::redo(app, None)?),
+                Item::Cut => Box::new(PredefinedMenuItem::cut(app, None)?),
+                Item::Copy => Box::new(PredefinedMenuItem::copy(app, None)?),
+                Item::Paste => Box::new(PredefinedMenuItem::paste(app, None)?),
+                Item::SelectAll => Box::new(PredefinedMenuItem::select_all(app, None)?),
+            });
+        }
+        let refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = built.iter().map(|b| &**b).collect();
+        submenus.push(Submenu::with_items(app, title, true, &refs)?);
+    }
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = submenus
+        .iter()
+        .map(|s| s as &dyn tauri::menu::IsMenuItem<Wry>)
+        .collect();
+    Menu::with_items(app, &refs)
 }
 
 /// What a click on one of charter's own menu items does.
@@ -265,6 +330,115 @@ mod tests {
         let clear = alpha.iter().filter(|&&a| a == 0).count();
         let opaque = alpha.iter().filter(|&&a| a == u8::MAX).count();
         clear * 2 > alpha.len() && opaque * 10 > alpha.len()
+    }
+
+    /// The accelerator `item` carries once built, written the way muda parses one.
+    ///
+    /// A predefined item's is not charter's to choose: muda 0.19.3
+    /// (`src/items/predefined.rs::accelerator`) gives each a fixed one, `CmdOrCtrl` on every
+    /// platform, and that table is copied here so a test can hold the menu to it.
+    fn accelerator(item: Item, macos: bool) -> Option<String> {
+        let chord = |key: &str| Some(format!("CmdOrCtrl+{key}"));
+        match item {
+            Item::Quit(accelerator) => Some(accelerator.to_owned()),
+            Item::Separator => None,
+            Item::Hide => chord("H"),
+            Item::Undo => chord("Z"),
+            Item::Redo if macos => Some("CmdOrCtrl+Shift+Z".to_owned()),
+            Item::Redo => chord("Y"),
+            Item::Cut => chord("X"),
+            Item::Copy => chord("C"),
+            Item::Paste => chord("V"),
+            Item::SelectAll => chord("A"),
+        }
+    }
+
+    /// Whether a pane's terminal turns `accelerator` into bytes for the shell, on a platform
+    /// that is macOS or not — so a menu that claims it takes a key from the chat.
+    ///
+    /// xterm (`@xterm/xterm` 6.0.0, `Keyboard.ts`) encodes `Ctrl` with a letter as a control
+    /// character only when neither `Shift`, `Alt` nor `Meta` is held; with `Shift` it sends
+    /// nothing, which is the room GNOME Terminal and Konsole put their own keys in. `CmdOrCtrl`
+    /// is `Ctrl` off macOS and `⌘` on it, and a `⌘` chord xterm sends nothing for either.
+    fn a_terminal_encodes(accelerator: &str, macos: bool) -> bool {
+        let words: Vec<String> = accelerator.split('+').map(str::to_uppercase).collect();
+        let (key, modifiers) = words.split_last().expect("an accelerator has a key");
+        let ctrl = modifiers.iter().any(|m| {
+            m == "CTRL"
+                || m == "CONTROL"
+                || (!macos && (m == "CMDORCTRL" || m == "COMMANDORCONTROL"))
+        });
+        let other = modifiers
+            .iter()
+            .any(|m| m == "SHIFT" || m == "ALT" || m == "OPTION" || m == "SUPER" || m == "CMD");
+        ctrl && !other && key.len() == 1 && key.chars().all(|c| c.is_ascii_alphabetic())
+    }
+
+    fn accelerators(macos: bool) -> Vec<(Item, String)> {
+        layout(macos)
+            .into_iter()
+            .flat_map(|(_, items)| items)
+            .filter_map(|item| accelerator(item, macos).map(|a| (item, a)))
+            .collect()
+    }
+
+    #[test]
+    fn a_ctrl_letter_is_the_terminals_and_a_ctrl_shift_letter_or_a_cmd_chord_is_not() {
+        assert!(a_terminal_encodes("CmdOrCtrl+C", false));
+        assert!(a_terminal_encodes("Ctrl+Q", false));
+        assert!(!a_terminal_encodes("CmdOrCtrl+C", true));
+        assert!(!a_terminal_encodes("Ctrl+Shift+Q", false));
+        assert!(!a_terminal_encodes("Alt+F4", false));
+    }
+
+    #[test]
+    fn off_macos_no_menu_accelerator_is_a_key_the_chats_terminal_encodes() {
+        // #187: off macOS muda's predefined Edit items are `Ctrl` chords, and every one of
+        // them is a key a shell owns — Copy was `Ctrl-C`, the interrupt.
+        let taken: Vec<(Item, String)> = accelerators(false)
+            .into_iter()
+            .filter(|(_, a)| a_terminal_encodes(a, false))
+            .collect();
+
+        assert_eq!(taken, Vec::new());
+    }
+
+    #[test]
+    fn off_macos_quit_is_ctrl_shift_q_as_it_is_in_a_terminal_app() {
+        assert_eq!(
+            accelerators(false),
+            vec![(Item::Quit("Ctrl+Shift+Q"), "Ctrl+Shift+Q".to_owned())]
+        );
+    }
+
+    #[test]
+    fn on_macos_the_menu_is_the_cmd_menu_it_always_was() {
+        assert_eq!(
+            layout(true),
+            vec![
+                (
+                    "charter",
+                    vec![Item::Hide, Item::Separator, Item::Quit("CmdOrCtrl+Q")]
+                ),
+                (
+                    "Edit",
+                    vec![
+                        Item::Undo,
+                        Item::Redo,
+                        Item::Separator,
+                        Item::Cut,
+                        Item::Copy,
+                        Item::Paste,
+                        Item::SelectAll,
+                    ]
+                ),
+            ]
+        );
+        assert!(
+            accelerators(true)
+                .iter()
+                .all(|(_, a)| !a_terminal_encodes(a, true))
+        );
     }
 
     #[test]

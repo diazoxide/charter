@@ -646,7 +646,7 @@ mod tests {
 
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        run(dir.path(), &["init", "-q", "-b", "main", "."], READ).unwrap();
+        crate::testgit::run(dir.path(), &["init", "-q", "-b", "main", "."]);
         dir
     }
 
