@@ -249,6 +249,35 @@ fn a_local_file_holding_anything_but_harness_is_refused() {
 }
 
 #[test]
+fn a_local_file_may_hold_extensions_as_well_as_harness() {
+    // charter-app#253: an extension is turned on or off, and configured, for this machine's
+    // use of the project in the Local file, which overrides the Shared one key by key.
+    let dir = plane(COMMENTED);
+    let why = refusals(
+        dir.path(),
+        Which::Local,
+        "[extensions.stats]\nenabled = false\n[extensions.stats.settings]\nwindow = \"7d\"\n",
+    );
+    assert_eq!(why, Vec::<String>::new());
+}
+
+#[test]
+fn an_extensions_table_charter_would_not_read_is_refused_in_either_file() {
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        let why = refusals(dir.path(), which, "[extensions.stats]\nenabled = \"yes\"\n");
+        assert_eq!(
+            why,
+            [format!(
+                "extensions.stats.enabled in {} is not true or false",
+                which.file()
+            )],
+            "{which:?}"
+        );
+    }
+}
+
+#[test]
 fn a_local_file_that_does_not_exist_is_created_on_the_first_save() {
     let dir = plane(COMMENTED);
     let body = "[harness]\ndefault = \"claude\"\n";
