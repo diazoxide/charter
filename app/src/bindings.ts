@@ -1282,6 +1282,15 @@ export type Panels = {
 	workspace: string,
 	/**  The clones on disk, by name, in the order the directory lists them. */
 	repos: string[],
+	/**
+	 *  Where each clone in `repos` is, by name: the path `repos::clones` **checked**, so the
+	 *  window never joins one together (charter-app#174). It is what lets a clone be picked as
+	 *  where the next chat starts, from the explorer's heading and the bottom bar's row.
+	 * 
+	 *  Beside `repos` rather than in place of it, so the order the directory lists them in and
+	 *  every reader of the names stay as they are.
+	 */
+	paths: { [key in string]: string },
 	/**  Repos `workspace.json` names that are not cloned here. Membership, not presence. */
 	absent: string[],
 	/**

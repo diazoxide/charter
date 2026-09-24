@@ -166,6 +166,14 @@ export type Does =
    *  the piece it means, the same way `tab.close:<id>` spells out its tab. */
   | { verb: "removeWorktree"; cut: Cut; force: boolean }
   | { verb: "mergeWorktree"; cut: Cut }
+  /** Makes a clone the spot the next chat starts in — the explorer's pick, one level up from a
+   *  piece (charter-app#174). It starts nothing: the picker still asks, and the core still
+   *  decides whether that directory can be started in. The path is the one the core spelled. */
+  | { verb: "pickClone"; repo: string; path: string }
+  /** A new tab whose chat starts in that clone — this one tab. The explorer's pick is left as
+   *  it was, so the NEXT plain `New tab` starts where it would have; making the clone the spot
+   *  for every chat after is `pickClone`'s, and the two rows must not do the same thing. */
+  | { verb: "newTabIn"; repo: string; path: string }
   /** Shows the opener, so another project can be opened into this window beside the ones it
    *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
   | { verb: "openProject" }
@@ -269,6 +277,17 @@ export type Now = {
    */
   pieces?: readonly Cut[];
   /**
+   * The focused workspace's clones, each with the path the core spelled (`Panels.paths`).
+   *
+   * Two rows each (charter-app#174): a clone had no menu because nothing here was about one,
+   * and nothing could be until the core said where a clone is. Ten clones is twenty rows,
+   * counted beside the pieces in `actions.test.ts`.
+   */
+  clones?: readonly Clone[];
+  /** Where the next chat starts, when the explorer has picked somewhere — the path, so a
+   *  clone's pick row can say it is already the spot rather than offer it again. */
+  startsIn?: string;
+  /**
    * The plane's personas, as the right-hand panel lists them.
    *
    * One row each, and they are cheap: a plane has a handful, not a workspace's worth.
@@ -359,6 +378,10 @@ export type Doing = {
    *  meant by looking at what happens to be in front (charter-app#174). */
   removeWorktree: (cut: Cut, force: boolean) => Promise<Ran>;
   mergeWorktree: (cut: Cut) => Promise<Ran>;
+  /** Makes that clone where the next chat starts. It starts nothing, so it answers no `Ran`. */
+  pickClone: (repo: string, path: string) => void;
+  /** Opens the picker for a new tab whose chat starts in that directory, and nowhere else. */
+  newChatIn: (path: string) => void;
   sendKey: (key: string) => Promise<Ran>;
   openProject: () => void;
   /** Opens the new-project dialog. Nothing is scaffolded and nothing is opened until it is
@@ -384,6 +407,9 @@ export type Doing = {
  * a workspace that is not the one focused.
  */
 export type Cut = { workspace: string; repo: string; piece: string };
+
+/** One clone of the focused workspace: its name, and where it is as the core spelled it. */
+export type Clone = { repo: string; path: string };
 
 /** The id `Cut` gets inside a row: the clone and the piece, which is unique within one
  *  workspace and is what the explorer's row can name without looking anything up. */
@@ -753,6 +779,23 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // **The focused workspace's clones, two rows each** (charter-app#174). A clone is where a
+  // chat can start, one level up from a piece, and that is the whole of what this window can
+  // do to one: open a tab there, or pick it as where every new chat starts. The first is the
+  // ordinary `New tab`'s picker aimed at the clone for that one tab; the second is the
+  // explorer's pick. Neither writes anything, so both are above the line.
+  for (const { repo, path } of now.clones ?? []) {
+    offers.push(
+      can(`clone.chat:${repo}`, `New tab in ${repo}`, { verb: "newTabIn", repo, path }, repo),
+    );
+    const pick = `Start new chats in ${repo}`;
+    offers.push(
+      now.startsIn === path
+        ? cannot(`clone.pick:${repo}`, pick, `New chats already start in ${repo}.`, repo)
+        : can(`clone.pick:${repo}`, pick, { verb: "pickClone", repo, path }, repo),
+    );
+  }
+
   // **And every view an approved extension offers, one row each.** The personas panel's heading
   // draws the same views as buttons for a pointer; this is how a keyboard reaches them, and it
   // is the same verb. The extension's id is in the words, because what is in force is shown
@@ -1021,6 +1064,12 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.removeWorktree(does.cut, does.force);
     case "mergeWorktree":
       return doing.mergeWorktree(does.cut);
+    case "pickClone":
+      doing.pickClone(does.repo, does.path);
+      return DID;
+    case "newTabIn":
+      doing.newChatIn(does.path);
+      return DID;
     case "sendKey":
       return doing.sendKey(does.key);
     case "openProject":
@@ -1279,6 +1328,9 @@ export type MenuOn =
    *  these, so carrying it would be a third copy of an answer the window already has. */
   | { on: "worktree"; repo: string; piece: string }
   | { on: "persona"; persona: string }
+  /** One clone of the focused workspace, by name — the explorer's clone heading and the bottom
+   *  bar's repo row. The path is the catalogue's, so the menu does not carry it. */
+  | { on: "clone"; repo: string }
   /** The panes — the centre of the window, where a chat is. Not about any one pane: a split
    *  acts on the pane that has the keyboard, which is what the bar's buttons act on too. */
   | { on: "pane" };
@@ -1344,6 +1396,10 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       // an operator edits. A menu with one honest row is the answer; a menu with three
       // invented ones is the defect this module exists to prevent (charter-app#174).
       return { above: [`persona.show:${what.persona}`], below: [] };
+    case "clone":
+      // Where a chat can start, and nothing else: a clone is the operator's own checkout, and
+      // nothing in this window writes to one (charter-app#174).
+      return { above: [`clone.chat:${what.repo}`, `clone.pick:${what.repo}`], below: [] };
     case "pane":
       return {
         above: ["chat.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],

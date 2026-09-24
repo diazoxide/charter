@@ -37,18 +37,17 @@ import { useTabStop } from "./roving";
  * whether that directory can be started in — it writes the harness layer there or refuses
  * with a sentence naming what stopped it.
  *
- * **A clone is a heading and not a leaf, and that is a gap rather than a decision.**
- * `workspace_panels` answers with clone NAMES; the only paths the window ever holds are ones
- * the core spelled, and a piece carries its own. Making the clone itself pickable needs the
- * core to say where it is, which is a change to `Panels` and to the generated bindings, and
- * it is not in this one.
+ * **A clone is a heading, and it is picked from its menu rather than by a click.** A click on
+ * the heading opens and closes it, which is what a heading does; the pick is `Start new chats
+ * in <repo>` on the clone's context menu, beside `New tab in <repo>` (charter-app#174). Both
+ * carry the path the core spelled (`Panels.paths`), so nothing here joins one together, and a
+ * picked clone is marked the way a picked piece is.
  *
- * **A piece row has a context menu and a clone row does not, for that same gap**
- * (charter-app#174). A worktree is something charter can act on, and since #174 the rows that
- * act on one name the piece they mean, so a menu here is the catalogue filtered to this piece
- * — merge above the line, remove below it. A clone is not: nothing in `actions.ts` is about
- * one, because nothing this window can do is. A menu there would have to invent a verb, which
- * is the second list `actions.ts` opens by refusing to have.
+ * **Every row that is a place has a context menu, and each is the catalogue filtered to that
+ * place** (charter-app#174). A piece's is merge above the line and remove below it; a clone's
+ * is the two rows above and nothing below, because nothing in this window writes to a clone.
+ * Nothing here says what those rows mean — `Menus.tsx` draws whatever `actions.ts` has, and
+ * Shift+F10 or the menu key opens the same menu on the row the arrows are on.
  *
  * **It is drawn as a tree, and the lines are drawn by the rows rather than by the lists.**
  * The nesting was always here — workspace, clone, piece, chat — and nothing said so: four
@@ -126,7 +125,12 @@ export function Explorer({
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const tree = treeOf(workspace, state, chats, folded);
   const drawn = tree.filter((row) => row.drawn);
-  const picked = spot === undefined ? ROOT : pieceRow(spot.repo, spot.piece);
+  const picked =
+    spot === undefined
+      ? ROOT
+      : spot.piece === undefined
+        ? cloneRow(spot.repo)
+        : pieceRow(spot.repo, spot.piece);
   const stop = useTabStop(
     picked,
     drawn.map((row) => row.id),
@@ -250,18 +254,30 @@ export function Explorer({
                   open={!folded.has(foldKey(workspace, repo))}
                   onToggle={(event) => fold(foldKey(workspace, repo), event.currentTarget.open)}
                 >
-                  <RovingFocusGroup.Item asChild tabStopId={cloneRow(repo)}>
-                    <summary {...treeitem(cloneRow(repo))}>
-                      {/* The twisty says which way the disclosure goes, which the default marker
+                  {/* The clone's menu: a new tab in it, and picking it as where new chats
+                    start (charter-app#174). On the heading, for the piece rows' reason — the
+                    `<details>` also holds every row inside the clone. */}
+                  <Menued on={{ on: "clone", repo }} offers={offers} onPress={onPress}>
+                    <RovingFocusGroup.Item
+                      asChild
+                      tabStopId={cloneRow(repo)}
+                      active={picked === cloneRow(repo)}
+                    >
+                      <summary
+                        {...treeitem(cloneRow(repo))}
+                        aria-current={picked === cloneRow(repo) ? "true" : undefined}
+                      >
+                        {/* The twisty says which way the disclosure goes, which the default marker
                     said in the platform's own glyph at the platform's own size. It turns
                     with `[open]`, and the turn is the one motion here that is a direct
                     answer to a click — `prefers-reduced-motion` stops it all the same. */}
-                      <ChevronRight className="twisty" />
-                      <FolderGit2 className="node-icon" />
-                      <span className="repo">{repo}</span>
-                      <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
-                    </summary>
-                  </RovingFocusGroup.Item>
+                        <ChevronRight className="twisty" />
+                        <FolderGit2 className="node-icon" />
+                        <span className="repo">{repo}</span>
+                        <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
+                      </summary>
+                    </RovingFocusGroup.Item>
+                  </Menued>
                   {piecesRefused[repo] ? (
                     // Said, never swallowed: a clone with no rows otherwise reads as a clone
                     // nobody has cut a worktree in.
@@ -414,11 +430,12 @@ function Pending({ children }: { children: ReactNode }) {
   );
 }
 
-/** Where the next chat starts, when it is not the workspace's own directory.
+/** Where the next chat starts, when it is not the workspace's own directory: a piece, or — with
+ *  no `piece` — the clone itself, picked from its menu (charter-app#174).
  *
- *  It carries the path the CORE spelled — `worktree_list` answers with it — so nothing here
- *  ever joins one together. */
-export type Spot = { repo: string; piece: string; path: string };
+ *  It carries the path the CORE spelled — `worktree_list` answers with a piece's, and
+ *  `Panels.paths` with a clone's — so nothing here ever joins one together. */
+export type Spot = { repo: string; piece?: string; path: string };
 
 /** How many pieces a clone has, on its heading, so a closed one still says whether there is
  *  anything in it. */
