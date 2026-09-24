@@ -28,7 +28,8 @@ const WHO: [(&str, &str); 6] = [
     ("GIT_COMMITTER_DATE", "2026-01-01T00:00:00+00:00"),
 ];
 
-/// The template every fixture repository is made from: `commit.gpgsign` and `tag.gpgsign` off.
+/// The template every fixture repository is made from: `commit.gpgsign` and `tag.gpgsign` off,
+/// and `core.excludesFile` pointed at nothing (charter-app#191, #262).
 pub const TEMPLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/git-template");
 
 /// `git`, with every repository it creates made from [`TEMPLATE`], so none asks a developer's
