@@ -12,6 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { ViewTab } from "./bindings";
+import { BUILT_IN, DEFAULT_THEME, drawIn, inForce } from "./theme/theme";
 
 /**
  * **A tab that holds something other than a chat**, against the whole window (ADR 0043,
@@ -125,7 +126,15 @@ const STATISTICS = {
 
 /** The core, answering every command the window sends, and recording what it was asked. */
 function core(
-  on: { reopened?: ViewTab[]; chats?: (typeof OPEN_CHAT)[]; offered?: (typeof STATISTICS)[] } = {},
+  on: {
+    reopened?: ViewTab[];
+    chats?: (typeof OPEN_CHAT)[];
+    offered?: (typeof STATISTICS)[];
+    /** What `extensions_on` answers: the extensions this project has on (charter-app#253). */
+    extensionsOn?: string[];
+    /** What `project_theme_drawn` answers: the theme this project draws (charter-app#273). */
+    projectTheme?: string | null;
+  } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC((cmd, args) => {
@@ -140,10 +149,13 @@ function core(
     if (cmd === "running_sessions") return [];
     if (cmd === "extension_views") return on.offered ?? [];
     if (cmd === "extension_panels") return [];
+    if (cmd === "extensions_on") return on.extensionsOn ?? ["persona-statistics"];
+    if (cmd === "project_theme_drawn") return on.projectTheme ?? null;
     if (cmd === "workspace_panels")
       return {
         workspace: "alpha",
         repos: [],
+        paths: {},
         absent: [],
         refused: [],
         todos: [],
@@ -365,5 +377,49 @@ describe("view tabs at a relaunch", () => {
     expect(told.length).toBeGreaterThan(0);
     for (const one of told)
       expect((one.args.views as ViewTab[]).map((view) => view.key)).toEqual(["steward"]);
+  });
+});
+
+describe("a project's own extensions (charter-app#253)", () => {
+  it("offers an extension's view only while the project in front has that extension on", async () => {
+    core({ offered: [STATISTICS], extensionsOn: ["persona-statistics"] });
+    render(<App />);
+    const panel = await screen.findByTestId("panel-personas");
+    expect(await within(panel).findByRole("button", { name: /Statistics/ })).toBeInTheDocument();
+  });
+
+  it("offers nothing from an extension the project turned off", async () => {
+    const { asked } = core({ offered: [STATISTICS], extensionsOn: [] });
+    render(<App />);
+    const panel = await screen.findByTestId("panel-personas");
+    await waitFor(() =>
+      expect(asked.some((one) => one.cmd === "extensions_on" && one.args.plane === PLANE)).toBe(
+        true,
+      ),
+    );
+    await within(panel).findByRole("button", { name: /steward/ });
+
+    expect(within(panel).queryByRole("button", { name: /Statistics/ })).toBeNull();
+  });
+});
+
+describe("a project's own theme (charter-app#273)", () => {
+  afterEach(() => drawIn(DEFAULT_THEME));
+
+  it("is drawn while that project is in front", async () => {
+    const { asked } = core({ projectTheme: "charter-light" });
+    render(<App />);
+    await waitFor(() => expect(inForce()).toBe(BUILT_IN["charter-light"]));
+    expect(asked.some((one) => one.cmd === "project_theme_drawn" && one.args.plane === PLANE)).toBe(
+      true,
+    );
+  });
+
+  it("leaves the window its own theme for a project that picked nothing", async () => {
+    const { asked } = core({ projectTheme: null });
+    render(<App />);
+    await waitFor(() => expect(asked.some((one) => one.cmd === "project_theme_drawn")).toBe(true));
+    await screen.findByTestId("panel-personas");
+    expect(inForce()).toBe(DEFAULT_THEME);
   });
 });

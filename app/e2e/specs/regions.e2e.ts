@@ -306,15 +306,13 @@ describe("the right-hand region", () => {
 
   // What a persona row opens — the persona's own tab — is `view-tabs.e2e.ts`.
 
-  it("holds the needs-you queue, which used to be on the bar", async () => {
+  it("holds no needs-you queue, which is the title bar's now (charter-app#249)", async () => {
     await untilTheStripIsRead();
 
     const panels = await $('[data-testid="panels"]');
-    const queue = await panels.$('[aria-label="Needs you"]');
-    await queue.waitForExist({ timeout: 20_000 });
-    // And it is not on the bar any more.
-    const onTheBar = await $('header.bar [aria-label="Needs you"]');
-    expect(await onTheBar.isExisting()).toBe(false);
+    await panels.waitForExist({ timeout: 20_000 });
+    expect(await panels.$('[aria-label="Needs you"]').isExisting()).toBe(false);
+    expect(await panels.$(".needs-you").isExisting()).toBe(false);
   });
 
   it("holds no alerts section, because alerts are the window's drawer now", async () => {

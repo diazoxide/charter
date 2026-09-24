@@ -1,6 +1,4 @@
 /// <reference types="node" />
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -130,6 +128,7 @@ const TODO = row("20260302-091400-review", "Review the rollout plan", {
 const PANELS: PanelsModel = {
   workspace: "alpha",
   repos: ["svc", "tool"],
+  paths: {},
   absent: [],
   refused: [],
   todos: [
@@ -163,9 +162,6 @@ function draw(
   on: {
     workspace?: string;
     state?: WorkspaceState;
-    queue?: number[];
-    quiet?: string[];
-    showChat?: (session: number) => void;
     offers?: Catalogued;
     onPress?: (offer: Offer) => void;
     contributed?: PanelView[];
@@ -178,10 +174,6 @@ function draw(
       <Panels
         workspace={"workspace" in on ? on.workspace : "alpha"}
         state={on.state ?? state()}
-        queue={on.queue ?? []}
-        quiet={on.quiet ?? []}
-        nameOf={(session) => `ide.${session}`}
-        showChat={on.showChat ?? (() => {})}
         offers={on.offers ?? new Map()}
         onPress={on.onPress ?? (() => {})}
         contributed={on.contributed ?? []}
@@ -195,28 +187,11 @@ function draw(
 }
 
 describe("the right-hand region", () => {
-  it("holds the needs-you queue, which used to share a line with six other things", () => {
-    // ADR 0038 moved it here off `<header className="bar">`.
-    draw({ queue: [7] });
+  it("holds no needs-you queue, which is the title bar's now (charter-app#249)", () => {
+    draw();
 
-    expect(within(screen.getByTestId("panels")).getByLabelText("Needs you")).toBeInTheDocument();
-  });
-
-  it("brings a chat forward from the queue", async () => {
-    const shown: number[] = [];
-    draw({ queue: [7], showChat: (session) => shown.push(session) });
-
-    await userEvent.click(screen.getByRole("button", { name: "ide.7" }));
-
-    expect(shown).toEqual([7]);
-  });
-
-  it("draws the queue even when no workspace is focused, because it is not the workspace's", () => {
-    // A chat asking for you in a workspace nobody is looking at is exactly the one that must
-    // not be hidden.
-    draw({ workspace: undefined, queue: [7] });
-
-    expect(screen.getByLabelText("Needs you")).toBeInTheDocument();
+    expect(within(screen.getByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
+    expect(screen.getByTestId("panels").querySelector(".needs-you")).toBeNull();
   });
 
   it("is named for what it is, and not a second answer to which workspace this is", () => {
@@ -405,34 +380,6 @@ describe("charter's own panels", () => {
     // `0 memories` is said rather than left off: a row that omits the count reads as one
     // charter did not look at, which is a different fact from a persona with none.
     expect(notes[1]).toHaveTextContent("default · 2 memories");
-  });
-});
-
-/**
- * **The count's colour is only ever on a pair the contrast suite measures.**
- *
- * `needs-you.base` is `#b85050` in charter-dark, which is 3.64:1 on `surface.base` — under AA
- * for words. So the words beside the count are `text.primary`, and the number is
- * `needs-you.text` FILLED with `needs-you.base`, which is the pair `contrast.test.ts` holds at
- * 4.5:1. jsdom computes no colour, so this reads the rules.
- */
-describe("the needs-you count's colours", () => {
-  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
-    /\/\*[\s\S]*?\*\//g,
-    "",
-  );
-  const rule = (selector: string) =>
-    new RegExp(`(?:^|\\})\\s*${selector.replace(/[.]/g, "\\.")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ??
-    "";
-
-  it("never writes the sentence in needs-you.base", () => {
-    expect(rule(".needs-you-count")).toMatch(/(?:^|[;\s])color:\s*var\(--text-primary\)/);
-    expect(rule(".needs-you-count")).not.toMatch(/(?:^|[;\s])color:\s*var\(--needs-you-base\)/);
-  });
-
-  it("fills the number with needs-you.base under needs-you.text, the measured pair", () => {
-    expect(rule(".needs-you-number")).toMatch(/background:\s*var\(--needs-you-base\)/);
-    expect(rule(".needs-you-number")).toMatch(/(?:^|[;\s])color:\s*var\(--needs-you-text\)/);
   });
 });
 

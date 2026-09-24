@@ -603,9 +603,34 @@ pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, S
         return Some((REASON_SPELLING, HANDOFF_SPELLING.to_string()));
     }
     let seg = seg.expect("`spelled_exactly` answers false for no segment");
+    // A report back carries no brief and opens no chat (charter-app#259): its text is the
+    // command's own argument, which the prompt shows as it is. Only a live substitution is
+    // still refused, because that text is not the one the prompt showed.
+    if is_a_report(&seg) {
+        return livesub::live_substitution(cmd)
+            .map(|_| (REASON_BRIEF_SOURCE, HANDOFF_REPORT_SOURCE.to_string()));
+    }
     let what = brief_source(cmd, &seg, piped)?;
     Some((REASON_BRIEF_SOURCE, handoff_source(what)))
 }
+
+/// Whether a handoff segment is `charter handoff report <summary>` — a report back, which
+/// carries its text as an argument and reads no brief (charter-app#259).
+///
+/// `report` bare and followed by at least one word, and nothing read from stdin: `charter handoff report
+/// <<'BRIEF'` is still a handoff INTO a workspace called `report`, judged as one.
+fn is_a_report(seg: &[Tok]) -> bool {
+    seg.get(2)
+        .is_some_and(|word| word.bare && word.text == "report")
+        && seg.len() > 3
+        && !seg.iter().any(|t| t.is_op(&["<<", "<<<", "<", "<>"]))
+}
+
+/// What a report back with a live substitution in it is told.
+pub const HANDOFF_REPORT_SOURCE: &str = "`charter handoff report` sends its summary as the \
+     text the permission prompt shows, and this call has a live command substitution in it, \
+     which the shell would replace before charter reads it. Write the summary out in plain \
+     words: charter handoff report \"<summary>\"";
 
 /// Whether the handoff on `line` is spelled the way the host's rule matches: the SOURCE, not
 /// the words a shell makes of it.
@@ -1006,5 +1031,53 @@ mod tests {
         assert!(disguised_as("{handoff,}", "handoff"));
         assert!(disguised_as("hando?f", "handoff"), "a glob is read as one");
         assert!(!disguised_as("$h", "handoff"), "a variable is not seen");
+    }
+
+    // ----- a report back (charter-app#259) ------------------------------------------------
+
+    #[test]
+    fn a_report_back_carries_its_summary_as_an_argument_and_needs_no_heredoc() {
+        assert_eq!(
+            refusal("charter handoff report \"Dropped it. Two repos changed.\""),
+            None
+        );
+        assert_eq!(refusal("charter handoff report 'done'"), None);
+    }
+
+    #[test]
+    fn a_report_back_the_shell_would_rewrite_is_refused() {
+        assert_eq!(
+            reason("charter handoff report \"$(cat notes.md)\""),
+            Some(REASON_BRIEF_SOURCE)
+        );
+    }
+
+    #[test]
+    fn a_report_back_is_still_spelled_exactly_and_still_asked_only_of_the_main_chat() {
+        assert_eq!(
+            reason("charter 'handoff' report \"done\""),
+            Some(REASON_SPELLING)
+        );
+        let subagent = Caller {
+            agent_id: Some("a1"),
+            ..attended()
+        };
+        assert_eq!(
+            handoff_refusal("charter handoff report \"done\"", subagent).map(|(r, _)| r),
+            Some(REASON_SUBAGENT)
+        );
+    }
+
+    #[test]
+    fn a_handoff_into_a_workspace_called_report_is_still_judged_as_a_handoff() {
+        assert_eq!(
+            refusal("charter handoff report <<'BRIEF'\nship it\nBRIEF"),
+            None
+        );
+        assert_eq!(
+            reason("charter handoff report < brief.txt"),
+            Some(REASON_BRIEF_SOURCE)
+        );
+        assert_eq!(reason("charter handoff report"), Some(REASON_BRIEF_SOURCE));
     }
 }

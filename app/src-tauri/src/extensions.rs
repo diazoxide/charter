@@ -353,6 +353,323 @@ pub async fn forget_extension(id: String) -> Result<(), String> {
     .map_err(|err| format!("forgetting that extension did not finish: {err}"))?
 }
 
+// ---------------------------------------------------------------------------------------
+// Per project (charter-app#253, ADR 0048)
+// ---------------------------------------------------------------------------------------
+
+/// One setting an extension declares, and what this project resolved it to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ProjectExtensionSetting {
+    pub key: String,
+    pub title: String,
+    /// `bool`, `text` or `choice`.
+    pub kind: String,
+    /// The words a `choice` may be; empty otherwise.
+    pub choices: Vec<String>,
+    /// What it is when no file sets it, as text (`true`/`false` for a `bool`).
+    pub default: String,
+    /// What it is in this project, as text.
+    pub value: String,
+    /// `default`, `shared` or `local`: which file it came from.
+    pub source: String,
+}
+
+/// One extension in one project, as the Project settings tab draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ProjectExtension {
+    pub id: String,
+    pub name: String,
+    /// `on`, `off`, `needs-approval` or `not-installed`.
+    pub state: String,
+    /// `default`, `shared` or `local`: which file decided `state`.
+    pub source: String,
+    pub settings: Vec<ProjectExtensionSetting>,
+    /// Each value a file set that charter did not use, and why.
+    pub ignored: Vec<ProjectExtensionIgnored>,
+}
+
+/// A value a file set that charter did not use.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ProjectExtensionIgnored {
+    /// `charter.toml` or `charter.local.toml`: the section that says it.
+    pub file: String,
+    /// The core's sentence.
+    pub why: String,
+}
+
+/// Every extension this machine has installed, and every one this project's files name, with
+/// what each is in this project — `extension::project::resolve`, shaped for the wire.
+///
+/// It takes a survey, so it re-hashes every installed extension's directory: an extension that
+/// changed since its yes reads as needing approval here, which is the truth the tab is for. It
+/// is asked when the tab is opened and after it saves, never on a timer.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_extensions(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+) -> Result<Vec<ProjectExtension>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        project_rows(
+            &extension::survey(&config),
+            &extension::project::Choices::read(&root),
+        )
+    })
+    .await
+    .map_err(|err| format!("reading this project's extensions did not finish: {err}"))
+}
+
+/// [`project_extensions`] without a runtime.
+fn project_rows(
+    seen: &extension::Survey,
+    choices: &extension::project::Choices,
+) -> Vec<ProjectExtension> {
+    let installed = extension::project::Installed::from_survey(seen);
+    extension::project::resolve(&installed, choices)
+        .into_iter()
+        .map(|it| {
+            let declared = installed
+                .iter()
+                .find(|one| one.id == it.id)
+                .map(|one| one.settings.as_slice())
+                .unwrap_or_default();
+            ProjectExtension {
+                settings: it
+                    .settings
+                    .iter()
+                    .filter_map(|resolved| {
+                        let setting = declared.iter().find(|d| d.key == resolved.key)?;
+                        let (kind, choices) = match &setting.kind {
+                            extension::SettingKind::Bool => ("bool", Vec::new()),
+                            extension::SettingKind::Text => ("text", Vec::new()),
+                            extension::SettingKind::Choice(words) => ("choice", words.clone()),
+                        };
+                        Some(ProjectExtensionSetting {
+                            key: setting.key.clone(),
+                            title: setting.title.clone(),
+                            kind: kind.to_owned(),
+                            choices,
+                            default: as_text(&setting.default),
+                            value: as_text(&resolved.value),
+                            source: resolved.source.as_str().to_owned(),
+                        })
+                    })
+                    .collect(),
+                id: it.id,
+                name: it.name,
+                state: it.state.as_str().to_owned(),
+                source: it.source.as_str().to_owned(),
+                ignored: it
+                    .ignored
+                    .into_iter()
+                    .map(|one| ProjectExtensionIgnored {
+                        file: one.source.file().unwrap_or_default().to_owned(),
+                        why: one.why,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+fn as_text(value: &extension::SettingValue) -> String {
+    match value {
+        extension::SettingValue::Bool(b) => b.to_string(),
+        extension::SettingValue::Text(text) => text.clone(),
+    }
+}
+
+/// The ids of the extensions that are on in this project: what the window keeps of the panels,
+/// views and themes it surveyed once, while this project is in front.
+///
+/// **The record alone, and no extension's directory** — so it is cheap enough to ask for every
+/// project a window holds. What it cannot see, an extension that changed since its yes, the
+/// survey already left out of what the window holds, and the executor re-takes the fingerprint
+/// at every press. The precedence is `extension::project::resolve`'s, as everywhere else.
+#[tauri::command]
+#[specta::specta]
+pub async fn extensions_on(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+) -> Result<Vec<String>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        on_ids(
+            &extension::read(&config),
+            &extension::project::Choices::read(&root),
+        )
+    })
+    .await
+    .map_err(|err| format!("reading this project's extensions did not finish: {err}"))
+}
+
+/// [`extensions_on`] without a runtime.
+fn on_ids(loaded: &extension::Loaded, choices: &extension::project::Choices) -> Vec<String> {
+    extension::project::resolve(&extension::project::Installed::from_record(loaded), choices)
+        .into_iter()
+        .filter(extension::project::Effective::is_on)
+        .map(|it| it.id)
+        .collect()
+}
+
+// ---------------------------------------------------------------------------------------
+// A project's theme (charter-app#273, ADR 0048)
+// ---------------------------------------------------------------------------------------
+
+/// One theme a project may pick, as the Theme select lists it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ThemeOption {
+    /// What the file holds: `charter-dark`, `charter-light`, `system`, or `<extension>/<theme>`.
+    pub value: String,
+    /// What the select shows.
+    pub label: String,
+}
+
+/// A project's theme, as the Project settings tab draws it —
+/// `extension::project::theme::resolve`, shaped for the wire.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ProjectTheme {
+    /// charter's own themes, following the system, and every theme an extension this machine
+    /// approved contributes — whether or not this project has that extension on.
+    pub options: Vec<ThemeOption>,
+    /// What the files pick, in force, as a file holds it; `null` when neither picks one.
+    pub picked: Option<String>,
+    /// `charter.toml` or `charter.local.toml`: the file `picked` came from; `null` with no pick.
+    pub file: Option<String>,
+    /// What the window draws while this project is in front; `null` leaves it its own theme.
+    pub draws: Option<String>,
+    /// Why `draws` is not `picked`, when it is not.
+    pub why: Option<String>,
+    /// Each value a file set that charter did not use, and why.
+    pub ignored: Vec<ProjectExtensionIgnored>,
+}
+
+/// This project's theme, with every theme it may pick. It takes a survey, as
+/// [`project_extensions`] does, so a pick the extension no longer contributes is said here.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_theme(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+) -> Result<ProjectTheme, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        project_theme_of(
+            &extension::survey(&config),
+            &extension::project::Choices::read(&root),
+            &extension::project::theme::Said::read(&root),
+        )
+    })
+    .await
+    .map_err(|err| format!("reading this project's theme did not finish: {err}"))
+}
+
+/// [`project_theme`] without a runtime.
+fn project_theme_of(
+    seen: &extension::Survey,
+    choices: &extension::project::Choices,
+    said: &extension::project::theme::Said,
+) -> ProjectTheme {
+    use extension::project::theme;
+    let installed = extension::project::Installed::from_survey(seen);
+    let offered: Vec<theme::Offered> = in_force(seen)
+        .into_iter()
+        .map(|one| theme::Offered {
+            id: one.extension,
+            name: one.name,
+        })
+        .collect();
+    let it = theme::resolve(
+        &extension::project::resolve(&installed, choices),
+        Some(&offered),
+        said,
+    );
+    let mut options: Vec<ThemeOption> = extension::BUILT_IN_THEMES
+        .iter()
+        .map(|name| ThemeOption {
+            value: (*name).to_owned(),
+            label: format!("{name} (built in)"),
+        })
+        .collect();
+    options.push(ThemeOption {
+        value: theme::SYSTEM.to_owned(),
+        label: "Follow the system".to_owned(),
+    });
+    options.extend(offered.iter().map(|one| {
+        let whose = installed
+            .iter()
+            .find(|it| it.id == one.id)
+            .map_or(one.id.as_str(), |it| it.name.as_str());
+        ThemeOption {
+            value: theme::Pick::Extension {
+                id: one.id.clone(),
+                name: one.name.clone(),
+            }
+            .value(),
+            label: format!("{} ({whose})", one.name),
+        }
+    }));
+    ProjectTheme {
+        options,
+        picked: it.picked.as_ref().map(theme::Pick::value),
+        file: it.source.file().map(str::to_owned),
+        draws: it.draws.as_ref().map(theme::Pick::value),
+        why: it.why,
+        ignored: it
+            .ignored
+            .into_iter()
+            .map(|one| ProjectExtensionIgnored {
+                file: one.source.file().unwrap_or_default().to_owned(),
+                why: one.why,
+            })
+            .collect(),
+    }
+}
+
+/// What the window draws while this project is in front, as a file holds it: `null` leaves the
+/// window its own theme.
+///
+/// **The record alone**, as [`extensions_on`] is, so it is cheap enough to ask for every project
+/// a window holds. A pick the extension does not contribute is left to the window, which only
+/// ever holds the themes a survey found, and draws the built-in when the pick is not among them.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_theme_drawn(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+) -> Result<Option<String>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        project_theme_drawn_of(
+            &extension::read(&config),
+            &extension::project::Choices::read(&root),
+            &extension::project::theme::Said::read(&root),
+        )
+    })
+    .await
+    .map_err(|err| format!("reading this project's theme did not finish: {err}"))
+}
+
+/// [`project_theme_drawn`] without a runtime.
+fn project_theme_drawn_of(
+    loaded: &extension::Loaded,
+    choices: &extension::project::Choices,
+    said: &extension::project::theme::Said,
+) -> Option<String> {
+    use extension::project::theme;
+    let on =
+        extension::project::resolve(&extension::project::Installed::from_record(loaded), choices);
+    theme::resolve(&on, None, said)
+        .draws
+        .as_ref()
+        .map(theme::Pick::value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +793,111 @@ mod tests {
         let listed = listed(&extension::survey(&config));
 
         assert_eq!(listed.built_in_themes, extension::BUILT_IN_THEMES.to_vec());
+    }
+
+    #[test]
+    fn a_project_that_turns_an_approved_extension_off_has_it_off_and_says_which_file() {
+        let (_dir, at, config) = made();
+        let found = extension::install(&config, &at).expect("installed");
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        let choices = extension::project::Choices::from_text(
+            None,
+            Some("[extensions.solarized]\nenabled = false\n"),
+        );
+
+        let rows = project_rows(&extension::survey(&config), &choices);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.id.as_str(), row.state.as_str(), row.source.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("solarized", "off", "local")]
+        );
+        assert_eq!(
+            on_ids(&extension::read(&config), &choices),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            on_ids(
+                &extension::read(&config),
+                &extension::project::Choices::default()
+            ),
+            vec!["solarized".to_owned()],
+            "a project that says nothing kept the machine-wide answer"
+        );
+    }
+
+    #[test]
+    fn a_project_that_wants_an_unapproved_extension_reads_as_needing_approval_here() {
+        let (_dir, at, config) = made();
+        extension::install(&config, &at).expect("installed");
+        let choices = extension::project::Choices::from_text(
+            Some("[extensions.solarized]\nenabled = true\n"),
+            None,
+        );
+
+        let rows = project_rows(&extension::survey(&config), &choices);
+        assert_eq!(
+            (rows[0].state.as_str(), rows[0].source.as_str()),
+            ("needs-approval", "shared")
+        );
+        assert!(on_ids(&extension::read(&config), &choices).is_empty());
+    }
+
+    #[test]
+    fn a_projects_theme_offers_every_approved_theme_and_says_why_one_turned_off_is_not_drawn() {
+        // charter-app#273.
+        let (_dir, at, config) = made();
+        let found = extension::install(&config, &at).expect("installed");
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        let shared = "[theme]\nuse = \"solarized/Solarized Dark\"\n";
+        let local = "[extensions.solarized]\nenabled = false\n";
+        let choices = extension::project::Choices::from_text(Some(shared), Some(local));
+        let said = extension::project::theme::Said::from_text(Some(shared), Some(local));
+
+        let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+        assert_eq!(
+            theme
+                .options
+                .iter()
+                .map(|one| (one.value.as_str(), one.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("charter-dark", "charter-dark (built in)"),
+                ("charter-light", "charter-light (built in)"),
+                ("system", "Follow the system"),
+                ("solarized/Solarized Dark", "Solarized Dark (Solarized)"),
+            ]
+        );
+        assert_eq!(theme.picked.as_deref(), Some("solarized/Solarized Dark"));
+        assert_eq!(theme.file.as_deref(), Some("charter.toml"));
+        assert_eq!(theme.draws.as_deref(), Some("charter-dark"));
+        assert_eq!(
+            theme.why.as_deref(),
+            Some(
+                "charter.toml picks “Solarized Dark” from solarized, but solarized is off in this \
+                 project — so the built-in charter-dark is drawn"
+            )
+        );
+        assert_eq!(
+            project_theme_drawn_of(&extension::read(&config), &choices, &said).as_deref(),
+            Some("charter-dark"),
+            "the window drew a theme the project turned off"
+        );
+
+        let choices = extension::project::Choices::from_text(Some(shared), None);
+        let said = extension::project::theme::Said::from_text(Some(shared), None);
+        assert_eq!(
+            project_theme_drawn_of(&extension::read(&config), &choices, &said).as_deref(),
+            Some("solarized/Solarized Dark")
+        );
+        assert_eq!(
+            project_theme_drawn_of(
+                &extension::read(&config),
+                &choices,
+                &extension::project::theme::Said::default()
+            ),
+            None,
+            "a project that picks nothing leaves the window its own theme"
+        );
     }
 }

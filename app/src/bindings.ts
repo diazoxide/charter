@@ -545,6 +545,39 @@ export const commands = {
 	 */
 	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
 	/**
+	 *  Every extension this machine has installed, and every one this project's files name, with
+	 *  what each is in this project — `extension::project::resolve`, shaped for the wire.
+	 * 
+	 *  It takes a survey, so it re-hashes every installed extension's directory: an extension that
+	 *  changed since its yes reads as needing approval here, which is the truth the tab is for. It
+	 *  is asked when the tab is opened and after it saves, never on a timer.
+	 */
+	projectExtensions: (plane: PlaneId) => typedError<ProjectExtension[], string>(__TAURI_INVOKE("project_extensions", { plane })),
+	/**
+	 *  The ids of the extensions that are on in this project: what the window keeps of the panels,
+	 *  views and themes it surveyed once, while this project is in front.
+	 * 
+	 *  **The record alone, and no extension's directory** — so it is cheap enough to ask for every
+	 *  project a window holds. What it cannot see, an extension that changed since its yes, the
+	 *  survey already left out of what the window holds, and the executor re-takes the fingerprint
+	 *  at every press. The precedence is `extension::project::resolve`'s, as everywhere else.
+	 */
+	extensionsOn: (plane: PlaneId) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane })),
+	/**
+	 *  This project's theme, with every theme it may pick. It takes a survey, as
+	 *  [`project_extensions`] does, so a pick the extension no longer contributes is said here.
+	 */
+	projectTheme: (plane: PlaneId) => typedError<ProjectTheme, string>(__TAURI_INVOKE("project_theme", { plane })),
+	/**
+	 *  What the window draws while this project is in front, as a file holds it: `null` leaves the
+	 *  window its own theme.
+	 * 
+	 *  **The record alone**, as [`extensions_on`] is, so it is cheap enough to ask for every project
+	 *  a window holds. A pick the extension does not contribute is left to the window, which only
+	 *  ever holds the themes a survey found, and draws the built-in when the pick is not among them.
+	 */
+	projectThemeDrawn: (plane: PlaneId) => typedError<string | null, string>(__TAURI_INVOKE("project_theme_drawn", { plane })),
+	/**
 	 *  Every view an approved extension offers this window.
 	 * 
 	 *  An extension that is new, changed or unreadable offers nothing — the registry's one job, as
@@ -928,6 +961,14 @@ export type ExtensionView = {
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
+/**  Where a handed-off chat came from, as the window draws it. */
+export type HandedFromNote = {
+	/**  The chat it came from, by the name the operator saw it under. */
+	name: string,
+	/**  The workspace it came from. */
+	workspace: string,
+};
+
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
  *  later decision about extensions is read off.
@@ -1017,6 +1058,13 @@ export type Moved = {
 	 */
 	moved_at: number,
 	/**
+	 *  The chats that have reported back to this one and not been read yet, by the name the
+	 *  operator sees them under, oldest first (charter-app#259). Each is a needs-you item that
+	 *  says `<child> reported back` rather than only this chat's name. Empty for nearly every
+	 *  chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
+	 */
+	reports: string[],
+	/**
 	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
 	 * 
 	 *  **What lets the window put its events back in order.** Every `Moved` is built under the
@@ -1091,6 +1139,11 @@ export type OpenChat = {
 	 *  started with.
 	 */
 	label: string | null,
+	/**
+	 *  Where a handoff opened it from, where one did: the note its tab's tooltip and its header
+	 *  draw, `↳ from steward 3 · ops` (charter-app#258). Never the parent's number.
+	 */
+	from: HandedFromNote | null,
 };
 
 /**
@@ -1229,6 +1282,15 @@ export type Panels = {
 	workspace: string,
 	/**  The clones on disk, by name, in the order the directory lists them. */
 	repos: string[],
+	/**
+	 *  Where each clone in `repos` is, by name: the path `repos::clones` **checked**, so the
+	 *  window never joins one together (charter-app#174). It is what lets a clone be picked as
+	 *  where the next chat starts, from the explorer's heading and the bottom bar's row.
+	 * 
+	 *  Beside `repos` rather than in place of it, so the order the directory lists them in and
+	 *  every reader of the names stay as they are.
+	 */
+	paths: { [key in string]: string },
 	/**  Repos `workspace.json` names that are not cloned here. Membership, not presence. */
 	absent: string[],
 	/**
@@ -1436,10 +1498,69 @@ export type ProfileRow = {
 	approval: string | null,
 };
 
+/**  One extension in one project, as the Project settings tab draws it. */
+export type ProjectExtension = {
+	id: string,
+	name: string,
+	/**  `on`, `off`, `needs-approval` or `not-installed`. */
+	state: string,
+	/**  `default`, `shared` or `local`: which file decided `state`. */
+	source: string,
+	settings: ProjectExtensionSetting[],
+	/**  Each value a file set that charter did not use, and why. */
+	ignored: ProjectExtensionIgnored[],
+};
+
+/**  A value a file set that charter did not use. */
+export type ProjectExtensionIgnored = {
+	/**  `charter.toml` or `charter.local.toml`: the section that says it. */
+	file: string,
+	/**  The core's sentence. */
+	why: string,
+};
+
+/**  One setting an extension declares, and what this project resolved it to. */
+export type ProjectExtensionSetting = {
+	key: string,
+	title: string,
+	/**  `bool`, `text` or `choice`. */
+	kind: string,
+	/**  The words a `choice` may be; empty otherwise. */
+	choices: string[],
+	/**  What it is when no file sets it, as text (`true`/`false` for a `bool`). */
+	default: string,
+	/**  What it is in this project, as text. */
+	value: string,
+	/**  `default`, `shared` or `local`: which file it came from. */
+	source: string,
+};
+
 /**  Both files. */
 export type ProjectSettings = {
 	shared: SettingsFile,
 	local: SettingsFile,
+};
+
+/**
+ *  A project's theme, as the Project settings tab draws it —
+ *  `extension::project::theme::resolve`, shaped for the wire.
+ */
+export type ProjectTheme = {
+	/**
+	 *  charter's own themes, following the system, and every theme an extension this machine
+	 *  approved contributes — whether or not this project has that extension on.
+	 */
+	options: ThemeOption[],
+	/**  What the files pick, in force, as a file holds it; `null` when neither picks one. */
+	picked: string | null,
+	/**  `charter.toml` or `charter.local.toml`: the file `picked` came from; `null` with no pick. */
+	file: string | null,
+	/**  What the window draws while this project is in front; `null` leaves it its own theme. */
+	draws: string | null,
+	/**  Why `draws` is not `picked`, when it is not. */
+	why: string | null,
+	/**  Each value a file set that charter did not use, and why. */
+	ignored: ProjectExtensionIgnored[],
 };
 
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
@@ -1719,6 +1840,14 @@ export type Started = {
 	 *  blank — so the tab draws what the record holds rather than what was typed.
 	 */
 	label: string | null,
+};
+
+/**  One theme a project may pick, as the Theme select lists it. */
+export type ThemeOption = {
+	/**  What the file holds: `charter-dark`, `charter-light`, `system`, or `<extension>/<theme>`. */
+	value: string,
+	/**  What the select shows. */
+	label: string,
 };
 
 /**  What the operating system has already spent of the window's own title bar. */

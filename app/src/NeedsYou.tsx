@@ -1,11 +1,11 @@
-/** What a chat is doing, as the tab and the queue draw it. */
-import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
-import { CircleCheck, Hand, SquareTerminal, X } from "lucide-react";
-import type { KeyboardEvent } from "react";
-import { ignoreId, type Catalogued, type Offer } from "./actions";
+/** What a chat is doing, as the tab draws it, and the queue of chats asking for you. */
+import { Hand, X } from "lucide-react";
+import * as Menu from "@radix-ui/react-dropdown-menu";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import type { Offer } from "./actions";
 import { type State } from "./chatState";
 import { useArrived } from "./lib/arrived";
-import { useTabStop } from "./roving";
+import { moveAlong } from "./tabSequence";
 import { deletes } from "./tabKeys";
 
 /** The word beside a chat's name. */
@@ -36,104 +36,6 @@ export function ChatState({ state }: { state: State }) {
 }
 
 /**
- * The chats asking for you, across every workspace.
- *
- * It holds only chats that ASKED — one that has never run is `waiting` for a first prompt,
- * which is not the same thing. A relaunch that put twenty chats back must not fill this.
- *
- * And it names the chats it cannot vouch for. A harness that cannot report everything — a
- * Codex chat stopped mid-turn for an approval says nothing (charter-app#52, and there is no
- * way for it to say so that does not arm a hook which DECIDES a permission) — can be waiting
- * on you while the queue is empty.
- *
- * **So the empty state says what is known and not more.** "Nothing needs you" is a claim
- * about every chat on the plane; while a chat that cannot report one is open, what charter
- * actually knows is that nothing has SAID so. The hedge used to sit in a second sentence
- * under a headline that still claimed the certainty — a precise "this may be waiting and
- * cannot say" beats a confident wrong state, and it cannot be built out of two sentences
- * that disagree.
- */
-export function NeedsYou({
-  queue,
-  quiet,
-  nameOf,
-  show,
-  offers,
-  onPress,
-}: {
-  queue: readonly number[];
-  /** The chats that can be waiting on you without saying so, by name. */
-  quiet: readonly string[];
-  nameOf: (session: number) => string;
-  show: (session: number) => void;
-  /** The catalogue by id, where each item's Ignore row (`needs.ignore:<session>`) is. */
-  offers: Catalogued;
-  onPress: (offer: Offer) => void;
-}) {
-  // The queue is ONE Tab stop, its oldest chat, and Up and Down move along it (charter-app#189,
-  // `roving.ts`): at fifty chats asking, fifty stops would be the strip's problem over again.
-  const stop = useTabStop(undefined, queue.map(String));
-  const unsaid =
-    quiet.length === 0 ? null : (
-      <span className="needs-you-quiet">
-        {quiet.length === 1
-          ? `${quiet[0]} can be waiting on you without saying so.`
-          : `${quiet.length} chats can be waiting on you without saying so.`}
-      </span>
-    );
-  if (queue.length === 0) {
-    // Said rather than left blank: an empty queue is the good state, and a blank space does
-    // not tell anyone the app is watching. Which of the two sentences it is depends on
-    // whether every open chat can report — never both, because they are different claims.
-    return (
-      <div className="needs-you needs-you-empty" aria-label="Needs you">
-        <span>
-          <CircleCheck className="node-icon" />
-          {quiet.length === 0 ? "Nothing needs you" : "Nothing has said it needs you"}
-        </span>
-        {unsaid}
-      </div>
-    );
-  }
-  return (
-    // **The loudest thing in the window, and deliberately.** This number is why charter-app
-    // exists: it is how many chats have stopped and are waiting on the operator, and at fifty
-    // sessions it is the only thing on screen that is worth interrupting for. So it is drawn
-    // at a size nothing else here has, in `needs-you.base`, with the one hand-raised mark the
-    // window uses — and the sentence still says the number in words for anyone who is read to.
-    <div className="needs-you" aria-label="Needs you">
-      <span className="needs-you-count">
-        <Hand className="node-icon" />
-        <strong className="needs-you-number">{queue.length}</strong>
-        {" need you"}
-      </span>
-      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-        <ul>
-          {queue.map((session) => {
-            const ignore = offers.get(ignoreId(session));
-            return (
-              <li key={session}>
-                <RovingFocusGroup.Item asChild tabStopId={String(session)}>
-                  <button
-                    onClick={() => show(session)}
-                    onKeyDown={(event) => ignoreOnDelete(event, ignore, onPress)}
-                  >
-                    <SquareTerminal className="node-icon" />
-                    {nameOf(session)}
-                  </button>
-                </RovingFocusGroup.Item>
-                <Ignore offer={ignore} onPress={onPress} />
-              </li>
-            );
-          })}
-        </ul>
-      </RovingFocusGroup.Root>
-      {unsaid}
-    </div>
-  );
-}
-
-/**
  * **A needs-you item's Ignore** (charter-app#248): the catalogue's `needs.ignore:<session>` row
  * drawn as the `✕` a pointer wants, so its accessible name is the row's words — "Ignore ide.3
  * until it asks again" — and the glyph is only the glyph.
@@ -142,10 +44,10 @@ export function NeedsYou({
  * back. The core holds that (`ignore_needs_you`), and the red counts on the project and
  * workspace tabs go down with the item because they are read from the same queue.
  *
- * **Not a Tab stop**, for the reason a tab's `×` is not (charter-app#189): the queue is one stop,
- * and fifty chats asking must not become a hundred. The keyboard's way to it is Delete on the
- * item ([`ignoreOnDelete`]) or the palette's row. Exported, with that handler, for whatever
- * lists the queue next — the title bar's list (charter-app#249).
+ * **Out of the keyboard's way**, for the reason a tab's `×` is (charter-app#189): in the title
+ * bar's list each chat is ONE item for the arrows, and fifty chats asking must not become a
+ * hundred. The keyboard's way to it is Delete on the item ([`ignoreOnDelete`]) or the
+ * palette's row.
  */
 export function Ignore({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
   if (!offer) return null;
@@ -155,6 +57,9 @@ export function Ignore({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
       tabIndex={-1}
       aria-label={offer.title}
       title={offer.title}
+      // A press does not take the keyboard: the ✕ leaves with its item, and focus on an
+      // element that goes is focus on the page. It stays in the list, where the arrows work.
+      onPointerDown={(event) => event.preventDefault()}
       onClick={() => onPress(offer)}
     >
       <X />
@@ -178,8 +83,239 @@ export function ignoreOnDelete(
 ) {
   if (offer === undefined || !deletes(event)) return;
   event.preventDefault();
-  const item = event.currentTarget.closest("li");
-  const neighbour = item?.nextElementSibling ?? item?.previousElementSibling;
+  const row = event.currentTarget.closest(".needs-you-row");
+  const rows = [...(row?.parentElement?.querySelectorAll(".needs-you-row") ?? [])];
+  const at = row ? rows.indexOf(row) : -1;
+  const neighbour = rows[at + 1] ?? rows[at - 1];
   onPress(offer);
-  neighbour?.querySelector<HTMLElement>("button")?.focus();
+  neighbour?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+}
+
+/** One chat asking for the operator, as its project reports it to the window. */
+export type Asking = {
+  session: number;
+  /** What the chat is called there (`nameOf`), so a chat's name reads the same everywhere. */
+  name: string;
+  /** The workspace it is filed in, already said as the strip says it. */
+  workspace: string;
+  /**
+   * The chats that have reported back to this one and not been read, by name (charter-app#259).
+   * Its row then says `<child> reported back` — what the operator is being asked to look at —
+   * and Go still opens THIS chat, the one that asked, whose next turn is handed the report.
+   */
+  reported?: readonly string[];
+  /** The catalogue's `needs.show:<session>`: the chat to the front, its workspace with it. */
+  go?: Offer;
+  /** The catalogue's `needs.ignore:<session>`. */
+  ignore?: Offer;
+};
+
+/** The same, as the window lists it: with the project it is in, whose rows these are. */
+export type Needing = Asking & {
+  plane: string;
+  /** The project, named as its tab names it. */
+  project: string;
+};
+
+/** A chat that can be waiting on the operator without being able to say so (charter-app#52):
+ *  a shell, or a harness without charter's hooks. */
+export type Quiet = {
+  name: string;
+  /** The project it is in, named as its tab names it. */
+  project: string;
+};
+
+/** What the faint hand says, in its name and its tooltip. */
+function quietSaid(quiet: readonly Quiet[]): string {
+  return quiet.length === 1
+    ? `Nothing has asked for you, but ${quiet[0].name} can't tell charter it's waiting`
+    : `Nothing has asked for you, but ${quiet.length} chats can't tell charter they're waiting`;
+}
+
+/**
+ * **The needs-you queue, in the title bar** (charter-app#249): a hand and a count, and nothing
+ * at all when nothing needs you. Pressed, it drops a list of every chat asking across every
+ * project the window holds — its name, then its workspace and project — and each one has
+ * **Go** (that chat to the front, its project and workspace with it) and **✕** (Ignore).
+ *
+ * It is the queue's ONLY place. It lived in the Attention panel, which is one project's and
+ * one workspace's; a chat asking in a project behind the one on screen was a red number on
+ * that project's tab and nothing more. The title bar is the window's, so it can hold them all.
+ *
+ * **A Radix menu** (ADR 0037), with the show-more menu's two decisions (`docs/ui-primitives.md`):
+ * not modal, and a click outside closes it. So the keyboard is the primitive's — Enter opens it
+ * on its first chat, the arrows move, Escape closes it and puts the keyboard back on the button.
+ * Each chat is ONE menu item, which is its Go; the `✕` beside it is [`Ignore`], out of the
+ * arrows' way as it is out of Tab's in the queue it came from, and Delete on the item is the
+ * keyboard's way to it ([`ignoreOnDelete`]).
+ *
+ * **Three states, and the middle one is the honest one** (the operator's ruling on #249):
+ *
+ * - a chat has asked: the hand, and the count;
+ * - nothing has asked, but a chat that cannot report is open — a shell, a harness without
+ *   charter's hooks (charter-app#52): a **faint hand with no number**, whose name, tooltip and
+ *   list say which chats those are. "Nothing needs you" would be a claim about a chat charter
+ *   cannot see, and a blank bar says it without words;
+ * - neither: nothing at all.
+ *
+ * The faint hand is the same button with the same menu, so the keyboard reaches it the same way.
+ */
+export function NeedsYouMenu({
+  items,
+  quiet,
+  onPress,
+}: {
+  items: readonly Needing[];
+  /** The chats that can be waiting without saying so, across every project. */
+  quiet: readonly Quiet[];
+  /** Carries a row out in the project it belongs to. */
+  onPress: (plane: string, offer: Offer) => void;
+}) {
+  /**
+   * Whether the list is up — held here rather than left to Radix, for the show-more menu's
+   * measured reason (`PlaneView.ShowMore`): Radix opens on `pointerdown`, and the WebView a
+   * scenario drives answers a click with no pointer event at all.
+   */
+  const [open, setOpen] = useState(false);
+  /** Whether the list closed because a Go put the keyboard in a chat (see `onCloseAutoFocus`). */
+  const went = useRef(false);
+  /**
+   * **The keyboard, when the last chat leaves.** Focus on an element that goes is focus on the
+   * page, where the next key does nothing — the reason [`ignoreOnDelete`] moves it before the
+   * item leaves. With no item left to move to, it goes to the faint hand when there is one, and
+   * otherwise to the next Tab stop after where the button was, as Tab would
+   * (`tabSequence.moveAlong`).
+   * `held` is whether the keyboard was on the button or in the
+   * list (React's focus events travel out of the portal the list is drawn in); a blur towards
+   * somewhere else clears it, and the element being taken away is no such blur.
+   */
+  const anchor = useRef<HTMLSpanElement>(null);
+  const held = useRef(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const asked = items.length > 0;
+  const none = !asked && quiet.length === 0;
+  // The button appearing because a chat has just asked, as opposed to having been there when
+  // the bar was drawn: only the first is a change worth drawing (`useArrived`).
+  const arrived = useArrived(asked);
+  // A list that emptied is a list that closed: the next chat to ask brings the button back,
+  // not a menu the operator did not open. Adjusted while rendering, React's own way to reset
+  // state on a change of props.
+  if (none && open) setOpen(false);
+  useLayoutEffect(() => {
+    if (asked || !held.current) return;
+    held.current = false;
+    const lost = document.activeElement === null || document.activeElement === document.body;
+    if (!lost) return;
+    if (trigger.current) trigger.current.focus();
+    else if (anchor.current) moveAlong(anchor.current, false);
+  }, [asked]);
+  const said = asked
+    ? `${items.length} ${items.length === 1 ? "chat needs" : "chats need"} you`
+    : quietSaid(quiet);
+  return (
+    // `display: contents`: a place to be next to, not a box in the bar's row.
+    <span
+      ref={anchor}
+      className="needs-you-anchor"
+      onFocus={() => {
+        held.current = true;
+      }}
+      onBlur={(event) => {
+        if (event.relatedTarget !== null) held.current = false;
+      }}
+    >
+      {!none && (
+        <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
+          <Menu.Trigger asChild>
+            {/* `tabIndex={0}`: WebKit leaves a `<button>` out of the tab sequence unless its
+            `tabindex` is written down (`docs/ui-primitives.md`, charter-app#186), and Tauri's
+            drag handler stops at it either way because it is a `<button>`. */}
+            <button
+              ref={trigger}
+              type="button"
+              className={`needs-you-button${asked ? "" : " muted"}${arrived && asked ? " arrived" : ""}`}
+              data-testid="needs-you-button"
+              tabIndex={0}
+              aria-label={said}
+              title={said}
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => setOpen((up) => !up)}
+            >
+              <Hand aria-hidden="true" />
+              {asked && <span className="needs-you-number">{items.length}</span>}
+            </button>
+          </Menu.Trigger>
+          <Menu.Portal>
+            <Menu.Content
+              className="more-menu needs-you-menu"
+              align="end"
+              sideOffset={4}
+              collisionPadding={8}
+              onCloseAutoFocus={(event) => {
+                // **Go leaves the keyboard in the chat it went to.** A pane that becomes the
+                // focused one takes the keyboard itself (`SessionPane`), and Radix putting it back
+                // on this button a tick later would take it away again. When Go put it nowhere —
+                // the chat was already in front — the button gets it, as Escape's close does.
+                const kept = went.current && document.activeElement !== document.body;
+                went.current = false;
+                if (kept) event.preventDefault();
+              }}
+            >
+              {items.map((item) => {
+                const press = (offer: Offer) => onPress(item.plane, offer);
+                const back =
+                  item.reported && item.reported.length > 0
+                    ? `${item.reported.join(", ")} reported back`
+                    : undefined;
+                const where = `${back ? `${item.name}: ${back}` : item.name} · ${item.workspace} · ${item.project}`;
+                return (
+                  <Menu.Group
+                    key={`${item.plane}#${item.session}`}
+                    className="needs-you-row"
+                    aria-label={item.name}
+                  >
+                    <Menu.Item
+                      className="more-tab needs-you-go"
+                      aria-label={`Go to ${where}`}
+                      // Not `disabled`: a disabled item is skipped by the arrows, and Delete on
+                      // it is still the keyboard's way to its Ignore. It says it cannot go.
+                      aria-disabled={item.go?.available === false || undefined}
+                      aria-keyshortcuts="Delete"
+                      title={item.go?.available === false ? item.go.reason : `Go to ${where}`}
+                      onSelect={(event) => {
+                        if (!item.go?.available) {
+                          event.preventDefault();
+                          return;
+                        }
+                        went.current = true;
+                        press(item.go);
+                      }}
+                      onKeyDown={(event) => ignoreOnDelete(event, item.ignore, press)}
+                    >
+                      <span className="needs-you-name">{back ?? item.name}</span>
+                      <span className="needs-you-where">
+                        {item.workspace} · {item.project}
+                      </span>
+                      <span className="needs-you-word">Go</span>
+                    </Menu.Item>
+                    <Ignore offer={item.ignore} onPress={press} />
+                  </Menu.Group>
+                );
+              })}
+              {quiet.length > 0 && (
+                <Menu.Group className="needs-you-quiet" aria-label="Can't say they're waiting">
+                  {quiet.map((one) => (
+                    <p key={`${one.project}#${one.name}`}>
+                      <span className="needs-you-name">{one.name}</span>
+                      {` · ${one.project} can't tell charter it's waiting`}
+                    </p>
+                  ))}
+                </Menu.Group>
+              )}
+            </Menu.Content>
+          </Menu.Portal>
+        </Menu.Root>
+      )}
+    </span>
+  );
 }

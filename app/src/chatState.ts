@@ -44,6 +44,12 @@ export type ChatStates = {
    */
   readonly queueFrom: number;
   readonly heardAt: Readonly<Record<number, number>>;
+  /**
+   * The chats that have reported back to each chat and not been read, by name (charter-app#259).
+   * A chat with any is a needs-you item that says `<child> reported back`. Only the chat's own
+   * snapshots change it, under `heardAt`'s rule, and its next prompt empties it.
+   */
+  readonly reports: Readonly<Record<number, readonly string[]>>;
 };
 
 export const nothingKnown: ChatStates = {
@@ -52,6 +58,7 @@ export const nothingKnown: ChatStates = {
   movedAt: {},
   queueFrom: 0,
   heardAt: {},
+  reports: {},
 };
 
 /** The state of one chat, which is `unknown` until something says otherwise. */
@@ -69,6 +76,11 @@ export function movedAt(states: ChatStates, session: number): number {
   return states.movedAt[session] ?? 0;
 }
 
+/** The chats that reported back to `session` and have not been read yet, oldest first. */
+export function reportsTo(states: ChatStates, session: number): readonly string[] {
+  return states.reports[session] ?? [];
+}
+
 /**
  * The chats that can be waiting on the operator without saying so, by name.
  *
@@ -77,12 +89,17 @@ export function movedAt(states: ChatStates, session: number): number {
  * something it cannot see. Not one already in the queue, which is named there, and not one
  * whose program has ended, which cannot be waiting on anybody.
  */
-export function quietOnes(chats: readonly OpenChat[], states: ChatStates): string[] {
+export function quietOnes(
+  chats: readonly OpenChat[],
+  states: ChatStates,
+  /** What the window calls a chat, when it has a name for it — a tab's (#270). */
+  nameOf: (chat: OpenChat) => string = (chat) => chat.name,
+): string[] {
   return chats
     .filter((chat) => Boolean(chat.unreported))
     .filter((chat) => !states.needsYou.includes(chat.session))
     .filter((chat) => !["done", "failed"].includes(stateOf(states, chat.session)))
-    .map((chat) => chat.name);
+    .map(nameOf);
 }
 
 /**
@@ -111,6 +128,7 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
     movedAt: newerChat ? { ...states.movedAt, [move.session]: move.moved_at } : states.movedAt,
     queueFrom: newerQueue ? move.sequence : states.queueFrom,
     heardAt: newerChat ? { ...states.heardAt, [move.session]: move.sequence } : states.heardAt,
+    reports: newerChat ? { ...states.reports, [move.session]: move.reports } : states.reports,
   };
 }
 

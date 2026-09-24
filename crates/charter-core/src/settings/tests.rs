@@ -249,6 +249,35 @@ fn a_local_file_holding_anything_but_harness_is_refused() {
 }
 
 #[test]
+fn a_local_file_may_hold_extensions_as_well_as_harness() {
+    // charter-app#253: an extension is turned on or off, and configured, for this machine's
+    // use of the project in the Local file, which overrides the Shared one key by key.
+    let dir = plane(COMMENTED);
+    let why = refusals(
+        dir.path(),
+        Which::Local,
+        "[extensions.stats]\nenabled = false\n[extensions.stats.settings]\nwindow = \"7d\"\n",
+    );
+    assert_eq!(why, Vec::<String>::new());
+}
+
+#[test]
+fn an_extensions_table_charter_would_not_read_is_refused_in_either_file() {
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        let why = refusals(dir.path(), which, "[extensions.stats]\nenabled = \"yes\"\n");
+        assert_eq!(
+            why,
+            [format!(
+                "extensions.stats.enabled in {} is not true or false",
+                which.file()
+            )],
+            "{which:?}"
+        );
+    }
+}
+
+#[test]
 fn a_local_file_that_does_not_exist_is_created_on_the_first_save() {
     let dir = plane(COMMENTED);
     let body = "[harness]\ndefault = \"claude\"\n";
@@ -487,4 +516,48 @@ fn a_value_is_never_written_over_a_table() {
     assert!(err.contains("memory is a table"), "{err}");
     let err = edited(COMMENTED, &[set(&["forge"], Value::Text("x".into()))]).unwrap_err();
     assert!(err.contains("forge is a table"), "{err}");
+}
+
+#[test]
+fn either_file_may_pick_a_theme() {
+    // charter-app#273: a project's theme, Local over Shared.
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        for value in ["charter-light", "system", "solarized/Solarized Dark"] {
+            let why = refusals(dir.path(), which, &format!("[theme]\nuse = \"{value}\"\n"));
+            assert_eq!(why, Vec::<String>::new(), "{which:?} {value}");
+        }
+    }
+}
+
+#[test]
+fn a_theme_charter_would_not_read_is_refused_in_either_file() {
+    let dir = plane(COMMENTED);
+    for which in [Which::Shared, Which::Local] {
+        let file = which.file();
+        let why = refusals(
+            dir.path(),
+            which,
+            "[theme]\nuse = \"purple\"\nfont = \"x\"\n",
+        );
+        assert_eq!(
+            why,
+            [
+                format!(
+                    "theme.use in {file} is \"purple\", which is not charter-dark, \
+                     charter-light, system or <extension>/<theme>"
+                ),
+                format!("theme.font in {file} is not read — [theme] holds use and nothing else"),
+            ],
+            "{which:?}"
+        );
+        let why = refusals(dir.path(), which, "theme = \"system\"\n");
+        assert_eq!(
+            why,
+            [format!(
+                "theme in {file} is not a table — write [theme] with use = \"<theme>\""
+            )],
+            "{which:?}"
+        );
+    }
 }

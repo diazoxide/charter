@@ -1,6 +1,13 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -109,6 +116,7 @@ function core(
       return {
         workspace: a.workspace,
         repos: a.workspace === "alpha" ? ["svc"] : [],
+        paths: a.workspace === "alpha" ? { svc: `${ALPHA}/svc` } : {},
         absent: [],
         refused: [],
         todos: [],
@@ -216,6 +224,49 @@ describe("the four regions", () => {
     expect(startedIn(asked)).toEqual([`${CUT}/two`]);
   });
 
+  it("starts a chat in a clone picked from its menu, on the path the core spelled", async () => {
+    // charter-app#174: a clone is picked one level up from a piece, from the heading's menu,
+    // and the explorer marks it the way it marks a picked piece.
+    const { asked } = core();
+    render(<App />);
+    const clone = await screen.findByTestId("clone-svc");
+    const heading = within(clone).getByRole("treeitem", { name: /^svc/ });
+
+    fireEvent.contextMenu(heading);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Start new chats in svc" }));
+    await waitFor(() => expect(heading).toHaveAttribute("aria-current", "true"));
+    await openAChat();
+
+    expect(startedIn(asked)).toEqual([`${ALPHA}/svc`]);
+  });
+
+  it("opens the picker for a new tab in the clone from the bottom bar's row too", async () => {
+    const { asked } = core();
+    render(<App />);
+    const row = await screen.findByTestId("repo-svc");
+
+    fireEvent.contextMenu(row);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tab in svc" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+
+    expect(startedIn(asked)).toEqual([`${ALPHA}/svc`]);
+  });
+
+  it("starts only that tab in the clone, and the next New tab where it always did", async () => {
+    // The review of #174: `New tab in svc` had set the explorer's pick, which made it the
+    // same row as `Start new chats in svc` under another name.
+    const { asked } = core();
+    render(<App />);
+    fireEvent.contextMenu(await screen.findByTestId("repo-svc"));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "New tab in svc" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await waitFor(() => expect(startedIn(asked)).toHaveLength(1));
+
+    await openAChat();
+
+    expect(startedIn(asked)).toEqual([`${ALPHA}/svc`, ALPHA]);
+  });
+
   it("does not carry a pick into another workspace", async () => {
     // A pick belongs to the workspace it was made in. Carrying it across would point the
     // next chat at a directory in the workspace the operator has just left.
@@ -264,13 +315,13 @@ describe("the four regions", () => {
     expect(startedIn(asked)).toEqual([ALPHA]);
   });
 
-  it("puts the needs-you queue on the right, not on the bar", async () => {
-    core([]);
+  it("puts the needs-you queue in the title bar, and not on the right (charter-app#249)", async () => {
+    core([7]);
     render(<App />);
 
-    const queue = await screen.findByLabelText("Needs you");
-    expect(within(screen.getByTestId("panels")).getByLabelText("Needs you")).toBe(queue);
-    expect(document.querySelector("header.bar .needs-you")).toBeNull();
+    const hand = await screen.findByRole("button", { name: "1 chat needs you" });
+    expect(screen.getByTestId("title-bar")).toContainElement(hand);
+    expect(within(await screen.findByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
   });
 
   it("puts a region away and brings it back", async () => {
@@ -427,6 +478,8 @@ describe("the window the stored arrangement asks for", () => {
         { id: "aside", side: "right", order: 0, collapsed: false },
         { id: "bottom", side: "bottom", order: 0, collapsed: false },
       ],
+      // The machine's text sizes share the file (charter-app#283), written as they stand.
+      text: { window: 14, terminal: 13 },
     });
   });
 });

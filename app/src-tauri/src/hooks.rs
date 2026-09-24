@@ -44,6 +44,11 @@ pub struct Moved {
     /// export a `u64` and the app panics at startup in a debug build when one is reached
     /// for.
     pub moved_at: u32,
+    /// The chats that have reported back to this one and not been read yet, by the name the
+    /// operator sees them under, oldest first (charter-app#259). Each is a needs-you item that
+    /// says `<child> reported back` rather than only this chat's name. Empty for nearly every
+    /// chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
+    pub reports: Vec<String>,
     /// Which snapshot of the board this is — bigger was taken later (charter-app#248).
     ///
     /// **What lets the window put its events back in order.** Every `Moved` is built under the
@@ -272,6 +277,17 @@ impl Hooks {
             .unwrap_or_else(PoisonError::into_inner) = Some(answering);
     }
 
+    /// A chat `session` handed work to, shown as `from`, has reported back to it
+    /// (charter-app#259): it is a needs-you item now. Answers what the window must be told, or
+    /// nothing when no reader would see a difference; built under the same hold as the change,
+    /// for [`apply`]'s reason.
+    pub fn reported_back(&self, session: u32, from: &str) -> Option<Moved> {
+        let mut board = self.board();
+        board
+            .reported_back(session, from)
+            .then(|| seen_by(&board, &self.plane, session))
+    }
+
     pub fn socket(&self) -> Option<&Path> {
         self.socket.as_deref()
     }
@@ -335,6 +351,7 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         needs_you: queue.contains(&session),
         queue,
         moved_at: board.moved_at(session),
+        reports: board.reports(session),
     }
 }
 

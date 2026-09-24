@@ -19,19 +19,65 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mid-turn is named first, and you choose to restart now or wait. If the restart does not come
   back, the next launch offers the same sessions.
   ([#251](https://github.com/diazoxide/charter-app/issues/251))
-- **Project settings**, a tab of its own: right-click a project's tab and choose *Project
-  settings…*, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
+- **Project settings**, a tab of its own: right-click a project's tab and choose _Project
+  settings…_, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
   which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
   this machine — each as a form over the keys charter documents and as raw TOML for everything
   else. Saving keeps your comments and the order of your keys, and refuses what charter would
   refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
   in the committed file, a value that looks like a credential. Local is created on the first
   save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
+- **Extensions per project.** Each project can turn an installed extension on or off, and set
+  what it declares, in either section of Project settings: Shared for the team, Local for you,
+  and Local wins key by key. The tab shows every extension with what it is in this project —
+  on, off, _needs approval here_, or _not installed here_ — and which file decided it. Approval
+  stays with this machine: a project that enables an extension you have not approved leaves it
+  off until you approve it in Extensions. A project that says nothing keeps every approved
+  extension on, as before. Panels, views and themes follow the project in front, and a view
+  refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter-app/issues/253))
+- **A theme per project.** Project settings has a Theme select in Shared and in Local: charter's
+  dark or light theme, *Follow the system*, or any theme an extension you approved contributes.
+  Local wins over Shared. While that project is in front the window and every terminal draw its
+  theme, and switching projects switches it live. A pick whose extension is off in the project,
+  or not approved on this machine, draws the built-in dark theme, and the tab says why. A
+  project's pick wins over your `theme.json`; a project that picks nothing keeps it. ([#273](https://github.com/diazoxide/charter-app/issues/273))
 - An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
   counts on its project and workspace tabs at once, without touching the chat. It lasts until
   that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
   the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
   ([#248](https://github.com/diazoxide/charter-app/issues/248))
+- A handed-off chat is named for its task. `charter handoff --name "<short task>"` names the new
+  chat's tab, and the handoff skill always writes one from the brief; without it the tab is the
+  ordinary `<persona> <N>`, so four handoffs from one chat are four tabs you can tell apart. The
+  chat it came from is shown by name, never by number — `↳ from steward 3 · platform-next` in the
+  tab's tooltip and the chat's corner, and in the new chat's first line.
+  ([#258](https://github.com/diazoxide/charter-app/issues/258))
+- A handoff can ask for an answer. With `charter handoff --report`, the new chat is told to
+  finish with `charter handoff report "<summary>"`, and the chat that asked gets a needs-you item
+  (`<chat> reported back`) and the report as context on its next turn — quoted as data, and never
+  typed into it. The report goes only to the chat that asked, and exactly once per handoff —
+  another needs another `--report` handoff; if that chat has closed, the next chat in its workspace learns it when
+  it starts. Without `--report`, nothing changes. ([#259](https://github.com/diazoxide/charter-app/issues/259))
+- Right-click a repo — its heading in the explorer, or its row in the bottom bar — for **New tab
+  in** it, which starts that one tab's chat in the clone, and **Start new chats in** it, which
+  makes the clone where every new chat starts until you pick somewhere else, as picking a
+  worktree does one level down, and the explorer marks it.
+  Shift+F10 or the menu key opens any of charter's menus on the row the keyboard is on.
+  ([#174](https://github.com/diazoxide/charter-app/issues/174))
+
+### Changed
+
+- The needs-you queue is in the title bar now, and nowhere else. A hand and a count sit left of
+  About when anything needs you. When nothing has asked but a chat that can't report is open — a
+  shell, or a harness without charter's hooks — it is a faint hand with no number, and its
+  tooltip and list name those chats ("shell 2 can't tell charter it's waiting"). With neither,
+  nothing is there. Pressing it lists every
+  chat asking in every open project — its name, then its workspace and project — each with
+  **Go**, which brings that chat to the front and switches project and workspace to get there,
+  and **✕**, which ignores it. The Attention panel no longer has the queue; its other sections
+  are unchanged. From the keyboard, Tab reaches the button, Enter opens the list, the arrows
+  move, Delete ignores, and Escape closes it.
+  ([#249](https://github.com/diazoxide/charter-app/issues/249))
 
 ### Fixed
 
@@ -69,7 +115,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   says so instead of passing silently. ([#228](https://github.com/diazoxide/charter-app/pull/228))
 - `charter secret`, `charter persona secret` and `charter vault` are back. A chat that runs
   `charter secret exec <vault> --file KUBECONFIG=<key> -- kubectl …` or `charter secret list
-  <vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without
+<vault>` got a usage error from 0.1.0, which put charter first on the chat's `PATH` without
   them; they now answer as the Python charter did, with the plain-file, reference and 1Password
   providers, and a value still never reaches the chat: `list` prints names, `get` a size band
   and a keyed fingerprint, and `exec` hands values to the command's environment or to 0600 temp
@@ -187,7 +233,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pane rather than taking a row from it, and a very light line divides one tab from the next.
   ([#214](https://github.com/diazoxide/charter-app/pull/214))
 - The project, workspace and chat strips nest, and tabs that do not fit collapse into a
-  *N more* button instead of scrolling. ([#139](https://github.com/diazoxide/charter-app/pull/139),
+  _N more_ button instead of scrolling. ([#139](https://github.com/diazoxide/charter-app/pull/139),
   [#171](https://github.com/diazoxide/charter-app/pull/171))
 - Closing the window hides it to the tray. Quitting says which chats it will end, and the next
   launch puts back the projects and chats you had open.

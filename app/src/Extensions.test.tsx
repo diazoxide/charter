@@ -1,10 +1,11 @@
 import { StrictMode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render as renderBare, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { Extensions } from "./Extensions";
-import { BUILT_IN, DEFAULT_THEME, drawIn, inForce } from "./theme/theme";
+import { drawThemeFor, Extensions } from "./Extensions";
+import { BUILT_IN, DEFAULT_THEME, drawIn, inForce, onDrawn, type Theme } from "./theme/theme";
+import { GLOBAL } from "./windowprefs";
 
 /**
  * A colour for a theme an extension contributes, taken out of charter's own light theme
@@ -334,5 +335,162 @@ describe("a theme an extension contributes", () => {
       inForce().values["text.primary"],
       "a value that is not a colour reached the document",
     ).toBe(DEFAULT_THEME.values["text.primary"]);
+  });
+});
+
+describe("a theme, per project (charter-app#253)", () => {
+  const SOLARIZED = {
+    extension: "solarized",
+    name: "Solarized Dark",
+    text: JSON.stringify({
+      name: "Solarized Dark",
+      appearance: "dark",
+      tokens: { "surface.base": OTHER },
+    }),
+  };
+
+  it("is drawn while the project in front has its extension on", async () => {
+    core({ themes: [SOLARIZED] });
+    await drawThemeFor(new Set(["solarized"]));
+    expect(inForce().name).toBe("Solarized Dark");
+  });
+
+  it("is not drawn for a project that turned its extension off, and the built-in comes back", async () => {
+    core({ themes: [SOLARIZED] });
+    await drawThemeFor(new Set(["solarized"]));
+    expect(inForce().name).toBe("Solarized Dark");
+
+    await drawThemeFor(new Set());
+
+    expect(inForce()).toBe(DEFAULT_THEME);
+  });
+
+  it("is drawn from every approved extension when no project is in front", async () => {
+    core({ themes: [SOLARIZED] });
+    await drawThemeFor("every");
+    expect(inForce().name).toBe("Solarized Dark");
+  });
+});
+
+describe("the theme a project picks (charter-app#273)", () => {
+  const SOLARIZED = {
+    extension: "solarized",
+    name: "Solarized Dark",
+    text: JSON.stringify({
+      name: "Solarized Dark",
+      appearance: "dark",
+      tokens: { "surface.base": OTHER },
+    }),
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(globalThis, GLOBAL);
+  });
+
+  /** The operating system's appearance, as `matchMedia` answers it, and a way to change it. */
+  function system(light: boolean) {
+    const heard = new Set<(event: { matches: boolean }) => void>();
+    const query = {
+      get matches() {
+        return light;
+      },
+      addEventListener: (_: string, listen: (event: { matches: boolean }) => void) =>
+        heard.add(listen),
+      removeEventListener: (_: string, listen: (event: { matches: boolean }) => void) =>
+        heard.delete(listen),
+    };
+    vi.stubGlobal("matchMedia", (media: string) =>
+      media === "(prefers-color-scheme: light)" ? query : { ...query, matches: false },
+    );
+    return (to: boolean) => {
+      light = to;
+      for (const listen of heard) listen({ matches: to });
+    };
+  }
+
+  it("draws a built-in the project picked, whatever its extensions contribute", async () => {
+    core({ themes: [SOLARIZED] });
+    await drawThemeFor(new Set(["solarized"]), "charter-light");
+    expect(inForce()).toBe(BUILT_IN["charter-light"]);
+  });
+
+  it("draws the extension theme the project picked", async () => {
+    const light = {
+      extension: "solarized",
+      name: "Solarized Light",
+      text: JSON.stringify({ name: "Solarized Light", appearance: "light", tokens: {} }),
+    };
+    core({ themes: [SOLARIZED, light] });
+    await drawThemeFor(new Set(["solarized"]), "solarized/Solarized Light");
+    expect(inForce().name).toBe("Solarized Light");
+    expect(inForce().appearance).toBe("light");
+  });
+
+  it("falls back to the built-in when the picked theme is not among what the window holds", async () => {
+    core({ themes: [SOLARIZED] });
+    await drawThemeFor(new Set(["solarized"]), "solarized/Solarized Light");
+    expect(inForce()).toBe(DEFAULT_THEME);
+
+    await drawThemeFor(new Set(), "solarized/Solarized Dark");
+    expect(inForce()).toBe(DEFAULT_THEME);
+  });
+
+  it("draws the built-in for a picked theme that is not JSON, never the last project's", async () => {
+    core({ themes: [{ ...SOLARIZED, text: "not json" }] });
+    drawIn(BUILT_IN["charter-light"]); // the project in front before this one
+    await drawThemeFor(new Set(["solarized"]), "solarized/Solarized Dark");
+    expect(inForce()).toBe(DEFAULT_THEME);
+  });
+
+  it("follows the system, and keeps following it while the pick stands", async () => {
+    core({});
+    const turn = system(true);
+    await drawThemeFor(new Set(), "system");
+    expect(inForce()).toBe(BUILT_IN["charter-light"]);
+
+    turn(false);
+    expect(inForce()).toBe(BUILT_IN["charter-dark"]);
+
+    await drawThemeFor(new Set(), "charter-light");
+    turn(true);
+    turn(false);
+    expect(inForce()).toBe(BUILT_IN["charter-light"]);
+  });
+
+  it("reaches the terminal live when the project in front changes", async () => {
+    // #216's live switch: a pane follows `onDrawn`, so the theme a project switch draws is the
+    // one every terminal on screen is handed.
+    core({ themes: [SOLARIZED] });
+    const terminal: Theme[] = [];
+    const stop = onDrawn((theme) => terminal.push(theme));
+
+    await drawThemeFor(new Set(["solarized"]), "charter-light"); // project A in front
+    await drawThemeFor(new Set(["solarized"]), "solarized/Solarized Dark"); // project B
+    await drawThemeFor(new Set(), null); // project C picks nothing and has nothing on
+    stop();
+
+    expect(terminal.map((theme) => theme.name)).toEqual([
+      "charter-light",
+      "Solarized Dark",
+      "charter-dark",
+    ]);
+  });
+
+  it("wins over this machine's theme.json, which comes back for a project that picks nothing", async () => {
+    core({ themes: [SOLARIZED] });
+    (globalThis as Record<string, unknown>)[GLOBAL] = {
+      theme: {
+        path: "/home/dev/.config/charter/theme.json",
+        found: true,
+        document: { name: "mine", appearance: "light", tokens: {} },
+        trouble: null,
+      },
+    };
+    await drawThemeFor(new Set(["solarized"]), "solarized/Solarized Dark");
+    expect(inForce().name).toBe("Solarized Dark");
+
+    await drawThemeFor(new Set(["solarized"]), null);
+    expect(inForce().name).toBe("mine");
   });
 });

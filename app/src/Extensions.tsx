@@ -1,9 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ApproveExtension } from "./ApproveExtension";
-import { commands, type ExtensionAsk, type InstalledExtensions } from "./bindings";
-import { drawIn, inForce, load } from "./theme/theme";
-import { atCreation } from "./windowprefs";
+import {
+  commands,
+  type ExtensionAsk,
+  type ExtensionTheme,
+  type InstalledExtensions,
+} from "./bindings";
+import { extensionsChanged } from "./extensionsOn";
+import { projectThemeChanged } from "./projectTheme";
+import {
+  BUILT_IN,
+  DEFAULT_THEME,
+  drawIn,
+  inForce,
+  load,
+  PREFERS_LIGHT,
+  SYSTEM,
+  systemTheme,
+  type Theme,
+} from "./theme/theme";
+import { forgetTheirTheme, theirThemeOnce } from "./windowprefs";
 
 /**
  * What has contributed what to this window, and the question charter asks before anything new
@@ -41,7 +58,10 @@ export function Extensions({ onClose }: { onClose: () => void }) {
     }
     setWent(null);
     setListed(answered.data);
-    await drawWhatIsInForce();
+    // An approval or a removal changes what every project has on, and which themes there are.
+    extensionsChanged();
+    projectThemeChanged();
+    await drawWhatIsInForce({ reread: true });
   }, []);
 
   // The first read, written as `Opener`'s is: the command's own promise, a `gone` flag, and
@@ -59,7 +79,7 @@ export function Extensions({ onClose }: { onClose: () => void }) {
         else setListed(answered.data);
       })
       .catch(() => undefined);
-    void drawWhatIsInForce();
+    void drawWhatIsInForce({ reread: true });
     return () => {
       gone = true;
     };
@@ -194,37 +214,132 @@ function standingReads(standing: string): string {
   return "not approved — contributing nothing";
 }
 
+/** The themes approved extensions contribute, asked once and again when the registry changes. */
+let offered: Promise<ExtensionTheme[]> | undefined;
+/** Whose themes may be drawn: the project in front's extensions, or every approved one when no
+ *  project is in front (charter-app#253, ADR 0048). */
+let allowed: ReadonlySet<string> | "every" = "every";
+/** What the project in front picked (charter-app#273), as its file holds it — `charter-dark`,
+ *  `charter-light`, `system` or `<extension>/<theme>` — or `null` when it picked nothing. */
+let picked: string | null = null;
+/** Each theme's text, loaded once: so a project switch that keeps the theme repaints nothing. */
+const loaded = new Map<string, Theme | null>();
+/** Bumped by every draw: a draw that waited on the survey and was overtaken draws nothing. */
+let drawing = 0;
+
 /**
- * Puts the theme an approved extension contributes on the document.
+ * Draws the theme the project in front has — `on` is what that project has on
+ * (`extensionsOn.ts`, the core's `extension::project::resolve`), or `"every"` with no project in
+ * front; `pick` is what it picked (`projectTheme.ts`, the core's `extension::project::theme`).
+ * A project that turned an extension off gets charter's own theme back, and so does a pick the
+ * window holds no such theme for.
+ */
+export function drawThemeFor(on: ReadonlySet<string> | "every", pick: string | null = null) {
+  allowed = on;
+  picked = pick;
+  if (pick === SYSTEM) followSystem();
+  return drawWhatIsInForce();
+}
+
+/** For tests: forget what was asked and for whom. */
+export function forgetExtensionThemes() {
+  offered = undefined;
+  allowed = "every";
+  picked = null;
+  loaded.clear();
+  unfollowSystem?.();
+  unfollowSystem = undefined;
+  forgetTheirTheme();
+}
+
+/** How to stop following the system's appearance, while it is followed. */
+let unfollowSystem: (() => void) | undefined;
+
+/**
+ * Redraws when the operating system turns light or dark, while the project in front follows it.
+ * One listener for the life of the window, started by the first project that picks it.
+ */
+function followSystem() {
+  if (unfollowSystem !== undefined || typeof matchMedia !== "function") return;
+  const query = matchMedia(PREFERS_LIGHT);
+  const changed = () => {
+    if (picked === SYSTEM) draw(systemTheme());
+  };
+  query.addEventListener("change", changed);
+  unfollowSystem = () => query.removeEventListener("change", changed);
+}
+
+/** Puts `theme` in force, unless it already is — so the terminal is told only of a change. */
+function draw(theme: Theme | null) {
+  if (theme !== null && theme !== inForce()) drawIn(theme);
+}
+
+/**
+ * Puts the theme the project in front has on the document.
  *
  * **After the first frame, never before it.** `main.tsx` draws a built-in that is compiled into
  * the bundle precisely so that nothing is read from disk on the way to the first paint (ADR
  * 0026's 2 s cold start). An extension theme is a disk read and a fingerprint of every file the
- * extension declares, so it lands afterwards. The visible cost is one repaint for an operator
- * who installed one, and the alternative is a slower launch for everybody who did not.
+ * extension declares, so it lands afterwards — when the window knows which project is in front
+ * (`App.tsx`). The visible cost is one repaint for an operator who installed one, and the
+ * alternative is a slower launch for everybody who did not.
  *
- * **The operator's own `theme.json` wins.** It is the one theme they wrote for this machine
- * themselves, and it was drawn before the first frame (`windowprefs.ts`); an extension's
- * contribution does not repaint over it. Delete the file to have the extension's theme.
+ * **In this order** (charter-app#273, ADR 0048):
+ *
+ * 1. **What the project picked**: a built-in, the built-in matching the system, or the
+ *    extension theme it names — which the window holds only while the project has that extension
+ *    on and this machine approved it. A pick the window holds nothing for draws the built-in; the
+ *    settings tab says why.
+ * 2. With no pick, **the operator's own `theme.json`**, the one theme they wrote for this machine
+ *    themselves, drawn before the first frame (`windowprefs.ts`). A project's pick is more
+ *    specific than a machine's file, which is why it comes first.
+ * 3. With neither, the first theme from an extension the project has on, or charter's own.
  *
  * The text is handed to `theme.load`, which is the parse-and-re-emit rule: a token's text is
  * read into a typed value and a fresh string is written out from it, so the theme's own bytes
  * never reach a stylesheet (ADR 0041 property 4). Nothing here throws; a theme that is not JSON
  * at all is dropped and the window keeps the theme it has.
  */
-export async function drawWhatIsInForce(): Promise<void> {
-  if (atCreation().theme.document !== null) return;
-  const answered = await commands.extensionThemes();
-  if (answered.status === "error" || answered.data.length === 0) return;
-  // The first in force. Choosing among several is a preference this machine does not yet keep,
-  // and inventing one here would put a setting in a component.
-  const chosen = answered.data[0];
-  let raw: unknown;
-  try {
-    raw = JSON.parse(chosen.text);
-  } catch {
-    return;
+export async function drawWhatIsInForce({ reread = false } = {}): Promise<void> {
+  const mine = ++drawing;
+  if (reread) offered = undefined;
+  const pick = picked;
+  if (pick === SYSTEM) return draw(systemTheme());
+  if (pick !== null && Object.prototype.hasOwnProperty.call(BUILT_IN, pick))
+    return draw(BUILT_IN[pick]);
+  if (pick === null) {
+    const theirs = theirThemeOnce();
+    if (theirs !== undefined) return draw(theirs);
   }
-  const { theme } = load(raw);
-  if (theme !== inForce()) drawIn(theme);
+  offered ??= commands
+    .extensionThemes()
+    .then((answered) => (answered.status === "ok" ? (answered.data ?? []) : []))
+    .catch((): ExtensionTheme[] => []);
+  const themes = await offered;
+  if (mine !== drawing) return;
+  const on = allowed;
+  const may = (theme: ExtensionTheme) => on === "every" || on.has(theme.extension);
+  const chosen =
+    pick === null
+      ? // Choosing among several is the project's pick; with none, the first in force.
+        themes.find(may)
+      : themes.find((theme) => may(theme) && `${theme.extension}/${theme.name}` === pick);
+  const theme = chosen === undefined ? DEFAULT_THEME : parsed(chosen.text);
+  // A theme that is not JSON at all keeps the window as it is — unless the project picked it,
+  // where keeping it would leave the last project's theme on this one: that draws the built-in.
+  draw(theme === null && pick !== null ? DEFAULT_THEME : theme);
+}
+
+/** A theme's text as a theme, loaded once, or `null` when it is not JSON at all. */
+function parsed(text: string): Theme | null {
+  const known = loaded.get(text);
+  if (known !== undefined) return known;
+  let theme: Theme | null;
+  try {
+    theme = load(JSON.parse(text) as unknown).theme;
+  } catch {
+    theme = null;
+  }
+  loaded.set(text, theme);
+  return theme;
 }

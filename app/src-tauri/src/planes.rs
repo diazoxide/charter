@@ -275,8 +275,19 @@ impl Held {
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
         let gone = self.hooks.closed(session);
         let closed = self.chats.close(session);
+        // Nothing will prompt it again, so a report waiting for its next turn goes to the
+        // workspace it asked from, where the next chat to start reads it (charter-app#259).
+        charter_core::handback::orphan(&self.root, session);
         (self.tell)(gone);
         closed
+    }
+
+    /// A chat `session` handed work to, shown as `from`, has reported back to it — a needs-you
+    /// item now — and the window is told (charter-app#259). Nothing is typed into the chat.
+    pub fn reported_back(&self, session: u32, from: &str) {
+        if let Some(moved) = self.hooks.reported_back(session, from) {
+            (self.tell)(moved);
+        }
     }
 
     /// Drops a chat's request for the operator without answering it — the needs-you item's
@@ -1763,6 +1774,7 @@ mod tests {
                 pinned: false,
                 number: None,
                 label: None,
+                from: None,
             }],
             dealt: 0,
             relaunch_after_update: false,
@@ -1794,6 +1806,7 @@ mod tests {
                 pinned: false,
                 number: None,
                 label: None,
+                from: None,
             })
             .collect();
         reopen::write(

@@ -361,6 +361,27 @@ struct OpenChat {
     /// <N>` (charter-app#254). Charter's label only: `name` is still what its harness was
     /// started with.
     label: Option<String>,
+    /// Where a handoff opened it from, where one did: the note its tab's tooltip and its header
+    /// draw, `↳ from steward 3 · ops` (charter-app#258). Never the parent's number.
+    from: Option<HandedFromNote>,
+}
+
+/// Where a handed-off chat came from, as the window draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct HandedFromNote {
+    /// The chat it came from, by the name the operator saw it under.
+    pub name: String,
+    /// The workspace it came from.
+    pub workspace: String,
+}
+
+impl From<&charter_core::reopen::HandedFrom> for HandedFromNote {
+    fn from(from: &charter_core::reopen::HandedFrom) -> Self {
+        Self {
+            name: from.name.clone(),
+            workspace: from.workspace.clone(),
+        }
+    }
 }
 
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
@@ -740,6 +761,7 @@ fn start_chat(
         // deals it one that this plane has never used (charter-app#90).
         number: None,
         label: label.clone(),
+        from: None,
     };
     let session = held
         .chats()
@@ -792,6 +814,7 @@ fn open_session(
         // deals it one that this plane has never used (charter-app#90).
         number: None,
         label: None,
+        from: None,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
@@ -1022,6 +1045,7 @@ impl From<chats::Open> for OpenChat {
             in_front: open.in_front,
             pinned: open.pinned,
             label: open.label,
+            from: open.from.as_ref().map(HandedFromNote::from),
             resumed: match &open.how {
                 Reopened::Resumed(id) => Some(id.to_string()),
                 Reopened::Fresh(_) => None,
@@ -1210,6 +1234,10 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::forget_extension,
             extensions::extension_themes,
             extensions::extension_panels,
+            extensions::project_extensions,
+            extensions::extensions_on,
+            extensions::project_theme,
+            extensions::project_theme_drawn,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,
