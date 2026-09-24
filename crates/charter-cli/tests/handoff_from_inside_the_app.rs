@@ -94,12 +94,19 @@ fn charter(root: &Path, app: Option<&Path>, args: &[&str]) -> Output {
             .env(CHAT_ENV, ASKING.to_string());
     }
     let mut child = command.spawn().expect("the binary runs");
-    child
+    // A refusal can come before charter reads the brief, and then the pipe is closed under
+    // this write. That is the refusal's business, which the caller asserts on; only a
+    // different write error is this helper's.
+    match child
         .stdin
         .take()
         .expect("a pipe")
         .write_all(BRIEF.as_bytes())
-        .expect("the brief is written");
+    {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("the brief is written: {error}"),
+    }
     child.wait_with_output().expect("the binary finishes")
 }
 
