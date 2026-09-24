@@ -105,6 +105,7 @@ impl Plane {
 
 #[test]
 fn a_chat_started_on_a_profile_runs_that_profiles_command_in_that_profiles_environment() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     let bin = plane.harness();
     plane.profile(
@@ -129,6 +130,7 @@ fn a_chat_started_on_a_profile_runs_that_profiles_command_in_that_profiles_envir
 
 #[test]
 fn the_harness_a_chat_runs_comes_from_the_declared_kind_and_not_from_the_program_name() {
+    charter_core::unsteered!();
     // The whole reason this is not `Harness::of_command`: a profile's command is commonly a
     // WRAPPER — ADR 0022 says so in as many words — and a wrapper's name is not `claude`.
     // Inferring from it hands the board `None`, which is the narrowest rule there is, and
@@ -157,6 +159,7 @@ fn the_harness_a_chat_runs_comes_from_the_declared_kind_and_not_from_the_program
 
 #[test]
 fn a_codex_chat_is_started_plain_because_codex_names_no_flag_to_choose_an_id() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     let bin = plane.harness();
     // Nothing in the Codex home: the app arms a Codex chat with `-c` flags of its own.
@@ -174,6 +177,7 @@ fn a_codex_chat_is_started_plain_because_codex_names_no_flag_to_choose_an_id() {
 
 #[test]
 fn the_persona_a_chat_adopts_rides_on_its_environment() {
+    charter_core::unsteered!();
     // How a persona reaches a chat at all: `CHARTER_PERSONA`, which is the rung charter's
     // own resolver reads. A profile may not set it — a declaration that tried would be
     // refused — so charter sets it at the launch.
@@ -193,6 +197,7 @@ fn the_persona_a_chat_adopts_rides_on_its_environment() {
 
 #[test]
 fn a_chat_that_asked_for_charters_footer_carries_the_word_that_says_so() {
+    charter_core::unsteered!();
     // Charter ADR 0029. The choice is per chat and it reaches the harness the only way it
     // can: an environment variable set at the exec, which Claude Code's `statusLine` command
     // inherits — and `charter statusline` IS that command, so it reads it and draws instead of
@@ -219,6 +224,7 @@ fn a_chat_that_asked_for_charters_footer_carries_the_word_that_says_so() {
 
 #[test]
 fn a_chat_that_did_not_ask_carries_no_footer_variable_at_all() {
+    charter_core::unsteered!();
     // The default, and it is an ABSENCE rather than a second word. Nothing has to be unset
     // for an ordinary chat, and there is exactly one value this variable is ever written
     // with — so a value that is not it came from somewhere that is not charter.
@@ -240,6 +246,7 @@ fn a_chat_that_did_not_ask_carries_no_footer_variable_at_all() {
 
 #[test]
 fn a_persona_this_plane_does_not_have_is_refused_rather_than_set_on_the_harness() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     let bin = plane.harness();
     plane.profile("claude", &bin, "");
@@ -253,6 +260,7 @@ fn a_persona_this_plane_does_not_have_is_refused_rather_than_set_on_the_harness(
 
 #[test]
 fn the_profile_name_and_the_persona_ride_beside_the_kind_never_inside_charter_harness() {
+    charter_core::unsteered!();
     // `CHARTER_HARNESS` keeps the REGISTRY's name for the kind. Hooks compare it to
     // `claude-code` for session ids, resume and the working spinner, and a value of
     // `claude-work` would make each of them quietly answer "not Claude Code".
@@ -278,6 +286,7 @@ fn the_profile_name_and_the_persona_ride_beside_the_kind_never_inside_charter_ha
 
 #[test]
 fn a_chat_whose_profile_is_gone_is_skipped_by_name_and_never_given_another() {
+    charter_core::unsteered!();
     // ADR 0022: another profile may be another account, where that chat's resume id does not
     // exist and where its workspace's code was never meant to go. It stays in the record, so
     // declaring the profile again brings it back.
@@ -297,6 +306,7 @@ fn a_chat_whose_profile_is_gone_is_skipped_by_name_and_never_given_another() {
 
 #[test]
 fn a_chat_starts_with_nothing_installed_and_its_harness_is_not_run_to_get_there() {
+    charter_core::unsteered!();
     // The Python charter's plugin used to be probed for — `plugin list --json` — and
     // installed from its marketplace when it was missing. The launch runs nothing now.
     let plane = Plane::new();
@@ -313,6 +323,7 @@ fn a_chat_starts_with_nothing_installed_and_its_harness_is_not_run_to_get_there(
 
 #[test]
 fn a_chat_with_a_conversation_recorded_comes_back_resumed_on_the_same_profile() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     let bin = plane.harness();
     plane.profile("claude", &bin, "");
@@ -332,6 +343,7 @@ fn a_chat_with_a_conversation_recorded_comes_back_resumed_on_the_same_profile() 
 
 #[test]
 fn an_opencode_profile_refuses_here_too_because_this_is_where_a_chat_starts() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     let bin = plane.harness();
     plane.profile("opencode", &bin, "");
@@ -346,6 +358,7 @@ fn an_opencode_profile_refuses_here_too_because_this_is_where_a_chat_starts() {
 
 #[test]
 fn the_persona_a_new_chat_starts_on_is_one_the_plane_actually_has() {
+    charter_core::unsteered!();
     // `[persona] default` is a line in a committed file and nothing checks that the persona
     // it names exists. Offering it as the picker's preselection anyway means the operator
     // presses Start and is refused over a persona they never chose.
@@ -365,6 +378,7 @@ fn the_persona_a_new_chat_starts_on_is_one_the_plane_actually_has() {
 
 #[test]
 fn a_default_persona_the_plane_does_not_have_is_offered_to_nobody() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     fs::write(
         plane.root().join("charter.toml"),
@@ -377,6 +391,7 @@ fn a_default_persona_the_plane_does_not_have_is_offered_to_nobody() {
 
 #[test]
 fn the_shared_store_is_never_the_persona_a_new_chat_adopts() {
+    charter_core::unsteered!();
     // `_shared` is the store every persona reads, not a persona. It is admitted by name
     // wherever a persona directory is resolved, and it is NOT in the list of personas — so
     // a plane whose default names it would preselect a row the picker does not even draw.
@@ -398,6 +413,7 @@ fn the_shared_store_is_never_the_persona_a_new_chat_adopts() {
 
 #[test]
 fn a_plane_with_no_personas_at_all_offers_none_rather_than_failing() {
+    charter_core::unsteered!();
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("charter.toml"), "").unwrap();
 
@@ -417,6 +433,7 @@ fn a_plane_with_no_personas_at_all_offers_none_rather_than_failing() {
 
 #[test]
 fn a_persona_on_the_legacy_flat_layout_starts_because_the_picker_offers_it() {
+    charter_core::unsteered!();
     // `personas/<name>.md` is the old layout and `Plane::personas` lists it. The start used
     // to require `personas/<name>/persona.md`, so a plane on that layout offered personas
     // that could not start — a dialog arguing with itself.
@@ -437,6 +454,7 @@ fn a_persona_on_the_legacy_flat_layout_starts_because_the_picker_offers_it() {
 
 #[test]
 fn the_shared_store_is_refused_as_a_persona_even_where_it_has_a_persona_md() {
+    charter_core::unsteered!();
     // `_shared` is the store every persona READS. The picker never offers it, and a caller
     // that is not the picker must not be able to point a chat's `CHARTER_PERSONA` at it.
     let plane = Plane::new();
@@ -458,6 +476,7 @@ fn the_shared_store_is_refused_as_a_persona_even_where_it_has_a_persona_md() {
 
 #[test]
 fn a_persona_whose_directory_leaves_the_plane_is_refused() {
+    charter_core::unsteered!();
     // A committed `personas/<name> -> <outside>` travels with the plane to every machine
     // that clones it. Gated on the entry that is OPENED, not on `personas/` above it.
     let plane = Plane::new();
@@ -504,6 +523,7 @@ fn a_wrapper_profile(plane: &Plane, kind: &str, rest: &[&str]) -> PathBuf {
 
 #[test]
 fn a_wrapper_profiles_own_words_come_before_everything_the_app_adds() {
+    charter_core::unsteered!();
     // M8.3: `["ccs", "work"]` is ONE command the operator wrote — `work` is the wrapper's own
     // subcommand, read before it hands the rest to the harness. The app's flags went straight
     // after argv[0] and started `ccs --plugin-dir … --settings … work`, which a wrapper that
@@ -532,6 +552,7 @@ fn a_wrapper_profiles_own_words_come_before_everything_the_app_adds() {
 
 #[test]
 fn a_plain_profile_is_started_on_the_line_it_always_was() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     let bin = plane.harness();
     plane.profile("claude", &bin, "");
@@ -548,6 +569,7 @@ fn a_plain_profile_is_started_on_the_line_it_always_was() {
 
 #[test]
 fn a_codex_wrapper_resumes_after_its_own_words_and_the_apps_flags() {
+    charter_core::unsteered!();
     // Codex takes the same rule: its `-c` flags after the wrapper's words, and the `resume`
     // SUBCOMMAND last of all.
     let plane = Plane::new();

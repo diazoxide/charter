@@ -53,6 +53,7 @@ fn why(reading: &Reading) -> String {
 
 #[test]
 fn a_plane_nothing_has_refreshed_has_no_forge_state_and_that_is_not_a_refusal() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
 
     let cache = cistate::read(&at).expect("a plane with no cache is not a refusal");
@@ -66,6 +67,7 @@ fn a_plane_nothing_has_refreshed_has_no_forge_state_and_that_is_not_a_refusal() 
 
 #[test]
 fn the_state_the_last_refresh_recorded_for_this_branch_is_what_the_panel_shows() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
     let svc = tree(&at);
     cache_holding(
@@ -101,6 +103,7 @@ fn the_state_the_last_refresh_recorded_for_this_branch_is_what_the_panel_shows()
 
 #[test]
 fn an_entry_that_names_no_pipeline_is_not_the_same_as_nobody_having_looked() {
+    charter_core::unsteered!();
     // Python writes `ci: null` for "there is no pipeline" and for "the call failed" alike,
     // so this says only what the file says — but it is still a *fetch*, with an age, and
     // that is the part "not fetched" would throw away.
@@ -124,6 +127,7 @@ fn an_entry_that_names_no_pipeline_is_not_the_same_as_nobody_having_looked() {
 
 #[test]
 fn an_entry_keyed_under_another_spelling_of_the_same_checkout_is_still_found() {
+    charter_core::unsteered!();
     // The refresher keys by the path as IT walked the plane, and two programs reach the same
     // checkout under two spellings all the time — `/tmp` is a link to `/private/tmp`, and a
     // plane reached through a link into `workspaces/` is another. On the string alone every
@@ -167,6 +171,7 @@ fn an_entry_keyed_under_another_spelling_of_the_same_checkout_is_still_found() {
 
 #[test]
 fn an_entry_for_a_different_checkout_is_not_served_for_this_one() {
+    charter_core::unsteered!();
     // The guard on the guard: resolving both sides must not turn every miss into a hit.
     let (_keep, at) = plane();
     std::fs::create_dir_all(at.join("workspaces/alpha/svc")).unwrap();
@@ -190,6 +195,7 @@ fn an_entry_for_a_different_checkout_is_not_served_for_this_one() {
 
 #[test]
 fn an_entry_fetched_for_another_branch_is_not_served_for_this_one() {
+    charter_core::unsteered!();
     // The checkout moved since the refresh. Serving the old answer under the new branch is
     // how a red pipeline reads as somebody else's.
     let (_keep, at) = plane();
@@ -209,6 +215,7 @@ fn an_entry_fetched_for_another_branch_is_not_served_for_this_one() {
 
 #[test]
 fn an_entry_older_than_the_window_is_not_served_however_green_it_is() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
     let svc = tree(&at);
     cache_holding(
@@ -229,6 +236,7 @@ fn an_entry_older_than_the_window_is_not_served_however_green_it_is() {
 
 #[test]
 fn an_entry_with_no_stamp_is_not_served_as_though_it_had_just_been_written() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
     let svc = tree(&at);
     cache_holding(&at, &svc, r#"{"branch": "main", "ci": "success"}"#);
@@ -242,6 +250,7 @@ fn an_entry_with_no_stamp_is_not_served_as_though_it_had_just_been_written() {
 
 #[test]
 fn a_ci_word_charter_does_not_know_is_never_put_on_the_panel() {
+    charter_core::unsteered!();
     // The file is unsigned and another program writes it. The seven words are what both
     // forges are pinned to, and a cell holding anything else is drawn by whatever renders
     // the panel — an escape sequence included.
@@ -267,6 +276,7 @@ fn a_ci_word_charter_does_not_know_is_never_put_on_the_panel() {
 
 #[test]
 fn a_change_that_is_not_a_whole_number_above_zero_is_dropped_and_the_row_still_draws() {
+    charter_core::unsteered!();
     // charter #326: the change id is the one forge field that reaches a line a terminal
     // interprets. Python coerces it on read as well as on write, because an entry written
     // by a charter with a bug renders for two hours after the upgrade that fixed it.
@@ -298,6 +308,7 @@ fn a_change_that_is_not_a_whole_number_above_zero_is_dropped_and_the_row_still_d
 
 #[test]
 fn a_sigil_that_is_not_one_of_the_two_a_forge_uses_is_dropped() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
     let svc = tree(&at);
     // A whole escape sequence AND a single ordinary character. Only the second holds the
@@ -327,6 +338,7 @@ fn a_sigil_that_is_not_one_of_the_two_a_forge_uses_is_dropped() {
 
 #[test]
 fn the_field_an_older_charter_wrote_the_change_under_is_still_read() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
     let svc = tree(&at);
     cache_holding(
@@ -357,6 +369,7 @@ fn the_field_an_older_charter_wrote_the_change_under_is_still_read() {
 
 #[test]
 fn a_cache_file_that_is_a_symlink_is_refused_rather_than_followed() {
+    charter_core::unsteered!();
     let (_keep, at) = plane();
     let elsewhere = tempfile::tempdir().unwrap();
     let planted = elsewhere.path().join("planted.json");
@@ -379,6 +392,7 @@ fn a_cache_file_that_is_a_symlink_is_refused_rather_than_followed() {
 
 #[test]
 fn a_cache_directory_that_is_a_symlink_is_refused_too() {
+    charter_core::unsteered!();
     // The file itself is then perfectly ordinary, which is exactly why the whole way down
     // is walked rather than only the leaf.
     let (_keep, at) = plane();
@@ -401,6 +415,7 @@ fn a_cache_directory_that_is_a_symlink_is_refused_too() {
 
 #[test]
 fn a_cache_that_is_not_a_regular_file_is_refused_rather_than_opened() {
+    charter_core::unsteered!();
     // A FIFO here would block the read for ever, and the panel would never draw.
     let (_keep, at) = plane();
     std::fs::create_dir_all(at.join(cistate::CACHE)).unwrap();
@@ -416,6 +431,7 @@ fn a_cache_that_is_not_a_regular_file_is_refused_rather_than_opened() {
 
 #[test]
 fn a_cache_charter_cannot_parse_is_said_rather_than_read_as_empty() {
+    charter_core::unsteered!();
     // "Nothing was fetched" and "this file is broken" send an operator to different places.
     let (_keep, at) = plane();
     for junk in ["{", "[]", "\"a string\"", "null"] {

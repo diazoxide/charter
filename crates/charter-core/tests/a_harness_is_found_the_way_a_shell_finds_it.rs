@@ -75,6 +75,7 @@ impl Plane {
 
 #[test]
 fn a_harness_charter_cannot_find_is_an_unknown_that_names_every_directory_it_looked_in() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     let p = plane.running(NOWHERE);
 
@@ -113,6 +114,7 @@ fn a_harness_charter_cannot_find_is_an_unknown_that_names_every_directory_it_loo
 
 #[test]
 fn a_chat_is_not_started_on_a_harness_charter_cannot_find_and_the_refusal_says_where_it_looked() {
+    charter_core::unsteered!();
     let plane = Plane::new();
     plane.running(NOWHERE);
 
@@ -131,6 +133,7 @@ fn a_chat_is_not_started_on_a_harness_charter_cannot_find_and_the_refusal_says_w
 
 #[test]
 fn a_codex_chat_whose_program_is_missing_is_refused_the_same_way() {
+    charter_core::unsteered!();
     // Codex's home used to be read for three marks before the launch; nothing is read now, so
     // the launch's resolution is what answers for both kinds, in the same words.
     let plane = Plane::new();
@@ -148,6 +151,7 @@ fn a_codex_chat_whose_program_is_missing_is_refused_the_same_way() {
 
 #[test]
 fn a_command_the_operator_wrote_as_a_path_is_never_searched_for_and_fails_where_it_always_did() {
+    charter_core::unsteered!();
     // The guard on the other side of the search. A profile naming a place — `/nope/claude`,
     // `./claude`, `bin/claude` — is handed to the spawn exactly as declared: charter neither
     // hunts for its basename in `~/.local/bin` (which would start a DIFFERENT program than
@@ -175,6 +179,7 @@ fn a_command_the_operator_wrote_as_a_path_is_never_searched_for_and_fails_where_
 
 #[test]
 fn a_profile_that_names_an_absolute_program_starts_that_exact_program() {
+    charter_core::unsteered!();
     // Resolution must not canonicalise, rewrite or re-search a path that is already one: on
     // macOS a temp directory is `/var/folders/…` and its resolved spelling is
     // `/private/var/…`, and a launch that silently swapped them would start a program under a
@@ -190,6 +195,7 @@ fn a_profile_that_names_an_absolute_program_starts_that_exact_program() {
 
 #[test]
 fn every_caller_of_the_search_gets_the_same_answer_out_of_it() {
+    charter_core::unsteered!();
     // One search, asked three ways: `programs::find` (a harness), `programs::on_path` (the
     // doctor's listing) and `forge::find_cli` (the forge CLI that becomes a git credential
     // helper). Before charter-app#134 these were three separate walks that had already drifted

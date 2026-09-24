@@ -7,6 +7,12 @@
 # the backlog, where it stays visible. Each entry names its file and function, and never a
 # line number, so that an edit above it does not quietly point it at a different mutant.
 
+# Test infrastructure compiled into the library only so charter-core's integration tests,
+# which are separate crates, can reach it (charter-app#267). It decides how a test runs, never
+# what charter does; mutating it measures the suite's plumbing, not the product. Everything in
+# it was `cfg(test)`, which cargo-mutants skips, until it had to be reachable from `tests/`.
+exclude_globs = ["crates/charter-core/src/testrun.rs"]
+
 exclude_re = [
     # `now() < deadline` against `now() <= deadline` differs only at the one instant equal to
     # the deadline; the loop polls every 10 ms and no test can land on it.

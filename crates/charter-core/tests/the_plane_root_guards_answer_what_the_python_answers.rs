@@ -237,6 +237,7 @@ fn check(recorded: &oracle_corpus::Row, base: &str, scratch: &Path, wrong: &mut 
 
 #[test]
 fn the_recorded_plane_root_cases_answer_what_the_python_answered() {
+    charter_core::unsteered!();
     if let Ok(base) = std::env::var(CHILD) {
         let wrong = replay(&base);
         assert!(
