@@ -22,6 +22,8 @@ pub mod list;
 pub mod mcp;
 pub mod select;
 pub mod stats;
+#[cfg(test)]
+mod tests_plane;
 
 /// `vault: none` — a persona that deliberately holds no credentials. `persona.NO_VAULT`.
 pub const NO_VAULT: &str = "none";
@@ -266,6 +268,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vault_of(dir.path(), &state, "solo"), None);
+    }
+
+    #[test]
+    fn a_declared_vault_is_the_personas_whatever_the_registry_tags() {
+        let dir = plane(&[
+            ("ops", "---\nvault: ops\n---\n"),
+            ("kid", "---\nextends: ops\n---\n"),
+        ]);
+        let state = dir.path().join(".charter");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("vaults.json"),
+            r#"{"vaults": {"other": {"persona": "ops"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(vault_of(dir.path(), &state, "ops").as_deref(), Some("ops"));
+        assert_eq!(vault_of(dir.path(), &state, "kid").as_deref(), Some("ops"));
+    }
+
+    #[test]
+    fn declared_skills_are_the_personas_own_in_order_blanks_dropped() {
+        let dir = plane(&[
+            ("base", "---\nskills: inherited\n---\n"),
+            (
+                "ops",
+                "---\nextends: base\nskills:  superpowers:tdd , ,deploy \n---\n",
+            ),
+        ]);
+        assert_eq!(
+            declared_skills(dir.path(), "ops"),
+            ["superpowers:tdd", "deploy"]
+        );
+        assert!(declared_skills(dir.path(), "ghost").is_empty());
+    }
+
+    #[test]
+    fn a_definition_is_named_relative_to_the_plane_and_state_lives_in_dot_charter() {
+        let dir = plane(&[("ops", "---\n---\n")]);
+        std::fs::write(dir.path().join("personas/flat.md"), "---\n---\n").unwrap();
+        assert_eq!(def_rel(dir.path(), "ops"), "personas/ops/persona.md");
+        assert_eq!(def_rel(dir.path(), "flat"), "personas/flat.md");
+        assert_eq!(state_dir(dir.path()), dir.path().join(".charter"));
     }
 
     #[test]

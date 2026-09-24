@@ -154,6 +154,116 @@ pub fn list(root: &Path, state: &Path, selection: &ActivePersona, say: Sink) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::personaverbs::tests_plane::{Heard, Plane, SOLO};
+
+    fn run(plane: &Plane, name: Option<&str>, rung: PersonaRung) -> (u8, Heard) {
+        let selection = ActivePersona {
+            name: name.map(String::from),
+            rung,
+        };
+        let mut heard = Heard::default();
+        let rc = list(plane.root(), &plane.state(), &selection, &mut heard.sink());
+        (rc, heard)
+    }
+
+    const ROSTER: &str = "  PERSONA  ROLE             VAULT   VAULT STATUS\n\
+                          \x20 devops   DevOps Engineer  devops  not set up (local)\n";
+
+    #[test]
+    fn the_active_persona_is_starred_and_named_with_the_rung_that_chose_it() {
+        // persona-list-marks-the-active-persona-and-each-vaults-status
+        let plane = Plane::fixture("daily");
+        let (rc, heard) = run(&plane, Some("steward"), PersonaRung::PlaneDefault);
+        assert_eq!((rc, heard.err.as_str()), (0, ""));
+        assert_eq!(
+            heard.out,
+            format!(
+                "Active persona: steward  (via charter.toml)\n\n{ROSTER}\
+                 * steward  Steward          —       no vault\n"
+            )
+        );
+    }
+
+    #[test]
+    fn a_selection_naming_no_persona_is_none_and_the_way_out_depends_on_the_rung() {
+        // persona-list-says-a-selection-naming-no-persona-is-none
+        let plane = Plane::fixture("daily");
+        let (rc, heard) = run(&plane, Some("ghost"), PersonaRung::SessionPointer);
+        assert_eq!(rc, 0);
+        assert_eq!(
+            heard.out,
+            format!(
+                "Active persona: ghost  (via session — no persona by that name exists, so no \
+                 persona is active)\n\
+                 Ways out: `charter persona use <persona>` selects one that exists, or add the \
+                 missing one as `personas/<name>/persona.md`.\n\n{ROSTER}\
+                 \x20 steward  Steward          —       no vault\n"
+            )
+        );
+        // persona-list-under-the-environment-says-the-environment-is-the-way-out
+        let (_, heard) = run(&plane, Some("ghost"), PersonaRung::Environment);
+        assert!(
+            heard.out.starts_with(
+                "Active persona: ghost  (via $CHARTER_PERSONA — no persona by that name exists, \
+                 so no persona is active)\n\
+                 Ways out: unset `$CHARTER_PERSONA`, or set it to a persona that exists; it \
+                 outranks `charter persona use`, so that does not move it.\n\n"
+            ),
+            "{}",
+            heard.out
+        );
+    }
+
+    #[test]
+    fn nothing_selected_is_a_dash_and_no_row_is_starred() {
+        let plane = Plane::fixture("daily");
+        let (_, heard) = run(&plane, None, PersonaRung::Nothing);
+        assert_eq!(
+            heard.out,
+            format!(
+                "Active persona: —  (via none)\n\n{ROSTER}\
+                 \x20 steward  Steward          —       no vault\n"
+            )
+        );
+    }
+
+    #[test]
+    fn a_persona_with_no_role_has_an_empty_role_cell_and_its_registry_tagged_vault() {
+        // persona-list-with-a-persona-that-declares-no-role
+        let plane = Plane::fixture("daily");
+        plane.write("personas/solo/persona.md", SOLO);
+        let (_, heard) = run(&plane, Some("steward"), PersonaRung::PlaneDefault);
+        assert_eq!(
+            heard.out,
+            format!(
+                "Active persona: steward  (via charter.toml)\n\n{ROSTER}\
+                 \x20 solo                      —       no vault\n\
+                 * steward  Steward          —       no vault\n"
+            )
+        );
+    }
+
+    #[test]
+    fn a_plane_with_no_personas_says_how_to_add_one() {
+        // persona-list-on-a-plane-with-no-personas
+        let plane = Plane::fixture("minimal");
+        std::fs::remove_dir_all(plane.path("personas/steward")).unwrap();
+        let (rc, heard) = run(&plane, None, PersonaRung::Nothing);
+        assert_eq!((rc, heard.out.as_str()), (0, ""));
+        assert_eq!(
+            heard.err,
+            "• No personas yet. Add one: write personas/<name>/persona.md\n"
+        );
+    }
+
+    #[test]
+    fn a_persona_exists_only_under_a_valid_name_with_a_definition() {
+        let plane = Plane::fixture("daily");
+        assert!(exists(plane.root(), "steward"));
+        assert!(!exists(plane.root(), "ghost"));
+        plane.write("personas/Bad/persona.md", "---\nrole: x\n---\n");
+        assert!(!exists(plane.root(), "Bad"));
+    }
 
     #[test]
     fn a_vault_the_registry_does_not_name_is_not_set_up_and_none_is_no_vault() {

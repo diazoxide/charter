@@ -89,8 +89,8 @@ fn a_whole_file_refusal_is_listed_under_the_file_that_carried_it() {
 
 #[test]
 fn a_plane_whose_profiles_git_would_carry_lists_them_refused_and_names_the_one_fix() {
-    // Not ordinary rows with a warning under them: each of those refusals says "the
-    // profiles in it are refused", so the listing has to show them that way.
+    // Not ordinary rows with a warning under them: each of those refusals says "charter
+    // reads nothing in it", so the listing has to show them that way.
     let dir = plane("[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n");
     Command::new("git")
         .args(["init", "-q"])

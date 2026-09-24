@@ -749,3 +749,7 @@ mod tests {
         assert_eq!(row(dir.path(), "router", 14, today).status, "orchestrator");
     }
 }
+
+#[cfg(test)]
+#[path = "stats_tests.rs"]
+mod recorded;

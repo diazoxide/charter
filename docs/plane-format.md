@@ -476,7 +476,10 @@ key refuses.
   (`charter/commands.py:1104`), and `reinit` backfills it
   (`charter/commands.py:1821`). If git *would* carry it (tracked, committable, or git cannot
   say), **every profile in it is refused** (`charter/profiles.py:518` `ignore_check`,
-  `charter/profiles.py:456` `with_ignore_check`).
+  `charter/profiles.py:456` `with_ignore_check`). In charter-app, **nothing in it is read**
+  then: its `[extensions]`, `[theme]` and `[harness_plugins]` are left out too, and the other
+  layers decide (charter-app#308, ADR 0048). Every reader takes the file through
+  `crates/charter-core/src/settings.rs` `layer_text`, which applies the same check.
 - **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
   since charter-app#253 — `[extensions]` by `extension::project` and, since charter-app#273,
   `[theme]` by `extension::project::theme` (ADR 0048), and, since charter-app#274,
