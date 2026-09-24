@@ -167,7 +167,8 @@ fn a_value_the_reader_would_ignore_is_refused_in_its_words() {
     assert_eq!(
         refused,
         vec![
-            "extensions.stats.enabled in workspaces/alpha/workspace.json is not true or false"
+            "settings.extensions.stats.enabled in workspaces/alpha/workspace.json is not true or \
+             false"
                 .to_owned()
         ]
     );

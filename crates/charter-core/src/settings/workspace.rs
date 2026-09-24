@@ -118,7 +118,7 @@ pub fn refusals(text: &str, workspace: &str) -> Vec<String> {
         toml::Value::Table(table) => Some(table),
         _ => None,
     }) {
-        out.extend(project::refusals_in(&table, &file));
+        out.extend(project::refusals_in(&table, &file, "settings."));
     }
     out
 }
@@ -271,11 +271,7 @@ pub fn save(
 
 /// The manifest a workspace gets when it has none, as charter's own scaffold writes it.
 fn birth(ws: &Workspace) -> Map<String, Json> {
-    let author = std::env::var("USER")
-        .ok()
-        .filter(|user| !user.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned());
-    match ws.birth_manifest(chrono::Utc::now(), &author) {
+    match ws.birth_manifest(chrono::Utc::now(), &crate::wscmd::ensure::author()) {
         Json::Object(doc) => doc,
         _ => Map::new(),
     }

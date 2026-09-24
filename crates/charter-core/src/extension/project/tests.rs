@@ -457,14 +457,14 @@ fn a_workspace_value_the_extension_would_not_accept_falls_through_to_shared_and_
         vec![
             Ignored {
                 source: Source::Workspace,
-                why: "workspaces/alpha/workspace.json sets extensions.stats.settings.window to \
-                      \"1y\", and it is one of 7d, 30d — so the value from charter.toml is used"
+                why: "workspaces/alpha/workspace.json sets settings.extensions.stats.settings.window \
+                      to \"1y\", and it is one of 7d, 30d — so the value from charter.toml is used"
                     .to_owned(),
             },
             Ignored {
                 source: Source::Workspace,
-                why: "workspaces/alpha/workspace.json sets extensions.stats.settings.nope, which \
-                      stats does not declare — charter hands it nothing"
+                why: "workspaces/alpha/workspace.json sets settings.extensions.stats.settings.nope, \
+                      which stats does not declare — charter hands it nothing"
                     .to_owned(),
             },
         ]

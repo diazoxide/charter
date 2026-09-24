@@ -61,12 +61,16 @@ function ask(plane: PlaneId, workspace: string | undefined) {
 /** Ask `plane` again, for every workspace it was asked about — after its settings or a
  *  workspace's were saved, or an extension was approved. With no plane, every one. */
 export function extensionsChanged(plane?: PlaneId) {
-  for (const key of [...latest.keys()]) {
-    const where = whereOf.get(key);
-    if (where !== undefined && (plane === undefined || where.plane === plane)) {
+  // Every place ever asked about, including one whose last question failed: a save is exactly
+  // when a failed answer should be asked for again.
+  let asked = false;
+  for (const where of [...whereOf.values()]) {
+    if (plane === undefined || where.plane === plane) {
       ask(where.plane, where.workspace);
+      asked = true;
     }
   }
+  if (!asked && plane !== undefined) ask(plane, undefined);
 }
 
 /** What `plane` has on in `workspace`, or `undefined` until it has said. */

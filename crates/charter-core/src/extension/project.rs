@@ -185,16 +185,27 @@ impl Choices {
     }
 
     /// Every layer that can say something, the one with the last word first, with the file a
-    /// sentence names for it.
-    fn layers(&self) -> [(Source, String, &BTreeMap<String, Said>); 3] {
+    /// sentence names for it and where the table sits in that file.
+    fn layers(&self) -> [Layer<'_>; 3] {
         [
-            (Source::Local, LOCAL_FILE.to_owned(), &self.local),
-            (
-                Source::Workspace,
-                self.workspace_file().unwrap_or_default(),
-                &self.workspace,
-            ),
-            (Source::Shared, COMMITTED_FILE.to_owned(), &self.shared),
+            Layer {
+                source: Source::Local,
+                file: LOCAL_FILE.to_owned(),
+                at: "",
+                said: &self.local,
+            },
+            Layer {
+                source: Source::Workspace,
+                file: self.workspace_file().unwrap_or_default(),
+                at: WORKSPACE_AT,
+                said: &self.workspace,
+            },
+            Layer {
+                source: Source::Shared,
+                file: COMMITTED_FILE.to_owned(),
+                at: "",
+                said: &self.shared,
+            },
         ]
     }
 
@@ -207,6 +218,18 @@ impl Choices {
             .map(String::as_str)
             .collect()
     }
+}
+
+/// Where `[extensions]` sits in a workspace's `workspace.json`, as a path names it.
+const WORKSPACE_AT: &str = "settings.";
+
+/// One layer of [`Choices`]: which it is, the file a sentence names, where the table sits in
+/// it, and what it says.
+struct Layer<'c> {
+    source: Source,
+    file: String,
+    at: &'static str,
+    said: &'c BTreeMap<String, Said>,
 }
 
 /// Every well-formed `[extensions.<id>]` in `top` — a whole TOML file, or a workspace's
@@ -345,21 +368,27 @@ impl Effective {
 pub fn resolve(installed: &[Installed], choices: &Choices) -> Vec<Effective> {
     let mut ids: BTreeSet<&str> = choices.named();
     ids.extend(installed.iter().map(|it| it.id.as_str()));
+    let layers = choices.layers();
     ids.into_iter()
-        .map(|id| one(id, installed.iter().find(|it| it.id == id), choices))
+        .map(|id| one(id, installed.iter().find(|it| it.id == id), &layers))
         .collect()
 }
 
-fn one(id: &str, here: Option<&Installed>, choices: &Choices) -> Effective {
+/// What one layer says about one extension.
+type Saying<'l> = (&'l Layer<'l>, Option<&'l Said>);
+
+fn one(id: &str, here: Option<&Installed>, layers: &[Layer<'_>]) -> Effective {
     // Local, then the workspace, then Shared: the first that says, decides.
-    let layers: Vec<(Source, String, Option<&Said>)> = choices
-        .layers()
-        .into_iter()
-        .map(|(source, file, said)| (source, file, said.get(id)))
+    let layers: Vec<Saying<'_>> = layers
+        .iter()
+        .map(|layer| (layer, layer.said.get(id)))
         .collect();
     let (wanted, source) = layers
         .iter()
-        .find_map(|(source, _, said)| said.and_then(|said| said.enabled).map(|on| (on, *source)))
+        .find_map(|(layer, said)| {
+            said.and_then(|said| said.enabled)
+                .map(|on| (on, layer.source))
+        })
         .unwrap_or((true, Source::Default));
     let state = match here {
         _ if !wanted => State::Off,
@@ -376,13 +405,14 @@ fn one(id: &str, here: Option<&Installed>, choices: &Choices) -> Effective {
         }
         // A key a layer sets that the extension does not declare is said once per layer: it
         // reaches nothing, and a form that silently dropped it would read as a value in force.
-        for (source, file, said) in &layers {
+        for (layer, said) in &layers {
             for key in said.map(|said| said.settings.keys()).into_iter().flatten() {
                 if !it.settings.iter().any(|declared| &declared.key == key) {
+                    let (file, at) = (&layer.file, layer.at);
                     ignored.push(Ignored {
-                        source: *source,
+                        source: layer.source,
                         why: format!(
-                            "{file} sets {TABLE}.{id}.{SETTINGS}.{key}, which {id} does not \
+                            "{file} sets {at}{TABLE}.{id}.{SETTINGS}.{key}, which {id} does not \
                              declare — charter hands it nothing"
                         ),
                     });
@@ -406,18 +436,18 @@ fn one(id: &str, here: Option<&Installed>, choices: &Choices) -> Effective {
 fn setting(
     id: &str,
     declared: &Setting,
-    layers: &[(Source, String, Option<&Said>)],
+    layers: &[Saying<'_>],
     ignored: &mut Vec<Ignored>,
 ) -> Resolved {
     let key = &declared.key;
     let mut candidates = layers
         .iter()
-        .filter_map(|(source, file, said)| {
+        .filter_map(|(layer, said)| {
             said.and_then(|said| said.settings.get(key))
-                .map(|value| (*source, file, value))
+                .map(|value| (layer.source, &layer.file, layer.at, value))
         })
         .peekable();
-    while let Some((source, file, value)) = candidates.next() {
+    while let Some((source, file, at, value)) = candidates.next() {
         match declared.accepts(value) {
             Ok(value) => {
                 return Resolved {
@@ -428,14 +458,14 @@ fn setting(
             }
             Err(why) => {
                 let instead = match candidates.peek() {
-                    Some((_, next, _)) => format!("the value from {next}"),
+                    Some((_, next, _, _)) => format!("the value from {next}"),
                     None => "its default".to_owned(),
                 };
                 ignored.push(Ignored {
                     source,
                     why: format!(
-                        "{file} sets {TABLE}.{id}.{SETTINGS}.{key} to {value}, {why} — so \
-                         {instead} is used"
+                        "{file} sets {at}{TABLE}.{id}.{SETTINGS}.{key} to {value}, {why} — \
+                         so {instead} is used"
                     ),
                 });
             }
@@ -469,58 +499,61 @@ pub fn key_ok(key: &str) -> bool {
 /// that is the file's own reader's refusal, not this one's.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
     text.parse::<toml::Table>()
-        .map(|top| refusals_in(&top, file))
+        .map(|top| refusals_in(&top, file, ""))
         .unwrap_or_default()
 }
 
 /// [`refusals`], of a table already read — a whole TOML file, or a workspace's `settings` read
-/// as one (`crate::settings::workspace`).
-pub fn refusals_in(top: &toml::Table, file: &str) -> Vec<String> {
+/// as one (`crate::settings::workspace`). `at` is where the table sits in the file, as a path
+/// names it: empty for a TOML file, `settings.` for a workspace's `workspace.json`.
+pub fn refusals_in(top: &toml::Table, file: &str, at: &str) -> Vec<String> {
     let Some(table) = top.get(TABLE) else {
         return Vec::new();
     };
     let shape = "each extension is [extensions.<id>], holding enabled and \
                  [extensions.<id>.settings]";
     let Some(table) = table.as_table() else {
-        return vec![format!("{TABLE} in {file} is not a table — {shape}")];
+        return vec![format!("{at}{TABLE} in {file} is not a table — {shape}")];
     };
     let mut out = Vec::new();
     for (id, one) in table {
         if !id_ok(id) {
             out.push(format!(
-                "[{TABLE}.{}] in {file} is not an extension id — an id is letters, digits, '-', \
+                "[{at}{TABLE}.{}] in {file} is not an extension id — an id is letters, digits, '-', \
                  '_' and '.', starting with a letter or a digit",
                 toml_key(id)
             ));
             continue;
         }
         let Some(one) = one.as_table() else {
-            out.push(format!("{TABLE}.{id} in {file} is not a table — {shape}"));
+            out.push(format!(
+                "{at}{TABLE}.{id} in {file} is not a table — {shape}"
+            ));
             continue;
         };
         for (key, value) in one {
             match key.as_str() {
                 ENABLED if !value.is_bool() => {
                     out.push(format!(
-                        "{TABLE}.{id}.{ENABLED} in {file} is not true or false"
+                        "{at}{TABLE}.{id}.{ENABLED} in {file} is not true or false"
                     ));
                 }
                 ENABLED => {}
                 SETTINGS => match value.as_table() {
                     None => out.push(format!(
-                        "{TABLE}.{id}.{SETTINGS} in {file} is not a table of settings"
+                        "{at}{TABLE}.{id}.{SETTINGS} in {file} is not a table of settings"
                     )),
                     Some(settings) => {
                         for (name, value) in settings {
                             if !key_ok(name) {
                                 out.push(format!(
-                                    "{TABLE}.{id}.{SETTINGS}.{} in {file} is not a setting's key \
+                                    "{at}{TABLE}.{id}.{SETTINGS}.{} in {file} is not a setting's key \
                                      — a key is letters, digits, '-' and '_'",
                                     toml_key(name)
                                 ));
                             } else if !(value.is_bool() || value.is_str()) {
                                 out.push(format!(
-                                    "{TABLE}.{id}.{SETTINGS}.{name} in {file} is not a value a \
+                                    "{at}{TABLE}.{id}.{SETTINGS}.{name} in {file} is not a value a \
                                      setting can hold — a setting is true, false or text"
                                 ));
                             }
@@ -528,7 +561,7 @@ pub fn refusals_in(top: &toml::Table, file: &str) -> Vec<String> {
                     }
                 },
                 other => out.push(format!(
-                    "{TABLE}.{id}.{} in {file} is not read — [{TABLE}.<id>] holds {ENABLED} and \
+                    "{at}{TABLE}.{id}.{} in {file} is not read — [{TABLE}.<id>] holds {ENABLED} and \
                      {SETTINGS} and nothing else",
                     toml_key(other)
                 )),
