@@ -139,7 +139,7 @@ export function VaultTab({
 
   useEffect(() => {
     if (note === undefined || note.trouble) return;
-    const gone = setTimeout(() => setNote(undefined), COPIED_FOR_MS);
+    const gone = setTimeout(() => setNote(undefined), NOTE_FOR_MS);
     return () => clearTimeout(gone);
   }, [note]);
 
@@ -386,9 +386,10 @@ type VaultAnswer = Awaited<ReturnType<typeof commands.vaultOpen>>;
 /** How long a revealed value stays on the page. */
 const SHOWN_FOR_MS = 30_000;
 
-/** How long a copied value stays on the clipboard (`vaults.rs`, `CLEAR_AFTER`), and so how long
- * the tab says it is there. */
-const COPIED_FOR_MS = 60_000;
+/** How long a note under the header stays: a copy's lasts as long as the value stays on the
+ * clipboard (`vaults.rs`, `CLEAR_AFTER`), and a token move's as long. A refusal stays until the
+ * next press. */
+const NOTE_FOR_MS = 60_000;
 
 /** The one value the tab is showing, and whose it is. */
 type Shown = { key: string; value: string };

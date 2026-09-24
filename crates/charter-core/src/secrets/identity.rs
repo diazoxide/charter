@@ -81,21 +81,34 @@ pub fn in_keyring(ctx: &Ctx, vault: &Vault) -> bool {
         .unwrap_or(false)
 }
 
+/// One identity binding of a vault — the variable the CLI reads, the variable this machine
+/// carries it in — and where that is read from now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    pub target: String,
+    pub source: String,
+    pub held: Held,
+}
+
 /// Each identity variable the vault is read through, and where it is read from now. Never reads
 /// the keyring: a moved identity is [`Held::Keyring`] by its mark.
-pub fn held(ctx: &Ctx, vault: &Vault) -> Vec<(String, Held)> {
+pub fn held(ctx: &Ctx, vault: &Vault) -> Vec<Binding> {
     let moved = in_keyring(ctx, vault);
     bindings(vault)
         .into_iter()
-        .map(|(_, source)| {
-            let at = if moved {
+        .map(|(target, source)| {
+            let held = if moved {
                 Held::Keyring
             } else if ctx.env.get(&source).is_some_and(|v| !v.is_empty()) {
                 Held::Environment
             } else {
                 Held::Unset
             };
-            (source, at)
+            Binding {
+                target,
+                source,
+                held,
+            }
         })
         .collect()
 }
@@ -163,33 +176,25 @@ pub fn move_to_keyring(ctx: &Ctx, vault: &Vault) -> Result<Vec<String>, VaultErr
 /// Write the mark into this machine's half, beside whatever that half already says of the vault.
 fn mark(ctx: &Ctx, vault: &Vault) -> Result<(), VaultError> {
     let mut local = registry::load_local(ctx)?;
-    let vaults = local
-        .entry("vaults")
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !vaults.is_object() {
-        *vaults = Value::Object(Map::new());
-    }
-    let entry = vaults
-        .as_object_mut()
-        .expect("just made an object")
-        .entry(vault.name.clone())
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !entry.is_object() {
-        *entry = Value::Object(Map::new());
-    }
-    let config = entry
-        .as_object_mut()
-        .expect("just made an object")
-        .entry("config")
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !config.is_object() {
-        *config = Value::Object(Map::new());
-    }
-    config
-        .as_object_mut()
-        .expect("just made an object")
-        .insert(MARK.into(), Value::String(IN_KEYRING.into()));
+    let vaults = object_at(&mut local, "vaults");
+    let entry = object_at(vaults, &vault.name);
+    object_at(entry, "config").insert(MARK.into(), Value::String(IN_KEYRING.into()));
     registry::save_local(ctx, &local)
+}
+
+/// The object under `key` in `map`, made — or put in place of whatever else a hand-edited file
+/// held there.
+fn object_at<'a>(map: &'a mut Map<String, Value>, key: &str) -> &'a mut Map<String, Value> {
+    let slot = map
+        .entry(key.to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !slot.is_object() {
+        *slot = Value::Object(Map::new());
+    }
+    match slot {
+        Value::Object(inner) => inner,
+        _ => unreachable!("just made an object"),
+    }
 }
 
 /// The prefix of every variable no chat the app starts is given: 1Password's, whose

@@ -252,6 +252,14 @@ fn renaming_in_a_reference_vault_moves_the_reference_and_never_resolves_it() {
 // A vault's identity, moved into the keyring (#237). A test build's keyring is the stub under
 // the plane's state directory, so none of this reaches the operator's.
 
+/// Each identity variable of `v` and where it is held, as `(source, held)`.
+fn held_at(ctx: &Ctx, v: &registry::Vault) -> Vec<(String, identity::Held)> {
+    identity::held(ctx, v)
+        .into_iter()
+        .map(|b| (b.source, b.held))
+        .collect()
+}
+
 const MOVED_TOKEN: &str = "ops_fixture-moved-identity-2b7e91";
 
 /// A plane with a 1Password vault `team` read through `$OP_TEAM_TOKEN`.
@@ -312,7 +320,7 @@ fn a_vault_whose_identity_was_never_moved_does_not_ask_the_keyring() {
 
     assert_eq!(env_overlay(&carrying, &v).unwrap()[0].1, "from-the-env-44");
     assert_eq!(
-        identity::held(&carrying, &v),
+        held_at(&carrying, &v),
         [("OP_TEAM_TOKEN".to_string(), identity::Held::Environment)]
     );
 }
@@ -342,7 +350,7 @@ fn moving_an_identity_that_is_not_set_is_refused_and_marks_nothing() {
 
     assert!(err.message.contains("OP_TEAM_TOKEN"), "{}", err.message);
     assert_eq!(
-        identity::held(&bare, &v),
+        held_at(&bare, &v),
         [("OP_TEAM_TOKEN".to_string(), identity::Held::Unset)]
     );
     assert!(!tmp.path().join(".charter/keyring-stub.json").exists());
@@ -370,7 +378,7 @@ fn a_committed_registry_cannot_mark_an_identity_as_held_in_the_keyring() {
 
     let v = registry::vault(&ctx, "team").unwrap();
     assert_eq!(env_overlay(&ctx, &v).unwrap()[0].1, "from-the-env-55");
-    assert_eq!(identity::held(&ctx, &v)[0].1, identity::Held::Environment);
+    assert_eq!(held_at(&ctx, &v)[0].1, identity::Held::Environment);
 }
 
 #[test]
@@ -389,8 +397,5 @@ fn no_refusal_or_debug_of_an_identity_move_carries_the_token() {
     ] {
         assert!(!shown.contains(MOVED_TOKEN), "{shown}");
     }
-    assert_eq!(
-        identity::held(&carrying, &v)[0].1,
-        identity::Held::Environment
-    );
+    assert_eq!(held_at(&carrying, &v)[0].1, identity::Held::Environment);
 }

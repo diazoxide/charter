@@ -465,12 +465,10 @@ pub fn env_overlay(
 /// first one that cannot, or `None`. What `vault list` and the app's panel draw from, so neither
 /// makes the Keychain ask anything.
 pub fn identity_missing(ctx: &Ctx, vault: &registry::Vault) -> Option<VaultError> {
-    let held = identity::held(ctx, vault);
-    identity::bindings(vault)
+    identity::held(ctx, vault)
         .into_iter()
-        .zip(held)
-        .find(|(_, (_, at))| *at == identity::Held::Unset)
-        .map(|((target, source), _)| identity_unset(ctx, vault, &target, &source, None))
+        .find(|b| b.held == identity::Held::Unset)
+        .map(|b| identity_unset(ctx, vault, &b.target, &b.source, None))
 }
 
 /// The refusal for an identity variable found nowhere. Names only: a keyring failure is the

@@ -153,9 +153,9 @@ pub(crate) struct VaultContents {
 fn identity_of(ctx: &Ctx, v: &Vault) -> Vec<VaultIdentity> {
     identity::held(ctx, v)
         .into_iter()
-        .map(|(variable, held)| VaultIdentity {
-            variable,
-            held: match held {
+        .map(|b| VaultIdentity {
+            variable: b.source,
+            held: match b.held {
                 Held::Keyring => IdentityHeld::Keyring,
                 Held::Environment => IdentityHeld::Environment,
                 Held::Unset => IdentityHeld::Unset,
