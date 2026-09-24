@@ -20,9 +20,9 @@ import type { RelaunchChoice, RelaunchQuestion } from "./bindings";
  * click outside answers nothing, and the primitive requires the `Cancel` the focus goes to.
  * Both answers carry `tabIndex={0}` (`docs/ui-primitives.md`, charter-app#186).
  *
- * `question.after_update` is charter-app#251's way in: a restart to install an update writes it
- * into the record, and the question then says why it is being asked. "Reopen all" is in front
- * either way.
+ * `question.after_update` is charter-app#251's: Restart to update writes it into each record,
+ * and the launch it restarts into says why it is being asked. "Reopen all" is in front either
+ * way.
  *
  * Each project row carries its whole path as its title, for `calledOn`'s reason: two projects
  * can share a folder name.

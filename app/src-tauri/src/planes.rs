@@ -195,15 +195,6 @@ impl Held {
         &self.chats
     }
 
-    /// Writes what this plane has open into the plane itself.
-    ///
-    /// A failure is said and never refused over: the next launch of this plane reads no
-    /// record and starts empty, which is worse than a line on standard error and better than
-    /// an app that will not close a project.
-    fn record(&self) {
-        self.records.write(&self.chats.record());
-    }
-
     /// Puts back the chats this plane had open when it was last closed, which STARTS the
     /// programs its record names.
     ///
@@ -306,9 +297,19 @@ impl Held {
     /// in this process, and nothing it has on disk.
     ///
     /// The record is written BEFORE the sessions are ended, because ending them is what makes
-    /// there be nothing to write.
-    fn let_go(&self) {
-        self.record();
+    /// there be nothing to write. A write that fails is said and never refused over: the next
+    /// launch of this plane reads no record and starts empty, which is worse than a line on
+    /// standard error and better than an app that will not close a project.
+    ///
+    /// `to_update` is the quit that restarts charter to install an update (charter-app#251),
+    /// and it is the one writer that sets [`reopen::Record::relaunch_after_update`]. It goes
+    /// through the same gated [`Records::write`] as every other, so a plane whose record this
+    /// launch never put back is left exactly as it was.
+    fn let_go(&self, to_update: bool) {
+        self.records.write(&reopen::Record {
+            relaunch_after_update: to_update,
+            ..self.chats.record()
+        });
         self.chats.end_all();
         self.hooks.stop();
         drop(
@@ -358,6 +359,11 @@ struct Relaunching {
     /// The roots the answer said to start fresh, each taken the first time it is put back.
     /// Empty after "Reopen all", which is what every open did before there was a question.
     fresh: HashSet<PathBuf>,
+    /// Whether this launch follows a restart to update (charter-app#251): it took the word
+    /// [`Planes::let_go_of_all_to_update`] left. A record's own
+    /// [`reopen::Record::relaunch_after_update`] counts only when this is set, which is what
+    /// keeps a flag left in a plane nobody reopened from speaking at a later launch.
+    after_update: bool,
 }
 
 /// What a launch would put back, for the question it asks before putting any of it back.
@@ -521,15 +527,16 @@ impl Planes {
             return None;
         }
         let roots = self.launch_roots(&relaunching, restoring);
+        let restarted = relaunching.after_update;
         drop(relaunching);
-        let mut after_update = false;
+        let mut flagged = false;
         let projects: Vec<Waiting> = roots
             .into_iter()
             .filter_map(|root| {
                 // A record charter refuses to read puts nothing back, so it is not asked about;
                 // the refusal is said where it always was, when the project is opened.
                 let record = reopen::read_or_refusal(&root).ok()?;
-                after_update |= record.relaunch_after_update;
+                flagged |= record.relaunch_after_update;
                 record.holds_anything().then_some(Waiting {
                     chats: record.chats.len(),
                     views: record.views.len(),
@@ -539,7 +546,7 @@ impl Planes {
             .collect();
         (!projects.is_empty()).then_some(Relaunchable {
             projects,
-            after_update,
+            after_update: restarted && flagged,
         })
     }
 
@@ -597,6 +604,11 @@ impl Planes {
             }
         }
         roots
+    }
+
+    /// Whether this launch follows a restart to update — it took the word the restart left.
+    pub fn restarted_to_update(&self) -> bool {
+        self.relaunching().after_update
     }
 
     fn relaunching(&self) -> MutexGuard<'_, Relaunching> {
@@ -1003,7 +1015,7 @@ impl Planes {
             .map()
             .remove(plane)
             .ok_or_else(|| no_such(plane, "close"))?;
-        held.let_go();
+        held.let_go(false);
         Ok(())
     }
 
@@ -1032,9 +1044,38 @@ impl Planes {
     /// a lock still held here would be a deadlock on the way out, in the one path an operator
     /// cannot escape by clicking something else.
     pub fn let_go_of_all(&self) {
+        self.let_go_of_every_plane(false);
+    }
+
+    /// [`Self::let_go_of_all`], for the quit that restarts charter to install an update
+    /// (charter-app#251): each plane's record says so, and the launch after the restart is
+    /// left word of it ([`reopen::RESTARTED_TO_UPDATE`]), so its question can say why it is
+    /// asking.
+    ///
+    /// **Everything is on disk before the restart is even asked for**, which is what makes a
+    /// relaunch that fails lose nothing: the next launch, however it comes, reads the same
+    /// records and asks the same question.
+    ///
+    /// The records first and the word after them. Word with no flagged record behind it says
+    /// nothing; a flagged record with no word is an ordinary relaunch, which is the smaller
+    /// wrong of the two if only one of the writes lands.
+    pub fn let_go_of_all_to_update(&self) {
+        self.let_go_of_every_plane(true);
+        if let Some(config) = self.config.as_deref()
+            && let Err(why) = reopen::mark_restart_to_update(config)
+        {
+            eprintln!(
+                "charter: the launch after this restart will not say it followed an update \
+                 ({why}); what was open is recorded all the same"
+            );
+        }
+    }
+
+    /// Empties the registry, then lets go of each plane it held. See [`Self::let_go_of_all`].
+    fn let_go_of_every_plane(&self, to_update: bool) {
         let all: Vec<_> = self.map().drain().map(|(_, held)| held).collect();
         for held in all {
-            held.let_go();
+            held.let_go(to_update);
         }
     }
 
@@ -1239,6 +1280,18 @@ impl Restoring {
         Self(!args.into_iter().any(|arg| arg == NO_RESTORE))
     }
 
+    /// [`Self::from_args`], unless this launch follows a restart to update (charter-app#251),
+    /// which always puts the window set back.
+    ///
+    /// Tauri's restart starts the new process with the old one's arguments, so a charter that
+    /// was started with `--no-restore` would otherwise come back from Restart to update without
+    /// the projects it was holding a moment earlier — and without asking about their chats. The
+    /// flag was about the launch it was typed at, which the restart continues rather than
+    /// repeats.
+    pub fn after(args: impl IntoIterator<Item = String>, restarted_to_update: bool) -> Self {
+        Self(restarted_to_update || Self::from_args(args).0)
+    }
+
     pub fn wanted(&self) -> bool {
         self.0
     }
@@ -1369,6 +1422,14 @@ fn resolving_with(
     cwd: std::io::Result<PathBuf>,
     resolve: impl FnOnce(&Path) -> Result<PathBuf, String>,
 ) -> Launch {
+    // Taken whatever this launch opens, so the word a restart to update left is spent by the
+    // launch after it and by no later one (charter-app#251). This runs once per process, from
+    // `setup`: a second launch's arguments reach the running app through the single-instance
+    // plugin and never come back through here to take the word a second time.
+    planes.relaunching().after_update = planes
+        .config
+        .as_deref()
+        .is_some_and(reopen::take_restart_to_update);
     let cwd = match cwd {
         Ok(cwd) => cwd,
         // Nothing to go on at all. Not an error: an app launched from an icon has no useful
@@ -2218,18 +2279,34 @@ mod tests {
         assert_eq!(tried(&planes.held(&plane).expect("it is held")), 1);
     }
 
-    #[test]
-    fn a_relaunch_after_an_update_says_so_in_the_question() {
-        let dir = tempfile::tempdir().expect("a directory");
-        let (planes, root, _held) = launched_with_one_chat(dir.path());
+    /// A plane whose record holds one chat and says a restart to update wrote it.
+    fn flagged_by_a_restart(root: &Path) {
         reopen::write(
-            &root,
+            root,
             &reopen::Record {
                 relaunch_after_update: true,
-                ..reopen::read_or_refusal(&root).expect("the record reads")
+                ..one_chat_on("/bin/echo")
             },
         )
         .expect("the record is written");
+    }
+
+    /// A launch in `root`, on a machine whose store is at `config`.
+    fn launched_in(config: &Path, root: &Path) -> Planes {
+        let planes = planes_keeping(config);
+        resolving_with(&planes, Ok(root.to_path_buf()), |_| Ok(root.to_path_buf()));
+        planes
+    }
+
+    #[test]
+    fn the_launch_after_a_restart_to_update_says_so_in_the_question() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        flagged_by_a_restart(&root);
+        reopen::mark_restart_to_update(&config).expect("the restart is marked");
+
+        let planes = launched_in(&config, &root);
 
         assert!(
             planes
@@ -2237,6 +2314,102 @@ mod tests {
                 .expect("there is something to ask about")
                 .after_update
         );
+    }
+
+    #[test]
+    fn a_flag_left_in_a_plane_the_restart_did_not_reopen_says_nothing_at_a_later_launch() {
+        // #250's gap: the launch after the restart was somewhere else (`--no-restore`, a trust
+        // ask declined), so this plane's record kept the flag. A later launch here is an
+        // ordinary one and must not say charter restarted to install an update.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let elsewhere = a_plane(&dir.path().join("elsewhere"));
+        flagged_by_a_restart(&root);
+        reopen::mark_restart_to_update(&config).expect("the restart is marked");
+        launched_in(&config, &elsewhere);
+
+        let later = launched_in(&config, &root);
+
+        assert!(
+            !later
+                .relaunch_ask(&[])
+                .expect("there is something to ask about")
+                .after_update,
+            "a flag outlived the restart that wrote it"
+        );
+    }
+
+    #[test]
+    fn a_flag_with_no_restart_behind_it_says_nothing() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        flagged_by_a_restart(&root);
+
+        let planes = launched_in(&config, &root);
+
+        assert!(
+            !planes
+                .relaunch_ask(&[])
+                .expect("there is something to ask about")
+                .after_update
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_restart_to_update_records_every_plane_it_held_and_leaves_word_for_the_next_launch() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let one = a_plane(&dir.path().join("one"));
+        let two = a_plane(&dir.path().join("two"));
+        let planes = planes_keeping(&config);
+        for root in [&one, &two] {
+            // `/bin/cat` waits on its terminal, so each chat is still running when the
+            // restart writes the record — the record names what was really open.
+            a_record_naming(root, "/bin/cat");
+            let shown = asking(planes.open_if_approved(root).expect("it is a plane")).contributes;
+            planes.approve_and_open(root, &shown).expect("yes");
+        }
+
+        planes.let_go_of_all_to_update();
+
+        for root in [&one, &two] {
+            let after = reopen::read_or_refusal(root).expect("the record reads");
+            assert!(
+                after.relaunch_after_update,
+                "{} was not recorded as a restart to update",
+                root.display()
+            );
+            assert_eq!(
+                after.chats.len(),
+                1,
+                "the chat to put back was not recorded"
+            );
+        }
+        assert!(planes.open_now().is_empty(), "a plane was still held");
+        assert!(
+            reopen::take_restart_to_update(&config),
+            "the next launch was left no word of the restart"
+        );
+        // And what was written is vouched for, so the relaunch does not ask about a record
+        // charter wrote itself.
+        let after = planes_keeping(&config);
+        opened(after.open_if_approved(&one).expect("it is a plane"));
+    }
+
+    #[test]
+    fn a_restart_to_update_leaves_a_record_the_launch_never_put_back_as_it_was() {
+        // The question at this launch was never answered, so the record is still the last
+        // quit's, and not the app's to write — a restart to update included.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, _held) = launched_with_one_chat(dir.path());
+        let before = std::fs::read(record_of(&root)).expect("the record");
+
+        planes.let_go_of_all_to_update();
+
+        assert_eq!(std::fs::read(record_of(&root)).expect("the record"), before);
     }
 
     fn a_persona_view() -> reopen::View {
@@ -2862,6 +3035,17 @@ mod tests {
 
         assert_eq!(back.planes, vec![one, two]);
         assert_eq!(back.active, Some(0), "the first window's front tab is lost");
+    }
+
+    #[test]
+    fn a_restart_to_update_puts_the_window_set_back_even_under_no_restore() {
+        // Tauri restarts with the old process's arguments, and the projects held a moment ago
+        // are what Restart to update is to reopen.
+        let args = || ["charter-app".to_owned(), NO_RESTORE.to_owned()];
+
+        assert!(Restoring::after(args(), true).wanted());
+        assert!(!Restoring::after(args(), false).wanted());
+        assert!(Restoring::after(["charter-app".to_owned()], false).wanted());
     }
 
     #[test]
