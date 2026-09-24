@@ -11,6 +11,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `charter save` follows `[plane] mode`. `off` commits nothing, `commit` stops after the
+  commit, and `push` pushes to `[plane] branch` when one is set. Until charter can open the
+  pull request, `pr` and `pr-merge` commit but never push to the target branch. A plane that
+  names no mode is saved exactly as before.
+- A save with no message says what changed in the plane's own words, for example
+  `charter save: 3 files (steward memory 2, ide todos 1)`, instead of only counting files.
+- `[plane] sign = true`, or `--sign`, now signs the save whatever the machine's own
+  `commit.gpgsign` says. Before, `--sign` only allowed signing. A signer that fails still
+  leaves an unsigned commit, and says so.
+- What charter tells an agent a memory will do, and what `charter remember` prints, now
+  follow `[plane] mode`: a memory travels with the plane's next save. The old text promised
+  that `share = "push"` pushed each memory immediately, which this charter never did.
+  ([#293](https://github.com/diazoxide/charter-app/issues/293))
+
 ## [0.2.0] - 2026-09-25
 
 0.2.0 is about settings that belong to a project or a workspace rather than to the machine, and

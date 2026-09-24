@@ -161,28 +161,6 @@ impl Plane {
             .map(str::to_string)
     }
 
-    /// How far a memory travels once written — `[memory] share` in `charter.toml`, clamped
-    /// to `local`, `commit` or `push`, and `local` for anything else (`instance.share_of`).
-    ///
-    /// A typo fails SAFE: the other side of that failure is publishing an agent's notes.
-    pub fn memory_share(&self) -> &'static str {
-        let declared = std::fs::read_to_string(self.root.join(crate::plane::MANIFEST))
-            .ok()
-            .and_then(|text| text.parse::<toml::Table>().ok())
-            .and_then(|doc| {
-                doc.get("memory")?
-                    .as_table()?
-                    .get("share")?
-                    .as_str()
-                    .map(str::to_string)
-            });
-        match declared.as_deref() {
-            Some("commit") => "commit",
-            Some("push") => "push",
-            _ => "local",
-        }
-    }
-
     /// Whether `name` is LIVE — un-ignored in the plane's `.gitignore` managed block, so its
     /// memory is committed and shared (`workspace.live_workspaces`).
     pub fn is_live(&self, name: &str) -> bool {

@@ -59,8 +59,6 @@ crates/charter-core/src/layer.rs: replace match guard e.kind() == std::io::Error
 crates/charter-core/src/workspaces.rs: delete ! in Plane::is_live
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::remember_titled
 crates/charter-core/src/workspaces.rs: delete ! in Workspace::scaffold_memory
-crates/charter-core/src/workspaces.rs: delete match arm Some("commit") in Plane::memory_share
-crates/charter-core/src/workspaces.rs: delete match arm Some("push") in Plane::memory_share
 crates/charter-core/src/workspaces.rs: replace && with || in Plane::personas
 crates/charter-core/src/workspaces.rs: replace && with || in Workspace::remember_titled
 crates/charter-core/src/workspaces.rs: replace && with || in Workspace::scaffold_memory
@@ -71,8 +69,6 @@ crates/charter-core/src/workspaces.rs: replace == with != in Plane::read_workspa
 crates/charter-core/src/workspaces.rs: replace == with != in Workspace::scaffold_charter
 crates/charter-core/src/workspaces.rs: replace Plane::is_live -> bool with false
 crates/charter-core/src/workspaces.rs: replace Plane::is_live -> bool with true
-crates/charter-core/src/workspaces.rs: replace Plane::memory_share -> &'static str with ""
-crates/charter-core/src/workspaces.rs: replace Plane::memory_share -> &'static str with "xyzzy"
 crates/charter-core/src/workspaces.rs: replace Workspace::name -> &str with ""
 crates/charter-core/src/workspaces.rs: replace Workspace::name -> &str with "xyzzy"
 crates/charter-core/src/workspaces.rs: replace ^ with | in scratch_tag

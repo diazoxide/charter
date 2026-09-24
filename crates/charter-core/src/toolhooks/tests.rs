@@ -528,11 +528,13 @@ fn what_recording_a_memory_does_is_said_for_each_share() {
     let p = Plane::new();
     assert!(memory_share_note(&p.root).starts_with("It stays on THIS MACHINE"));
     for (share, opens) in [
+        // `share` is the deprecated alias of `[plane] mode`, and a memory travels with the
+        // plane's next save — nothing commits or pushes it on its own (charter-app#293).
         (
             "commit",
-            "It is committed locally straight away, but NOT pushed",
+            "It is committed with the plane's next save, but NOT pushed",
         ),
-        ("push", "It is committed and pushed immediately"),
+        ("push", "It reaches the team with the plane's next save"),
     ] {
         std::fs::write(
             p.root.join("charter.toml"),
@@ -702,4 +704,39 @@ fn a_resume_is_logged_under_the_persona_it_resumes_never_under_the_name_it_was_s
         .map(|l| serde_json::from_str::<Value>(l).unwrap()["agent"].to_string())
         .collect();
     assert_eq!(agents, ["\"devops\"", "\"devops\""], "{log}");
+}
+#[test]
+fn what_a_memory_will_do_follows_the_planes_mode_and_never_promises_a_push_nobody_makes() {
+    // charter-app#293: the note said `share = "push"` meant "committed and pushed
+    // immediately" while charter committed nothing. A memory travels with the plane's next save.
+    let note = |toml: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), toml).unwrap();
+        memory_share_note(dir.path())
+    };
+    assert_eq!(
+        note(""),
+        "It stays on THIS MACHINE until the plane is saved — `charter save` commits and pushes \
+         it."
+    );
+    assert_eq!(note("[memory]\nshare = \"local\"\n"), note(""));
+    assert_eq!(
+        note("[plane]\nmode = \"off\"\n"),
+        "It stays on THIS MACHINE — this plane's `[plane] mode` is `off`, so charter commits \
+         nothing; commit and push it yourself if the team needs it."
+    );
+    assert_eq!(
+        note("[plane]\nmode = \"commit\"\n"),
+        "It is committed with the plane's next save, but NOT pushed — this plane's `[plane] \
+         mode` is `commit`."
+    );
+    assert_eq!(
+        note("[memory]\nshare = \"push\"\n"),
+        "It reaches the team with the plane's next save — `charter save` pushes it."
+    );
+    assert_eq!(
+        note("[plane]\nmode = \"pr\"\n"),
+        "It is committed with the plane's next save; this plane's `[plane] mode` is `pr`, and \
+         this charter does not open that pull request yet."
+    );
 }

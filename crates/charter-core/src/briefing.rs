@@ -463,10 +463,15 @@ fn memory_digest(root: &Path, name: &str) -> String {
 
 // ---- 3. unshared memory -------------------------------------------------------------------
 
-/// `_uncommitted_memory_nudge`: memory or refs sitting uncommitted, on a plane whose `share`
-/// says they should travel. Silent under `share = "local"`, where uncommitted is the point.
+/// `_uncommitted_memory_nudge`: memory or refs sitting uncommitted, on a plane whose
+/// `[plane] mode` says they should travel. Silent on a plane that names no mode, or `off`,
+/// where uncommitted is the point.
 fn uncommitted_memory_nudge(root: &Path) -> Option<String> {
-    if Plane::open(root).memory_share() == "local" {
+    use crate::planesave::Mode;
+    if matches!(
+        crate::planesave::Settings::read(root).plane.mode.value,
+        None | Some(Mode::Off)
+    ) {
         return None;
     }
     use crate::worktree::git;
