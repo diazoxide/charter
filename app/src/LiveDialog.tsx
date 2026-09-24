@@ -31,6 +31,8 @@ export function LiveDialog({
   const [read, setRead] = useState<LivePreview | null>(null);
   const [trouble, setTrouble] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** A switch that happened and a save that did not: kept on screen until it is closed. */
+  const [switched, setSwitched] = useState<{ said: string[]; notSaved: string } | null>(null);
   const cancel = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -61,7 +63,8 @@ export function LiveDialog({
       const got = await commands.workspaceLive(plane, workspace, going);
       if (got.status === "ok") {
         tellSaved();
-        onDone(got.data);
+        if (got.data.notSaved === null) onDone(got.data.said);
+        else setSwitched({ said: got.data.said, notSaved: got.data.notSaved });
       } else {
         setTrouble(got.error);
       }
@@ -107,27 +110,45 @@ export function LiveDialog({
               <p className="came-back">{whereText(read)}</p>
             </>
           )}
+          {read !== null && read.mode !== null && read.mode !== "off" && (
+            <p className="came-back">
+              The save also takes every other unsaved change in the plane.
+            </p>
+          )}
           {trouble !== null && (
             <p className="trouble" role="alert">
               {trouble}
             </p>
           )}
-          <div className="doing">
-            <button
-              type="button"
-              className="ends-it"
-              tabIndex={0}
-              disabled={busy || read === null}
-              onClick={() => void confirm()}
-            >
-              {`Make ${word}`}
-            </button>
-            <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0} ref={cancel} onClick={onClose}>
-                Cancel
+          {switched !== null && (
+            <p className="trouble" role="alert">
+              {`It is ${word} now, and the plane was not saved: ${switched.notSaved}`}
+            </p>
+          )}
+          {switched !== null ? (
+            <div className="doing">
+              <button type="button" tabIndex={0} ref={cancel} onClick={() => onDone(switched.said)}>
+                Close
               </button>
-            </AlertDialog.Cancel>
-          </div>
+            </div>
+          ) : (
+            <div className="doing">
+              <button
+                type="button"
+                className="ends-it"
+                tabIndex={0}
+                disabled={busy || read === null}
+                onClick={() => void confirm()}
+              >
+                {`Make ${word}`}
+              </button>
+              <AlertDialog.Cancel asChild>
+                <button type="button" tabIndex={0} ref={cancel} onClick={onClose}>
+                  Cancel
+                </button>
+              </AlertDialog.Cancel>
+            </div>
+          )}
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>
@@ -138,6 +159,9 @@ export function LiveDialog({
 function whereText(read: LivePreview): string {
   if (read.live) {
     return "It stops publishing them from now on. What was already pushed stays in the repository's history.";
+  }
+  if (read.mode === null) {
+    return "This plane has not been told how it is saved yet: the switch is made now, and nothing is committed until you choose how in the Saving tab.";
   }
   if (read.mode === "off") {
     return "This plane's mode is off, so charter commits nothing; they are published when you commit and push them.";

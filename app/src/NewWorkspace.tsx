@@ -131,7 +131,9 @@ export function NewWorkspace({
             </div>
             <p className="came-back">
               A live workspace&apos;s charter, memory and todos are committed with the plane and
-              published by every save. Left unticked, they stay on this machine.
+              published by every save — ticked, the plane is saved as soon as it is made, the way
+              the Saving tab says this plane saves (and not at all while it has not been told). Left
+              unticked, they stay on this machine.
             </p>
 
             {/* Verbatim, and in the dialog rather than behind it: the operator is still

@@ -148,11 +148,8 @@ pub fn workspace_create(
 ) -> Result<Vec<String>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let mut said = create_in(&root, &name, vision.as_deref(), live)?;
-    if live {
-        match crate::saving::save_as(&root, None, charter_core::planegit::Trigger::Live) {
-            Ok(saved) => said.extend(saved),
-            Err(refused) => said.push(refused),
-        }
+    if live && let Some(not_saved) = crate::live::save_after(&root, &mut said) {
+        said.push(not_saved);
     }
     Ok(said)
 }

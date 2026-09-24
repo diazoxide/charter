@@ -368,7 +368,7 @@ export const commands = {
 	 *  Make the workspace `name` LIVE (`live`) or LOCAL, then save the plane. Answers every line
 	 *  both said, or the refusal.
 	 */
-	workspaceLive: (plane: PlaneId, name: string, live: boolean) => typedError<string[], string>(__TAURI_INVOKE("workspace_live", { plane, name, live })),
+	workspaceLive: (plane: PlaneId, name: string, live: boolean) => typedError<LiveSwitched, string>(__TAURI_INVOKE("workspace_live", { plane, name, live })),
 	/**
 	 *  What deleting this workspace would discard, for the dialog to show **before** anything is
 	 *  pressed.
@@ -1194,10 +1194,23 @@ export type LivePreview = {
 	live: boolean,
 	/**  The workspace's files the block publishes (or stops publishing), plane-relative. */
 	files: string[],
-	/**  Where the plane is pushed, when it is on a forge charter knows. */
+	/**
+	 *  Where the plane is pushed: `origin` as git has it, or `null` when the plane has none.
+	 *  Any remote, not only a forge charter knows — a save pushes to it all the same.
+	 */
 	remote: string | null,
 	/**  `[plane] mode`, so the confirmation can say whether a save will push at all. */
 	mode: string | null,
+};
+
+/**
+ *  What a switch did: every line it and the save said, and — kept apart, because the switch
+ *  has already happened — why the save did not.
+ */
+export type LiveSwitched = {
+	said: string[],
+	/**  Why the plane was not saved after the switch: refused, or not asked yet how it saves. */
+	notSaved: string | null,
 };
 
 /**  What a merge did, for the window to report. */

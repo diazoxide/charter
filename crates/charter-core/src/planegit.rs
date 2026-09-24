@@ -1835,8 +1835,10 @@ fn commit_push(
             // **No test reaches this arm, and that is measured rather than assumed.** The
             // obvious way to make one — `update-index --cacheinfo` with a sha that is not
             // in the object store — does not survive the `add -A` this command runs first:
-            // git stages the DELETION of a path with no file on disk, so the row is not
-            // listed at all. What is left that reaches here is a `git show` that fails for
+            // git stages the DELETION of a path with no file on disk — a row the guard now
+            // skips before it gets here, because a deletion publishes nothing (it did reach
+            // here until charter-app#301, and refused every save that removed a memory). What
+            // is left that reaches here is a `git show` that fails for
             // a reason a fixture cannot manufacture: a corrupt object store, the deadline,
             // git gone from PATH mid-command. Deleting this arm therefore turns nothing
             // red, and the next person to mutate it should know that before they conclude
