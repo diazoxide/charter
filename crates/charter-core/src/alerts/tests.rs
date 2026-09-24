@@ -16,7 +16,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
         Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args(args)
+            .args(crate::testgit::isolated(args))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_AUTHOR_NAME", "t")

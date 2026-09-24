@@ -387,7 +387,7 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let mut command = Command::new("git");
         command
-            .args(args)
+            .args(crate::testgit::isolated(args))
             .current_dir(dir)
             .env_clear()
             .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")

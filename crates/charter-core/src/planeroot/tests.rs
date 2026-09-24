@@ -4,24 +4,17 @@
 //! the rules stated once each, on a fixture small enough to read, plus the three inputs the
 //! differential cannot arbitrate because the oracle raises on them (charter#1178).
 //!
-//! Every git call that WRITES here passes `-c commit.gpgsign=false`: the runner keeps `HOME`, and
-//! a signer in the operator's global config would otherwise be asked to sign fixture commits.
+//! Every repository here is made through [`crate::testgit`]: the runner keeps `HOME`, and a signer
+//! in the operator's global config would otherwise be asked to sign fixture commits.
 
 use super::*;
 use crate::worktree::git::{READ, run};
 
 fn git(dir: &std::path::Path, args: &[&str]) {
-    let mut full = vec![
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "tag.gpgsign=false",
-        "-c",
-        "user.name=t",
-        "-c",
-        "user.email=t@t",
-    ];
+    let mut full = vec!["-c", "user.name=t", "-c", "user.email=t@t"];
     full.extend_from_slice(args);
+    let full = crate::testgit::isolated(&full);
+    let full: Vec<&str> = full.iter().map(String::as_str).collect();
     let r = run(dir, &full, READ).unwrap();
     assert!(r.ok(), "git {args:?} failed: {}", r.err);
 }

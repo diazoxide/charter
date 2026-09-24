@@ -333,6 +333,9 @@ mod tests {
         .unwrap();
         let clone = root.join("workspaces/alpha/widget");
         std::fs::create_dir_all(&clone).unwrap();
+        // Deliberately NOT through `crate::testgit`: its template writes the very
+        // `commit.gpgsign = false` these tests assert the policy writes, which would make them
+        // pass without it. Nothing here commits, so no signer is ever asked.
         git::run(&clone, &["init", "-q", "."], git::READ).unwrap();
         if let Some(origin) = origin {
             git::run(&clone, &["remote", "add", "origin", origin], git::READ).unwrap();

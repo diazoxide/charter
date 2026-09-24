@@ -33,9 +33,10 @@ impl Fixture {
         // What `charter init` writes: the plane's own machine-local state is not committed.
         std::fs::write(root.join(".gitignore"), ".charter/\n").unwrap();
         run(&root, &["init", "-q", "-b", "main", "."]);
-        // In the repo's own config, never the machine's: CI runners have no git identity, and
-        // a developer's global `commit.gpgsign = true` is exactly what these tests want left
-        // in place.
+        // In the repo's own config, never the machine's: CI runners have no git identity. The
+        // repo is made through `testgit`, so a developer's global `commit.gpgsign = true` is
+        // not asked for here (charter-app#191); the test that proves `save` never runs a
+        // signer turns signing on in the repo itself.
         run(&root, &["config", "user.name", "Fixture"]);
         run(&root, &["config", "user.email", "fixture@example.invalid"]);
         std::fs::create_dir_all(root.join("personas/steward/memory")).unwrap();
@@ -108,13 +109,13 @@ impl Fixture {
 
 /// git, for a test's own setup — not through the module under test.
 fn run(dir: &Path, args: &[&str]) -> String {
-    let done = git::run_untimed(dir, args).expect("git runs");
+    let done = crate::testgit::run(dir, args);
     assert!(done.ok(), "git {args:?} failed: {done:?}");
     done.out
 }
 
 fn ask(dir: &Path, args: &[&str]) -> String {
-    git::run_untimed(dir, args).expect("git runs").out
+    crate::testgit::run(dir, args).out
 }
 
 // --------------------------------------------------------------------------------------- //

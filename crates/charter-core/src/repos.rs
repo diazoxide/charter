@@ -431,7 +431,7 @@ mod tests {
         let fixture = |args: &[&str]| {
             let mut command = std::process::Command::new("git");
             command
-                .args(args)
+                .args(crate::testgit::isolated(args))
                 .current_dir(&tree)
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")

@@ -500,7 +500,7 @@ mod tests {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C")
             .arg(dir)
-            .args(args)
+            .args(crate::testgit::isolated(args))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_AUTHOR_NAME", "t")
@@ -586,7 +586,7 @@ mod tests {
         // was started, so a chat in a subdirectory reads a file charter would otherwise miss.
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        crate::worktree::git::run(&root, &["init", "-q"], ASKING_GIT).expect("a repository");
+        fixture_git(&root, &["init", "-q"]);
         std::fs::create_dir_all(root.join(".claude")).unwrap();
         std::fs::write(root.join(".claude/settings.local.json"), fills("theirs")).unwrap();
         let deeper = root.join("packages/thing");
