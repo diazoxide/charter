@@ -125,6 +125,31 @@ export const commands = {
 	 */
 	planesToRestore: () => typedError<Restore, string>(__TAURI_INVOKE("planes_to_restore")),
 	/**
+	 *  What this launch would put back, for the window to ask about — **or nothing, and then there
+	 *  is no question**: nothing was open, or the operator has already answered.
+	 * 
+	 *  Asked BEFORE the window restores anything, and nothing starts until [`relaunch`] has the
+	 *  answer. On a blocking thread for [`planes_to_restore`]'s reason, and because it reads one
+	 *  record per project.
+	 */
+	relaunchAsk: () => typedError<{
+	/**  Every project with something to put back, the launch's own first. */
+	projects: WaitingProject[],
+	/**
+	 *  Whether charter restarted itself to install an update, rather than the operator
+	 *  quitting it (charter-app#251). The question then says so.
+	 */
+	after_update: boolean,
+} | null, string>(__TAURI_INVOKE("relaunch_ask")),
+	/**
+	 *  The operator's answer to [`relaunch_ask`] — or `ReopenAll` from a window that had nothing to
+	 *  ask. **Every launch sends one**, because the launch's own project is put back here and
+	 *  nowhere else; a second answer, from a window that reloaded, changes nothing.
+	 * 
+	 *  On a blocking thread because the answer starts every chat the launch's project held.
+	 */
+	relaunch: (choice: RelaunchChoice) => typedError<null, string>(__TAURI_INVOKE("relaunch", { choice })),
+	/**
 	 *  A window says what it is holding: its projects as tabs, and which one is in front.
 	 * 
 	 *  Two things, in one call, because they are one fact. A notification about a chat in a
@@ -221,8 +246,9 @@ export const commands = {
 	/**
 	 *  The chats the app already has open — at a launch, the ones put back from the record.
 	 * 
-	 *  The window asks this instead of opening its own: putting the record back happens before
-	 *  there is a window, so that a relaunch does not depend on a webview having run.
+	 *  The window asks this instead of opening its own: the core puts the record back, once the
+	 *  window has sent the operator's answer to the launch's question (`opener::relaunch`,
+	 *  charter-app#250), and a window that reloads asks again rather than starting a second copy.
 	 */
 	openedChats: (plane: PlaneId) => typedError<OpenChat[], string>(__TAURI_INVOKE("opened_chats", { plane })),
 	/**
@@ -1459,6 +1485,20 @@ export type Refused = {
 	at_risk: AtRisk[],
 };
 
+/**  The operator's answer, as the window sends it. */
+export type RelaunchChoice = "ReopenAll" | "StartFresh";
+
+/**  What a launch asks before it puts anything back (charter-app#250). */
+export type RelaunchQuestion = {
+	/**  Every project with something to put back, the launch's own first. */
+	projects: WaitingProject[],
+	/**
+	 *  Whether charter restarted itself to install an update, rather than the operator
+	 *  quitting it (charter-app#251). The question then says so.
+	 */
+	after_update: boolean,
+};
+
 /**  One clone's git state, and what the forge cache last recorded for its branch. */
 export type RepoState = {
 	name: string,
@@ -1704,6 +1744,14 @@ export type ViewTab = {
 	at: number,
 	active: boolean,
 	pinned: boolean,
+};
+
+/**  One project's share of the question: which, and how much of it would come back. */
+export type WaitingProject = {
+	/**  The project's root, which is also the id it is held by once it is open. */
+	plane: string,
+	chats: number,
+	views: number,
 };
 
 /**
