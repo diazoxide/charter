@@ -291,11 +291,17 @@ fn worktrees_finding(root: &Path, cfg: &toml::Table) -> Option<(String, String)>
 /// request on a plane whose origin no forge adapter can open one on. Neither is a refusal: the
 /// first still reads, and the second is the Saving view's **blocked**, said ahead of time.
 fn save_finding(root: &Path) -> Option<(String, String)> {
-    let shared =
-        std::fs::read_to_string(root.join(crate::profiles::COMMITTED_FILE)).unwrap_or_default();
-    // A key or value the settings tab would refuse is one nothing reads: say so first.
-    if let Some(why) = crate::planesave::refusals(&shared, false, crate::profiles::COMMITTED_FILE)
+    use crate::planesave::{Source, refusals};
+    use crate::settings::{Which, layer_text};
+    let shared = layer_text(root, Which::Shared).unwrap_or_default();
+    // This machine's file as every reader takes it: none at all when git would carry it, which
+    // the profiles row already names.
+    let local = layer_text(root, Which::Local).unwrap_or_default();
+    // A key or value the settings tab would refuse is one nothing reads: say so first, in
+    // either file, since profiles no longer refuses `[plane]` and `[repos]` in the local one.
+    if let Some(why) = refusals(&shared, false, Which::Shared.file())
         .into_iter()
+        .chain(refusals(&local, true, Which::Local.file()))
         .next()
     {
         return Some((
@@ -305,11 +311,35 @@ fn save_finding(root: &Path) -> Option<(String, String)> {
         ));
     }
     let plane = crate::planesave::Settings::read(root).plane;
-    if !plane.from_share && crate::planesave::share_is_set(&shared) {
+    // Only when charter.toml's own `[plane] mode` overrides it: a mode from this machine's
+    // local file leaves `share` the one every other clone reads, so removing it would change
+    // theirs.
+    if !plane.from_share
+        && plane.mode.source == Source::Shared
+        && crate::planesave::share_is_set(&shared)
+    {
         return Some((
             "[memory] share is deprecated, and [plane] mode overrides it, so nothing reads it"
                 .to_owned(),
             "Remove share from [memory] in charter.toml.".to_owned(),
+        ));
+    }
+    // This machine's local mode overrides it here, and every other clone still reads it.
+    let everywhere = crate::planesave::Settings::from_text(Some(&shared), None).plane;
+    if plane.mode.source == Source::Local
+        && everywhere.from_share
+        && let Some(theirs) = everywhere.mode.value
+    {
+        let word = theirs.as_str();
+        return Some((
+            format!(
+                "[memory] share is deprecated, and is still read as [plane] mode = \"{word}\" \
+                 by every clone without this machine's charter.local.toml"
+            ),
+            format!(
+                "Write mode = \"{word}\" under [plane] in charter.toml and remove share from \
+                 [memory] — [plane] mode says how far every save goes, not only a memory's."
+            ),
         ));
     }
     let mode = plane.mode.value?;

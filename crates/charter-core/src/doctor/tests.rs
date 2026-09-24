@@ -453,6 +453,41 @@ fn share_that_plane_mode_overrides_is_named_as_dead() {
 }
 
 #[test]
+fn share_that_only_this_machines_local_mode_overrides_is_not_called_dead() {
+    // Every other clone still reads share, so removing it would change their mode.
+    let (_d, root) = plane("[memory]\nshare = \"push\"\n");
+    std::fs::write(
+        root.join("charter.local.toml"),
+        "[plane]\nmode = \"commit\"\n",
+    )
+    .unwrap();
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.status, Status::Warn);
+    assert_eq!(
+        r.detail,
+        "[memory] share is deprecated, and is still read as [plane] mode = \"push\" by every \
+         clone without this machine's charter.local.toml"
+    );
+    assert_eq!(
+        r.hint,
+        "Write mode = \"push\" under [plane] in charter.toml and remove share from [memory] — \
+         [plane] mode says how far every save goes, not only a memory's."
+    );
+}
+
+#[test]
+fn a_save_setting_the_local_file_holds_and_nothing_reads_is_named() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::write(root.join("charter.local.toml"), "[plane]\nmode = \"prr\"\n").unwrap();
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.status, Status::Warn);
+    assert_eq!(
+        r.detail,
+        "plane.mode in charter.local.toml is not a mode — one of off, commit, push, pr, pr-merge"
+    );
+}
+
+#[test]
 fn a_save_setting_charter_does_not_read_is_named() {
     let (_d, root) = plane("[plane]\nmod = \"push\"\n");
     let r = one(&root, "charter.toml");
