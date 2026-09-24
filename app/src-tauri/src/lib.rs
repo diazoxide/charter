@@ -401,6 +401,10 @@ struct SidebarWorkspace {
     vision: String,
     todos: Vec<String>,
     chats: Vec<OpenChat>,
+    /// Its colour as its `workspace.json` holds it — a palette name or `#rrggbb` — or `null`
+    /// (charter-app#281). Here because every workspace tab draws its own, whether or not it is
+    /// in front, and the sidebar is already the one read of every workspace.
+    colour: Option<String>,
 }
 
 /// The whole left-hand side: every workspace with its chats, and the focused workspace's
@@ -466,6 +470,9 @@ fn plane_sidebar(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sid
                 .map(|todo| todo.title)
                 .collect(),
             chats: filed.remove(&name).unwrap_or_default(),
+            colour: charter_core::extension::project::theme::colour_of(&ws)
+                .as_ref()
+                .map(charter_core::extension::project::theme::Colour::value),
             name,
         });
     }

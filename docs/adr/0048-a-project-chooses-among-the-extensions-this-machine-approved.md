@@ -13,7 +13,9 @@ is (charter-app#246, #253).
 contributes it. **Amended 2026-09-24 (charter-app#273):** a project also *picks* its theme, by the
 same precedence — see [A project's theme](#a-projects-theme) below. **Amended 2026-09-24
 (charter-app#280):** a workspace is a layer of the same order, between Shared and Local — see
-[A workspace refines its project](#a-workspace-refines-its-project) below.
+[A workspace refines its project](#a-workspace-refines-its-project) below. **Amended 2026-09-24
+(charter-app#281):** a workspace picks a theme in that order too, and has a colour of its own —
+see [A workspace's theme and colour](#a-workspaces-theme-and-colour) below.
 
 ## The decision
 
@@ -188,8 +190,57 @@ extension says which layer decided it — Shared, the workspace, Local, or the d
 buttons follow the workspace in front. The executor's gate is handed the workspace of the strip
 the view is on, read at the press; a view the workspace turned off is refused with a sentence
 naming `workspaces/<ws>/workspace.json` and the Workspace settings tab. The Project settings tab
-still asks for the project alone. **The theme stays the project's** until #281 gives a workspace
-a theme of its own: the window's theme is asked for the project in front, as before.
+still asks for the project alone. The theme stayed the project's until #281, below.
+
+## A workspace's theme and colour
+
+Added by charter-app#281. The operator: *"if user selected theme in project or local config —
+workspace collor can add some filter and make same theme but with different collor"*.
+
+**A workspace picks a theme in the same order.** `settings.theme.use` in its `workspace.json` is
+one more layer of `theme::resolve`, in the place #280 gave the workspace: this machine's approval,
+Shared, the workspace, Local. `theme::Said` carries it the way `Choices` carries the extensions'
+(`Said::read_in`, `Said::in_workspace`), and the extension a pick names must be on **in that
+workspace** — `resolve` is handed `extension::project::resolve`'s answer for the same project and
+workspace. The fallback, the sentence and `theme.json`'s place are #273's, unchanged. `theme` is
+the second name in `settings::workspace::READ`.
+
+**The window's theme follows the workspace in front.** Each project reports its focused workspace
+to the window, and the window asks `project_theme_drawn` and `extensions_on` for the pair. So a
+workspace switch is a theme switch, live, and `theme.onDrawn` hands it to every terminal, as a
+project switch does. #280 left the theme following the project alone; this is that fixed.
+
+**A colour is a workspace's alone.** `settings.theme.colour` — one of eight palette names, or
+`#rrggbb` whose hue is taken — is read from the workspace's layer and from nowhere else: a
+project's `[theme] colour` is refused, because a colour exists to tell one workspace from another,
+and one set for the whole project would tell nothing apart. It picks no theme; it has no
+precedence to resolve. `theme::resolve` returns it with the pick, and `theme::colour_of` reads it
+for a workspace that is not in front.
+
+**The colour is a hue shift of the theme in force, and only of its accent and tab shades.** The
+window turns `accent.base`, `accent.surface`, `focus.ring` and `tab.active` to the hue of the
+workspace in front, on the whole window, and `layer.workspace`, `layer.chat` and `layer.selected`
+as well on that workspace's own tab and on the chat strip, which holds its chats. Each workspace
+tab carries its own tint whether or not it is in front: a small mark in its accent and its own
+shade. The title bar's workspace carries the same mark. Text and the terminal are never touched.
+
+The arithmetic (`app/src/theme/tint.ts`) turns the hue in OKLCH and then searches the lightness
+for **the relative luminance the original had**, so every contrast ratio the theme cleared, its
+tinted shades clear too, at every hue; `contrast.test.ts` runs every palette hue on both built-in
+themes to hold it. A neutral grey, which has no hue to turn, is given a small fixed chroma. White
+stays white, so charter-light's selected tab is white in every colour and says it with the mark.
+
+Rejected:
+
+- **A colour as a second theme, or a palette of accent tokens per colour.** Eight colours times
+  every theme is a theme author's work multiplied, and an extension theme would have no colours
+  at all. A hue shift works on any theme, including one charter has never seen.
+- **Tinting the text or the terminal.** It is the only way a colour could break contrast, and
+  the terminal is where the operator reads all day.
+- **HSL.** Its lightness is not perceived lightness, so a yellow and a blue tint of one shade
+  would read as two different shades. OKLCH keeps the step; the luminance search keeps WCAG.
+- **A colour in the project's files, or overridable by Local.** See above: a colour is identity,
+  not preference. A machine that wants another look picks another theme in Local.
 
 ## Where each consumer asks
 

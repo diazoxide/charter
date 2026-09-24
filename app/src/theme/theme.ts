@@ -51,6 +51,7 @@ import {
   REDUCE,
   type Motion,
 } from "./motion";
+import { hueOf, tintHex } from "./tint";
 
 /**
  * Every token, in the order a theme file is easiest to read in.
@@ -223,6 +224,87 @@ export const PREFERS_LIGHT = "(prefers-color-scheme: light)";
 export function systemTheme(): Theme {
   const light = typeof matchMedia === "function" && matchMedia(PREFERS_LIGHT).matches;
   return light ? BUILT_IN["charter-light"] : BUILT_IN["charter-dark"];
+}
+
+/**
+ * **What a workspace's colour tints on the whole window** (charter-app#281): the accent, the
+ * focus ring and the active-tab wash, from the workspace in front ({@link drawTint}). The
+ * operator's *"make same theme but with different collor"* — and not the text, and not the
+ * terminal, so every contrast the theme cleared still holds (`contrast.test.ts`).
+ */
+export const TINTED_WINDOW: readonly Token[] = [
+  "accent.base",
+  "accent.surface",
+  "focus.ring",
+  "tab.active",
+];
+
+/**
+ * **And on a workspace's own tab and its chat strip**: the same, and the layer shades. Set on
+ * those elements rather than on the window, because the project strip is not a workspace's and
+ * every workspace tab shows its own colour whether or not it is in front
+ * ({@link tintVariables}).
+ */
+export const TINTED_TABS: readonly Token[] = [
+  ...TINTED_WINDOW,
+  "layer.workspace",
+  "layer.chat",
+  "layer.selected",
+];
+
+/** Each theme's tints, made once per colour: so a redraw with the same colour is the same
+ *  object, and a strip of fifty tabs does the arithmetic once. */
+const tints = new WeakMap<Theme, Map<string, Theme>>();
+
+/**
+ * `theme` with a workspace's colour — a `tint.PALETTE` name or `#rrggbb` — turning
+ * {@link TINTED_TABS} to its hue (`tint.ts` has the arithmetic and why the luminance is kept).
+ * The theme itself for no colour, or one with no hue.
+ */
+export function tinted(theme: Theme, colour: string | null | undefined): Theme {
+  const hue = hueOf(colour);
+  if (hue === undefined || colour == null) return theme;
+  let made = tints.get(theme);
+  if (made === undefined) {
+    made = new Map();
+    tints.set(theme, made);
+  }
+  const known = made.get(colour);
+  if (known !== undefined) return known;
+  const values = { ...theme.values };
+  for (const token of TINTED_TABS) values[token] = tintHex(theme.values[token], hue);
+  const tint = { ...theme, values };
+  made.set(colour, tint);
+  return tint;
+}
+
+/**
+ * The custom properties that draw `tokens` of `theme` in a workspace's colour — what a
+ * workspace tab and its chat strip put on themselves as a `style`. Empty with no colour, so an
+ * element of a workspace without one reads the window's own.
+ */
+export function tintVariables(
+  theme: Theme,
+  colour: string | null | undefined,
+  tokens: readonly Token[],
+): Record<string, string> {
+  const tint = tinted(theme, colour);
+  if (tint === theme) return {};
+  return Object.fromEntries(tokens.map((token) => [property(token), tint.values[token]]));
+}
+
+/** The colour of the workspace in front, which the window's accent is drawn in. */
+let tint: string | null = null;
+
+/**
+ * Tints the window's accent and focus ring with the colour of the workspace in front
+ * (charter-app#281), or takes the tint off with `null`. The theme is not redrawn and the
+ * terminal is not told: nothing it draws is tinted.
+ */
+export function drawTint(colour: string | null): void {
+  if (colour === tint) return;
+  tint = colour;
+  if (drawnOn !== null) paint(current, drawnOn, tint);
 }
 
 /** The built-in a theme of this appearance falls back to, token by token. */
@@ -402,6 +484,12 @@ export function apply(theme: Theme, to: HTMLElement, reduced = motionReduced()):
   to.dataset.theme = theme.name;
 }
 
+/** Writes {@link TINTED_WINDOW} of `theme` in `colour` onto `to`, or as the theme has them. */
+function paint(theme: Theme, to: HTMLElement, colour: string | null): void {
+  const tint = tinted(theme, colour);
+  for (const token of TINTED_WINDOW) to.style.setProperty(property(token), tint.values[token]);
+}
+
 /** What the running window is drawn in. Read by a pane that is opening a terminal, which then
  *  follows it through {@link onDrawn}. */
 let current: Theme = DEFAULT_THEME;
@@ -420,6 +508,7 @@ export function drawIn(theme: Theme, to: HTMLElement = document.documentElement)
   current = theme;
   drawnOn = to;
   apply(theme, to);
+  if (tint !== null) paint(theme, to, tint);
   followReducedMotion();
   if (changed) for (const follow of followers) follow(theme);
 }
@@ -460,6 +549,8 @@ function followReducedMotion(): void {
   if (following || typeof matchMedia !== "function") return;
   following = true;
   matchMedia(REDUCE).addEventListener("change", (event) => {
-    if (drawnOn !== null) apply(current, drawnOn, event.matches);
+    if (drawnOn === null) return;
+    apply(current, drawnOn, event.matches);
+    if (tint !== null) paint(current, drawnOn, tint);
   });
 }

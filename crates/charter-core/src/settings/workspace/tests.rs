@@ -182,7 +182,7 @@ fn a_settings_key_no_reader_reads_is_refused() {
         refusals(text, "alpha"),
         vec![
             "settings.colour in workspaces/alpha/workspace.json is not read — a workspace's \
-             settings hold extensions, harness_plugins and nothing else"
+             settings hold extensions, harness_plugins, theme and nothing else"
                 .to_owned()
         ]
     );
@@ -296,6 +296,53 @@ fn what_a_save_writes_is_what_the_resolver_reads_in_that_workspace_and_nowhere_e
     assert_eq!(state(Some("alpha")), (State::Off, Source::Workspace));
     assert_eq!(state(None), (State::On, Source::Default));
     assert_eq!(state(Some("beta")), (State::On, Source::Default));
+}
+
+#[test]
+fn a_saved_theme_and_colour_are_what_the_theme_resolver_reads_in_that_workspace() {
+    // charter-app#281: `theme` is a table a workspace's settings may hold.
+    use crate::extension::project::theme::{self, Colour, Pick};
+    let dir = plane(Some(&old()));
+    save(
+        dir.path(),
+        "alpha",
+        Some(&old()),
+        &[
+            at(&["theme", "use"], Some(Value::Text("charter-light".into()))),
+            at(&["theme", "colour"], Some(Value::Text("teal".into()))),
+        ],
+    )
+    .unwrap();
+    let got = theme::resolve(&[], None, &theme::Said::read_in(dir.path(), Some("alpha")));
+    assert_eq!(
+        (got.draws, got.colour),
+        (
+            Some(Pick::BuiltIn("charter-light")),
+            Some(Colour::Palette("teal"))
+        )
+    );
+    assert!(read_file(dir.path(), "alpha").unwrap().refusals.is_empty());
+}
+
+#[test]
+fn a_colour_the_theme_reader_would_ignore_is_refused_in_its_words() {
+    let dir = plane(Some(&old()));
+    let refused = save(
+        dir.path(),
+        "alpha",
+        Some(&old()),
+        &[at(&["theme", "colour"], Some(Value::Text("mauve".into())))],
+    )
+    .unwrap_err();
+    assert_eq!(
+        refused,
+        vec![
+            "settings.theme.colour in workspaces/alpha/workspace.json is \"mauve\", which is not \
+             red, orange, yellow, green, teal, blue, purple, pink or #rrggbb"
+                .to_owned()
+        ]
+    );
+    assert_eq!(on_disk(dir.path()), old());
 }
 
 #[test]

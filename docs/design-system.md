@@ -87,6 +87,27 @@ little bit highlight separation"_. Its own token because `border.subtle` sat too
 layer shades to be seen, and a theme should be able to lift the tabs apart without lifting every
 other subtle rule in the window.
 
+**A workspace's colour is a hue shift of the theme in force, not a colour of its own**
+(charter-app#281, ADR 0048). A workspace names one of eight hues (`tint.PALETTE`, the same eight
+the core reads) or a `#rrggbb` whose hue is taken, and the window turns only these tokens to it:
+
+- on the whole window, from the workspace in front: `accent.base`, `accent.surface`,
+  `focus.ring`, `tab.active` (`theme.TINTED_WINDOW`, drawn by `drawTint`);
+- on that workspace's own tab and on the chat strip, which holds its chats, the same and
+  `layer.workspace`, `layer.chat`, `layer.selected` (`theme.TINTED_TABS`), set on the element as
+  custom properties by `tintVariables`. Each workspace tab carries its own tint whether or not it
+  is in front: a `.workspace-mark` dot in its accent and its own shade. The title bar's workspace
+  carries the same dot, `.crumb-mark`.
+
+Never the text, never `layer.project` (the project strip is not a workspace's), never the
+terminal. `app/src/theme/tint.ts` does the arithmetic in OKLCH and then keeps each token's
+**relative luminance** exactly, so a tinted shade clears every contrast floor the theme's own
+cleared; `contrast.test.ts` runs every palette hue on both built-in themes, and holds two pairs
+the tint adds — the mark (`accent.base`) and a tab's primary text on `layer.workspace`. A neutral
+grey is given a small fixed chroma, felt rather than noticed, as the strips are meant to be;
+white stays white. No colour is written for this anywhere but `app/src/theme/`: a component asks
+`tintVariables` and sets what it answers.
+
 **The chat states and the CI states share a group on purpose.** `.ci-pending` is
 `var(--state-waiting)` because amber means "not finished" in both, and a theme author who wants
 to change that changes one value rather than hunting for the second one.
