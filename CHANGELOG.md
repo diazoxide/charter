@@ -58,11 +58,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   identity variable a vault declares. A tab can also move a token an app was launched with, and
   then warns to relaunch charter so the export leaves its process.
   ([#237](https://github.com/diazoxide/charter-app/issues/237))
+- **Extensions per project.** Each project can turn an installed extension on or off, and set
+  what it declares, in either section of Project settings: Shared for the team, Local for you,
+  and Local wins key by key. The tab shows every extension with what it is in this project —
+  on, off, *needs approval here*, or *not installed here* — and which file decided it. Approval
+  stays with this machine: a project that enables an extension you have not approved leaves it
+  off until you approve it in Extensions. A project that says nothing keeps every approved
+  extension on, as before. Panels, views and themes follow the project in front, and a view
+  refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter-app/issues/253))
 - An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
   counts on its project and workspace tabs at once, without touching the chat. It lasts until
   that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
   the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
   ([#248](https://github.com/diazoxide/charter-app/issues/248))
+
+### Changed
+
+- The needs-you queue is in the title bar now, and nowhere else. A hand and a count sit left of
+  About when anything needs you. When nothing has asked but a chat that can't report is open — a
+  shell, or a harness without charter's hooks — it is a faint hand with no number, and its
+  tooltip and list name those chats ("shell 2 can't tell charter it's waiting"). With neither,
+  nothing is there. Pressing it lists every
+  chat asking in every open project — its name, then its workspace and project — each with
+  **Go**, which brings that chat to the front and switches project and workspace to get there,
+  and **✕**, which ignores it. The Attention panel no longer has the queue; its other sections
+  are unchanged. From the keyboard, Tab reaches the button, Enter opens the list, the arrows
+  move, Delete ignores, and Escape closes it.
+  ([#249](https://github.com/diazoxide/charter-app/issues/249))
 
 ### Fixed
 

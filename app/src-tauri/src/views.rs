@@ -211,9 +211,13 @@ pub(crate) async fn open_view(
             });
         }
         let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+        // What the project this view is in says about the extension, read at the press like
+        // the rest of the gate (ADR 0048).
+        let project = extension::project::Choices::read(&root);
         executor
             .ask(
                 &config,
+                &project,
                 &extension,
                 &view,
                 Some(key.as_str()).filter(|key| !key.is_empty()),

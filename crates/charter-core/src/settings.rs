@@ -12,7 +12,8 @@
 //! [`crate::doctor`]'s `charter.toml` row for the Shared file (the loader's own parse and
 //! schema refusals, and the settings it reads as absent) and [`crate::profiles`] for the
 //! Local one — asked of the text about to be written rather than of the file on disk
-//! ([`crate::profiles::derive_from`]). Two more refusals are a writer's, because only a writer
+//! ([`crate::profiles::derive_from`]) — and, in either file, `[extensions]` is asked of the one
+//! reader of it, [`crate::extension::project::refusals`]. Two more refusals are a writer's, because only a writer
 //! can cause them: a Local file git would commit ([`crate::profiles::ignore_check_before_writing`],
 //! whose sentences are the loader's too), and a secret-shaped value in either file
 //! ([`crate::secretshape::secret_kind`], the classifier the leak guard and `charter save` use).
@@ -127,10 +128,14 @@ pub fn refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
 /// What the readers of the file refuse in `text`: the doctor's `charter.toml` row for Shared,
 /// the profiles loader for Local.
 fn read_refusals(root: &Path, which: Which, text: &str) -> Vec<String> {
-    match which {
+    let mut out = match which {
         Which::Shared => shared_refusals(root, text),
         Which::Local => local_refusals(root, text),
-    }
+    };
+    // Either file may hold `[extensions]` (charter-app#253), and it is read by one reader in
+    // both, so it is refused in that reader's words in both.
+    out.extend(crate::extension::project::refusals(text, which.file()));
+    out
 }
 
 /// What only a writer can cause, and so what stops every save however long the file has held

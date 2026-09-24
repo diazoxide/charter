@@ -1223,6 +1223,8 @@ fn commands() -> Builder<tauri::Wry> {
             vaults::vault_secret_copy,
             vaults::vault_identity_move,
             vaults::vault_identity_put,
+            extensions::project_extensions,
+            extensions::extensions_on,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,

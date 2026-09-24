@@ -54,8 +54,12 @@ When two choices conflict, the higher priority wins.
 
 1. **One window.**
    - **Left:** a sidebar listing every workspace with its chats, and each chat's live state.
-   - **Top:** a global "needs you" queue, plus OS notifications. An item can be ignored, which
-     lasts until its chat asks again (charter-app#248).
+   - **Top:** a global "needs you" queue in the title bar, plus OS notifications: a button (a
+     hand and a count) that opens a list of every chat asking across every project, each with
+     **Go** and **✕** (charter-app#249). When nothing has asked but a chat that cannot report
+     is open (a shell, a harness without charter's hooks), it is a faint hand with no count
+     that names those chats; with neither, nothing is drawn. Ignoring an item lasts until its
+     chat asks again (charter-app#248).
    - **Center:** tabs and free split panes.
    - **Right:** panels for the focused workspace: repos, branches, CI, todos, personas.
    - **Palette:** the command palette is the primary input, keyboard first.
