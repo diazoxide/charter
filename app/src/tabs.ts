@@ -53,6 +53,16 @@ export type Direction = "row" | "column";
  */
 export type ViewRef = { from: string | null; view: string; key: string };
 
+/**
+ * **The Project settings view** (charter-app#252): a plane's `charter.toml` and
+ * `charter.local.toml`, as forms and as raw TOML. One per plane, so its key is empty — the
+ * same shape as every other view, opened by the same verb, deduplicated by the same `viewKey`.
+ */
+export const SETTINGS_VIEW: ViewRef = { from: null, view: "settings", key: "" };
+
+/** What the Project settings tab is called. */
+export const SETTINGS_TITLE = "Project settings";
+
 /** What a pane shows. */
 export type Content =
   /**
@@ -90,16 +100,24 @@ export type Layout =
 export type Tab = {
   id: number;
   /**
-   * What the tab bar shows: the chat's name and the persona it adopted, where charter knows
-   * one — `3 steward` rather than `3` (charter-app#130) — or the view's title for a tab that
-   * opened on a view.
+   * What the tab bar shows: **the name the operator gave the chat, or its default** — or the
+   * view's title for a tab that opened on a view.
    *
-   * A number identifies a chat to charter and tells the operator nothing, and the strip is
-   * where an operator with fifty of them works out which is which. The persona is known at
-   * the moment a tab opens on both paths — the picker carries the operator's choice, and a
-   * chat put back at a launch carries its own — so this is never filled in later.
+   * The default is the persona the chat adopted and then its number, `steward 3` rather than
+   * `3` (charter-app#130), persona first because that is what the operator reads the strip
+   * for (charter-app#254). A number identifies a chat to charter and tells the operator
+   * nothing, and the strip is where an operator with fifty of them works out which is which.
+   * What goes before the number is known at the moment a tab opens on every path — the picker
+   * carries the operator's choice, and a chat put back at a launch carries its own — so this
+   * is never filled in later.
+   *
+   * **A name given is charter's label and nothing else** (charter-app#254). The chat's own
+   * name — what its harness was started with, and what a split's chat is started under — is
+   * `Content.chat`, and a rename never touches it: a running harness is not disturbed.
    */
   name: string;
+  /** What {@link name} goes back to when a given name is taken off: the default above. */
+  defaultName: string;
   layout: Layout;
   /** The pane a split or a close acts on. */
   focused: number;
@@ -129,24 +147,59 @@ export function noTabs(): Tabs {
   return { byId: {}, order: [], named: { tabs: 0, panes: 0 } };
 }
 
-/** Opens a tab with one pane showing `session`, in front. */
+/**
+ * Opens a tab with one pane showing `session`, in front.
+ *
+ * `who` is what the default name puts before the chat's number: the persona it adopted, or —
+ * with none — the program it runs. `label` is the name the operator gave it, where they gave
+ * one, and the tab says that instead.
+ */
 export function openTab(
   tabs: Tabs,
   session: number,
   chat = "",
-  persona: string | null = null,
+  who: string | null = null,
+  label: string | null = null,
 ): Tabs {
   const named = chat || String(tabs.named.tabs + 1);
   return withTab(
     tabs,
-    persona ? `${named} ${persona}` : named,
+    who ? `${who} ${named}` : named,
     { kind: "session", session, chat: named },
     tabs.order.length,
+    label,
   );
 }
 
-/** The one place a tab is minted: `content` in one pane, at `at` in the order, in front. */
-function withTab(tabs: Tabs, name: string, content: Content, at: number): Tabs {
+/**
+ * Gives a chat's tab the name `label`, or its default back with `null` (charter-app#254).
+ *
+ * **The tab's name and nothing else**: the chat's own name, which its harness was started
+ * with, stays what it was. A tab that opened on a view is named after what it shows, and is
+ * left as it is; so is a tab that is not there.
+ *
+ * **A split tab's name is its own chat's** — the first pane's, {@link chatOf} — whichever pane
+ * has the keyboard, because that is the chat the tab is (its state mark and its pin are that
+ * chat's too). A relaunch brings each chat back as a tab of its own, so the name comes back on
+ * that chat's tab and the chat that was split beside it comes back under its default.
+ */
+export function renameTab(tabs: Tabs, id: number, label: string | null): Tabs {
+  const tab = tabs.byId[id];
+  if (!tab || chatOf(tabs, id) === undefined) return tabs;
+  return { ...tabs, byId: { ...tabs.byId, [id]: { ...tab, name: label ?? tab.defaultName } } };
+}
+
+/**
+ * The one place a tab is minted: `content` in one pane, at `at` in the order, in front, named
+ * `label` where the operator gave it one and `name` otherwise.
+ */
+function withTab(
+  tabs: Tabs,
+  name: string,
+  content: Content,
+  at: number,
+  label: string | null = null,
+): Tabs {
   const id = tabs.named.tabs + 1;
   const pane = tabs.named.panes + 1;
   const order = [...tabs.order];
@@ -154,7 +207,13 @@ function withTab(tabs: Tabs, name: string, content: Content, at: number): Tabs {
   return {
     byId: {
       ...tabs.byId,
-      [id]: { id, name, layout: { kind: "pane", pane, content }, focused: pane },
+      [id]: {
+        id,
+        name: label ?? name,
+        defaultName: name,
+        layout: { kind: "pane", pane, content },
+        focused: pane,
+      },
     },
     order,
     inFront: id,
@@ -332,9 +391,10 @@ export function openTabBehind(
   tabs: Tabs,
   session: number,
   chat = "",
-  persona: string | null = null,
+  who: string | null = null,
+  label: string | null = null,
 ): Tabs {
-  const opened = openTab(tabs, session, chat, persona);
+  const opened = openTab(tabs, session, chat, who, label);
   return tabs.inFront === undefined ? opened : { ...opened, inFront: tabs.inFront };
 }
 

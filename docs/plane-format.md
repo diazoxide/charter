@@ -301,6 +301,17 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   (`charter/instance.py:331`), `declare_default_persona` (`:342`) and
   `clear_default_persona` (`:355`). `charter version bump` also commits it
   (`charter/commands.py:3842`).
+  **In charter-app, also the Project settings tab** (`charter_core::settings::save`,
+  charter-app#252): the whole file, whole or not at all (a temp file beside it, then one
+  rename), keeping the existing file's mode. A form's change is applied with `toml_edit`, so
+  every comment, blank line, key order and spacing it did not touch is kept, and a replaced
+  value keeps the decoration it had. It refuses to write text in which the next read would
+  refuse something the file on disk does not already have — a finding of `charter doctor`'s
+  `charter.toml` row, a `[harness.<name>]` table — in those readers' own words; it refuses a
+  value `secretshape` calls a credential whether or not the file already held it; and it
+  refuses to write over a file that changed on disk since the tab read it. (The file marks the
+  plane, so the tab is only ever open where it exists; were it deleted under the tab, a save
+  would create it at 0600.)
 - **Read by:** `charter/instance.py:105` `load` — and *only* there:
   `charter/config.py:719` (every command/hook, at import), plus direct re-reads in
   `charter/commands.py:211`, `charter/commands.py:3614`, `charter/hooks.py:7260`,
@@ -412,12 +423,18 @@ key refuses.
 
 ### `charter.local.toml`
 
-- **Format:** TOML. **Charter never writes this file** — it is hand-edited (or edited by a
-  chat) and read only.
+- **Format:** TOML. Hand-edited (or edited by a chat), and in charter-app written by the
+  Project settings tab and nothing else.
 - **Status:** **stable** — the operator edits it by hand, and two different processes read it
   (the CLI/`doctor`, and the frame launcher/selector on a launch).
-- **Written by:** nobody in charter. `charter init`/`reinit` only add the `.gitignore` line for
-  it (`charter/commands.py:1803`, `charter/commands.py:1806`).
+- **Written by:** nothing in the Python charter — `charter init`/`reinit` only add the
+  `.gitignore` line for it (`charter/commands.py:1803`, `charter/commands.py:1806`).
+  charter-app's Project settings tab (`charter_core::settings::save`, charter-app#252) writes it
+  as it writes `charter.toml` (above), and **creates it on the first save**, at mode 0600. It
+  refuses to create or write the file where git would commit it — asked before the file exists
+  with `git check-ignore -q -- charter.local.toml` (exit 1 is "would commit", and is also git's
+  answer for a tracked path), and afterwards with the loader's own `ignore_check` — in the
+  loader's own sentences, and refuses anything `profiles` would refuse in it.
 - **Read by:** `charter/profiles.py:240` `_read_local` (the only reader), through
   `charter/profiles.py:284` `derive` and `charter/profiles.py:404` `current` (memoized per
   process on `(root, local bytes, charter.toml bytes)`, `charter/profiles.py:428`). Surfaces:
@@ -2990,8 +3007,12 @@ down rather than read off the code.
 - **Written by:** `app/src-tauri/src/lib.rs` (charter-app) — whenever what is open changes
   (a chat started, closed, or brought to front), and again on the way out. Not only on the
   way out: an app that is killed, or crashes, runs no exit handler.
-- **Read by:** `app/src-tauri/src/lib.rs`, in Tauri's `setup`, before there is a window —
-  so a relaunch does not depend on a webview having run.
+- **Read by:** `app/src-tauri/src/planes.rs`, at a launch, twice: once for the counts the
+  launch's question names (how many chats and view tabs, in which projects), and once when the
+  operator has answered it and the record is put back (charter-app#250). **Nothing it names
+  starts before that answer.** "Start fresh" rewrites it holding no chat and no view tab, and
+  keeps `dealt`; Esc, closing the question, or a window that never answers all mean "Reopen
+  all", and the file is left as it was until then.
 - **Git:** gitignored already, by the plane's own `/.charter/` line.
 - **No lock** — one app per plane (Tauri's single-instance plugin), and last writer wins.
 
@@ -3009,6 +3030,8 @@ down rather than read off the code.
 | `chats[].profile` | str | default `""` (absent) | the harness profile the chat started on, by NAME — never its command or its environment, so an edit to `charter.local.toml` takes effect at the reopen and the account it names never reaches this file (ADR 0022). Held to a name charter would mint; anything else reads as empty |
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
+| `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
+| `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. Nothing writes `true` yet; charter-app#251 is to |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
 record cannot disagree with what is about to be started. Only a harness charter has

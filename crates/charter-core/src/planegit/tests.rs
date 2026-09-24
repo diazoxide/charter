@@ -98,6 +98,9 @@ impl Fixture {
                 &theirs.display().to_string(),
             ],
         );
+        // The clone's own identity, as the plane's: CI runners have none of their own.
+        run(&theirs, &["config", "user.name", "Other"]);
+        run(&theirs, &["config", "user.email", "other@example.invalid"]);
         std::fs::write(theirs.join("theirs.md"), "theirs").unwrap();
         run(&theirs, &["add", "-A"]);
         run(&theirs, &["commit", "-q", "-m", "theirs"]);
@@ -679,6 +682,9 @@ fn with_a_rebase_that_cannot_finish(fixture: &Fixture) -> PathBuf {
             &theirs.display().to_string(),
         ],
     );
+    // The clone's own identity, as the plane's: CI runners have none of their own.
+    run(&theirs, &["config", "user.name", "Other"]);
+    run(&theirs, &["config", "user.email", "other@example.invalid"]);
     std::fs::write(theirs.join(".gitattributes"), "slow.md filter=slow\n").unwrap();
     std::fs::write(theirs.join("slow.md"), "slow").unwrap();
     run(&theirs, &["add", "-A"]);

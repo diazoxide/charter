@@ -23,6 +23,7 @@ import {
   openView,
   putViewBack,
   refileViews,
+  renameTab,
   stopWaiting,
   viewKey,
   type ViewRef,
@@ -62,12 +63,12 @@ describe("a tab's name", () => {
     expect(tabs.byId[tabs.order[0]].name).toBe("1");
   });
 
-  it("carries the persona the chat adopted, because a number identifies nothing", () => {
-    // charter-app#130: at fifty chats the strip read `3`, `4`, `5`. A number is what a chat
-    // is called to charter; it tells the operator nothing about which chat it is.
+  it("is the persona and then the chat's number, so the strip reads `steward 1`", () => {
+    // charter-app#130: at fifty chats the strip read `3`, `4`, `5`. charter-app#254: the
+    // operator reads the persona first — `steward 3`, not `3 steward`.
     const tabs = openTab(noTabs(), 7, "3", "steward");
 
-    expect(tabs.byId[tabs.order[0]].name).toBe("3 steward");
+    expect(tabs.byId[tabs.order[0]].name).toBe("steward 3");
   });
 
   it("keeps the chat's own name beside it, for the core and for a split", () => {
@@ -78,10 +79,54 @@ describe("a tab's name", () => {
     expect(chatNameOf(tabs, tabs.order[0])).toBe("3");
   });
 
-  it("says only the chat's name when charter knows no persona for it", () => {
+  it("says only the chat's name when charter knows nothing to put before it", () => {
     const tabs = openTab(noTabs(), 7, "3", null);
 
     expect(tabs.byId[tabs.order[0]].name).toBe("3");
+  });
+
+  it("is the name the operator gave the chat, where they gave one (charter-app#254)", () => {
+    const tabs = openTab(noTabs(), 7, "3", "steward", "billing bug");
+
+    expect(tabs.byId[tabs.order[0]].name).toBe("billing bug");
+    // Charter's label only: the chat is still called `3` to the core and to a split.
+    expect(chatNameOf(tabs, tabs.order[0])).toBe("3");
+  });
+});
+
+describe("renaming a tab (charter-app#254)", () => {
+  it("gives the tab the new name and leaves the chat's own name alone", () => {
+    const opened = openTab(noTabs(), 7, "3", "steward");
+
+    const tabs = renameTab(opened, opened.order[0], "billing bug");
+
+    expect(tabs.byId[tabs.order[0]].name).toBe("billing bug");
+    expect(chatNameOf(tabs, tabs.order[0])).toBe("3");
+  });
+
+  it("takes the default back when the name is taken off", () => {
+    const named = openTab(noTabs(), 7, "3", "steward", "billing bug");
+
+    const tabs = renameTab(named, named.order[0], null);
+
+    expect(tabs.byId[tabs.order[0]].name).toBe("steward 3");
+  });
+
+  it("leaves a view's tab as it is: it is named after what it shows", () => {
+    const opened = openView(
+      noTabs(),
+      { from: null, view: "persona", key: "steward" },
+      "steward",
+      "alpha",
+    );
+
+    expect(renameTab(opened, opened.order[0], "mine")).toBe(opened);
+  });
+
+  it("answers the same tabs for a tab that is not there", () => {
+    const opened = openTab(noTabs(), 7, "3", "steward");
+
+    expect(renameTab(opened, 99, "mine")).toBe(opened);
   });
 });
 

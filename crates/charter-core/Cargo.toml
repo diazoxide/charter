@@ -36,6 +36,10 @@ getrandom = "0.3"
 tempfile.workspace = true
 thiserror.workspace = true
 toml = { version = "0.9", features = ["preserve_order"] }
+# The Project settings tab's writer (charter-app#252): an edit to `charter.toml` or
+# `charter.local.toml` keeps every comment, blank line and key order the operator wrote. The
+# version already in this workspace's lockfile, so it adds no crate to the tree.
+toml_edit = "0.25"
 unicode-normalization = "0.1.25"
 uuid = { version = "1.26.1", features = ["v4"] }
 

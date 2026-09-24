@@ -39,7 +39,9 @@ function chat(session: number, name: string, workspace: string, pinned = false) 
     session,
     name,
     cwd: `${PLANE}/workspaces/${workspace}`,
-    harness: "claude",
+    // No harness and no persona, so its tab is its own name alone and the assertions below read
+    // the names they gave it (the default before the name is charter-app#254's, tested there).
+    harness: null,
     in_front: session === 1,
     resumed: null,
     fresh: null,

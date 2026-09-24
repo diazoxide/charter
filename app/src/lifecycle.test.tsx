@@ -79,6 +79,7 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
     persona: null,
     unreported: null,
     pinned: false,
+    label: null,
     ...one,
   };
 }
@@ -208,7 +209,7 @@ describe("what the window does with the chats the core already has", () => {
 
     render(<App />);
 
-    await vi.waitFor(() => expect(tabs()).toEqual(["ide.7", "ide.8"]));
+    await vi.waitFor(() => expect(tabs()).toEqual(["claude ide.7", "claude ide.8"]));
     expect(of("close_session", asked)).toEqual([]);
   });
 
@@ -293,7 +294,7 @@ describe("what the window does with the chats the core already has", () => {
   it("tells the core which chat is in front, so the next quit records it", async () => {
     const { asked } = core([chat({ session: 7, in_front: true }), chat({ session: 8 })]);
     render(<App />);
-    await vi.waitFor(() => expect(tabs()).toEqual(["ide.7", "ide.8"]));
+    await vi.waitFor(() => expect(tabs()).toEqual(["claude ide.7", "claude ide.8"]));
 
     await userEvent.click(
       within(screen.getByRole("tablist", { name: "Tabs" })).getAllByRole("tab")[1],
@@ -319,17 +320,25 @@ function stateShown(name: string): string | null | undefined {
 describe("what the window is told about the chats", () => {
   /** A move, as the core pushes it: one chat, in one plane. */
   function moving(plane: string, session: number, state: string, queue: number[] = []): Moved {
-    return { plane, session, state, needs_you: queue.includes(session), queue, moved_at: 1 };
+    return {
+      plane,
+      session,
+      state,
+      needs_you: queue.includes(session),
+      queue,
+      moved_at: 1,
+      sequence: 1,
+    };
   }
 
   it("takes a move in the plane it is showing", async () => {
     const { move } = core([chat({ session: 7, name: "ide.7" })]);
     render(<App />);
-    await vi.waitFor(() => expect(tabs()).toEqual(["ide.7"]));
+    await vi.waitFor(() => expect(tabs()).toEqual(["claude ide.7"]));
 
     move(moving("/home/dev/plane", 7, "waiting", [7]));
 
-    await vi.waitFor(() => expect(stateShown("ide.7")).toBe("waiting"));
+    await vi.waitFor(() => expect(stateShown("claude ide.7")).toBe("waiting"));
   });
 
   it("leaves a chat alone when the move belongs to another plane", async () => {
@@ -344,13 +353,13 @@ describe("what the window is told about the chats", () => {
       chat({ session: 8, name: "ide.8" }),
     ]);
     render(<App />);
-    await vi.waitFor(() => expect(tabs()).toEqual(["ide.7", "ide.8"]));
+    await vi.waitFor(() => expect(tabs()).toEqual(["claude ide.7", "claude ide.8"]));
 
     move(moving("/home/dev/another-plane", 7, "waiting", [7]));
     move(moving("/home/dev/plane", 8, "running"));
 
-    await vi.waitFor(() => expect(stateShown("ide.8")).toBe("running"));
-    expect(stateShown("ide.7")).toBe("unknown");
+    await vi.waitFor(() => expect(stateShown("claude ide.8")).toBe("running"));
+    expect(stateShown("claude ide.7")).toBe("unknown");
   });
 });
 
@@ -367,7 +376,9 @@ describe("being asked to quit", () => {
     // `getAllBy`: a chat that reports no state is named twice on purpose — once in the list
     // of what is ending, and once in the sentence saying charter cannot tell if it is
     // mid-turn. This test is about the list.
-    expect(within(dialog.getByRole("list")).getByText("ide.7")).toBeInTheDocument();
+    // By their tabs' names: the chat with a harness is `claude ide.7`, the one with none is
+    // its own name alone (charter-app#254).
+    expect(within(dialog.getByRole("list")).getByText("claude ide.7")).toBeInTheDocument();
     expect(within(dialog.getByRole("list")).getByText("ide.8")).toBeInTheDocument();
   });
 
@@ -380,6 +391,7 @@ describe("being asked to quit", () => {
       needs_you: needsYou,
       queue: needsYou ? [session] : [],
       moved_at: 1,
+      sequence: 1,
     };
   }
 
@@ -426,7 +438,7 @@ describe("being asked to quit", () => {
 
     expect(
       within(screen.getByRole("dialog")).getByText(
-        /ide\.7 reports no state, so charter cannot tell whether it is mid-turn/,
+        /codex ide\.7 reports no state, so charter cannot tell whether it is mid-turn/,
       ),
     ).toBeInTheDocument();
   });
