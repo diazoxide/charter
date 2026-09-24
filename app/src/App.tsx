@@ -633,6 +633,7 @@ function App() {
       closePane: () => undefined,
       closeTab: () => undefined,
       selectTab: () => undefined,
+      renameTab: () => undefined,
       focusWorkspace: () => undefined,
       // Both are rows the catalogue marks unavailable with no plane — there is nowhere to make
       // a workspace and no workspace to delete — so `perform` refuses them before either of

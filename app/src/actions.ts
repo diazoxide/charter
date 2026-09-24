@@ -85,6 +85,18 @@ export const PASS_THROUGH_BYTES = "\u001bOQ";
 export const CHAT_KEYBOARD = "data-chat-keyboard";
 
 /**
+ * The mark a chat's tab puts on itself to say `F2` renames it there (charter-app#254).
+ *
+ * `F2` is the platform's rename key for a focused item — and it is also the palette's, claimed
+ * on the window, capture-phase, from anywhere (`Palette.opensIt`). **A focused chat tab is the
+ * one place the palette stands back**, for the reason `CHAT_KEYBOARD` gives about a pane: the
+ * key means something else where it landed. The palette is still `⌘K` from the tab, and `F2`
+ * from anywhere else. An attribute rather than the tab's role, because the role is what the tab
+ * IS and this is what the key MEANS on it: a view's tab is a tab too, and has no rename.
+ */
+export const RENAMES_ON_F2 = "data-renames-on-f2";
+
+/**
  * The strip a chat working outside every workspace appears on.
  *
  * The sidebar has always shown those chats rather than dropping them, and a strip that shows
@@ -111,6 +123,8 @@ export type Does =
   | { verb: "closePane"; ends: boolean }
   | { verb: "closeTab"; tab: number; ends: boolean }
   | { verb: "selectTab"; tab: number }
+  /** Opens the name of a chat's tab for editing, in place on the strip (charter-app#254). */
+  | { verb: "renameTab"; tab: number }
   /** Pins or unpins a chat, a workspace or a project (ADR 0039).
    *
    *  Three verbs and not one, because they are three stores: a project's pin and a
@@ -306,6 +320,9 @@ export type Doing = {
   closePane: () => void;
   closeTab: (tab: number) => void;
   selectTab: (tab: number) => void;
+  /** Brings the tab forward with its name open for editing. Nothing is renamed until the
+   *  operator says the name, so it answers no `Ran`. */
+  renameTab: (tab: number) => void;
   /** Each answers a `Ran`, because a pin can be refused: the stores are bounded, and
    *  "charter pins at most 32 projects — unpin one first" is a sentence the operator can act
    *  on and must therefore reach them. */
@@ -616,6 +633,15 @@ export function catalogue(now: Now): Offer[] {
     });
   }
 
+  // **Renaming is a row, so the tab's menu and the palette are one surface** (charter-app#254),
+  // and a double-click on the tab's name runs the same thing. Above the line: it ends nothing.
+  // A tab that opened on a view is named after what it shows, and has none.
+  for (const tab of now.tabs.order) {
+    if (chatOf(now.tabs, tab) === undefined) continue;
+    const name = now.tabs.byId[tab].name;
+    offers.push(can(`tab.rename:${tab}`, `Rename chat ${name}…`, { verb: "renameTab", tab }, name));
+  }
+
   // The workspaces of this project, which is the axis the tmux frame had and the port lost
   // (ADR 0036). These rows are the workspace strip as well as palette rows — one place the
   // words and the availability are written down, the same rule the tab strip follows.
@@ -924,6 +950,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "selectTab":
       doing.selectTab(does.tab);
       return DID;
+    case "renameTab":
+      doing.renameTab(does.tab);
+      return DID;
     case "pinTab":
       return doing.pinTab(does.tab, does.pinned);
     case "pinWorkspace":
@@ -1179,7 +1208,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
   switch (what.on) {
     case "chat":
       return {
-        above: [`tab.select:${what.tab}`, `tab.pin:${what.tab}`],
+        above: [`tab.select:${what.tab}`, `tab.rename:${what.tab}`, `tab.pin:${what.tab}`],
         below: [`tab.close:${what.tab}`],
       };
     case "workspace":

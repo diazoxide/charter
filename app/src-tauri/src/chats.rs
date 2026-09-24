@@ -41,6 +41,9 @@ pub struct Open {
     /// Whether the operator pinned it (ADR 0039). It rides the record, so a pinned
     /// chat comes back pinned; see [`charter_core::reopen::Chat::pinned`].
     pub pinned: bool,
+    /// The name the operator gave it, where they gave one (charter-app#254). It rides the
+    /// record too; see [`charter_core::reopen::Chat::label`].
+    pub label: Option<String>,
 }
 
 /// The most chats one record may start at a launch. The product's scale is fifty (the
@@ -406,6 +409,29 @@ impl Chats {
         Ok(())
     }
 
+    /// Gives a chat the name `raw`, or takes the one it was given off when `raw` is blank —
+    /// and answers the name it now has (charter-app#254).
+    ///
+    /// **Charter's label and nothing else**: the harness keeps the name it was started with
+    /// (`Chat::name`), so a rename never reaches a program that is running. The name is held to
+    /// [`charter_core::reopen::label`], and a refusal changes nothing and says why.
+    ///
+    /// Nothing is written when nothing changed, for [`Self::pin`]'s reason.
+    pub fn rename(&self, session: u32, raw: &str) -> Result<Option<String>, String> {
+        let label = charter_core::reopen::label(raw)?;
+        let mut open = lock(&self.open);
+        let Some(one) = open.get_mut(&session) else {
+            return Err(format!("charter has no chat {session} open to rename."));
+        };
+        if one.chat.label == label {
+            return Ok(label);
+        }
+        one.chat.label.clone_from(&label);
+        drop(open);
+        self.write_it_down();
+        Ok(label)
+    }
+
     /// What the window says its view tabs are now. Written down when it differs from what was
     /// held, and not otherwise — for [`Self::pin`]'s reason: every write is a fingerprint the
     /// machine store then has to vouch for.
@@ -455,6 +481,7 @@ impl Chats {
                     in_front: front == Some(session),
                     how: running.how.clone(),
                     pinned: chat.pinned,
+                    label: chat.label.clone(),
                 })
             })
             .collect()
@@ -629,6 +656,7 @@ mod tests {
                     show_footer: false,
                     pinned: false,
                     number: None,
+                    label: None,
                 },
                 Size {
                     columns: 80,
@@ -691,6 +719,7 @@ mod tests {
                     show_footer: false,
                     pinned: false,
                     number: None,
+                    label: None,
                 },
                 Size {
                     columns: 80,
@@ -738,6 +767,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             },
             Size {
                 columns: 80,
@@ -786,6 +816,7 @@ mod tests {
                     show_footer: false,
                     pinned: false,
                     number: None,
+                    label: None,
                 },
                 Size {
                     columns: 80,
@@ -847,6 +878,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         }
     }
 
@@ -1822,6 +1854,134 @@ mod tests {
         let _ = chats.close(session);
     }
 
+    // ----- the name the operator gave a chat (charter-app#254) -----
+
+    #[test]
+    fn a_name_given_to_a_chat_is_written_into_the_record_and_said_on_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "3", None), SIZE)
+            .unwrap();
+
+        let held = chats
+            .rename(session, "  billing bug ")
+            .expect("the chat is open");
+
+        assert_eq!(held.as_deref(), Some("billing bug"));
+        assert_eq!(
+            chats.record().chats[0].label.as_deref(),
+            Some("billing bug")
+        );
+        assert_eq!(chats.open_now()[0].label.as_deref(), Some("billing bug"));
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_rename_is_charters_label_and_leaves_the_harness_name_alone() {
+        // The harness was started with `--name 3` and is resumed under it: a running harness
+        // is never disturbed by a rename, and a split still starts its chat as `3`.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "3", None), SIZE)
+            .unwrap();
+
+        chats.rename(session, "billing bug").unwrap();
+
+        assert_eq!(chats.record().chats[0].name, "3");
+        assert_eq!(chats.open_now()[0].name, "3");
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_blank_name_takes_the_given_one_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "3", None), SIZE)
+            .unwrap();
+        chats.rename(session, "billing bug").unwrap();
+
+        let held = chats.rename(session, "   ").unwrap();
+
+        assert_eq!(held, None);
+        assert_eq!(chats.record().chats[0].label, None);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_name_charter_refuses_changes_nothing_and_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "3", None), SIZE)
+            .unwrap();
+        chats.rename(session, "billing bug").unwrap();
+
+        let refused = chats.rename(session, "pay\u{202e}lanigiro").unwrap_err();
+
+        assert!(refused.contains("invisible"), "{refused}");
+        assert_eq!(
+            chats.record().chats[0].label.as_deref(),
+            Some("billing bug")
+        );
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_chat_charter_does_not_have_open_cannot_be_renamed() {
+        let chats = Chats::new();
+
+        assert!(chats.rename(7, "billing bug").is_err());
+        assert_eq!(chats.record(), Record::default());
+    }
+
+    #[test]
+    fn renaming_to_the_name_it_already_has_writes_nothing() {
+        // `pin`'s reason: every write is a fingerprint the machine store has to vouch for.
+        let dir = tempfile::tempdir().unwrap();
+        let written = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counting = std::sync::Arc::clone(&written);
+        let chats = Chats::recorded_by(Box::new(move |_| {
+            counting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "3", None), SIZE)
+            .unwrap();
+        chats.rename(session, "billing bug").unwrap();
+        let after_one = written.load(std::sync::atomic::Ordering::SeqCst);
+
+        chats.rename(session, " billing bug").unwrap();
+
+        assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), after_one);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_chat_put_back_keeps_the_name_it_was_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let back = chats.put_back_here(
+            &Record {
+                views: Vec::new(),
+                chats: vec![Chat {
+                    label: Some("billing bug".into()),
+                    ..chat(&a_claude(dir.path()), "3", None)
+                }],
+                dealt: 0,
+            },
+            SIZE,
+        );
+
+        assert_eq!(back[0].label.as_deref(), Some("billing bug"));
+        assert_eq!(
+            chats.record().chats[0].label.as_deref(),
+            Some("billing bug")
+        );
+        chats.end_all();
+    }
+
     #[test]
     fn ending_every_chat_leaves_nothing_to_record() {
         let dir = tempfile::tempdir().unwrap();
@@ -1863,6 +2023,7 @@ mod tests {
             show_footer: true,
             pinned: false,
             number: None,
+            label: None,
         };
 
         let session = chats
@@ -1902,6 +2063,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         };
         assert_eq!(
             chat.harness(),
@@ -1968,6 +2130,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2063,6 +2226,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         };
         let session = chats.start_ready(&chat, &ready, SIZE).expect("it runs");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

@@ -40,6 +40,7 @@ function doing(): Doing & { calls: string[] } {
     closePane: note("closePane"),
     closeTab: note("closeTab"),
     selectTab: note("selectTab"),
+    renameTab: note("renameTab"),
     focusWorkspace: note("focusWorkspace"),
     createWorkspace: note("createWorkspace"),
     removeWorkspace: note("removeWorkspace"),
@@ -220,7 +221,7 @@ describe("the one list of actions", () => {
     // which ends the program. Nothing said so, and the `×` read as "hide this tab".
     const offers = catalogue(now({ tabs: openTab(noTabs(), 7, "3", "steward") }));
 
-    expect(by(offers, "tab.close:1")?.title).toBe("End chat 3 steward");
+    expect(by(offers, "tab.close:1")?.title).toBe("End chat steward 3");
     expect(by(offers, "tab.close:1")?.note).toBe(ENDS_IT);
     // And not on rows that only navigate: a note on everything is a note on nothing.
     expect(by(offers, "tab.select:1")?.note).toBeUndefined();
@@ -456,6 +457,12 @@ describe("the one list of actions", () => {
       ).toBe("Unpin tab steward");
     });
 
+    it("offers no rename, because a view's tab is named after what it shows", () => {
+      const tabs = withView();
+
+      expect(by(catalogue(now({ tabs })), `tab.rename:${tabs.inFront}`)).toBeUndefined();
+    });
+
     it("still ends a chat's tab beside it, and asks about that", () => {
       const tabs = withView();
       const row = by(catalogue(now({ tabs })), `tab.close:${tabs.order[0]}`);
@@ -654,6 +661,8 @@ describe("carrying out a row", () => {
         "closePane",
         "closeTab:1",
         "closeTab:2",
+        "renameTab:1",
+        "renameTab:2",
         // The same three calls whether the row was the chat in front's or the explorer's:
         // both name the piece, so both arrive here identically (charter-app#174).
         "removeWorktree:svc/fix-it,false",
@@ -684,6 +693,17 @@ describe("carrying out a row", () => {
   });
 });
 
+describe("renaming a chat (charter-app#254)", () => {
+  it("is a row per chat tab, named by the tab's name", () => {
+    const tabs = openTab(noTabs(), 7, "3", "steward");
+    const row = by(catalogue(now({ tabs })), `tab.rename:${tabs.order[0]}`);
+
+    expect(row?.title).toBe("Rename chat steward 3…");
+    expect(row?.available).toBe(true);
+    expect(row?.does).toEqual({ verb: "renameTab", tab: tabs.order[0] });
+  });
+});
+
 describe("the catalogue as the tabs change", () => {
   it("grows a row per tab as tabs open", () => {
     let tabs: Tabs = noTabs();
@@ -699,6 +719,9 @@ describe("the catalogue as the tabs change", () => {
       // and ends nothing, and `frame/leave.py`'s rule is that only the destructive go last.
       "tab.pin:1",
       "tab.pin:2",
+      // Renaming is an arrangement too, and ends nothing (charter-app#254).
+      "tab.rename:1",
+      "tab.rename:2",
       "tab.close:1",
       "tab.close:2",
     ]);
@@ -807,8 +830,10 @@ describe("the palette at fifty chats", () => {
       // stand in front of it. Inside each half the catalogue's own order stands.
       "Merge this chat's worktree into its clone",
       "Remove this chat's worktree",
-      "Merge worktree piece-0 into repo-0",
-      "Merge worktree piece-1 into repo-0",
+      // Then the rows about things that are not in front, in the catalogue's order: a rename
+      // per chat (charter-app#254) comes before the pieces, as the tab rows always have.
+      "Rename chat ide.1…",
+      "Rename chat charter.2…",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -914,6 +939,9 @@ describe("the palette at fifty chats", () => {
     // merely carries a name, so the rows these crowd are other names and not the verbs.
     expect(offers.filter((row) => row.id.startsWith("tab.pin:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("workspace.pin:"))).toHaveLength(6);
+    // And one rename row per chat (charter-app#254), for the pin's reason: it is how the
+    // tab's menu and the palette are one surface, and a verb typed still ranks first.
+    expect(offers.filter((row) => row.id.startsWith("tab.rename:"))).toHaveLength(50);
     // One row per workspace that can be deleted, and never one for the strip of chats
     // outside every workspace: that strip is not a workspace on the plane, and there is
     // nothing on disk for a delete to name.
@@ -926,14 +954,15 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
-    // 292 rows: 50 chats three times over, 6 workspaces THREE times, 50 pieces TWICE, 8
+    // 342 rows: 50 chats four times over, 6 workspaces THREE times, 50 pieces TWICE, 8
     // personas, 2 in the queue, and the fifteen verbs. It was 118 before the pins, 174 before
     // the extension list (ADR 0041), 175 before a workspace could be made and deleted
     // from the window, 183 before the explorer's rows had anything to offer, and 291 before
-    // the row that puts `charter` on a terminal's PATH. What the
+    // the row that puts `charter` on a terminal's PATH, and 292 before a chat could be renamed
+    // (charter-app#254). What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(292);
+    expect(offers).toHaveLength(342);
   });
 
   /**
@@ -954,8 +983,8 @@ describe("the palette at fifty chats", () => {
    * different is the shape: the scan's cost is the catalogue's length, and #174 is the change
    * that grew it — a third more comparisons for the same fifty menus, before anything is
    * added next. A millisecond assertion would be flaky on a shared runner, so what is pinned
-   * below is the work itself, which is the standard #133 set: 150 lookups, and the same 150
-   * whichever catalogue it is.
+   * below is the work itself, which is the standard #133 set: 200 lookups (150 before a chat
+   * could be renamed, charter-app#254), and the same 200 whichever catalogue it is.
    */
   describe("what a menu on the chat strip costs (charter-app#174)", () => {
     /** A catalogue that counts what is asked of it. `Map` and not a stand-in, so what is
@@ -974,16 +1003,16 @@ describe("the palette at fifty chats", () => {
       return offers.lookups;
     }
 
-    it("asks for three rows per tab and never walks the list", () => {
+    it("asks for four rows per tab and never walks the list", () => {
       const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
 
-      // 50 tabs × the three ids a chat menu lists. **Not fifty scans of 291 rows**, which is
+      // 50 tabs × the four ids a chat menu lists. **Not fifty scans of 291 rows**, which is
       // what this cost before the lookup was built once for the window — and the number that
       // does not move when the catalogue grows again.
-      expect(strip(offers)).toBe(150);
+      expect(strip(offers)).toBe(200);
     });
 
-    it("is the same 150 whether the catalogue is 183 rows or 291", () => {
+    it("is the same 200 whether the catalogue carries the pieces or not", () => {
       // The property, not the timing: the cost of a menu is flat in the length of the list it
       // reads. A scan is not, which is why #174's hundred rows needed this first.
       const small = new Counting(
@@ -992,7 +1021,7 @@ describe("the palette at fifty chats", () => {
         ),
       );
 
-      expect(strip(small)).toBe(150);
+      expect(strip(small)).toBe(200);
     });
   });
 });

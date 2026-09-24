@@ -47,6 +47,30 @@ export function closeOnDelete(
 }
 
 /**
+ * **F2 on a focused chat tab opens its name for editing** (charter-app#254): the platform's
+ * rename key for a focused item, called from the same `onKeyDown` as {@link closeOnDelete}.
+ *
+ * It presses the row the tab's menu and the palette list (`tab.rename:<id>`), so it does what
+ * they do. The palette, which claims `F2` from the whole window, stands back on a tab marked
+ * `RENAMES_ON_F2` (`Palette.theTabRenamesOnIt`); this is the other half of that. Never with a
+ * modifier, and only on the tab itself, for `closeOnDelete`'s reasons.
+ *
+ * @param offer The tab's `tab.rename:<id>` row. A view's tab has none, and F2 there is the
+ *   palette's as everywhere else.
+ */
+export function renameOnF2(
+  event: KeyboardEvent<HTMLElement>,
+  offer: Offer | undefined,
+  onPress: (offer: Offer) => void,
+) {
+  if (offer === undefined || event.target !== event.currentTarget) return;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (event.key !== "F2") return;
+  event.preventDefault();
+  onPress(offer);
+}
+
+/**
  * Puts the focus on `strip`'s stop once `tab` has left the document, if the focus was left on
  * the page when it did.
  *

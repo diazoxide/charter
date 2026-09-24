@@ -251,6 +251,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         show_footer: false,
         pinned: false,
         number: None,
+        label: None,
     };
     let session = held
         .chats()
@@ -370,6 +371,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         };
         held.chats()
             .start_ready(&chat, &ready, STARTING)
@@ -390,6 +392,7 @@ mod tests {
             show_footer: false,
             pinned: false,
             number: None,
+            label: None,
         };
         held.chats().start(&chat, STARTING).expect("it runs")
     }

@@ -79,6 +79,7 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
     persona: null,
     unreported: null,
     pinned: false,
+    label: null,
     ...one,
   };
 }

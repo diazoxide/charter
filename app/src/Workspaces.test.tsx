@@ -185,7 +185,7 @@ describe("the workspace strip", () => {
     await openAChat();
 
     expect(asked.find(({ cmd }) => cmd === "start_chat")?.args).toMatchObject({ cwd: ALPHA });
-    expect(chatTabs()).toEqual(["1 steward"]);
+    expect(chatTabs()).toEqual(["steward 1"]);
   });
 
   it("shows the focused workspace's chats and no others", async () => {
@@ -196,12 +196,12 @@ describe("the workspace strip", () => {
     await focus("beta");
     await openAChat();
 
-    expect(chatTabs()).toEqual(["2 steward"]);
+    expect(chatTabs()).toEqual(["steward 2"]);
     expect(panes()).toEqual(["session 2"]);
 
     await focus("alpha");
 
-    expect(chatTabs()).toEqual(["1 steward"]);
+    expect(chatTabs()).toEqual(["steward 1"]);
     expect(panes()).toEqual(["session 1"]);
   });
 
@@ -256,7 +256,7 @@ describe("the workspace strip", () => {
     await openAChat();
 
     await userEvent.keyboard("{F2}");
-    await userEvent.type(screen.getByRole("combobox"), "switch to tab 1 steward");
+    await userEvent.type(screen.getByRole("combobox"), "switch to tab steward 1");
     await userEvent.keyboard("{Enter}");
 
     expect(focused()).toEqual(["alpha"]);
@@ -273,7 +273,7 @@ describe("the workspace strip", () => {
     await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta", "Outside every workspace"]));
     // And the window opens on it, because that is where the chat in front is.
     expect(focused()).toEqual(["Outside every workspace"]);
-    expect(chatTabs()).toEqual(["stray steward"]);
+    expect(chatTabs()).toEqual(["steward stray"]);
   });
 
   it("opens on the workspace of the chat that was in front at the last quit", async () => {
@@ -283,7 +283,7 @@ describe("the workspace strip", () => {
     render(<App />);
 
     await vi.waitFor(() => expect(focused()).toEqual(["beta"]));
-    expect(chatTabs()).toEqual(["5 steward"]);
+    expect(chatTabs()).toEqual(["steward 5"]);
   });
 
   it("says how many chats are in a workspace that is not on screen", async () => {
@@ -326,7 +326,7 @@ describe("the chat strip at fifty chats (charter-app#130)", () => {
 
     await openAChat();
 
-    expect(chatTabs()).toEqual(["1 steward"]);
+    expect(chatTabs()).toEqual(["steward 1"]);
   });
 
   it("says on the close button that it ends the chat, because nothing else does", async () => {
@@ -338,7 +338,7 @@ describe("the chat strip at fifty chats (charter-app#130)", () => {
     await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
     await openAChat();
 
-    const closer = screen.getByRole("button", { name: "End chat 1 steward" });
+    const closer = screen.getByRole("button", { name: "End chat steward 1" });
 
     expect(closer).toHaveAttribute("title", expect.stringContaining("There is no undo"));
     expect(screen.queryByRole("button", { name: /Close tab/ })).toBeNull();
@@ -449,16 +449,16 @@ describe("the strip that is drawn", () => {
     render(<App />);
     await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
     expect(focused()).toEqual(["alpha"]);
-    expect(chatTabs()).toEqual(["one steward", "two steward"]);
+    expect(chatTabs()).toEqual(["steward one", "steward two"]);
 
     // The plane gains a workspace at chat one's own directory, so chat one is `gamma`'s now.
     // Nothing the window did moved it, and no handler runs on the way: the strip is re-read
     // because the tabs changed, and what changed is the OTHER chat closing.
     plane.addGamma();
-    await userEvent.click(screen.getByRole("button", { name: "End chat two steward" }));
+    await userEvent.click(screen.getByRole("button", { name: "End chat steward two" }));
     await userEvent.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "End chat two steward",
+        name: "End chat steward two",
       }),
     );
 
@@ -466,6 +466,6 @@ describe("the strip that is drawn", () => {
     // The pane on screen is chat one's, so the strip drawn has to be chat one's too.
     expect(panes()).toEqual(["session 1"]);
     expect(focused()).toEqual(["gamma"]);
-    expect(chatTabs()).toEqual(["one steward"]);
+    expect(chatTabs()).toEqual(["steward one"]);
   });
 });

@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   aim,
   CHAT_KEYBOARD,
+  RENAMES_ON_F2,
   narrow,
   PASS_THROUGH_ID,
   PASS_THROUGH_KEY,
@@ -19,8 +20,10 @@ import {
  * so the bar's buttons here are not a second list, they are four rows of THIS one, drawn
  * permanently. `actions.catalogue` is the whole of the seam.
  *
- * **Keyboard first, and nothing in it needs a mouse.** `F2` and `⌘K` open it from anywhere and
- * `Ctrl-K` from anywhere but a chat's own terminal (the rule is below); typing narrows it, the
+ * **Keyboard first, and nothing in it needs a mouse.** `⌘K` opens it from anywhere, `F2` from
+ * anywhere but a focused chat tab — where it is the platform's rename key (charter-app#254,
+ * `theTabRenamesOnIt`) — and `Ctrl-K` from anywhere but a chat's own terminal (the rule is
+ * below); typing narrows it, the
  * arrows move over every row, Enter runs the one it is aimed at, Escape leaves — and the focus
  * goes back where it was, which for an operator mid-chat is the terminal they were typing in.
  * A click selects and runs too; that is a convenience, not the path.
@@ -160,7 +163,7 @@ export function Palette({
       // chat while the chat has the keyboard. Falling through here is the whole of the fix —
       // nothing is prevented and nothing is stopped, so the keystroke carries on down to
       // xterm's textarea exactly as it would if the palette were not here at all.
-      if (opensIt(e) && !theChatKeepsIt(e)) {
+      if (opensIt(e) && !theChatKeepsIt(e) && !theTabRenamesOnIt(e)) {
         e.preventDefault();
         e.stopPropagation();
         // Pressed again while it is already up. tmux answers this with `send-prefix` and so
@@ -415,4 +418,19 @@ export function theChatKeepsIt(e: KeyboardEvent): boolean {
   if (!e.ctrlKey || e.metaKey) return false;
   const on = e.target;
   return on instanceof Element && on.closest(`[${CHAT_KEYBOARD}]`) !== null;
+}
+
+/**
+ * Whether an `F2` landed on a chat's tab, where it renames the tab rather than opening this
+ * (charter-app#254, `actions.RENAMES_ON_F2`).
+ *
+ * The same question `theChatKeepsIt` asks — where did the keystroke land — about the one other
+ * place `F2` means something of its own: the platform's rename key on a focused item. Nothing
+ * is taken from the operator: `⌘K` opens the palette from the tab, and `F2` still does from
+ * everywhere else, including the chat itself.
+ */
+export function theTabRenamesOnIt(e: KeyboardEvent): boolean {
+  if (e.key !== "F2") return false;
+  const on = e.target;
+  return on instanceof Element && on.hasAttribute(RENAMES_ON_F2);
 }

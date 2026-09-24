@@ -1470,6 +1470,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             }],
             dealt: 0,
         }
@@ -1499,6 +1500,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             })
             .collect();
         reopen::write(
