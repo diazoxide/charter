@@ -37,7 +37,8 @@ says that every choice a file makes for it is ignored. No harness is left out wi
 "figma@claude-plugins-official" = false
 ```
 
-**Precedence**, which is ADR 0048's, per plugin: Local over Shared. With neither file naming a
+**Precedence**, which is ADR 0048's, per plugin: Local over Shared — and, since charter-app#282,
+a workspace's layer between them (below). With neither file naming a
 plugin it is **not set**, and the harness decides as it always did, from its own user and
 project settings. One function, `harness_plugin::resolve`, answers it for the settings tab and
 for a chat's start.
@@ -71,6 +72,44 @@ answer is the pins whatever is installed, so a project that says nothing reads n
 directory. A chat on no profile, the operator's shell, is handed the pins alone, as before: it
 has no declared kind to choose an adapter by, and `Harness::of_command` may not be relied on to
 pick one.
+
+## A workspace refines its project (charter-app#282)
+
+Added by charter-app#282, the third of #279's tickets, on the order ADR 0048's "A workspace
+refines its project" set for every table a workspace may hold: **this machine first, then
+Shared, then the workspace, then Local.** For a harness plugin "this machine" is what it has
+installed and the pins, so the whole order is: pins, then installed, then Local, then the
+workspace's `settings.harness_plugins.<harness>."<id>"` in its `workspace.json`, then Shared,
+then not set.
+
+| Installed here | Shared | Workspace | Local | In this workspace | A chat in it is handed |
+|---|---|---|---|---|---|
+| yes | `true` | `false` | — | off, from the workspace | `false` |
+| yes | `true` | `false` | `true` | on, from Local | `true` |
+| yes | — | `false` | — | off, from the workspace | `false` |
+| yes | `false` | — | — | off, from Shared | `false` |
+| pinned | — | the other way | — | the pin, and the workspace's value said ignored | the pin |
+
+**One resolver, one more layer.** `harness_plugin::Choices` carries the workspace's layer as
+`extension::project::Choices` does (`Choices::read_in(root, workspace)`, `in_workspace`), read
+from the manifest by the same `settings::workspace::table_in`, and `resolve` reads the three
+layers in order. The settings tab and a chat's start both go through it; neither has an order of
+its own. `harness_plugins` is one more name in `settings::workspace::READ`, and a workspace's
+value is refused by the same `refusals_in` a TOML file's is, with the key named where it is
+written (`settings.harness_plugins.claude."charter-app@inline" … cannot be false`).
+
+**Which workspace a chat is in** is the one the window files it under: the workspace whose
+directory its `cwd` is in (`workspaces::Plane::workspace_of`). `start::ready` asks it, so every
+caller — the picker, a relaunch, a handoff — gets the same answer from the same line. A chat
+whose directory is in no workspace gets the project's answer, as before.
+
+**Every harness, the same way.** The layer is harness-neutral: Claude Code applies it through
+`enabledPlugins`, and a workspace's choice for Codex or opencode is listed, said ignored with
+*not supported yet*, and handed to nothing — never silently skipped.
+
+**Where it is shown.** The Workspace settings view tab draws a Harness plugins group per
+harness, asked with `project_harness_plugins` for that workspace, and each plugin says which
+layer decided it: `charter.toml`, `workspace.json`, `charter.local.toml`, or not set.
 
 ## The adapters
 

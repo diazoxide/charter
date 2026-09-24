@@ -127,6 +127,98 @@ fn a_plugin_a_file_names_that_is_not_installed_is_listed_and_handed_to_nothing()
 }
 
 // -------------------------------------------------------------------------------------
+// A workspace: the layer between Shared and Local (charter-app#282)
+// -------------------------------------------------------------------------------------
+
+/// [`claude`], in the workspace `alpha` whose `workspace.json` is `manifest`.
+fn claude_in(installed: &[&str], shared: &str, manifest: &str, local: &str) -> Vec<Effective> {
+    let installed: Vec<Plugin> = installed.iter().map(|id| plugin("claude", id)).collect();
+    resolve(
+        &CLAUDE_CODE,
+        &installed,
+        &Choices::from_text(Some(shared), Some(local)).in_workspace("alpha", Some(manifest)),
+    )
+}
+
+/// A `workspace.json` whose settings turn each of Claude Code's plugins on or off.
+fn ws(pairs: &[(&str, bool)]) -> String {
+    let plugins: serde_json::Map<String, serde_json::Value> = pairs
+        .iter()
+        .map(|(id, on)| ((*id).to_owned(), serde_json::Value::Bool(*on)))
+        .collect();
+    serde_json::json!({"name": "alpha", "settings": {"harness_plugins": {"claude": plugins}}})
+        .to_string()
+}
+
+#[test]
+fn a_workspace_overrides_shared_and_local_overrides_the_workspace_per_plugin() {
+    let all = claude_in(
+        &["figma@official", "serena@official", "humanizer@h"],
+        "[harness_plugins.claude]\n\"figma@official\" = true\n\"serena@official\" = true\n",
+        &ws(&[("figma@official", false), ("serena@official", false)]),
+        "[harness_plugins.claude]\n\"serena@official\" = true\n",
+    );
+    let at = |id| (row(&all, id).wanted, row(&all, id).source);
+    assert_eq!(at("figma@official"), (Some(false), Source::Workspace));
+    assert_eq!(at("serena@official"), (Some(true), Source::Local));
+    assert_eq!(at("humanizer@h"), (None, Source::Default));
+}
+
+#[test]
+fn a_workspace_that_names_nothing_leaves_the_project_answer_as_it_was() {
+    let shared = "[harness_plugins.claude]\n\"figma@official\" = false\n";
+    assert_eq!(
+        claude_in(&["figma@official"], shared, r#"{"name": "alpha"}"#, ""),
+        claude(&["figma@official"], shared, "")
+    );
+    assert_eq!(
+        claude_in(&["figma@official"], shared, "not json", ""),
+        claude(&["figma@official"], shared, "")
+    );
+}
+
+#[test]
+fn a_workspace_that_turns_a_pin_the_wrong_way_is_ignored_by_its_own_file_and_key() {
+    let all = claude_in(&[], "", &ws(&[("charter-app@inline", false)]), "");
+    let own = row(&all, "charter-app@inline");
+    assert_eq!((own.wanted, own.source), (Some(true), Source::Default));
+    assert_eq!(
+        own.ignored,
+        [Ignored {
+            source: Source::Workspace,
+            why: "workspaces/alpha/workspace.json sets \
+                  settings.harness_plugins.claude.\"charter-app@inline\" to false, and \
+                  charter-app@inline is always on: it is charter's own plugin, and it carries \
+                  charter's hooks and the Bash guard"
+                .to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn a_workspaces_choice_for_a_harness_that_cannot_apply_is_said_ignored_and_handed_nothing() {
+    let installed = [plugin("codex", "figma@official")];
+    let manifest = r#"{"settings": {"harness_plugins": {"codex": {"figma@official": false}}}}"#;
+    let all = resolve(
+        &CODEX,
+        &installed,
+        &Choices::default().in_workspace("alpha", Some(manifest)),
+    );
+    assert_eq!(chosen(&CODEX, &all), Chosen::new());
+    let it = row(&all, "figma@official");
+    assert_eq!(it.ignored.len(), 1, "{:?}", it.ignored);
+    assert_eq!(it.ignored[0].source, Source::Workspace);
+    assert!(
+        it.ignored[0].why.starts_with(
+            "workspaces/alpha/workspace.json sets settings.harness_plugins.codex.\
+             \"figma@official\", and plugins for Codex are not supported yet"
+        ),
+        "{}",
+        it.ignored[0].why
+    );
+}
+
+// -------------------------------------------------------------------------------------
 // What no file moves
 // -------------------------------------------------------------------------------------
 
@@ -466,8 +558,19 @@ fn a_harness_plugins_that_is_not_a_table_is_refused() {
 /// A plane whose `charter.toml` is `shared`, and a Claude Code config dir whose install record
 /// is `record` — read only through the chat's own `CLAUDE_CONFIG_DIR`.
 fn start_with(shared: &str, record: &str) -> Chosen {
+    start_in(shared, None, record)
+}
+
+/// [`start_with`], for a chat in the workspace `alpha` whose `workspace.json` is `manifest`,
+/// when there is one.
+fn start_in(shared: &str, manifest: Option<&str>, record: &str) -> Chosen {
     let plane = tempfile::tempdir().unwrap();
     std::fs::write(plane.path().join("charter.toml"), shared).unwrap();
+    if let Some(manifest) = manifest {
+        let alpha = plane.path().join("workspaces/alpha");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::write(alpha.join("workspace.json"), manifest).unwrap();
+    }
     let config = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(config.path().join("plugins")).unwrap();
     std::fs::write(config.path().join("plugins/installed_plugins.json"), record).unwrap();
@@ -477,7 +580,20 @@ fn start_with(shared: &str, record: &str) -> Chosen {
         home: None,
         process: false,
     };
-    for_start("claude", plane.path(), &env)
+    for_start("claude", plane.path(), manifest.map(|_| "alpha"), &env)
+}
+
+#[test]
+fn a_workspace_that_chooses_in_a_project_that_does_not_is_handed_its_choice_at_the_start() {
+    // The record is read because the WORKSPACE names a plugin, though neither project file does.
+    let got = start_in(
+        "",
+        Some(&ws(&[("figma@official", false)])),
+        r#"{"version": 2, "plugins": {"figma@official": [{"scope": "user"}]}}"#,
+    );
+    let mut want = BTreeMap::from(pins(&CLAUDE_CODE));
+    want.insert("figma@official".to_owned(), false);
+    assert_eq!(got, want);
 }
 
 #[test]
@@ -511,6 +627,9 @@ fn a_chat_on_a_harness_that_cannot_apply_is_handed_nothing_at_its_start() {
         home: None,
         process: false,
     };
-    assert_eq!(for_start("codex", plane.path(), &env), Chosen::new());
-    assert_eq!(for_start("opencode", plane.path(), &env), Chosen::new());
+    assert_eq!(for_start("codex", plane.path(), None, &env), Chosen::new());
+    assert_eq!(
+        for_start("opencode", plane.path(), None, &env),
+        Chosen::new()
+    );
 }

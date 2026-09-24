@@ -708,3 +708,81 @@ fn a_codex_chat_is_started_with_no_plugin_choice_whatever_its_project_says() {
         "{line:?}"
     );
 }
+
+#[test]
+fn a_chat_started_in_a_workspace_is_handed_that_workspaces_plugin_choices_between_shared_and_local()
+{
+    charter_core::unsteered!();
+    // charter-app#282: `settings.harness_plugins` in the workspace's `workspace.json` sits
+    // between charter.toml and charter.local.toml. The chat is in the workspace because its
+    // directory is, which is how the window files it under one.
+    let plane = Plane::new();
+    let config = claude_config(
+        &plane,
+        &["figma@official", "serena@official", "humanizer@h"],
+    );
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[harness_plugins.claude]\n\"figma@official\" = true\n\"serena@official\" = true\n",
+    )
+    .unwrap();
+    let alpha = plane.root().join("workspaces/alpha");
+    fs::create_dir_all(&alpha).unwrap();
+    fs::write(
+        alpha.join("workspace.json"),
+        r#"{"name": "alpha", "settings": {"harness_plugins": {"claude": {"figma@official": false, "serena@official": false, "humanizer@h": false}}}}"#,
+    )
+    .unwrap();
+    let bin = plane.harness();
+    plane.profile(
+        "claude",
+        &bin,
+        &format!(
+            "env = {{ CLAUDE_CONFIG_DIR = {:?} }}\n\n[harness_plugins.claude]\n\"serena@official\" = true\n",
+            config.display().to_string()
+        ),
+    );
+    let enabled = |cwd: PathBuf| {
+        let ready = start::ready(
+            &Start {
+                cwd: Some(cwd),
+                ..plane.start("work")
+            },
+            plane.root(),
+        )
+        .expect("it starts");
+        let line = ready.command_line(armed_with(
+            Harness::ClaudeCode,
+            plane.root(),
+            &ready.plugins,
+        ));
+        let at = line
+            .iter()
+            .position(|word| word == "--settings")
+            .expect("settings");
+        let settings: serde_json::Value = serde_json::from_str(&line[at + 1]).expect("JSON");
+        settings["enabledPlugins"].clone()
+    };
+
+    assert_eq!(
+        enabled(alpha.clone()),
+        serde_json::json!({
+            "charter-app@inline": true,
+            "charter@charter": false,
+            "figma@official": false,
+            "humanizer@h": false,
+            "serena@official": true,
+        }),
+        "the workspace overrides Shared, and Local overrides the workspace"
+    );
+    assert_eq!(
+        enabled(plane.root().to_path_buf()),
+        serde_json::json!({
+            "charter-app@inline": true,
+            "charter@charter": false,
+            "figma@official": true,
+            "serena@official": true,
+        }),
+        "a chat outside the workspace is not handed its choices"
+    );
+}

@@ -8,11 +8,14 @@
 //!
 //! # The precedence, and where it comes from
 //!
-//! #272's ([`crate::extension::project`], ADR 0048), per key: **Local over Shared**, and with
-//! neither file naming a plugin it is **not set**. Not set means the harness decides the way it
-//! always did, from its own user and project settings. This is the one place it differs from an
-//! extension, which is on by default. A harness plugin is not charter's to turn on: it is the
-//! operator's own install, and charter says nothing about it until a project does.
+//! #272's ([`crate::extension::project`], ADR 0048), per key: **Local, then the workspace, then
+//! Shared**. A chat in a workspace also reads `settings.harness_plugins.<harness>` in that
+//! workspace's `workspace.json` (charter-app#282, [`Choices::read_in`]), the layer between the
+//! project's two files, through the same reader. With no layer naming a plugin it is **not
+//! set**. Not set means the harness decides the way it always did, from its own user and project
+//! settings. This is the one place it differs from an extension, which is on by default. A
+//! harness plugin is not charter's to turn on: it is the operator's own install, and charter says
+//! nothing about it until a project does.
 //!
 //! **What this machine has installed comes first**, the way this machine's approval comes first
 //! for an extension. A file that names a plugin this machine does not have is listed as such and
@@ -445,20 +448,50 @@ pub fn id_ok(id: &str) -> bool {
 // What a project's files say, and the precedence
 // ------------------------------------------------------------------------------------------
 
-/// What a project's two files say, by harness and then by plugin id.
+/// What one layer says: by harness, then by plugin id.
+type Said = BTreeMap<String, BTreeMap<String, bool>>;
+
+/// What a project's two files say, by harness and then by plugin id — and, in a workspace, what
+/// that workspace's `workspace.json` says (charter-app#282), the layer between them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Choices {
-    shared: BTreeMap<String, BTreeMap<String, bool>>,
-    local: BTreeMap<String, BTreeMap<String, bool>>,
+    shared: Said,
+    /// Empty outside a workspace, and for a workspace whose manifest says nothing.
+    workspace: Said,
+    local: Said,
+    /// The workspace these were read in, when they were.
+    workspace_name: Option<String>,
 }
 
 impl Choices {
     /// The two files' text: `None` for a file that is not there.
     pub fn from_text(shared: Option<&str>, local: Option<&str>) -> Self {
+        let said = |text: &str| {
+            text.parse::<toml::Table>()
+                .map(|top| said_in(&top))
+                .unwrap_or_default()
+        };
         Self {
-            shared: shared.map(said_in).unwrap_or_default(),
-            local: local.map(said_in).unwrap_or_default(),
+            shared: shared.map(said).unwrap_or_default(),
+            local: local.map(said).unwrap_or_default(),
+            ..Self::default()
         }
+    }
+
+    /// The same choices, in the workspace `name` whose `workspace.json` has this text (`None`:
+    /// it has none). Its `settings.harness_plugins` go between Shared and Local. A manifest with
+    /// none, or one that is not JSON, says nothing, which leaves the project's answer as it was.
+    pub fn in_workspace(self, name: &str, manifest: Option<&str>) -> Self {
+        self.with_workspace(
+            name,
+            manifest.and_then(crate::settings::workspace::table_in),
+        )
+    }
+
+    fn with_workspace(mut self, name: &str, settings: Option<toml::Table>) -> Self {
+        self.workspace = settings.as_ref().map(said_in).unwrap_or_default();
+        self.workspace_name = Some(name.to_owned());
+        self
     }
 
     /// The plane at `root`'s two files. A file that cannot be read says nothing.
@@ -467,20 +500,77 @@ impl Choices {
         Self::from_text(text(COMMITTED_FILE).as_deref(), text(LOCAL_FILE).as_deref())
     }
 
-    /// Whether either file turns any of `harness`'s plugins on or off.
+    /// [`Self::read`], in `workspace` when there is one — the same reader
+    /// [`crate::extension::project::Choices::read_in`] is. A name that is not one of the plane's
+    /// workspaces reads as a workspace with no settings.
+    pub fn read_in(root: &Path, workspace: Option<&str>) -> Self {
+        let project = Self::read(root);
+        match workspace {
+            None => project,
+            Some(name) => {
+                project.with_workspace(name, crate::settings::workspace::read(root, name))
+            }
+        }
+    }
+
+    /// The workspace's file as a sentence names it — `workspaces/<ws>/workspace.json` — or
+    /// `None` outside a workspace.
+    pub fn workspace_file(&self) -> Option<String> {
+        self.workspace_name
+            .as_deref()
+            .map(crate::settings::workspace::named)
+    }
+
+    /// Whether any layer turns any of `harness`'s plugins on or off.
     fn names_any(&self, harness: &str) -> bool {
-        [&self.shared, &self.local]
+        [&self.shared, &self.workspace, &self.local]
             .iter()
             .any(|file| file.get(harness).is_some_and(|said| !said.is_empty()))
     }
+
+    /// Every layer, the one with the last word first: its source, the file a sentence names,
+    /// where the table sits in that file, and what it says for `harness`.
+    fn layers(&self, harness: &str) -> [Layer<'_>; 3] {
+        [
+            Layer {
+                source: Source::Local,
+                file: LOCAL_FILE.to_owned(),
+                at: "",
+                said: self.local.get(harness),
+            },
+            Layer {
+                source: Source::Workspace,
+                file: self.workspace_file().unwrap_or_default(),
+                at: WORKSPACE_AT,
+                said: self.workspace.get(harness),
+            },
+            Layer {
+                source: Source::Shared,
+                file: COMMITTED_FILE.to_owned(),
+                at: "",
+                said: self.shared.get(harness),
+            },
+        ]
+    }
 }
 
-/// Every well-formed `"<id>" = true|false` under each `[harness_plugins.<harness>]` in `text`.
-/// What is not well formed is left out here and refused by [`refusals`].
-fn said_in(text: &str) -> BTreeMap<String, BTreeMap<String, bool>> {
-    let Ok(top) = text.parse::<toml::Table>() else {
-        return BTreeMap::new();
-    };
+/// Where `[harness_plugins]` sits in a workspace's `workspace.json`, as a key path names it.
+const WORKSPACE_AT: &str = "settings.";
+
+/// One layer of [`Choices`], for one harness.
+struct Layer<'c> {
+    source: Source,
+    /// The file a sentence names.
+    file: String,
+    /// Where the table sits in that file.
+    at: &'static str,
+    said: Option<&'c BTreeMap<String, bool>>,
+}
+
+/// Every well-formed `"<id>" = true|false` under each `[harness_plugins.<harness>]` in `top` — a
+/// whole TOML file, or a workspace's `settings` read as one. What is not well formed is left out
+/// here and refused by [`refusals`].
+fn said_in(top: &toml::Table) -> Said {
     top.get(TABLE)
         .and_then(toml::Value::as_table)
         .into_iter()
@@ -513,7 +603,7 @@ pub struct Effective {
     pub origin: String,
     /// On, off, or `None` for not set: the harness decides.
     pub wanted: Option<bool>,
-    /// Which file decided [`Self::wanted`], or neither (and for a pin, neither).
+    /// Which layer decided [`Self::wanted`], or none (and for a pin, none).
     pub source: Source,
     /// Whether this machine has it installed for this harness.
     pub installed: bool,
@@ -528,10 +618,9 @@ pub struct Effective {
 /// decided that. In id order.
 pub fn resolve(adapter: &dyn Adapter, installed: &[Plugin], choices: &Choices) -> Vec<Effective> {
     let harness = adapter.harness();
-    let shared = choices.shared.get(harness);
-    let local = choices.local.get(harness);
+    let layers = choices.layers(harness);
     let mut ids: BTreeSet<&str> = installed.iter().map(|it| it.id.as_str()).collect();
-    for said in [shared, local].into_iter().flatten() {
+    for said in layers.iter().filter_map(|layer| layer.said) {
         ids.extend(said.keys().map(String::as_str));
     }
     ids.extend(adapter.pinned().iter().map(|pin| pin.id));
@@ -540,28 +629,28 @@ pub fn resolve(adapter: &dyn Adapter, installed: &[Plugin], choices: &Choices) -
     ids.into_iter()
         .map(|id| {
             let here = installed.iter().find(|it| it.id == id);
-            let said = [
-                (Source::Local, local.and_then(|said| said.get(id))),
-                (Source::Shared, shared.and_then(|said| said.get(id))),
-            ];
-            let (mut wanted, mut source) = said
+            // Local, then the workspace, then Shared: the first that names it decides.
+            let said: Vec<(&Layer<'_>, bool)> = layers
                 .iter()
-                .find_map(|(source, on)| on.map(|on| (Some(*on), *source)))
-                .unwrap_or((None, Source::Default));
+                .filter_map(|layer| Some((layer, *layer.said?.get(id)?)))
+                .collect();
+            let (mut wanted, mut source) =
+                said.first().map_or((None, Source::Default), |(layer, on)| {
+                    (Some(*on), layer.source)
+                });
             let mut ignored = Vec::new();
             let pin = adapter.pinned().iter().find(|pin| pin.id == id);
-            for (from, on) in said {
-                let Some(&on) = on else { continue };
-                let file = from.file().unwrap_or_default();
-                let key = format!("{TABLE}.{harness}.{}", toml_key(id));
+            for (layer, on) in said {
+                let (file, at) = (&layer.file, layer.at);
+                let key = format!("{at}{TABLE}.{harness}.{}", toml_key(id));
                 if let Some(pin) = pin.filter(|pin| pin.on != on) {
                     ignored.push(Ignored {
-                        source: from,
+                        source: layer.source,
                         why: format!("{file} sets {key} to {on}, and {}", pin.why),
                     });
                 } else if let Some(cannot) = &cannot {
                     ignored.push(Ignored {
-                        source: from,
+                        source: layer.source,
                         why: format!("{file} sets {key}, and {cannot}; charter hands it nothing"),
                     });
                 }
@@ -597,17 +686,18 @@ pub fn chosen(adapter: &dyn Adapter, all: &[Effective]) -> Chosen {
         .collect()
 }
 
-/// What a chat of `kind`, started in the plane at `root` with `env`, is handed.
+/// What a chat of `kind`, started in the plane at `root` — in `workspace`, when it is in one —
+/// with `env`, is handed.
 ///
-/// **The harness's record is read only when a project file names one of its plugins**: with
-/// nothing chosen, the answer is the pins whatever is installed, so a project that says nothing
-/// costs no read of anybody's home directory. Where the record cannot be read, the pins alone: a
-/// listing charter could not read is not a reason to start a chat without its guard.
-pub fn for_start(kind: &str, root: &Path, env: &Env<'_>) -> Chosen {
+/// **The harness's record is read only when a layer names one of its plugins**: with nothing
+/// chosen, the answer is the pins whatever is installed, so a project that says nothing costs no
+/// read of anybody's home directory. Where the record cannot be read, the pins alone: a listing
+/// charter could not read is not a reason to start a chat without its guard.
+pub fn for_start(kind: &str, root: &Path, workspace: Option<&str>, env: &Env<'_>) -> Chosen {
     let Some(adapter) = adapter(kind) else {
         return Chosen::new();
     };
-    let choices = Choices::read(root);
+    let choices = Choices::read_in(root, workspace);
     let installed = if choices.names_any(adapter.harness()) {
         adapter.installed(env).unwrap_or_default()
     } else {
@@ -627,9 +717,9 @@ pub struct Group {
     pub plugins: Vec<Effective>,
 }
 
-/// Every harness, with what it has installed and what this project has each at.
-pub fn survey(root: &Path, env: &Env<'_>) -> Vec<Group> {
-    let choices = Choices::read(root);
+/// Every harness, with what it has installed and what `choices` — a project's, or a project's in
+/// one workspace ([`Choices::read_in`]) — have each at.
+pub fn survey(choices: &Choices, env: &Env<'_>) -> Vec<Group> {
     ADAPTERS
         .iter()
         .map(|&adapter| {
@@ -641,7 +731,7 @@ pub fn survey(root: &Path, env: &Env<'_>) -> Vec<Group> {
                 adapter,
                 record: adapter.record(env),
                 trouble,
-                plugins: resolve(adapter, &installed, &choices),
+                plugins: resolve(adapter, &installed, choices),
             }
         })
         .collect()
@@ -653,20 +743,27 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
     let Ok(top) = text.parse::<toml::Table>() else {
         return Vec::new();
     };
+    refusals_in(&top, file, "")
+}
+
+/// [`refusals`], of a table already read — a whole TOML file, or a workspace's `settings` read as
+/// one (charter-app#282) — whose `[harness_plugins]` sits at `at` in `file` (`"settings."` in a
+/// `workspace.json`), so each sentence names the key where it is written.
+pub fn refusals_in(top: &toml::Table, file: &str, at: &str) -> Vec<String> {
     let Some(table) = top.get(TABLE) else {
         return Vec::new();
     };
     let shape = "each harness is [harness_plugins.<harness>], holding \"<plugin id>\" = true or \
                  false";
     let Some(table) = table.as_table() else {
-        return vec![format!("{TABLE} in {file} is not a table — {shape}")];
+        return vec![format!("{at}{TABLE} in {file} is not a table — {shape}")];
     };
     let mut out = Vec::new();
     for (harness, plugins) in table {
         let Some(adapter) = adapter(harness) else {
             let known: Vec<&str> = ADAPTERS.iter().map(|it| it.harness()).collect();
             out.push(format!(
-                "[{TABLE}.{}] in {file} is not a harness charter knows — one of: {}",
+                "[{at}{TABLE}.{}] in {file} is not a harness charter knows — one of: {}",
                 toml_key(harness),
                 known.join(", ")
             ));
@@ -674,12 +771,12 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
         };
         let Some(plugins) = plugins.as_table() else {
             out.push(format!(
-                "{TABLE}.{harness} in {file} is not a table — {shape}"
+                "{at}{TABLE}.{harness} in {file} is not a table — {shape}"
             ));
             continue;
         };
         for (id, on) in plugins {
-            let key = format!("{TABLE}.{harness}.{}", toml_key(id));
+            let key = format!("{at}{TABLE}.{harness}.{}", toml_key(id));
             if !id_ok(id) {
                 out.push(format!(
                     "{key} in {file} is not a plugin id — one line of at most {MOST_ID_BYTES} \

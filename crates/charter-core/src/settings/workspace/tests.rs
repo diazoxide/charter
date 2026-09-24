@@ -182,7 +182,7 @@ fn a_settings_key_no_reader_reads_is_refused() {
         refusals(text, "alpha"),
         vec![
             "settings.colour in workspaces/alpha/workspace.json is not read — a workspace's \
-             settings hold extensions and nothing else"
+             settings hold extensions, harness_plugins and nothing else"
                 .to_owned()
         ]
     );
@@ -306,5 +306,86 @@ fn null_reads_as_not_set() {
         table.to_string(),
         "[extensions.stats]\n",
         "the null was carried into the table"
+    );
+}
+
+// -------------------------------------------------------------------------------------
+// A workspace's harness plugins (charter-app#282)
+// -------------------------------------------------------------------------------------
+
+fn plugin_off(id: &str) -> Edit {
+    at(&["harness_plugins", "claude", id], Some(Value::Bool(false)))
+}
+
+#[test]
+fn a_workspaces_harness_plugins_are_saved_and_are_what_the_resolver_reads_in_that_workspace() {
+    use crate::extension::project::Source;
+    use crate::harness_plugin::{CLAUDE_CODE, Choices, Plugin, resolve};
+    let dir = plane(Some(&old()));
+    save(
+        dir.path(),
+        "alpha",
+        Some(&old()),
+        &[plugin_off("figma@official")],
+    )
+    .unwrap();
+    assert!(
+        read_file(dir.path(), "alpha").unwrap().refusals.is_empty(),
+        "a well-formed harness_plugins table is not refused"
+    );
+    let installed = [Plugin {
+        id: "figma@official".into(),
+        harness: "claude",
+        name: "figma".into(),
+        source: "fixture".into(),
+    }];
+    let figma = |workspace: Option<&str>| {
+        let it = resolve(
+            &CLAUDE_CODE,
+            &installed,
+            &Choices::read_in(dir.path(), workspace),
+        )
+        .into_iter()
+        .find(|it| it.id == "figma@official")
+        .unwrap();
+        (it.wanted, it.source)
+    };
+    assert_eq!(figma(Some("alpha")), (Some(false), Source::Workspace));
+    assert_eq!(figma(None), (None, Source::Default));
+    assert_eq!(figma(Some("beta")), (None, Source::Default));
+}
+
+#[test]
+fn a_workspace_cannot_turn_charters_own_plugin_off_and_is_told_so_at_its_own_key() {
+    let dir = plane(Some(&old()));
+    let refused = save(
+        dir.path(),
+        "alpha",
+        Some(&old()),
+        &[plugin_off("charter-app@inline")],
+    )
+    .unwrap_err();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(
+        refused[0].starts_with(
+            "settings.harness_plugins.claude.\"charter-app@inline\" in \
+             workspaces/alpha/workspace.json cannot be false: charter-app@inline is always on"
+        ),
+        "{}",
+        refused[0]
+    );
+    assert_eq!(on_disk(dir.path()), old(), "nothing was written");
+}
+
+#[test]
+fn a_workspace_naming_a_harness_charter_does_not_know_is_refused() {
+    let text = r#"{"settings": {"harness_plugins": {"cursor": {"x@y": true}}}}"#;
+    assert_eq!(
+        refusals(text, "alpha"),
+        vec![
+            "[settings.harness_plugins.cursor] in workspaces/alpha/workspace.json is not a \
+             harness charter knows — one of: claude, opencode, codex"
+                .to_owned()
+        ]
     );
 }

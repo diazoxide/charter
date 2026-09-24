@@ -95,7 +95,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         if (newest()) setExtensions([]);
       });
     void commands
-      .projectHarnessPlugins(plane)
+      .projectHarnessPlugins(plane, null)
       .then((said) => {
         if (newest()) setHarnesses(said.status === "ok" ? (said.data ?? []) : []);
       })
@@ -149,7 +149,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         testid="settings-shared"
         title="Shared"
         who="Committed; your team sees this."
-        groups={[...SHARED, ...harnessPluginGroups(harnesses)]}
+        groups={[...SHARED, ...harnessPluginGroups(harnesses, "project")]}
         extensions={extensions}
         theme={theme}
         send={(base, change) => commands.saveProjectSettings(plane, "shared", base, change)}
@@ -160,7 +160,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         testid="settings-local"
         title="Local"
         who="This machine only. Gitignored; charter will not write it anywhere git would commit it."
-        groups={[...LOCAL, ...harnessPluginGroups(harnesses)]}
+        groups={[...LOCAL, ...harnessPluginGroups(harnesses, "project")]}
         extensions={extensions}
         theme={theme}
         send={(base, change) => commands.saveProjectSettings(plane, "local", base, change)}
@@ -177,13 +177,16 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
  * The layer between the project's two files: `charter.toml`, then this workspace, then
  * `charter.local.toml`. A workspace refines its project for the team, and this machine's Local
  * file still has the last word; none of the three reaches past this machine's approval. It holds
- * the one group a workspace can set today, Extensions — the same group as Project settings',
- * asked with `project_extensions` for this workspace, so each extension says which layer
- * decided it. A form only: the manifest holds more than settings, and charter keeps the rest.
+ * the groups a workspace can set: Extensions — the same group as Project settings', asked with
+ * `project_extensions` for this workspace — and Harness plugins, one group per harness
+ * (charter-app#282), asked with `project_harness_plugins` for this workspace. Each extension and
+ * each plugin says which layer decided it. A form only: the manifest holds more than settings,
+ * and charter keeps the rest.
  */
 export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; workspace: string }) {
   const [file, setFile] = useState<OneWorkspace | { trouble: string }>();
   const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   /** The newest read out, as in {@link ProjectSettings}. */
   const reading = useRef(0);
 
@@ -205,6 +208,14 @@ export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; worksp
       })
       .catch(() => {
         if (newest()) setExtensions([]);
+      });
+    void commands
+      .projectHarnessPlugins(plane, workspace)
+      .then((said) => {
+        if (newest()) setHarnesses(said.status === "ok" ? (said.data ?? []) : []);
+      })
+      .catch(() => {
+        if (newest()) setHarnesses([]);
       });
   }, [plane, workspace]);
 
@@ -247,7 +258,7 @@ export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; worksp
             ? "Committed with this LIVE workspace; your team sees this."
             : "This workspace is not LIVE, so its workspace.json stays on this machine."
         }
-        groups={WORKSPACE}
+        groups={[...WORKSPACE, ...harnessPluginGroups(harnesses, "workspace")]}
         extensions={extensions}
         theme={undefined}
         rawView={false}
@@ -536,23 +547,36 @@ const EXTENSIONS: Group = {
     ),
 };
 
-/** What a harness plugin is in this project, and why, in a sentence under its control. */
-function pluginStanding(it: HarnessPlugin, harness: string): string {
-  const file = it.source === "local" ? "charter.local.toml" : "charter.toml";
+/** The file a harness plugin's source is, by its own name: the layer that decided it. */
+function pluginFile(source: string): string {
+  if (source === "local") return "charter.local.toml";
+  if (source === "workspace") return "workspace.json";
+  return "charter.toml";
+}
+
+/** What a harness plugin is in this project or workspace, and why, in a sentence under its
+ *  control. */
+function pluginStanding(it: HarnessPlugin, harness: string, scope: Scope): string {
+  const file = pluginFile(it.source);
   if (!it.installed)
     return `not installed on this machine — named in ${file}, so no chat is handed it`;
   const where = it.origin === "" ? "" : ` Installed: ${it.origin}.`;
   if (it.state === "not-set") return `not set — ${harness} decides, from its own settings.${where}`;
-  return `${it.state} in this project — from ${file}.${where}`;
+  return `${it.state} in this ${scope} — from ${file}.${where}`;
 }
 
+/** Whose settings a section is: the project's two files, or one workspace's (charter-app#282). */
+type Scope = "project" | "workspace";
+
 /**
- * **Harness plugins, one group per harness, in either section** (charter-app#274, ADR 0050).
- * Local overrides Shared plugin by plugin; not set leaves a plugin to the harness. A plugin
- * charter fixes is a line and not a control, and a harness whose adapter cannot apply is its
- * "not supported yet" sentence, with what it has installed listed under it.
+ * **Harness plugins, one group per harness, in every section** (charter-app#274, #282, ADR 0050).
+ * Local overrides the workspace, which overrides Shared, plugin by plugin; not set leaves a
+ * plugin to the harness. A plugin charter fixes is a line and not a control, and a harness whose
+ * adapter cannot apply is its "not supported yet" sentence, with what it has installed listed
+ * under it. In a workspace's section a toggle writes `settings.harness_plugins.<harness>` of its
+ * `workspace.json` — the same path under `settings` as the files' table.
  */
-function harnessPluginGroups(harnesses: readonly HarnessPlugins[]): Group[] {
+function harnessPluginGroups(harnesses: readonly HarnessPlugins[], scope: Scope): Group[] {
   return harnesses.map((harness) => {
     const chosen = harness.unsupported === null ? harness.plugins.filter((it) => !it.pinned) : [];
     return {
@@ -567,7 +591,7 @@ function harnessPluginGroups(harnesses: readonly HarnessPlugins[]): Group[] {
           onOffAt(
             key("harness_plugins", harness.harness, it.id),
             `${harness.title}: ${it.id}`,
-            pluginStanding(it, harness.title),
+            pluginStanding(it, harness.title, scope),
             "not set",
           ),
         ),
