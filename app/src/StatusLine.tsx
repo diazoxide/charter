@@ -267,6 +267,7 @@ function AlertsButton({ alerts }: { alerts?: Alerts }) {
       <button
         type="button"
         className="status-alerts"
+        tabIndex={0}
         data-testid="status-alerts"
         disabled
         aria-label="Alerts — nothing to open here"
@@ -284,6 +285,9 @@ function AlertsButton({ alerts }: { alerts?: Alerts }) {
     <button
       type="button"
       className="status-alerts"
+      // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+      // down (`docs/ui-primitives.md`, charter-app#189).
+      tabIndex={0}
       data-testid="status-alerts"
       data-count={count ?? "unknown"}
       aria-label={

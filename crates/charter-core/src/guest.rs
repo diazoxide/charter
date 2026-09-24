@@ -2160,7 +2160,7 @@ mod tests {
     }
 
     fn git_in(dir: &Path, args: &[&str]) {
-        let run = crate::worktree::git::run(dir, args, crate::worktree::git::READ).unwrap();
+        let run = crate::testgit::run(dir, args);
         assert!(run.ok(), "git {args:?}: {}", run.err);
     }
 

@@ -1,7 +1,9 @@
 /** What a chat is doing, as the tab and the queue draw it. */
+import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { CircleCheck, Hand, SquareTerminal } from "lucide-react";
 import { type State } from "./chatState";
 import { useArrived } from "./lib/arrived";
+import { useTabStop } from "./roving";
 
 /** The word beside a chat's name. */
 const WORDS: Record<State, string> = {
@@ -60,6 +62,9 @@ export function NeedsYou({
   nameOf: (session: number) => string;
   show: (session: number) => void;
 }) {
+  // The queue is ONE Tab stop, its oldest chat, and Up and Down move along it (charter-app#189,
+  // `roving.ts`): at fifty chats asking, fifty stops would be the strip's problem over again.
+  const stop = useTabStop(undefined, queue.map(String));
   const unsaid =
     quiet.length === 0 ? null : (
       <span className="needs-you-quiet">
@@ -94,16 +99,20 @@ export function NeedsYou({
         <strong className="needs-you-number">{queue.length}</strong>
         {" need you"}
       </span>
-      <ul>
-        {queue.map((session) => (
-          <li key={session}>
-            <button onClick={() => show(session)}>
-              <SquareTerminal className="node-icon" />
-              {nameOf(session)}
-            </button>
-          </li>
-        ))}
-      </ul>
+      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+        <ul>
+          {queue.map((session) => (
+            <li key={session}>
+              <RovingFocusGroup.Item asChild tabStopId={String(session)}>
+                <button onClick={() => show(session)}>
+                  <SquareTerminal className="node-icon" />
+                  {nameOf(session)}
+                </button>
+              </RovingFocusGroup.Item>
+            </li>
+          ))}
+        </ul>
+      </RovingFocusGroup.Root>
       {unsaid}
     </div>
   );

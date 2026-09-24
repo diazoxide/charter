@@ -528,7 +528,7 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let mut command = std::process::Command::new("git");
         command
-            .args(args)
+            .args(crate::testgit::unsigned(args))
             .current_dir(dir)
             .env_clear()
             .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")

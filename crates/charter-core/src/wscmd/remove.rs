@@ -230,14 +230,6 @@ mod tests {
         git(at, &["init", "-q", "-b", "main"]);
         git(at, &["config", "user.email", "t@example.com"]);
         git(at, &["config", "user.name", "T"]);
-        // **A fixture repository may not inherit the developer's signing configuration.** With
-        // `commit.gpgsign = true` and 1Password's signer in `~/.gitconfig` — an ordinary setup,
-        // and the operator's — every commit below either parks on a biometric prompt or fails
-        // with `1Password: agent returned an error`, and a dozen tests of this command go red
-        // for a reason that has nothing to do with it. **CI cannot see it**: a runner has no
-        // signing config. charter's Python suite hit exactly this and turned it off everywhere
-        // (`news/0.54.0-…-your-thumb.md`); this port carried the helpers over without it.
-        git(at, &["config", "commit.gpgsign", "false"]);
         std::fs::write(at.join("README.md"), "hi\n").unwrap();
         git(at, &["add", "-A"]);
         git(at, &["commit", "-qm", "first"]);
@@ -245,8 +237,7 @@ mod tests {
     }
 
     fn git(at: &Path, argv: &[&str]) {
-        let run = crate::worktree::git::run(at, argv, crate::worktree::git::READ)
-            .expect("git runs in a test");
+        let run = crate::testgit::run(at, argv);
         assert!(run.ok(), "git {argv:?} failed: {}", run.err);
     }
 
@@ -367,8 +358,6 @@ mod tests {
         );
         git(&clone, &["config", "user.email", "t@example.com"]);
         git(&clone, &["config", "user.name", "T"]);
-        // A clone is not made by `repo`, so it needs the same line — see `repo`.
-        git(&clone, &["config", "commit.gpgsign", "false"]);
         std::fs::write(clone.join("second.md"), "x\n").unwrap();
         git(&clone, &["add", "-A"]);
         git(&clone, &["commit", "-qm", "second"]);

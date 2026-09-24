@@ -26,6 +26,8 @@
 //! asked a second time exits 98 — which is what makes a pager that never advances fail at
 //! once rather than loop until the mutation run's timeout.
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -993,7 +995,7 @@ mod child {
             ],
         ] {
             let done =
-                charter_core::forklock::output(Command::new("git").args(&args).current_dir(&clone))
+                charter_core::forklock::output(support::unsigned().args(&args).current_dir(&clone))
                     .unwrap();
             assert!(done.status.success(), "{done:?}");
         }

@@ -16,7 +16,7 @@ fn git(dir: &Path, args: &[&str]) {
         Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args(args)
+            .args(crate::testgit::unsigned(args))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("GIT_AUTHOR_NAME", "t")
@@ -1046,4 +1046,119 @@ fn the_name_column_is_a_floor_and_a_wider_name_pushes_only_its_own_row() {
         render(&r, 0, false)
     );
     assert!(render(&r, 8, false).ends_with("git     2.50"));
+}
+
+// ---- git auth: the one-credential policy, checked and never applied (charter-app#198) --------
+
+/// A clone at `workspaces/alpha/<name>` whose `origin` is `url`.
+fn clone_with_origin(root: &Path, name: &str, url: &str) -> PathBuf {
+    let clone = root.join("workspaces/alpha").join(name);
+    std::fs::create_dir_all(&clone).unwrap();
+    git(&clone, &["init", "-q", "-b", "main", "."]);
+    git(&clone, &["remote", "add", "origin", url]);
+    clone
+}
+
+#[test]
+fn git_auth_is_green_when_every_repo_carries_its_forges_token_only_policy() {
+    let (_d, root) = plane("schema = 1\n");
+    let clone = clone_with_origin(&root, "svc", "https://github.com/acme/svc.git");
+    crate::gitpolicy::apply(&clone, &root);
+
+    let r = one(&root, "git auth");
+
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "token-only across 1 repo(s) (each forge's own HTTPS token; no SSH/signing)"
+    );
+}
+
+#[test]
+fn git_auth_names_a_drifted_clone_and_the_command_that_fixes_it() {
+    let (_d, root) = plane("schema = 1\n");
+    clone_with_origin(&root, "svc", "https://github.com/acme/svc.git");
+
+    let r = one(&root, "git auth");
+
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(r.detail, "1/1 repo(s) not token-only: svc");
+    assert_eq!(
+        r.hint,
+        "Apply the single-credential policy to every clone: charter git-policy --apply"
+    );
+}
+
+#[test]
+fn git_auth_only_reads_and_never_applies_the_policy_it_checks() {
+    let (_d, root) = plane("schema = 1\n");
+    let clone = clone_with_origin(&root, "svc", "https://github.com/acme/svc.git");
+    let before = std::fs::read_to_string(clone.join(".git/config")).unwrap();
+
+    one(&root, "git auth");
+
+    assert_eq!(
+        std::fs::read_to_string(clone.join(".git/config")).unwrap(),
+        before
+    );
+    assert!(!crate::gitpolicy::check(&clone, &root).is_empty());
+}
+
+#[test]
+fn git_auth_does_not_send_an_unmanaged_forge_to_an_apply_that_skips_it() {
+    let (_d, root) = plane("schema = 1\n");
+    clone_with_origin(&root, "svc", "https://git.nowhere.example/acme/svc.git");
+
+    let r = one(&root, "git auth");
+
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(r.detail, "1/1 repo(s) not token-only: svc");
+    assert!(
+        r.hint.starts_with("1 repo(s) have an unrecognised forge"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn git_auth_splits_its_hint_between_fixable_and_unmanaged_repos_and_names_at_most_three() {
+    let (_d, root) = plane("schema = 1\n");
+    for name in ["a", "b", "c"] {
+        clone_with_origin(&root, name, &format!("https://github.com/acme/{name}.git"));
+    }
+    clone_with_origin(&root, "d", "https://git.nowhere.example/acme/d.git");
+
+    let r = one(&root, "git auth");
+
+    assert_eq!(r.detail, "4/4 repo(s) not token-only: a, b, c …");
+    assert!(
+        r.hint.starts_with(
+            "charter git-policy --apply fixes 3 drifted repo(s); 1 more have an unrecognised forge"
+        ),
+        "{r:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn git_auth_names_a_workspace_it_cannot_read_rather_than_counting_it_clean() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, root) = plane("schema = 1\n");
+    let clone = clone_with_origin(&root, "svc", "https://github.com/acme/svc.git");
+    crate::gitpolicy::apply(&clone, &root);
+    let shut = root.join("workspaces/beta");
+    std::fs::create_dir_all(&shut).unwrap();
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let r = one(&root, "git auth");
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "token-only across 1 repo(s); 1 director(ies) under workspaces/ cannot be checked"
+    );
+    assert_eq!(
+        r.hint,
+        "workspaces/beta cannot be checked — restoring read access to it clears this."
+    );
 }

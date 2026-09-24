@@ -319,7 +319,7 @@ impl Doctor {
             rows.push(deferred::row(&cli, deferred::FORGES));
             rows.push(deferred::row(&format!("{cli} auth"), deferred::FORGES));
         }
-        rows.push(deferred::row("git auth", deferred::GIT_POLICY));
+        rows.push(git::git_auth(self));
         rows.push(config::charter_toml(self));
         rows.push(profiles::harness_profiles(self));
         rows.extend(profiles::profile_rows(self));

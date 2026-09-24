@@ -14,6 +14,8 @@ use std::path::Path;
 
 use charter_core::profiles::{self, Source};
 
+mod support;
+
 /// A plane with the two files profiles are read from.
 fn plane(committed: &str, local: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -770,7 +772,7 @@ fn the_launch_read_is_the_one_that_has_already_asked_git() {
         "[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
     );
     charter_core::forklock::output(
-        std::process::Command::new("git")
+        support::unsigned()
             .args(["init", "-q"])
             .current_dir(dir.path())
             .env("GIT_CONFIG_GLOBAL", "/dev/null"),

@@ -112,6 +112,12 @@ pub const UNMANAGED_FORGE: &str = "forge unknown — origin host is not a defaul
                                    be verified or applied. Declare it under [[forge]] (host = \
                                    \"…\") to bring it under management.";
 
+/// Whether `drift`, as [`check`] returned it, is the one answer for a repo on a forge charter
+/// cannot name — which [`apply`] deliberately leaves alone.
+pub fn is_unmanaged(drift: &[String]) -> bool {
+    drift.len() == 1 && drift[0] == UNMANAGED_FORGE
+}
+
 /// Policy settings that are MISSING or wrong in `repo`'s local config, against THAT repo's own
 /// forge. Empty means compliant. Python's `check`.
 pub fn check(repo: &Path, root: &Path) -> Vec<String> {
@@ -266,7 +272,7 @@ pub fn policy(root: &Path, apply_it: bool, say: Sink) -> u8 {
         if drift.is_empty() {
             continue;
         }
-        if drift.len() == 1 && drift[0] == UNMANAGED_FORGE {
+        if is_unmanaged(&drift) {
             // Honest "can't tell" — never silently reported green, and never guessed at via
             // `apply` either.
             unmanaged += 1;
@@ -333,6 +339,9 @@ mod tests {
         .unwrap();
         let clone = root.join("workspaces/alpha/widget");
         std::fs::create_dir_all(&clone).unwrap();
+        // Deliberately NOT through `crate::testgit`: its template writes the very
+        // `commit.gpgsign = false` these tests assert the policy writes, which would make them
+        // pass without it. Nothing here commits, so no signer is ever asked.
         git::run(&clone, &["init", "-q", "."], git::READ).unwrap();
         if let Some(origin) = origin {
             git::run(&clone, &["remote", "add", "origin", origin], git::READ).unwrap();
@@ -397,6 +406,9 @@ mod tests {
     }
 
     /// A clone at `workspaces/<ws>/<name>` under `root`, with `origin` when given.
+    ///
+    /// Not through `crate::testgit`, for `repo`'s reason above: its template writes the
+    /// `commit.gpgsign = false` these tests count as drift. Nothing here commits.
     fn clone_at(root: &Path, ws: &str, name: &str, origin: Option<&str>) -> PathBuf {
         let clone = root.join("workspaces").join(ws).join(name);
         std::fs::create_dir_all(&clone).unwrap();

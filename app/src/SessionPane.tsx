@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type KeyboardEvent } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
@@ -6,6 +6,7 @@ import { CHAT_KEYBOARD } from "./actions";
 import * as bench from "./bench";
 import { commands, type PlaneId } from "./bindings";
 import { draw } from "./renderer";
+import { moveAlong } from "./tabSequence";
 import { inForce, onDrawn, xtermTheme } from "./theme/theme";
 
 /**
@@ -155,9 +156,38 @@ export function SessionPane({
       // back from the chords a terminal encodes (`actions.CHAT_KEYBOARD`, charter-app#106).
       {...{ [CHAT_KEYBOARD]: "" }}
       data-session={session}
+      onKeyDownCapture={leavesTheChat}
       onMouseDown={take}
       onClick={take}
       ref={holder}
     />
   );
+}
+
+/**
+ * **How the keyboard leaves a chat's terminal: Ctrl+Tab forwards, Ctrl+Shift+Tab backwards**
+ * (charter-app#189).
+ *
+ * Tab inside a terminal is the shell's — completion — and Shift+Tab is a harness's own
+ * (Claude Code cycles its modes on it), so neither is ever taken: xterm prevents both and sends
+ * them on, which is why a terminal is a Tab stop you arrive at and cannot Tab out of.
+ *
+ * **Ctrl+Tab is the platforms' own answer to exactly that**, a control that keeps Tab for
+ * itself: GTK moves the focus out of a text view with it, as Windows does out of a multi-line
+ * box and AppKit out of a field editor that took Tab. And it takes nothing from the chat, by
+ * the rule `docs/ui-primitives.md` holds every claimed key to: xterm.js 6.0.0's
+ * `evaluateKeyboardEvent` ignores Ctrl on key code 9 and sends `\t` for Ctrl+Tab and `ESC [ Z`
+ * for Ctrl+Shift+Tab — the same bytes Tab and Shift+Tab already send. A shell cannot tell them
+ * apart, so there is nothing to hand back.
+ *
+ * On the capture phase of the pane, so it runs before xterm's own listener on its textarea,
+ * and stops the event there. WebKit has no default action for Ctrl+Tab (its tab handler
+ * returns early on Ctrl), so where the keyboard goes is decided here, along the same sequence
+ * Tab walks (`tabSequence.ts`).
+ */
+export function leavesTheChat(event: KeyboardEvent<HTMLElement>) {
+  if (event.key !== "Tab" || !event.ctrlKey || event.metaKey || event.altKey) return;
+  event.preventDefault();
+  event.stopPropagation();
+  moveAlong(event.currentTarget, event.shiftKey);
 }
