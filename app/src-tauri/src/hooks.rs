@@ -81,14 +81,7 @@ pub struct Hooks {
     /// so the socket has to exist first. Until it is filled every ask is answered with a
     /// refusal, never with a silence an asker would have to wait out.
     answering: Arc<Mutex<Option<Answering>>>,
-    /// Told when a chat's own harness says the operator prompted it (charter-app#259): a
-    /// handed-off chat that has sent its report owes another once it is given more to do.
-    /// A slot filled after the fact, for [`Self::answering`]'s reason.
-    prompted: Arc<Mutex<Option<Prompted>>>,
 }
-
-/// Told the number of a chat the operator has just prompted.
-pub type Prompted = Arc<dyn Fn(u32) + Send + Sync + 'static>;
 
 /// What answers an ask, told which connection it came on.
 pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
@@ -203,7 +196,6 @@ impl Hooks {
             reading: Mutex::new(None),
             socket: None,
             answering: Arc::new(Mutex::new(None)),
-            prompted: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -217,27 +209,12 @@ impl Hooks {
         let socket = listener.path().to_path_buf();
         let board = Arc::new(Mutex::new(Board::new()));
         let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
-        let prompted: Arc<Mutex<Option<Prompted>>> = Arc::new(Mutex::new(None));
         let reading = listener.each_answering(
             {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
-                let prompted = Arc::clone(&prompted);
                 Box::new(move |report| {
                     if let Some(what) = apply(&board, &plane, &report) {
-                        // A prompt the board took is the chat's own harness saying the operator
-                        // gave it a turn — never a nested one, which the board refused.
-                        if report.event == charter_core::state::Event::UserPromptSubmit
-                            && what.state == "running"
-                        {
-                            let told = prompted
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .clone();
-                            if let Some(told) = told {
-                                told(report.chat);
-                            }
-                        }
                         moved(what);
                     }
                 })
@@ -266,7 +243,6 @@ impl Hooks {
             reading: Mutex::new(Some(reading)),
             socket: Some(socket),
             answering,
-            prompted,
         })
     }
 
@@ -299,11 +275,6 @@ impl Hooks {
             .answering
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(answering);
-    }
-
-    /// Who is told when a chat's own harness says the operator prompted it.
-    pub fn when_prompted(&self, prompted: Prompted) {
-        *self.prompted.lock().unwrap_or_else(PoisonError::into_inner) = Some(prompted);
     }
 
     /// A chat `session` handed work to, shown as `from`, has reported back to it

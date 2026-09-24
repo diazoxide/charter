@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { LoaderCircle } from "lucide-react";
+import { extensionsChanged } from "./extensionsOn";
 import {
   commands,
   type PlaneId,
+  type ProjectExtension,
   type ProjectSettings as Both,
   type SettingsEdit,
   type SettingsFile,
@@ -24,22 +26,49 @@ import {
  * the file as it now stands, or every reason nothing was written, in the core's words — which is
  * all this draws.
  *
- * **Where #253 goes.** Each section is a list of {@link Group}s, and a group is data: a heading
- * and the controls under it, each reading and writing keys by path. Per-project extensions are
- * one more group in either section — reading `[extensions]` out of `SettingsFile.fields`, which
- * already carries every key in the file, forms or no forms.
+ * Each section is a list of {@link Group}s, and a group is data: a heading and the controls
+ * under it, each reading and writing keys by path. **Extensions** (charter-app#253, ADR 0048) is
+ * one group in either section: each extension with what it is in this project and which file
+ * decided it — the core's `extension::project::resolve`, asked with `project_extensions` — and
+ * a control per key that writes `[extensions.<id>]` in the section it is in.
  */
 export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [both, setBoth] = useState<Both | { trouble: string }>();
+  const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  /** The newest read out: an answer to an older one — before a save, or for another plane — is
+   *  dropped rather than drawn over what came after it. */
+  const reading = useRef(0);
 
   const read = useCallback(() => {
+    const mine = ++reading.current;
+    const newest = () => reading.current === mine;
     void commands
       .projectSettings(plane)
-      .then((said) => setBoth(said.status === "ok" ? said.data : { trouble: said.error }))
-      .catch((err: unknown) => setBoth({ trouble: String(err) }));
+      .then((said) => {
+        if (newest()) setBoth(said.status === "ok" ? said.data : { trouble: said.error });
+      })
+      .catch((err: unknown) => {
+        if (newest()) setBoth({ trouble: String(err) });
+      });
+    // What is in force is read with the files, so a save shows its effect. A refusal leaves the
+    // list empty: the group then says there is nothing, and the files' forms still work.
+    void commands
+      .projectExtensions(plane)
+      .then((said) => {
+        if (newest()) setExtensions(said.status === "ok" ? (said.data ?? []) : []);
+      })
+      .catch(() => {
+        if (newest()) setExtensions([]);
+      });
   }, [plane]);
 
   useEffect(read, [read]);
+
+  const saved = useCallback(() => {
+    read();
+    // The window keeps of its surveyed panels, views and themes what this project has on.
+    extensionsChanged(plane);
+  }, [plane, read]);
 
   if (both === undefined) {
     return (
@@ -69,7 +98,8 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         title="Shared"
         who="Committed; your team sees this."
         groups={SHARED}
-        onSaved={read}
+        extensions={extensions}
+        onSaved={saved}
       />
       <Section
         plane={plane}
@@ -77,7 +107,8 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         title="Local"
         who="This machine only. Gitignored; charter will not write it anywhere git would commit it."
         groups={LOCAL}
-        onSaved={read}
+        extensions={extensions}
+        onSaved={saved}
       />
     </div>
   );
@@ -99,13 +130,24 @@ type Control = {
   /** `text` is one line, `choice` a closed set, `lines` one entry per line. */
   kind: "text" | "choice" | "lines";
   choices?: readonly string[];
+  /** What a `choice`'s empty option says. */
+  unset?: string;
   read: (file: SettingsFile) => string;
   /** The edits `draft` makes to `file`, the file it was typed over. */
   edits: (draft: string, file: SettingsFile) => SettingsEdit[];
 };
 
-/** A heading and what is under it. */
-type Group = { title: string; note?: string; controls: (file: SettingsFile) => Control[] };
+/** A heading and what is under it. `extensions` is what the core says is in force in this
+ *  project, for the group that draws it. */
+type Group = {
+  title: string;
+  note?: string;
+  controls: (file: SettingsFile, extensions: readonly ProjectExtension[]) => Control[];
+  /** Sentences about this file the group says under its heading. */
+  notes?: (file: SettingsFile, extensions: readonly ProjectExtension[]) => string[];
+  /** What the group says when it has no controls; "None in this file." otherwise. */
+  empty?: string;
+};
 
 const key = (...keys: string[]): SettingsStep[] => keys.map((one) => ({ key: one }));
 
@@ -233,6 +275,89 @@ function envAt(name: string): Control {
   };
 }
 
+/** What an extension is in this project, and why, in a sentence after its name. */
+function standing(it: ProjectExtension): string {
+  const file = it.source === "local" ? "charter.local.toml" : "charter.toml";
+  switch (it.state) {
+    case "on":
+      return it.source === "default"
+        ? "on — installed and approved on this machine"
+        : `on — enabled in ${file}`;
+    case "off":
+      return `off — turned off in ${file}`;
+    case "needs-approval":
+      return `needs approval here — ${it.source === "default" ? "installed" : `enabled in ${file}`}, and this machine has not approved it. Approve it in Extensions.`;
+    default:
+      return `not installed here — named in ${file}; install it from Extensions to use it`;
+  }
+}
+
+/** One key holding true or false, as a closed choice: on, off, or not set here. */
+function onOffAt(path: SettingsStep[], label: string, hint: string, unset: string): Control {
+  return {
+    id: JSON.stringify(path),
+    label,
+    hint,
+    kind: "choice",
+    choices: ["on", "off"],
+    unset,
+    read: (file) => {
+      const value = valueAt(file, path);
+      if (value?.kind !== "bool") return shown(value);
+      return value.value ? "on" : "off";
+    },
+    edits: (draft) => [
+      {
+        path,
+        value: draft === "" ? null : { kind: "bool", value: draft === "on" },
+      },
+    ],
+  };
+}
+
+/** Where a resolved setting came from, as the end of a sentence. */
+function from(source: string): string {
+  if (source === "local") return "from charter.local.toml";
+  if (source === "shared") return "from charter.toml";
+  return "its default";
+}
+
+/**
+ * **Extensions, in either section** (charter-app#253, ADR 0048). A project turns an extension
+ * this machine has installed on or off, and sets what it declares; Local overrides Shared key by
+ * key, and neither overrides this machine's approval. The sentence under each is the core's
+ * answer for the project as both files stand — which the toggle above it may be about to change.
+ */
+const EXTENSIONS: Group = {
+  title: "Extensions",
+  empty: "No extension is installed on this machine or named by this project.",
+  controls: (_file, extensions) =>
+    extensions.flatMap((it) => {
+      const at = (...rest: string[]) => key("extensions", it.id, ...rest);
+      return [
+        onOffAt(
+          at("enabled"),
+          `${it.name}: enabled`,
+          `${it.name}: ${standing(it)}`,
+          "not set — inherits",
+        ),
+        ...it.settings.map((setting): Control => {
+          const label = `${it.name}: ${setting.title}`;
+          const hint = `In this project: ${setting.kind === "bool" ? (setting.value === "true" ? "on" : "off") : setting.value || "empty"}, ${from(setting.source)}.`;
+          const path = at("settings", setting.key);
+          if (setting.kind === "bool") return onOffAt(path, label, hint, "not set");
+          if (setting.kind === "choice")
+            return textAt(path, label, { hint, kind: "choice", choices: setting.choices });
+          return textAt(path, label, { hint });
+        }),
+      ];
+    }),
+  notes: (file, extensions) =>
+    extensions.flatMap((it) =>
+      it.ignored.filter((one) => one.file === file.file).map((one) => one.why),
+    ),
+};
+
 /** The harness kinds a profile may name — `profiles::KINDS`, in the registry's order. */
 const KINDS = ["claude", "opencode", "codex"] as const;
 
@@ -291,9 +416,10 @@ const SHARED: Group[] = [
         ];
       }),
   },
+  EXTENSIONS,
 ];
 
-/** `charter.local.toml`: `[harness]` and nothing else, which is all the loader reads there. */
+/** `charter.local.toml`: `[harness]` and `[extensions]`, which is all its readers read there. */
 const LOCAL: Group[] = [
   {
     title: "Harness",
@@ -317,6 +443,7 @@ const LOCAL: Group[] = [
         { ...envAt(name), label: `${name}: environment` },
       ]),
   },
+  EXTENSIONS,
 ];
 
 // ------------------------------------------------------------------------------------------
@@ -331,6 +458,7 @@ function Section({
   title,
   who,
   groups,
+  extensions,
   onSaved,
 }: {
   plane: PlaneId;
@@ -338,6 +466,7 @@ function Section({
   title: string;
   who: string;
   groups: readonly Group[];
+  extensions: readonly ProjectExtension[];
   onSaved: () => void;
 }) {
   const heading = useId();
@@ -360,7 +489,11 @@ function Section({
     if (!file.parsed) setMode("raw");
   }
 
-  const controls = groups.map((group) => ({ group, controls: group.controls(file) }));
+  const controls = groups.map((group) => ({
+    group,
+    controls: group.controls(file, extensions),
+    notes: group.notes?.(file, extensions) ?? [],
+  }));
   const all = controls.flatMap((one) => one.controls);
   const changed = all.filter((one) => one.id in drafts && drafts[one.id] !== one.read(file));
   const dirty = mode === "form" ? changed.length > 0 : raw !== file.text;
@@ -437,11 +570,11 @@ function Section({
       {dirty && <p className="settings-hint">Save or discard these changes to switch views.</p>}
 
       {mode === "form" ? (
-        controls.map(({ group, controls: under }) => (
+        controls.map(({ group, controls: under, notes }) => (
           <fieldset key={group.title} className="settings-group">
             <legend>{group.title}</legend>
             {group.note && <p className="settings-hint">{group.note}</p>}
-            {under.length === 0 && <p className="none">None in this file.</p>}
+            {under.length === 0 && <p className="none">{group.empty ?? "None in this file."}</p>}
             {under.map((control) => (
               <SettingControl
                 key={control.id}
@@ -449,6 +582,11 @@ function Section({
                 value={drafts[control.id] ?? control.read(file)}
                 onChange={(to) => setDrafts((was) => ({ ...was, [control.id]: to }))}
               />
+            ))}
+            {notes.map((why, at) => (
+              <p key={at} className="settings-hint">
+                {why}
+              </p>
             ))}
           </fieldset>
         ))
@@ -567,7 +705,7 @@ function SettingControl({
           aria-describedby={described}
           onChange={(event) => onChange(event.target.value)}
         >
-          <option value="">not set</option>
+          <option value="">{control.unset ?? "not set"}</option>
           {/* A value the file holds that is not one of the choices is still shown as held —
               the core decides what it means, and a form that silently showed another would
               write that one on the next save. */}

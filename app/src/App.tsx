@@ -31,8 +31,9 @@ import { countOf, useAlerts } from "./alerts";
 import { AlertsDrawer } from "./AlertsDrawer";
 import { useAboutThisMachine } from "./windowprefs";
 import { ApprovePlane } from "./ApprovePlane";
-import { Extensions } from "./Extensions";
+import { drawThemeFor, Extensions } from "./Extensions";
 import { Opener } from "./Opener";
+import { useExtensionsOn } from "./extensionsOn";
 import { useContributedPanels } from "./Panels";
 import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
@@ -55,6 +56,7 @@ import {
 } from "./PlaneView";
 import type { Alerts } from "./StatusLine";
 import { TitleBar, runningIn, useTitleBarRoom, type Crumbs } from "./TitleBar";
+import type { Needing, Quiet } from "./NeedsYou";
 import { useUpdates } from "./Updates";
 import { noTabs } from "./tabs";
 
@@ -560,6 +562,16 @@ function App() {
    *  Only once the core has said what the launch resolved and the restore has finished
    *  opening what it remembered: both are about to decide whether there is a project here. */
   const openerUp = inFront === undefined && launch !== undefined && !restoring;
+  /** What the project in front has on (charter-app#253), for the one thing that is the window's
+   *  and not a project's to draw: the theme. */
+  const onInFront = useExtensionsOn(inFront);
+  // The theme the project in front may have, drawn once it has said what it has on — and every
+  // approved extension's with no project in front, which is what the window drew before projects
+  // had a say (ADR 0048). After the first frame, like every extension theme (`Extensions.tsx`).
+  useEffect(() => {
+    if (inFront === undefined) void drawThemeFor("every");
+    else if (onInFront !== undefined) void drawThemeFor(onInFront);
+  }, [inFront, onInFront]);
   /** What the project in front last said about itself, when it has said anything yet. The
    *  palette lists its catalogue and runs its rows, so a row reaches that project's live
    *  arrangement and no other's. */
@@ -798,13 +810,13 @@ function App() {
       <Pin held={pinnedProjects.includes(project.plane)} what="project" />
       {/* What is waiting for you over there. It is the reason a project behind the one on
           screen goes on listening rather than being torn down. */}
-      {(reports[project.plane]?.needsYou ?? 0) > 0 && (
+      {(reports[project.plane]?.asking.length ?? 0) > 0 && (
         <span
           className="project-needs"
-          data-needs={reports[project.plane]?.needsYou}
-          aria-label={`${reports[project.plane]?.needsYou} chats need you in ${project.name}`}
+          data-needs={reports[project.plane]?.asking.length}
+          aria-label={`${reports[project.plane]?.asking.length} chats need you in ${project.name}`}
         >
-          {reports[project.plane]?.needsYou}
+          {reports[project.plane]?.asking.length}
         </span>
       )}
     </>
@@ -884,13 +896,56 @@ function App() {
     [inFront, launch, restoring, saying],
   );
 
+  /**
+   * **Every project's chats asking, for the title bar's list** (charter-app#249), in the order
+   * the project strip draws the projects and each project's queue in its own order.
+   *
+   * Out of the reports the window already holds, so the list costs no command of its own —
+   * and a project behind the one on screen, which draws nothing, still reports its queue.
+   */
+  const needing = useMemo<Needing[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (reports[plane]?.asking ?? []).map((one) => ({ ...one, plane, project: calledOn(plane) })),
+      ),
+    [planes, reports],
+  );
+
+  /** And the chats that can be waiting without saying so, for the faint hand (charter-app#52). */
+  const quiet = useMemo<Quiet[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (reports[plane]?.quiet ?? []).map((name) => ({ name, project: calledOn(plane) })),
+      ),
+    [planes, reports],
+  );
+
+  /**
+   * A row off that list, carried out by the project it is about — through that project's own
+   * `run`, so a Go and an Ignore are exactly the palette's rows.
+   *
+   * **A row that shows a chat shows its project first.** Go is "that chat, in front", and the
+   * chat is only in front when its project is: the project's own `showChat` brings the tab and
+   * its workspace forward, and this brings the project.
+   */
+  const pressNeeding = useCallback((plane: string, offer: Offer) => {
+    if (offer.does.verb === "showChat") setShowing({ at: "plane", plane });
+    void reportsNow.current[plane]?.run(offer);
+  }, []);
+
   return (
     <main className="window">
       {/* The window's own title bar. Above the project strip, because on
           macOS it IS the title bar — the system's traffic lights float over it — and on every
           other platform it is the window's first row under the system's own bar.
           `TitleBar.tsx` argues the shape, the drag region and what moved here. */}
-      <TitleBar crumbs={crumbs} updates={updates} room={titleBarRoom} chats={ending} />
+      <TitleBar
+        crumbs={crumbs}
+        updates={updates}
+        room={titleBarRoom}
+        chats={ending}
+        needing={{ items: needing, quiet, onPress: pressNeeding }}
+      />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
           holds any — including one, because `+` is how it gets a second and `×` is the way
           back to the opener. Named, because the chat tabs and the workspaces are tablists

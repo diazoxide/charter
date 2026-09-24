@@ -1234,6 +1234,8 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::forget_extension,
             extensions::extension_themes,
             extensions::extension_panels,
+            extensions::project_extensions,
+            extensions::extensions_on,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,

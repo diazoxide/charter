@@ -39,9 +39,12 @@ import {
 import {
   catalogue,
   catalogued,
+  ignoreId,
+  needsYouRows,
   OUTSIDE,
   OUTSIDE_TITLE,
   perform,
+  showId,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
@@ -99,7 +102,7 @@ import {
   type Tabs,
   type ViewRef,
 } from "./tabs";
-import { ChatState } from "./NeedsYou";
+import { ChatState, type Asking } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { ViewMark, ViewPane } from "./Views";
@@ -108,18 +111,15 @@ import { closeOnDelete, renameOnF2 } from "./tabKeys";
 import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
-import {
-  movedAt,
-  quietOnes,
-  reportsTo,
-  stateOf,
-  useChatStates,
-  type ChatStates,
-} from "./chatState";
+import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
+import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
+
+/** One empty list, so a prop left out is the same list at every render. */
+const NONE: readonly never[] = [];
 
 /**
  * One project, with everything that belongs to it.
@@ -159,8 +159,8 @@ export function PlaneView({
   window: windowDoes,
   onReport,
   alerts,
-  contributed = [],
-  views = [],
+  contributed: surveyedPanels = NONE,
+  views: surveyedViews = NONE,
   settingsAsked,
 }: {
   plane: PlaneId;
@@ -182,7 +182,8 @@ export function PlaneView({
   alerts?: Alerts;
   /** What approved extensions contribute to the side region. The window's, for the same reason
    *  the alerts are: an extension is installed per machine and never travels in a plane
-   *  (ADR 0041), so one survey serves every project this window holds. */
+   *  (ADR 0041), so one survey serves every project this window holds — and this project keeps
+   *  of it what it has on (ADR 0048). */
   contributed?: readonly PanelView[];
   /** The views approved extensions offer (ADR 0041 stage 2), the window's for the
    *  same reason: one survey per window, not one per project. */
@@ -191,6 +192,21 @@ export function PlaneView({
    *  (`WindowDoing.openSettings`); `undefined` until it is. */
   settingsAsked?: number;
 }) {
+  /**
+   * **What this project has on** (charter-app#253, ADR 0048): the core's answer for this plane's
+   * two files over this machine's approvals. The window's survey is filtered by it here, once, so
+   * the side region, the view buttons and the palette's view rows all read one list. Charter's
+   * own panels (`from` null) are not an extension's and are never filtered.
+   */
+  const on = useExtensionsOn(plane);
+  const contributed = useMemo(
+    () => surveyedPanels.filter((panel) => panel.from === null || (on?.has(panel.from) ?? false)),
+    [on, surveyedPanels],
+  );
+  const views = useMemo(
+    () => surveyedViews.filter((view) => on?.has(view.extension) ?? false),
+    [on, surveyedViews],
+  );
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
    *  It keeps listening while the project is behind another one, which is what lets its tab
@@ -252,6 +268,12 @@ export function PlaneView({
    *  a terminal, a workspace another chat made. The sidebar and the focused workspace's panels
    *  are read again on it. */
   const changesOnDisk = usePlaneChanged([plane]);
+  // The plane root is watched, so an edit to `charter.toml` or `charter.local.toml` — in an
+  // editor, from a `git pull` — is one of these, and what this project has on may have moved
+  // with it (charter-app#253). Not at the mount: `useExtensionsOn` asks then.
+  useEffect(() => {
+    if (changesOnDisk > 0) extensionsChanged(plane);
+  }, [changesOnDisk, plane]);
   /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now. */
   const [makingWorkspace, setMakingWorkspace] = useState(false);
@@ -1527,7 +1549,7 @@ export function PlaneView({
 
   // The chats that can be waiting on the operator without saying so. Read from the sidebar,
   // which is the core's own list of what is open and what each chat runs. It is needed up
-  // here as well as beside the queue: the palette's row for the queue must not claim
+  // here as well as in the title bar's list: the palette's row for the queue must not claim
   // "Nothing needs you." over the top of a chat that cannot say it does (charter-app#52).
   //
   // Held, because it is one of the catalogue's inputs: a fresh array on every render would
@@ -1535,9 +1557,15 @@ export function PlaneView({
   const quiet = useMemo(
     () =>
       sidebar
-        ? quietOnes([...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled], states)
+        ? quietOnes(
+            [...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled],
+            states,
+            // The name its tab carries, as everywhere else a chat is named; the plane's own
+            // name for a chat no tab here holds.
+            (chat) => (alreadyShows(tabs, chat.session) ? nameOf(chat.session) : chat.name),
+          )
         : [],
-    [sidebar, states],
+    [nameOf, sidebar, states, tabs],
   );
 
   /** The chats working in the focused workspace, which is what the explorer files under the
@@ -1778,6 +1806,25 @@ export function PlaneView({
     [filedIn, plane, reopened, states, tabs],
   );
 
+  // **This project's chats asking, for the title bar's list** (charter-app#249), which is the
+  // window's and holds every project's. Their rows are the catalogue's own (`needsYouRows`),
+  // asked on their own because the catalogue is built only for the project in front.
+  const asking = useMemo<Asking[]>(() => {
+    const reportsTo = (session: number) => states.reports[session] ?? [];
+    const rows = catalogued(needsYouRows(states.needsYou, nameOf, tabs, reportsTo));
+    return states.needsYou.map((session) => {
+      const filed = filedIn(session);
+      return {
+        session,
+        name: nameOf(session),
+        reported: reportsTo(session),
+        workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
+        go: rows.get(showId(session)),
+        ignore: rows.get(ignoreId(session)),
+      };
+    });
+  }, [filedIn, nameOf, states.needsYou, states.reports, tabs]);
+
   // What this project has open, told to the window: the quit warning lists every project's
   // chats, and this project's own tab says when one of them needs you.
   //
@@ -1789,7 +1836,8 @@ export function PlaneView({
   const mine = useMemo<PlaneReport>(
     () => ({
       ending,
-      needsYou: states.needsYou.length,
+      asking,
+      quiet,
       settled,
       offers,
       run,
@@ -1801,7 +1849,7 @@ export function PlaneView({
       read: sidebar !== undefined,
       where: focused === OUTSIDE ? OUTSIDE_TITLE : focused,
     }),
-    [ending, focused, offers, report, run, settled, sidebar, states.needsYou.length],
+    [asking, ending, focused, offers, quiet, report, run, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2138,11 +2186,6 @@ export function PlaneView({
             <Panels
               workspace={ofWorkspace}
               state={workspaceState}
-              queue={states.needsYou}
-              quiet={quiet}
-              nameOf={nameOf}
-              reportsTo={(session) => reportsTo(states, session)}
-              showChat={showChat}
               offers={found}
               onPress={press}
               contributed={contributed}
@@ -2313,8 +2356,12 @@ export type PlaneReport = {
   run: (offer: Offer) => Promise<Ran>;
   /** What its last action answered, drawn by the window beside the palette. */
   said?: { from: string; refused: boolean; words: string };
-  /** How many of its chats are asking for the operator, for its own tab to say so. */
-  needsYou: number;
+  /** Its chats asking for the operator: for its own tab to count, and for the title bar's
+   *  list (charter-app#249). */
+  asking: Asking[];
+  /** Its chats that can be waiting without saying so (charter-app#52), by name: the title
+   *  bar's faint hand. */
+  quiet: readonly string[];
   /** Whether the core has answered what it already had open. Until it has, "no tabs" is
    *  "not yet", and a quit that read it as "nothing is running" would end the lot. */
   settled: boolean;

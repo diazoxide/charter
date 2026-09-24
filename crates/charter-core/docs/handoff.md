@@ -139,8 +139,9 @@ a chat in the middle of a turn is never interrupted:
 **The pairing is charter's.** The app records, when it opens the chat, which chat asked; the
 report names no recipient, so no chat can send its report anywhere but back to the chat that
 asked. A report is refused, saying why, from a chat no handoff opened, from a handoff made
-without `--report`, and a second time from the same handoff — until you give that chat another
-turn, after which it owes one more. It is refused before anything is sent when it is empty,
+without `--report`, and a second time from the same handoff, whatever happens in between —
+prompting that chat again does not re-arm it; another answer needs another `--report`
+handoff. It is refused before anything is sent when it is empty,
 past 4,096 bytes, or holds a control character other than a line break or an invisible one.
 
 **If the chat that asked has closed**, the report is kept for the workspace it asked from, and
@@ -205,8 +206,7 @@ the two numbers are both on screen. Name long material by its path instead of pa
 
 ## Limits
 
-- **A handed-off chat reports back only when asked** (`--report`), and then once per turn you
-  give it. If you need the answer in this turn of this conversation, you wanted a sub-agent.
+- **A handed-off chat reports back only when asked** (`--report`), and then exactly once. If you need the answer in this turn of this conversation, you wanted a sub-agent.
 - **The same harness only.** A Claude Code chat hands off to a Claude Code chat.
 - **The brief is a command-line argument.** It reaches the harness as `claude "<brief>"` or
   `codex "<brief>"`, so any process on this machine that can list processes can read it while

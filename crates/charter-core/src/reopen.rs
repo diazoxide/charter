@@ -150,7 +150,8 @@ pub enum Owed {
     Nothing,
     /// One report, not yet sent.
     Due,
-    /// The report was sent. Another is owed only once the chat is prompted again.
+    /// The report was sent, and that is the handoff's one report: nothing re-arms it. Another
+    /// needs another `--report` handoff (the operator's ruling, charter-app#259).
     Sent,
 }
 

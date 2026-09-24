@@ -147,8 +147,9 @@ One caller left in billing-ui, noted in its todos."
 
 A few plain lines: what was done, where it is, what is left. No secrets, no pasted files —
 name them by path. It goes back to the chat that asked, and only there; charter chose the
-recipient when it opened this chat. You get one report per turn the operator gives you, so
-send it at the end, not as progress notes.
+recipient when it opened this chat. **You get exactly one report**, so send it at the end,
+not as progress notes; a second is refused whatever happens in between. If the chat that
+asked needs another answer later, it hands off again with `--report`.
 
 Without that line under the stamp, nobody is waiting on a report and `charter handoff report`
 is refused — just finish the work.
@@ -156,7 +157,8 @@ is refused — just finish the work.
 ## Limits, and say them
 
 - **A report back only when asked.** Without `--report` the new chat never answers this one,
-  and with it the report arrives on this chat's next turn, not in the middle of this one.
+  and with it exactly one report arrives on this chat's next turn, not in the middle of
+  this one. For a second answer, hand off again with `--report`.
 - **The brief is the whole context.** Nothing about this conversation travels with it.
 - **The same harness.** A Claude Code chat hands off to a Claude Code chat.
 - A handed-off chat may hand off again, under the same prompt. There is no depth limit,

@@ -481,16 +481,6 @@ impl Planes {
                 },
             })
         });
-        // A handed-off chat the operator prompts again owes another report (charter-app#259).
-        // A `Weak` for the same reason as the answer above.
-        held.hooks().when_prompted({
-            let held = Arc::downgrade(&held);
-            Arc::new(move |session| {
-                if let Some(held) = held.upgrade() {
-                    held.chats().prompted(session);
-                }
-            })
-        });
         open.insert(id.clone(), Arc::clone(&held));
         id
     }

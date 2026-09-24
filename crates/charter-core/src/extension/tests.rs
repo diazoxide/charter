@@ -1815,3 +1815,94 @@ fn the_executor_is_the_only_thing_in_the_core_that_starts_an_extension_s_program
     }
     assert!(include_str!("../executor.rs").contains("fn cleared("));
 }
+
+// -------------------------------------------------------------------------------------
+// Settings a project may choose (charter-app#253)
+// -------------------------------------------------------------------------------------
+
+/// A view extension declaring `settings`, with its program on disk.
+fn with_settings(made: &Made, settings: &str) -> Result<Extension, String> {
+    made.manifest(&format!(
+        r#"{{"version":1,"id":"stats","name":"Stats","settings":{settings},
+            "contributes":{{"runs":"run","views":[{{"id":"s","title":"S","about":"personas"}}]}}}}"#
+    ));
+    made.file("run", "#!/bin/sh\n");
+    read_at(&made.at())
+}
+
+#[test]
+fn an_extension_declares_the_settings_a_project_may_choose() {
+    let made = Made::new();
+    let found = with_settings(
+        &made,
+        r#"[{"key":"window","title":"Window","type":"choice","choices":["7d","30d"],"default":"30d"},
+            {"key":"compact","type":"bool"}]"#,
+    )
+    .expect("read");
+    assert_eq!(
+        found.manifest.settings,
+        vec![
+            Setting {
+                key: "window".into(),
+                title: "Window".into(),
+                kind: SettingKind::Choice(vec!["7d".into(), "30d".into()]),
+                default: SettingValue::Text("30d".into()),
+            },
+            Setting {
+                key: "compact".into(),
+                title: "compact".into(),
+                kind: SettingKind::Bool,
+                default: SettingValue::Bool(false),
+            },
+        ]
+    );
+    assert!(
+        prompt(&found, Standing::New)
+            .declares
+            .contains(&"settings a project may choose, handed to its program with each question: Window, compact".to_owned()),
+        "the operator was not shown what a project can hand the program"
+    );
+}
+
+#[test]
+fn a_setting_charter_could_not_honour_refuses_the_extension() {
+    for (settings, why) in [
+        (r#"[{"key":"../x","type":"bool"}]"#, "a setting's key is"),
+        (r#"[{"key":"a","type":"number"}]"#, "no type charter knows"),
+        (
+            r#"[{"key":"a","type":"choice"}]"#,
+            "without a list of words",
+        ),
+        (
+            r#"[{"key":"a","type":"choice","choices":["x"],"default":"y"}]"#,
+            "a default it would not accept",
+        ),
+        (
+            r#"[{"key":"a","type":"bool"},{"key":"a","type":"text"}]"#,
+            "two settings called",
+        ),
+        (
+            r#"[{"key":"a","type":"bool","colour":"red"}]"#,
+            "not part of what a setting may say",
+        ),
+    ] {
+        let made = Made::new();
+        let refused = with_settings(&made, settings).expect_err(settings);
+        assert!(refused.contains(why), "{settings}: {refused}");
+    }
+}
+
+#[test]
+fn settings_with_no_program_to_hand_them_to_are_refused() {
+    let made = Made::new();
+    made.ordinary();
+    made.manifest(
+        r#"{"version":1,"id":"solarized","settings":[{"key":"a","type":"bool"}],
+            "contributes":{"themes":[{"name":"Solarized Dark","file":"dark.json"}]}}"#,
+    );
+    let refused = read_at(&made.at()).expect_err("it read");
+    assert!(
+        refused.contains("no program ('runs') to hand them to"),
+        "{refused}"
+    );
+}

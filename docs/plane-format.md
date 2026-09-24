@@ -318,7 +318,10 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   `charter/commands.py:211`, `charter/commands.py:3614`, `charter/hooks.py:7260`,
   `charter/statusline.py:2123`, `charter/statusline.py:2141`, `charter/doctor.py:343`,
   `charter/persona.py:1031`, `charter/profiles.py:432`, `charter/forge/registry.py:96`,
-  `charter/forge/registry.py:140`, `charter/commands_update.py:604`.
+  `charter/forge/registry.py:140`, `charter/commands_update.py:604`. In charter-app, its
+  `[extensions]` table is read by `crates/charter-core/src/extension/project.rs`
+  (`Choices::read`) for the Project settings tab, the window's filter on extension panels,
+  views and themes, and the executor's gate (charter-app#253).
 - **Git:** committed (nothing ignores it; `_GITIGNORE_BASELINE` ignores its *local* sibling
   only, `charter/commands.py:1104`).
 - **Encoding details for a byte-identical writer:**
@@ -375,6 +378,9 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[update].channel` | str | default `"stable"`; closed set `stable`,`dev` | Which charter this plane tracks. Unknown → `stable`; the matched **constant** is stored, never the file's string. | stable | `charter/instance.py:2948`, `charter/instance.py:2936` |
 | `[harness].default` | str | default `None` | What bare `charter` launches. Matched against the harness registry's `cli_name`s; a non-match is recorded as `refused` (contained) rather than ignored. | stable | `charter/instance.py:3000`, `charter/instance.py:3088` |
 | `[harness.<name>]` | table | — | **Refused here**: profiles live in `charter.local.toml`. Reported by name. | stable | `charter/profiles.py:316`, `charter/profiles.py:132` |
+| `[extensions.<id>].enabled` | bool | optional; absent = this machine's answer (an approved extension is on) | **charter-app only** (charter-app#253, ADR 0048). Whether this project has the extension on. It cannot reach past this machine's approval: `true` for an extension this machine has not approved reads as *needs approval here* and contributes nothing. `charter.local.toml`'s value overrides this one. `<id>` is an extension's id (letters, digits, `-`, `_`, `.`, starting with a letter or digit). | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
+| `[extensions.<id>.settings].<key>` | bool or str | optional; absent = the extension's declared default | **charter-app only.** A value for a setting the extension's manifest declares (`bool`, `text` of at most 200 bytes, or one of a `choice`'s words), handed to its program with each question as `settings`. A key it does not declare, or a value it would not accept, is ignored with a sentence and the next file down is used. Overridden key by key by `charter.local.toml`. | stable | `crates/charter-core/src/extension/project.rs` `resolve`, `crates/charter-core/src/extension.rs` `Setting::accepts` |
+| any other key in `[extensions.<id>]` | — | — | Refused by the Project settings tab's save, and ignored by the reader. | stable | `crates/charter-core/src/extension/project.rs` `refusals` |
 
 #### `[frame]` — every key, via `FRAME_FIELDS` (`charter/instance.py:1652`)
 
@@ -441,14 +447,17 @@ key refuses.
   process on `(root, local bytes, charter.toml bytes)`, `charter/profiles.py:428`). Surfaces:
   `charter harness list` (`charter/commands_harness.py:62`), `charter doctor`
   (`charter/doctor.py:755`), the launcher/selector (`charter/frame/launcher.py:478`,
-  `charter/frame/selector.py:25`).
+  `charter/frame/selector.py:25`). In charter-app, its `[extensions]` table is read by
+  `crates/charter-core/src/extension/project.rs` as `charter.toml`'s is (charter-app#253).
 - **Git:** gitignored — the baseline writes `/charter.local.toml`
   (`charter/commands.py:1104`), and `reinit` backfills it
   (`charter/commands.py:1821`). If git *would* carry it (tracked, committable, or git cannot
   say), **every profile in it is refused** (`charter/profiles.py:518` `ignore_check`,
   `charter/profiles.py:456` `with_ignore_check`).
-- **Encoding details:** only `[harness]` is read; any other top-level key is refused with a
-  sentence (`charter/profiles.py:325`). A missing file declares nothing and is not a refusal
+- **Encoding details:** only `[harness]` is read by the profiles loader, and — in charter-app
+  since charter-app#253 — `[extensions]` by `extension::project` (ADR 0048); any other
+  top-level key is refused with a sentence (`charter/profiles.py:325`, and in charter-app
+  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names both tables). A missing file declares nothing and is not a refusal
   (`charter/profiles.py:241`). Profile `env` is stored **sorted by name**
   (`charter/profiles.py:363`), and `~` in `command[0]` and in every `env` value is expanded
   only at launch (`charter/profiles.py:474`, `charter/profiles.py:480`) — never in the file
@@ -462,6 +471,8 @@ key refuses.
 | `…​.command` | list[str] | required, non-empty, all non-empty strings | argv. Never a shell string — no shell runs it. Refused if its first word is charter itself. | stable | `charter/profiles.py:261`, `charter/profiles.py:445` |
 | `…​.env` | table of str→str | optional, default `{}` | Environment for the harness process. A name starting `CHARTER_` is refused; a name containing `KEY`/`TOKEN`/`SECRET`/`PASSWORD` (case-insensitive) is refused. | stable | `charter/profiles.py:265`, `charter/profiles.py:89`, `charter/profiles.py:58` |
 | any other key in a profile table | — | — | Refuses that profile (e.g. `enviroment`). | stable | `charter/profiles.py:86`, `charter/profiles.py:278` |
+| `[extensions.<id>].enabled` | bool | optional | **charter-app only** (charter-app#253, ADR 0048). This machine's choice for this project, over `charter.toml`'s. Same shape and rules as there; still cannot reach past this machine's approval. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
+| `[extensions.<id>.settings].<key>` | bool or str | optional | **charter-app only.** Overrides `charter.toml`'s value for the same key, key by key; falls through to it (then to the declared default) when the extension would not accept this one. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 
 ---
 
@@ -3065,7 +3076,7 @@ down rather than read off the code.
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
 | `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
-| `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone; `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, until the chat is prompted again. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that cannot be one reads as the whole key absent — the note is not drawn and no report is owed |
+| `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone; `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that cannot be one reads as the whole key absent — the note is not drawn and no report is owed |
 | `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251, **Restart to update**, the only writer of `true`), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. **It counts only at the launch that follows the restart**: the restart also leaves an empty `restarted-to-update` file beside the machine store (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), and the next launch removes it whatever it opens. A plane that launch did not open keeps the flag, and it says nothing at any later launch |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a

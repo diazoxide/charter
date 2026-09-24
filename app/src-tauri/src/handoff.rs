@@ -168,8 +168,8 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
         }
         Owed::Sent => {
             return Err(format!(
-                "this chat has already reported back to '{}', and a handoff gets one report; \
-                 another is owed only once this chat is prompted again",
+                "this chat has already reported back to '{}', and a handoff gets one report — \
+                 already reported. Hand off again with --report for another",
                 from.name
             ));
         }
@@ -908,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_reports_once_until_the_operator_prompts_it_again() {
+    fn a_chat_reports_once_and_a_prompt_afterwards_does_not_let_it_report_again() {
         let plane = Plane::new();
         let planes = planes();
         let id = planes.open(&plane.root);
@@ -924,13 +924,41 @@ mod tests {
             "{again:?}"
         );
 
-        held.chats().prompted(child);
+        // The operator gives the child another turn, as its own harness reports it over the
+        // socket: a prompt is not the parent asking again (the operator's ruling, #259).
+        let conversation = held
+            .hooks()
+            .board()
+            .conversation(child)
+            .map(str::to_owned)
+            .expect("the child was started under a conversation charter chose");
+        charter_core::hookwire::send(
+            held.hooks().socket().expect("the plane listens"),
+            &charter_core::hookwire::Report {
+                chat: child,
+                event: charter_core::state::Event::UserPromptSubmit,
+                conversation: charter_core::hookwire::Conversation::Named(conversation),
+                pid: Some(4242),
+                detail: charter_core::state::Detail::default(),
+            },
+        )
+        .expect("the prompt is sent");
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while held.hooks().board().state(child) != charter_core::state::State::Running
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(
+            held.hooks().board().state(child),
+            charter_core::state::State::Running,
+            "the prompt reached the board"
+        );
+
+        let after = report(&held, &id, &tickets, child, "third");
         assert!(
-            matches!(
-                report(&held, &id, &tickets, child, "second"),
-                Answer::Reported { .. }
-            ),
-            "given more to do, it owes another"
+            matches!(&after, Answer::No { why } if why.contains("--report for another")),
+            "a prompt does not re-arm it: {after:?}"
         );
     }
 

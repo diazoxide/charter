@@ -469,19 +469,6 @@ impl Chats {
         self.write_it_down();
     }
 
-    /// The operator has prompted `session` again: a handed-off chat that already sent its
-    /// report owes another, because it has been given more to do (charter-app#259). A chat
-    /// that owes nothing — a fire-and-forget handoff, or none — is left as it is.
-    pub fn prompted(&self, session: u32) {
-        let sent = lock(&self.open)
-            .get(&session)
-            .and_then(|one| one.chat.from.as_ref())
-            .is_some_and(|from| from.report == charter_core::reopen::Owed::Sent);
-        if sent {
-            self.owes(session, charter_core::reopen::Owed::Due);
-        }
-    }
-
     /// What the window says its view tabs are now. Written down when it differs from what was
     /// held, and not otherwise — for [`Self::pin`]'s reason: every write is a fingerprint the
     /// machine store then has to vouch for.

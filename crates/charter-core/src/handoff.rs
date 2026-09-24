@@ -235,7 +235,7 @@ pub const SHOWN_STAMP: &str = "⟨handoff from {from} · workspace {workspace} �
 /// the chat that sent it is waiting on one report and how to send it.
 pub const REPORT_ASK: &str = "⟨the chat that handed this off wants an answer: when the work is \
 done, finish with `charter handoff report \"<summary>\"` — a few lines on what you did and what \
-you found. It reaches that chat once, as a report, the next time it is prompted⟩";
+you found. It is sent once, and that chat reads it the next time it is prompted⟩";
 
 /// The first message the new chat is actually sent: the wire message `msg` with its stamp
 /// naming the parent as `from`, and [`REPORT_ASK`] under it when `report` — or `None` for a

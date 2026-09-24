@@ -616,30 +616,7 @@ export function catalogue(now: Now): Offer[] {
       ? cannot("needs.next", "Show the chat that needs you", nothingSaidSoFar(now.quiet ?? []))
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
-  for (const session of now.needsYou) {
-    const name = now.nameOf(session);
-    const reported = now.reportsTo?.(session) ?? [];
-    const title =
-      reported.length > 0
-        ? `Show ${name}: ${reported.join(", ")} reported back`
-        : `Show ${name}, which needs you`;
-    offers.push(
-      tabHolding(now.tabs, session) === undefined
-        ? cannot(`needs.show:${session}`, title, "That chat has no tab in this window.", name)
-        : can(`needs.show:${session}`, title, { verb: "showChat", session }, name),
-    );
-    // **Ignore, until the chat asks again** (charter-app#248): the item's `✕`, Delete on it,
-    // and this row in the palette are one row. Always available — ignoring is about the
-    // request, and a chat asking from a tab this window does not hold is still asking.
-    offers.push(
-      can(
-        ignoreId(session),
-        `Ignore ${name} until it asks again`,
-        { verb: "ignoreNeedsYou", session },
-        name,
-      ),
-    );
-  }
+  offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs, now.reportsTo));
 
   const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
 
@@ -1059,6 +1036,49 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "nothing":
       return DID;
   }
+}
+
+/**
+ * A queued chat's two rows: `needs.show:<session>`, the chat to the front, and its Ignore.
+ *
+ * The catalogue's, and ALSO asked on its own: the catalogue is built only for the project in
+ * front, and the title bar's list (charter-app#249) holds every project's queue — so a project
+ * behind the one on screen reports these rows for its chats without building the other 117.
+ */
+export function needsYouRows(
+  needsYou: readonly number[],
+  nameOf: (session: number) => string,
+  tabs: Tabs,
+  /** The chats that reported back to each chat asking (charter-app#259), so its row says so. */
+  reportsTo: (session: number) => readonly string[] = () => [],
+): Offer[] {
+  return needsYou.flatMap((session) => {
+    const name = nameOf(session);
+    const reported = reportsTo(session);
+    const title =
+      reported.length > 0
+        ? `Show ${name}: ${reported.join(", ")} reported back`
+        : `Show ${name}, which needs you`;
+    return [
+      tabHolding(tabs, session) === undefined
+        ? cannot(showId(session), title, "That chat has no tab in this window.", name)
+        : can(showId(session), title, { verb: "showChat", session }, name),
+      // **Ignore, until the chat asks again** (charter-app#248): the item's `✕`, Delete on
+      // it, and this row in the palette are one row. Always available — ignoring is about
+      // the request, and a chat asking from a tab this window does not hold is still asking.
+      can(
+        ignoreId(session),
+        `Ignore ${name} until it asks again`,
+        { verb: "ignoreNeedsYou", session },
+        name,
+      ),
+    ];
+  });
+}
+
+/** The catalogue's id for a queued chat's Go row, for a surface drawing that row. */
+export function showId(session: number): string {
+  return `needs.show:${session}`;
 }
 
 /** The catalogue's id for a queued chat's Ignore row, for a surface drawing that row. */
