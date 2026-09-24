@@ -514,3 +514,7 @@ pub fn remove(ctx: &Ctx, name: &str, io: &mut dyn Io) -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "vaultcmd_tests.rs"]
+mod tests;

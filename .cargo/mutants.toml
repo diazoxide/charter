@@ -65,4 +65,28 @@ exclude_re = [
     # after an unpin that changed nothing, and in both of those the store is already inside
     # both bounds, which `trim` leaves as it is. The site says why.
     'src/machine\.rs:\d+:\d+: replace && with \|\| in Store::pin$',
+    # `secret cp`'s open flags are single, distinct bits (`WRONLY`, `CREATE`, `NOFOLLOW`,
+    # `NONBLOCK`), and XOR of distinct bits IS their OR: `^` for `|` builds the same flags.
+    'src/secrets/cmd\.rs:\d+:\d+: replace \| with \^ in (identify_dest|cp_unix)$',
+    # `secrets::cmd::strerror`'s `ends_with(')')` against `true`: an OS error's text always ends
+    # in the ` (os error N)` it found, so the guard is never false where the pattern matched.
+    # The site says so.
+    'src/secrets/cmd\.rs:\d+:\d+: replace match guard text\.ends_with\(.\).\) with true in strerror$',
+    # `secrets::cmd::cp_off_unix` is the refusal a non-unix build gives, and no unix build
+    # compiles it: a change to it is a change to code this platform does not build.
+    'src/secrets/cmd\.rs:\d+:\d+: replace cp_off_unix -> i32 with ',
+    # `persona_vault`'s `Some(v) if !v.is_empty()` against `true`: `declared_vault` never
+    # answers an empty value (it skips one), and a frontmatter value is already stripped, so
+    # the guard only ever sees non-empty text. The site says so.
+    'src/secrets/cmd\.rs:\d+:\d+: replace match guard !v\.is_empty\(\) with true in persona_vault$',
+    # `secret cp`'s second look, by the descriptor it opens (`stream_opened_as`, through
+    # `identify_dest`), is how a macOS `/dev/fd/N` is known for charter's own stream: there it
+    # `lstat`s as a regular file on another device. On Linux `/dev/fd/N` is a symlink, refused
+    # before the second look, and every file that reaches it opens to the inode it `lstat`ed,
+    # so an answer of "no stream" from it is the answer it already gives. The Linux nightly
+    # cannot observe these; macOS CI pins them with
+    # `cp_refuses_charter_s_own_standard_output_by_identity`. The site says so.
+    'src/secrets/cmd\.rs:\d+:\d+: replace stream_opened_as -> Option<&.static str> with None$',
+    'src/secrets/cmd\.rs:\d+:\d+: replace identify_dest -> Option<rustix::fs::Stat> with (None|Some\(Default::default\(\)\))$',
+    'src/secrets/cmd\.rs:\d+:\d+: replace \| with & in identify_dest$',
 ]
