@@ -355,7 +355,7 @@ fn a_local_file_git_would_commit_is_never_written() {
     assert_eq!(
         err,
         [
-            "git would commit charter.local.toml, so the profiles in it are refused until it is \
+            "git would commit charter.local.toml, so charter reads nothing in it until it is \
           ignored — charter reinit adds /charter.local.toml to .gitignore."
         ]
     );

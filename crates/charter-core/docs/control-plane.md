@@ -519,7 +519,7 @@ line names the fix:
 
 ```
 refused:
-  claude-work: git would commit charter.local.toml, so the profiles in it are refused until it is ignored — charter reinit adds /charter.local.toml to .gitignore.
+  claude-work: git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter reinit adds /charter.local.toml to .gitignore.
 ! to use the profiles in charter.local.toml: charter reinit
 ```
 

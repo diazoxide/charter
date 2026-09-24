@@ -573,7 +573,7 @@ pub fn current_of(derived: ProfileSet) -> ProfileSet {
 /// `set` with every profile the local file declares refused, when `check` says git would
 /// carry that file.
 ///
-/// Each of those three refusals says "the profiles in it are refused", so a surface that
+/// Each of those three refusals says "charter reads nothing in it", so a surface that
 /// asked must show them refused — not as ordinary rows with a warning under them. Takes the
 /// check rather than running it, so a caller that also prints the fix asks git once.
 pub fn with_ignore_check(mut set: ProfileSet, check: &IgnoreCheck) -> ProfileSet {
@@ -897,8 +897,9 @@ const TRACKED_STATUS: &str = " MTADRCU";
 /// Otherwise one of three refusals, each with its OWN fix — `charter reinit` adds the ignore
 /// line, and an ignore rule does not apply to a path git already tracks.
 ///
-/// The only function here that runs git, and never on a config read: one `git status` where
-/// a person asked.
+/// The only function here that runs git: one `git status` of one path. It is asked where a
+/// person asked, and — since charter-app#308 — by `crate::settings::layer_text` on every read of
+/// the Local layer, but only when the file exists; a plane with no local file runs no git.
 pub fn ignore_check(root: &Path) -> IgnoreCheck {
     ignore_check_with(root, Path::new("git"))
 }
@@ -949,8 +950,8 @@ pub fn ignore_check_before_writing_within(
 fn check_of(state: GitState) -> IgnoreCheck {
     match state {
         GitState::Tracked => IgnoreCheck {
-            reason: "git tracks charter.local.toml, so the profiles in it would reach every \
-                     clone of this plane — charter refuses them until it is untracked: git \
+            reason: "git tracks charter.local.toml, so what it says would reach every clone \
+                     of this plane — charter reads nothing in it until it is untracked: git \
                      rm --cached charter.local.toml, commit that removal, then charter \
                      reinit."
                 .to_owned(),
@@ -959,7 +960,7 @@ fn check_of(state: GitState) -> IgnoreCheck {
                 .to_owned(),
         },
         GitState::Committable => IgnoreCheck {
-            reason: "git would commit charter.local.toml, so the profiles in it are refused \
+            reason: "git would commit charter.local.toml, so charter reads nothing in it \
                      until it is ignored — charter reinit adds /charter.local.toml to \
                      .gitignore."
                 .to_owned(),
@@ -969,8 +970,8 @@ fn check_of(state: GitState) -> IgnoreCheck {
             let why = shown::short(&why);
             IgnoreCheck {
                 reason: format!(
-                    "git could not say whether charter.local.toml is ignored ({why}), so the \
-                     profiles in it are refused — an unknown is not a pass. Run git status \
+                    "git could not say whether charter.local.toml is ignored ({why}), so \
+                     charter reads nothing in it — an unknown is not a pass. Run git status \
                      --ignored -- charter.local.toml in the plane to see what git says."
                 ),
                 fix: format!(

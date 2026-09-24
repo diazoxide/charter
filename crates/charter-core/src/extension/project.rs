@@ -29,6 +29,11 @@
 //! the next file down is used — never a guess. A file charter cannot read or parse says
 //! nothing, which leaves every extension at the machine's answer rather than turning them all
 //! off: the settings tab is where that file's refusal is shown (`crate::settings`).
+//!
+//! **A `charter.local.toml` git would carry is no layer at all** (charter-app#308): tracked, or
+//! not ignored, it would reach every clone, so [`Choices::read`] takes the two files through
+//! [`crate::settings::layer_text`], which drops such a Local file whole, as the profiles loader
+//! refuses its profiles. The workspace, then Shared, decide instead.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -157,10 +162,15 @@ impl Choices {
         self
     }
 
-    /// The plane at `root`'s two files. A file that cannot be read says nothing.
+    /// The plane at `root`'s two files, as [`crate::settings::layer_text`] hands them: a file
+    /// that cannot be read says nothing, and neither does a `charter.local.toml` git would carry
+    /// (charter-app#308).
     pub fn read(root: &Path) -> Self {
-        let text = |name: &str| std::fs::read_to_string(root.join(name)).ok();
-        Self::from_text(text(COMMITTED_FILE).as_deref(), text(LOCAL_FILE).as_deref())
+        use crate::settings::{Which, layer_text};
+        Self::from_text(
+            layer_text(root, Which::Shared).as_deref(),
+            layer_text(root, Which::Local).as_deref(),
+        )
     }
 
     /// [`Self::read`], in `workspace` when there is one: the answer for whatever is in that

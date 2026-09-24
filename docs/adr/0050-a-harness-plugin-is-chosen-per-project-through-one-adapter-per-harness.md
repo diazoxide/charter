@@ -37,6 +37,13 @@ says that every choice a file makes for it is ignored. No harness is left out wi
 "figma@claude-plugins-official" = false
 ```
 
+**A Local file git would carry chooses nothing** (charter-app#308, ADR 0048's
+[section](0048-a-project-chooses-among-the-extensions-this-machine-approved.md#a-local-file-git-would-carry-decides-nothing)).
+`harness_plugin::Choices::read` takes the two files through `settings::layer_text`, so while
+`charter.local.toml` is tracked or not ignored its `[harness_plugins]` is not read and a chat is
+handed what Shared and the workspace chose. Choosing the plugins a chat loads is exactly what a
+committed copy must not do for every clone.
+
 **Precedence**, which is ADR 0048's, per plugin: Local over Shared — and, since charter-app#282,
 a workspace's layer between them (below). With neither file naming a
 plugin it is **not set**, and the harness decides as it always did, from its own user and

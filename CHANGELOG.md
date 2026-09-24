@@ -175,6 +175,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plugins or frames, submits no forms, and accepts no `<base>`. The policy and the allow-list are
   now separate guards on reveal and copy. Before, the policy was the only one.
   ([#276](https://github.com/diazoxide/charter-app/issues/276))
+- A `charter.local.toml` that git tracks, or would commit, no longer decides anything. The file
+  is meant to stay on one machine, and charter already refused the harness profiles in it when
+  git would carry it. The extensions, theme and harness plugins it chose were still applied,
+  though, so a copy committed by mistake reached every clone of the plane. Now charter reads
+  nothing in such a file, and the workspace and `charter.toml` decide instead. The Local section
+  of Project settings still shows the file and says why it is not read and how to fix it: add
+  `/charter.local.toml` to `.gitignore` (`charter reinit` does that), or, if git already tracks
+  it, `git rm --cached` it first. ([#308](https://github.com/diazoxide/charter-app/issues/308))
 
 ## [0.1.1] - 2026-09-24
 
