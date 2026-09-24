@@ -3589,8 +3589,8 @@ button.show-more:focus-visible {
   background: none;
   color: var(--text-muted);
   cursor: default;
+  /* No easing: a row's hover is not animated (`docs/design-system.md`, motion). */
   opacity: 0;
-  transition: opacity var(--motion-duration-quick) var(--motion-easing-standard);
 }
 
 .vault-secrets tr:hover .vault-reveal,

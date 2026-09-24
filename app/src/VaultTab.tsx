@@ -32,8 +32,9 @@ import { counted } from "./Vaults";
  *   snapshot, an accessibility dump would all carry it. Read from the element once, at the press,
  *   and emptied there.
  *
- * **Copy never brings the value here.** The core reads it and puts it on the clipboard itself,
- * and a minute later clears the clipboard if it still holds it ({@link clearTheClipboardLater}).
+ * **Copy never brings the value here.** The core reads it, puts it on the clipboard itself, and
+ * a minute later clears the clipboard if it still holds it (`vaults.rs`, `clear_later`). The
+ * timer is the core's, so a tab or a window that closes within the minute leaves nothing behind.
  *
  * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
  * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
@@ -56,24 +57,25 @@ export function VaultTab({
   const [note, setNote] = useState<{ said: string; trouble?: boolean }>();
   /** Which press of an eye is the latest, so an answer to an earlier one is dropped. */
   const pressed = useRef(0);
+  /** The secret whose reveal is on its way, so a second press cancels it rather than asks again. */
+  const coming = useRef<string | undefined>(undefined);
 
   const hide = useCallback(() => {
     pressed.current += 1;
+    coming.current = undefined;
     setShown(undefined);
   }, []);
 
   const reveal = async (key: string) => {
-    if (shown?.key === key) {
-      hide();
-      return;
-    }
+    const again = shown?.key === key || coming.current === key;
     hide();
+    if (again) return;
     const mine = pressed.current;
+    coming.current = key;
     setNote(undefined);
-    const answer = await commands
-      .vaultSecretReveal(plane, vault, key)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    const answer = await settled(commands.vaultSecretReveal(plane, vault, key));
     if (mine !== pressed.current) return;
+    coming.current = undefined;
     if (answer.status === "error") setNote({ said: answer.error, trouble: true });
     else setShown({ key, value: answer.data });
   };
@@ -81,6 +83,8 @@ export function VaultTab({
   useEffect(() => {
     if (shown === undefined) return;
     const gone = setTimeout(hide, SHOWN_FOR_MS);
+    // Escape anywhere in the window, not only in this tab: it only ever hides, and a value on
+    // the screen is the one thing an operator reaching for Escape wants gone.
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") hide();
     };
@@ -93,14 +97,11 @@ export function VaultTab({
 
   const copy = async (key: string) => {
     setNote(undefined);
-    const answer = await commands
-      .vaultSecretCopy(plane, vault, key)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    const answer = await settled(commands.vaultSecretCopy(plane, vault, key));
     if (answer.status === "error") {
       setNote({ said: answer.error, trouble: true });
       return;
     }
-    clearTheClipboardLater();
     setNote({
       said: `Copied ${key}. The clipboard clears in a minute, unless something else is copied first.`,
     });
@@ -108,7 +109,7 @@ export function VaultTab({
 
   useEffect(() => {
     if (note === undefined || note.trouble) return;
-    const gone = setTimeout(() => setNote(undefined), CLIPBOARD_FOR_MS);
+    const gone = setTimeout(() => setNote(undefined), COPIED_FOR_MS);
     return () => clearTimeout(gone);
   }, [note]);
 
@@ -313,28 +314,18 @@ type VaultAnswer = Awaited<ReturnType<typeof commands.vaultOpen>>;
 /** How long a revealed value stays on the page. */
 const SHOWN_FOR_MS = 30_000;
 
-/** How long a copied value may stay on the clipboard. */
-const CLIPBOARD_FOR_MS = 60_000;
+/** How long a copied value stays on the clipboard (`vaults.rs`, `CLEAR_AFTER`), and so how long
+ * the tab says it is there. */
+const COPIED_FOR_MS = 60_000;
 
 /** The one value the tab is showing, and whose it is. */
 type Shown = { key: string; value: string };
 
-/** The clear that is waiting, for whichever copy was last. */
-let clearing: ReturnType<typeof setTimeout> | undefined;
-
-/**
- * Ask the core, a minute from now, to clear the clipboard — which it does only while the
- * clipboard still holds what it copied, so whatever the operator copied since is left alone
- * (`vaults.rs`, `clear_copied`). **Kept outside the tab**, so closing the tab within the minute
- * does not leave the value on the clipboard; a later copy, from any tab, restarts the minute.
- */
-function clearTheClipboardLater() {
-  clearTimeout(clearing);
-  clearing = setTimeout(() => {
-    clearing = undefined;
-    // Nothing to tell anyone if it fails: the answer is the core's sentence, not the value.
-    void commands.vaultClipboardClear().catch(() => undefined);
-  }, CLIPBOARD_FOR_MS);
+/** A command's answer, with a promise that failed outright read as a refusal. */
+async function settled<T>(
+  asked: Promise<{ status: "ok"; data: T } | { status: "error"; error: string }>,
+): Promise<{ status: "ok"; data: T } | { status: "error"; error: string }> {
+  return asked.catch((err: unknown) => ({ status: "error", error: String(err) }));
 }
 
 /** Which dialog the tab is asking in, and about which secret. */

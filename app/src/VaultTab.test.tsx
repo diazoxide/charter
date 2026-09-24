@@ -40,7 +40,7 @@ type Asked = { cmd: string; args: Record<string, unknown> };
  */
 function core(
   opened: VaultContents | Error,
-  writes: Record<string, VaultContents | string | boolean | Error> = {},
+  writes: Record<string, VaultContents | string | Error> = {},
 ): Asked[] {
   const asked: Asked[] = [];
   mockIPC((cmd, args) => {
@@ -379,6 +379,30 @@ describe("revealing a value", () => {
     expect(asked).toEqual(["A", "B"]);
   });
 
+  it("cancels a reveal still on its way when the eye is pressed again", async () => {
+    const user = onAFakeClock();
+    let answer: (value: string) => void = () => undefined;
+    const asked: string[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "vault_open") return contents([secret("API_TOKEN")]);
+      if (cmd === "vault_secret_reveal") {
+        asked.push((args as { key: string }).key);
+        return new Promise<string>((resolve) => (answer = resolve));
+      }
+      return null;
+    });
+    draw();
+    const eye = await screen.findByRole("button", { name: "Reveal API_TOKEN" });
+
+    await user.click(eye);
+    await user.click(eye);
+    await act(async () => answer(REVEALED));
+
+    expect(asked).toEqual(["API_TOKEN"]);
+    expect(eye).toHaveAttribute("aria-pressed", "false");
+    noValueAnywhere(REVEALED);
+  });
+
   it("says why when the core refuses a reveal, and shows nothing", async () => {
     const user = onAFakeClock();
     core(contents([secret("API_TOKEN")]), {
@@ -433,9 +457,13 @@ describe("revealing a value", () => {
 });
 
 describe("copying a value", () => {
-  it("asks the core to copy it, never receives it, and asks for the clear a minute later", async () => {
+  // The clipboard itself is the core's: it reads the value, writes it, and clears it a minute
+  // later only while the clipboard still holds it. That minute, and "something else was copied
+  // since", are tested on tokio's paused clock in `vaults.rs`. Here: the tab asks, never
+  // receives the value, and says so for as long as it is there.
+  it("asks the core to copy it and never receives the value", async () => {
     const user = onAFakeClock();
-    const asked = core(contents([secret("API_TOKEN")]), { vault_clipboard_clear: true });
+    const asked = core(contents([secret("API_TOKEN")]));
     draw();
 
     await user.click(await screen.findByRole("button", { name: "API_TOKEN" }));
@@ -444,70 +472,28 @@ describe("copying a value", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Copied API_TOKEN. The clipboard clears in a minute",
     );
-    expect(asked.filter((one) => one.cmd === "vault_secret_copy")).toEqual([
+    expect(asked.filter((one) => one.cmd !== "vault_open")).toEqual([
       { cmd: "vault_secret_copy", args: { plane: PLANE, vault: "ops", key: "API_TOKEN" } },
     ]);
-    expect(asked.some((one) => one.cmd === "vault_secret_reveal")).toBe(false);
-
-    await after(59_000);
-    expect(asked.some((one) => one.cmd === "vault_clipboard_clear")).toBe(false);
-    await after(1_000);
-    expect(asked.filter((one) => one.cmd === "vault_clipboard_clear")).toHaveLength(1);
-    expect(screen.getByRole("status")).toHaveTextContent("");
   });
 
-  it("leaves the clipboard to the core when something else was copied since", async () => {
-    // The core keeps a digest of what it copied and clears only while the clipboard still
-    // holds it (`vaults.rs`); here it answers that it did not, and the tab claims nothing.
+  it("stops saying the value is on the clipboard when the core clears it, a minute on", async () => {
     const user = onAFakeClock();
-    const asked = core(contents([secret("API_TOKEN")]), { vault_clipboard_clear: false });
-    draw();
-
-    await user.click(await screen.findByRole("button", { name: "API_TOKEN" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
-    await screen.findByText(/Copied API_TOKEN/);
-    await after(60_000);
-
-    expect(asked.filter((one) => one.cmd === "vault_clipboard_clear")).toHaveLength(1);
-    expect(screen.getByRole("status")).toHaveTextContent("");
-  });
-
-  it("counts the minute from the last copy, and clears once", async () => {
-    const user = onAFakeClock();
-    const asked = core(contents([secret("A"), secret("B")]), { vault_clipboard_clear: true });
-    draw();
-    const copy = async (key: string) => {
-      await user.click(await screen.findByRole("button", { name: key }));
-      await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
-      await screen.findByText(new RegExp(`Copied ${key}`));
-    };
-
-    await copy("A");
-    await after(30_000);
-    await copy("B");
-    await after(59_000);
-    expect(asked.some((one) => one.cmd === "vault_clipboard_clear")).toBe(false);
-    await after(1_000);
-    expect(asked.filter((one) => one.cmd === "vault_clipboard_clear")).toHaveLength(1);
-  });
-
-  it("still clears the clipboard when the tab is closed within the minute", async () => {
-    const user = onAFakeClock();
-    const asked = core(contents([secret("API_TOKEN")]), { vault_clipboard_clear: true });
+    core(contents([secret("API_TOKEN")]));
     draw();
     await user.click(await screen.findByRole("button", { name: "API_TOKEN" }));
     await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
     await screen.findByText(/Copied API_TOKEN/);
 
-    cleanup();
-    await after(60_000);
-
-    expect(asked.filter((one) => one.cmd === "vault_clipboard_clear")).toHaveLength(1);
+    await after(59_000);
+    expect(screen.getByRole("status")).toHaveTextContent("Copied API_TOKEN");
+    await after(1_000);
+    expect(screen.getByRole("status")).toHaveTextContent("");
   });
 
   it("says why when the core refuses a copy", async () => {
     const user = onAFakeClock();
-    const asked = core(contents([secret("API_TOKEN")]), {
+    core(contents([secret("API_TOKEN")]), {
       vault_secret_copy: new Error("the clipboard did not take the copy"),
     });
     draw();
@@ -515,7 +501,6 @@ describe("copying a value", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Copy" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("did not take the copy");
-    await after(60_000);
-    expect(asked.some((one) => one.cmd === "vault_clipboard_clear")).toBe(false);
+    expect(screen.getByRole("status")).toHaveTextContent("");
   });
 });

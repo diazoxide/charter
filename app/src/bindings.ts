@@ -503,22 +503,13 @@ export const commands = {
 	vaultSecretRename: (plane: PlaneId, vault: string, from: string, to: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_rename", { plane, vault, from, to })),
 	/**  Delete a secret. No value crosses. */
 	vaultSecretDelete: (plane: PlaneId, vault: string, key: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_delete", { plane, vault, key })),
-	/**
-	 *  One secret's value, to show in the window for a while — the only command whose answer holds
-	 *  a value. Recorded as `charter secret get --reveal` records. A keyring vault reads the store
-	 *  here, so the system may ask the operator first.
-	 */
+	/**  One secret's value, to show in the window for a while ([`reveal`]). */
 	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
 	/**
-	 *  Put one secret's value on the clipboard, recorded as a reveal is. The value never comes back
-	 *  to the window: the answer is nothing.
+	 *  Put one secret's value on the clipboard ([`copy`]) and clear it a minute later
+	 *  ([`clear_later`]). The answer is nothing: the value never comes back to the window.
 	 */
 	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
-	/**
-	 *  Clear the clipboard if it still holds what a vault's Copy last put there, and answer whether
-	 *  it did. What the operator copied since is left alone.
-	 */
-	vaultClipboardClear: () => typedError<boolean, string>(__TAURI_INVOKE("vault_clipboard_clear")),
 	/**
 	 *  Every view an approved extension offers this window.
 	 * 
