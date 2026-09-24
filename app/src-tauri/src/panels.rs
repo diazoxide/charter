@@ -281,56 +281,33 @@ pub(crate) struct Panels {
     contributed: Vec<PanelView>,
 }
 
-/// What one persona says about itself, for the row a reader clicked.
+/// The persona view's `Vault` line: the vault's NAME and where it came from, or why there is
+/// none — the answer `charter persona list` gives, from the same resolution
+/// (`charter_core::personaverbs::vault`), in words that keep apart what charter-app#185 was
+/// about.
 ///
-/// **The vault is a NAME and nothing else.** charter refuses a secret by kind and never
-/// echoes one, and a panel is the last place that rule should get a special case: this struct
-/// carries the word `vault: <name>` puts in the definition, so the window can say which vault
-/// a chat as this persona would open. Nothing here ever reads the vault.
-#[derive(Debug, Clone, serde::Serialize, specta::Type)]
-pub(crate) struct PersonaDetails {
-    name: String,
-    /// `role:`, inherited-inclusive.
-    role: Option<String>,
-    /// `delegate-when:` — the work that should come to this persona, which is what makes it
-    /// findable and what a router reads.
-    delegate_when: Option<String>,
-    /// `tools:`, the union down the `extends:` chain.
-    tools: Vec<String>,
-    /// The vault's name, where the definition declares one.
-    vault: Option<String>,
-    /// Whether the definition declares `vault: none` — that it holds no credentials at all.
-    ///
-    /// **Separate from `vault` being absent, and the window must keep them apart.** charter's
-    /// own `vault_of` falls back to a vault tagged with this persona in the registry, and
-    /// nothing in Rust reads that registry yet — so "no `vault:` line" means charter-app has
-    /// not looked, not that there is nothing. Drawing the two the same way would have the
-    /// window claim a persona holds no credentials on the strength of a file nobody read.
-    declares_no_vault: bool,
-    /// The `extends:` chain, child first. One name long for a persona that extends nothing.
-    lineage: Vec<String>,
-    /// The definition file, relative to the plane.
-    file: String,
-}
-
-/// What a persona's definition says, or charter's own sentence saying why it will not answer.
-pub(crate) fn persona(root: &Path, name: &str) -> Result<PersonaDetails, String> {
-    let shown = charter_core::personas::details(root, name)?;
-    let (vault, declares_no_vault) = match shown.vault {
-        charter_core::personas::Vault::Named(name) => (Some(name), false),
-        charter_core::personas::Vault::DeclaredNone => (None, true),
-        charter_core::personas::Vault::Undeclared => (None, false),
-    };
-    Ok(PersonaDetails {
-        name: shown.name,
-        role: shown.role,
-        delegate_when: shown.delegate_when,
-        tools: shown.tools,
-        vault,
-        declares_no_vault,
-        lineage: shown.lineage,
-        file: shown.file,
-    })
+/// **The vault is a NAME and nothing else.** charter refuses a secret by kind and never echoes
+/// one, and a panel is the last place that rule should get a special case. Nothing here ever
+/// opens the vault; the registry is read for which vault is tagged with the persona, not for
+/// anything in it.
+///
+/// "Holds no credentials" is said only where the definition says `vault: none`. A persona
+/// neither the definition nor the registry names a vault for has none, which is a different
+/// fact, and a registry that does not read is a third: no answer, and charter's sentence why.
+fn vault_line(vault: charter_core::personas::Vault) -> String {
+    use charter_core::personas::Vault;
+    match vault {
+        Vault::Named(vault) => format!("{vault} — the name; what is in it is never shown here"),
+        Vault::Registered(vault) => format!(
+            "{vault} — the name, from the vault registry (its definition names none); what is \
+             in it is never shown here"
+        ),
+        Vault::DeclaredNone => "none; this persona holds no credentials of its own".into(),
+        Vault::Unnamed => "none — neither its definition nor the vault registry names one".into(),
+        Vault::RegistryUnreadable(why) => format!(
+            "unknown — its definition names none, and the vault registry does not read: {why}"
+        ),
+    }
 }
 
 /// One clone's git state, and what the forge cache last recorded for its branch.
@@ -628,7 +605,13 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
 /// `None` is a persona the plane does not have (any more): the window draws that as a view
 /// whose source has gone, not as a failure. A definition charter will not read is a trouble
 /// note, and the memories are still drawn under it.
-pub(crate) fn persona_view(root: &Path, name: &str) -> Result<Option<Vec<panel::Block>>, String> {
+///
+/// `state` is the plane's state directory: the vault registry's local half is there.
+pub(crate) fn persona_view(
+    root: &Path,
+    state: &Path,
+    name: &str,
+) -> Result<Option<Vec<panel::Block>>, String> {
     if !charter_core::personas::valid_name(name) {
         return Err(format!("{name:?} is not a persona name charter would read"));
     }
@@ -643,7 +626,7 @@ pub(crate) fn persona_view(root: &Path, name: &str) -> Result<Option<Vec<panel::
         tone: panel::Tone::Plain,
     };
     let mut blocks = Vec::new();
-    match persona(root, name) {
+    match charter_core::personas::details(root, state, name) {
         // charter's own sentence, which names the fix. Drawn rather than swallowed: a view that
         // came up empty reads as a persona with nothing in it.
         Err(why) => blocks.push(panel::Block::Note {
@@ -680,19 +663,8 @@ pub(crate) fn persona_view(root: &Path, name: &str) -> Result<Option<Vec<panel::
                         shown.tools.join(", ")
                     },
                 ),
-                // **The vault's NAME, and never a thing inside it.** The three answers are three
-                // because "holds no credentials" and "nobody has said" are different facts — see
-                // `PersonaDetails::declares_no_vault`.
-                fact(
-                    "Vault",
-                    match (shown.vault, shown.declares_no_vault) {
-                        (Some(vault), _) => {
-                            format!("{vault} — the name; what is in it is never shown here")
-                        }
-                        (None, true) => "none; this persona holds no credentials of its own".into(),
-                        (None, false) => "not declared in its definition".into(),
-                    },
-                ),
+                // **The vault's NAME, and never a thing inside it** — see `vault_line`.
+                fact("Vault", vault_line(shown.vault)),
             ];
             if shown.lineage.len() > 1 {
                 facts.push(fact("Inherits", shown.lineage.join(" → ")));

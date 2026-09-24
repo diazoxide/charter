@@ -154,6 +154,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   out of the needs-you queue and out of the red counts on its project and workspace tabs. It
   used to stay there until some other chat moved.
   ([#247](https://github.com/diazoxide/charter-app/issues/247))
+- A persona's card names the vault `charter persona list` names. A persona whose definition has
+  no `vault:` line but that `vaults.json` tags a vault to used to be shown as "not declared in
+  its definition"; the card now shows that vault's name and says it came from the vault
+  registry. A persona nothing names a vault for says so, a `vault: none` still says it holds no
+  credentials of its own, and a registry that does not read is shown with charter's reason.
+  ([#185](https://github.com/diazoxide/charter-app/issues/185))
+- `charter persona stats` reads a dispatch log's timestamps as Python's
+  `datetime.fromisoformat` did, digit for digit. A stamp such as `2026-03-04T100`, with three
+  digits for the time, is skipped rather than read as ten o'clock, and so is a one-digit hour,
+  minute or second. Any one character between the date and the time, a comma before the
+  fraction and an offset with seconds all read as Python read them.
+  ([#315](https://github.com/diazoxide/charter-app/issues/315))
 
 ### Security
 

@@ -148,16 +148,32 @@ pub fn vault_ctx(root: &Path, state: &Path) -> crate::secrets::Ctx {
 /// the registry tags with this persona, by name. A registry that does not read names no
 /// vault — Python catches the error here.
 pub fn vault_of(root: &Path, state: &Path, name: &str) -> Option<String> {
+    vault(root, state, name).name().map(str::to_string)
+}
+
+/// [`vault_of`], saying where its answer came from — the persona card's vault, so the card and
+/// the CLI cannot name different ones (charter-app#185).
+pub fn vault(root: &Path, state: &Path, name: &str) -> crate::personas::Vault {
+    use crate::personas::Vault;
     if let Some(r) = resolve(root, name)
         && let Some(v) = r.get("vault")
     {
-        let v = crate::memstore::py_strip(v);
-        return (v != NO_VAULT && !v.is_empty()).then(|| v.to_string());
+        return match crate::memstore::py_strip(v) {
+            NO_VAULT => Vault::DeclaredNone,
+            // Python's `vault_of` answers `None` for a value that strips to nothing and does
+            // not go on to the registry. `Resolved` never carries a blank value, so this is
+            // the port being exact rather than a case a definition reaches.
+            "" => Vault::Unnamed,
+            v => Vault::Named(v.to_string()),
+        };
     }
-    let doc = crate::secrets::registry::load_registry(&vault_ctx(root, state)).ok()?;
-    crate::secrets::registry::vaults_for_persona(&doc, name)
-        .into_iter()
-        .next()
+    match crate::secrets::registry::load_registry(&vault_ctx(root, state)) {
+        Err(why) => Vault::RegistryUnreadable(why.message),
+        Ok(doc) => crate::secrets::registry::vaults_for_persona(&doc, name)
+            .into_iter()
+            .next()
+            .map_or(Vault::Unnamed, Vault::Registered),
+    }
 }
 
 /// Where a persona's definition sits, relative to the plane — `def_path(name).relative_to(ROOT)`.
