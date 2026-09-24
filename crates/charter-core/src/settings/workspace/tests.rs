@@ -251,6 +251,21 @@ fn a_secret_shaped_value_is_refused_by_its_kind_and_never_quoted() {
 }
 
 #[test]
+fn a_workspace_that_is_gone_is_said_and_never_made_again_by_a_save() {
+    // A settings tab put back at a launch can name a workspace deleted since; its first save
+    // must not bring the directory back with one file in it.
+    let dir = plane(None);
+    fs::remove_dir_all(dir.path().join("workspaces/alpha")).unwrap();
+    let gone = "there is no workspace 'alpha' in this plane any more, so it has no settings";
+    assert_eq!(read_file(dir.path(), "alpha").unwrap_err(), gone);
+    assert_eq!(
+        save(dir.path(), "alpha", None, &[off()]).unwrap_err(),
+        vec![gone.to_owned()]
+    );
+    assert!(!dir.path().join("workspaces/alpha").exists());
+}
+
+#[test]
 fn a_name_that_is_not_a_workspace_is_refused_before_it_is_joined_onto_a_path() {
     let dir = plane(None);
     assert!(read_file(dir.path(), "../x").is_err());

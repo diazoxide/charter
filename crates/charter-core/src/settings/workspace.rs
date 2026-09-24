@@ -143,11 +143,18 @@ pub struct Read {
     pub live: bool,
 }
 
-/// The workspace `workspace` of the plane at `root`, or the sentence for a name that is not one.
+/// The workspace `workspace` of the plane at `root`, or the sentence for a name that is not one
+/// — or for one that is not there any more, whose directory a save must never make again.
 fn workspace_of(root: &Path, workspace: &str) -> Result<Workspace, String> {
-    Plane::open(root)
+    let ws = Plane::open(root)
         .workspace(workspace)
-        .map_err(|_| format!("'{workspace}' is not a workspace charter can name"))
+        .map_err(|_| format!("'{workspace}' is not a workspace charter can name"))?;
+    if !ws.dir().is_dir() {
+        return Err(format!(
+            "there is no workspace '{workspace}' in this plane any more, so it has no settings"
+        ));
+    }
+    Ok(ws)
 }
 
 /// The manifest's text, `None` when it is not there, or why it could not be read.
