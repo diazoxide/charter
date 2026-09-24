@@ -15,6 +15,7 @@ mod panels;
 mod panics;
 mod pin;
 mod planes;
+mod planewatch;
 mod sessions;
 mod slowstart;
 mod updates;
@@ -1169,6 +1170,8 @@ fn commands() -> Builder<tauri::Wry> {
         // What `update://checked` carries. It crosses on an event rather than a command, so it
         // is named here or the window would have to write the shape out by hand.
         .typ::<updates::Offer>()
+        // What `plane-changed` carries, for the same reason.
+        .typ::<planewatch::PlaneChanged>()
 }
 
 /// Where the generated TypeScript lives.
@@ -1337,6 +1340,15 @@ pub fn run() {
                     let window = app.handle().clone();
                     std::sync::Arc::new(move |arrived: handoff::Arrived| {
                         let _ = window.emit(handoff::ARRIVED, &arrived);
+                    })
+                })
+                // The plane moved on disk — a todo closed in a terminal, a workspace another
+                // chat made — and the window reads it again (charter-app#264).
+                .telling_changes({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |plane: PlaneId| {
+                        let _ =
+                            window.emit(planewatch::CHANGED, &planewatch::PlaneChanged { plane });
                     })
                 }),
             );

@@ -176,6 +176,9 @@ pub struct Held {
     tell: Teller,
     chats: Chats,
     records: Arc<Records>,
+    /// What tells the window the plane moved on disk (charter-app#264). None where the
+    /// platform would not watch; the panels then read the plane when focused, as they did.
+    watch: Mutex<Option<crate::planewatch::Watch>>,
 }
 
 impl Held {
@@ -278,6 +281,12 @@ impl Held {
         self.record();
         self.chats.end_all();
         self.hooks.stop();
+        drop(
+            self.watch
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
     }
 }
 
@@ -296,6 +305,8 @@ pub struct Planes {
     open: Mutex<HashMap<PlaneId, Arc<Held>>>,
     /// Told when a handoff has opened a chat in any plane (charter-app#204).
     arrivals: crate::handoff::Arrivals,
+    /// Told when any plane changes on disk (charter-app#264).
+    changes: crate::planewatch::Changed,
 }
 
 impl Planes {
@@ -310,12 +321,20 @@ impl Planes {
             // Nobody to tell yet. A registry with no window still opens a handed-off chat;
             // it simply has no strip to put it on until one asks what is open.
             arrivals: Arc::new(|_| {}),
+            changes: Arc::new(|_| {}),
         }
     }
 
     /// Tells `arrivals` whenever a handoff opens a chat, so the window can put it on a strip.
     pub fn telling_arrivals(mut self, arrivals: crate::handoff::Arrivals) -> Self {
         self.arrivals = arrivals;
+        self
+    }
+
+    /// Tells `changes` whenever a plane this registry holds changes on disk, so the window reads
+    /// it again (`crate::planewatch`).
+    pub fn telling_changes(mut self, changes: crate::planewatch::Changed) -> Self {
+        self.changes = changes;
         self
     }
 
@@ -776,6 +795,18 @@ impl Planes {
                 }));
         }
 
+        // Never fatal, as the socket above is not: a plane that cannot be watched still opens,
+        // and its panels read it when a workspace is focused.
+        let watch = crate::planewatch::Watch::start(id.clone(), &root, Arc::clone(&self.changes))
+            .map_err(|why| {
+                eprintln!(
+                    "charter: {} is not watched ({why}); its panels will not follow changes \
+                     made outside this window",
+                    root.display()
+                );
+            })
+            .ok();
+
         Held {
             id,
             root,
@@ -783,6 +814,7 @@ impl Planes {
             tell: Arc::clone(&self.tell),
             chats,
             records,
+            watch: Mutex::new(watch),
         }
     }
 

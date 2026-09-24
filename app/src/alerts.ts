@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { commands, type PlaneAlerts, type PlaneId } from "./bindings";
+import { usePlaneChanged } from "./planeChanged";
 
 /**
  * **charter's alerts, for every project this window holds** — the reading the status bar's
@@ -46,8 +47,9 @@ export function countOf(
 export const REREAD_EVERY_MS = 60_000;
 
 /**
- * The reading, kept fresh: asked when the projects change, when the window comes back into
- * focus, when {@link reread} is called (the drawer calls it as it opens), and once a minute.
+ * The reading, kept fresh: asked when the projects change, when one of them changes on disk
+ * (`planeChanged.ts`, charter-app#264), when the window comes back into focus, when
+ * {@link reread} is called (the drawer calls it as it opens), and once a minute.
  *
  * **A reading is never replaced by "reading…"** once there has been one: the drawer keeps
  * drawing the last answer while the next is on its way, rather than blanking every minute.
@@ -59,6 +61,7 @@ export function useAlerts(planes: readonly PlaneId[]): {
   const [reading, setReading] = useState<AlertsReading>({ at: "reading" });
   const [asked, setAsked] = useState(0);
   const holding = planes.join("\n");
+  const onDisk = usePlaneChanged(planes);
 
   // Written as `Extensions`'s first read is: the command's own promise, a `gone` flag, and the
   // state set inside the callback — so an answer that lands after a newer ask began, or after
@@ -80,7 +83,7 @@ export function useAlerts(planes: readonly PlaneId[]): {
     return () => {
       gone = true;
     };
-  }, [holding, asked]);
+  }, [holding, asked, onDisk]);
 
   useEffect(() => {
     const again = () => setAsked((n) => n + 1);
