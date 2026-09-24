@@ -5,7 +5,13 @@ import * as Menu from "@radix-ui/react-dropdown-menu";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import { Ellipsis, Eye, EyeOff, KeyRound, LoaderCircle, Plus, Search } from "lucide-react";
 import { EmptyState } from "./EmptyState";
-import { commands, type PlaneId, type VaultContents, type VaultSecret } from "./bindings";
+import {
+  commands,
+  type PlaneId,
+  type VaultContents,
+  type VaultIdentity,
+  type VaultSecret,
+} from "./bindings";
 import { useTabStop } from "./roving";
 import { counted } from "./Vaults";
 
@@ -36,6 +42,13 @@ import { counted } from "./Vaults";
  * a minute later clears the clipboard if it still holds it (`vaults.rs`, `clear_later`). The
  * timer is the core's, so a tab or a window that closes within the minute leaves nothing behind.
  *
+ * **A 1Password token moves into the Keychain from here** (charter-app#237). Where the vault is
+ * read through an identity variable charter's environment carries (`$OP_TEAM_TOKEN`), the header
+ * offers "Move this token into the Keychain": `vault_identity_move` reads the token in the core,
+ * stores it in the keyring and answers with the vault's names. The token never comes here, and
+ * no chat carries an `OP_*` variable, so after the move the keyring is where every `charter
+ * secret` finds it.
+ *
  * **Every write answers with the vault as it now is**, so the table is redrawn from the core's
  * answer and never patched by hand here; `onChanged` tells the window, whose Vaults panel counts
  * the secrets too.
@@ -55,6 +68,7 @@ export function VaultTab({
   const [asking, setAsking] = useState<Asking>();
   const [shown, setShown] = useState<Shown>();
   const [note, setNote] = useState<{ said: string; trouble?: boolean }>();
+  const [moving, setMoving] = useState(false);
   /** Which press of an eye is the latest, so an answer to an earlier one is dropped. */
   const pressed = useRef(0);
   /** The secret whose reveal is on its way, so a second press cancels it rather than asks again. */
@@ -104,6 +118,22 @@ export function VaultTab({
     }
     setNote({
       said: `Copied ${key}. The clipboard clears in a minute, unless something else is copied first.`,
+    });
+  };
+
+  const moveToken = async () => {
+    setMoving(true);
+    setNote(undefined);
+    const answer = await settled(commands.vaultIdentityMove(plane, vault));
+    setMoving(false);
+    if (answer.status === "error") {
+      setNote({ said: answer.error, trouble: true });
+      return;
+    }
+    setSaid({ contents: answer.data });
+    onChanged();
+    setNote({
+      said: `Moved ${named(answer.data.identity)} into the Keychain. No chat is given it, and charter reads it from the Keychain first.`,
     });
   };
 
@@ -197,6 +227,11 @@ export function VaultTab({
                 {contents.health.detail}
               </p>
             )}
+            <IdentityLine
+              identity={contents.identity}
+              moving={moving}
+              onMove={() => void moveToken()}
+            />
             <div className="vault-tools">
               <div className="panel-search">
                 <Search className="node-icon" />
@@ -305,6 +340,43 @@ export function VaultTab({
         />
       )}
     </section>
+  );
+}
+
+/** Identity variables as the tab names them: `$OP_TEAM_TOKEN, $OP_OTHER_TOKEN`. */
+function named(identity: VaultIdentity[]): string {
+  return identity.map((one) => `$${one.variable}`).join(", ");
+}
+
+/**
+ * Where the vault's identity token is, under the header, and the offer to move it: shown for a
+ * token charter's environment carries, and a plain sentence once it is in the Keychain. A vault
+ * whose token is nowhere says so in its health line above, and a vault read through none shows
+ * nothing here.
+ */
+function IdentityLine({
+  identity,
+  moving,
+  onMove,
+}: {
+  identity: VaultIdentity[];
+  moving: boolean;
+  onMove: () => void;
+}) {
+  if (identity.length === 0) return null;
+  if (identity.every((one) => one.held === "keyring")) {
+    return (
+      <p className="vault-identity">{`charter reads ${named(identity)} from the Keychain.`}</p>
+    );
+  }
+  if (!identity.some((one) => one.held === "environment")) return null;
+  return (
+    <p className="vault-identity">
+      {`Read through ${named(identity)}, a token in charter's environment. `}
+      <button type="button" tabIndex={0} disabled={moving} onClick={onMove}>
+        Move this token into the Keychain
+      </button>
+    </p>
   );
 }
 

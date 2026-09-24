@@ -413,3 +413,103 @@ fn no_error_repeats_a_value_or_a_stored_entry() {
         assert!(!said(&out).contains(VALUE), "{args:?}: {}", said(&out));
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// A 1Password identity moved into the keyring (#237).
+
+/// A service-account token, fabricated: the fake `op` below answers only to it.
+const IDENTITY: &str = "ops_fixture-service-account-9d41c7";
+
+/// What the fake `op` hands back for any field it is asked to read.
+const RESOLVED: &str = "resolved-through-the-keyring-3a6f";
+
+/// A plane with a 1Password vault `team` read through `$OP_TEAM_TOKEN`, and on `bin/` an `op`
+/// that reads a field only when `$OP_SERVICE_ACCOUNT_TOKEN` is [`IDENTITY`].
+fn with_a_1password_vault() -> tempfile::TempDir {
+    let tmp = plane();
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("a bin directory");
+    let op = bin.join("op");
+    std::fs::write(
+        &op,
+        format!(
+            "#!/bin/sh\n\
+             [ \"$OP_SERVICE_ACCOUNT_TOKEN\" = '{IDENTITY}' ] || {{ echo 'not signed in' >&2; exit 1; }}\n\
+             [ \"$1\" = read ] && {{ printf '%s' '{RESOLVED}'; exit 0; }}\n\
+             exit 1\n"
+        ),
+    )
+    .expect("a fake op");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let out = run(
+        &tmp,
+        &[
+            "vault",
+            "add",
+            "team",
+            "--provider",
+            "1password",
+            "--op-vault",
+            "Fixture",
+            "--token-env",
+            "OP_TEAM_TOKEN",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    tmp
+}
+
+/// `charter secret exec team` in a terminal that exports nothing: no `OP_*` at all.
+fn exec_in_a_plain_terminal(tmp: &tempfile::TempDir) -> Output {
+    let path = format!("{}:/usr/bin:/bin", tmp.path().join("bin").display());
+    charter(
+        tmp,
+        &[
+            "secret",
+            "exec",
+            "team",
+            "--env",
+            "DEPLOY=DEPLOY",
+            "--",
+            "/bin/sh",
+            "-c",
+            &format!("[ \"$DEPLOY\" = '{RESOLVED}' ] && echo resolved-ok"),
+        ],
+    )
+    .env("PATH", path)
+    .output()
+    .expect("the binary runs")
+}
+
+#[test]
+fn a_moved_identity_lets_secret_exec_run_from_a_terminal_that_exports_no_token() {
+    use charter_core::secrets::{Ctx, Env, identity, registry};
+    let tmp = with_a_1password_vault();
+    let root = tmp.path().join("plane");
+
+    // Before the move, a terminal without the variable is refused, and says why.
+    let before = exec_in_a_plain_terminal(&tmp);
+    assert_ne!(before.status.code(), Some(0), "{}", said(&before));
+    assert!(
+        said(&before).contains("$OP_TEAM_TOKEN"),
+        "{}",
+        said(&before)
+    );
+
+    // The app's move, from a process that carried the variable. A test build keeps the keyring
+    // in the plane's stub, which is where the fenced binary below looks too.
+    let carrying = Ctx::new(&root, Env::of(&[("OP_TEAM_TOKEN", IDENTITY)]));
+    let team = registry::vault(&carrying, "team").expect("registered");
+    identity::move_to_keyring(&carrying, &team).expect("moved");
+
+    let after = exec_in_a_plain_terminal(&tmp);
+
+    assert_eq!(after.status.code(), Some(0), "{}", said(&after));
+    assert!(
+        text(&after.stdout).contains("resolved-ok"),
+        "{}",
+        said(&after)
+    );
+    assert!(!said(&after).contains(IDENTITY), "{}", said(&after));
+}

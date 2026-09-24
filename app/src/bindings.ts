@@ -511,6 +511,11 @@ export const commands = {
 	 */
 	vaultSecretCopy: (plane: PlaneId, vault: string, key: string) => typedError<null, string>(__TAURI_INVOKE("vault_secret_copy", { plane, vault, key })),
 	/**
+	 *  Move a vault's identity token into the keyring ([`move_identity`]). No value crosses: the
+	 *  token is read from the app's own environment, and the answer is the vault's names.
+	 */
+	vaultIdentityMove: (plane: PlaneId, vault: string) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_move", { plane, vault })),
+	/**
 	 *  Every view an approved extension offers this window.
 	 * 
 	 *  An extension that is new, changed or unreadable offers nothing — the registry's one job, as
@@ -893,6 +898,15 @@ export type ExtensionView = {
 
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
+
+/**  Where one of a vault's identity variables is read from now (#237). */
+export type IdentityHeld = 
+/**  Moved into the keyring, which is read first. */
+"keyring" | 
+/**  In charter's environment, and not moved: the tab offers to move it. */
+"environment" | 
+/**  Nowhere: the vault cannot be read. */
+"unset";
 
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
@@ -1528,6 +1542,12 @@ export type Restore = {
 	dropped: string[],
 };
 
+/**
+ *  A value the window hands over to be stored, and the one a reveal hands back
+ *  ([`vault_secret_reveal`], the only command whose answer holds one).
+ */
+export type SecretValue = string;
+
 /**  What a save is: the raw view's whole text, or a form's changes to the text it was read as. */
 export type SettingsChange = { kind: "raw"; text: string } | { kind: "edits"; edits: SettingsEdit[] };
 
@@ -1586,12 +1606,6 @@ export type SettingsWhich =
 "shared" | 
 /**  `charter.local.toml` — gitignored; this machine only. */
 "local";
-
-/**
- *  A value the window hands over to be stored, and the one a reveal hands back
- *  ([`vault_secret_reveal`], the only command whose answer holds one).
- */
-export type SecretValue = string;
 
 /**
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's
@@ -1680,12 +1694,26 @@ export type VaultContents = {
 	count: number,
 	health: VaultHealth,
 	secrets: VaultSecret[],
+	/**
+	 *  The identity variables it is read through; empty for a vault that declares none. Said
+	 *  from the registry's mark and the environment, never by reading the keyring.
+	 */
+	identity: VaultIdentity[],
 };
 
 /**  Whether a vault can be read, and the provider's own sentence about it. Never a value. */
 export type VaultHealth = {
 	ok: boolean,
 	detail: string,
+};
+
+/**
+ *  One identity variable a vault is read through — `$OP_TEAM_TOKEN` — and where it is. Its
+ *  NAME, never its value.
+ */
+export type VaultIdentity = {
+	variable: string,
+	held: IdentityHeld,
 };
 
 /**  One secret, as a vault's table shows it: its name, and what the keys index knows. */

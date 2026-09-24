@@ -3643,6 +3643,19 @@ button.show-more:focus-visible {
   margin: 0;
 }
 
+/* Where the vault's identity token is, and the offer to move it into the Keychain (#237): the
+   note's size and colour, the button beside the sentence rather than under it. */
+.vault-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  max-width: 60rem;
+  margin: 0 0 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 /* A list in a view has the pane's height to use, not a side region's. */
 .view-body .panel-list {
   margin-top: 0.6rem;

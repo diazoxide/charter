@@ -1165,6 +1165,7 @@ fn commands() -> Builder<tauri::Wry> {
             vaults::vault_secret_delete,
             vaults::vault_secret_reveal,
             vaults::vault_secret_copy,
+            vaults::vault_identity_move,
             views::extension_views,
             views::extension_programs_run,
             views::open_view,

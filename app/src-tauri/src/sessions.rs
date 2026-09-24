@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::{AlacrittyEngine, Size};
 use charter_core::hookwire::{CHAT_ENV, SOCKET_ENV};
+use charter_core::secrets::identity::kept_from_chats;
 use charter_core::session::{Attachment, Exit, Session, Spec};
 
 /// How many lines of history each session keeps. The pane showing it is told, so its own
@@ -53,6 +54,21 @@ pub struct Watching {
 #[derive(Debug, Clone)]
 pub struct Reporting {
     pub socket: PathBuf,
+}
+
+/// What a chat's program is started without, of the variables the app itself has (`inherited`).
+///
+/// - **A harness's identity**, whatever charter was launched from: only the harness this session
+///   starts may say which conversation and which process a hook belongs to.
+/// - **Every `OP_*` variable** (#237). A 1Password service-account token in the app's
+///   environment would otherwise sit in every chat's shell, one `echo` from the model. A vault
+///   read through one reads it from the keyring once the vault's tab has moved it there.
+fn not_inherited(inherited: impl Iterator<Item = std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    charter_core::hookwire::NOT_INHERITED
+        .iter()
+        .map(Into::into)
+        .chain(inherited.filter(|name| kept_from_chats(name)))
+        .collect()
 }
 
 /// Every session the app is running, by the id the UI calls it by.
@@ -135,18 +151,14 @@ impl Sessions {
         // to carry it: a chat that learned its number afterwards would have a first turn
         // nothing could attribute.
         let id = self.number_for(wanted);
+        // A profile's `OP_*` is dropped with the app's own (#237): a chat never carries one.
         spec.env = opening
             .env
             .iter()
+            .filter(|(key, _)| !kept_from_chats(std::ffi::OsStr::new(key)))
             .map(|(key, value)| (key.into(), value.into()))
             .collect();
-        // Whatever charter itself was launched from, a chat starts without its harness's
-        // identity: only the harness this session starts may say which conversation and
-        // which process a hook belongs to.
-        spec.env_without = charter_core::hookwire::NOT_INHERITED
-            .iter()
-            .map(Into::into)
-            .collect();
+        spec.env_without = not_inherited(std::env::vars_os().map(|(name, _)| name));
         // **The chat is what charter's per-session state is keyed on, and this is what says
         // so** — charter-app#63. Without it `active::session_id` falls to the harness's own
         // `$CLAUDE_CODE_SESSION_ID`, which names the CONVERSATION: `/clear` starts a new one
@@ -699,6 +711,104 @@ mod tests {
         opening.program = Some("/definitely/not/a/program".to_owned());
 
         assert!(sessions.open(None, &opening, &|_| {}).is_err());
+    }
+
+    // --- no chat carries a 1Password token (#237) ------------------------------------- //
+
+    /// The names of every `OP_*` variable in the environment of the program a chat started —
+    /// names only, so not even a fixture's value is put on a screen.
+    fn op_names_in_a_chat(sessions: &Sessions, env: Vec<(String, String)>) -> String {
+        let mut opening = opening(
+            "printf 'ops<%s>' \"$(env | grep '^OP_' | cut -d= -f1 | tr '\\n' ,)\"; sleep 600",
+        );
+        opening.env = env;
+        let id = sessions
+            .open(None, &opening, &|_| {})
+            .expect("the session opens");
+        let (_view, seen) = watching(sessions, id);
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let shown = lock(&seen).clone();
+            if let Some((_, rest)) = shown.split_once("ops<")
+                && let Some((names, _)) = rest.split_once('>')
+            {
+                return names.to_owned();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the chat never printed, only {shown:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_chat_is_not_given_an_op_variable_a_profile_declares() {
+        let sessions = Sessions::new();
+
+        let names = op_names_in_a_chat(
+            &sessions,
+            vec![
+                (
+                    "OP_SERVICE_ACCOUNT_TOKEN".into(),
+                    "ops_fixture-profile-1".into(),
+                ),
+                ("OP_TEAM_TOKEN".into(), "ops_fixture-profile-2".into()),
+                ("KEPT_BY_THE_PROFILE".into(), "yes".into()),
+            ],
+        );
+
+        assert_eq!(names, "");
+    }
+
+    /// Set in the child's environment only, so the parent knows it is the child.
+    const INHERITING_CHILD: &str = "CHARTER_TEST_OP_INHERITING_CHILD";
+
+    /// The child half of the test below: an app process whose own environment carries `OP_*`
+    /// tokens, as one started from the operator's shell does.
+    #[test]
+    fn an_app_started_with_op_tokens_starts_chats_without_them() {
+        if std::env::var_os(INHERITING_CHILD).is_none() {
+            return;
+        }
+        assert!(
+            std::env::var_os("OP_FIXTURE_SERVICE_ACCOUNT_TOKEN").is_some(),
+            "the child needs an inherited token"
+        );
+        let names = op_names_in_a_chat(&Sessions::new(), Vec::new());
+        assert_eq!(names, "", "a chat inherited these");
+        println!("chat-env-checked");
+    }
+
+    #[test]
+    fn no_chat_the_app_starts_inherits_an_op_variable_from_the_app() {
+        // The app inherits whatever started it, and a chat inherits the app. Setting a variable
+        // in this process would need `unsafe`, so the app is this test binary run again with
+        // the tokens in its environment.
+        let out = charter_core::forklock::output(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sessions::tests::an_app_started_with_op_tokens_starts_chats_without_them",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(INHERITING_CHILD, "1")
+                .env(
+                    "OP_FIXTURE_SERVICE_ACCOUNT_TOKEN",
+                    "ops_fixture-inherited-1",
+                )
+                .env("OP_TEAM_TOKEN", "ops_fixture-inherited-2")
+                .stdin(std::process::Stdio::null()),
+        )
+        .unwrap();
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{printed}");
+        assert!(printed.contains("chat-env-checked"), "{printed}");
     }
 
     // --- the chat's own session id (charter-app#63) ------------------------------------ //

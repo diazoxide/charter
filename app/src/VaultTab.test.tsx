@@ -28,6 +28,7 @@ function contents(secrets: VaultSecret[], over: Partial<VaultContents> = {}): Va
     count: secrets.length,
     health: { ok: true, detail: `${secrets.length} secret(s) in the system keyring` },
     secrets,
+    identity: [],
     ...over,
   };
 }
@@ -502,5 +503,77 @@ describe("copying a value", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("did not take the copy");
     expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+});
+
+describe("a 1Password vault's token", () => {
+  /** `team`, a 1Password vault read through `$OP_TEAM_TOKEN`, held `held`. */
+  function team(held: "environment" | "keyring"): VaultContents {
+    return contents([secret("DEPLOY", { size: null, updated: null })], {
+      provider: "1password",
+      identity: [{ variable: "OP_TEAM_TOKEN", held }],
+    });
+  }
+
+  it("offers to move a token charter reads from its environment into the Keychain", async () => {
+    const asked = core(team("environment"), { vault_identity_move: team("keyring") });
+    const onChanged = draw();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Move this token into the Keychain" }),
+    );
+
+    expect(asked.at(-1)).toEqual({
+      cmd: "vault_identity_move",
+      args: { plane: PLANE, vault: "ops" },
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Moved $OP_TEAM_TOKEN into the Keychain",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Move this token into the Keychain" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("says where the token is, and offers nothing, once it is in the Keychain", async () => {
+    core(team("keyring"));
+    draw();
+
+    expect(await screen.findByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Move this token into the Keychain" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers nothing for a vault read through no token", async () => {
+    core(contents([secret("API_TOKEN")]));
+    draw();
+
+    await screen.findByRole("table", { name: "Secrets in ops" });
+    expect(
+      screen.queryByRole("button", { name: "Move this token into the Keychain" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says why when the core refuses the move, and keeps offering it", async () => {
+    core(team("environment"), {
+      vault_identity_move: new Error(
+        "charter could not write 'charter/identity' in the system keyring",
+      ),
+    });
+    draw();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Move this token into the Keychain" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "could not write 'charter/identity'",
+    );
+    expect(
+      screen.getByRole("button", { name: "Move this token into the Keychain" }),
+    ).toBeInTheDocument();
   });
 });

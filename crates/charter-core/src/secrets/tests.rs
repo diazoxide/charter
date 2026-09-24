@@ -247,3 +247,150 @@ fn renaming_in_a_reference_vault_moves_the_reference_and_never_resolves_it() {
     );
     assert!(reference::reference_for(&ctx, &v, "OLD").is_err());
 }
+
+// ---------------------------------------------------------------------------------------
+// A vault's identity, moved into the keyring (#237). A test build's keyring is the stub under
+// the plane's state directory, so none of this reaches the operator's.
+
+const MOVED_TOKEN: &str = "ops_fixture-moved-identity-2b7e91";
+
+/// A plane with a 1Password vault `team` read through `$OP_TEAM_TOKEN`.
+fn team_plane() -> (tempfile::TempDir, registry::Vault) {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Fixture"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
+    );
+    registry::add_vault(&ctx, "team", "1password", config, None, false, false).unwrap();
+    let v = registry::vault(&ctx, "team").unwrap();
+    (tmp, v)
+}
+
+#[test]
+fn a_moved_identity_is_read_from_the_keyring_when_the_environment_no_longer_has_it() {
+    let (tmp, v) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+
+    assert_eq!(
+        identity::move_to_keyring(&carrying, &v).unwrap(),
+        ["OP_TEAM_TOKEN"]
+    );
+
+    // A chat, or a plain terminal, that never had the variable.
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = registry::vault(&bare, "team").unwrap();
+    assert_eq!(
+        env_overlay(&bare, &v).unwrap(),
+        vec![(
+            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+            MOVED_TOKEN.to_string()
+        )]
+    );
+}
+
+#[test]
+fn once_moved_the_keyring_is_read_before_the_environment() {
+    let (tmp, v) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+    identity::move_to_keyring(&carrying, &v).unwrap();
+
+    let stale = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", "a-stale-export")]));
+    let v = registry::vault(&stale, "team").unwrap();
+
+    assert_eq!(env_overlay(&stale, &v).unwrap()[0].1, MOVED_TOKEN);
+}
+
+#[test]
+fn a_vault_whose_identity_was_never_moved_does_not_ask_the_keyring() {
+    let (tmp, v) = team_plane();
+    // A store that cannot be read: a lookup that asked it would fail.
+    std::fs::write(tmp.path().join(".charter/keyring-stub.json"), "not json").unwrap();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", "from-the-env-44")]));
+
+    assert_eq!(env_overlay(&carrying, &v).unwrap()[0].1, "from-the-env-44");
+    assert_eq!(
+        identity::held(&carrying, &v),
+        [("OP_TEAM_TOKEN".to_string(), identity::Held::Environment)]
+    );
+}
+
+#[test]
+fn a_moved_identity_that_the_keyring_lost_falls_back_to_the_environment_then_says_both() {
+    let (tmp, v) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+    identity::move_to_keyring(&carrying, &v).unwrap();
+    std::fs::remove_file(tmp.path().join(".charter/keyring-stub.json")).unwrap();
+
+    let v = registry::vault(&carrying, "team").unwrap();
+    assert_eq!(env_overlay(&carrying, &v).unwrap()[0].1, MOVED_TOKEN);
+
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    let err = env_overlay(&bare, &v).unwrap_err();
+    assert!(err.message.contains("$OP_TEAM_TOKEN"), "{}", err.message);
+    assert!(err.message.contains("keyring"), "{}", err.message);
+}
+
+#[test]
+fn moving_an_identity_that_is_not_set_is_refused_and_marks_nothing() {
+    let (tmp, v) = team_plane();
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+
+    let err = identity::move_to_keyring(&bare, &v).unwrap_err();
+
+    assert!(err.message.contains("OP_TEAM_TOKEN"), "{}", err.message);
+    assert_eq!(
+        identity::held(&bare, &v),
+        [("OP_TEAM_TOKEN".to_string(), identity::Held::Unset)]
+    );
+    assert!(!tmp.path().join(".charter/keyring-stub.json").exists());
+}
+
+#[test]
+fn a_committed_registry_cannot_mark_an_identity_as_held_in_the_keyring() {
+    // The keyring is this machine's, and so is the mark: a `vaults.json` that arrives by
+    // `git pull` saying "read this from the keyring" would make charter hand a keyring item to
+    // whatever `op` it runs.
+    let (tmp, v) = team_plane();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", "from-the-env-55")]));
+    identity::move_to_keyring(&ctx, &v).unwrap();
+    // Move the mark from the local half into the committed one.
+    let mut local = registry::load_local(&ctx).unwrap();
+    let entry = local["vaults"]["team"].clone();
+    local["vaults"].as_object_mut().unwrap().remove("team");
+    registry::save_local(&ctx, &local).unwrap();
+    let mut shared = registry::load_shared(&ctx).unwrap();
+    shared["vaults"]
+        .as_object_mut()
+        .unwrap()
+        .insert("team".into(), entry);
+    registry::save_shared(&ctx, &shared).unwrap();
+
+    let v = registry::vault(&ctx, "team").unwrap();
+    assert_eq!(env_overlay(&ctx, &v).unwrap()[0].1, "from-the-env-55");
+    assert_eq!(identity::held(&ctx, &v)[0].1, identity::Held::Environment);
+}
+
+#[test]
+fn no_refusal_or_debug_of_an_identity_move_carries_the_token() {
+    let (tmp, v) = team_plane();
+    let carrying = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", MOVED_TOKEN)]));
+    // A keyring that cannot be read, so the move fails after the token was read.
+    std::fs::write(tmp.path().join(".charter/keyring-stub.json"), "not json").unwrap();
+
+    let err = identity::move_to_keyring(&carrying, &v).unwrap_err();
+
+    for shown in [
+        err.message.clone(),
+        format!("{err:?}"),
+        format!("{carrying:?}"),
+    ] {
+        assert!(!shown.contains(MOVED_TOKEN), "{shown}");
+    }
+    assert_eq!(
+        identity::held(&carrying, &v)[0].1,
+        identity::Held::Environment
+    );
+}

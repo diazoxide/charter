@@ -1,10 +1,11 @@
 //! The plane's vaults, as the window reaches them.
 
 use charter_core::secrets::cmd::{self, Io, Say};
+use charter_core::secrets::identity::{self, Held};
 use charter_core::secrets::keyring;
 use charter_core::secrets::registry::{self, Vault};
 use charter_core::secrets::vaultcmd;
-use charter_core::secrets::{Ctx, Env, VaultError, env_overlay};
+use charter_core::secrets::{Ctx, Env, VaultError, identity_missing};
 
 use crate::planes::{PlaneId, Planes};
 
@@ -56,12 +57,12 @@ fn counted(n: usize) -> u32 {
 /// The provider's own health line, or — for a vault read through an identity variable that is
 /// unset — the first line of the core's sentence saying so.
 fn health(ctx: &Ctx, v: &Vault) -> VaultHealth {
-    match env_overlay(ctx, v) {
-        Err(e) => VaultHealth {
+    match identity_missing(ctx, v) {
+        Some(e) => VaultHealth {
             ok: false,
             detail: e.message.lines().next().unwrap_or_default().to_owned(),
         },
-        Ok(_) => {
+        None => {
             let (ok, detail) = cmd::health(ctx, v);
             VaultHealth { ok, detail }
         }
@@ -115,6 +116,26 @@ pub(crate) struct VaultSecret {
     pub updated: Option<String>,
 }
 
+/// Where one of a vault's identity variables is read from now (#237).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum IdentityHeld {
+    /// Moved into the keyring, which is read first.
+    Keyring,
+    /// In charter's environment, and not moved: the tab offers to move it.
+    Environment,
+    /// Nowhere: the vault cannot be read.
+    Unset,
+}
+
+/// One identity variable a vault is read through — `$OP_TEAM_TOKEN` — and where it is. Its
+/// NAME, never its value.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct VaultIdentity {
+    pub variable: String,
+    pub held: IdentityHeld,
+}
+
 /// One vault, opened.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct VaultContents {
@@ -123,6 +144,24 @@ pub(crate) struct VaultContents {
     pub count: u32,
     pub health: VaultHealth,
     pub secrets: Vec<VaultSecret>,
+    /// The identity variables it is read through; empty for a vault that declares none. Said
+    /// from the registry's mark and the environment, never by reading the keyring.
+    pub identity: Vec<VaultIdentity>,
+}
+
+/// Where each of the vault's identity variables is read from now.
+fn identity_of(ctx: &Ctx, v: &Vault) -> Vec<VaultIdentity> {
+    identity::held(ctx, v)
+        .into_iter()
+        .map(|(variable, held)| VaultIdentity {
+            variable,
+            held: match held {
+                Held::Keyring => IdentityHeld::Keyring,
+                Held::Environment => IdentityHeld::Environment,
+                Held::Unset => IdentityHeld::Unset,
+            },
+        })
+        .collect()
 }
 
 /// One vault's secrets, by name.
@@ -152,6 +191,7 @@ pub(crate) fn open(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
     Ok(VaultContents {
         count: counted(secrets.len()),
         health: health(ctx, &v),
+        identity: identity_of(ctx, &v),
         name: v.name,
         provider: v.provider,
         secrets,
@@ -413,6 +453,15 @@ pub(crate) fn clear_now(pasting: &std::sync::Mutex<Pasting>) -> Result<bool, Str
     locked(pasting).clear_copied(None)
 }
 
+/// Move the vault's identity token from charter's environment into the keyring
+/// ([`identity::move_to_keyring`]), and answer with the vault as it now is. The token goes from
+/// this process's environment to the keyring and nowhere else: not the window, not an error.
+pub(crate) fn move_identity(ctx: &Ctx, vault: &str) -> Result<VaultContents, String> {
+    let v = cmd::provider(ctx, vault).map_err(message_of)?;
+    identity::move_to_keyring(ctx, &v).map_err(message_of)?;
+    open(ctx, vault)
+}
+
 /// What a new vault is kept in when the window does not say: the system's own credential
 /// store (#232, decision 1).
 const DEFAULT_PROVIDER: &str = "keyring";
@@ -616,6 +665,21 @@ pub(crate) async fn vault_secret_reveal(
 ) -> Result<SecretValue, String> {
     blocking(ctx_of(&planes, &plane)?, move |ctx| {
         reveal(ctx, &vault, &key)
+    })
+    .await
+}
+
+/// Move a vault's identity token into the keyring ([`move_identity`]). No value crosses: the
+/// token is read from the app's own environment, and the answer is the vault's names.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_identity_move(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    vault: String,
+) -> Result<VaultContents, String> {
+    blocking(ctx_of(&planes, &plane)?, move |ctx| {
+        move_identity(ctx, &vault)
     })
     .await
 }
@@ -1219,6 +1283,123 @@ mod tests {
         board.put("copied-value-a-51");
         assert_eq!(clear_now(&pasting), Ok(false));
         assert_eq!(board.now().as_deref(), Some("copied-value-a-51"));
+    }
+
+    // --- a 1Password identity, moved into the keyring (#237) ---------------------------- //
+
+    /// A fabricated service-account token.
+    const TOKEN: &str = "ops_fixture-window-move-6c02da";
+
+    /// A plane with a 1Password vault `team` read through `$OP_TEAM_TOKEN`, an `op` on `PATH`
+    /// that lists one field, and a process environment of `carrying`.
+    fn team(carrying: &[(&str, &str)]) -> (tempfile::TempDir, Ctx) {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let op = bin.join("op");
+        std::fs::write(
+            &op,
+            "#!/bin/sh\n[ \"$1 $2\" = 'item get' ] && { printf '%s' '{\"fields\":[{\"label\":\"DEPLOY\",\"value\":\"x\"}]}'; exit 0; }\nexit 1\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let mut vars = vec![("PATH", path.as_str())];
+        vars.extend_from_slice(carrying);
+        let ctx = Ctx::new(dir.path(), Env::of(&vars));
+        let mut config = serde_json::Map::new();
+        config.insert("op-vault".into(), serde_json::json!("Fixture"));
+        config.insert(
+            "env".into(),
+            serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
+        );
+        registry::add_vault(&ctx, "team", "1password", config, None, false, false).unwrap();
+        (dir, ctx)
+    }
+
+    fn identity_of(opened: &VaultContents) -> Vec<(&str, IdentityHeld)> {
+        opened
+            .identity
+            .iter()
+            .map(|i| (i.variable.as_str(), i.held))
+            .collect()
+    }
+
+    #[test]
+    fn a_vault_read_through_a_token_in_the_environment_says_so_and_names_the_variable() {
+        let (_dir, ctx) = team(&[("OP_TEAM_TOKEN", TOKEN)]);
+
+        let opened = open(&ctx, "team").unwrap();
+
+        assert_eq!(
+            identity_of(&opened),
+            [("OP_TEAM_TOKEN", IdentityHeld::Environment)]
+        );
+        assert!(open(&ctx, "team").is_ok_and(|o| o.health.ok), "{opened:?}");
+    }
+
+    #[test]
+    fn moving_the_token_answers_with_the_vault_reading_it_from_the_keyring() {
+        let (dir, ctx) = team(&[("OP_TEAM_TOKEN", TOKEN)]);
+
+        let moved = move_identity(&ctx, "team").unwrap();
+
+        assert_eq!(
+            identity_of(&moved),
+            [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
+        );
+        // A chat's `charter`, which has no `$OP_TEAM_TOKEN`, now finds it.
+        let path = format!("{}:/usr/bin:/bin", dir.path().join("bin").display());
+        let bare = Ctx::new(dir.path(), Env::of(&[("PATH", path.as_str())]));
+        let reopened = open(&bare, "team").unwrap();
+        assert_eq!(
+            identity_of(&reopened),
+            [("OP_TEAM_TOKEN", IdentityHeld::Keyring)]
+        );
+        assert!(reopened.health.ok, "{reopened:?}");
+    }
+
+    #[test]
+    fn a_vault_whose_token_is_nowhere_says_so_and_a_move_is_refused() {
+        let (_dir, ctx) = team(&[]);
+
+        // Its keys are `op`'s to list, and `op` is not run under an identity nobody declared.
+        let opened = open(&ctx, "team").unwrap_err();
+        assert!(
+            opened.contains("$OP_TEAM_TOKEN, which is unset"),
+            "{opened}"
+        );
+        let err = move_identity(&ctx, "team").unwrap_err();
+        assert!(err.contains("$OP_TEAM_TOKEN"), "{err}");
+    }
+
+    #[test]
+    fn a_vault_with_no_identity_lists_none_and_has_nothing_to_move() {
+        let (_dir, ctx) = plane();
+        assert!(open(&ctx, "ops").unwrap().identity.is_empty());
+        assert!(move_identity(&ctx, "ops").is_err());
+    }
+
+    #[test]
+    fn no_answer_or_refusal_of_a_move_carries_the_token() {
+        let (dir, ctx) = team(&[("OP_TEAM_TOKEN", TOKEN)]);
+        let mut answers = vec![wire(&open(&ctx, "team")), wire(&list(&ctx))];
+        answers.push(wire(&move_identity(&ctx, "team")));
+        answers.push(wire(&move_identity(&ctx, "nope")));
+        answers.push(wire(&open(&ctx, "team")));
+        answers.push(wire(&list(&ctx)));
+        // A keyring that cannot be written: the refusal comes after the token was read.
+        std::fs::write(dir.path().join(".charter/keyring-stub.json"), "not json").unwrap();
+        answers.push(wire(&move_identity(&ctx, "team")));
+        answers.push(wire(&open(&ctx, "team")));
+        answers.extend(traced(&ctx).iter().map(ToString::to_string));
+
+        // The move happened, so the absence below is not an absence of a token to leak.
+        assert!(answers[2].contains("\"keyring\""), "{}", answers[2]);
+        for answer in &answers {
+            assert!(!answer.contains(TOKEN), "{answer}");
+        }
     }
 
     #[test]

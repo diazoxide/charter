@@ -11,7 +11,7 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { ViewTab } from "./bindings";
+import type { VaultContents, ViewTab } from "./bindings";
 
 /**
  * **A tab that holds something other than a chat**, against the whole window (ADR 0043,
@@ -130,7 +130,7 @@ beforeEach(() => {
   held = ["API_TOKEN"];
   made = [];
 });
-const vaultOf = (name: string) => ({
+const vaultOf = (name: string): VaultContents => ({
   name,
   provider: "keyring",
   count: name === "ops" ? held.length : 0,
@@ -139,6 +139,7 @@ const vaultOf = (name: string) => ({
     name === "ops"
       ? held.map((key) => ({ key, size: "16–31 bytes", updated: "2026-09-24T11:32:17Z" }))
       : [],
+  identity: [],
 });
 const vaultList = () =>
   ["ops", ...made].map((name) => {

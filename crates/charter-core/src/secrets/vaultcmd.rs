@@ -422,7 +422,9 @@ pub fn list(ctx: &Ctx, io: &mut dyn Io) -> i32 {
     );
     for row in &body {
         let detail = match registry::vault_in(&doc, &row[0])
-            .and_then(|v| super::env_overlay(ctx, &v).map(|_| v))
+            // Where the identity is, never the identity: a moved one is not read from the
+            // keyring to draw a row.
+            .and_then(|v| super::identity_missing(ctx, &v).map_or(Ok(v), Err))
         {
             Ok(v) => cmd::health(ctx, &v).1,
             Err(e) => e.message.split('\n').next().unwrap_or_default().to_string(),

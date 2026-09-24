@@ -28,6 +28,7 @@ pub mod cmd;
 pub mod dotenv;
 pub mod exec;
 pub mod fingerprint;
+pub mod identity;
 pub mod keyring;
 pub mod onepassword;
 pub mod plain_file;
@@ -430,39 +431,78 @@ pub fn loose_dir_note(root: &Path, loose: &[(PathBuf, u32)]) -> String {
 /// `(TARGET, value)` pairs — empty when it declares none.
 ///
 /// A vault may bind the identity it is read through, target variable to source variable:
-/// `"env": {"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_DEVOPS_TOKEN"}`. Only NAMES are stored. A
-/// declared source that is unset or empty is an ERROR: falling back to an ambient token would
-/// read the vault under an identity the plane did not declare, and the failure would look like
-/// a missing secret rather than a wrong credential.
+/// `"env": {"OP_SERVICE_ACCOUNT_TOKEN": "OP_ACME_DEVOPS_TOKEN"}`. Only NAMES are stored.
+///
+/// **A moved identity is read from the keyring first, then the environment** ([`identity`],
+/// #237): a chat no longer carries `$OP_*`, and a plain terminal that still exports a stale one
+/// does not outvote the token the operator moved. A keyring that holds none, or cannot be read,
+/// falls to the environment.
+///
+/// A declared source found in neither is an ERROR: falling back to an ambient token would read
+/// the vault under an identity the plane did not declare, and the failure would look like a
+/// missing secret rather than a wrong credential.
 pub fn env_overlay(
     ctx: &Ctx,
     vault: &registry::Vault,
 ) -> Result<Vec<(String, String)>, VaultError> {
-    let Some(mapping) = vault
-        .config
-        .get("env")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return Ok(Vec::new());
-    };
     let mut out = Vec::new();
-    for (target, source) in mapping {
-        let source = py_str(source);
-        match ctx.env.get(&source).filter(|v| !v.is_empty()) {
-            Some(val) => out.push((target.clone(), val)),
-            None => {
-                return Err(VaultError::new(format!(
-                    "vault '{}' is read through ${source}, which is unset. charter will not fall \
-                     back to an ambient ${target}: that would read this vault under an identity \
-                     it does not declare, and the failure would look like a missing secret rather \
-                     than a wrong credential.\n  export {source}=… , or drop the binding: charter \
-                     vault add {} --provider {} --force",
-                    vault.name, vault.name, vault.provider
-                )));
-            }
+    for (target, source) in identity::bindings(vault) {
+        let kept = identity::from_keyring(ctx, vault, &source);
+        let found = match &kept {
+            Ok(Some(token)) => Some(token.clone()),
+            _ => ctx.env.get(&source).filter(|v| !v.is_empty()),
+        };
+        match found {
+            Some(val) => out.push((target, val)),
+            None => return Err(identity_unset(ctx, vault, &target, &source, kept.err())),
         }
     }
     Ok(out)
+}
+
+/// Whether every identity variable the vault is read through can be found — moved into the
+/// keyring, or set — WITHOUT reading the keyring: the refusal [`env_overlay`] would give for the
+/// first one that cannot, or `None`. What `vault list` and the app's panel draw from, so neither
+/// makes the Keychain ask anything.
+pub fn identity_missing(ctx: &Ctx, vault: &registry::Vault) -> Option<VaultError> {
+    let held = identity::held(ctx, vault);
+    identity::bindings(vault)
+        .into_iter()
+        .zip(held)
+        .find(|(_, (_, at))| *at == identity::Held::Unset)
+        .map(|((target, source), _)| identity_unset(ctx, vault, &target, &source, None))
+}
+
+/// The refusal for an identity variable found nowhere. Names only: a keyring failure is the
+/// store's sentence, which names the service and never a value.
+fn identity_unset(
+    ctx: &Ctx,
+    vault: &registry::Vault,
+    target: &str,
+    source: &str,
+    keyring: Option<VaultError>,
+) -> VaultError {
+    if identity::in_keyring(ctx, vault) {
+        let why = keyring.map_or_else(
+            || format!("{} holds no token for it", keyring::STORE_NAME),
+            |e| e.message,
+        );
+        return VaultError::new(format!(
+            "vault '{}' is read through ${source}, which was moved into {}, but {why}, and it \
+             is not set here either. charter will not fall back to an ambient ${target}.\n  Set \
+             ${source} where charter runs and move it again from the vault's tab.",
+            vault.name,
+            keyring::STORE_NAME
+        ));
+    }
+    VaultError::new(format!(
+        "vault '{}' is read through ${source}, which is unset. charter will not fall \
+         back to an ambient ${target}: that would read this vault under an identity \
+         it does not declare, and the failure would look like a missing secret rather \
+         than a wrong credential.\n  export {source}=… , or drop the binding: charter \
+         vault add {} --provider {} --force",
+        vault.name, vault.name, vault.provider
+    ))
 }
 
 /// `VaultProvider.identity_note`: ` (identity from $SOURCE)`, or `""` — appended to a read
