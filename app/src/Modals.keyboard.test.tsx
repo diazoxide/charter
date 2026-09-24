@@ -15,6 +15,7 @@ import { Extensions } from "./Extensions";
 import { Health } from "./Doctor";
 import { Palette } from "./Palette";
 import { QuitWarning } from "./QuitWarning";
+import { RelaunchAsk } from "./RelaunchAsk";
 import { StartChat } from "./StartChat";
 import { PinItem, UpdateItem } from "./Updates";
 import { sequenceIn } from "./tabSequence";
@@ -233,7 +234,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // unreachable in every sense that matters: not by the key an operator presses, and only
     // by walking a dialog backwards. The footer checkbox (ADR 0029's one choice) was
     // reachable by neither. What this test pins is the plain thing: **Tab, forwards, reaches
-    // all six.**
+    // all seven**, the Name field (charter-app#254) among them.
     picker();
 
     expect(await reachableByKeyboard()).toEqual([
@@ -242,11 +243,13 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'radio "claude"',
       'radio "steward"',
       'checkbox "draw charter\'s footer in this chat"',
+      // The Name field (charter-app#254): an `<input>`, which every engine puts in the sequence.
+      'input "Name"',
       'summary "1 refused"',
     ]);
   });
 
-  it("reaches all six the other way too, which is the half that half-worked before", async () => {
+  it("reaches all seven the other way too, which is the half that half-worked before", async () => {
     // Shift+Tab was the only direction that went anywhere in this dialog, and it went most of
     // the way: everything but the footer checkbox, by the engine's sequence as far as the
     // first edge and by Radix's `focus(last)` after that. Asserted because "the fix did not
@@ -257,6 +260,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     expect(await reachableByKeyboard({ shift: true })).toEqual([
       'button "Cancel"',
       'summary "1 refused"',
+      'input "Name"',
       'checkbox "draw charter\'s footer in this chat"',
       'radio "steward"',
       'radio "claude"',
@@ -290,6 +294,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'radio "claude"',
       'radio "none"',
       'checkbox "draw charter\'s footer in this chat"',
+      'input "Name"',
     ]);
   });
 
@@ -508,7 +513,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
             <EndingChat
               offer={{
                 id: "tab.close:1",
-                title: "End chat 1 steward",
+                title: "End chat steward 1",
                 available: true,
                 reason: "",
                 does: { verb: "closeTab", tab: 1, ends: true },
@@ -518,7 +523,22 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
               onCancel={() => {}}
             />,
           ),
-        ['button "Cancel"', 'button "End chat 1 steward"'],
+        ['button "Cancel"', 'button "End chat steward 1"'],
+      ],
+      [
+        "the question a relaunch asks",
+        () =>
+          void render(
+            <RelaunchAsk
+              question={{
+                projects: [{ plane: "/home/dev/plane", chats: 2, views: 0 }],
+                after_update: false,
+              }}
+              nameOf={(plane) => plane}
+              onAnswer={() => {}}
+            />,
+          ),
+        ['button "Reopen all sessions"', 'button "Start fresh"'],
       ],
     ];
     for (const [what, show, answers] of two) {

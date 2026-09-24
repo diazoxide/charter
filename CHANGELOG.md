@@ -13,11 +13,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Project settings**, a tab of its own: right-click a project's tab and choose *Project
+  settings…*, or find it in the palette. It has two sections — **Shared**, `charter.toml`,
+  which is committed and your team sees, and **Local**, `charter.local.toml`, which stays on
+  this machine — each as a form over the keys charter documents and as raw TOML for everything
+  else. Saving keeps your comments and the order of your keys, and refuses what charter would
+  refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
+  in the committed file, a value that looks like a credential. Local is created on the first
+  save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
 - An Ignore (✕) on each chat in the needs-you queue takes it out of the queue and out of the red
   counts on its project and workspace tabs at once, without touching the chat. It lasts until
   that chat asks again: its next stop puts it back as a new item. Delete on a focused item does
   the same (Backspace on a Mac), and the palette lists it as "Ignore … until it asks again".
   ([#248](https://github.com/diazoxide/charter-app/issues/248))
+
+### Changed
+
+- The needs-you queue is in the title bar now, and nowhere else. A hand and a count sit left of
+  About when anything needs you, and nothing is there when nothing does. Pressing it lists every
+  chat asking in every open project — its name, then its workspace and project — each with
+  **Go**, which brings that chat to the front and switches project and workspace to get there,
+  and **✕**, which ignores it. The Attention panel no longer has the queue; its other sections
+  are unchanged. From the keyboard, Tab reaches the button, Enter opens the list, the arrows
+  move, Delete ignores, and Escape closes it.
+  ([#249](https://github.com/diazoxide/charter-app/issues/249))
 
 ### Fixed
 

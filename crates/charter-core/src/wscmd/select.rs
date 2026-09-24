@@ -410,7 +410,7 @@ fn lock_words(name: &str, locked: Option<&str>) -> String {
 /// name is bounded to one line because it comes out of a shell, and a line separator in it
 /// would write a line of this output that charter did not.
 pub(crate) fn warn_env_override(name: &str, say: Sink) {
-    let env = std::env::var(crate::active::WORKSPACE_ENV).unwrap_or_default();
+    let env = crate::steer::var(crate::active::WORKSPACE_ENV).unwrap_or_default();
     let env = crate::memstore::py_strip(&env);
     if env.is_empty() || env == name {
         return;

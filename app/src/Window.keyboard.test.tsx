@@ -282,7 +282,7 @@ describe("the window's tab order", () => {
       "tab alpha32",
       "button New workspace…",
       // The chat strip: the selected chat's tab, and the `+`. A tab's `×` is not a stop.
-      "tab two steward",
+      "tab steward two",
       "button New tab",
       // The explorer, on the left by default: ONE stop, its current row.
       "treeitem alphathe workspace itself",
@@ -330,9 +330,9 @@ describe("a list is one Tab stop", () => {
     // The workspace row, three chats working in it, the clone, its one worktree.
     expect(rows.map(said)).toEqual([
       expect.stringMatching(/^treeitem alpha/),
-      expect.stringMatching(/^treeitem one/),
-      expect.stringMatching(/^treeitem two/),
-      expect.stringMatching(/^treeitem three/),
+      expect.stringMatching(/^treeitem steward one/),
+      expect.stringMatching(/^treeitem steward two/),
+      expect.stringMatching(/^treeitem steward three/),
       "treeitem svc1",
       "treeitem one",
     ]);
@@ -383,8 +383,8 @@ describe("a list is one Tab stop", () => {
     const items = await screen.findAllByRole("menuitem");
     // The oldest chat asking first, and the chats alone: their Ignore is no item (#248).
     expect(items.map((item) => item.querySelector(".needs-you-name")?.textContent)).toEqual([
-      "three steward",
-      "one steward",
+      "steward three",
+      "steward one",
     ]);
     await waitFor(() => expect(items[0]).toHaveFocus());
     await userEvent.keyboard("{ArrowDown}");
@@ -472,7 +472,7 @@ describe("Delete on a focused tab", () => {
 
     // The tab the keyboard is on, not the one in front.
     const asking = await screen.findByRole("alertdialog");
-    expect(asking).toHaveTextContent("End chat one");
+    expect(asking).toHaveTextContent("End chat steward one");
     await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(tabsOf("Tabs")).toHaveLength(3);
@@ -536,7 +536,7 @@ describe("Delete on a focused tab", () => {
 
     await userEvent.keyboard("{Backspace}");
 
-    expect(await screen.findByRole("alertdialog")).toHaveTextContent("End chat two");
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("End chat steward two");
   });
 
   it("is not Backspace anywhere else, where Backspace on a tab means nothing", async () => {
@@ -569,7 +569,8 @@ describe("Delete on a focused tab", () => {
     await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
     tabsOf("Tabs")[1].focus();
 
-    await userEvent.keyboard("{F2}");
+    // ⌘K, because F2 on a chat tab renames it (charter-app#254).
+    await userEvent.keyboard("{Meta>}k{/Meta}");
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
     await userEvent.keyboard("end{Backspace}{ArrowLeft}{Delete}");
 

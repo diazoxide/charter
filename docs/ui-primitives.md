@@ -144,12 +144,18 @@ drawer asks nothing and a stray click cannot answer anything. Radix hands focus 
 `Dialog.Trigger`, and the button that opens this lives in a project's status line while the drawer
 is the window's, so the drawer remembers where the keyboard was and puts it back itself.
 
+And the **question a relaunch asks** (`app/src/RelaunchAsk.tsx`, charter-app#250): an
+`AlertDialog`, because it arrives without being asked for. **"Reopen all sessions" is the
+primitive's `Cancel`**, first and focused, so Escape and a stray Return both keep the work.
+**"Start fresh" is a plain button, not the primitive's `Action`**: an `Action` also closes the
+dialog, and closing is this dialog's "Reopen all", so one press would send both answers.
+
 And the **question before a chat ends** (`app/src/EndingChat.tsx`):
-`@radix-ui/react-alert-dialog`, the operator's *"closing session should ask confirmation"*. It is
+`@radix-ui/react-alert-dialog`, the operator's _"closing session should ask confirmation"_. It is
 the first surface here that is **not** a `Dialog`, and the reason is the role: an
 alert dialog is `role="alertdialog"`, announced as an interruption rather than as a surface, and
 the primitive requires a `Cancel` that focus goes to. The four below are questions the operator
-went looking for; this one arrives *because of* something they did, which is the distinction the
+went looking for; this one arrives _because of_ something they did, which is the distinction the
 role exists for. Two consequences worth knowing before the next one:
 
 - **`AlertDialogContent` takes no `onInteractOutside`.** It refuses outside interaction itself,
@@ -186,8 +192,8 @@ other side when there is no room, which is what makes naming a side safe at all.
 archive of everything a persona remembers and an extension's statistics, which a popover anchored
 in a 260 px column is a thin surface for; a non-modal sheet over the centre region was built and
 then replaced the same day, when the operator was asked where the card should open and chose
-**"Its own tab"**: *"we dont have other tabs then sessions, and this can be good example for us -
-that in tabs we can have what we want - not only harnesses"*.
+**"Its own tab"**: _"we dont have other tabs then sessions, and this can be good example for us -
+that in tabs we can have what we want - not only harnesses"_.
 
 So a persona is a **view**, and a view is what a tab's pane holds when it does not hold a chat
 (ADR 0043, as amended; `app/src/tabs.ts`, `app/src/Views.tsx`). No primitive is involved
@@ -265,7 +271,7 @@ quirk. The second half of that sentence is the whole of the fix and is the secti
 not known when the rest of this was written.
 
 It was measured rather than reasoned about, three times, and the third measurement **corrected
-the first two**. `palette.e2e.ts`'s *"closes the chat it just opened, by the keyboard alone"*
+the first two**. `palette.e2e.ts`'s _"closes the chat it just opened, by the keyboard alone"_
 pressed Tab to move from `Cancel` to the confirm; the question stayed on screen on `webkit macos`,
 and after that was read as a macOS default it did the same on `WebKitGTK linux`. Then the spec was
 made to write down every keydown the document sees, and it said (charter-app#176):
@@ -280,7 +286,7 @@ the page saw: Shift on <button> "Cancel"; Tab on <button> "Cancel"; Enter on <bu
    `browser.keys(["Shift", "Tab"])` **is not delivered as a chord**: the Tab keydown arrives with
    `event.shiftKey` unset, so Radix's edge handler never fires either.
 2. **A focused button is not activated by a synthesised `Enter`.** The engine delivered the
-   keydown *to* `Cancel`, unprevented — the focus was genuine and the engine agreed — and nothing
+   keydown _to_ `Cancel`, unprevented — the focus was genuine and the engine agreed — and nothing
    happened. WebDriver key actions carry no implicit activation.
 
 The second is a fact about the **test rig**, not about charter, and it is the one that matters
@@ -310,7 +316,7 @@ a synthetic dispatch carries none of them.
 
 So, for whoever writes the next spec: **the keyboard half of a scenario can only assert what the
 app does in JavaScript.** Escape, `F2`, the palette's own Enter — all handled by a listener — are
-fair game. Anything the *engine* would have done in response to a key is not, and asking for it
+fair game. Anything the _engine_ would have done in response to a key is not, and asking for it
 produces a red that looks like an app defect and is not one. The reachability half of
 charter-app#186 therefore stayed in jsdom, where the engine's rule is written down and modelled
 explicitly; `picker.e2e.ts` keeps the half a scenario really can prove, which is that the
@@ -319,7 +325,7 @@ attribute the rule needs survives the build and is on the element in the shipped
 Three things follow, and the last is the one a reviewer should hold us to:
 
 - **Shift+Tab from the first answer is Radix's own `focus()` call**, not the engine's tab
-  sequence, so it reaches the last answer everywhere a real keyboard is driving. A *scenario*
+  sequence, so it reaches the last answer everywhere a real keyboard is driving. A _scenario_
   cannot use it, for finding 1 above; `App.test.tsx` is where that route is tested.
 - **A claim of the form "this button can be pressed by keyboard" belongs in a unit test**, where
   jsdom implements activation. A scenario can prove that the keyboard reaches a surface and that
@@ -341,19 +347,19 @@ cannot answer the question at all, for finding 2 above.
 
 What it found, before anything was changed:
 
-| surface                            | tabbables | opened on       | Tab reached                  | Shift+Tab reached      | reachable by neither                          |
-| ---------------------------------- | --------- | --------------- | ---------------------------- | ---------------------- | --------------------------------------------- |
-| `StartChat` (the picker)           | 6         | `Cancel`        | **nothing — it never moved** | the form, then `Start` | the footer checkbox                           |
-| `Updates` (the offer)              | 5         | channel         | nothing                      | `Close`                | `Install`, `Check now`                        |
-| `NewProject`                       | 5         | the folder box  | nothing                      | nothing                | `Browse…`, the checkbox, `Create project`     |
-| `Extensions`                       | 4         | `Add…`          | nothing                      | `Done`                 | `Review`, `Remove`, per row                   |
-| `NewWorkspace`                     | 4         | the name box    | the vision box               | nothing                | `Create workspace`                            |
-| `Doctor`                           | 3         | `<summary>`     | nothing                      | `Close`                | `Check again`                                 |
-| `QuitWarning`, `EndingChat`        | 2         | `Cancel`        | nothing                      | the other answer       | —                                             |
-| `ApprovePlane`, `ApproveExtension` | 2         | `Cancel`        | the other answer             | nothing                | —                                             |
-| `DeleteWorkspace`                  | 2         | `Cancel`        | nothing                      | the delete             | —                                             |
-| `AlertsDrawer`, `PinItem`          | 1         | its one control | —                            | —                      | —                                             |
-| `Palette`                          | 1         | its box         | —                            | —                      | —                                             |
+| surface                            | tabbables | opened on       | Tab reached                  | Shift+Tab reached      | reachable by neither                      |
+| ---------------------------------- | --------- | --------------- | ---------------------------- | ---------------------- | ----------------------------------------- |
+| `StartChat` (the picker)           | 6         | `Cancel`        | **nothing — it never moved** | the form, then `Start` | the footer checkbox                       |
+| `Updates` (the offer)              | 5         | channel         | nothing                      | `Close`                | `Install`, `Check now`                    |
+| `NewProject`                       | 5         | the folder box  | nothing                      | nothing                | `Browse…`, the checkbox, `Create project` |
+| `Extensions`                       | 4         | `Add…`          | nothing                      | `Done`                 | `Review`, `Remove`, per row               |
+| `NewWorkspace`                     | 4         | the name box    | the vision box               | nothing                | `Create workspace`                        |
+| `Doctor`                           | 3         | `<summary>`     | nothing                      | `Close`                | `Check again`                             |
+| `QuitWarning`, `EndingChat`        | 2         | `Cancel`        | nothing                      | the other answer       | —                                         |
+| `ApprovePlane`, `ApproveExtension` | 2         | `Cancel`        | the other answer             | nothing                | —                                         |
+| `DeleteWorkspace`                  | 2         | `Cancel`        | nothing                      | the delete             | —                                         |
+| `AlertsDrawer`, `PinItem`          | 1         | its one control | —                            | —                      | —                                         |
+| `Palette`                          | 1         | its box         | —                            | —                      | —                                         |
 
 The last three rows arrived from charter-app#172 while this was being measured, each with the
 defect on the day it was written — which is the argument for a file that walks every surface
@@ -411,7 +417,7 @@ Three things about that choice, because each was a fork:
   macOS exposes full keyboard access as a system preference and `WKPreferences` has only
   private SPI for the web half of it. WebKitGTK's `enable-tabs-to-links` is about links.
 - **It goes on the two-answer dialogs as well**, which did not need it. "The keyboard works
-  here" was a property of *how many buttons there are*, and a dialog that grows a third control
+  here" was a property of _how many buttons there are_, and a dialog that grows a third control
   should not silently lose it — which is the failure this whole section is the record of.
 
 One consequence worth knowing before the next one: the same WebKit change makes an explicit
@@ -487,7 +493,7 @@ and `FourRegions.test.tsx` found it by holding a `nav` that had been replaced.
 **A terminal keeps Tab.** xterm prevents Tab and Shift+Tab and sends them to the shell —
 completion, and Claude Code's mode cycling — and nothing in the window takes either. So a
 terminal is a stop you can reach and cannot Tab out of, which is why the pane's own controls are
-written *before* it in the document (they are absolutely positioned, so the look is unchanged).
+written _before_ it in the document (they are absolutely positioned, so the look is unchanged).
 **They are shown on hover and while the keyboard is on them, and at no other time** — not
 because their pane is focused, which is the pane the operator is typing in and a corner he
 asked to keep clear. A `visibility: hidden` control is out of the sequence, so the focused
@@ -521,17 +527,17 @@ its own — and drops the accent edge under the selected tab too, on the operato
 the running app.
 
 **The inset went because it could not be told apart from padding.** His words, unprompted:
-*"workspaces tabs and sessions tabs have some padding from left, they should be like project
-tabs without padding."* That is the signal failing at the only test that matters — the person
+_"workspaces tabs and sessions tabs have some padding from left, they should be like project
+tabs without padding."_ That is the signal failing at the only test that matters — the person
 it was drawn for read it as slop. It was not free either: 1.1rem off the workspace strip and
 2.2rem off the chat strip is a tab's worth of room at ADR 0026's widths, taken from the two
 strips that collapse first (`fits.ts`).
 
 **What replaces it is a shade, and it is a theme token rather than a look.** The operator asked
-for the layers to differ — *"lets make some different styles/collor for each layer"* — and then
+for the layers to differ — _"lets make some different styles/collor for each layer"_ — and then
 turned down coloured rules under each strip, the first answer to that, as not minimal enough:
-*"i prefer to change little bit backgrounds of tabs and little lighter for selected tab, borders
-are not feeling well."* So each strip is one quiet step of neutral grey — `layer.project`,
+_"i prefer to change little bit backgrounds of tabs and little lighter for selected tab, borders
+are not feeling well."_ So each strip is one quiet step of neutral grey — `layer.project`,
 `layer.workspace`, `layer.chat`, outermost deepest — and nothing is drawn under or between the
 rows. Three properties of that answer are decisions rather than details:
 
@@ -545,7 +551,7 @@ rows. Three properties of that answer are decisions rather than details:
   theme file. A "strip" component parameterised by depth would be exactly the charter API in
   front of nothing that the rule at the top of this file refuses.
 
-**And a tab's label is centred in its cell** — *"also lets make tabs labels center aligned"* —
+**And a tab's label is centred in its cell** — _"also lets make tabs labels center aligned"_ —
 which is one `justify-content` on the rule that already says what a tab is. A chat tab's `×` is
 outside the button, so a chat's name is centred in the room the `×` leaves rather than in the
 whole cell: the same rule, not an exception to it.
@@ -599,21 +605,21 @@ component library gets added on.
   list. Radix has no tree or listbox primitive, and native buttons are not hand-rolled markup.
 - **The region buttons are `aria-pressed` toggles**, which is what the platform has for a
   control that is on or off. They are **on the status line and icon-only** since charter-app
-  #193, which the operator asked for twice — *"show hide buttons can be movet to bottom status
-  bar — again like ZED"*, and then *"let make them without labels, just small icons without
-  texts, texts only with tooltips"*. Three things about that are decisions:
+  #193, which the operator asked for twice — _"show hide buttons can be movet to bottom status
+  bar — again like ZED"_, and then _"let make them without labels, just small icons without
+  texts, texts only with tooltips"_. Three things about that are decisions:
   - **The name did not go with the words.** `aria-label` carries it, which is the one condition
     `docs/design-system.md` puts on an icon with no text beside it — and not a formality here:
     `pressOnly("Explorer")` is how the palette and the specs reach a control, and a screen
     reader reads the same string. An icon-only button whose accessible name is an icon is a
     button nobody can find, by either route.
-  - **The `title` says what pressing does, not what the thing is.** *"Put the Explorer region
-    away"* is where prose belongs once there is no visible text; a tooltip repeating the label
+  - **The `title` says what pressing does, not what the thing is.** _"Put the Explorer region
+    away"_ is where prose belongs once there is no visible text; a tooltip repeating the label
     is a tooltip nobody reads twice.
   - **The status line hosts every region's way back and has none of its own**, which is not a
     contradiction of `StatusLine.tsx`'s argument for not being a region but the sharpest form
-    of it: it is the frame. `FourRegions.test.tsx`'s *"cannot be put away, because it is not a
-    region"* is the guard, and it presses all three toggles to get there.
+    of it: it is the frame. `FourRegions.test.tsx`'s _"cannot be put away, because it is not a
+    region"_ is the guard, and it presses all three toggles to get there.
   - **A scenario reaches them by `[aria-label="Explorer"]` and no longer by `=Explorer`.**
     WebdriverIO's `=` is a whole-text match, and there is no text. `regions.e2e.ts`,
     `pane-fill.e2e.ts` and `status-line.e2e.ts` all moved; `StripMarks.test.tsx` is what holds
@@ -691,7 +697,7 @@ second whether the chat keeps it anyway.
   on the platform that has only it.
 
 **How the window knows.** A capture listener on the window runs before the focus has had any
-say, so the only thing it can ask is where the keystroke was *delivered*: `e.target`. A pane
+say, so the only thing it can ask is where the keystroke was _delivered_: `e.target`. A pane
 marks itself with `actions.CHAT_KEYBOARD` (`data-chat-keyboard`) and xterm's textarea is a
 descendant of it, so `target.closest()` is the whole test. An attribute and not the `.pane`
 class, because the class is how a pane is drawn and this is what it means.
@@ -702,7 +708,7 @@ above — so a key claim is evaluated in jsdom, where the real event can be disp
 happened to it asserted. The missing modifier is one symptom of a larger one, measured in #186
 and written up above: **this driver dispatches a synthetic DOM keydown and performs no default
 action at all**, which is also why no key it sends presses a button and why Tab does not move
-the focus even between two text boxes. `Palette.test.tsx`'s *"a chord the chat's own terminal would encode"*
+the focus even between two text boxes. `Palette.test.tsx`'s _"a chord the chat's own terminal would encode"_
 is where the rule is pinned, including the half that matters most: the keystroke reaches the
 document **unprevented**, which is what reaching the shell actually means.
 

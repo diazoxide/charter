@@ -45,6 +45,11 @@ tauri-plugin-dialog = "2"
 # of the plugin, not a feature, so there is no build of it that skips verification.
 tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["time"] }
+# The plane changing under the window (charter-app#264): the todos a terminal closed, a workspace
+# another process made. notify is the standard cross-platform watcher (FSEvents, inotify,
+# ReadDirectoryChangesW); the debouncer folds a burst into one read.
+notify = "8.2"
+notify-debouncer-full = "0.7"
 
 [lints]
 workspace = true

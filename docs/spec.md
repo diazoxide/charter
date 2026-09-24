@@ -91,8 +91,10 @@ When two choices conflict, the higher priority wins.
    reached through the git binary: **ADR 0027**. The design is
    `docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md`.
 5. **Lifecycle.** Closing the window hides the app to the tray. Quitting warns if a session is
-   mid-turn and then ends every session. On the next launch, chats reopen through each
-   harness's own resume.
+   mid-turn and then ends every session. On the next launch, when anything was open, the window
+   asks once — reopen every session, or start fresh — naming how many chats in which projects,
+   and starts nothing before the answer. Reopening resumes each chat through its harness's own
+   resume; Esc or closing the question reopens (charter-app#250).
 6. **Harnesses in v1:** Claude Code and Codex. opencode follows.
 7. **Remote sessions are not in v1.** Sessions sit behind one interface (spawn, read/write
    bytes, resize, exit) with local PTY as the first implementation, so SSH or devcontainers

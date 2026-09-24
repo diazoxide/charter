@@ -47,6 +47,7 @@ import {
   showId,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
+  RENAMES_ON_F2,
   type Cut,
   type Doing,
   type Offer,
@@ -61,6 +62,7 @@ import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
+import { usePlaneChanged } from "./planeChanged";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
@@ -82,6 +84,9 @@ import {
   panesOf,
   putViewBack,
   refileViews,
+  SETTINGS_TITLE,
+  SETTINGS_VIEW,
+  renameTab,
   viewKey,
   selectTab,
   showWorkspace,
@@ -102,7 +107,8 @@ import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { ViewMark, ViewPane } from "./Views";
 import { useTabStop } from "./roving";
-import { closeOnDelete } from "./tabKeys";
+import { closeOnDelete, renameOnF2 } from "./tabKeys";
+import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
@@ -150,6 +156,7 @@ export function PlaneView({
   alerts,
   contributed = [],
   views = [],
+  settingsAsked,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -175,6 +182,9 @@ export function PlaneView({
   /** The views approved extensions offer (ADR 0041 stage 2), the window's for the
    *  same reason: one survey per window, not one per project. */
   views?: readonly ExtensionView[];
+  /** A count that goes up each time the window is asked for THIS project's settings tab
+   *  (`WindowDoing.openSettings`); `undefined` until it is. */
+  settingsAsked?: number;
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
@@ -204,6 +214,8 @@ export function PlaneView({
   }>();
   /** Why the last start did not happen, shown in the picker rather than behind it. */
   const [pickerTrouble, setPickerTrouble] = useState<string>();
+  /** The chat tab whose name is open for editing on the strip, if one is (charter-app#254). */
+  const [renaming, setRenaming] = useState<number>();
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
   /** What the core last said about where a chat is working, and which directory it was
@@ -231,6 +243,10 @@ export function PlaneView({
    * (charter-app#174).
    */
   const [rereadWorkspace, setRereadWorkspace] = useState(0);
+  /** Bumped when the core says this plane changed on disk (charter-app#264): a todo closed in
+   *  a terminal, a workspace another chat made. The sidebar and the focused workspace's panels
+   *  are read again on it. */
+  const changesOnDisk = usePlaneChanged([plane]);
   /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now. */
   const [makingWorkspace, setMakingWorkspace] = useState(false);
@@ -414,10 +430,12 @@ export function PlaneView({
           setPinnedChats(open.filter((chat) => chat.pinned).map((chat) => chat.session));
         }
         setPinnedViews(back.filter((view) => view.pinned).map((view) => viewKey(refOf(view))));
-        // The persona comes with the chat, so a tab put back reads `3 steward` from its first
-        // frame rather than reading `3` until the sidebar has been read (charter-app#130).
+        // The persona comes with the chat, so a tab put back reads `steward 3` from its first
+        // frame rather than reading `3` until the sidebar has been read (charter-app#130) — and
+        // so does the name the operator gave it, which rides the record (charter-app#254).
         const chats = open.reduce(
-          (tabs, chat) => openTab(tabs, chat.session, chat.name, chat.persona),
+          (tabs, chat) =>
+            openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
           noTabs(),
         );
         // Each view at the place it had, in the order of those places, so a view recorded at 2
@@ -483,7 +501,9 @@ export function PlaneView({
       // Already drawn: the adoption above can race the event and draw it first.
       if (alreadyShows(now.current, arrived.session)) return;
       setStartedIn((was) => ({ ...was, [arrived.session]: arrived.workspace }));
-      change((tabs) => openTabBehind(tabs, arrived.session, arrived.name, arrived.persona));
+      change((tabs) =>
+        openTabBehind(tabs, arrived.session, arrived.name, whoOf(arrived.persona, arrived.harness)),
+      );
     }).catch(() => undefined);
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, [change, plane]);
@@ -491,7 +511,8 @@ export function PlaneView({
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
   // directory the operator also edits by hand and another charter process writes, so there is
   // nothing to invalidate a cache of it. `tabs` is the dependency because opening or ending a
-  // chat is what this window can change about the answer.
+  // chat is what this window can change about the answer, and `changesOnDisk` because the core
+  // says when something else changed it (charter-app#264).
   useEffect(() => {
     void commands
       .planeSidebar(plane)
@@ -543,7 +564,7 @@ export function PlaneView({
       })
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
-  }, [change, plane, replan, startedIn, tabs]);
+  }, [change, changesOnDisk, plane, replan, startedIn, tabs]);
 
   /**
    * What the machine store says this operator has pinned here, and what it says is gone.
@@ -637,7 +658,7 @@ export function PlaneView({
    *  outside every workspace is not a workspace on the plane, so there is no directory to
    *  read and every region says so rather than drawing another workspace's answer. */
   const ofWorkspace = focused === OUTSIDE ? undefined : focused;
-  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace);
+  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
   const doctor = useDoctor(plane);
@@ -785,7 +806,16 @@ export function PlaneView({
    * The `+` and the show-more button are siblings of this tablist rather than children of
    * it, so its own width is already what is left for tabs and `controls` goes on nothing.
    */
-  const { strip, width: room } = useRoom(onStrip.length);
+  const { strip: measured, width: room } = useRoom(onStrip.length);
+  /** The chat strip itself, for handing the keyboard back to a tab after a rename. */
+  const chatStrip = useRef<HTMLElement | null>(null);
+  const strip = useCallback(
+    (element: HTMLElement | null) => {
+      chatStrip.current = element;
+      measured(element);
+    },
+    [measured],
+  );
   const { shown, hidden } = useMemo(
     () => fitting(onStrip, tabs.inFront, room, LEAST.chat),
     [onStrip, room, tabs.inFront],
@@ -848,10 +878,11 @@ export function PlaneView({
 
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
 
-  /** A row was picked: the chat starts on that profile, with that persona, and either
-   *  drawing charter's footer in its pane or leaving it blank (ADR 0029). */
+  /** A row was picked: the chat starts on that profile, with that persona, either drawing
+   *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in
+   *  the picker, if one was (charter-app#254). */
   const startPicked = useCallback(
-    async (profile: string, persona: string | null, showFooter: boolean) => {
+    async (profile: string, persona: string | null, showFooter: boolean, label: string | null) => {
       const where = picking?.where;
       if (where === undefined) return;
       const inFrontTab = now.current.inFront;
@@ -872,6 +903,7 @@ export function PlaneView({
           persona,
           startIn,
           name,
+          label,
           showFooter,
           STARTING_SIZE.columns,
           STARTING_SIZE.rows,
@@ -892,7 +924,9 @@ export function PlaneView({
       const filed = startIn === null ? OUTSIDE : (focused ?? OUTSIDE);
       setStartedIn((was) => ({ ...was, [session]: filed }));
       if ("tab" in where) {
-        change((tabs) => openTab(tabs, session, name, persona));
+        const kind = picking?.options.profiles.find((one) => one.name === profile)?.kind;
+        const held = started.data.label ?? null;
+        change((tabs) => openTab(tabs, session, name, whoOf(persona, kind), held));
         return;
       }
       const before = now.current;
@@ -908,7 +942,13 @@ export function PlaneView({
   /** The approval IS this click. After it, the whole chain of checks runs again from the
    *  top before anything is exec'd, so a yes never walks past a refusal standing behind it. */
   const approveAndStart = useCallback(
-    async (profile: string, persona: string | null, showFooter: boolean, shown: string) => {
+    async (
+      profile: string,
+      persona: string | null,
+      showFooter: boolean,
+      shown: string,
+      label: string | null,
+    ) => {
       const said = await commands
         .approveProfile(plane, profile, shown)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -921,7 +961,7 @@ export function PlaneView({
       // away the choice on the one path where a profile is being used for the first time.
       // The footer choice rides the same path, and for the same reason: a first run of a
       // profile is exactly where a dropped choice would go unnoticed.
-      await startPicked(profile, persona, showFooter);
+      await startPicked(profile, persona, showFooter, label);
     },
     [plane, startPicked],
   );
@@ -998,6 +1038,20 @@ export function PlaneView({
     },
     [change, filedIn, focused],
   );
+
+  /**
+   * The Project settings tab, opened when the window asks for it (charter-app#252). Asked
+   * through the window even from this project's own palette, so there is one way in: the
+   * window brings the project forward and this opens its tab. `handled` keeps a rebuilt
+   * `showView` — it changes with the focused workspace — from opening it a second time for
+   * the same ask.
+   */
+  const handled = useRef(settingsAsked);
+  useEffect(() => {
+    if (settingsAsked === undefined || handled.current === settingsAsked) return;
+    handled.current = settingsAsked;
+    showView(SETTINGS_VIEW, SETTINGS_TITLE);
+  }, [settingsAsked, showView]);
 
   /**
    * Focuses a workspace: the strip below it shows that workspace's chats, and one of them
@@ -1323,6 +1377,55 @@ export function PlaneView({
     [plane],
   );
 
+  /**
+   * Opens a chat tab's name for editing on the strip (charter-app#254) — what the tab's menu,
+   * the palette's row, a double-click on the tab and `F2` on it all run, through the one
+   * catalogue row. **The tab comes forward first**, because the strip always draws the tab in
+   * front (`fits.ts`) and a name being typed has to be on screen.
+   */
+  const beginRename = useCallback(
+    (id: number) => {
+      if (chatOf(now.current, id) === undefined) return;
+      bringToFront(id);
+      setRenaming(id);
+    },
+    [bringToFront],
+  );
+
+  /**
+   * Asks the core to hold `typed` as the chat's name, and draws what it answers.
+   *
+   * **The core's answer is the name, not what was typed**: it trims it, a blank is the default
+   * back, and a name it will not draw is refused in its own words — which is what this answers,
+   * for the box to say beside the name. Charter's label only: the harness keeps its own.
+   */
+  const saveName = useCallback(
+    async (id: number, typed: string): Promise<string | undefined> => {
+      const session = chatOf(now.current, id);
+      if (session === undefined) return "That tab has no chat to rename.";
+      const said = await commands
+        .renameChat(plane, session, typed)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return said.error;
+      change((tabs) => renameTab(tabs, id, said.data));
+      return undefined;
+    },
+    [change, plane],
+  );
+
+  /** The box is finished with. After Enter or Escape the keyboard goes back to the tab — the
+   *  one in front, which the rename brought there — once it is drawn again. */
+  const backToTheTab = useRef(false);
+  const endRename = useCallback((back: boolean) => {
+    backToTheTab.current = back;
+    setRenaming(undefined);
+  }, []);
+  useEffect(() => {
+    if (renaming !== undefined || !backToTheTab.current) return;
+    backToTheTab.current = false;
+    chatStrip.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+  }, [renaming]);
+
   /** Pins or unpins one workspace. It goes in the machine store, so what the store now says
    *  is asked again rather than assumed — `pinning` is what asks. */
   const pinWorkspace = useCallback(
@@ -1344,6 +1447,7 @@ export function PlaneView({
       closePane,
       closeTab: close,
       selectTab: bringToFront,
+      renameTab: beginRename,
       pinTab,
       pinWorkspace,
       pinProject: windowDoes.pinProject,
@@ -1366,9 +1470,11 @@ export function PlaneView({
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
+      openSettings: windowDoes.openSettings,
       quit: windowDoes.quit,
     }),
     [
+      beginRename,
       bringToFront,
       close,
       closePane,
@@ -1408,8 +1514,14 @@ export function PlaneView({
    *  spots they are working at. The plane's own answer, like everything else about where a
    *  chat is: nothing on the plane records a chat, so the directory it works in is it. */
   const workspaceChats = useMemo(
-    () => sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.chats ?? [],
-    [ofWorkspace, sidebar],
+    () =>
+      (sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.chats ?? []).map((chat) => {
+        // Named as its tab is — the name the operator gave it, or `steward 3` — rather than by
+        // the harness's own name, which is a number (charter-app#254).
+        const tab = tabs.order.find((id) => chatOf(tabs, id) === chat.session);
+        return tab === undefined ? chat : { ...chat, name: tabs.byId[tab].name };
+      }),
+    [ofWorkspace, sidebar, tabs],
   );
 
   /**
@@ -1621,7 +1733,9 @@ export function PlaneView({
           return {
             key: `${plane}#${session}`,
             project: plane,
-            name: known?.name ?? tabs.byId[id].name,
+            // The tab's name — the one the operator gave it, or its default — and not the
+            // harness's: this is a list the operator reads (charter-app#254).
+            name: tabs.byId[id].name,
             harness: known?.harness ?? null,
             cwd: known?.cwd ?? null,
             workspace: filed === OUTSIDE ? OUTSIDE_TITLE : filed,
@@ -1813,36 +1927,57 @@ export function PlaneView({
                tab into and nothing measuring tabs through the markup. */
               <Menued key={id} on={{ on: "chat", tab: id }} offers={found} onPress={press}>
                 <span className="tab">
-                  <RovingFocusGroup.Item
-                    asChild
-                    tabStopId={String(id)}
-                    active={id === tabs.inFront}
-                  >
-                    <button
-                      role="tab"
-                      aria-selected={id === tabs.inFront}
-                      onKeyDown={(event) => closeOnDelete(event, by(`tab.close:${id}`), press)}
-                      // The catalogue's row, not a second copy of it. The tab already in front
-                      // has a row that says so and cannot run — a tab is never disabled, because
-                      // the selected tab is the one a keyboard has to be able to land on.
-                      onClick={() => {
-                        const offer = by(`tab.select:${id}`);
-                        if (offer?.available) press(offer);
-                      }}
+                  {renaming === id ? (
+                    // The name, open for editing in the tab's place (charter-app#254). Not
+                    // inside the tab's button: an input inside a button is two controls in one.
+                    <TabRename
+                      name={tabs.byId[id].name}
+                      onSave={(typed) => saveName(id, typed)}
+                      onDone={endRename}
+                    />
+                  ) : (
+                    <RovingFocusGroup.Item
+                      asChild
+                      tabStopId={String(id)}
+                      active={id === tabs.inFront}
                     >
-                      <TabMarks
-                        tabs={tabs}
-                        id={id}
-                        states={states}
-                        pin={
-                          <Pin
-                            held={isPinned(id)}
-                            what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
-                          />
-                        }
-                      />
-                    </button>
-                  </RovingFocusGroup.Item>
+                      <button
+                        role="tab"
+                        aria-selected={id === tabs.inFront}
+                        // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
+                        // tab that has a rename row — a chat's, and never a view's.
+                        {...(by(`tab.rename:${id}`) ? { [RENAMES_ON_F2]: "" } : {})}
+                        onKeyDown={(event) => {
+                          closeOnDelete(event, by(`tab.close:${id}`), press);
+                          renameOnF2(event, by(`tab.rename:${id}`), press);
+                        }}
+                        // The catalogue's row, not a second copy of it. The tab already in front
+                        // has a row that says so and cannot run — a tab is never disabled, because
+                        // the selected tab is the one a keyboard has to be able to land on.
+                        onClick={() => {
+                          const offer = by(`tab.select:${id}`);
+                          if (offer?.available) press(offer);
+                        }}
+                        // A double-click on the name renames it — the same row again.
+                        onDoubleClick={() => {
+                          const offer = by(`tab.rename:${id}`);
+                          if (offer?.available) press(offer);
+                        }}
+                      >
+                        <TabMarks
+                          tabs={tabs}
+                          id={id}
+                          states={states}
+                          pin={
+                            <Pin
+                              held={isPinned(id)}
+                              what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
+                            />
+                          }
+                        />
+                      </button>
+                    </RovingFocusGroup.Item>
+                  )}
                   <Closer offer={by(`tab.close:${id}`)} onPress={press} />
                 </span>
               </Menued>
@@ -2128,9 +2263,11 @@ export function PlaneView({
         <StartChat
           options={picking.options}
           trouble={pickerTrouble}
-          onStart={(profile, persona, footer) => void startPicked(profile, persona, footer)}
-          onApprove={(profile, persona, footer, shown) =>
-            void approveAndStart(profile, persona, footer, shown)
+          onStart={(profile, persona, footer, label) =>
+            void startPicked(profile, persona, footer, label)
+          }
+          onApprove={(profile, persona, footer, shown, label) =>
+            void approveAndStart(profile, persona, footer, shown, label)
           }
           onCancel={() => {
             setPicking(undefined);
@@ -2180,6 +2317,10 @@ export type WindowDoing = {
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
+  /** Brings a project to the front and opens its Project settings tab (charter-app#252). The
+   *  window's, because the project may not be the one in front, and only the window can bring
+   *  it there. */
+  openSettings: (plane: string) => void;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
    *  in front draws nothing, and its pin still has to be on that strip (ADR 0039). */
   pinProject: (plane: string, pinned: boolean) => Promise<Ran>;
@@ -2196,7 +2337,20 @@ type Arrived = {
   name: string;
   workspace: string;
   persona: string | null;
+  /** The harness it runs, for its default name when it adopted no persona. */
+  harness?: string | null;
 };
+
+/**
+ * What a chat's default name puts before its number (charter-app#254): the persona it adopted,
+ * or — with none — the program it runs, by the word the plane calls its harness. `steward 3`,
+ * `claude 4`. Not the profile's name, which is the operator's word for an account (`work 4`
+ * would name the account, not the program). A chat on neither is a shell, and says its own
+ * name alone, as it always has. Every path a tab opens by goes through here.
+ */
+function whoOf(persona: string | null, harness: string | null | undefined): string | null {
+  return persona ?? harness ?? null;
+}
 
 /** Whether any tab already shows `session`, in any of its panes. */
 function alreadyShows(tabs: Tabs, session: number): boolean {

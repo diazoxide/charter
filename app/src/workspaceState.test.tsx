@@ -56,6 +56,31 @@ const ORDINARY = (cmd: string, args: Record<string, unknown>) => {
 };
 
 describe("useWorkspaceState", () => {
+  it("reads the plane again when it changes on disk, and asks git nothing more", async () => {
+    // charter-app#264. The plane moving on disk is a todo closed in a terminal, so the plane
+    // read runs again — and `git status` per clone, five seconds each at worst, does not, nor
+    // does `git worktree list` while the clone names are the same.
+    // A fresh answer per read, as the core's is: the clone list is a new array each time.
+    const { asked } = core((cmd, args) =>
+      cmd === "workspace_panels" ? { ...PANELS, repos: [...PANELS.repos] } : ORDINARY(cmd, args),
+    );
+    const { result, rerender } = renderHook(
+      ({ changed }: { changed: number }) => useWorkspaceState(PLANE, "alpha", 0, changed),
+      { initialProps: { changed: 0 } },
+    );
+    await waitFor(() => expect(result.current.pieces.tool).toEqual([]));
+
+    rerender({ changed: 1 });
+    await waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "workspace_panels")).toHaveLength(2),
+    );
+    await new Promise((settle) => setTimeout(settle, 20));
+
+    expect(asked.filter((one) => one.cmd === "workspace_repos")).toHaveLength(1);
+    expect(asked.filter((one) => one.cmd === "worktree_list")).toHaveLength(2);
+    expect(result.current.pieces.svc).toHaveLength(2);
+  });
+
   it("asks git for the pieces once per clone, however often the window renders", async () => {
     // **The measurement #133 asked for, kept as a bound rather than a millisecond.** Every
     // one of these is a `git worktree list` subprocess in the core, so the thing worth

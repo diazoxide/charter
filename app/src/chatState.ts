@@ -117,8 +117,8 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
 /**
  * Subscribes to what the chats are doing in ONE plane, starting from what the core knows.
  *
- * The first answer matters: chats are put back before there is a window (M1.7), so some of
- * them may have fired hooks already.
+ * The first answer matters: chats are put back before this plane's view subscribes (M1.7,
+ * and charter-app#250's answer comes first), so some of them may have fired hooks already.
  *
  * **Every move is checked against the plane it came from.** `chat-moved` is emitted on the
  * app, not on a window, and every plane numbers its chats from one — so a process holding two

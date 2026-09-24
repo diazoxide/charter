@@ -284,6 +284,28 @@ pub fn builtins() -> Vec<Profile> {
 /// Never fails and runs no subprocess. The two rules that need charter's own command surface
 /// are [`current`]'s.
 pub fn derive(root: &Path) -> ProfileSet {
+    let committed = std::fs::read_to_string(root.join(COMMITTED_FILE)).ok();
+    derive_from(committed.as_deref(), read_local(root))
+}
+
+/// The local file as [`derive_from`] takes it: its text, `None` when there is none, or the
+/// error that stopped the read.
+pub fn read_local(root: &Path) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(root.join(LOCAL_FILE)) {
+        Ok(text) => Ok(Some(text)),
+        // An absent file declares nothing and is not a refusal.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// [`derive`] over the two files' TEXT rather than the plane's — what the files would say, so
+/// the Project settings tab can ask it of a file before it is written (charter-app#252) and
+/// get the refusals the next read would give, in the same words.
+///
+/// `local` is the local file's read: `Ok(None)` when there is none, and the error when there is
+/// one that could not be read.
+pub fn derive_from(committed: Option<&str>, local: std::io::Result<Option<String>>) -> ProfileSet {
     let mut set = ProfileSet {
         profiles: builtins(),
         ..ProfileSet::default()
@@ -291,7 +313,7 @@ pub fn derive(root: &Path) -> ProfileSet {
 
     // 1. The committed file: a profile there is refused with a pointer to the local file,
     //    `default` is the candidate default, and any other key is ignored as it always was.
-    if let Ok(committed) = read_toml(&root.join(COMMITTED_FILE))
+    if let Some(committed) = committed.and_then(|text| text.parse::<toml::Table>().ok())
         && let Some(harness) = committed.get("harness").and_then(toml::Value::as_table)
     {
         for (key, value) in harness {
@@ -320,8 +342,8 @@ pub fn derive(root: &Path) -> ProfileSet {
     }
 
     // 2. The local file: only `[harness]` is read.
-    let local = match std::fs::read_to_string(root.join(LOCAL_FILE)) {
-        Ok(text) => match text.parse::<toml::Table>() {
+    let local = match local {
+        Ok(Some(text)) => match text.parse::<toml::Table>() {
             Ok(table) => Some(table),
             Err(e) => {
                 set.refused.push(Refused {
@@ -340,7 +362,7 @@ pub fn derive(root: &Path) -> ProfileSet {
         // An absent file declares nothing and is not a refusal. Anything else that stops the
         // read IS one, because a file that is there and says nothing is indistinguishable
         // from one nobody wrote.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Ok(None) => None,
         Err(e) => {
             set.refused.push(Refused {
                 name: String::new(),
@@ -501,7 +523,12 @@ pub fn for_launch(root: &Path) -> (ProfileSet, IgnoreCheck) {
 /// reach every clone of this plane, so nothing that decides a LAUNCH may call it — use
 /// [`for_launch`].
 pub fn current(root: &Path) -> ProfileSet {
-    let mut set = derive(root);
+    current_of(derive(root))
+}
+
+/// [`current`]'s two rules, applied to a set [`derive`] or [`derive_from`] made.
+pub fn current_of(derived: ProfileSet) -> ProfileSet {
+    let mut set = derived;
     for profile in set.profiles.clone() {
         let name = shown::short(&profile.name);
         let reason = if COMMAND_WORDS.contains(&profile.name.as_str()) {
@@ -728,13 +755,6 @@ pub(crate) fn py_repr(value: &toml::Value) -> String {
     crate::pyrepr::repr_toml(value)
 }
 
-fn read_toml(path: &Path) -> Result<toml::Table, ()> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| text.parse::<toml::Table>().ok())
-        .ok_or(())
-}
-
 /// `p`'s command with a leading `~` expanded in its first word ONLY — the program. No shell
 /// runs it, so nothing else would; an argument is the harness's to interpret.
 pub fn expanded_command(p: &Profile, home: &Path) -> Vec<String> {
@@ -882,7 +902,36 @@ pub fn ignore_check_within(root: &Path, git: &Path, timeout: std::time::Duration
     if !root.join(LOCAL_FILE).exists() {
         return IgnoreCheck::default();
     }
-    match git_path_state(root, git, timeout) {
+    check_of(git_path_state(root, git, timeout))
+}
+
+/// Whether git would carry the local file **once it is written** — [`ignore_check`] for a
+/// writer, which has to ask before the file exists (charter-app#252).
+///
+/// [`ignore_check`] passes an absent file, because an absent file declares nothing. A writer
+/// cannot take that pass: the file it is about to create would be committed by the next
+/// `git add -A` if nothing ignores it. So where there is no file yet this asks git whether the
+/// path is IGNORED (`git check-ignore`, which answers for a path that does not exist and counts
+/// a tracked path as not ignored), and says it in [`ignore_check`]'s own sentences.
+pub fn ignore_check_before_writing(root: &Path) -> IgnoreCheck {
+    ignore_check_before_writing_within(root, Path::new("git"), GIT_TIMEOUT)
+}
+
+/// [`ignore_check_before_writing`] against a named `git`, waiting `timeout` for it.
+pub fn ignore_check_before_writing_within(
+    root: &Path,
+    git: &Path,
+    timeout: std::time::Duration,
+) -> IgnoreCheck {
+    if root.join(LOCAL_FILE).exists() {
+        return ignore_check_within(root, git, timeout);
+    }
+    check_of(git_ignore_state(root, git, timeout))
+}
+
+/// The refusal, and its fix, for what git said about the local file.
+fn check_of(state: GitState) -> IgnoreCheck {
+    match state {
         GitState::Tracked => IgnoreCheck {
             reason: "git tracks charter.local.toml, so the profiles in it would reach every \
                      clone of this plane — charter refuses them until it is untracked: git \
@@ -926,69 +975,29 @@ enum GitState {
     Unknown(String),
 }
 
-/// What git says about the local file, from ONE `git status`.
-///
-/// `--no-optional-locks` because a plain `status` refreshes the index and takes `index.lock`
-/// when it can, which broke a concurrent `charter save` (charter #917). `LC_ALL=C` because
-/// "not a git repository" is git's own sentence and a translated git says it in another
-/// language. `--untracked-files=all` overrides an operator's `status.showUntrackedFiles=no`,
+/// What git says about the local file, from ONE `git status` ([`git_answer`] says why its
+/// flags). `--untracked-files=all` overrides an operator's `status.showUntrackedFiles=no`,
 /// which would otherwise hide `??`.
 fn git_path_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitState {
-    let mut child = match crate::forklock::spawn(
-        std::process::Command::new(git)
-            .args([
-                "--no-optional-locks",
-                "-C",
-                &root.display().to_string(),
-                "status",
-                "--porcelain=v1",
-                "--ignored=matching",
-                "--untracked-files=all",
-                "--",
-                LOCAL_FILE,
-            ])
-            .env("LC_ALL", "C")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped()),
+    let out = match git_answer(
+        root,
+        git,
+        &[
+            "status",
+            "--porcelain=v1",
+            "--ignored=matching",
+            "--untracked-files=all",
+            "--",
+            LOCAL_FILE,
+        ],
+        timeout,
     ) {
-        Ok(child) => child,
-        Err(e) => return GitState::Unknown(e.to_string()),
-    };
-    // A timeout is an unknown, not a pass, so the wait is bounded and the child is ended.
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            // `<` and `<=` differ only at the one instant that equals the deadline, which no
-            // test can land on: `.cargo/mutants.toml` excludes that mutant as equivalent.
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return GitState::Unknown(format!(
-                    "git did not answer within {} seconds",
-                    timeout.as_secs()
-                ));
-            }
-            Err(e) => return GitState::Unknown(e.to_string()),
-        }
-    }
-    let out = match child.wait_with_output() {
         Ok(out) => out,
-        Err(e) => return GitState::Unknown(e.to_string()),
+        Err(state) => return state,
     };
     let said = String::from_utf8_lossy(&out.stderr).trim().to_owned();
     if !out.status.success() {
-        if out.status.code() == Some(128) && said.contains("not a git repository") {
-            return GitState::NotARepo;
-        }
-        return GitState::Unknown(match said.lines().next() {
-            Some(line) => line.to_owned(),
-            None => format!("git exited {:?}", out.status.code()),
-        });
+        return failed(&out, &said);
     }
     // What the porcelain lines say, kept apart from the state they decide: a tracked line
     // anywhere wins, because the next commit carries the file whatever else is printed.
@@ -1014,4 +1023,83 @@ fn git_path_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitS
     } else {
         GitState::Ignored
     }
+}
+
+/// What git says about a local file that does not exist yet, from ONE `git check-ignore`:
+/// exit 0 is ignored, exit 1 is not — which is also its answer for a path git tracks.
+fn git_ignore_state(root: &Path, git: &Path, timeout: std::time::Duration) -> GitState {
+    let out = match git_answer(
+        root,
+        git,
+        &["check-ignore", "-q", "--", LOCAL_FILE],
+        timeout,
+    ) {
+        Ok(out) => out,
+        Err(state) => return state,
+    };
+    match out.status.code() {
+        Some(0) => GitState::Ignored,
+        Some(1) => GitState::Committable,
+        _ => failed(&out, String::from_utf8_lossy(&out.stderr).trim()),
+    }
+}
+
+/// A git that exited non-zero: not a repository, or an unknown with git's first line.
+fn failed(out: &std::process::Output, said: &str) -> GitState {
+    if out.status.code() == Some(128) && said.contains("not a git repository") {
+        return GitState::NotARepo;
+    }
+    GitState::Unknown(match said.lines().next() {
+        Some(line) => line.to_owned(),
+        None => format!("git exited {:?}", out.status.code()),
+    })
+}
+
+/// One git command in `root`, bounded by `timeout`, with its output — or the unknown it came
+/// to. `--no-optional-locks` because a plain `status` refreshes the index and takes
+/// `index.lock` when it can, which broke a concurrent `charter save` (charter #917). `LC_ALL=C`
+/// because "not a git repository" is git's own sentence and a translated git says it in
+/// another language.
+fn git_answer(
+    root: &Path,
+    git: &Path,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, GitState> {
+    let mut child = match crate::forklock::spawn(
+        std::process::Command::new(git)
+            .args(["--no-optional-locks", "-C", &root.display().to_string()])
+            .args(args)
+            .env("LC_ALL", "C")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    ) {
+        Ok(child) => child,
+        Err(e) => return Err(GitState::Unknown(e.to_string())),
+    };
+    // A timeout is an unknown, not a pass, so the wait is bounded and the child is ended.
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            // `<` and `<=` differ only at the one instant that equals the deadline, which no
+            // test can land on: `.cargo/mutants.toml` excludes that mutant as equivalent.
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(GitState::Unknown(format!(
+                    "git did not answer within {} seconds",
+                    timeout.as_secs()
+                )));
+            }
+            Err(e) => return Err(GitState::Unknown(e.to_string())),
+        }
+    }
+    child
+        .wait_with_output()
+        .map_err(|e| GitState::Unknown(e.to_string()))
 }

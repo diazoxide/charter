@@ -17,7 +17,7 @@
 //! process happened to be holding, and put that dependency on disk. So the identity of a chat
 //! is the pair, and every command that names a session names its plane beside it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use charter_core::engine::Size;
 use charter_core::machine;
 use charter_core::reopen;
+use charter_core::reopen::Choice;
 
 use crate::chats::Chats;
 use crate::hooks::{self, Hooks, Moved};
@@ -176,6 +177,9 @@ pub struct Held {
     tell: Teller,
     chats: Chats,
     records: Arc<Records>,
+    /// What tells the window the plane moved on disk (charter-app#264). None where the
+    /// platform would not watch; the panels then read the plane when focused, as they did.
+    watch: Mutex<Option<crate::planewatch::Watch>>,
 }
 
 impl Held {
@@ -217,9 +221,24 @@ impl Held {
     /// compared what a *different* read of it said — so a write landing between the two was
     /// started without ever having been drawn in a dialog. There is now one read per open, and
     /// no way to write a second one without changing this signature.
-    fn reopen(&self, size: Size, record: Read) {
+    ///
+    /// **`choice` is the operator's answer at the launch** (charter-app#250), and every open
+    /// that is not one of the launch's projects is [`Choice::ReopenAll`], which is what an open
+    /// always did. A fresh start writes the cleared record at once — the choice is the moment
+    /// the old one stops being wanted, and a record left as it was would ask again at the next
+    /// launch about chats the operator already declined.
+    fn reopen(&self, size: Size, record: Read, choice: Choice) {
         self.records.allow();
         let record = match record {
+            Ok(record) if choice == Choice::StartFresh => {
+                let fresh = record.chosen(Choice::StartFresh);
+                self.records.write(&fresh);
+                eprintln!(
+                    "charter: plane {}, started fresh as asked; nothing is reopened",
+                    self.root.display()
+                );
+                fresh
+            }
             Ok(record) => record,
             Err(why) => {
                 // Not the same thing as an empty plane, and an operator told "nothing to
@@ -292,6 +311,12 @@ impl Held {
         self.record();
         self.chats.end_all();
         self.hooks.stop();
+        drop(
+            self.watch
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
     }
 }
 
@@ -310,6 +335,47 @@ pub struct Planes {
     open: Mutex<HashMap<PlaneId, Arc<Held>>>,
     /// Told when a handoff has opened a chat in any plane (charter-app#204).
     arrivals: crate::handoff::Arrivals,
+    /// Told when any plane changes on disk (charter-app#264).
+    changes: crate::planewatch::Changed,
+    /// The launch's question and its answer — see [`Relaunching`].
+    relaunching: Mutex<Relaunching>,
+}
+
+/// Where the launch's question stands (charter-app#250): what it holds back until the
+/// operator answers, and what the answer was.
+///
+/// **Nothing the launch would put back starts before the answer.** The launch's own plane is
+/// attached at once — its board, its socket, its tab — but its record waits here as `owed`,
+/// and the window restores the other projects only after it has answered. The answer is taken
+/// once: a webview that reloads asks again, and a second put-back would be a second copy of
+/// every chat.
+#[derive(Default)]
+struct Relaunching {
+    /// The plane the launch's working directory named, attached and not yet put back.
+    owed: Option<PlaneId>,
+    /// Whether the operator has answered. From then on there is no question to ask.
+    decided: bool,
+    /// The roots the answer said to start fresh, each taken the first time it is put back.
+    /// Empty after "Reopen all", which is what every open did before there was a question.
+    fresh: HashSet<PathBuf>,
+}
+
+/// What a launch would put back, for the question it asks before putting any of it back.
+#[derive(Debug)]
+pub struct Relaunchable {
+    /// Every project with a chat or a view tab to put back, the launch's own first.
+    pub projects: Vec<Waiting>,
+    /// Whether any of their records was written by a quit that restarted charter to install an
+    /// update (charter-app#251), which changes what the question says.
+    pub after_update: bool,
+}
+
+/// One project's share of [`Relaunchable`].
+#[derive(Debug)]
+pub struct Waiting {
+    pub root: PathBuf,
+    pub chats: usize,
+    pub views: usize,
 }
 
 impl Planes {
@@ -324,12 +390,21 @@ impl Planes {
             // Nobody to tell yet. A registry with no window still opens a handed-off chat;
             // it simply has no strip to put it on until one asks what is open.
             arrivals: Arc::new(|_| {}),
+            changes: Arc::new(|_| {}),
+            relaunching: Mutex::new(Relaunching::default()),
         }
     }
 
     /// Tells `arrivals` whenever a handoff opens a chat, so the window can put it on a strip.
     pub fn telling_arrivals(mut self, arrivals: crate::handoff::Arrivals) -> Self {
         self.arrivals = arrivals;
+        self
+    }
+
+    /// Tells `changes` whenever a plane this registry holds changes on disk, so the window reads
+    /// it again (`crate::planewatch`).
+    pub fn telling_changes(mut self, changes: crate::planewatch::Changed) -> Self {
+        self.changes = changes;
         self
     }
 
@@ -421,7 +496,113 @@ impl Planes {
         // programs, and a program that dies at once tells the board, which tells the window,
         // which asks this very registry what the chat is called.
         let Ok(held) = self.held(plane) else { return };
-        held.reopen(STARTING, record);
+        // A project the launch's answer said to start fresh is started fresh the first time it
+        // is put back, and only that time. That first time may be later in the day — a restore
+        // whose trust ask was declined, opened afterwards from the recents — which is still
+        // the operator's answer for that project; after it, an open is an ordinary one.
+        let choice = if self.relaunching().fresh.remove(held.root()) {
+            Choice::StartFresh
+        } else {
+            Choice::ReopenAll
+        };
+        held.reopen(STARTING, record, choice);
+    }
+
+    /// What this launch would put back, or nothing when there is nothing to ask about — no
+    /// project holds a chat or a view tab — or the operator has already answered.
+    ///
+    /// `restoring` is the projects the window is about to restore (`opener::planes_to_restore`),
+    /// named by the paths the window will open them by. **Reading a record here starts
+    /// nothing**: the counts are all this takes from it, and each project is read again, by the
+    /// one read its own open makes, when it is actually put back (charter-app#123).
+    pub fn relaunch_ask(&self, restoring: &[PathBuf]) -> Option<Relaunchable> {
+        let relaunching = self.relaunching();
+        if relaunching.decided {
+            return None;
+        }
+        let roots = self.launch_roots(&relaunching, restoring);
+        drop(relaunching);
+        let mut after_update = false;
+        let projects: Vec<Waiting> = roots
+            .into_iter()
+            .filter_map(|root| {
+                // A record charter refuses to read puts nothing back, so it is not asked about;
+                // the refusal is said where it always was, when the project is opened.
+                let record = reopen::read_or_refusal(&root).ok()?;
+                after_update |= record.relaunch_after_update;
+                record.holds_anything().then_some(Waiting {
+                    chats: record.chats.len(),
+                    views: record.views.len(),
+                    root,
+                })
+            })
+            .collect();
+        (!projects.is_empty()).then_some(Relaunchable {
+            projects,
+            after_update,
+        })
+    }
+
+    /// The operator's answer to [`Self::relaunch_ask`] — or the answer a launch with nothing
+    /// to ask about takes without asking, which is [`Choice::ReopenAll`].
+    ///
+    /// **Taken once.** A second answer — a reloaded window — changes nothing.
+    ///
+    /// Puts the launch's own plane back, which it has owed since [`at_launch`] attached it,
+    /// and marks every project in `restoring` for a fresh start when that is the answer, so
+    /// the window's restore opens them through the ordinary gate and they come back empty.
+    ///
+    /// **This is where the launch's yes — the first of the two approvals [`Approved`] names —
+    /// is spent now**, and it covers the one plane [`at_launch`] wrote down as owed, never a
+    /// plane the caller names.
+    pub fn relaunch(&self, choice: Choice, restoring: &[PathBuf]) {
+        let owed = {
+            let mut relaunching = self.relaunching();
+            if relaunching.decided {
+                return;
+            }
+            relaunching.decided = true;
+            if choice == Choice::StartFresh {
+                relaunching.fresh = self
+                    .launch_roots(&relaunching, restoring)
+                    .into_iter()
+                    .collect();
+            }
+            relaunching.owed.take()
+        };
+        // The lock is dropped before anything starts, for `reopen`'s reason: a program that
+        // dies at once tells the window, which asks this registry about it.
+        if let Some(plane) = owed {
+            self.reopen(&plane, &Approved(()), self.record_of(&plane));
+        }
+    }
+
+    /// Every project this launch puts back, by root: its own plane first, then each project
+    /// the window will restore. The one list both the question and the answer are about, so
+    /// what is asked about and what is started fresh cannot drift apart.
+    fn launch_roots(&self, relaunching: &Relaunching, restoring: &[PathBuf]) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> = relaunching
+            .owed
+            .as_ref()
+            .and_then(|plane| self.held(plane).ok())
+            .map(|held| held.root.clone())
+            .into_iter()
+            .collect();
+        for path in restoring {
+            // A project that is no longer a plane is the restore's own news, and it says so.
+            if let Ok(root) = plane_at(path)
+                && !roots.contains(&root)
+            {
+                roots.push(root);
+            }
+        }
+        roots
+    }
+
+    fn relaunching(&self) -> MutexGuard<'_, Relaunching> {
+        self.relaunching
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Opens a plane the operator asked for — **only if this machine has already recorded
@@ -790,6 +971,18 @@ impl Planes {
                 }));
         }
 
+        // Never fatal, as the socket above is not: a plane that cannot be watched still opens,
+        // and its panels read it when a workspace is focused.
+        let watch = crate::planewatch::Watch::start(id.clone(), &root, Arc::clone(&self.changes))
+            .map_err(|why| {
+                eprintln!(
+                    "charter: {} is not watched ({why}); its panels will not follow changes \
+                     made outside this window",
+                    root.display()
+                );
+            })
+            .ok();
+
         Held {
             id,
             root,
@@ -797,6 +990,7 @@ impl Planes {
             tell: Arc::clone(&self.tell),
             chats,
             records,
+            watch: Mutex::new(watch),
         }
     }
 
@@ -1202,16 +1396,14 @@ fn resolving_with(
             // launched from a terminal must not find that list empty — and opening it from
             // that list asks once, as every other plane does.
             //
-            // The record is read HERE, because the launch draws no dialog and so has nothing
-            // to have shown. It is still one read: `Held::reopen` no longer makes its own
-            // (charter-app#123), so this line is the whole of it and a second one would have
-            // to be written on purpose.
-            //
-            // Against the root the REGISTRY settled on, never the one the resolver handed
-            // over: `Planes::open` canonicalises, and reading `/var/…` while the plane is held
-            // as `/private/var/…` is the same two-spellings-of-one-directory defect the id
-            // exists to stop, wearing the record's hat.
-            planes.reopen(&plane, &Approved(()), planes.record_of(&plane));
+            // **It is not put back HERE** (charter-app#250). The launch asks the operator
+            // whether they want what was open back, and nothing starts before the answer — so
+            // the plane is written down as owed, and [`Planes::relaunch`] spends this yes when
+            // the window has the answer. That is where the record is read, once, against the
+            // root the registry settled on (`record_of`): `Planes::open` canonicalises, and
+            // reading `/var/…` while the plane is held as `/private/var/…` is the
+            // two-spellings-of-one-directory defect the id exists to stop.
+            planes.relaunching().owed = Some(plane.clone());
             Launch {
                 plane: Some(plane),
                 from,
@@ -1509,8 +1701,10 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             }],
             dealt: 0,
+            relaunch_after_update: false,
         }
     }
 
@@ -1538,6 +1732,7 @@ mod tests {
                 show_footer: false,
                 pinned: false,
                 number: None,
+                label: None,
             })
             .collect();
         reopen::write(
@@ -1812,14 +2007,269 @@ mod tests {
             held.root(),
             root.canonicalize().expect("the plane resolves").as_path()
         );
-        // And the launch IS the operator's yes, so the record it holds is put back. Counted
-        // rather than looked at: a chat whose program dies at once is a chat that was tried,
-        // and on a runner either answer is honest — what must not happen is neither.
+        // And the launch IS the operator's yes, so the record it holds is put back — once
+        // they have answered whether they want it back (charter-app#250). Counted rather than
+        // looked at: a chat whose program dies at once is a chat that was tried, and on a
+        // runner either answer is honest — what must not happen is neither.
+        planes.relaunch(Choice::ReopenAll, &[]);
         assert_eq!(
-            held.chats().open_now().len() + held.chats().would_not_start().len(),
+            tried(&held),
             1,
             "the launch attached the plane and never put its record back"
         );
+    }
+
+    // ----- the question a relaunch asks (charter-app#250) -----
+
+    /// How many chats a plane has tried to start: running, or tried and refused. Counted
+    /// rather than looked at, for the launch test's reason above.
+    fn tried(held: &Held) -> usize {
+        held.chats().open_now().len() + held.chats().would_not_start().len()
+    }
+
+    /// A plane launched in, holding a record of one chat, and the registry that launched it.
+    fn launched_with_one_chat(dir: &Path) -> (Planes, PathBuf, Arc<Held>) {
+        let root = a_plane(&dir.join("plane"));
+        a_record_naming(&root, "/bin/echo");
+        let planes = planes();
+        let plane = resolving_with(&planes, Ok(root.clone()), |_| Ok(root.clone()))
+            .plane
+            .expect("a plane was opened");
+        let held = planes.held(&plane).expect("it is held");
+        (planes, root, held)
+    }
+
+    #[test]
+    fn a_launch_starts_no_chat_before_the_operator_has_chosen() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (_planes, root, held) = launched_with_one_chat(dir.path());
+
+        assert_eq!(tried(&held), 0, "a chat started while the question was up");
+        assert!(
+            reopen::read_or_refusal(&root)
+                .expect("the record reads")
+                .holds_anything(),
+            "the record was touched before anything was chosen"
+        );
+    }
+
+    #[test]
+    fn a_launch_that_is_never_answered_leaves_the_record_as_it_was_at_the_quit() {
+        // A window that never loaded, or a quit with the question still up. The record is
+        // not the app's to write until the choice has been made, so nothing is lost.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, _held) = launched_with_one_chat(dir.path());
+        let before = std::fs::read(record_of(&root)).expect("the record");
+
+        planes.let_go_of_all();
+
+        assert_eq!(std::fs::read(record_of(&root)).expect("the record"), before);
+    }
+
+    #[test]
+    fn the_question_names_each_project_with_something_to_put_back_and_what() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, _held) = launched_with_one_chat(dir.path());
+        let other = a_plane(&dir.path().join("other"));
+        a_record_naming_each_on(&other, &["/bin/echo", "/bin/echo"]);
+        reopen::write(
+            &other,
+            &reopen::Record {
+                views: vec![a_persona_view()],
+                ..reopen::read_or_refusal(&other).expect("the record reads")
+            },
+        )
+        .expect("the record is written");
+        let empty = a_plane(&dir.path().join("empty"));
+
+        let asked = planes
+            .relaunch_ask(&[other.clone(), empty])
+            .expect("there is something to ask about");
+
+        let said: Vec<(PathBuf, usize, usize)> = asked
+            .projects
+            .iter()
+            .map(|waiting| (waiting.root.clone(), waiting.chats, waiting.views))
+            .collect();
+        assert_eq!(
+            said,
+            vec![
+                (root.canonicalize().expect("resolves"), 1, 0),
+                (other.canonicalize().expect("resolves"), 2, 1),
+            ],
+            "the launch's own project first, then each restored one that holds anything"
+        );
+        assert!(!asked.after_update);
+    }
+
+    #[test]
+    fn nothing_to_put_back_anywhere_is_no_question() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let other = a_plane(&dir.path().join("other"));
+        let planes = planes();
+        resolving_with(&planes, Ok(root.clone()), |_| Ok(root.clone()));
+
+        assert!(planes.relaunch_ask(&[other]).is_none());
+    }
+
+    #[test]
+    fn start_fresh_starts_nothing_and_clears_the_record_but_keeps_every_number_dealt() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, held) = launched_with_one_chat(dir.path());
+        reopen::write(
+            &root,
+            &reopen::Record {
+                dealt: 6,
+                ..reopen::read_or_refusal(&root).expect("the record reads")
+            },
+        )
+        .expect("the record is written");
+
+        planes.relaunch(Choice::StartFresh, &[]);
+
+        assert_eq!(tried(&held), 0);
+        let after = reopen::read_or_refusal(&root).expect("the record reads");
+        assert!(!after.holds_anything(), "the record still holds {after:?}");
+        assert_eq!(
+            after.dealt, 6,
+            "a number already dealt could be dealt again"
+        );
+    }
+
+    #[test]
+    fn the_choice_is_made_once_and_a_reloaded_window_asking_again_changes_nothing() {
+        // A webview reload runs the window's launch path a second time. The chats are already
+        // back, so a second question — or a second put-back — would be a second copy of each.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, _root, held) = launched_with_one_chat(dir.path());
+        let restored = a_plane(&dir.path().join("restored"));
+        a_record_naming(&restored, "/bin/echo");
+        let restoring = std::slice::from_ref(&restored);
+
+        planes.relaunch(Choice::ReopenAll, restoring);
+        assert!(planes.relaunch_ask(restoring).is_none(), "it asked twice");
+        planes.relaunch(Choice::StartFresh, restoring);
+
+        assert_eq!(tried(&held), 1);
+        assert!(
+            planes.relaunching().fresh.is_empty(),
+            "a second answer marked the restore for a fresh start"
+        );
+    }
+
+    /// Yesterday's session of `root`: approved on this machine, and quit with one chat open.
+    ///
+    /// The chat is `/bin/cat`, which waits on its terminal until it is ended — so it is still
+    /// running when the quit writes the record, and the record the next launch reads names it.
+    #[cfg(unix)]
+    fn approved_yesterday_with_one_chat(config: &Path, root: &Path) {
+        a_record_naming(root, "/bin/cat");
+        let planes = planes_keeping(config);
+        let shown = asking(planes.open_if_approved(root).expect("it is a plane")).contributes;
+        planes.approve_and_open(root, &shown).expect("yes");
+        planes.let_go_of_all();
+        assert!(
+            reopen::read_or_refusal(root)
+                .expect("the record reads")
+                .holds_anything(),
+            "yesterday's quit recorded nothing"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_project_restored_after_start_fresh_opens_with_nothing_put_back() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        approved_yesterday_with_one_chat(&config, &root);
+
+        // Today: the launch restores it, and the operator starts fresh.
+        let planes = planes_keeping(&config);
+        planes.relaunch(Choice::StartFresh, std::slice::from_ref(&root));
+        let plane = opened(planes.open_if_approved(&root).expect("it is a plane"));
+        let held = planes.held(&plane).expect("it is held");
+
+        assert_eq!(tried(&held), 0);
+        assert!(
+            !reopen::read_or_refusal(&root)
+                .expect("the record reads")
+                .holds_anything()
+        );
+        // And the cleared record is vouched for, so the next open does not ask about a change
+        // charter made itself.
+        planes.close(&plane).expect("it closes");
+        opened(planes.open_if_approved(&root).expect("it is a plane"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_project_opened_after_reopen_all_puts_its_record_back() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        approved_yesterday_with_one_chat(&config, &root);
+
+        let planes = planes_keeping(&config);
+        planes.relaunch(Choice::ReopenAll, std::slice::from_ref(&root));
+        let plane = opened(planes.open_if_approved(&root).expect("it is a plane"));
+
+        assert_eq!(tried(&planes.held(&plane).expect("it is held")), 1);
+    }
+
+    #[test]
+    fn a_relaunch_after_an_update_says_so_in_the_question() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, _held) = launched_with_one_chat(dir.path());
+        reopen::write(
+            &root,
+            &reopen::Record {
+                relaunch_after_update: true,
+                ..reopen::read_or_refusal(&root).expect("the record reads")
+            },
+        )
+        .expect("the record is written");
+
+        assert!(
+            planes
+                .relaunch_ask(&[])
+                .expect("there is something to ask about")
+                .after_update
+        );
+    }
+
+    fn a_persona_view() -> reopen::View {
+        reopen::View {
+            from: None,
+            view: "persona".to_owned(),
+            key: "steward".to_owned(),
+            title: "steward".to_owned(),
+            workspace: None,
+            at: 1,
+            active: false,
+            pinned: false,
+        }
+    }
+
+    /// [`a_record_naming_each`], on every platform.
+    fn a_record_naming_each_on(root: &Path, programs: &[&str]) {
+        let chats = programs
+            .iter()
+            .enumerate()
+            .map(|(which, program)| reopen::Chat {
+                name: format!("chat.{which}"),
+                ..one_chat_on(program).chats.remove(0)
+            })
+            .collect();
+        reopen::write(
+            root,
+            &reopen::Record {
+                chats,
+                ..Default::default()
+            },
+        )
+        .expect("the record is written");
     }
 
     /// A registry whose machine store is `config`, which is what a real one has.
@@ -2556,7 +3006,7 @@ mod tests {
             let (planes, told) = planes_telling();
             let plane = planes.open(&root);
             let held = planes.held(&plane).expect("it is held");
-            held.reopen(STARTING, Ok(reopen::Record::default()));
+            held.reopen(STARTING, Ok(reopen::Record::default()), Choice::ReopenAll);
             a_chat_asking_for_you(&held, &told, "/bin/cat");
 
             planes.let_go_of_all();
@@ -2571,7 +3021,7 @@ mod tests {
         let (planes, told) = planes_telling();
         let plane = planes.open(&root);
         let held = planes.held(&plane).expect("it is held");
-        held.reopen(STARTING, reopen::read_or_refusal(&root));
+        held.reopen(STARTING, reopen::read_or_refusal(&root), Choice::ReopenAll);
         let back = held.chats().open_now();
         assert_eq!(back.len(), 1, "the record did not put the chat back");
 
