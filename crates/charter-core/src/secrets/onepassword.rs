@@ -551,3 +551,7 @@ pub fn health(ctx: &Ctx, vault: &Vault) -> (bool, String) {
     }
     (true, format!("{n} secret(s) in 1Password item '{item}'"))
 }
+
+#[cfg(test)]
+#[path = "onepassword_tests.rs"]
+mod tests;

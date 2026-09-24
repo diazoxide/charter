@@ -98,3 +98,7 @@ pub fn masked(ctx: &Ctx, value: &str) -> String {
         None => size_band(value),
     }
 }
+
+#[cfg(test)]
+#[path = "fingerprint_tests.rs"]
+mod tests;

@@ -49,6 +49,8 @@ pub fn urlsplit(url: &str) -> Split {
         .collect();
     let mut rest = url.as_str();
     let mut scheme = String::new();
+    // `i > 0` is CPython's; `i >= 0` would answer the same, since an empty candidate fails the
+    // first-character check below (`.cargo/mutants.toml` excludes that mutant).
     if let Some(i) = rest.find(':')
         && i > 0
     {

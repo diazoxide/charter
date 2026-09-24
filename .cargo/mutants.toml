@@ -89,4 +89,17 @@ exclude_re = [
     'src/secrets/cmd\.rs:\d+:\d+: replace stream_opened_as -> Option<&.static str> with None$',
     'src/secrets/cmd\.rs:\d+:\d+: replace identify_dest -> Option<rustix::fs::Stat> with (None|Some\(Default::default\(\)\))$',
     'src/secrets/cmd\.rs:\d+:\d+: replace \| with & in identify_dest$',
+    # `secrets::exec::supervise`'s SIGINT grace loop, `now() < deadline` against `<=`: they
+    # differ only at the one instant equal to the deadline, and the loop polls every 10 ms.
+    'src/secrets/exec\.rs:\d+:\d+: replace < with <= in supervise$',
+    # `secrets::exec::exit_status`: `code <= 0` differs from `code < 0` only at 0, where
+    # `(256 + 0) & 0xff` is 0 too, and an exit code is never above 255. The site says so.
+    'src/secrets/exec\.rs:\d+:\d+: replace < with <= in exit_status$',
+    # `secrets::replace_all`'s early return `from.is_empty() || data.len() < from.len()` against
+    # `&&`: a needle longer than the haystack never matches in the loop either, and an empty
+    # needle never arrives — `redact`, its only caller, drops empty values first. The site says so.
+    'src/secrets/mod\.rs:\d+:\d+: replace \|\| with && in replace_all$',
+    # `reference::urlsplit`'s `i > 0` against `>=`: at `i == 0` the candidate scheme is empty,
+    # and an empty candidate fails the first-character check that follows. The site says so.
+    'src/secrets/reference\.rs:\d+:\d+: replace > with >= in urlsplit$',
 ]
