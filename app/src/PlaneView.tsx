@@ -13,6 +13,7 @@ import clsx from "clsx";
 import { listen } from "@tauri-apps/api/event";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
+import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
   ChevronDown,
   FolderOpen,
@@ -97,6 +98,7 @@ import { ChatState } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { ViewMark, ViewPane } from "./Views";
+import { useTabStop } from "./roving";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
@@ -1641,6 +1643,14 @@ export function PlaneView({
 
   const frontChat = frontTab && reopened.find((chat) => chat.session === chatOf(tabs, frontTab.id));
 
+  // Each strip is ONE Tab stop, the selected tab, and the arrows move along it (charter-app#189,
+  // `roving.ts`). Asked here rather than below the early return, because they are hooks.
+  const workspaceStop = useTabStop(focused, workspacesShown.shown);
+  const chatStop = useTabStop(
+    tabs.inFront === undefined ? undefined : String(tabs.inFront),
+    shown.map(String),
+  );
+
   // A project the operator is not looking at keeps every piece of state above and draws none
   // of it. See this module's own docstring for why it is `null` and not `hidden`.
   if (!inFront) return null;
@@ -1660,40 +1670,48 @@ export function PlaneView({
           sidebar by it. The tablist is what this is. */}
       {strips.length > 0 && (
         <div className="workspaces">
-          <div
-            className="workspaces-strip"
-            role="tablist"
-            aria-label="Workspaces"
-            ref={workspaceStrip}
-            style={{ "--least": `${LEAST.workspace}px` } as CSSProperties}
-          >
-            {workspacesShown.shown.map((workspace) => {
-              const offer = by(`workspace.focus:${workspace}`);
-              return (
-                /* Right-click is the third reader of the catalogue (`Menus.tsx`): focus, pin,
+          <RovingFocusGroup.Root asChild orientation="horizontal" {...workspaceStop}>
+            <div
+              className="workspaces-strip"
+              role="tablist"
+              aria-label="Workspaces"
+              ref={workspaceStrip}
+              style={{ "--least": `${LEAST.workspace}px` } as CSSProperties}
+            >
+              {workspacesShown.shown.map((workspace) => {
+                const offer = by(`workspace.focus:${workspace}`);
+                return (
+                  /* Right-click is the third reader of the catalogue (`Menus.tsx`): focus, pin,
                    make one, and — under the line — delete this one. `asChild`, so the strip
                    gains no wrapper: the trigger IS the tab, which is what #171's `flex: 1 1 0`
                    cells require. */
-                <Menued
-                  key={workspace}
-                  on={{ on: "workspace", workspace }}
-                  offers={found}
-                  onPress={press}
-                >
-                  <button
-                    role="tab"
-                    aria-selected={workspace === focused}
-                    title={offer?.title}
-                    onClick={() => {
-                      if (offer?.available) press(offer);
-                    }}
+                  <Menued
+                    key={workspace}
+                    on={{ on: "workspace", workspace }}
+                    offers={found}
+                    onPress={press}
                   >
-                    {workspaceMarks(workspace)}
-                  </button>
-                </Menued>
-              );
-            })}
-          </div>
+                    <RovingFocusGroup.Item
+                      asChild
+                      tabStopId={workspace}
+                      active={workspace === focused}
+                    >
+                      <button
+                        role="tab"
+                        aria-selected={workspace === focused}
+                        title={offer?.title}
+                        onClick={() => {
+                          if (offer?.available) press(offer);
+                        }}
+                      >
+                        {workspaceMarks(workspace)}
+                      </button>
+                    </RovingFocusGroup.Item>
+                  </Menued>
+                );
+              })}
+            </div>
+          </RovingFocusGroup.Root>
           {/* This strip's own controls, in the shape the project strip above already has
               (`App.tsx`): the `+` that makes one more of what the strip lists, then what the
               strip had no room for. `.strip-doing` and not a `.more` of its own, because the
@@ -1735,50 +1753,58 @@ export function PlaneView({
             sessions-under-a-workspace was. Named, because the projects and the workspaces
             above are tablists too and a query for `role="tab"` across the whole window
             would mix all three. */}
-        <div
-          className="tabs"
-          role="tablist"
-          aria-label="Tabs"
-          ref={strip}
-          style={{ "--least": `${LEAST.chat}px` } as CSSProperties}
-        >
-          {shown.map((id) => (
-            /* Right-click is the third reader of the catalogue (`Menus.tsx`). `asChild`, so
+        <RovingFocusGroup.Root asChild orientation="horizontal" {...chatStop}>
+          <div
+            className="tabs"
+            role="tablist"
+            aria-label="Tabs"
+            ref={strip}
+            style={{ "--least": `${LEAST.chat}px` } as CSSProperties}
+          >
+            {shown.map((id) => (
+              /* Right-click is the third reader of the catalogue (`Menus.tsx`). `asChild`, so
                the strip gains no wrapper element: the trigger IS the tab.
 
                No `data-tab` and no scroll-into-view ref any more: #171 deleted `offscreen.ts`
                and the strip collapses rather than scrolls, so there is nothing to scroll a
                tab into and nothing measuring tabs through the markup. */
-            <Menued key={id} on={{ on: "chat", tab: id }} offers={found} onPress={press}>
-              <span className="tab">
-                <button
-                  role="tab"
-                  aria-selected={id === tabs.inFront}
-                  // The catalogue's row, not a second copy of it. The tab already in front
-                  // has a row that says so and cannot run — a tab is never disabled, because
-                  // the selected tab is the one a keyboard has to be able to land on.
-                  onClick={() => {
-                    const offer = by(`tab.select:${id}`);
-                    if (offer?.available) press(offer);
-                  }}
-                >
-                  <TabMarks
-                    tabs={tabs}
-                    id={id}
-                    states={states}
-                    pin={
-                      <Pin
-                        held={isPinned(id)}
-                        what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
+              <Menued key={id} on={{ on: "chat", tab: id }} offers={found} onPress={press}>
+                <span className="tab">
+                  <RovingFocusGroup.Item
+                    asChild
+                    tabStopId={String(id)}
+                    active={id === tabs.inFront}
+                  >
+                    <button
+                      role="tab"
+                      aria-selected={id === tabs.inFront}
+                      // The catalogue's row, not a second copy of it. The tab already in front
+                      // has a row that says so and cannot run — a tab is never disabled, because
+                      // the selected tab is the one a keyboard has to be able to land on.
+                      onClick={() => {
+                        const offer = by(`tab.select:${id}`);
+                        if (offer?.available) press(offer);
+                      }}
+                    >
+                      <TabMarks
+                        tabs={tabs}
+                        id={id}
+                        states={states}
+                        pin={
+                          <Pin
+                            held={isPinned(id)}
+                            what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
+                          />
+                        }
                       />
-                    }
-                  />
-                </button>
-                <Closer offer={by(`tab.close:${id}`)} onPress={press} />
-              </span>
-            </Menued>
-          ))}
-        </div>
+                    </button>
+                  </RovingFocusGroup.Item>
+                  <Closer offer={by(`tab.close:${id}`)} onPress={press} />
+                </span>
+              </Menued>
+            ))}
+          </div>
+        </RovingFocusGroup.Root>
         {/* The affordance that says the strip is not showing everything (ADR 0039). It is
             the first thing on the strip that says how many tabs there are past the edge —
             a scroller never did, which is the premise ADR 0036 was missing. It is absent
@@ -2227,11 +2253,15 @@ function PaneFrame({
   const usage = useChatUsage(plane, session, moved, running);
   return (
     <div className="pane-frame">
-      {children}
+      {/* **The corners before the terminal, in the document**, although they are drawn over
+          it: the tab order is the document's, and a terminal keeps Tab for its shell, so a
+          control written after it is one Tab never reaches (charter-app#189). The pane's own
+          controls are in its top corner, which is where reading order puts them anyway. */}
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
       </div>
       <div className="pane-corner at-end">{doing}</div>
+      {children}
     </div>
   );
 }
@@ -2288,6 +2318,9 @@ export function Doer({
         offer.id === "pane.close" && !closesOnly(offer.does) && "ends-a-chat",
         bare && "bare",
       )}
+      // WebKit leaves a `<button>` out of the tab sequence unless its `tabindex` is written down
+      // (`docs/ui-primitives.md`, charter-app#189).
+      tabIndex={0}
       disabled={!offer.available}
       aria-label={bare ? (words ?? offer.title) : undefined}
       title={offer.reason || offer.note || (bare ? offer.title : undefined)}
@@ -2406,6 +2439,7 @@ export function ShowMore({
         <button
           className={arrived ? "show-more arrived" : "show-more"}
           aria-label={`Show ${many} the strip is not showing`}
+          tabIndex={0}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => setOpen((up) => !up)}
         >
@@ -2493,6 +2527,11 @@ export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
       // A tab showing only a view closes and ends nothing, so its `×` does not wear the danger
       // hover a chat's does — the look may not say more than the act does, either way.
       className={clsx("closer", closesOnly(offer.does) && "keeps")}
+      // **Not a Tab stop, and deliberately** (charter-app#189). The strip it sits on is ONE
+      // stop, the WAI-ARIA "Tabs" pattern; a `×` per tab in the sequence would be fifty stops
+      // again. A keyboard ends a chat from the palette's row for it, or from the tab's own menu
+      // (the context-menu key), both of which read the same catalogue row this does.
+      tabIndex={-1}
       aria-label={offer.title}
       title={offer.note ? `${offer.title} — ${offer.note}` : offer.title}
       onClick={() => onPress(offer)}
@@ -2586,6 +2625,10 @@ function LayoutPanes({
       // it is. Clicking anywhere in it focuses it, which is what a terminal's click does.
       return (
         <div className="pane-frame" onPointerDown={() => onFocus(layout.pane)}>
+          {/* Before the view, for `PaneFrame`'s reason: the tab order is the document's. */}
+          <div className="pane-corner at-end">
+            <PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />
+          </div>
           <div
             className={layout.pane === focused ? "pane view focused" : "pane view"}
             onFocus={() => onFocus(layout.pane)}
@@ -2599,9 +2642,6 @@ function LayoutPanes({
               onOpenView={onOpenView}
               onAsk={() => onAsk(layout.pane)}
             />
-          </div>
-          <div className="pane-corner at-end">
-            <PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />
           </div>
         </div>
       );
@@ -2712,6 +2752,10 @@ function PaneDoing({
             className={
               offer.id === "pane.close" && !closesOnly(offer.does) ? "ends-a-chat" : undefined
             }
+            // WebKit leaves a `<button>` out of the tab sequence unless this is written down
+            // (`docs/ui-primitives.md`). Only the focused pane's are drawn (`App.css`), so only
+            // they are stops: a hidden control is not one.
+            tabIndex={0}
             disabled={!offer.available}
             aria-label={offer.title}
             title={offer.reason || (offer.note ? `${offer.title} — ${offer.note}` : offer.title)}

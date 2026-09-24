@@ -23,6 +23,25 @@ body {
   margin: 0;
 }
 
+/* **Wherever Tab can land, it is seen landing** (charter-app#189). Every stop in the window
+   now says `tabindex`, and a stop with no ring is one the operator has to find by pressing
+   Enter to see what happens. Most controls draw their own ring in this same token, inset,
+   because a ring outside a cell is clipped by the strip it is in; this is the floor under
+   them, at zero specificity (`:where`) so any control's own rule wins. `:focus-visible` and not
+   `:focus`: a click does not draw it. xterm's textarea is excluded — it is off-screen, and the
+   terminal's own cursor is how a pane says it has the keyboard. */
+:where(
+  button,
+  summary,
+  a,
+  [role="tab"],
+  [role="separator"],
+  [tabindex]:not(textarea)
+):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 /* **Every icon in the window, sized once, from the text it sits in.**
  *
  * Lucide puts `lucide` on every `<svg>` it draws, so this one rule is the whole of the icon
@@ -772,11 +791,20 @@ button.show-more:focus-visible {
    accessibility tree — so a hidden control cannot be pressed by accident or found by a reader
    that cannot see it either.
 
-   **And they are drawn for the FOCUSED pane as well as the hovered one**, because hover-only
-   is a control that does not exist without a pointer. The focused pane is where a keyboard
-   is, so `:focus-within` is true there — including while the terminal itself has the keyboard,
-   which is the ordinary case. A pane the operator is not in shows nothing until the pointer
-   is over it. */
+   **Drawn on hover, and while the keyboard is ON them — not while it is merely in the pane**
+   (charter-app#189). The operator asked for them *"visible when hovering harness only"* and
+   objected to that corner being cluttered; the focused pane is the one he is typing in, so a
+   rule that drew them for the focused pane, or whenever the terminal had the keyboard
+   (`.pane-frame:focus-within`, which is what was here before), drew them all day.
+
+   **But a keyboard has to be able to reach them**, and `visibility: hidden` is out of the tab
+   sequence. So the FOCUSED pane's controls are hidden by `opacity` instead: still in the
+   sequence — they are written before the terminal, so Tab from the strip arrives at them — but
+   not seen and not clickable (`pointer-events: none`, so a stray press cannot end a chat it
+   cannot see). The moment one has the keyboard, `.pane-doing:focus-within` draws the group;
+   leave it and it goes again. Every other pane's controls stay `visibility: hidden`: the
+   palette and the buttons act on the focused pane, so those are the only ones a keyboard
+   needs. */
 .pane-doing {
   display: flex;
   gap: 0.15rem;
@@ -788,8 +816,14 @@ button.show-more:focus-visible {
 }
 
 .pane-frame:hover .pane-doing,
-.pane-frame:focus-within .pane-doing {
+.pane-doing:focus-within {
   visibility: visible;
+}
+
+.pane-frame:has(.pane.focused):not(:hover) .pane-doing:not(:focus-within) {
+  visibility: visible;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .pane-doing button {
