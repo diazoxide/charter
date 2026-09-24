@@ -52,40 +52,9 @@ pub const ENABLED: &str = "enabled";
 /// The table of values for the settings it declares, inside `[extensions.<id>]`.
 pub const SETTINGS: &str = "settings";
 
-/// Where an answer came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
-    /// No file said: the machine's answer, or the setting's declared default.
-    Default,
-    /// `charter.toml`.
-    Shared,
-    /// The `settings` of the workspace's `workspace.json` (charter-app#280).
-    Workspace,
-    /// `charter.local.toml`.
-    Local,
-}
-
-impl Source {
-    /// The file this source is, or `None` for [`Source::Default`]. A workspace's is
-    /// `workspace.json`; which workspace's, [`Choices::workspace_file`] says.
-    pub fn file(self) -> Option<&'static str> {
-        match self {
-            Self::Default => None,
-            Self::Shared => Some(COMMITTED_FILE),
-            Self::Workspace => Some(crate::settings::workspace::FILE),
-            Self::Local => Some(LOCAL_FILE),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Shared => "shared",
-            Self::Workspace => "workspace",
-            Self::Local => "local",
-        }
-    }
-}
+/// Where an answer came from: the overlay's layers, in [`crate::settings`] because every
+/// reader of the overlay shares them (charter-app#309).
+pub use crate::settings::Source;
 
 /// What an extension is in this project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -377,26 +377,41 @@ pub fn name_refusal(root: &Path, name: &str) -> Option<String> {
 // through the one frontmatter reader above and merged down the `extends:` chain exactly as
 // `persona.resolve` merges them.
 
-/// Which vault a persona uses, as its own definition declares it.
+/// Which vault a persona uses, and where that answer came from — `persona.vault_of`, which
+/// asks the definition first and the vault registry only when the definition says nothing.
+/// [`crate::personaverbs::vault`] is the one resolution, and `charter persona list`, `persona
+/// secret`'s fallback and the persona card all read it.
 ///
-/// **Three answers and not two**, because "holds no credentials" and "nobody said" are
-/// different facts and rounding the second down to the first is the shape this repo keeps
-/// refusing elsewhere. `charter/persona.py` makes the same split — `declares_no_vault` is
-/// its own function beside `vault_of`, and its docstring says why: *"Use `declares_no_vault`
-/// to tell 'none, deliberately' from 'none, unexamined'."*
+/// **"Holds no credentials" and "nobody named one" stay apart**, because rounding the second
+/// down to the first is the shape this repo keeps refusing elsewhere. `charter/persona.py`
+/// makes the same split — `declares_no_vault` is its own function beside `vault_of`, and its
+/// docstring says why: *"Use `declares_no_vault` to tell 'none, deliberately' from 'none,
+/// unexamined'."*
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Vault {
     /// `vault: <name>`, inherited-inclusive. **The NAME, and never anything inside it.**
     Named(String),
     /// `vault: none` — the reserved value, declared by a persona that holds no credentials.
     DeclaredNone,
-    /// No `vault:` anywhere up the chain.
-    ///
-    /// **This is not "no vault".** charter's own `vault_of` falls back to the vault registry
-    /// — a vault tagged with this persona's name in `vaults.json` — and that registry has no
-    /// Rust reader yet. Whoever shows this must say "not declared" and not "none", or the
-    /// answer claims a persona holds no credentials on the strength of a file nothing read.
-    Undeclared,
+    /// No `vault:` up the chain, and the vault registry (`vaults.json`, either half) tags this
+    /// vault with the persona — the first such by name, as `vaults_for_persona` sorts them.
+    Registered(String),
+    /// Neither the definition nor the registry names one.
+    Unnamed,
+    /// No `vault:` up the chain, and the registry did not read: charter's own sentence why.
+    /// `vault_of` answers "none" here, as Python's `except` did; a reader shown this must not
+    /// be, or it is told a persona has no vault on the strength of a file nothing read.
+    RegistryUnreadable(String),
+}
+
+impl Vault {
+    /// The vault's name, wherever it came from — `vault_of`'s answer.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Named(name) | Self::Registered(name) => Some(name),
+            Self::DeclaredNone | Self::Unnamed | Self::RegistryUnreadable(_) => None,
+        }
+    }
 }
 
 /// What a persona's definition says about it, with its `extends:` chain applied.
@@ -475,10 +490,6 @@ fn csv(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// What a persona says about itself, or the sentence saying why charter will not answer.
-///
-/// The refusal is [`name_refusal`]'s, so a panel, the CLI and a hook all refuse a name in
-/// the same words — which is the whole point of that function existing (#1057, #1059).
 /// One persona's memory store, which is the same per-file store the workspaces use.
 ///
 /// **A path and not an opened thing**, so the two readers below each apply their own
@@ -513,20 +524,21 @@ pub fn memories(root: &Path, name: &str) -> Result<Vec<crate::workspaces::Entry>
     crate::workspaces::read_store(root, &memory_dir(root, name)).map_err(|why| why.to_string())
 }
 
-pub fn details(root: &Path, name: &str) -> Result<Details, String> {
+/// What a persona says about itself, or the sentence saying why charter will not answer.
+///
+/// The refusal is [`name_refusal`]'s, so a panel, the CLI and a hook all refuse a name in
+/// the same words — which is the whole point of that function existing (#1057, #1059).
+///
+/// `state` is the plane's state directory ([`crate::plane::state_dir`]), where this machine's
+/// half of the vault registry lives.
+pub fn details(root: &Path, state: &Path, name: &str) -> Result<Details, String> {
     if let Some(refused) = name_refusal(root, name) {
         return Err(refused);
     }
     let chain = lineage(root, name);
     let (declared, tools) = effective(root, &chain);
     let value = |key: &str| meta(&declared, key).map(str::to_string);
-    let vault = match meta(&declared, "vault") {
-        // `persona.vault_of`: the reserved `none` is a declaration, not a name.
-        Some(NO_VAULT) => Vault::DeclaredNone,
-        // A blank value never reaches here, so anything else is a name.
-        Some(named) => Vault::Named(named.to_string()),
-        None => Vault::Undeclared,
-    };
+    let vault = crate::personaverbs::vault(root, state, name);
     let file = def_path(root, name);
     Ok(Details {
         name: name.to_string(),
@@ -799,7 +811,7 @@ mod detail_tests {
              delegate-when: CI/CD pipelines, k8s deploys\n---\n\n# DevOps Engineer\nbody\n",
         );
 
-        let shown = details(dir.path(), "devops").expect("it loads");
+        let shown = details(dir.path(), &dir.path().join(".charter"), "devops").expect("it loads");
 
         assert_eq!(shown.name, "devops");
         assert_eq!(shown.role.as_deref(), Some("DevOps Engineer"));
@@ -813,10 +825,9 @@ mod detail_tests {
         assert_eq!(shown.file, "personas/devops/persona.md");
     }
 
-    /// The three answers about a vault, and the reason there are three: a persona that
-    /// DECLARES it holds no credentials is not the same as one nobody has said anything
-    /// about — charter's own `vault_of` falls back to the vault registry for the second,
-    /// and nothing in Rust reads that registry yet.
+    /// A persona that DECLARES it holds no credentials is not the same as one nobody has said
+    /// anything about: `vault_of` asks the vault registry about the second, and here it has
+    /// nothing to say.
     #[test]
     fn a_declared_none_is_not_the_same_answer_as_nothing_declared() {
         let dir = plane();
@@ -829,17 +840,102 @@ mod detail_tests {
         persona(dir.path(), "forge", "---\nrole: Forge\nvault: forge\n---\n");
 
         assert_eq!(
-            details(dir.path(), "steward").unwrap().vault,
+            details(dir.path(), &dir.path().join(".charter"), "steward")
+                .unwrap()
+                .vault,
             Vault::DeclaredNone
         );
         assert_eq!(
-            details(dir.path(), "release").unwrap().vault,
-            Vault::Undeclared
+            details(dir.path(), &dir.path().join(".charter"), "release")
+                .unwrap()
+                .vault,
+            Vault::Unnamed
         );
         assert_eq!(
-            details(dir.path(), "forge").unwrap().vault,
+            details(dir.path(), &dir.path().join(".charter"), "forge")
+                .unwrap()
+                .vault,
             Vault::Named("forge".to_string())
         );
+    }
+
+    /// charter-app#185: the vault registry tags a vault to a persona whose definition names
+    /// none, and the card names it as `charter persona list` and `persona secret` do — the
+    /// first by name, from either half of the registry.
+    #[test]
+    fn a_vault_only_the_registry_tags_is_named_as_the_cli_names_it() {
+        let dir = plane();
+        let state = dir.path().join(".charter");
+        persona(dir.path(), "release", "---\nrole: Release\n---\n");
+        persona(dir.path(), "forge", "---\nrole: Forge\n---\n");
+        std::fs::write(
+            dir.path().join("vaults.json"),
+            r#"{"vaults": {"zeta": {"provider": "plain-file", "persona": "release"},
+                "alpha": {"provider": "plain-file", "persona": "release"}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("vaults.json"),
+            r#"{"vaults": {"forge-local": {"provider": "keyring", "persona": "forge"}}}"#,
+        )
+        .unwrap();
+
+        for (name, vault) in [("release", "alpha"), ("forge", "forge-local")] {
+            let shown = details(dir.path(), &state, name).unwrap().vault;
+            assert_eq!(shown, Vault::Registered(vault.to_string()));
+            assert_eq!(
+                shown.name(),
+                crate::personaverbs::vault_of(dir.path(), &state, name).as_deref(),
+                "the card and the CLI name the same vault for {name}"
+            );
+        }
+    }
+
+    /// The registry is asked only when the definition says nothing: a `vault:` line wins over
+    /// a tag, and so does `vault: none` — as `vault_of` decides.
+    #[test]
+    fn a_definition_that_says_anything_about_its_vault_outranks_the_registry() {
+        let dir = plane();
+        let state = dir.path().join(".charter");
+        persona(dir.path(), "steward", "---\nvault: none\n---\n");
+        persona(dir.path(), "devops", "---\nvault: devops\n---\n");
+        std::fs::write(
+            dir.path().join("vaults.json"),
+            r#"{"vaults": {"a": {"provider": "plain-file", "persona": "steward"},
+                "b": {"provider": "plain-file", "persona": "devops"}}}"#,
+        )
+        .unwrap();
+
+        let steward = details(dir.path(), &state, "steward").unwrap().vault;
+        assert_eq!(steward, Vault::DeclaredNone);
+        assert_eq!(steward.name(), None);
+        assert_eq!(
+            crate::personaverbs::vault_of(dir.path(), &state, "steward"),
+            None
+        );
+        let devops = details(dir.path(), &state, "devops").unwrap().vault;
+        assert_eq!(devops, Vault::Named("devops".to_string()));
+        assert_eq!(
+            crate::personaverbs::vault_of(dir.path(), &state, "devops").as_deref(),
+            Some("devops")
+        );
+    }
+
+    /// A registry that does not read is said to be one, in charter's own sentence: answering
+    /// "no vault" would be a claim about a file nothing read.
+    #[test]
+    fn a_registry_that_does_not_read_is_not_an_answer_that_there_is_no_vault() {
+        let dir = plane();
+        let state = dir.path().join(".charter");
+        persona(dir.path(), "release", "---\nrole: Release\n---\n");
+        std::fs::write(dir.path().join("vaults.json"), "{not json").unwrap();
+
+        let Vault::RegistryUnreadable(why) = details(dir.path(), &state, "release").unwrap().vault
+        else {
+            panic!("a corrupt registry was read as an answer");
+        };
+        assert!(why.contains("vaults.json is corrupt"), "{why}");
     }
 
     /// `persona.resolve`, root first: a child's line wins, and a line with nothing after the
@@ -859,7 +955,7 @@ mod detail_tests {
             "---\nextends: base\nrole:\nvault: child-vault\n---\n",
         );
 
-        let shown = details(dir.path(), "child").expect("it loads");
+        let shown = details(dir.path(), &dir.path().join(".charter"), "child").expect("it loads");
 
         assert_eq!(
             shown.role.as_deref(),
@@ -884,7 +980,9 @@ mod detail_tests {
         );
 
         assert_eq!(
-            details(dir.path(), "child").unwrap().tools,
+            details(dir.path(), &dir.path().join(".charter"), "child")
+                .unwrap()
+                .tools,
             ["gh", "git", "kubectl"]
         );
     }
@@ -898,7 +996,11 @@ mod detail_tests {
         persona(dir.path(), "b", "---\ntools: gh, glab\n---\n");
         persona(dir.path(), "c", "---\ntools: gh, , glab,\n---\n");
 
-        let tools = |name: &str| details(dir.path(), name).unwrap().tools;
+        let tools = |name: &str| {
+            details(dir.path(), &dir.path().join(".charter"), name)
+                .unwrap()
+                .tools
+        };
         assert_eq!(tools("a"), ["gh", "glab"]);
         assert_eq!(tools("b"), ["gh", "glab"]);
         assert_eq!(tools("c"), ["gh", "glab"], "an empty part is thrown away");
@@ -911,15 +1013,15 @@ mod detail_tests {
         let dir = plane();
 
         assert_eq!(
-            details(dir.path(), "nope").unwrap_err(),
+            details(dir.path(), &dir.path().join(".charter"), "nope").unwrap_err(),
             "no persona 'nope' (add it: write personas/nope/persona.md)"
         );
         assert_eq!(
-            details(dir.path(), "Bad").unwrap_err(),
+            details(dir.path(), &dir.path().join(".charter"), "Bad").unwrap_err(),
             "invalid persona name 'Bad' (lowercase letters, digits, '.', '_', '-')"
         );
         assert_eq!(
-            details(dir.path(), "_shared").unwrap_err(),
+            details(dir.path(), &dir.path().join(".charter"), "_shared").unwrap_err(),
             "invalid persona name '_shared' (lowercase letters, digits, '.', '_', '-')"
         );
     }
@@ -936,7 +1038,7 @@ mod detail_tests {
         )
         .unwrap();
 
-        let shown = details(dir.path(), "flat").expect("it loads");
+        let shown = details(dir.path(), &dir.path().join(".charter"), "flat").expect("it loads");
 
         assert_eq!(shown.file, "personas/flat.md");
         assert_eq!(shown.role.as_deref(), Some("Flat"));
@@ -953,9 +1055,9 @@ mod detail_tests {
             "---\nrole: Real\n---\nvault: not-a-vault\ntools: kubectl\n",
         );
 
-        let shown = details(dir.path(), "a").expect("it loads");
+        let shown = details(dir.path(), &dir.path().join(".charter"), "a").expect("it loads");
 
-        assert_eq!(shown.vault, Vault::Undeclared);
+        assert_eq!(shown.vault, Vault::Unnamed);
         assert_eq!(shown.tools, [] as [String; 0]);
     }
 
@@ -970,7 +1072,7 @@ mod detail_tests {
             "---\nvault: first\nvault: second\nrole: one\nrole: two\n---\n",
         );
 
-        let shown = details(dir.path(), "a").expect("it loads");
+        let shown = details(dir.path(), &dir.path().join(".charter"), "a").expect("it loads");
 
         assert_eq!(shown.vault, Vault::Named("second".to_string()));
         assert_eq!(shown.role.as_deref(), Some("two"));
