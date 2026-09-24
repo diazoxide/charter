@@ -2003,7 +2003,7 @@ fn a_manifest_in_the_format_before_capabilities_loads_as_it_did_and_keeps_its_ap
 }
 
 #[test]
-fn a_capabilities_that_is_not_a_list_of_words_is_refused() {
+fn a_capabilities_that_is_not_a_list_of_distinct_words_is_refused() {
     let made = Made::new();
     made.ordinary();
     for (capabilities, said) in [

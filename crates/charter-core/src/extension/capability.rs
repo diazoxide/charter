@@ -29,11 +29,17 @@ pub enum Capability {
 }
 
 impl Capability {
+    /// The word a manifest writes, and what the approval prompt says it does — one row per
+    /// capability, so that adding one is one arm here and one in [`Self::known`].
+    fn spelled(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Probe => ("probe", "charter's test capability, which grants nothing"),
+        }
+    }
+
     /// The word a manifest writes.
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Probe => "probe",
-        }
+        self.spelled().0
     }
 
     /// Every capability this build of charter knows, in the order a prompt lists them.
@@ -52,10 +58,8 @@ impl Capability {
 
     /// What the approval prompt says about it, in charter's words.
     pub fn asks(self) -> String {
-        let what = match self {
-            Self::Probe => "charter's test capability, which grants nothing",
-        };
-        format!("the capability “{}” — {what}", self.as_str())
+        let (word, what) = self.spelled();
+        format!("the capability “{word}” — {what}")
     }
 }
 
@@ -75,20 +79,7 @@ pub(super) fn declared(value: &serde_json::Value) -> Result<Vec<Capability>, Str
             .as_str()
             .ok_or("has a 'capabilities' entry that is not a word")?;
         let Some(capability) = Capability::parse(word) else {
-            let known: Vec<&str> = Capability::known()
-                .into_iter()
-                .map(Capability::as_str)
-                .collect();
-            return Err(format!(
-                "asks for the capability \"{}\", which this charter does not know, so it loads \
-                 none of this extension. {} A newer charter may know it.",
-                crate::shown::readable(word, MOST_WORD_SHOWN),
-                if known.is_empty() {
-                    "This charter grants no capabilities yet.".to_owned()
-                } else {
-                    format!("This charter knows {}.", known.join(", "))
-                }
-            ));
+            return Err(unknown(word, &Capability::known()));
         };
         if out.contains(&capability) {
             return Err(format!(
@@ -99,4 +90,43 @@ pub(super) fn declared(value: &serde_json::Value) -> Result<Vec<Capability>, Str
         out.push(capability);
     }
     Ok(out)
+}
+
+/// The refusal of `word`, saying what this build knows instead. `known` is a parameter so that
+/// the sentence a release build says — which knows no capability, and which no fenced test
+/// build can be — is tested too.
+fn unknown(word: &str, known: &[Capability]) -> String {
+    let known: Vec<&str> = known.iter().map(|it| it.as_str()).collect();
+    format!(
+        "asks for the capability \"{}\", which this charter does not know, so it loads none of \
+         this extension. {} A newer charter may know it.",
+        crate::shown::readable(word, MOST_WORD_SHOWN),
+        if known.is_empty() {
+            "This charter grants no capabilities yet.".to_owned()
+        } else {
+            format!("This charter knows {}.", known.join(", "))
+        }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_release_build_refuses_every_word_and_says_it_grants_none_yet() {
+        assert_eq!(
+            unknown("badges", &[]),
+            "asks for the capability \"badges\", which this charter does not know, so it loads \
+             none of this extension. This charter grants no capabilities yet. A newer charter \
+             may know it."
+        );
+    }
+
+    #[test]
+    fn a_refusal_repeats_at_most_a_line_of_the_word_it_refuses() {
+        let said = unknown(&"x".repeat(10_000), &[Capability::Probe]);
+        assert!(said.len() < 300, "{said}");
+        assert!(said.contains("This charter knows probe."), "{said}");
+    }
 }

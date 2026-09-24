@@ -123,13 +123,11 @@ fn the_approval_prompt_names_every_capability_the_probe_asks_for() {
     );
 
     let asked = extension::prompt(&found, extension::Standing::New);
-    assert!(
-        asked
-            .declares
-            .iter()
-            .any(|line| line.starts_with("the capability “probe”")),
-        "{:?}",
-        asked.declares
+    // First, and in exactly the words the window draws (`Extensions.test.tsx` renders this
+    // same sentence).
+    assert_eq!(
+        asked.declares[0],
+        "the capability “probe” — charter's test capability, which grants nothing"
     );
 }
 

@@ -48,8 +48,8 @@ protocol is refused in a manifest that names an earlier one.
 declared, fingerprinted, approved, run, answered, and refused when asked for wrongly. It also
 writes the capability's own amendment to ADR 0041 in that change. Until the first real
 capability lands, the vocabulary holds one word, `probe`. It grants nothing, and only a build
-carrying the plane fence knows it, which means a test build. A release build knows no capability
-and refuses every word.
+carrying the plane fence knows it: a test build, or the app's `e2e` build that the scenario tests
+drive. A release build knows no capability and refuses every word.
 
 ### Process life
 

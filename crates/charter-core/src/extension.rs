@@ -848,9 +848,12 @@ fn parse(text: &str) -> Result<Manifest, String> {
             u32::try_from(found).map_err(|_| "has a version charter cannot hold".to_owned())?
         }
         Some(found) => {
+            let reads = match crate::executor::PROTOCOL {
+                1 => "version 1".to_owned(),
+                newest => format!("versions 1 to {newest}"),
+            };
             return Err(format!(
-                "is version {found}, and this charter reads versions 1 to {}",
-                crate::executor::PROTOCOL
+                "is version {found}, and this charter reads {reads}"
             ));
         }
         None => return Err("says no version, so charter cannot say what it means".into()),
