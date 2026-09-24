@@ -7,6 +7,7 @@ import * as bench from "./bench";
 import { commands, type PlaneId } from "./bindings";
 import { draw } from "./renderer";
 import { moveAlong } from "./tabSequence";
+import { onTextSizes, textSizes } from "./textSize";
 import { inForce, onDrawn, xtermTheme } from "./theme/theme";
 
 /**
@@ -51,7 +52,8 @@ export function SessionPane({
     if (!where) return;
 
     const pane = new Terminal({
-      fontSize: 12,
+      // The machine's terminal text size (charter-app#283), 13px unless the operator changed it.
+      fontSize: textSizes().terminal,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       // The same theme the rest of the window is drawn from. It used to be two hex values
       // written out here, which were `--paper` and `--ink` spelled a second time and had
@@ -70,6 +72,16 @@ export function SessionPane({
     // now that xterm's stylesheet sits in a layer below charter's (M6.8).
     const unfollow = onDrawn((theme) => {
       pane.options.theme = xtermTheme(theme);
+    });
+    // **And so is a text size changed while it is up** (charter-app#283), then a refit: the
+    // cells are a new size, so the rows and columns that fit the pane are new, and `fit` is
+    // what tells the program (`onResize` below). The window's own size is not the terminal's.
+    let drawnAt = pane.options.fontSize;
+    const unsize = onTextSizes(({ terminal: size }) => {
+      if (size === drawnAt) return;
+      drawnAt = size;
+      pane.options.fontSize = size;
+      fit.fit();
     });
     terminal.current = pane;
     bench.paneOpened(session, pane);
@@ -138,6 +150,7 @@ export function SessionPane({
     return () => {
       gone = true;
       unfollow();
+      unsize();
       watching.disconnect();
       typed.dispose();
       resized.dispose();
