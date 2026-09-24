@@ -4,7 +4,8 @@ import { cleanup, render as renderBare, screen, within } from "@testing-library/
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import { LEAST } from "./fits";
+import { LEAST, leastAt } from "./fits";
+import { DEFAULT_TEXT } from "./textSize";
 import type { Moved, OpenChat } from "./bindings";
 
 /**
@@ -83,7 +84,8 @@ function measuring(): Room {
   return {
     roomFor: (tabs) => {
       const strip = screen.getByRole("tablist", { name: "Tabs" });
-      widths.set(strip, tabs * LEAST.chat);
+      // The floor the strip fits by at the default window text size (charter-app#283).
+      widths.set(strip, tabs * leastAt(LEAST.chat, DEFAULT_TEXT.window));
       for (const one of live) {
         if (one.gone || !one.targets.includes(strip)) continue;
         one.callback([], undefined as unknown as ResizeObserver);
@@ -118,6 +120,7 @@ function chat(session: number): OpenChat {
     unreported: null,
     pinned: false,
     label: null,
+    from: null,
   };
 }
 
@@ -174,6 +177,7 @@ function moving(session: number, at: number): Moved {
     moved_at: at,
     // The board numbers a snapshot at least as late as the move it reports.
     sequence: at,
+    reports: [],
   };
 }
 

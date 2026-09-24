@@ -27,6 +27,7 @@ pub mod gitstate;
 pub mod glrefresh;
 pub mod glstate;
 pub mod guest;
+pub mod handback;
 pub mod handed;
 pub mod handoff;
 pub mod handoffguard;

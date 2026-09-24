@@ -4,7 +4,10 @@
    terminal ended up with a palette of its own. `src/theme/literals.test.ts` refuses one. */
 :root {
   font-family: ui-sans-serif, Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 13px;
+  /* The default window text size (charter-app#283, `textSize.DEFAULT_TEXT`). What is in force
+     is set on the element itself before the first frame (`main.tsx`), and every size below is
+     in rem or em, so the whole window scales from this one number. */
+  font-size: 14px;
   line-height: 1.4;
   color: var(--text-primary);
   background: var(--surface-base);
@@ -800,6 +803,24 @@ button.show-more:focus-visible {
 
 .gauge-label {
   color: var(--text-muted);
+}
+
+/* **Where a handed-off chat came from** (charter-app#258): `↳ from steward 3 · ops`, beside the
+   gauge in the chat's own corner, and quiet — it is a note about the chat's origin, read once,
+   not a status. The gauge's box so the two read as one strip, never a border of its own colour.
+   Clipped rather than wrapped: a corner that grew a second line would cover the terminal. */
+.pane-from {
+  max-width: 24rem;
+  overflow: hidden;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
 }
 
 .gauge-ok {
@@ -4033,6 +4054,28 @@ button.show-more:focus-visible {
 .settings-actions button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* A text size on the Preferences tab (charter-app#283): the slider, what it is at, and its
+   reset, on one row. The slider is not a text box, so the box look `.settings-field input`
+   gives every input is taken back off it. */
+.text-size {
+  align-items: center;
+  margin: 0.2rem 0 0;
+}
+
+.text-size input[type="range"] {
+  flex: 1;
+  max-width: 16rem;
+  padding: 0;
+  background: none;
+  border: 0;
+  accent-color: var(--accent-base);
+}
+
+.text-size output {
+  min-width: 3em;
+  font-variant-numeric: tabular-nums;
 }
 
 .settings-standing ul,

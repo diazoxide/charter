@@ -118,6 +118,76 @@ pub struct Chat {
     /// which is what every record written before this field says — not a format change, for
     /// [`Self::pinned`]'s reason.
     pub label: Option<String>,
+    /// The chat a handoff opened this one from, where one did (charter-app#258, #259).
+    ///
+    /// What the tab's tooltip and the chat's header say (`↳ from steward 3 · ops`), and,
+    /// for a handoff that asked for an answer, the pairing a report is checked against:
+    /// **recorded by the app when it opened the chat, and never passed by the chat that
+    /// reports**, so a chat cannot send its report anywhere but back to the chat that asked.
+    /// Riding the record is what lets the pairing outlive a relaunch. `None` is every chat the
+    /// operator opened, and every record written before this field.
+    pub from: Option<HandedFrom>,
+}
+
+/// The chat a handoff came from, as the chat it opened keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandedFrom {
+    /// The app's number for that chat — the key its reports are left under.
+    pub chat: u32,
+    /// Its name as the operator saw it when it handed off: the name it was given, or its
+    /// default. A copy, so the note still reads after that chat is closed.
+    pub name: String,
+    /// The workspace it handed off from, which is where a report goes when it is gone.
+    pub workspace: String,
+    /// Whether it asked for a report, and whether one has been sent.
+    pub report: Owed,
+}
+
+/// What a handed-off chat owes the chat that opened it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owed {
+    /// Nothing: the handoff was fire-and-forget.
+    Nothing,
+    /// One report, not yet sent.
+    Due,
+    /// The report was sent, and that is the handoff's one report: nothing re-arms it. Another
+    /// needs another `--report` handoff (the operator's ruling, charter-app#259).
+    Sent,
+}
+
+impl Owed {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Nothing => "",
+            Self::Due => "owed",
+            Self::Sent => "sent",
+        }
+    }
+
+    fn of(word: &str) -> Self {
+        match word {
+            "owed" => Self::Due,
+            "sent" => Self::Sent,
+            _ => Self::Nothing,
+        }
+    }
+}
+
+/// The name a chat is shown under: the one the operator gave it, or its default — the persona
+/// it adopted, else the harness it runs, then its own name (`steward 3`, `claude 4`); a chat on
+/// neither is its own name alone (charter-app#254).
+///
+/// The window's `whoOf` and `openTab` draw the same rule, and this is the core's copy of it,
+/// for the one sentence the core has to write with a chat's name in it: where a handed-off
+/// chat came from.
+pub fn shown_name(chat: &Chat, harness: Option<&str>) -> String {
+    if let Some(label) = &chat.label {
+        return label.clone();
+    }
+    match chat.persona.as_deref().or(harness) {
+        Some(who) => format!("{who} {}", chat.name),
+        None => chat.name.clone(),
+    }
 }
 
 /// The most view tabs one record puts back. A window opens one per persona and per extension
@@ -773,6 +843,50 @@ struct ChatOnDisk {
     /// way in, and a value it refuses reads as absent: the chat comes back under its default.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     label: String,
+    /// The chat a handoff opened this one from, or absent — see [`Chat::from`]. Absent for
+    /// every chat the operator opened, so a plane that never handed off writes the record it
+    /// always wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from: Option<FromOnDisk>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FromOnDisk {
+    #[serde(default)]
+    chat: u32,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    workspace: String,
+    /// `"owed"`, `"sent"`, or absent for a handoff that asked for nothing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    report: String,
+}
+
+impl From<&HandedFrom> for FromOnDisk {
+    fn from(from: &HandedFrom) -> Self {
+        Self {
+            chat: from.chat,
+            name: from.name.clone(),
+            workspace: from.workspace.clone(),
+            report: from.report.word().to_owned(),
+        }
+    }
+}
+
+impl FromOnDisk {
+    /// Held to what the app would have written: a number a chat can have, a name [`label`]
+    /// takes, a workspace name that can be one. Anything else reads as no handoff at all — the
+    /// note is drawn, and the pairing is what a report is checked against.
+    fn sound(self) -> Option<HandedFrom> {
+        Some(HandedFrom {
+            chat: (self.chat > 0).then_some(self.chat)?,
+            name: label(&self.name).ok().flatten()?,
+            workspace: crate::contain::workspace_name_ok(&self.workspace)
+                .then_some(self.workspace)?,
+            report: Owed::of(&self.report),
+        })
+    }
 }
 
 impl From<&Record> for OnDisk {
@@ -811,6 +925,7 @@ impl From<&Record> for OnDisk {
                     pinned: chat.pinned,
                     number: chat.number.unwrap_or_default(),
                     label: chat.label.clone().unwrap_or_default(),
+                    from: chat.from.as_ref().map(FromOnDisk::from),
                 })
                 .collect(),
             dealt: highest_dealt(record),
@@ -857,6 +972,7 @@ impl From<ChatOnDisk> for Chat {
             // a number no chat here holds costs at most a gap in the counting.
             number: (chat.number > 0).then_some(chat.number),
             label: label(&chat.label).ok().flatten(),
+            from: chat.from.and_then(FromOnDisk::sound),
         }
     }
 }
@@ -880,6 +996,7 @@ mod tests {
             pinned: false,
             number: None,
             label: None,
+            from: None,
         }
     }
 
@@ -1209,6 +1326,7 @@ mod tests {
                 pinned: false,
                 number: None,
                 label: None,
+                from: None,
             }],
         }
     }
@@ -1951,6 +2069,101 @@ mod tests {
     #[test]
     fn a_space_inside_a_label_is_content() {
         assert_eq!(label("steward 1"), Ok(Some("steward 1".into())));
+    }
+
+    // ----- where a handed-off chat came from (charter-app#258, #259) -----------------------
+
+    fn handed() -> HandedFrom {
+        HandedFrom {
+            chat: 16,
+            name: "steward 3".into(),
+            workspace: "platform-next".into(),
+            report: Owed::Due,
+        }
+    }
+
+    #[test]
+    fn a_handed_off_chat_comes_back_knowing_where_it_came_from_and_what_it_owes() {
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![Chat {
+                from: Some(handed()),
+                ..claude("3", None)
+            }],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        assert_eq!(read(plane.path()).chats[0].from, Some(handed()));
+    }
+
+    #[test]
+    fn a_report_already_sent_comes_back_sent() {
+        let plane = tempfile::tempdir().unwrap();
+        let sent = HandedFrom {
+            report: Owed::Sent,
+            ..handed()
+        };
+        let record = Record {
+            chats: vec![Chat {
+                from: Some(sent.clone()),
+                ..claude("3", None)
+            }],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        assert_eq!(read(plane.path()).chats[0].from, Some(sent));
+    }
+
+    #[test]
+    fn a_chat_the_operator_opened_writes_no_from_key() {
+        let plane = tempfile::tempdir().unwrap();
+        write(plane.path(), &one_chat()).unwrap();
+
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+
+        assert!(!text.contains("\"from\""), "{text}");
+    }
+
+    #[test]
+    fn a_from_off_disk_charter_would_not_have_written_reads_as_no_handoff() {
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        for from in [
+            r#"{"chat":0,"name":"steward 3","workspace":"ops","report":"owed"}"#,
+            "{\"chat\":16,\"name\":\"pay\\u202elanigiro\",\"workspace\":\"ops\",\"report\":\"owed\"}",
+            r#"{"chat":16,"name":"steward 3","workspace":"../up","report":"owed"}"#,
+        ] {
+            std::fs::write(
+                path(plane.path()),
+                format!(
+                    r#"{{"version":1,"at":0,"chats":[{{"program":"claude","name":"3","from":{from}}}]}}"#
+                ),
+            )
+            .unwrap();
+
+            let back = read(plane.path());
+
+            assert_eq!(back.chats.len(), 1, "{from}");
+            assert_eq!(back.chats[0].from, None, "{from}");
+        }
+    }
+
+    #[test]
+    fn a_chat_is_shown_under_its_given_name_else_its_persona_or_harness_and_its_own() {
+        let steward = Chat {
+            persona: Some("steward".into()),
+            ..claude("3", None)
+        };
+        assert_eq!(shown_name(&steward, Some("claude")), "steward 3");
+        assert_eq!(shown_name(&claude("4", None), Some("claude")), "claude 4");
+        assert_eq!(shown_name(&claude("5", None), None), "5");
+        let named = Chat {
+            label: Some("billing bug".into()),
+            ..steward
+        };
+        assert_eq!(shown_name(&named, Some("claude")), "billing bug");
     }
 
     #[test]

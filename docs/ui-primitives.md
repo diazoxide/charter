@@ -728,3 +728,15 @@ beginning-of-line), `Ctrl-Z` (undo, against SUSP), `Ctrl-Y` (redo, against `yank
 on `Ctrl+Shift+Q`: a terminal app's own keys add `Shift` (GNOME Terminal, Konsole), and xterm
 sends nothing for a `Ctrl+Shift` letter. `lifecycle::layout` is where that is decided, and its
 tests hold every accelerator it produces off macOS to this rule.
+
+**The text-size keys take nothing either** (charter-app#283, `textSize.sizeKey`). `⌘` on a Mac
+and `Ctrl` elsewhere, with `=` or `+`, makes the text in focus bigger, with `-` smaller, with `0`
+its default: a terminal pane's size inside a pane, the window's anywhere else. Measured in
+xterm.js 6.0.0, `Ctrl` is encoded with a letter, space, `3`–`8`, `[`, `\` and `]` — not `=`, `-`
+or `0` — so none of these is a shell's key. One modifier per platform, not both as `⌘K` has, so
+a Mac's `Ctrl` chords stay the terminal's whatever a later xterm.js sends for them. The one neighbour a shell does own is `Ctrl+Shift+-`, whose `key` is `_` and which xterm
+sends as `^_`, readline's `undo`: it is never matched, and reaches the shell unprevented. (A
+real xterm sends `^_` for a plain `Ctrl+-` too; xterm.js does not, and it is the terminal in
+every pane.) They are a capture listener on the window, like the palette's, and not menu
+accelerators: which size a key changes depends on where the keystroke landed, which only the
+page knows. Preferences… is on the menu, on `⌘,` and `Ctrl+,`; xterm sends nothing for either.

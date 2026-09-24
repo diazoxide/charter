@@ -68,6 +68,7 @@ row), and the status of that field where it differs from its file's.
   - [`charter.local.toml`](#charterlocaltoml)
   - [`.charter/harness-profiles-launched.json`](#charterharness-profiles-launchedjson)
   - [`.gitignore` (plane root)](#gitignore-plane-root)
+  - [`.gitattributes` (plane root)](#gitattributes-plane-root)
   - [Baseline directories: `personas/`, `inventory/`, `workspaces/`](#baseline-directories-personas-inventory-workspaces)
   - [`personas/<front-door>/` (what `charter init` scaffolds at the plane root)](#personasfront-door-what-charter-init-scaffolds-at-the-plane-root)
   - [`inventory/repos.json`](#inventoryreposjson)
@@ -115,6 +116,7 @@ row), and the status of that field where it differs from its file's.
   - [`.charter/persona-state/ephemeral/<session>/<name|_shared>/<slug>.md`](#charterpersona-stateephemeralsessionnamesharedslugmd)
   - [`.charter/persona-state/trace/<session>.jsonl`](#charterpersona-statetracesessionjsonl)
   - [`.charter/reports/<id>.json`](#charterreportsidjson)
+  - [`.charter/handbacks/` — reports back from handed-off chats](#charterhandbacks--reports-back-from-handed-off-chats)
   - [`~/.config/charter/reporting-consent` (outside the plane)](#configcharterreporting-consent-outside-the-plane)
   - [`.charter/sessions/<sid>.persona`, `.charter/terminals/<tid>.persona`, `.charter/active-persona`](#chartersessionssidpersona-charterterminalstidpersona-charteractive-persona)
   - [`.charter/mcp-approved.json`](#chartermcp-approvedjson)
@@ -182,6 +184,7 @@ row), and the status of that field where it differs from its file's.
   - [`mcp-approved.json`](#mcp-approvedjson)
   - [`agent-personas.json`](#agent-personasjson)
   - [`plane-push.json`](#plane-pushjson)
+  - [`save-journal.jsonl`](#save-journaljsonl)
   - [`ws-edit-nudge/<sid>-<workspace>`](#ws-edit-nudgesid-workspace)
   - [`ws-autosave/<workspace>`](#ws-autosaveworkspace)
   - [`workspace-tab-order`](#workspace-tab-order)
@@ -371,10 +374,18 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[[forge]].group` / `.owner` | str | optional; `group` wins, else `owner`, else `""` | Org/group whose repos are discovered. | stable | `charter/instance.py:162` |
 | `[[forge]].host` | str | optional; default `gitlab.com` / `github.com` | Self-hosted host. Must match `_HOST_RE` (bare host, optional `:port`) or the block is refused. | stable | `charter/forge/registry.py:29`, `charter/forge/registry.py:56` |
 | `[[forge]].exclude` | array of str | optional; default `()` | Repo names never written to the inventory; per block. | stable | `charter/instance.py:170` |
-| `[memory].share` | str | default `"local"`; one of `local`,`commit`,`push` | How far a written memory travels. Unknown value clamps to `local`. | stable | `charter/instance.py:466`, `charter/instance.py:265` |
+| `[memory].share` | str | default `"local"`; one of `local`,`commit`,`push` | How far a written memory travels. Unknown value clamps to `local`. **In charter-app, a deprecated alias of `[plane].mode`** (`local`→*not set*, `commit`→`commit`, `push`→`push`); `[plane].mode` wins when both are present, and `doctor` warns (ADR 0051). | stable | `charter/instance.py:466`, `charter/instance.py:265` |
 | `[workspace].default` | str | default `"default"` | Workspace used when nothing else selected. Validated by `workspace_name_ok` (`^[A-Za-z0-9][A-Za-z0-9._-]*$` + `contain.segment_ok`); invalid → fallback. | stable | `charter/instance.py:243`, `charter/instance.py:181` |
 | `[persona].default` | str | optional; blank = absent = `None` | The plane's front door persona. Written by `charter persona default`. | stable | `charter/instance.py:259` |
 | `[plane].worktrees` | str | optional; `None` = `workspaces/<ws>/.worktrees/` | Relocated worktree root. Relative resolves against ROOT; a committed value must satisfy `contain.plane_adjacent` or it is ignored (doctor warns). `$CHARTER_WORKTREES` overrides and is unrestricted. | stable | `charter/instance.py:488`, `charter/config.py:82` |
+| `[plane].mode` | str | optional; closed set `off`,`commit`,`push`,`pr`,`pr-merge`; absent = `[memory].share`'s alias when that is `commit` or `push`, else **ask once** (the Saving view asks before anything is pushed); a new plane is written with `push` | **charter-app only.** How far a save of the plane goes, as a ladder: `off` never commits; `commit` commits locally; `push` also pushes to `branch`; `pr` pushes to `save_branch` and opens or updates one PR/MR into `branch`; `pr-merge` also sets that PR to auto-merge. `pr`/`pr-merge` on an origin that is not a GitHub or GitLab forge charter knows is a config error (doctor, the settings tab) and saves fall back to `commit` with the plane **blocked**. Unknown value → refused by the settings tab, read as absent. | stable | ADR 0051 (accepted, not built) |
+| `[plane].branch` | str | optional; default the remote's default branch | **charter-app only.** The *target* branch the plane is saved into. | stable | ADR 0051 (accepted, not built) |
+| `[plane].save_branch` | str | optional; default `charter/save/<host>` | **charter-app only.** The one rolling branch per machine that `pr`/`pr-merge` push to; one PR from it is kept open and updated by every save. Replaces the per-push `charter/<sha>` branch. | stable | ADR 0051 (accepted, not built) |
+| `[plane].sign` | bool | optional; default `false` | **charter-app only.** Sign save commits. A push refused for an unsigned commit tells the operator to set this. | stable | ADR 0051 (accepted, not built) |
+| `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051 (accepted, not built) |
+| `[plane].autosave_after` | str | optional; default `"30s"`; a whole number followed by `s` or `m` | **charter-app only.** The quiet period after the last change before an auto-save. | stable | ADR 0051 (accepted, not built) |
+| `[repos.<name>]` | table | optional, one per repo | **charter-app only.** How a workspace repo is saved. `<name>` is the repo's `name` in `inventory/repos.json`, so one table governs every workspace's clone of it. Takes the same keys as `[plane]` (`mode`, `branch`, `sign`, `autosave`, `autosave_after`) except `save_branch`, with the defaults `mode = "pr"` and `autosave = false`. A save commits on the branch the clone is on and `pr` opens its PR from that branch into `branch` (default: the repo's `default_branch`); on that default branch, a PR mode first creates `charter/<workspace>/<short-sha>`. It never runs while a session in that workspace is mid-turn. | stable | ADR 0051 (accepted, not built) |
+| any other key in `[plane]` or `[repos.<name>]` | — | — | Refused by the Project settings tab's save, ignored by readers. | stable | ADR 0051 (accepted, not built) |
 | `[charter].version` | str | optional | The version lock. Reported **as written** (even if malformed); must match `^\d+\.\d+\.\d+$` before it is acted on. | stable | `charter/instance.py:321`, `charter/instance.py:290` |
 | `[update].channel` | str | default `"stable"`; closed set `stable`,`dev` | Which charter this plane tracks. Unknown → `stable`; the matched **constant** is stored, never the file's string. | stable | `charter/instance.py:2948`, `charter/instance.py:2936` |
 | `[harness].default` | str | default `None` | What bare `charter` launches. Matched against the harness registry's `cli_name`s; a non-match is recorded as `refused` (contained) rather than ignored. | stable | `charter/instance.py:3000`, `charter/instance.py:3088` |
@@ -463,7 +474,7 @@ key refuses.
   since charter-app#253 — `[extensions]` by `extension::project` (ADR 0048) and, since
   charter-app#274, `[harness_plugins]` by `harness_plugin` (ADR 0050); any other
   top-level key is refused with a sentence (`charter/profiles.py:325`, and in charter-app
-  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names all three tables). A missing file declares nothing and is not a refusal
+  `crates/charter-core/src/profiles.rs` `derive_from`, whose sentence names all three tables). In charter-app, `[plane]` and `[repos.<name>]` are also read, and override `charter.toml`'s values **key by key** (ADR 0051, on ADR 0048's overlay); every surface that shows one names the file that decided it. A missing file declares nothing and is not a refusal
   (`charter/profiles.py:241`). Profile `env` is stored **sorted by name**
   (`charter/profiles.py:363`), and `~` in `command[0]` and in every `env` value is expanded
   only at launch (`charter/profiles.py:474`, `charter/profiles.py:480`) — never in the file
@@ -479,6 +490,7 @@ key refuses.
 | any other key in a profile table | — | — | Refuses that profile (e.g. `enviroment`). | stable | `charter/profiles.py:86`, `charter/profiles.py:278` |
 | `[extensions.<id>].enabled` | bool | optional | **charter-app only** (charter-app#253, ADR 0048). This machine's choice for this project, over `charter.toml`'s. Same shape and rules as there; still cannot reach past this machine's approval. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
 | `[extensions.<id>.settings].<key>` | bool or str | optional | **charter-app only.** Overrides `charter.toml`'s value for the same key, key by key; falls through to it (then to the declared default) when the extension would not accept this one. | stable | `crates/charter-core/src/extension/project.rs` `resolve` |
+| `[plane].<key>`, `[repos.<name>].<key>` | as in `charter.toml` | optional | **charter-app only.** This machine's value, over `charter.toml`'s, key by key. Same shapes and refusals. | stable | ADR 0051 (accepted, not built) |
 
 ---
 
@@ -543,6 +555,31 @@ key refuses.
   - Presence detection is **whole-line, stripped**, except `.charter/` which is a substring
     test on the body (`charter/commands.py:1136`) — both quirks are deliberate and recorded.
   - Plain `write_text`; no atomic write, no lock.
+
+---
+
+### `.gitattributes` (plane root)
+
+- **Format:** git attributes, line-oriented, inside a managed block with the markers
+  `# >>> charter merge rules (managed by charter) >>>` and `# <<< charter merge rules <<<`.
+  Lines outside the block are the operator's own.
+- **Status:** **stable**. It is committed, and git reads it.
+- **Written by:** charter-app's `init` and `reinit` (ADR 0051). Not built yet.
+- **Read by:** git, on every merge and rebase a save makes.
+- **Git:** committed.
+- **Encoding details:** the block holds exactly these lines, in this order. Each names a file
+  that only ever grows by whole lines, so git's `union` driver keeps both sides of a conflict:
+
+  ```
+  personas/_dispatch/*.jsonl merge=union
+  personas/_skills/*.jsonl merge=union
+  workspaces/*/pieces/*.jsonl merge=union
+  workspaces/*/changes/log/*.jsonl merge=union
+  personas/*/memory/MEMORY.md merge=union
+  workspaces/*/memory/MEMORY.md merge=union
+  ```
+
+  Any other conflict leaves the plane **blocked** (ADR 0051).
 
 ---
 
@@ -1316,6 +1353,9 @@ automatic writers leave it byte for byte alone; absent is `"absent"`
     `todos` (each only if it exists) and `changes` only when `change.has_records`
     (`charter/commands_workspace.py:1119`). The two lists must agree and only a test holds
     them together.
+  - **In charter-app, going LOCAL also untracks** what the block had published
+    (`git rm --cached`, files kept on disk) and saves the plane, and going LIVE saves it at
+    once. History already pushed stays on the remote (ADR 0051).
 
 ### `.charter/…` — active-workspace pointers and per-plane workspace state
 
@@ -1936,6 +1976,37 @@ before it is stored.
 
 ---
 
+### `.charter/handbacks/` — reports back from handed-off chats
+
+- **Format:** one JSON object per file, compact, no trailing newline.
+- **Status:** **internal** — written by the app, taken by the `charter` binary's own hooks.
+  A report waits here from the moment a handed-off chat sends it (`charter handoff report`)
+  until the turn it is handed to.
+- **Written by:** `charter_core::handback::leave` (charter-app#259), from the app's answer to a
+  report, and from `handback::orphan` when a chat with reports waiting is closed.
+- **Read by:** `charter hook userpromptsubmit` (`chat-<n>/`, `<n>` from `$CHARTER_SESSION_ID`)
+  and `charter hook sessionstart` (`workspace-<ws>/`, the session's workspace), through
+  `handback::take`, which **removes each file it reads**: a report reaches one turn.
+- **Git:** gitignored (under `/.charter/`).
+- **Layout:** `chat-<n>/` for a report to a chat the app has open, `workspace-<ws>/` for one
+  whose chat has closed. Each file is `<nanoseconds since the epoch, 24 digits>-<uuid>.json`,
+  so a directory reads in arrival order; it is written as `.<name>` and renamed into place, and a
+  reader skips a name starting with `.`. An empty directory is removed by the reader.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `from` | str | the chat that reported, by the name it is shown under |
+| `from_workspace` | str | the workspace that chat works in |
+| `to` | str | the chat that asked, by the name it is shown under |
+| `to_workspace` | str | the workspace that chat handed off from — where the report goes when it is gone |
+| `summary` | str | the report: trimmed, at most 4,096 bytes, no control character but `\n` and no invisible one |
+
+**Held again on the way in.** A file whose `summary` breaks the report rule, whose names break
+the chat-name rule, whose workspaces cannot be one, or which is not JSON at all, is removed and
+handed to nobody. What is handed over is quoted as data: every line of the summary behind `> `.
+
+---
+
 ### `~/.config/charter/reporting-consent` (outside the plane)
 
 - **Format:** plain text, one sentence.
@@ -2016,6 +2087,10 @@ and pushes the files above — never their format:
 
 Under `local` (the default) charter writes the files and commits nothing; `personas/`
 therefore shows up in `git status` for a human.
+
+**In charter-app** no command commits a memory on its own. `share` is read only as the
+deprecated alias of `[plane].mode`, and the whole plane is saved by one save function, by
+hand or by auto-save (ADR 0051).
 
 ---
 
@@ -3051,6 +3126,7 @@ down rather than read off the code.
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
 | `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
+| `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone; `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that cannot be one reads as the whole key absent — the note is not drawn and no report is owed |
 | `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251, **Restart to update**, the only writer of `true`), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. **It counts only at the launch that follows the restart**: the restart also leaves an empty `restarted-to-update` file beside the machine store (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), and the next launch removes it whatever it opens. A plane that launch did not open keeps the flag, and it says nothing at any later launch |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
@@ -3171,6 +3247,30 @@ Only the **latest** sighting is kept (whole-file overwrite).
 | `detail` | str | git's own words | stable | `charter/planegit.py:282` |
 | `head` | str | the sha being pushed | stable | `charter/planegit.py:282` |
 | `at` | float epoch | when | stable | `charter/planegit.py:282` |
+
+In charter-app the save journal (below) takes over this record's job for saves made by
+charter-app. `charter save` keeps writing this record until its contract moves (ADR 0051).
+
+### `save-journal.jsonl`
+- **Format:** JSON Lines, one object per save attempt, appended. Capped at the newest 500
+  lines.
+- **Status:** **internal**. Only the app and `charter save` write it, and only the Saving view
+  reads it. Deleted ⇒ the Saving view's history starts empty.
+- **Written by:** `charter-core`'s save function (ADR 0051). Not built yet.
+- **Read by:** the Saving view (its last 50 entries).
+- **Git:** gitignored (under `/.charter/`).
+- **Fields:**
+  - `at`: epoch seconds
+  - `target`: `plane`, or `repo:<workspace>/<name>`
+  - `trigger`: one of `manual`, `quiet`, `session-end`, `quit`, `launch`, `cli`, `live`
+  - `mode`
+  - `files`: a count
+  - `commit`: a sha or null
+  - `pr`: a url or null
+  - `ms`: the duration
+  - `outcome`: one of `saved`, `committed`, `pushed`, `pr-open`, `blocked`, `offline`,
+    `skipped`, `failed`
+  - `detail`: git's or the forge's own words
 
 ### `ws-edit-nudge/<sid>-<workspace>`
 - **Format:** one byte, `1`

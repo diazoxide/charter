@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capacity, fitting, LEAST } from "./fits";
+import { capacity, fitting, LEAST, LEAST_TUNED_AT, leastAt } from "./fits";
 
 /**
  * The arithmetic that decides what a strip draws.
@@ -98,5 +98,23 @@ describe("the floors the three strips fit by", () => {
     // the same thing, which is what he was complaining about.
     expect(LEAST.project).toBeGreaterThan(LEAST.workspace);
     expect(LEAST.workspace).toBeGreaterThan(LEAST.chat);
+  });
+});
+
+describe("the floors at the window text size in force (charter-app#283)", () => {
+  it("are the floors themselves at the size they were tuned at, and scale with the text", () => {
+    expect(leastAt(LEAST.chat, LEAST_TUNED_AT)).toBe(LEAST.chat);
+    expect(leastAt(LEAST.chat, 26)).toBe(LEAST.chat * 2);
+    // So at the new 14px default a tab floor is a step wider than it was at 13px.
+    expect(leastAt(LEAST.chat, 14)).toBeGreaterThan(LEAST.chat);
+    expect(leastAt(LEAST.project, 10)).toBeLessThan(LEAST.project);
+  });
+
+  it("so a strip draws fewer, wider tabs when the text is bigger", () => {
+    const many = Array.from({ length: 20 }, (_, at) => at);
+    const width = 8 * LEAST.chat;
+    const atDefault = fitting(many, undefined, width, leastAt(LEAST.chat, LEAST_TUNED_AT)).shown;
+    const atBigger = fitting(many, undefined, width, leastAt(LEAST.chat, 21)).shown;
+    expect(atBigger.length).toBeLessThan(atDefault.length);
   });
 });

@@ -37,6 +37,46 @@ function needing(plane: string, session: number, workspace: string, project: str
   };
 }
 
+describe("a chat a handed-off chat reported back to, in the title bar's list (charter-app#259)", () => {
+  it("says who reported back, and its Go and Ignore are the chat that asked", async () => {
+    const pressed: string[] = [];
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[{ ...needing("/a", 3, "ops", "charter"), reported: ["drop commons"] }]}
+        onPress={(plane: string, offer: Offer) => pressed.push(`${plane} ${offer.id}`)}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+
+    const go = await screen.findByRole("menuitem", {
+      name: "Go to ops.3: drop commons reported back · ops · charter",
+    });
+    expect(go).toHaveTextContent(/drop commons reported back.*ops · charter.*Go/);
+    await userEvent.click(screen.getByRole("button", { name: "Ignore ops.3 until it asks again" }));
+    await userEvent.click(go);
+
+    expect(pressed).toEqual(["/a needs.ignore:3", "/a needs.show:3"]);
+  });
+
+  it("names every chat that reported back, oldest first", async () => {
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[
+          { ...needing("/a", 3, "ops", "charter"), reported: ["drop commons", "retry hooks"] },
+        ]}
+        onPress={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+
+    expect(
+      await screen.findByRole("menuitem", { name: /drop commons, retry hooks reported back/ }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("the title bar's needs-you button (charter-app#249)", () => {
   it("draws nothing when nothing needs you", () => {
     const { container } = render(<NeedsYouMenu quiet={[]} items={[]} onPress={() => {}} />);

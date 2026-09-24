@@ -369,6 +369,7 @@ describe("the workspace strip", () => {
       queue: [6],
       moved_at: 1,
       sequence: 1,
+      reports: [],
     });
     const asking = await screen.findByRole("button", { name: "1 chat needs you" });
     expect(asking).not.toHaveClass("muted");
@@ -399,6 +400,7 @@ describe("the workspace strip", () => {
       queue: [],
       moved_at: 1,
       sequence: 2,
+      reports: [],
     });
 
     await waitFor(() => expect(needs()).toBeUndefined());
