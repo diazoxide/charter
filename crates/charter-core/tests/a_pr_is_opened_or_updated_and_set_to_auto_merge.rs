@@ -11,7 +11,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use charter_core::forge::pr::{self, Pr, Repo};
+use charter_core::forge::pr::{self, AutoMerge, Pr, Repo};
 use support::forge_cli::{Scene, in_a_child, in_child, was_asked};
 
 #[test]
@@ -24,7 +24,10 @@ fn every_pull_request_question_is_asked_of_a_stand_in_cli() {
 const SETTINGS: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed rebaseMergeAllowed mergeCommitAllowed squashMergeAllowed pullRequest(number:$number){id}}}";
 
 /// The one GraphQL document that turns auto-merge on.
-const ENABLE: &str = "mutation($id:ID!,$method:PullRequestMergeMethod!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$method}){clientMutationId}}";
+const ENABLE: &str = "mutation($id:ID!,$method:PullRequestMergeMethod!,$head:GitObjectID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$method,expectedHeadOid:$head}){clientMutationId}}";
+
+/// The commit this save pushed, which is the only head the forge may merge.
+const PUSHED: &str = "0123456789abcdef0123456789abcdef01234567";
 
 mod prs {
     use super::*;
@@ -211,7 +214,7 @@ mod prs {
 
     fn gitlab_lookup(scene: &Scene, out: &str) -> PathBuf {
         scene.glab_api(
-            "projects/acme%2Fplat%2Fwidget/merge_requests?state=opened&source_branch=charter%2Fsave%2Fmac&target_branch=release&per_page=1",
+            "projects/acme%2Fplat%2Fwidget/merge_requests?state=opened&source_branch=charter%2Fsave%2Fmac&target_branch=release&per_page=100",
             0,
             out,
             "",
@@ -275,7 +278,8 @@ mod prs {
         let scene = Scene::new("mr-update.test");
         gitlab_lookup(
             &scene,
-            r#"[{"iid": 4, "web_url": "https://mr-update.test/acme/plat/widget/-/merge_requests/4"}]"#,
+            r#"[{"iid": 9, "source_project_id": 77, "target_project_id": 5, "web_url": "https://mr-update.test/acme/plat/widget/-/merge_requests/9"},
+                {"iid": 4, "source_project_id": 5, "target_project_id": 5, "web_url": "https://mr-update.test/acme/plat/widget/-/merge_requests/4"}]"#,
         );
         let updated = scene.answers(
             "glab",
@@ -304,6 +308,54 @@ mod prs {
         );
         assert_eq!(opened.map(|p| p.number), Ok(4));
         assert!(was_asked(&updated));
+    }
+
+    #[test]
+    fn a_gitlab_mr_from_a_fork_with_the_same_branch_name_is_never_adopted() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("mr-fork.test");
+        gitlab_lookup(
+            &scene,
+            r#"[{"iid": 9, "source_project_id": 77, "target_project_id": 5, "web_url": "https://mr-fork.test/acme/plat/widget/-/merge_requests/9"}]"#,
+        );
+        let created = scene.answers(
+            "glab",
+            &[
+                "--hostname",
+                "mr-fork.test",
+                "api",
+                "-X",
+                "POST",
+                "projects/acme%2Fplat%2Fwidget/merge_requests",
+                "-f",
+                "source_branch=charter/save/mac",
+                "-f",
+                "target_branch=release",
+                "-f",
+                "title=t",
+                "-f",
+                "description=b",
+            ],
+            0,
+            r#"{"iid": 10, "web_url": "https://mr-fork.test/acme/plat/widget/-/merge_requests/10"}"#,
+            "",
+        );
+        let opened = pr::open_or_update(
+            &repo(&scene, "gitlab", "acme/plat/widget"),
+            "charter/save/mac",
+            "release",
+            "t",
+            "b",
+        );
+        assert_eq!(
+            opened.map(|p| p.number),
+            Ok(10),
+            "a new MR, not the fork's !9"
+        );
+        assert!(was_asked(&created));
     }
 
     // -- auto-merge ------------------------------------------------------------------------ //
@@ -348,6 +400,8 @@ mod prs {
                 "id=PR_node12",
                 "-f",
                 &format!("method={method}"),
+                "-f",
+                &format!("head={PUSHED}"),
             ],
             code,
             out,
@@ -374,7 +428,10 @@ mod prs {
         settings(&scene, [true, true, true, true]);
         let asked = enable(&scene, "REBASE", 0, ENABLED, "");
         let repo = repo(&scene, "github", "acme/widget");
-        assert_eq!(pr::request_auto_merge(&repo, &twelve(&scene)), Ok(()));
+        assert_eq!(
+            pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+            Ok(AutoMerge::Queued)
+        );
         assert!(was_asked(&asked));
     }
 
@@ -388,7 +445,10 @@ mod prs {
         settings(&scene, [true, false, true, true]);
         let asked = enable(&scene, "MERGE", 0, ENABLED, "");
         let repo = repo(&scene, "github", "acme/widget");
-        assert_eq!(pr::request_auto_merge(&repo, &twelve(&scene)), Ok(()));
+        assert_eq!(
+            pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+            Ok(AutoMerge::Queued)
+        );
         assert!(was_asked(&asked));
     }
 
@@ -402,7 +462,10 @@ mod prs {
         settings(&scene, [true, false, false, true]);
         let asked = enable(&scene, "SQUASH", 0, ENABLED, "");
         let repo = repo(&scene, "github", "acme/widget");
-        assert_eq!(pr::request_auto_merge(&repo, &twelve(&scene)), Ok(()));
+        assert_eq!(
+            pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+            Ok(AutoMerge::Queued)
+        );
         assert!(was_asked(&asked));
     }
 
@@ -415,7 +478,7 @@ mod prs {
         let scene = Scene::new("am-off.test");
         settings(&scene, [false, true, true, true]);
         let repo = repo(&scene, "github", "acme/widget");
-        let said = pr::request_auto_merge(&repo, &twelve(&scene)).unwrap_err();
+        let said = pr::request_auto_merge(&repo, &twelve(&scene), PUSHED).unwrap_err();
         assert!(said.contains("auto-merge"), "{said}");
         assert!(said.contains("acme/widget"), "{said}");
     }
@@ -430,45 +493,38 @@ mod prs {
         settings(&scene, [true, false, false, false]);
         let repo = repo(&scene, "github", "acme/widget");
         assert_eq!(
-            pr::request_auto_merge(&repo, &twelve(&scene)),
+            pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
             Err("acme/widget allows no merge method".into())
         );
     }
 
     #[test]
-    fn a_github_pr_with_nothing_left_to_wait_for_is_merged_by_the_same_method() {
+    fn a_github_pr_with_nothing_left_to_wait_for_is_not_queued_and_not_merged() {
         charter_core::unsteered!();
         if !in_child() {
             return;
         }
-        let scene = Scene::new("am-clean.test");
-        settings(&scene, [true, false, true, true]);
-        enable(
-            &scene,
-            "MERGE",
-            1,
-            r#"{"data": {"enablePullRequestAutoMerge": null}, "errors": [{"type": "UNPROCESSABLE", "message": "Pull request Pull request is in clean status"}]}"#,
-            "gh: Pull request Pull request is in clean status\n",
-        );
-        let merged = scene.answers(
-            "gh",
-            &[
-                "api",
-                "--hostname",
-                "am-clean.test",
-                "-X",
-                "PUT",
-                "repos/acme/widget/pulls/12/merge",
-                "-f",
-                "merge_method=merge",
-            ],
-            0,
-            r#"{"merged": true}"#,
-            "",
-        );
-        let repo = repo(&scene, "github", "acme/widget");
-        assert_eq!(pr::request_auto_merge(&repo, &twelve(&scene)), Ok(()));
-        assert!(was_asked(&merged));
+        // No merge question is written down, so a merge would fail the call.
+        for (host, status) in [("am-clean.test", "clean"), ("am-unstable.test", "unstable")] {
+            let scene = Scene::new(host);
+            settings(&scene, [true, false, true, true]);
+            let said = format!("gh: Pull request Pull request is in {status} status\n");
+            enable(
+                &scene,
+                "MERGE",
+                1,
+                r#"{"data": {"enablePullRequestAutoMerge": null}, "errors": [{"type": "UNPROCESSABLE"}]}"#,
+                &said,
+            );
+            let repo = repo(&scene, "github", "acme/widget");
+            assert_eq!(
+                pr::request_auto_merge(&repo, &twelve(&scene), PUSHED),
+                Ok(AutoMerge::NotQueued(format!(
+                    "gh: Pull request Pull request is in {status} status"
+                ))),
+                "{status}"
+            );
+        }
     }
 
     #[test]
@@ -487,7 +543,7 @@ mod prs {
             "gh: Resource not accessible by integration\n",
         );
         let repo = repo(&scene, "github", "acme/widget");
-        let said = pr::request_auto_merge(&repo, &twelve(&scene)).unwrap_err();
+        let said = pr::request_auto_merge(&repo, &twelve(&scene), PUSHED).unwrap_err();
         assert!(
             said.contains("Resource not accessible by integration"),
             "{said}"
@@ -503,7 +559,32 @@ mod prs {
         );
     }
 
+    fn gitlab_mr(scene: &Scene, pipeline: &str) {
+        scene.glab_api(
+            "projects/acme%2Fplat%2Fwidget/merge_requests/3",
+            0,
+            &format!(r#"{{"iid": 3, "sha": "{PUSHED}", "head_pipeline": {pipeline}}}"#),
+            "",
+        );
+    }
+
     fn gitlab_merge(scene: &Scene, squash: &str) -> PathBuf {
+        gitlab_merge_answered(
+            scene,
+            squash,
+            0,
+            r#"{"iid": 3, "state": "opened", "merge_when_pipeline_succeeds": true}"#,
+            "",
+        )
+    }
+
+    fn gitlab_merge_answered(
+        scene: &Scene,
+        squash: &str,
+        code: i32,
+        out: &str,
+        err: &str,
+    ) -> PathBuf {
         scene.answers(
             "glab",
             &[
@@ -517,10 +598,12 @@ mod prs {
                 "merge_when_pipeline_succeeds=true",
                 "-F",
                 &format!("squash={squash}"),
+                "-f",
+                &format!("sha={PUSHED}"),
             ],
-            0,
-            r#"{"iid": 3, "state": "opened", "merge_when_pipeline_succeeds": true}"#,
-            "",
+            code,
+            out,
+            err,
         )
     }
 
@@ -539,9 +622,13 @@ mod prs {
         }
         let scene = Scene::new("mr-am.test");
         gitlab_project(&scene, "default_on");
+        gitlab_mr(&scene, r#"{"status": "running"}"#);
         let asked = gitlab_merge(&scene, "false");
         let repo = repo(&scene, "gitlab", "acme/plat/widget");
-        assert_eq!(pr::request_auto_merge(&repo, &three(&scene)), Ok(()));
+        assert_eq!(
+            pr::request_auto_merge(&repo, &three(&scene), PUSHED),
+            Ok(AutoMerge::Queued)
+        );
         assert!(was_asked(&asked));
     }
 
@@ -553,10 +640,75 @@ mod prs {
         }
         let scene = Scene::new("mr-am-always.test");
         gitlab_project(&scene, "always");
+        gitlab_mr(&scene, r#"{"status": "pending"}"#);
         let asked = gitlab_merge(&scene, "true");
         let repo = repo(&scene, "gitlab", "acme/plat/widget");
-        assert_eq!(pr::request_auto_merge(&repo, &three(&scene)), Ok(()));
+        assert_eq!(
+            pr::request_auto_merge(&repo, &three(&scene), PUSHED),
+            Ok(AutoMerge::Queued)
+        );
         assert!(was_asked(&asked));
+    }
+
+    #[test]
+    fn a_gitlab_mr_with_no_pipeline_running_is_not_queued_and_not_merged() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // GitLab merges at once when told to wait for a pipeline that is not running, so
+        // charter does not ask; no merge question is written down.
+        for (host, pipeline) in [
+            ("mr-none.test", "null"),
+            ("mr-done.test", r#"{"status": "success"}"#),
+        ] {
+            let scene = Scene::new(host);
+            gitlab_project(&scene, "default_off");
+            gitlab_mr(&scene, pipeline);
+            let repo = repo(&scene, "gitlab", "acme/plat/widget");
+            let got = pr::request_auto_merge(&repo, &three(&scene), PUSHED);
+            let Ok(AutoMerge::NotQueued(why)) = got else {
+                panic!("{host}: {got:?}");
+            };
+            assert!(why.contains("no pipeline running"), "{why}");
+        }
+    }
+
+    #[test]
+    fn a_gitlab_merge_refused_as_not_mergeable_is_not_queued_and_other_refusals_are_errors() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        for (host, code_said, queued) in [
+            (
+                "mr-405.test",
+                "glab: 405 Method Not Allowed (HTTP 405)",
+                true,
+            ),
+            (
+                "mr-422.test",
+                "glab: 422 Unprocessable Entity (HTTP 422)",
+                true,
+            ),
+            (
+                "mr-409.test",
+                "glab: 409 SHA does not match HEAD of source branch (HTTP 409)",
+                false,
+            ),
+        ] {
+            let scene = Scene::new(host);
+            gitlab_project(&scene, "never");
+            gitlab_mr(&scene, r#"{"status": "running"}"#);
+            gitlab_merge_answered(&scene, "false", 1, "", code_said);
+            let repo = repo(&scene, "gitlab", "acme/plat/widget");
+            let got = pr::request_auto_merge(&repo, &three(&scene), PUSHED);
+            if queued {
+                assert_eq!(got, Ok(AutoMerge::NotQueued(code_said.into())), "{host}");
+            } else {
+                assert!(got.unwrap_err().contains("SHA does not match"), "{host}");
+            }
+        }
     }
 
     // -- which repo ------------------------------------------------------------------------ //
@@ -595,6 +747,32 @@ mod prs {
             Ok(Repo {
                 forge: charter_core::forge::Forge::build("gitlab", Some("git.internal")).unwrap(),
                 path: "acme/plat/widget".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_planes_repo_is_its_own_origins() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        for args in [
+            vec!["init", "-q", "-b", "main", "."],
+            vec!["remote", "add", "origin", "git@github.com:acme/plane.git"],
+        ] {
+            let done =
+                charter_core::forklock::output(support::unsigned().args(&args).current_dir(&plane))
+                    .unwrap();
+            assert!(done.status.success(), "{done:?}");
+        }
+        assert_eq!(
+            Repo::of_plane(&plane),
+            Ok(Repo {
+                forge: charter_core::forge::Forge::build("github", None).unwrap(),
+                path: "acme/plane".into(),
             })
         );
     }
