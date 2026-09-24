@@ -122,7 +122,7 @@ function core(opened: ReturnType<typeof chat>[] = [], waiting: number[] = []) {
       };
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "chat_states")
-      return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
+      return waiting.map((session) => ({ session, state: "waiting", queue: waiting, sequence: 1 }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     return null;

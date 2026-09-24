@@ -1841,7 +1841,12 @@ button.show-more:focus-visible {
   padding: 0;
   list-style: none;
 }
-.needs-you li button {
+/* A chat asking, and its Ignore beside it (charter-app#248). */
+.needs-you li {
+  display: flex;
+  align-items: stretch;
+}
+.needs-you li button:not(.needs-you-ignore) {
   display: flex;
   gap: 0.35rem;
   align-items: center;
@@ -1862,6 +1867,23 @@ button.show-more:focus-visible {
 .needs-you li button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
+}
+/* Flat and muted like a view tab's `×`: ignoring ends nothing, so it hovers as a control does
+   and never as a danger — the chat is still there, still waiting. */
+.needs-you-ignore {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0 0.35rem;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: var(--text-muted);
+  line-height: 1;
+  cursor: default;
+}
+.needs-you-ignore:hover {
+  color: var(--text-primary);
 }
 
 /* **The count of chats waiting for the operator, drawn as the most important thing in the

@@ -1302,6 +1302,24 @@ export function PlaneView({
     [plane],
   );
 
+  /**
+   * Ignores a queued chat's request until it asks again (charter-app#248).
+   *
+   * **Nothing is changed here.** The ignore is the core's, and the core answers it with a
+   * `chat-moved` carrying the queue without this chat, which lowers the project's and the
+   * workspace's red counts in the same render that drops the item — they are all read from
+   * that one queue.
+   */
+  const ignoreNeedsYou = useCallback(
+    async (session: number): Promise<Ran> => {
+      const said = await commands
+        .ignoreNeedsYou(plane, session)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      return said.status === "error" ? { ok: false, refused: said.error } : { ok: true };
+    },
+    [plane],
+  );
+
   /** Pins or unpins one workspace. It goes in the machine store, so what the store now says
    *  is asked again rather than assumed — `pinning` is what asks. */
   const pinWorkspace = useCallback(
@@ -1330,6 +1348,7 @@ export function PlaneView({
       createWorkspace,
       removeWorkspace,
       showChat,
+      ignoreNeedsYou,
       // The verb still names a persona — that is what the catalogue row is about — and the
       // window turns it into the row it opens. `charter/personas` is charter's own panel's
       // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
@@ -1352,6 +1371,7 @@ export function PlaneView({
       closePane,
       createWorkspace,
       focusWorkspace,
+      ignoreNeedsYou,
       mergeWorktree,
       newTab,
       pinTab,

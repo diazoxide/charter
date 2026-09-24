@@ -111,7 +111,7 @@ function core({
         ? [{ piece: "one", path: `${CUT}/one`, branch: "one", wired: true, stale: false }]
         : [];
     if (cmd === "chat_states")
-      return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
+      return waiting.map((session) => ({ session, state: "waiting", queue: waiting, sequence: 1 }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "alerts_everywhere") return [{ plane: PLANE, alerts: [], stopped: null }];
@@ -235,7 +235,7 @@ describe("a terminal keeps its Tab", () => {
     core({ waiting: [3] });
     render(<App />);
     const terminal = await screen.findByLabelText("Terminal 2");
-    await within(await screen.findByTestId("panels")).findByRole("button", { name: /three/ });
+    await within(await screen.findByTestId("panels")).findByRole("button", { name: /^three/ });
     terminal.focus();
 
     await userEvent.keyboard("{Control>}{Tab}{/Control}");
@@ -245,7 +245,7 @@ describe("a terminal keeps its Tab", () => {
     // And past it, with an ordinary Tab, the Attention region's queue.
     await userEvent.tab();
     expect(document.activeElement).toBe(
-      within(screen.getByTestId("panels")).getByRole("button", { name: /three/ }),
+      within(screen.getByTestId("panels")).getByRole("button", { name: /^three/ }),
     );
 
     terminal.focus();
@@ -260,7 +260,7 @@ async function theWholeWindow() {
   core({ waiting: [3, 1] });
   render(<App />);
   await screen.findByTestId("piece-svc-one");
-  await within(await screen.findByTestId("panels")).findByRole("button", { name: /three/ });
+  await within(await screen.findByTestId("panels")).findByRole("button", { name: /^three/ });
   await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
 }
 
@@ -378,7 +378,10 @@ describe("a list is one Tab stop", () => {
 
   it("the needs-you queue: the oldest chat asking is the stop, and the arrows move", async () => {
     await theWholeWindow();
-    const queue = within(screen.getByLabelText("Needs you")).getAllByRole("button");
+    // The chats, and not their Ignore buttons, which are no stop at all (charter-app#248).
+    const queue = within(screen.getByLabelText("Needs you")).getAllByRole("button", {
+      name: /^(?!Ignore )/,
+    });
     expect(queue.map((row) => row.textContent)).toEqual(["three steward", "one steward"]);
     expect(queue.map((row) => row.getAttribute("tabindex"))).toEqual(["0", "-1"]);
 

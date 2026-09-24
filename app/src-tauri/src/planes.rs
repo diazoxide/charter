@@ -172,7 +172,7 @@ pub struct Held {
     id: PlaneId,
     root: PathBuf,
     hooks: Hooks,
-    /// The window, for a move no hook reports: a chat closed.
+    /// The window, for a move no hook reports: a chat closed, or a request ignored.
     tell: Teller,
     chats: Chats,
     records: Arc<Records>,
@@ -267,6 +267,20 @@ impl Held {
         let closed = self.chats.close(session);
         (self.tell)(gone);
         closed
+    }
+
+    /// Drops a chat's request for the operator without answering it — the needs-you item's
+    /// Ignore — and tells the window (charter-app#248).
+    ///
+    /// **The core holds it, not the window.** The window's queue is the one the last
+    /// `chat-moved` carried and it is replaced whole on every move, so an ignore kept in the
+    /// window would be undone by the next move of any chat. On the board it lasts exactly as
+    /// long as the request does: the chat's next `Stop` or `Notification` asks again.
+    ///
+    /// The snapshot is built under the board's hold (`Hooks::ignored`), and numbered there,
+    /// so a report racing it is put in order by the window rather than by which thread won.
+    pub fn ignore_needs_you(&self, session: u32) {
+        (self.tell)(self.hooks.ignored(session));
     }
 
     /// Writes the record, ends every session, and stops listening — everything a plane holds
@@ -2431,13 +2445,15 @@ mod tests {
         (planes, told)
     }
 
-    /// The needs-you queue a window showing `plane` holds now: the last one it was sent.
+    /// The needs-you queue a window showing `plane` holds now: the newest one it was sent,
+    /// which is the one numbered last — the window drops a snapshot older than the one it
+    /// holds, whatever order they land in (`chatState.ts`, charter-app#248).
     fn the_window_s_queue(told: &Mutex<Vec<Moved>>, plane: &PlaneId) -> Vec<u32> {
         told.lock()
             .expect("the log")
             .iter()
-            .rev()
-            .find(|moved| moved.plane == *plane)
+            .filter(|moved| moved.plane == *plane)
+            .max_by_key(|moved| moved.sequence)
             .map(|moved| moved.queue.clone())
             .unwrap_or_default()
     }
@@ -2576,5 +2592,66 @@ mod tests {
                 .all(|moved| moved.queue.is_empty() && !moved.needs_you),
             "a relaunch told the window a chat needs you: {told:?}"
         );
+    }
+
+    // **Ignore lasts until the chat asks again (charter-app#248).**
+
+    #[cfg(unix)]
+    #[test]
+    fn ignoring_a_chat_that_needs_you_takes_it_out_of_the_window_s_queue() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = a_chat_asking_for_you(&held, &told, "/bin/cat");
+
+        held.ignore_needs_you(session);
+
+        assert_eq!(
+            the_window_s_queue(&told, &plane),
+            Vec::<u32>::new(),
+            "the chat was ignored and the window still shows it needing you"
+        );
+        assert_eq!(
+            held.hooks().now(session).state,
+            "waiting",
+            "ignoring a chat answered nothing in it"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ignored_chat_that_stops_again_is_back_in_the_window_s_queue() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = a_chat_asking_for_you(&held, &told, "/bin/cat");
+        held.ignore_needs_you(session);
+        assert!(the_window_s_queue(&told, &plane).is_empty());
+
+        a_stop_from(&held, session);
+
+        assert_eq!(
+            the_window_s_queue_becomes(&told, &plane, |queue| queue.contains(&session)),
+            vec![session],
+            "the chat asked again and the window was not told"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ignored_chat_is_still_ignored_when_a_window_asks_again() {
+        // A window reload asks `chat_states`, and the board is what answers it.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, told) = planes_telling();
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = a_chat_asking_for_you(&held, &told, "/bin/cat");
+
+        held.ignore_needs_you(session);
+
+        let asked = held.hooks().now(session);
+        assert!(asked.queue.is_empty() && !asked.needs_you, "{asked:?}");
     }
 }

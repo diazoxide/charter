@@ -244,6 +244,43 @@ describe("a window holding more than one project", () => {
     expect(asked.filter((one) => one.cmd === "opened_chats").length).toBe(asksSoFar);
   });
 
+  it("ignores a chat from the queue, and its project's count goes down with it (charter-app#248)", async () => {
+    const { move, asked } = core({
+      launch: ONE,
+      chats: { [ONE]: [chat({ session: 1, name: "one.1" }), chat({ session: 2, name: "one.2" })] },
+    });
+    render(<App />);
+    await vi.waitFor(() => expect(chatTabs()).toEqual(["one.1", "one.2"]));
+    const asking = { plane: ONE, state: "waiting", moved_at: 1 };
+    move({ ...asking, session: 1, needs_you: true, queue: [1, 2], sequence: 1 });
+    move({ ...asking, session: 2, needs_you: true, queue: [1, 2], sequence: 2 });
+    const count = () => projectTab("one").querySelector(".project-needs")?.textContent;
+    await vi.waitFor(() => expect(count()).toBe("2"));
+
+    await userEvent.click(
+      within(screen.getByLabelText("Needs you")).getByRole("button", {
+        name: "Ignore one.1 until it asks again",
+      }),
+    );
+
+    // The core holds the ignore, and answers it the way it answers every move.
+    await vi.waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "ignore_needs_you").map((one) => one.args)).toEqual([
+        { plane: ONE, session: 1 },
+      ]),
+    );
+    move({ ...asking, session: 1, needs_you: false, queue: [2], sequence: 4 });
+    await vi.waitFor(() => expect(count()).toBe("1"));
+
+    // And a report the board took before the ignore, landing after it, does not bring it back.
+    move({ ...asking, session: 1, needs_you: true, queue: [1, 2], sequence: 3 });
+    await new Promise((settle) => setTimeout(settle, 50));
+    expect(count()).toBe("1");
+    expect(
+      within(screen.getByLabelText("Needs you")).queryByRole("button", { name: "one.1" }),
+    ).toBeNull();
+  });
+
   it("says on a project's tab when a chat over there needs you", async () => {
     // The reason a project behind the one on screen goes on listening rather than being torn
     // down: an operator looking at project B has no other way to learn that A is waiting.
@@ -262,7 +299,15 @@ describe("a window holding more than one project", () => {
 
     // Project ONE's chat 1, while project TWO is on screen. Both projects have a chat 1, so
     // a window that ignored the plane on the event would mark the wrong tab.
-    move({ plane: ONE, session: 1, state: "waiting", needs_you: true, queue: [1], moved_at: 1 });
+    move({
+      plane: ONE,
+      session: 1,
+      state: "waiting",
+      needs_you: true,
+      queue: [1],
+      moved_at: 1,
+      sequence: 1,
+    });
 
     await vi.waitFor(() =>
       expect(projectTab("one").querySelector(".project-needs")?.textContent).toBe("1"),

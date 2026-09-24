@@ -132,6 +132,9 @@ export type Does =
    *  discards work with nobody warned — the same objection `worktree.discard` records. */
   | { verb: "removeWorkspace"; workspace: string }
   | { verb: "showChat"; session: number }
+  /** Drops a chat's request for the operator until it asks again (charter-app#248). The chat
+   *  itself is untouched; the core holds the ignore, so the window's queue is told, not kept. */
+  | { verb: "ignoreNeedsYou"; session: number }
   /** Opens a view in a tab of its own, or brings forward the tab already showing it.
    *
    *  **One verb for charter's views and an extension's** — the persona view is
@@ -320,6 +323,8 @@ export type Doing = {
    *  core's guard. */
   removeWorkspace: (workspace: string) => void;
   showChat: (session: number) => void;
+  /** Answers a `Ran`, because it is a command the core can refuse — a project closed meanwhile. */
+  ignoreNeedsYou: (session: number) => Promise<Ran>;
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
@@ -575,6 +580,17 @@ export function catalogue(now: Now): Offer[] {
       tabHolding(now.tabs, session) === undefined
         ? cannot(`needs.show:${session}`, title, "That chat has no tab in this window.", name)
         : can(`needs.show:${session}`, title, { verb: "showChat", session }, name),
+    );
+    // **Ignore, until the chat asks again** (charter-app#248): the item's `✕`, Delete on it,
+    // and this row in the palette are one row. Always available — ignoring is about the
+    // request, and a chat asking from a tab this window does not hold is still asking.
+    offers.push(
+      can(
+        `needs.ignore:${session}`,
+        `Ignore ${name} until it asks again`,
+        { verb: "ignoreNeedsYou", session },
+        name,
+      ),
     );
   }
 
@@ -942,6 +958,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "showChat":
       doing.showChat(does.session);
       return DID;
+    case "ignoreNeedsYou":
+      return doing.ignoreNeedsYou(does.session);
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
