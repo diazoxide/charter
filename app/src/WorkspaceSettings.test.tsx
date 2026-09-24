@@ -88,6 +88,7 @@ const NO_THEME: ProjectTheme = {
   why: null,
   colour: null,
   ignored: [],
+  local_left_out: null,
 };
 
 const OWN_WHY =
@@ -101,6 +102,7 @@ const HARNESSES: HarnessPlugins[] = [
     unsupported: null,
     record: "/home/dev/.claude/plugins/installed_plugins.json",
     trouble: null,
+    local_left_out: null,
     plugins: [
       {
         id: "charter-app@inline",
@@ -131,6 +133,7 @@ const HARNESSES: HarnessPlugins[] = [
     unsupported:
       "plugins for opencode are not supported yet — charter does not start opencode chats yet",
     trouble: null,
+    local_left_out: null,
     plugins: [],
   },
   {
@@ -139,6 +142,7 @@ const HARNESSES: HarnessPlugins[] = [
     record: "/home/dev/.codex/config.toml",
     unsupported: "plugins for Codex are not supported yet — Codex 0.147.0 ignores -c",
     trouble: null,
+    local_left_out: null,
     plugins: [],
   },
 ];
@@ -160,6 +164,7 @@ function core(
   settings: Settings = ALPHA,
   saved?: (sent: Record<string, unknown>) => WorkspaceSettingsSaved,
   theme: ProjectTheme = NO_THEME,
+  leftOut: string | null = null,
 ) {
   const sent: Record<string, unknown>[] = [];
   const asked: [string, Record<string, unknown>][] = [];
@@ -167,10 +172,11 @@ function core(
     const given = (args ?? {}) as Record<string, unknown>;
     asked.push([cmd, given]);
     if (cmd === "workspace_settings") return settings;
-    if (cmd === "project_extensions") return EXTENSIONS;
-    if (cmd === "project_harness_plugins") return HARNESSES;
+    if (cmd === "project_extensions") return { extensions: EXTENSIONS, local_left_out: leftOut };
+    if (cmd === "project_harness_plugins")
+      return HARNESSES.map((one) => ({ ...one, local_left_out: leftOut }));
     if (cmd === "extensions_on") return [];
-    if (cmd === "project_theme") return theme;
+    if (cmd === "project_theme") return { ...theme, local_left_out: leftOut };
     if (cmd === "project_theme_drawn") return theme.draws;
     if (cmd === "save_workspace_settings") {
       sent.push(given);
@@ -568,5 +574,37 @@ describe("the Workspace settings view", () => {
     ).toBeInTheDocument();
     expect(await screen.findByTestId("settings-workspace")).toBeInTheDocument();
     expect(asked("open_view")).toEqual([]);
+  });
+});
+
+/** The ignore check's sentence for a `charter.local.toml` git would commit, as the core says it
+ *  (charter-app#308): what the Local section says, and every group that shows what is in force. */
+const LEFT_OUT =
+  "git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter reinit adds /charter.local.toml to .gitignore.";
+
+describe("a charter.local.toml git would carry (charter-app#319)", () => {
+  it("is said once in every group that shows what is in force, in the Local section's words", async () => {
+    core(ALPHA, undefined, NO_THEME, LEFT_OUT);
+    const section = await drawn();
+    await within(section).findByRole("group", { name: "Harness plugins: Claude Code" });
+
+    for (const name of [
+      "Extensions",
+      "Theme",
+      "Harness plugins: Claude Code",
+      "Harness plugins: opencode",
+      "Harness plugins: Codex",
+    ]) {
+      const group = within(section).getByRole("group", { name });
+      await waitFor(() => expect(within(group).getAllByText(LEFT_OUT)).toHaveLength(1));
+    }
+  });
+
+  it("is not said while charter reads the file", async () => {
+    core();
+    const section = await drawn();
+    await within(section).findByRole("group", { name: "Harness plugins: Claude Code" });
+
+    expect(screen.queryByText(/charter reads nothing in it/)).toBeNull();
   });
 });

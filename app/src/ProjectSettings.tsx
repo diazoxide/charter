@@ -11,6 +11,7 @@ import {
   type HarnessPlugins,
   type PlaneId,
   type ProjectExtension,
+  type ProjectExtensions,
   type ProjectTheme,
   type ProjectSettings as Both,
   type SettingsChange,
@@ -50,10 +51,16 @@ import {
  * either section: each plugin that harness has installed, on, off or not set, writing
  * `[harness_plugins.<harness>]` — the core's `harness_plugin::survey`, asked with
  * `project_harness_plugins`. A harness whose adapter cannot apply says so and has no control.
+ *
+ * **Each of those groups says it once when Local was left out having set something in it**
+ * (charter-app#319): the value in force beside a control is not the one Local set, and the group
+ * says why in the sentence the core's answer carries — the ignore check's, the one the Local
+ * section says at its head, so there is one wording. The Local section's own groups leave it to
+ * that head.
  */
 export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [both, setBoth] = useState<Both | { trouble: string }>();
-  const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   const [theme, setTheme] = useState<ProjectTheme>();
   /** The newest read out: an answer to an older one — before a save, or for another plane — is
@@ -93,10 +100,11 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
     void commands
       .projectExtensions(plane, null)
       .then((said) => {
-        if (newest()) setExtensions(said.status === "ok" ? (said.data ?? []) : []);
+        if (newest())
+          setExtensions(said.status === "ok" ? (said.data ?? NO_EXTENSIONS) : NO_EXTENSIONS);
       })
       .catch(() => {
-        if (newest()) setExtensions([]);
+        if (newest()) setExtensions(NO_EXTENSIONS);
       });
     void commands
       .projectHarnessPlugins(plane, null)
@@ -167,6 +175,8 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         groups={[...LOCAL, ...harnessPluginGroups(harnesses, "project")]}
         extensions={extensions}
         theme={theme}
+        // Its head already says why the file is not read, among its refusals.
+        groupsSayLeftOut={false}
         send={(base, change) => commands.saveProjectSettings(plane, "local", base, change)}
         onSaved={saved}
       />
@@ -186,12 +196,13 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
  * (charter-app#282), asked with `project_harness_plugins` for this workspace, and **Theme**
  * (charter-app#281): the workspace's pick, read by the same resolver as the project's
  * (`project_theme` for this workspace), and its **colour**. Each extension, each plugin and the
- * theme says which layer decided it. A form only: the manifest holds more than settings, and
- * charter keeps the rest.
+ * theme says which layer decided it — and, when Local was left out, each group says why, once
+ * (charter-app#319), as Project settings' do. A form only: the manifest holds more than settings,
+ * and charter keeps the rest.
  */
 export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; workspace: string }) {
   const [file, setFile] = useState<OneWorkspace | { trouble: string }>();
-  const [extensions, setExtensions] = useState<ProjectExtension[]>([]);
+  const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
   const [theme, setTheme] = useState<ProjectTheme>();
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   /** The newest read out, as in {@link ProjectSettings}. */
@@ -225,10 +236,11 @@ export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; worksp
     void commands
       .projectExtensions(plane, workspace)
       .then((said) => {
-        if (newest()) setExtensions(said.status === "ok" ? (said.data ?? []) : []);
+        if (newest())
+          setExtensions(said.status === "ok" ? (said.data ?? NO_EXTENSIONS) : NO_EXTENSIONS);
       })
       .catch(() => {
-        if (newest()) setExtensions([]);
+        if (newest()) setExtensions(NO_EXTENSIONS);
       });
     void commands
       .projectHarnessPlugins(plane, workspace)
@@ -344,6 +356,9 @@ type Control = {
   edits: (draft: string, file: Shown) => SettingsEdit[];
 };
 
+/** What `project_extensions` answers before it has answered, or when it could not. */
+const NO_EXTENSIONS: ProjectExtensions = { extensions: [], local_left_out: null };
+
 /** A heading and what is under it. `extensions` is what the core says is in force in this
  *  project, and `theme` what it says the project draws, for the groups that draw them. */
 type Group = {
@@ -360,6 +375,9 @@ type Group = {
     extensions: readonly ProjectExtension[],
     theme: ProjectTheme | undefined,
   ) => string[];
+  /** For a group that shows what is in force: why `charter.local.toml` had no say in it, as the
+   *  core's answer carries it (charter-app#319), or `null` when it had its say. */
+  leftOut?: (extensions: ProjectExtensions, theme: ProjectTheme | undefined) => string | null;
   /** What the group says when it has no controls; "None in this file." otherwise. */
   empty?: string;
 };
@@ -576,6 +594,7 @@ const EXTENSIONS: Group = {
     extensions.flatMap((it) =>
       it.ignored.filter((one) => one.file === file.file).map((one) => one.why),
     ),
+  leftOut: (extensions) => extensions.local_left_out,
 };
 
 /** The file a harness plugin's source is, by its own name: the layer that decided it. */
@@ -641,6 +660,7 @@ function harnessPluginGroups(harnesses: readonly HarnessPlugins[], scope: Scope)
           it.ignored.filter((one) => one.file === file.file).map((one) => one.why),
         ),
       ],
+      leftOut: () => harness.local_left_out,
     };
   });
 }
@@ -700,6 +720,7 @@ function themeGroup(unset: string, here: "project" | "workspace" = "project"): G
           : []),
       ];
     },
+    leftOut: (_extensions, theme) => theme?.local_left_out ?? null,
   };
 }
 
@@ -843,19 +864,23 @@ function Section({
   send,
   onSaved,
   rawView = true,
+  groupsSayLeftOut = true,
 }: {
   file: Shown;
   testid: string;
   title: string;
   who: string;
   groups: readonly Group[];
-  extensions: readonly ProjectExtension[];
+  extensions: ProjectExtensions;
   theme: ProjectTheme | undefined;
   /** Sends a change against the text it was typed over: `null` for a file not there yet. */
   send: (base: string | null, change: SettingsChange) => Promise<Sent>;
   onSaved: () => void;
   /** Whether the file is also offered as raw TOML. A workspace's manifest is not (#280). */
   rawView?: boolean;
+  /** Whether each group that shows what is in force says why Local was left out of it
+   *  (charter-app#319). The Local section's head says it for its groups. */
+  groupsSayLeftOut?: boolean;
 }) {
   const heading = useId();
   const [mode, setMode] = useState<Mode>(file.parsed || !rawView ? "form" : "raw");
@@ -879,8 +904,9 @@ function Section({
 
   const controls = groups.map((group) => ({
     group,
-    controls: group.controls(file, extensions, theme),
-    notes: group.notes?.(file, extensions, theme) ?? [],
+    controls: group.controls(file, extensions.extensions, theme),
+    notes: group.notes?.(file, extensions.extensions, theme) ?? [],
+    leftOut: groupsSayLeftOut ? (group.leftOut?.(extensions, theme) ?? null) : null,
   }));
   const all = controls.flatMap((one) => one.controls);
   const changed = all.filter((one) => one.id in drafts && drafts[one.id] !== one.read(file));
@@ -957,10 +983,11 @@ function Section({
 
       {mode === "form" ? (
         // A file no form can read, with no raw view to mend it in, shows only why (above).
-        (file.parsed ? controls : []).map(({ group, controls: under, notes }) => (
+        (file.parsed ? controls : []).map(({ group, controls: under, notes, leftOut }) => (
           <fieldset key={group.title} className="settings-group">
             <legend>{group.title}</legend>
             {group.note && <p className="settings-hint">{group.note}</p>}
+            {leftOut !== null && <p className="settings-hint">{leftOut}</p>}
             {under.length === 0 && <p className="none">{group.empty ?? "None in this file."}</p>}
             {under.map((control) => (
               <SettingControl

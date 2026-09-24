@@ -111,15 +111,18 @@ const NO_PICK: ProjectTheme = {
   why: null,
   colour: null,
   ignored: [],
+  local_left_out: null,
 };
 
 /** The core, as a mock: `project_settings` answers `both`, `project_extensions` answers
- *  `extensions`, and `save_project_settings` answers `saved` and records what it was sent. */
+ *  `extensions`, and `save_project_settings` answers `saved` and records what it was sent.
+ *  `leftOut` is why every answer says `charter.local.toml` was left out (charter-app#319). */
 function core(
   both: Both,
   saved?: (sent: Record<string, unknown>) => SettingsSaved,
   extensions: ProjectExtension[] = [],
   theme: ProjectTheme | (() => ProjectTheme) = NO_PICK,
+  leftOut: string | null = null,
 ) {
   const themeNow = () => (typeof theme === "function" ? theme() : theme);
   const sent: Record<string, unknown>[] = [];
@@ -134,10 +137,10 @@ function core(
     }
     if (cmd === "project_extensions") {
       extensionReads += 1;
-      return extensions;
+      return { extensions, local_left_out: leftOut };
     }
     if (cmd === "extensions_on") return [];
-    if (cmd === "project_theme") return themeNow();
+    if (cmd === "project_theme") return { ...themeNow(), local_left_out: leftOut };
     if (cmd === "project_theme_drawn") {
       themeAsks += 1;
       return themeNow().draws;
@@ -663,5 +666,44 @@ describe("the Project settings view", () => {
     expect(await screen.findByRole("heading", { name: "Project settings" })).toBeInTheDocument();
     expect(await screen.findByTestId("settings-shared")).toBeInTheDocument();
     expect(asked).not.toContain("open_view");
+  });
+});
+
+/** The ignore check's sentence for a `charter.local.toml` git would commit, as the core says it
+ *  (charter-app#308): what the Local section says, and every group that shows what is in force. */
+const LEFT_OUT =
+  "git would commit charter.local.toml, so charter reads nothing in it until it is ignored — charter reinit adds /charter.local.toml to .gitignore.";
+
+describe("a charter.local.toml git would carry (charter-app#319)", () => {
+  const CARRIED: Both = { shared: SHARED, local: { ...LOCAL, refusals: [LEFT_OUT] } };
+
+  it("is said once in each Shared group that shows what is in force, in the Local section's words", async () => {
+    core(CARRIED, undefined, EXTENSIONS, NO_PICK, LEFT_OUT);
+    const { shared } = await drawn();
+
+    for (const name of ["Extensions", "Theme"]) {
+      const group = within(shared).getByRole("group", { name });
+      await waitFor(() => expect(within(group).getAllByText(LEFT_OUT)).toHaveLength(1));
+    }
+  });
+
+  it("is said once in the Local section, at its head, and not again in each of its groups", async () => {
+    core(CARRIED, undefined, EXTENSIONS, NO_PICK, LEFT_OUT);
+    const { shared, local } = await drawn();
+    const said = within(shared).getByRole("group", { name: "Extensions" });
+    await waitFor(() => expect(said).toHaveTextContent(LEFT_OUT));
+
+    expect(within(local).getAllByText(LEFT_OUT)).toHaveLength(1);
+    expect(within(local).getByRole("group", { name: "Extensions" })).not.toHaveTextContent(
+      LEFT_OUT,
+    );
+  });
+
+  it("is not said while charter reads the file", async () => {
+    core({ shared: SHARED, local: LOCAL }, undefined, EXTENSIONS);
+    const { shared } = await drawn();
+    await within(shared).findByLabelText("Acme: enabled");
+
+    expect(screen.queryByText(/charter reads nothing in it/)).toBeNull();
   });
 });

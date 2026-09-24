@@ -153,7 +153,7 @@ fn the_check_sees_each_way_a_reader_is_written() {
     }
 
     // And what reads nothing: the one way in, a comment, a sentence that names the file.
-    let fine = "            layer_text(root, Which::Local).as_deref(),\n    \
+    let fine = "            layer_text(root, Which::Local).text(),\n    \
                 // text(LOCAL_FILE) is how it used to be read\n    \
                 format!(\"{} in charter.local.toml\", shown_text(x))\n";
     assert_eq!(reading_lines(fine), Vec::<usize>::new());
