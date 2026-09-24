@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { commands, type TitleBarRoom } from "./bindings";
+import { commands, type PlaneSaving, type TitleBarRoom } from "./bindings";
+import { SaveIndicator } from "./SavingView";
 import { AboutCharter } from "./About";
 import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
@@ -66,6 +67,7 @@ export function TitleBar({
   room,
   chats,
   needing,
+  save,
 }: {
   /** Where the window is, for the left-hand side. */
   crumbs: Crumbs;
@@ -103,6 +105,16 @@ export function TitleBar({
     quiet: readonly Quiet[];
     onPress: (plane: string, offer: Offer) => void;
   };
+  /**
+   * The project in front's save standing (charter-app#294, ADR 0051) and what its two buttons
+   * do. Absent — no project in front, or none read yet — draws nothing.
+   */
+  save?: {
+    saving: PlaneSaving;
+    busy: boolean;
+    onOpen: () => void;
+    onSave: () => void;
+  };
 }) {
   return (
     <header
@@ -120,6 +132,9 @@ export function TitleBar({
         {/* First, because it is the one of the three that is about the operator's chats and
             not about the app — and it is nothing at all when nothing needs you. */}
         {needing && <NeedsYouMenu {...needing} />}
+        {/* Then the project in front's unsaved work: about the project, not the app, and the
+            one thing on the bar the operator acts on as often as a chat that asks. */}
+        {save && <SaveIndicator {...save} />}
         <AboutCharter />
         {updates && <UpdateItem updates={updates} chats={chats} />}
       </span>

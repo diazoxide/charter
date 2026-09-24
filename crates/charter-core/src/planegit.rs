@@ -363,6 +363,162 @@ pub fn unlanded(root: &Path) -> Option<serde_json::Value> {
     (!is_spent(root, head)).then_some(rec)
 }
 
+// --------------------------------------------------------------------------------------- //
+// where unsaved work sits                                                                   //
+// --------------------------------------------------------------------------------------- //
+
+/// Where a plane's unsaved work sits, furthest back first (ADR 0051). The Saving view and the
+/// title bar show the furthest-back one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// A save cannot go further without a person: the last push conflicted or failed, and
+    /// its commit has not landed since.
+    Blocked,
+    /// Files the next save would commit.
+    Changed,
+    /// Commits the remote does not have yet.
+    Committed,
+    /// Pushed, and waiting on a pull request.
+    PrOpen,
+    /// On the target branch.
+    Saved,
+}
+
+impl Stage {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Blocked => "blocked",
+            Self::Changed => "changed",
+            Self::Committed => "committed",
+            Self::PrOpen => "pr-open",
+            Self::Saved => "saved",
+        }
+    }
+}
+
+/// A plane's save standing, read from git and the push record — never from the network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Standing {
+    pub stage: Stage,
+    /// What the next save would commit: tracked changes and new files git does not ignore,
+    /// as `git add -A` would take them, sorted.
+    pub changed: Vec<String>,
+    /// Commits on HEAD that the remote-tracking branch does not have. `None` when there is no
+    /// remote-tracking branch to count against.
+    pub ahead: Option<u32>,
+    /// The pull request a pushed commit is waiting on.
+    pub pr: Option<String>,
+    /// Why the save is blocked, in git's own words.
+    pub blocked: Option<String>,
+    /// The target branch commits are counted against: `[plane] branch`, or the one HEAD is on.
+    pub branch: String,
+    /// Whether a save would push: a mode that goes past the commit, and an origin on a forge
+    /// charter knows. When it would not, a commit is as far as a save goes, and a plane with
+    /// nothing left to commit is saved.
+    pub pushes: bool,
+}
+
+/// Where the plane at `root`'s unsaved work sits.
+pub fn standing(root: &Path) -> Standing {
+    let plane = crate::planesave::Settings::read(root).plane;
+    let here = git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
+        .ok()
+        .filter(git::Run::ok)
+        .map(|r| r.line().trim().to_string());
+    let Some(here) = here else {
+        return Standing {
+            stage: Stage::Blocked,
+            changed: Vec::new(),
+            ahead: None,
+            pr: None,
+            blocked: Some(
+                "this plane is not a git repository, so there is nothing to commit to".into(),
+            ),
+            branch: String::new(),
+            pushes: false,
+        };
+    };
+    let branch = plane.branch.value.clone().unwrap_or(here);
+    let pushes = matches!(plane.mode.value, None | Some(crate::planesave::Mode::Push))
+        && origin_https(root).is_some();
+    let changed = changed_paths(root);
+    let ahead = git::run(
+        root,
+        &[
+            "rev-list",
+            "--count",
+            &format!("refs/remotes/origin/{branch}..HEAD"),
+        ],
+        git::READ,
+    )
+    .ok()
+    .filter(git::Run::ok)
+    .and_then(|r| r.line().trim().parse().ok());
+    let record = unlanded(root);
+    let said = |key: &str| {
+        record
+            .as_ref()
+            .and_then(|r| r.get(key))
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let outcome = said("outcome");
+    let pr = (outcome.as_deref() == Some(Outcome::Branched.word()))
+        .then(|| said("url"))
+        .flatten();
+    let blocked = matches!(outcome.as_deref(), Some("conflict" | "failed" | "stranded"))
+        .then(|| said("detail").unwrap_or_else(|| outcome.clone().unwrap_or_default()));
+    let stage = if blocked.is_some() {
+        Stage::Blocked
+    } else if !changed.is_empty() {
+        Stage::Changed
+    } else if pr.is_some() {
+        Stage::PrOpen
+    } else if pushes && ahead != Some(0) {
+        // Nothing to count against is not nothing unpushed: say committed, never saved.
+        Stage::Committed
+    } else {
+        Stage::Saved
+    };
+    Standing {
+        stage,
+        changed,
+        ahead,
+        pr,
+        blocked,
+        branch,
+        pushes,
+    }
+}
+
+/// `git status --porcelain=v1 -z`'s paths: what `git add -A` would take. `-z` for the same
+/// reason the save's secret guard uses it — no quoting, NUL the only separator.
+fn changed_paths(root: &Path) -> Vec<String> {
+    let Ok(run) = git::run(
+        root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        git::READ,
+    ) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut entries = run.out.split('\0');
+    while let Some(entry) = entries.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let (status, path) = entry.split_at(3);
+        out.push(path.to_string());
+        // A rename or copy names where it came from next, as an entry of its own.
+        if status.contains(['R', 'C']) {
+            entries.next();
+        }
+    }
+    out.sort();
+    out
+}
+
 /// The `charter/<sha>` branch an earlier push is STILL waiting on a pull request for.
 ///
 /// Advancing it is a fast-forward — each new HEAD is a descendant of the one before — so one

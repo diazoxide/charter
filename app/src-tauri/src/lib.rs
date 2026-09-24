@@ -22,6 +22,7 @@ mod panics;
 mod pin;
 mod planes;
 mod planewatch;
+mod saving;
 mod sessions;
 mod settings;
 mod slowstart;

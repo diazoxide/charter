@@ -211,6 +211,9 @@ export type Does =
    *  front first when it is not. It writes nothing by itself: a save is the tab's, through the
    *  core's own checks. */
   | { verb: "openSettings"; plane: string }
+  /** Opens that project's Saving tab (charter-app#294) — bringing the project to the front
+   *  first when it is not. It saves nothing by itself: the save is the tab's button. */
+  | { verb: "openSaving"; plane: string }
   /** Opens that workspace's Workspace settings tab (charter-app#280), on that workspace's strip.
    *  It writes nothing by itself: a save is the tab's, through the core's own checks. */
   | { verb: "openWorkspaceSettings"; workspace: string }
@@ -411,6 +414,8 @@ export type Doing = {
   closeProject: (plane: string) => Promise<Ran>;
   /** Brings that project to the front and opens its Project settings tab. */
   openSettings: (plane: string) => void;
+  /** Brings that project to the front and opens its Saving tab. */
+  openSaving: (plane: string) => void;
   /** Opens that workspace's settings tab on its strip, or brings forward the one already open. */
   openWorkspaceSettings: (workspace: string) => void;
   /** Opens the Preferences tab, or brings forward the one already open. */
@@ -467,6 +472,7 @@ export function projectRows(
   switchTo: Offer[];
   pin: Offer[];
   settings: Offer[];
+  saving: Offer[];
   close: Offer[];
 } {
   return {
@@ -517,6 +523,13 @@ export function projectRows(
         plane: project.plane,
       }),
       note: `${project.name}: charter.toml, for the team, and charter.local.toml, for this machine.`,
+    })),
+    saving: projects.map((project) => ({
+      ...can(`project.saving:${project.plane}`, "Saving…", {
+        verb: "openSaving",
+        plane: project.plane,
+      }),
+      note: `${project.name}: what is not saved yet, and the save button.`,
     })),
     close: projects.map((project) => ({
       ...can(
@@ -780,6 +793,7 @@ export function catalogue(now: Now): Offer[] {
     ...projects.switchTo,
     ...projects.pin,
     ...projects.settings,
+    ...projects.saving,
   );
   // **This machine's preferences, beside the projects' settings** (charter-app#283): the text
   // sizes are the machine's and not a project's, so the row is there with no project open too,
@@ -1155,6 +1169,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openSettings":
       doing.openSettings(does.plane);
       return DID;
+    case "openSaving":
+      doing.openSaving(does.plane);
+      return DID;
     case "openWorkspaceSettings":
       doing.openWorkspaceSettings(does.workspace);
       return DID;
@@ -1443,6 +1460,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `project.select:${what.plane}`,
           `project.pin:${what.plane}`,
           `project.settings:${what.plane}`,
+          `project.saving:${what.plane}`,
           "project.create",
           "project.open",
         ],

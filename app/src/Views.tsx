@@ -4,6 +4,7 @@ import {
   KeyRound,
   LoaderCircle,
   Puzzle,
+  Save,
   Settings2,
   SlidersHorizontal,
   UserRound,
@@ -20,7 +21,8 @@ import {
   type PlaneId,
   type ViewAnswer,
 } from "./bindings";
-import { PREFERENCES_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
+import { SavingView } from "./SavingView";
+import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
 
 /** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
@@ -118,6 +120,7 @@ const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   persona: UserRound,
   vault: KeyRound,
   settings: Settings2,
+  saving: Save,
   [WORKSPACE_SETTINGS]: Settings2,
   preferences: SlidersHorizontal,
 };
@@ -245,6 +248,10 @@ export function ViewPane({
           /* A workspace's settings (charter-app#280): Project settings' body, for the one file
              a workspace holds. Keyed by both, for the same reason. */
           <WorkspaceSettings key={`${plane}\u0000${view.key}`} plane={plane} workspace={view.key} />
+        ) : isSaving(view) ? (
+          /* The plane's save standing and its save button (charter-app#294). Keyed by the
+             plane, so a pane that comes to show another project's starts from its own read. */
+          <SavingView key={plane} plane={plane} />
         ) : isPreferences(view) ? (
           /* The machine's, not the plane's (charter-app#283): the same surface whichever
              project's strip it was opened on. */
@@ -273,6 +280,11 @@ function isSettings(view: ViewRef): boolean {
 /** Whether `view` is a workspace's settings view (charter-app#280). */
 function isWorkspaceSettings(view: ViewRef): boolean {
   return view.from === null && view.view === WORKSPACE_SETTINGS;
+}
+
+/** Whether `view` is the Saving view (charter-app#294). */
+function isSaving(view: ViewRef): boolean {
+  return viewKey(view) === viewKey(SAVING_VIEW);
 }
 
 /** Whether `view` is the Preferences view (charter-app#283). */

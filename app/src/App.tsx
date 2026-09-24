@@ -17,6 +17,7 @@ import {
   type RelaunchChoice,
   type RelaunchQuestion,
 } from "./bindings";
+import { tellSaved, usePlaneSaving } from "./saving";
 import {
   catalogue,
   catalogued,
@@ -143,6 +144,8 @@ function App() {
    * have left behind. The project's own `PlaneView` opens it, because its tabs are its own.
    */
   const [settingsAsk, setSettingsAsk] = useState<{ plane: PlaneId; at: number }>();
+  /** The last ask for a project's Saving tab (charter-app#294), the same shape as `settingsAsk`. */
+  const [savingAsk, setSavingAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
    * The last ask for the Preferences tab (charter-app#283), the same shape as `settingsAsk`:
    * the project in front when it was asked, whose strip the tab opens on. The sizes are the
@@ -471,6 +474,10 @@ function App() {
         setShowing({ at: "plane", plane });
         setSettingsAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
       },
+      openSaving: (plane: string) => {
+        setShowing({ at: "plane", plane });
+        setSavingAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
+      },
       openPreferences: () => {
         const plane = inFrontNow.current;
         if (plane === undefined) setPreferencesAlone(true);
@@ -786,6 +793,7 @@ function App() {
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       openSettings: windowDoes.openSettings,
+      openSaving: windowDoes.openSaving,
       // A workspace is a project's, and there is no project here to have one.
       openWorkspaceSettings: () => undefined,
       openPreferences: windowDoes.openPreferences,
@@ -831,6 +839,7 @@ function App() {
       ...strip.switchTo,
       ...strip.pin,
       ...strip.settings,
+      ...strip.saving,
       ...strip.close,
     ],
     [strip],
@@ -992,6 +1001,29 @@ function App() {
    * chat is only in front when its project is: the project's own `showChat` brings the tab and
    * its workspace forward, and this brings the project.
    */
+  /**
+   * **The project in front's save standing, for the title bar** (charter-app#294). The bar's
+   * save button saves with the generated message; a refusal opens the project's Saving tab,
+   * whose journal holds the refusal's own words.
+   */
+  const { saving } = usePlaneSaving(inFront);
+  /** The project a save from the bar is running in: busy is that project's, not the window's. */
+  const [savingIn, setSavingIn] = useState<PlaneId>();
+  const saveInFront = useCallback(() => {
+    const plane = inFrontNow.current;
+    if (plane === undefined) return;
+    setSavingIn(plane);
+    void commands
+      .savePlane(plane, null)
+      .then((answer) => {
+        if (answer.status === "error") windowDoes.openSaving(plane);
+      })
+      .finally(() => {
+        setSavingIn(undefined);
+        tellSaved();
+      });
+  }, [windowDoes]);
+
   const pressNeeding = useCallback((plane: string, offer: Offer) => {
     if (offer.does.verb === "showChat") setShowing({ at: "plane", plane });
     void reportsNow.current[plane]?.run(offer);
@@ -1009,6 +1041,16 @@ function App() {
         room={titleBarRoom}
         chats={ending}
         needing={{ items: needing, quiet, onPress: pressNeeding }}
+        save={
+          inFront !== undefined && saving !== undefined
+            ? {
+                saving,
+                busy: savingIn === inFront,
+                onOpen: () => windowDoes.openSaving(inFront),
+                onSave: saveInFront,
+              }
+            : undefined
+        }
       />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
           holds any — including one, because `+` is how it gets a second and `×` is the way
@@ -1160,6 +1202,7 @@ function App() {
           contributed={contributedPanels}
           views={extensionViews}
           settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
+          savingAsked={savingAsk?.plane === plane ? savingAsk.at : undefined}
           preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}
         />
       ))}

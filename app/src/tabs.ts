@@ -64,6 +64,15 @@ export const SETTINGS_VIEW: ViewRef = { from: null, view: "settings", key: "" };
 export const SETTINGS_TITLE = "Project settings";
 
 /**
+ * **The Saving view** (charter-app#294, ADR 0051): where a plane's unsaved work sits, what the
+ * next save takes, the save button and the last saves. One per plane, like Project settings.
+ */
+export const SAVING_VIEW: ViewRef = { from: null, view: "saving", key: "" };
+
+/** What the Saving tab is called. */
+export const SAVING_TITLE = "Saving";
+
+/**
  * **A workspace's settings view** (charter-app#280): the `settings` of its `workspace.json`, the
  * layer between the project's Shared and Local files. A view tab of its own rather than a section
  * of Project settings, because #252 made that tab one section per FILE for one holder of settings

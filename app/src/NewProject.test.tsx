@@ -100,6 +100,7 @@ describe("making a project", () => {
       "Switch to project plane",
       "Pin project plane",
       "Project settings…",
+      "Saving…",
       "New project…",
       "Open a project…",
       "Close project plane",

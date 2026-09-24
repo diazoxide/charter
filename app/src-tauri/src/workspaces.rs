@@ -102,7 +102,7 @@ pub struct Refused {
 /// the sentence; the mark is left off because a window draws a refusal as a refusal and would
 /// otherwise say so twice. A command that failed with nothing marked hands back everything it
 /// said rather than an empty refusal, because a refusal with no words is not one.
-fn ran(code: u8, said: Vec<Say>) -> Result<Vec<String>, String> {
+pub(crate) fn ran(code: u8, said: Vec<Say>) -> Result<Vec<String>, String> {
     if code == 0 {
         return Ok(said.iter().map(ToString::to_string).collect());
     }

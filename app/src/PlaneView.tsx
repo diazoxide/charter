@@ -88,6 +88,8 @@ import {
   refileViews,
   PREFERENCES_TITLE,
   PREFERENCES_VIEW,
+  SAVING_TITLE,
+  SAVING_VIEW,
   SETTINGS_TITLE,
   SETTINGS_VIEW,
   workspaceSettingsTitle,
@@ -179,6 +181,7 @@ export function PlaneView({
   contributed: surveyedPanels = NONE,
   views: surveyedViews = NONE,
   settingsAsked,
+  savingAsked,
   preferencesAsked,
 }: {
   plane: PlaneId;
@@ -209,6 +212,8 @@ export function PlaneView({
   /** A count that goes up each time the window is asked for THIS project's settings tab
    *  (`WindowDoing.openSettings`); `undefined` until it is. */
   settingsAsked?: number;
+  /** The same, for THIS project's Saving tab (`WindowDoing.openSaving`, charter-app#294). */
+  savingAsked?: number;
   /** The same, for the Preferences tab (`WindowDoing.openPreferences`, charter-app#283): a
    *  count that goes up each time the window asks for it on THIS project's strip. */
   preferencesAsked?: number;
@@ -1186,6 +1191,14 @@ export function PlaneView({
     showView(SETTINGS_VIEW, SETTINGS_TITLE);
   }, [settingsAsked, showView]);
 
+  /** The Saving tab (charter-app#294), opened the same way and for the same reason. */
+  const savingHandled = useRef(savingAsked);
+  useEffect(() => {
+    if (savingAsked === undefined || savingHandled.current === savingAsked) return;
+    savingHandled.current = savingAsked;
+    showView(SAVING_VIEW, SAVING_TITLE);
+  }, [savingAsked, showView]);
+
   /** A workspace's settings tab (charter-app#280), on that workspace's strip. */
   const openWorkspaceSettings = useCallback(
     (workspace: string) =>
@@ -1657,6 +1670,7 @@ export function PlaneView({
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       openSettings: windowDoes.openSettings,
+      openSaving: windowDoes.openSaving,
       openWorkspaceSettings,
       openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
@@ -2609,6 +2623,8 @@ export type WindowDoing = {
    *  window's, because the project may not be the one in front, and only the window can bring
    *  it there. */
   openSettings: (plane: string) => void;
+  /** Brings a project to the front and opens its Saving tab (charter-app#294). */
+  openSaving: (plane: string) => void;
   /** Opens the Preferences tab (charter-app#283) on the project in front, or draws it where the
    *  opener is when there is none. The window's, because which project is in front is. */
   openPreferences: () => void;

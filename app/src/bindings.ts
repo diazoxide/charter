@@ -325,6 +325,19 @@ export const commands = {
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
+	 *  The plane's save standing.
+	 * 
+	 *  On a blocking thread: it asks git.
+	 */
+	planeSaving: (plane: PlaneId) => typedError<PlaneSaving, string>(__TAURI_INVOKE("plane_saving", { plane })),
+	/**
+	 *  Save the plane, as the save button does: `message`, or the generated one when it is empty.
+	 *  Answers every line the save said, or its refusal.
+	 * 
+	 *  On a blocking thread: it commits, and may push.
+	 */
+	savePlane: (plane: PlaneId, message: string | null) => typedError<string[], string>(__TAURI_INVOKE("save_plane", { plane, message })),
+	/**
 	 *  Make a workspace: `charter workspace create <name>`, with the vision when one was typed.
 	 * 
 	 *  **The name is checked by the core and by nothing in the window.** `wscmd::create` runs
@@ -1599,6 +1612,31 @@ export type PlaneContribution = {
  */
 export type PlaneId = string;
 
+/**  Where the plane's unsaved work sits, how far a save goes, and what the last saves did. */
+export type PlaneSaving = {
+	/**  `blocked`, `changed`, `committed`, `pr-open` or `saved`. */
+	stage: string,
+	/**  What the next save would commit. */
+	changed: string[],
+	/**  Commits the remote does not have; `null` when there is nothing to count against. */
+	ahead: number | null,
+	pr: string | null,
+	blocked: string | null,
+	/**  The target branch: `[plane] branch`, or the one the plane has checked out. */
+	branch: string,
+	/**  Whether a save would push. When it would not, a commit is as far as a save goes. */
+	pushes: boolean,
+	/**  `[plane] mode`, or `null` when the plane names none. */
+	mode: string | null,
+	/**
+	 *  Where the mode came from: `charter.toml`, `charter.local.toml`, `[memory] share`, or
+	 *  `default`.
+	 */
+	modeFrom: string,
+	/**  The newest [`JOURNAL_SHOWN`] saves, newest first. */
+	journal: SaveEntry[],
+};
+
 /**
  *  One row of the profile picker: what it runs, where charter read it, and what pressing
  *  Enter on it would do.
@@ -1876,6 +1914,19 @@ export type Restore = {
 	active: number | null,
 	/**  One line per project charter would not take back. */
 	dropped: string[],
+};
+
+/**  One save attempt, as the journal holds it. */
+export type SaveEntry = {
+	/**  Seconds since the epoch. */
+	at: number | null,
+	trigger: string,
+	mode: string,
+	files: number,
+	commit: string | null,
+	pr: string | null,
+	outcome: string,
+	detail: string,
 };
 
 /**
