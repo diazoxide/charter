@@ -36,14 +36,25 @@ export function closeOnDelete(
   offer: Offer | undefined,
   onPress: (offer: Offer) => void,
 ) {
-  if (offer === undefined || event.target !== event.currentTarget) return;
-  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-  if (event.key !== "Delete" && !(event.key === "Backspace" && onAMac())) return;
+  if (offer === undefined || !deletes(event)) return;
   event.preventDefault();
   const tab = event.currentTarget;
   const strip = tab.closest<HTMLElement>('[role="tablist"]');
   onPress(offer);
   if (strip) backOnTheStripWhenGone(tab, strip);
+}
+
+/**
+ * Whether this key, pressed on the element handling it, is the platform's delete: Delete, or
+ * Backspace on a Mac, with no modifier. `closeOnDelete` says why each of those.
+ *
+ * Shared with the needs-you queue's Ignore (charter-app#248, `NeedsYou.ignoreOnDelete`), which
+ * is the same key doing the same kind of thing to a list item.
+ */
+export function deletes(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.target !== event.currentTarget) return false;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  return event.key === "Delete" || (event.key === "Backspace" && onAMac());
 }
 
 /**

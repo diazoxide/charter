@@ -16,12 +16,19 @@ the work. It supplies the facts, the two tests below, and the mechanism.
 2 and 3 are one mechanism, a **handoff**, because a chat belongs to its workspace for life.
 The only thing that differs is the workspace.
 
-## 1. Apply the two tests
+## 1. Apply the three tests
 
-**Sub-agent or chat — who reads the result?** If this chat needs the answer to continue, it
-is a sub-agent. If the operator will read it and talk to it, it is a chat. There is no
-report-back channel from a handed-off chat: a parent that needs the answer wanted a
-sub-agent, and a handoff would leave it waiting for a message that never comes.
+**Sub-agent or chat — who reads the result?** If this chat needs the answer to continue *this
+turn*, it is a sub-agent. If the operator will read it and talk to it, it is a chat.
+
+**Fire-and-forget, or needs an answer?** Decide per handoff, and say which in the quiz:
+
+- **Fire-and-forget** (the default) — the work stands on its own and the operator reads the
+  new chat directly: a bug to fix, a chore, a question for another workspace to own.
+- **Needs an answer** (`--report`) — this chat has to act on the outcome later: it is waiting
+  on a fix to build on, a decision, a finding. The new chat reports back when it is done, and
+  the report reaches this chat on its next turn. Do not ask for one out of habit: every report
+  is an item on the operator's needs-you list.
 
 **This workspace or another — does the ask serve this workspace's vision?** Yes → a new
 chat here. No → another workspace.
@@ -71,7 +78,9 @@ credential-shaped brief by kind, and that refusal is a backstop, not the rule.
 
 Quiz with **AskUserQuestion**, showing the brief **in full** — not a summary of it. The
 brief becomes another chat's first message and runs with the operator's authority; an
-approval of a summary is not an approval of the text that gets sent. Offer:
+approval of a summary is not an approval of the text that gets sent.
+
+Say the task name and whether it reports back beside the brief. Offer:
 
 - **this workspace** — a new chat here;
 - **the matched workspace(s)** — one option each, named, with its vision;
@@ -82,7 +91,7 @@ approval of a summary is not an approval of the text that gets sent. Offer:
 ## 5. On a yes, run exactly this
 
 ```bash
-charter handoff billing <<'BRIEF'
+charter handoff billing --name "retry webhook deliveries" <<'BRIEF'
 # Retry the failed webhook deliveries
 ...the brief, verbatim...
 BRIEF
@@ -92,6 +101,13 @@ BRIEF
 current one included, because the permission prompt has to say where the chat goes and `.`
 says nothing. Write the name, never a placeholder in angle brackets — the shell reads `<`
 as a redirect and charter refuses the call.
+
+**Always pass `--name`**: a short task name you write from the brief, a few words a person
+scanning a strip of tabs recognises — `drop account-console-commons`, not `handoff` and not
+the workspace's name. At most 64 characters, plain text. It is what the new chat's tab says;
+without it the tab says `<persona> <N>`, and four handoffs look alike.
+
+Add `--report` when the second test said **needs an answer**.
 
 Add `--create --vision "<vision>"` for a workspace that does not exist yet, and
 `--persona <name>` when the quiz named one. Both are visible in the prompt.
@@ -118,9 +134,29 @@ every shape that prompt cannot stand in front of. Each one is the rule working:
 | an unattended run (`bypassPermissions`) | the same, and nothing would ask |
 | an empty brief, a brief that is not UTF-8, one past the size bound, one shaped like a credential | the command, before it changes anything |
 
+## When you are the chat a handoff opened
+
+Your first message starts with a stamp, `⟨handoff from steward 3 · workspace … · …⟩`. If the
+line under it says the chat that handed this off wants an answer, then when the work is done —
+or when you are stuck and cannot finish — finish with:
+
+```bash
+charter handoff report "Dropped account-console-commons from both repos; PRs #41 and #42 open.
+One caller left in billing-ui, noted in its todos."
+```
+
+A few plain lines: what was done, where it is, what is left. No secrets, no pasted files —
+name them by path. It goes back to the chat that asked, and only there; charter chose the
+recipient when it opened this chat. You get one report per turn the operator gives you, so
+send it at the end, not as progress notes.
+
+Without that line under the stamp, nobody is waiting on a report and `charter handoff report`
+is refused — just finish the work.
+
 ## Limits, and say them
 
-- **No report back.** The new chat never answers this one.
+- **A report back only when asked.** Without `--report` the new chat never answers this one,
+  and with it the report arrives on this chat's next turn, not in the middle of this one.
 - **The brief is the whole context.** Nothing about this conversation travels with it.
 - **The same harness.** A Claude Code chat hands off to a Claude Code chat.
 - A handed-off chat may hand off again, under the same prompt. There is no depth limit,

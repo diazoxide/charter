@@ -212,7 +212,7 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
         .map_err(|why| format!("the report could not be kept ({why})"))?;
     held.chats().owes(chat, Owed::Sent);
     if parent_open {
-        held.hooks().reported_back(from.chat, &child_name);
+        held.reported_back(from.chat, &child_name);
     }
     Ok(Answer::Reported {
         to,

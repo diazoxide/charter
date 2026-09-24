@@ -14,7 +14,8 @@
 //! operator never typed. `program`, `args` and `cwd` are **not** checked: they say what to
 //! run, and there is no shape that separates a harness the operator installed from anything
 //! else they might run. So this file is, for whoever can write it, a way to have a command
-//! run at every later launch — before any window, with nothing to click.
+//! run at every later launch — behind one question that names how many chats and in which
+//! projects (charter-app#250), and never what they run.
 //!
 //! **It is not true that a gitignored `.charter/` keeps this out of a clone.** An ignore rule
 //! does not apply to a tracked path: `git add -f` commits a symlink — or a file far larger
@@ -257,6 +258,57 @@ pub struct Record {
     /// while the record is readable: the conversion both ways holds it at or above every
     /// number the record names, so a hand-edited file cannot re-deal one it still lists.
     pub dealt: u32,
+    /// Whether this record was written by a quit that restarts charter to install an update
+    /// (charter-app#251), rather than by the operator quitting.
+    ///
+    /// **Read by the launch after that quit, and by nothing else.** It adds one sentence to the
+    /// launch's question saying why it is being asked; [`Choice::ReopenAll`] is the answer in
+    /// front either way. Every later write of the record is an ordinary one and carries
+    /// `false`, so it lasts until this plane's record is next written.
+    ///
+    /// **Nothing writes `true` yet**: this is the entry point charter-app#251 is to use. That
+    /// ticket also owns one gap it leaves: a plane that is not opened at the launch after the
+    /// update (`--no-restore`, a declined trust ask) keeps the flag until it is next opened.
+    pub relaunch_after_update: bool,
+}
+
+/// What the operator answered when a launch found something to put back (charter-app#250).
+///
+/// **Asked once per launch, before any chat starts**, and never when the record holds
+/// nothing ([`Record::holds_anything`]). A choice that is lost — the dialog closed, Esc, a
+/// window that never answered — is [`Choice::ReopenAll`], because the other answer is the only
+/// one that throws anything away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    /// Every chat back in its tab and pane, resuming its conversation, and every view tab
+    /// back where it was: what a launch did before it asked.
+    ReopenAll,
+    /// Nothing is put back, and the record is cleared of what it held.
+    StartFresh,
+}
+
+impl Record {
+    /// Whether a launch has anything to put back — a chat or a view tab. The counter of
+    /// numbers dealt is bookkeeping and is not something that was open.
+    pub fn holds_anything(&self) -> bool {
+        !self.chats.is_empty() || !self.views.is_empty()
+    }
+
+    /// The record a launch puts back once the operator has answered.
+    ///
+    /// **A fresh start keeps [`Record::dealt`]**, and it is the one thing it keeps: the chats
+    /// it drops still have workspace pointers and locks on disk keyed on their numbers, so a
+    /// new chat dealt one of those would read a stranger's workspace (charter-app#90). The
+    /// counter is taken at or above every number the record names, as a write would take it.
+    pub fn chosen(self, choice: Choice) -> Record {
+        match choice {
+            Choice::ReopenAll => self,
+            Choice::StartFresh => Record {
+                dealt: highest_dealt(&self),
+                ..Record::default()
+            },
+        }
+    }
 }
 
 /// How a chat came back, which is what the pane showing it says.
@@ -537,6 +589,7 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
             .take(MOST_VIEWS)
             .collect(),
         dealt: on_disk.dealt,
+        relaunch_after_update: on_disk.relaunch_after_update,
     };
     // Held to the same invariant on the way in as on the way out: a file whose counter sits
     // below a number it still names — hand-edited, or written by a charter that did not know
@@ -608,6 +661,11 @@ struct OnDisk {
     /// the key, because nothing here refuses one it does not know.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     views: Vec<ViewOnDisk>,
+    /// See [`Record::relaunch_after_update`]. **Written only when true**, so an ordinary
+    /// quit writes the record it always wrote, and absent reads as the ordinary quit every
+    /// record before it was. Not a version bump, for [`Chat::pinned`]'s reason.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    relaunch_after_update: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -832,6 +890,7 @@ impl From<&Record> for OnDisk {
                 .collect(),
             dealt: highest_dealt(record),
             views: record.views.iter().map(ViewOnDisk::from).collect(),
+            relaunch_after_update: record.relaunch_after_update,
         }
     }
 }
@@ -1213,6 +1272,7 @@ mod tests {
         Record {
             views: Vec::new(),
             dealt: 0,
+            relaunch_after_update: false,
             chats: vec![Chat {
                 program: "/bin/sh".into(),
                 args: vec!["-c".into(), "touch /tmp/pwned".into()],
@@ -1406,6 +1466,7 @@ mod tests {
         let record = Record {
             views: Vec::new(),
             dealt: 0,
+            relaunch_after_update: false,
             chats: vec![
                 Chat {
                     pinned: true,
@@ -1478,6 +1539,7 @@ mod tests {
                 },
             ],
             dealt: 5,
+            relaunch_after_update: false,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -1536,6 +1598,7 @@ mod tests {
                     ..claude("ide.7", None)
                 }],
                 dealt: 1,
+                relaunch_after_update: false,
             },
         )
         .expect("the record is written");
@@ -1593,6 +1656,7 @@ mod tests {
                 },
             ],
             dealt: 0,
+            relaunch_after_update: false,
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -1723,6 +1787,139 @@ mod tests {
         std::fs::write(path(&plane), &text).unwrap();
 
         assert_eq!(read_or_refusal(&plane).unwrap(), one_chat());
+    }
+
+    // ----- the choice at a relaunch (charter-app#250) -----
+
+    fn a_record_with_a_chat_and_a_view() -> Record {
+        Record {
+            chats: vec![Chat {
+                number: Some(3),
+                ..claude("ide.7", Some(ID))
+            }],
+            views: vec![persona_view("steward")],
+            dealt: 5,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_record_with_no_chat_and_no_view_tab_has_nothing_to_ask_about() {
+        // A first launch, and a plane whose last quit had nothing open: no question.
+        assert!(!Record::default().holds_anything());
+        assert!(
+            !Record {
+                dealt: 9,
+                ..Default::default()
+            }
+            .holds_anything(),
+            "a counter is bookkeeping, not something that was open"
+        );
+    }
+
+    #[test]
+    fn a_chat_or_a_view_tab_alone_is_something_to_ask_about() {
+        let chat = Record {
+            chats: vec![claude("ide.7", None)],
+            ..Default::default()
+        };
+        let view = Record {
+            views: vec![persona_view("steward")],
+            ..Default::default()
+        };
+
+        assert!(chat.holds_anything());
+        assert!(view.holds_anything());
+    }
+
+    #[test]
+    fn reopen_all_puts_back_the_record_exactly_as_it_was() {
+        let record = a_record_with_a_chat_and_a_view();
+
+        assert_eq!(record.clone().chosen(Choice::ReopenAll), record);
+    }
+
+    #[test]
+    fn start_fresh_puts_back_no_chat_and_no_view_tab() {
+        let fresh = a_record_with_a_chat_and_a_view().chosen(Choice::StartFresh);
+
+        assert!(fresh.chats.is_empty());
+        assert!(fresh.views.is_empty());
+        assert!(!fresh.holds_anything());
+    }
+
+    #[test]
+    fn start_fresh_keeps_every_number_already_dealt_so_none_is_dealt_twice() {
+        // charter-app#90: a number is never dealt twice. Chat 3's workspace pointer and lock
+        // are still on disk, so the first chat after a fresh start must not be 3 again —
+        // nor 4 or 5, which the counter says were dealt to chats closed before the quit.
+        let fresh = a_record_with_a_chat_and_a_view().chosen(Choice::StartFresh);
+
+        assert_eq!(fresh.dealt, 5);
+
+        let only_the_chat_knew = Record {
+            chats: vec![Chat {
+                number: Some(7),
+                ..claude("ide.7", None)
+            }],
+            dealt: 2,
+            ..Default::default()
+        }
+        .chosen(Choice::StartFresh);
+        assert_eq!(only_the_chat_knew.dealt, 7);
+    }
+
+    #[test]
+    fn a_fresh_start_written_and_read_back_is_still_nothing_to_reopen() {
+        let plane = tempfile::tempdir().unwrap();
+
+        write(
+            plane.path(),
+            &a_record_with_a_chat_and_a_view().chosen(Choice::StartFresh),
+        )
+        .unwrap();
+        let back = read(plane.path());
+
+        assert!(!back.holds_anything());
+        assert_eq!(back.dealt, 5);
+    }
+
+    #[test]
+    fn a_relaunch_after_an_update_is_said_in_the_record_and_read_back() {
+        // charter-app#251's way in: the quit that installs an update writes this, and the
+        // launch after it knows why it is being asked.
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            relaunch_after_update: true,
+            ..a_record_with_a_chat_and_a_view()
+        };
+
+        write(plane.path(), &record).unwrap();
+
+        assert_eq!(read(plane.path()), record);
+    }
+
+    #[test]
+    fn an_ordinary_quit_writes_no_update_key_and_an_absent_one_reads_as_an_ordinary_quit() {
+        let plane = tempfile::tempdir().unwrap();
+        write(plane.path(), &a_record_with_a_chat_and_a_view()).unwrap();
+
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+
+        assert!(!text.contains("relaunch_after_update"), "{text}");
+        assert!(!read(plane.path()).relaunch_after_update);
+    }
+
+    #[test]
+    fn a_fresh_start_is_not_a_relaunch_after_an_update_any_more() {
+        // The flag is about the launch that reads it, and no later one.
+        let fresh = Record {
+            relaunch_after_update: true,
+            ..a_record_with_a_chat_and_a_view()
+        }
+        .chosen(Choice::StartFresh);
+
+        assert!(!fresh.relaunch_after_update);
     }
 
     // ----- the name the operator gave a chat (charter-app#254) ----------------------------

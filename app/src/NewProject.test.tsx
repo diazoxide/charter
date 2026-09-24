@@ -99,6 +99,7 @@ describe("making a project", () => {
     ).toEqual([
       "Switch to project plane",
       "Pin project plane",
+      "Project settings…",
       "New project…",
       "Open a project…",
       "Close project plane",

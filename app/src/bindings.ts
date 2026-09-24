@@ -125,6 +125,31 @@ export const commands = {
 	 */
 	planesToRestore: () => typedError<Restore, string>(__TAURI_INVOKE("planes_to_restore")),
 	/**
+	 *  What this launch would put back, for the window to ask about — **or nothing, and then there
+	 *  is no question**: nothing was open, or the operator has already answered.
+	 * 
+	 *  Asked BEFORE the window restores anything, and nothing starts until [`relaunch`] has the
+	 *  answer. On a blocking thread for [`planes_to_restore`]'s reason, and because it reads one
+	 *  record per project.
+	 */
+	relaunchAsk: () => typedError<{
+	/**  Every project with something to put back, the launch's own first. */
+	projects: WaitingProject[],
+	/**
+	 *  Whether charter restarted itself to install an update, rather than the operator
+	 *  quitting it (charter-app#251). The question then says so.
+	 */
+	after_update: boolean,
+} | null, string>(__TAURI_INVOKE("relaunch_ask")),
+	/**
+	 *  The operator's answer to [`relaunch_ask`] — or `ReopenAll` from a window that had nothing to
+	 *  ask. **Every launch sends one**, because the launch's own project is put back here and
+	 *  nowhere else; a second answer, from a window that reloaded, changes nothing.
+	 * 
+	 *  On a blocking thread because the answer starts every chat the launch's project held.
+	 */
+	relaunch: (choice: RelaunchChoice) => typedError<null, string>(__TAURI_INVOKE("relaunch", { choice })),
+	/**
 	 *  A window says what it is holding: its projects as tabs, and which one is in front.
 	 * 
 	 *  Two things, in one call, because they are one fact. A notification about a chat in a
@@ -192,6 +217,11 @@ export const commands = {
 	openSession: (plane: PlaneId, program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { plane, program, args, cwd, name, columns, rows })),
 	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
 	closeSession: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { plane, session })),
+	/**
+	 *  Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
+	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
+	 */
+	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
 	/**  Sends what a pane typed to the session's program. */
 	sendInput: (plane: PlaneId, session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { plane, session, text })),
 	/**  Tells a session how big the pane showing it now is. */
@@ -216,8 +246,9 @@ export const commands = {
 	/**
 	 *  The chats the app already has open — at a launch, the ones put back from the record.
 	 * 
-	 *  The window asks this instead of opening its own: putting the record back happens before
-	 *  there is a window, so that a relaunch does not depend on a webview having run.
+	 *  The window asks this instead of opening its own: the core puts the record back, once the
+	 *  window has sent the operator's answer to the launch's question (`opener::relaunch`,
+	 *  charter-app#250), and a window that reloads asks again rather than starting a second copy.
 	 */
 	openedChats: (plane: PlaneId) => typedError<OpenChat[], string>(__TAURI_INVOKE("opened_chats", { plane })),
 	/**
@@ -534,6 +565,19 @@ export const commands = {
 	 *  waited on that would stop drawing.
 	 */
 	planeDoctor: (plane: PlaneId, full: boolean) => typedError<DoctorReport, string>(__TAURI_INVOKE("plane_doctor", { plane, full })),
+	/**
+	 *  Both of this plane's settings files, and what charter says about each.
+	 * 
+	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
+	 */
+	projectSettings: (plane: PlaneId) => typedError<ProjectSettings, string>(__TAURI_INVOKE("project_settings", { plane })),
+	/**
+	 *  Write one file: checked with the core's rules, written with its `toml_edit` writer.
+	 * 
+	 *  `base` is the text the window read (`null`: the file was not there), so a file changed on
+	 *  disk since is refused rather than overwritten.
+	 */
+	saveProjectSettings: (plane: PlaneId, which: SettingsWhich, base: string | null, change: SettingsChange) => typedError<SettingsSaved, string>(__TAURI_INVOKE("save_project_settings", { plane, which, base, change })),
 	/**
 	 *  What one chat's recorded usage says, or nothing.
 	 * 
@@ -864,6 +908,14 @@ export type ExtensionView = {
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
 export type GaugeTone = "ok" | "warn" | "bad";
 
+/**  Where a handed-off chat came from, as the window draws it. */
+export type HandedFromNote = {
+	/**  The chat it came from, by the name the operator saw it under. */
+	name: string,
+	/**  The workspace it came from. */
+	workspace: string,
+};
+
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
  *  later decision about extensions is read off.
@@ -952,6 +1004,25 @@ export type Moved = {
 	 *  for.
 	 */
 	moved_at: number,
+	/**
+	 *  The chats that have reported back to this one and not been read yet, by the name the
+	 *  operator sees them under, oldest first (charter-app#259). Each is a needs-you item that
+	 *  says `<child> reported back` rather than only this chat's name. Empty for nearly every
+	 *  chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
+	 */
+	reports: string[],
+	/**
+	 *  Which snapshot of the board this is — bigger was taken later (charter-app#248).
+	 * 
+	 *  **What lets the window put its events back in order.** Every `Moved` is built under the
+	 *  board's lock, but it is SENT after the lock is let go, on whichever thread built it: a
+	 *  hook's report on the socket's thread, a close on the command's. So a report taken just
+	 *  before a close can reach the window just after it, and the window, which keeps the last
+	 *  queue it was told, would put the closed chat back. The window drops any snapshot older
+	 *  than the one it holds (`chatState.ts`), which it can do only because this is numbered
+	 *  in the order the board was read. [`sequence`] is the whole definition.
+	 */
+	sequence: number,
 };
 
 /**  One news entry, as the pin's dialog lists it. */
@@ -1015,6 +1086,11 @@ export type OpenChat = {
 	 *  started with.
 	 */
 	label: string | null,
+	/**
+	 *  Where a handoff opened it from, where one did: the note its tab's tooltip and its header
+	 *  draw, `↳ from steward 3 · ops` (charter-app#258). Never the parent's number.
+	 */
+	from: HandedFromNote | null,
 };
 
 /**
@@ -1286,6 +1362,14 @@ export type PlaneAlerts = {
 };
 
 /**
+ *  What `plane-changed` carries: which plane moved. Every window filters on it, as it filters
+ *  `chat-moved`, because the app holds several planes and emits on the app.
+ */
+export type PlaneChanged = {
+	plane: PlaneId,
+};
+
+/**
  *  What a plane would contribute, as the trust prompt draws it — **and the exact value the
  *  operator's approval is checked against.**
  * 
@@ -1350,6 +1434,12 @@ export type ProfileRow = {
 	 *  runs; absent when charter has already recorded running exactly this.
 	 */
 	approval: string | null,
+};
+
+/**  Both files. */
+export type ProjectSettings = {
+	shared: SettingsFile,
+	local: SettingsFile,
 };
 
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
@@ -1434,6 +1524,20 @@ export type Refused = {
 	at_risk: AtRisk[],
 };
 
+/**  The operator's answer, as the window sends it. */
+export type RelaunchChoice = "ReopenAll" | "StartFresh";
+
+/**  What a launch asks before it puts anything back (charter-app#250). */
+export type RelaunchQuestion = {
+	/**  Every project with something to put back, the launch's own first. */
+	projects: WaitingProject[],
+	/**
+	 *  Whether charter restarted itself to install an update, rather than the operator
+	 *  quitting it (charter-app#251). The question then says so.
+	 */
+	after_update: boolean,
+};
+
 /**  One clone's git state, and what the forge cache last recorded for its branch. */
 export type RepoState = {
 	name: string,
@@ -1497,6 +1601,65 @@ export type Restore = {
 	/**  One line per project charter would not take back. */
 	dropped: string[],
 };
+
+/**  What a save is: the raw view's whole text, or a form's changes to the text it was read as. */
+export type SettingsChange = { kind: "raw"; text: string } | { kind: "edits"; edits: SettingsEdit[] };
+
+/**  Set the key at `path` to `value`, or remove it when `value` is `null`. */
+export type SettingsEdit = {
+	path: SettingsStep[],
+	value: SettingsValue | null,
+};
+
+/**  One value in a file, and where it is. */
+export type SettingsField = {
+	path: SettingsStep[],
+	value: SettingsValue,
+};
+
+/**  One file, as the tab draws it. */
+export type SettingsFile = {
+	which: SettingsWhich,
+	/**  `charter.toml` or `charter.local.toml`. */
+	file: string,
+	/**  Whether it is there. A Local file that is not is created by the first save. */
+	exists: boolean,
+	/**
+	 *  Its text, for the raw view — and what a save is checked against, so an edit made
+	 *  elsewhere since is never written over.
+	 */
+	text: string,
+	/**  What charter refuses in it as it stands, in the core's words. */
+	refusals: string[],
+	/**  Whether it is TOML. When it is not, `fields` is empty and only the raw view can mend it. */
+	parsed: boolean,
+	/**  Every value in it, in file order. */
+	fields: SettingsField[],
+};
+
+/**  What a save answered: the file as it now stands, or every reason nothing was written. */
+export type SettingsSaved = { kind: "saved"; file: SettingsFile } | { kind: "refused"; reasons: string[] };
+
+/**  One step of the way to a key: a table's key, or a block's place in `[[forge]]`. */
+export type SettingsStep = ({ key: string }) & { index?: never } | ({ index: number }) & { key?: never };
+
+/**
+ *  A value, as a form reads and writes it. `other` is one no form writes — a float, a date, a
+ *  list that is not all text — shown as TOML and changed only in the raw view.
+ */
+export type SettingsValue = { kind: "text"; value: string } | 
+/**
+ *  Whole numbers only; TOML's range is `i64` and a form writes no more than a JS number
+ *  carries exactly, so it travels as one.
+ */
+{ kind: "integer"; value: number | null } | { kind: "bool"; value: boolean } | { kind: "list"; value: string[] } | { kind: "other"; value: string };
+
+/**  Which file: the committed one or this machine's. */
+export type SettingsWhich = 
+/**  `charter.toml` — committed; the team sees it. */
+"shared" | 
+/**  `charter.local.toml` — gitignored; this machine only. */
+"local";
 
 /**
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's
@@ -1625,6 +1788,14 @@ export type ViewTab = {
 	at: number,
 	active: boolean,
 	pinned: boolean,
+};
+
+/**  One project's share of the question: which, and how much of it would come back. */
+export type WaitingProject = {
+	/**  The project's root, which is also the id it is held by once it is open. */
+	plane: string,
+	chats: number,
+	views: number,
 };
 
 /**

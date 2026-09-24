@@ -80,6 +80,7 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
     unreported: null,
     pinned: false,
     label: null,
+    from: null,
     ...one,
   };
 }
@@ -320,7 +321,16 @@ function stateShown(name: string): string | null | undefined {
 describe("what the window is told about the chats", () => {
   /** A move, as the core pushes it: one chat, in one plane. */
   function moving(plane: string, session: number, state: string, queue: number[] = []): Moved {
-    return { plane, session, state, needs_you: queue.includes(session), queue, moved_at: 1 };
+    return {
+      plane,
+      session,
+      state,
+      needs_you: queue.includes(session),
+      queue,
+      moved_at: 1,
+      sequence: 1,
+      reports: [],
+    };
   }
 
   it("takes a move in the plane it is showing", async () => {
@@ -383,6 +393,8 @@ describe("being asked to quit", () => {
       needs_you: needsYou,
       queue: needsYou ? [session] : [],
       moved_at: 1,
+      sequence: 1,
+      reports: [],
     };
   }
 

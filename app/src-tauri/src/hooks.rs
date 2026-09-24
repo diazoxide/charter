@@ -5,6 +5,7 @@
 //! polling anywhere: the listener blocks on `accept`, and the window is pushed to.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::hookwire::{Answer, Ask, Listener, NOTHING_ANSWERS, Reading, Report};
@@ -48,6 +49,16 @@ pub struct Moved {
     /// says `<child> reported back` rather than only this chat's name. Empty for nearly every
     /// chat, and emptied by this chat's next prompt, which is the turn the reports are handed.
     pub reports: Vec<String>,
+    /// Which snapshot of the board this is — bigger was taken later (charter-app#248).
+    ///
+    /// **What lets the window put its events back in order.** Every `Moved` is built under the
+    /// board's lock, but it is SENT after the lock is let go, on whichever thread built it: a
+    /// hook's report on the socket's thread, a close on the command's. So a report taken just
+    /// before a close can reach the window just after it, and the window, which keeps the last
+    /// queue it was told, would put the closed chat back. The window drops any snapshot older
+    /// than the one it holds (`chatState.ts`), which it can do only because this is numbered
+    /// in the order the board was read. [`sequence`] is the whole definition.
+    pub sequence: u32,
 }
 
 /// The board, the socket, and the thread reading it — one plane's whole side of the channel.
@@ -70,9 +81,6 @@ pub struct Hooks {
     /// so the socket has to exist first. Until it is filled every ask is answered with a
     /// refusal, never with a silence an asker would have to wait out.
     answering: Arc<Mutex<Option<Answering>>>,
-    /// Who is told what the window now sees, when something other than a hook moves a chat —
-    /// a report back (charter-app#259). The same teller the socket's reports go to.
-    tell: Option<Teller>,
     /// Told when a chat's own harness says the operator prompted it (charter-app#259): a
     /// handed-off chat that has sent its report owes another once it is given more to do.
     /// A slot filled after the fact, for [`Self::answering`]'s reason.
@@ -195,7 +203,6 @@ impl Hooks {
             reading: Mutex::new(None),
             socket: None,
             answering: Arc::new(Mutex::new(None)),
-            tell: None,
             prompted: Arc::new(Mutex::new(None)),
         }
     }
@@ -211,7 +218,6 @@ impl Hooks {
         let board = Arc::new(Mutex::new(Board::new()));
         let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
         let prompted: Arc<Mutex<Option<Prompted>>> = Arc::new(Mutex::new(None));
-        let tell = Arc::clone(&moved);
         let reading = listener.each_answering(
             {
                 let board = Arc::clone(&board);
@@ -260,7 +266,6 @@ impl Hooks {
             reading: Mutex::new(Some(reading)),
             socket: Some(socket),
             answering,
-            tell: Some(tell),
             prompted,
         })
     }
@@ -302,18 +307,14 @@ impl Hooks {
     }
 
     /// A chat `session` handed work to, shown as `from`, has reported back to it
-    /// (charter-app#259): it is a needs-you item now, and the window is told so. The answer is
-    /// built under the same hold as the change, for [`apply`]'s reason.
+    /// (charter-app#259): it is a needs-you item now. Answers what the window must be told, or
+    /// nothing when no reader would see a difference; built under the same hold as the change,
+    /// for [`apply`]'s reason.
     pub fn reported_back(&self, session: u32, from: &str) -> Option<Moved> {
-        let mut board = held_board(&self.board);
-        let moved = board
+        let mut board = self.board();
+        board
             .reported_back(session, from)
-            .then(|| seen_by(&board, &self.plane, session));
-        drop(board);
-        if let (Some(moved), Some(tell)) = (&moved, &self.tell) {
-            tell(moved.clone());
-        }
-        moved
+            .then(|| seen_by(&board, &self.plane, session))
     }
 
     pub fn socket(&self) -> Option<&Path> {
@@ -330,8 +331,31 @@ impl Hooks {
         Arc::clone(&self.board)
     }
 
-    /// What the window is told when something other than a hook moves a chat: a chat opening
-    /// or closing, or a program that has died.
+    /// Takes a chat off the board — closed, not merely ended — and answers with what the
+    /// window must now be told: a queue without it.
+    ///
+    /// Answered under the same hold as the removal, for the reason [`apply`] gives: the queue
+    /// it carries is the board's as of the removal, never one read a moment before it.
+    pub fn closed(&self, session: u32) -> Moved {
+        let mut board = self.board();
+        board.closed(session);
+        seen_by(&board, &self.plane, session)
+    }
+
+    /// Drops a chat's request without answering it — the operator's Ignore — and answers
+    /// with what the window must now be told: a queue without it (charter-app#248).
+    ///
+    /// Answered whether or not the board changed, and under the same hold as the change, for
+    /// the reason [`Hooks::closed`] gives: a window that asked to ignore a chat believes it is
+    /// asking, and the board's answer is the one to leave it with either way.
+    pub fn ignored(&self, session: u32) -> Moved {
+        let mut board = self.board();
+        board.ignored(session);
+        seen_by(&board, &self.plane, session)
+    }
+
+    /// What the window is told when something other than a hook moves a chat: a chat opening,
+    /// or a program that has died. A chat closing is [`Hooks::closed`].
     pub fn now(&self, session: u32) -> Moved {
         now(&self.board, self.plane.clone(), session)
     }
@@ -343,9 +367,13 @@ pub fn now(board: &Mutex<Board>, plane: PlaneId, session: u32) -> Moved {
 }
 
 /// The same, for a caller that is already holding the board.
+///
+/// **Only ever called with the board held**, which is what makes [`sequence`] an order over
+/// the board's states: the number is taken inside the same hold as the read.
 fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
     let queue = board.needs_you();
     Moved {
+        sequence: sequence(),
         plane: plane.clone(),
         session,
         state: word(board.state(session)),
@@ -354,6 +382,29 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         moved_at: board.moved_at(session),
         reports: board.reports(session),
     }
+}
+
+/// The next snapshot's number. See [`Moved::sequence`].
+///
+/// **The process's and not one board's**, which is stronger than the window needs and costs
+/// nothing: a project closed and opened again in one run gets a new board, and a count that
+/// began again at one would have a window still holding the old board's numbers drop every
+/// snapshot of the new one. Taken while a board is held, so for any one board the numbers
+/// run in the order its states were read.
+///
+/// Saturating, and a `u32` for the reason [`Board::moved_at`] gives (`specta` cannot carry a
+/// `u64`). At four billion snapshots every later one is numbered the same, and the window
+/// keeps a snapshot numbered the same as the one it holds — so the app falls back to taking
+/// events in the order they land, which is what it did before there was a number, rather than
+/// stopping listening.
+fn sequence() -> u32 {
+    static TAKEN: AtomicU32 = AtomicU32::new(0);
+    let was = TAKEN
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            Some(n.saturating_add(1))
+        })
+        .unwrap_or_else(|n| n);
+    was.saturating_add(1)
 }
 
 /// Applies one report, answering with what a reader would now see differently.
@@ -403,6 +454,75 @@ pub fn code_of(exit: &Exit) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A board holding chat `session`, which has stopped and is asking for you.
+    fn asking(session: u32) -> Hooks {
+        // Spelled the way a window hands one back; only the registry mints one for real.
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks = Hooks::deaf(plane);
+        hooks.board().opened(session, None, None);
+        assert!(apply(&hooks.board, &hooks.plane, &stop(session)).is_some());
+        hooks
+    }
+
+    fn stop(session: u32) -> Report {
+        Report {
+            chat: session,
+            event: charter_core::state::Event::Stop,
+            conversation: charter_core::hookwire::Conversation::Unknown,
+            pid: None,
+            detail: charter_core::state::Detail::default(),
+        }
+    }
+
+    #[test]
+    fn a_report_taken_before_a_close_is_numbered_before_it() {
+        // charter-app#248, the race #256 left open: a report's `Moved` is sent on the thread
+        // that read it, after the board is let go, so it can reach the window AFTER a close
+        // that came later. The number is what lets the window tell which is newer.
+        let hooks = asking(7);
+        let late = apply(&hooks.board, &hooks.plane, &stop(7));
+        hooks.board().ignored(7);
+        let report = apply(&hooks.board, &hooks.plane, &stop(7)).expect("a new request");
+
+        let close = hooks.closed(7);
+
+        assert!(
+            late.is_none(),
+            "a stop on a chat already asking moved nothing"
+        );
+        assert_eq!(report.queue, vec![7]);
+        assert!(close.queue.is_empty());
+        assert!(
+            report.sequence < close.sequence,
+            "the close ({}) is not numbered after the report it follows ({})",
+            close.sequence,
+            report.sequence
+        );
+    }
+
+    #[test]
+    fn every_snapshot_is_numbered_after_the_one_before_it() {
+        let hooks = asking(7);
+
+        let first = hooks.now(7);
+        let second = hooks.now(7);
+
+        assert!(first.sequence < second.sequence);
+    }
+
+    #[test]
+    fn ignoring_a_chat_tells_a_queue_without_it_and_the_chat_still_waiting() {
+        let hooks = asking(7);
+        let asked = hooks.now(7);
+
+        let ignored = hooks.ignored(7);
+
+        assert!(ignored.queue.is_empty());
+        assert!(!ignored.needs_you);
+        assert_eq!(ignored.state, "waiting");
+        assert!(ignored.sequence > asked.sequence);
+    }
 
     #[test]
     fn the_socket_sits_beside_the_record_the_app_already_writes() {

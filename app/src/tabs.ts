@@ -53,6 +53,16 @@ export type Direction = "row" | "column";
  */
 export type ViewRef = { from: string | null; view: string; key: string };
 
+/**
+ * **The Project settings view** (charter-app#252): a plane's `charter.toml` and
+ * `charter.local.toml`, as forms and as raw TOML. One per plane, so its key is empty — the
+ * same shape as every other view, opened by the same verb, deduplicated by the same `viewKey`.
+ */
+export const SETTINGS_VIEW: ViewRef = { from: null, view: "settings", key: "" };
+
+/** What the Project settings tab is called. */
+export const SETTINGS_TITLE = "Project settings";
+
 /** What a pane shows. */
 export type Content =
   /**

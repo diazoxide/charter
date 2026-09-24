@@ -56,6 +56,7 @@ export function Panels({
   queue,
   quiet,
   nameOf,
+  reportsTo,
   showChat,
   offers,
   onPress,
@@ -72,6 +73,8 @@ export function Panels({
   queue: readonly number[];
   quiet: readonly string[];
   nameOf: (session: number) => string;
+  /** The chats that reported back to each chat in the queue (charter-app#259). */
+  reportsTo?: (session: number) => readonly string[];
   showChat: (session: number) => void;
   /** The catalogue by id, which is what a row's verb is looked up in. */
   offers: Catalogued;
@@ -115,7 +118,15 @@ export function Panels({
       aria-label={workspace === undefined ? "Attention" : `Attention · ${workspace}`}
       data-testid="panels"
     >
-      <NeedsYou queue={queue} quiet={quiet} nameOf={nameOf} show={showChat} />
+      <NeedsYou
+        queue={queue}
+        quiet={quiet}
+        nameOf={nameOf}
+        reportsTo={reportsTo}
+        show={showChat}
+        offers={offers}
+        onPress={onPress}
+      />
 
       {workspace === undefined ? (
         <p className="empty">No workspace focused.</p>

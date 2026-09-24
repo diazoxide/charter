@@ -118,6 +118,7 @@ function chat(session: number): OpenChat {
     unreported: null,
     pinned: false,
     label: null,
+    from: null,
   };
 }
 
@@ -172,6 +173,9 @@ function moving(session: number, at: number): Moved {
     needs_you: false,
     queue: [],
     moved_at: at,
+    // The board numbers a snapshot at least as late as the move it reports.
+    sequence: at,
+    reports: [],
   };
 }
 

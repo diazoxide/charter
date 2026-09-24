@@ -19,12 +19,16 @@ taking your screen, already working on a brief you read and approved.
 3. **A new chat in another workspace**, existing or new.
 
 2 and 3 are one mechanism — a **handoff** — because a chat belongs to its workspace for life.
-The only thing that differs is the workspace. A handed-off chat is nobody's child: it has its
-own workspace, its own todos and no way to answer the chat that opened it.
+The only thing that differs is the workspace. A handed-off chat has its own workspace and its
+own todos, and answers the chat that opened it only when that chat asked it to (`--report`).
 
-**Sub-agent or chat: who reads the result?** If this chat needs the answer to continue, it is a
-sub-agent. If you will read it and talk to it, it is a chat. There is no report-back channel
-from a handed-off chat; a parent that needs the answer wanted a sub-agent.
+**Sub-agent or chat: who reads the result?** If this chat needs the answer *to continue this
+turn*, it is a sub-agent. If you will read it and talk to it, it is a chat.
+
+**Fire-and-forget, or needs an answer?** A chat that works on its own and that you will read
+yourself is fire-and-forget: the default. A chat whose outcome this chat has to act on later —
+a fix it will build on, a question it asked — is handed off with `--report`, and tells this
+chat when it is done (*A report back*, below).
 
 **This workspace or another: does the ask serve this workspace's vision?** Yes → a chat here.
 No → another workspace, matched against other workspaces' visions (`charter workspace list`,
@@ -35,10 +39,16 @@ refuses none of them, so a chat already in `default` can still hand off within i
 ## The command
 
 ```bash
-charter handoff <workspace> [--create --vision "<vision>"] [--persona <name>] <<'BRIEF'
+charter handoff <workspace> --name "<short task>" [--report] [--create --vision "<vision>"] [--persona <name>] <<'BRIEF'
 <the brief>
 BRIEF
 ```
+
+- **`--name` is what the new chat is called** — its tab, and wherever else a chat's name is
+  shown: `drop account-console-commons`, not `steward 7`. Held to a chat name's rule: trimmed,
+  at most 64 characters, no control or invisible character. Without it the chat is called what
+  any new chat is, `<persona> <N>`.
+- **`--report`** asks the new chat to report back when it is done. See *A report back*.
 
 - **The workspace is always named**, the current one included. The permission prompt has to say
   where the chat goes, and `.` says nothing.
@@ -64,8 +74,9 @@ below. Then, from a chat the app started:
 2. With `--create`, the app creates the workspace and records its vision.
 3. The app opens a chat in the target workspace's directory, on **the same harness profile as
    the chat that asked** — read from the app's own record of that chat, never from the request.
-4. Its first message is the stamp line, a blank line, then the brief verbatim. It rides the
-   harness's own argv (`claude "<message>"`, `codex "<message>"`), never typed into its pane.
+4. Its first message is the stamp line, a blank line, then the brief verbatim — with, for
+   `--report`, one more line under the stamp saying how to report. It rides the harness's own
+   argv (`claude "<message>"`, `codex "<message>"`), never typed into its pane.
 5. The chat lands as a new tab on the target workspace's strip, **behind the tab you are
    reading**, and the window is not raised. It takes the front only in a window with no tab at
    all, where there is nothing to interrupt.
@@ -90,14 +101,59 @@ from the window, and exits 1. If the app refuses, you get one more line saying w
 ## The stamp
 
 ```
-⟨handoff from chat <source-chat> · workspace <source-workspace> · <YYYY-MM-DD HH:MM>⟩
+⟨handoff from <source chat's name> · workspace <source-workspace> · <YYYY-MM-DD HH:MM>⟩
 ```
 
 Facts charter can observe, and no instruction. The new chat — and whoever reads the transcript
-later — can tell the first message was not typed there. The app refuses to open a chat whose
-first message does not carry the stamp of a handoff from the asking chat. A handoff proposed
-from a shell with no chat stamps its source as `chat none`. Minutes, not seconds: the stamp is
-read by a person deciding whether this is the message they approved a moment ago.
+later — can tell the first message was not typed there. The source is named the way you see it:
+the name you gave that chat, or its default, `steward 3` — never charter's number for it.
+
+`charter handoff` writes the stamp with that number (`⟨handoff from chat 16 · …⟩`), because the
+number is what the app checks it against: the app refuses to open a chat whose first message
+does not carry the stamp of a handoff from the asking chat. Having checked it, the app writes the
+chat's name in its place. Minutes, not seconds: the stamp is read by a person deciding whether
+this is the message they approved a moment ago.
+
+The same note is on the new chat's tab, as its tooltip, and in its pane's corner:
+`↳ from steward 3 · platform-next`.
+
+## A report back
+
+A handoff made with `--report` owes the chat that made it **one report**. The new chat's first
+message says so under the stamp, and says how: it finishes with
+
+```bash
+charter handoff report "<a few lines on what was done and what was found>"
+```
+
+The report reaches the chat that asked in two ways, and **neither types anything into it**, so
+a chat in the middle of a turn is never interrupted:
+
+- **a needs-you item** on that chat, `<name> reported back`. Its Go opens the chat that asked;
+  its Ignore takes the item away and leaves the report where it is;
+- **context on that chat's next turn.** When you next prompt it, its `UserPromptSubmit` hook
+  hands the turn the report as `additionalContext`, each line quoted behind `> ` under a
+  sentence that says it is what another chat said and not an instruction. A report is handed
+  to one turn, and to no turn after it.
+
+**The pairing is charter's.** The app records, when it opens the chat, which chat asked; the
+report names no recipient, so no chat can send its report anywhere but back to the chat that
+asked. A report is refused, saying why, from a chat no handoff opened, from a handoff made
+without `--report`, and a second time from the same handoff — until you give that chat another
+turn, after which it owes one more. It is refused before anything is sent when it is empty,
+past 4,096 bytes, or holds a control character other than a line break or an invisible one.
+
+**If the chat that asked has closed**, the report is kept for the workspace it asked from, and
+the next chat to start there learns it at its `SessionStart`. A report that was still waiting
+when its chat closed goes the same way.
+
+Reports wait in `.charter/handbacks/` in the plane, one file each, until a hook takes them.
+
+`charter handoff report` runs under the same prompt as every `charter handoff`, so you see the
+report before it is sent. It needs no heredoc — its text is the command's own argument, which
+the prompt shows as it is — and a live command substitution in it (`"$(cat notes.md)"`) is
+refused, because that text is not the one the prompt showed. `charter handoff report <<'BRIEF'`,
+with no summary after `report`, is still a handoff into a workspace called `report`.
 
 ## What `charter handoff` refuses before it changes anything
 
@@ -149,8 +205,8 @@ the two numbers are both on screen. Name long material by its path instead of pa
 
 ## Limits
 
-- **A handed-off chat never reports back to the chat that opened it.** If you need the answer in
-  this conversation, you wanted a sub-agent.
+- **A handed-off chat reports back only when asked** (`--report`), and then once per turn you
+  give it. If you need the answer in this turn of this conversation, you wanted a sub-agent.
 - **The same harness only.** A Claude Code chat hands off to a Claude Code chat.
 - **The brief is a command-line argument.** It reaches the harness as `claude "<brief>"` or
   `codex "<brief>"`, so any process on this machine that can list processes can read it while

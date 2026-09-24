@@ -1,9 +1,12 @@
 /** What a chat is doing, as the tab and the queue draw it. */
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
-import { CircleCheck, Hand, SquareTerminal } from "lucide-react";
+import { CircleCheck, Hand, MessageSquareReply, SquareTerminal, X } from "lucide-react";
+import type { KeyboardEvent } from "react";
+import { ignoreId, type Catalogued, type Offer } from "./actions";
 import { type State } from "./chatState";
 import { useArrived } from "./lib/arrived";
 import { useTabStop } from "./roving";
+import { deletes } from "./tabKeys";
 
 /** The word beside a chat's name. */
 const WORDS: Record<State, string> = {
@@ -55,12 +58,24 @@ export function NeedsYou({
   quiet,
   nameOf,
   show,
+  offers,
+  onPress,
+  reportsTo = () => [],
 }: {
   queue: readonly number[];
   /** The chats that can be waiting on you without saying so, by name. */
   quiet: readonly string[];
   nameOf: (session: number) => string;
   show: (session: number) => void;
+  /**
+   * The chats that have reported back to a chat in the queue, by name (charter-app#259). Such
+   * an item says `<child> reported back` — what the operator is being asked to look at — and
+   * Go still opens the chat that asked, whose next turn is handed the report.
+   */
+  reportsTo?: (session: number) => readonly string[];
+  /** The catalogue by id, where each item's Ignore row (`needs.ignore:<session>`) is. */
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
 }) {
   // The queue is ONE Tab stop, its oldest chat, and Up and Down move along it (charter-app#189,
   // `roving.ts`): at fifty chats asking, fifty stops would be the strip's problem over again.
@@ -101,19 +116,89 @@ export function NeedsYou({
       </span>
       <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
         <ul>
-          {queue.map((session) => (
-            <li key={session}>
-              <RovingFocusGroup.Item asChild tabStopId={String(session)}>
-                <button onClick={() => show(session)}>
-                  <SquareTerminal className="node-icon" />
-                  {nameOf(session)}
-                </button>
-              </RovingFocusGroup.Item>
-            </li>
-          ))}
+          {queue.map((session) => {
+            const ignore = offers.get(ignoreId(session));
+            const reported = reportsTo(session);
+            return (
+              <li key={session}>
+                <RovingFocusGroup.Item asChild tabStopId={String(session)}>
+                  <button
+                    onClick={() => show(session)}
+                    onKeyDown={(event) => ignoreOnDelete(event, ignore, onPress)}
+                    // Where Go goes, for a report: the chat that asked, not the one that answered.
+                    title={reported.length > 0 ? `Open ${nameOf(session)}` : undefined}
+                  >
+                    {reported.length > 0 ? (
+                      <>
+                        <MessageSquareReply className="node-icon" />
+                        {`${reported.join(", ")} reported back`}
+                      </>
+                    ) : (
+                      <>
+                        <SquareTerminal className="node-icon" />
+                        {nameOf(session)}
+                      </>
+                    )}
+                  </button>
+                </RovingFocusGroup.Item>
+                <Ignore offer={ignore} onPress={onPress} />
+              </li>
+            );
+          })}
         </ul>
       </RovingFocusGroup.Root>
       {unsaid}
     </div>
   );
+}
+
+/**
+ * **A needs-you item's Ignore** (charter-app#248): the catalogue's `needs.ignore:<session>` row
+ * drawn as the `✕` a pointer wants, so its accessible name is the row's words — "Ignore ide.3
+ * until it asks again" — and the glyph is only the glyph.
+ *
+ * It drops the request and not the chat: the chat is still waiting, and its next stop puts it
+ * back. The core holds that (`ignore_needs_you`), and the red counts on the project and
+ * workspace tabs go down with the item because they are read from the same queue.
+ *
+ * **Not a Tab stop**, for the reason a tab's `×` is not (charter-app#189): the queue is one stop,
+ * and fifty chats asking must not become a hundred. The keyboard's way to it is Delete on the
+ * item ([`ignoreOnDelete`]) or the palette's row. Exported, with that handler, for whatever
+ * lists the queue next — the title bar's list (charter-app#249).
+ */
+export function Ignore({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
+  if (!offer) return null;
+  return (
+    <button
+      className="needs-you-ignore"
+      tabIndex={-1}
+      aria-label={offer.title}
+      title={offer.title}
+      onClick={() => onPress(offer)}
+    >
+      <X />
+    </button>
+  );
+}
+
+/**
+ * **Delete on a needs-you item ignores it**: the platform's delete key (`tabKeys.deletes`), as
+ * it closes a focused tab (charter-app#239), pressing the same row the item's `✕` does.
+ *
+ * The keyboard moves to the next item — or the one before, for the last — as it goes. The item
+ * leaves only when the core's answer arrives, and focus left on an element that then goes is
+ * focus on the page, where the next Delete does nothing; so it moves now, while there is
+ * somewhere to move it.
+ */
+export function ignoreOnDelete(
+  event: KeyboardEvent<HTMLElement>,
+  offer: Offer | undefined,
+  onPress: (offer: Offer) => void,
+) {
+  if (offer === undefined || !deletes(event)) return;
+  event.preventDefault();
+  const item = event.currentTarget.closest("li");
+  const neighbour = item?.nextElementSibling ?? item?.previousElementSibling;
+  onPress(offer);
+  neighbour?.querySelector<HTMLElement>("button")?.focus();
 }

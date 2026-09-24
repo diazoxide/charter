@@ -15,7 +15,9 @@ mod panels;
 mod panics;
 mod pin;
 mod planes;
+mod planewatch;
 mod sessions;
+mod settings;
 mod slowstart;
 mod updates;
 mod usage;
@@ -830,21 +832,27 @@ fn close_session(
     plane: PlaneId,
     session: u32,
 ) -> Result<(), String> {
-    let held = planes.held(&plane)?;
-    held.chats().close(session)?;
-    // Nothing will prompt it again, so a report waiting for its next turn goes to the
-    // workspace it asked from, where the next chat to start reads it (charter-app#259).
-    charter_core::handback::orphan(held.root(), session);
-    // Off the board entirely, not merely ended: a report that arrives for it afterwards —
-    // from a hook that outlived the harness by a moment — moves nothing.
-    held.hooks().board().closed(session);
+    planes.held(&plane)?.close_chat(session)
+}
+
+/// Drops a chat's request for the operator until it asks again — the needs-you item's Ignore
+/// (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
+#[tauri::command]
+#[specta::specta]
+fn ignore_needs_you(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+) -> Result<(), String> {
+    planes.held(&plane)?.ignore_needs_you(session);
     Ok(())
 }
 
 /// The chats the app already has open — at a launch, the ones put back from the record.
 ///
-/// The window asks this instead of opening its own: putting the record back happens before
-/// there is a window, so that a relaunch does not depend on a webview having run.
+/// The window asks this instead of opening its own: the core puts the record back, once the
+/// window has sent the operator's answer to the launch's question (`opener::relaunch`,
+/// charter-app#250), and a window that reloads asks again rather than starting a second copy.
 #[tauri::command]
 #[specta::specta]
 fn opened_chats(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<OpenChat>, String> {
@@ -1174,10 +1182,13 @@ fn commands() -> Builder<tauri::Wry> {
             opener::open_plane,
             opener::approve_plane,
             opener::planes_to_restore,
+            opener::relaunch_ask,
+            opener::relaunch,
             opener::window_holds_planes,
             opener::create_project,
             open_session,
             close_session,
+            ignore_needs_you,
             send_input,
             resize_session,
             watch_session,
@@ -1228,6 +1239,8 @@ fn commands() -> Builder<tauri::Wry> {
             views::reopened_views,
             views::window_views,
             doctor::plane_doctor,
+            settings::project_settings,
+            settings::save_project_settings,
             usage::chat_usage,
             pin::plane_pin,
             about::about_charter,
@@ -1238,6 +1251,8 @@ fn commands() -> Builder<tauri::Wry> {
         // What `update://checked` carries. It crosses on an event rather than a command, so it
         // is named here or the window would have to write the shape out by hand.
         .typ::<updates::Offer>()
+        // What `plane-changed` carries, for the same reason.
+        .typ::<planewatch::PlaneChanged>()
 }
 
 /// Where the generated TypeScript lives.
@@ -1406,6 +1421,15 @@ pub fn run() {
                     let window = app.handle().clone();
                     std::sync::Arc::new(move |arrived: handoff::Arrived| {
                         let _ = window.emit(handoff::ARRIVED, &arrived);
+                    })
+                })
+                // The plane moved on disk — a todo closed in a terminal, a workspace another
+                // chat made — and the window reads it again (charter-app#264).
+                .telling_changes({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |plane: PlaneId| {
+                        let _ =
+                            window.emit(planewatch::CHANGED, &planewatch::PlaneChanged { plane });
                     })
                 }),
             );

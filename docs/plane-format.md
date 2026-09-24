@@ -115,6 +115,7 @@ row), and the status of that field where it differs from its file's.
   - [`.charter/persona-state/ephemeral/<session>/<name|_shared>/<slug>.md`](#charterpersona-stateephemeralsessionnamesharedslugmd)
   - [`.charter/persona-state/trace/<session>.jsonl`](#charterpersona-statetracesessionjsonl)
   - [`.charter/reports/<id>.json`](#charterreportsidjson)
+  - [`.charter/handbacks/` — reports back from handed-off chats](#charterhandbacks--reports-back-from-handed-off-chats)
   - [`~/.config/charter/reporting-consent` (outside the plane)](#configcharterreporting-consent-outside-the-plane)
   - [`.charter/sessions/<sid>.persona`, `.charter/terminals/<tid>.persona`, `.charter/active-persona`](#chartersessionssidpersona-charterterminalstidpersona-charteractive-persona)
   - [`.charter/mcp-approved.json`](#chartermcp-approvedjson)
@@ -301,6 +302,17 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
   (`charter/instance.py:331`), `declare_default_persona` (`:342`) and
   `clear_default_persona` (`:355`). `charter version bump` also commits it
   (`charter/commands.py:3842`).
+  **In charter-app, also the Project settings tab** (`charter_core::settings::save`,
+  charter-app#252): the whole file, whole or not at all (a temp file beside it, then one
+  rename), keeping the existing file's mode. A form's change is applied with `toml_edit`, so
+  every comment, blank line, key order and spacing it did not touch is kept, and a replaced
+  value keeps the decoration it had. It refuses to write text in which the next read would
+  refuse something the file on disk does not already have — a finding of `charter doctor`'s
+  `charter.toml` row, a `[harness.<name>]` table — in those readers' own words; it refuses a
+  value `secretshape` calls a credential whether or not the file already held it; and it
+  refuses to write over a file that changed on disk since the tab read it. (The file marks the
+  plane, so the tab is only ever open where it exists; were it deleted under the tab, a save
+  would create it at 0600.)
 - **Read by:** `charter/instance.py:105` `load` — and *only* there:
   `charter/config.py:719` (every command/hook, at import), plus direct re-reads in
   `charter/commands.py:211`, `charter/commands.py:3614`, `charter/hooks.py:7260`,
@@ -412,12 +424,18 @@ key refuses.
 
 ### `charter.local.toml`
 
-- **Format:** TOML. **Charter never writes this file** — it is hand-edited (or edited by a
-  chat) and read only.
+- **Format:** TOML. Hand-edited (or edited by a chat), and in charter-app written by the
+  Project settings tab and nothing else.
 - **Status:** **stable** — the operator edits it by hand, and two different processes read it
   (the CLI/`doctor`, and the frame launcher/selector on a launch).
-- **Written by:** nobody in charter. `charter init`/`reinit` only add the `.gitignore` line for
-  it (`charter/commands.py:1803`, `charter/commands.py:1806`).
+- **Written by:** nothing in the Python charter — `charter init`/`reinit` only add the
+  `.gitignore` line for it (`charter/commands.py:1803`, `charter/commands.py:1806`).
+  charter-app's Project settings tab (`charter_core::settings::save`, charter-app#252) writes it
+  as it writes `charter.toml` (above), and **creates it on the first save**, at mode 0600. It
+  refuses to create or write the file where git would commit it — asked before the file exists
+  with `git check-ignore -q -- charter.local.toml` (exit 1 is "would commit", and is also git's
+  answer for a tracked path), and afterwards with the loader's own `ignore_check` — in the
+  loader's own sentences, and refuses anything `profiles` would refuse in it.
 - **Read by:** `charter/profiles.py:240` `_read_local` (the only reader), through
   `charter/profiles.py:284` `derive` and `charter/profiles.py:404` `current` (memoized per
   process on `(root, local bytes, charter.toml bytes)`, `charter/profiles.py:428`). Surfaces:
@@ -1901,6 +1919,37 @@ before it is stored.
 
 ---
 
+### `.charter/handbacks/` — reports back from handed-off chats
+
+- **Format:** one JSON object per file, compact, no trailing newline.
+- **Status:** **internal** — written by the app, taken by the `charter` binary's own hooks.
+  A report waits here from the moment a handed-off chat sends it (`charter handoff report`)
+  until the turn it is handed to.
+- **Written by:** `charter_core::handback::leave` (charter-app#259), from the app's answer to a
+  report, and from `handback::orphan` when a chat with reports waiting is closed.
+- **Read by:** `charter hook userpromptsubmit` (`chat-<n>/`, `<n>` from `$CHARTER_SESSION_ID`)
+  and `charter hook sessionstart` (`workspace-<ws>/`, the session's workspace), through
+  `handback::take`, which **removes each file it reads**: a report reaches one turn.
+- **Git:** gitignored (under `/.charter/`).
+- **Layout:** `chat-<n>/` for a report to a chat the app has open, `workspace-<ws>/` for one
+  whose chat has closed. Each file is `<nanoseconds since the epoch, 24 digits>-<uuid>.json`,
+  so a directory reads in arrival order; it is written as `.<name>` and renamed into place, and a
+  reader skips a name starting with `.`. An empty directory is removed by the reader.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `from` | str | the chat that reported, by the name it is shown under |
+| `from_workspace` | str | the workspace that chat works in |
+| `to` | str | the chat that asked, by the name it is shown under |
+| `to_workspace` | str | the workspace that chat handed off from — where the report goes when it is gone |
+| `summary` | str | the report: trimmed, at most 4,096 bytes, no control character but `\n` and no invisible one |
+
+**Held again on the way in.** A file whose `summary` breaks the report rule, whose names break
+the chat-name rule, whose workspaces cannot be one, or which is not JSON at all, is removed and
+handed to nobody. What is handed over is quoted as data: every line of the summary behind `> `.
+
+---
+
 ### `~/.config/charter/reporting-consent` (outside the plane)
 
 - **Format:** plain text, one sentence.
@@ -2990,8 +3039,12 @@ down rather than read off the code.
 - **Written by:** `app/src-tauri/src/lib.rs` (charter-app) — whenever what is open changes
   (a chat started, closed, or brought to front), and again on the way out. Not only on the
   way out: an app that is killed, or crashes, runs no exit handler.
-- **Read by:** `app/src-tauri/src/lib.rs`, in Tauri's `setup`, before there is a window —
-  so a relaunch does not depend on a webview having run.
+- **Read by:** `app/src-tauri/src/planes.rs`, at a launch, twice: once for the counts the
+  launch's question names (how many chats and view tabs, in which projects), and once when the
+  operator has answered it and the record is put back (charter-app#250). **Nothing it names
+  starts before that answer.** "Start fresh" rewrites it holding no chat and no view tab, and
+  keeps `dealt`; Esc, closing the question, or a window that never answers all mean "Reopen
+  all", and the file is left as it was until then.
 - **Git:** gitignored already, by the plane's own `/.charter/` line.
 - **No lock** — one app per plane (Tauri's single-instance plugin), and last writer wins.
 
@@ -3010,6 +3063,8 @@ down rather than read off the code.
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
 | `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
+| `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone; `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, until the chat is prompted again. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that cannot be one reads as the whole key absent — the note is not drawn and no report is owed |
+| `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. Nothing writes `true` yet; charter-app#251 is to |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
 record cannot disagree with what is about to be started. Only a harness charter has

@@ -15,6 +15,7 @@ import { Extensions } from "./Extensions";
 import { Health } from "./Doctor";
 import { Palette } from "./Palette";
 import { QuitWarning } from "./QuitWarning";
+import { RelaunchAsk } from "./RelaunchAsk";
 import { StartChat } from "./StartChat";
 import { PinItem, UpdateItem } from "./Updates";
 import { sequenceIn } from "./tabSequence";
@@ -523,6 +524,21 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
             />,
           ),
         ['button "Cancel"', 'button "End chat steward 1"'],
+      ],
+      [
+        "the question a relaunch asks",
+        () =>
+          void render(
+            <RelaunchAsk
+              question={{
+                projects: [{ plane: "/home/dev/plane", chats: 2, views: 0 }],
+                after_update: false,
+              }}
+              nameOf={(plane) => plane}
+              onAnswer={() => {}}
+            />,
+          ),
+        ['button "Reopen all sessions"', 'button "Start fresh"'],
       ],
     ];
     for (const [what, show, answers] of two) {
