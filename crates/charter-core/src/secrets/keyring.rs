@@ -29,8 +29,9 @@
 //!
 //! **Which store a build talks to** is decided once, here ([`store`]): a fenced build — every
 //! test build, and the app's `e2e` build (`crate::fence`) — keeps values in
-//! `<state>/keyring-stub.json` and never reaches the operating system's store. So no test in this
-//! repository can read or write the operator's login keychain, however it is written.
+//! `<state>/keyring-stub.json` (the state directory: `.charter/`, or `$CHARTER_HOME`) and never
+//! reaches the operating system's store. So no test in this repository can read or write the
+//! operator's login keychain, however it is written.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -57,11 +58,6 @@ pub struct Secret(String);
 impl Secret {
     pub fn new(value: String) -> Self {
         Self(value)
-    }
-
-    /// The value, for the one caller that is handing it on.
-    pub fn expose(&self) -> &str {
-        &self.0
     }
 
     pub fn into_inner(self) -> String {
@@ -258,11 +254,18 @@ pub struct Listed {
     pub updated: String,
 }
 
+/// What the index records about one key: its size band and when it was last written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub size: String,
+    pub updated: String,
+}
+
 /// A vault's index: the service its items live under, and what each key is.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Index {
     pub service: Option<String>,
-    pub keys: BTreeMap<String, (String, String)>,
+    pub keys: BTreeMap<String, Entry>,
 }
 
 /// Where a keyring vault's index lives: beside the local registry, in the state directory.
@@ -314,17 +317,23 @@ pub fn load_index(ctx: &Ctx, vault: &Vault) -> Result<Index, VaultError> {
                 .unwrap_or_default()
                 .to_owned()
         };
-        keys.insert(k.clone(), (field("size"), field("updated")));
+        keys.insert(
+            k.clone(),
+            Entry {
+                size: field("size"),
+                updated: field("updated"),
+            },
+        );
     }
     Ok(Index { service, keys })
 }
 
 fn save_index(ctx: &Ctx, vault: &Vault, index: &Index) -> Result<(), VaultError> {
     let mut keys = Map::new();
-    for (k, (size, updated)) in &index.keys {
+    for (k, e) in &index.keys {
         let mut entry = Map::new();
-        entry.insert("size".into(), Value::String(size.clone()));
-        entry.insert("updated".into(), Value::String(updated.clone()));
+        entry.insert("size".into(), Value::String(e.size.clone()));
+        entry.insert("updated".into(), Value::String(e.updated.clone()));
         keys.insert(k.clone(), Value::Object(entry));
     }
     let mut doc = Map::new();
@@ -381,7 +390,11 @@ pub fn listed(ctx: &Ctx, vault: &Vault) -> Result<Vec<Listed>, VaultError> {
     Ok(load_index(ctx, vault)?
         .keys
         .into_iter()
-        .map(|(key, (size, updated))| Listed { key, size, updated })
+        .map(|(key, e)| Listed {
+            key,
+            size: e.size,
+            updated: e.updated,
+        })
         .collect())
 }
 
@@ -432,13 +445,22 @@ pub fn set_with(
     let mut index = load_index(ctx, vault)?;
     let service = match &index.service {
         Some(s) => s.clone(),
-        None => new_service(vault)?,
+        None => {
+            // Kept BEFORE the first item is written: an item under a service no index records
+            // is one nothing will ever find again.
+            let made = new_service(vault)?;
+            index.service = Some(made.clone());
+            save_index(ctx, vault, &index)?;
+            made
+        }
     };
     store.set(&service, key, value)?;
-    index.service = Some(service);
     index.keys.insert(
         key.to_owned(),
-        (fingerprint::size_band(value), at.to_owned()),
+        Entry {
+            size: fingerprint::size_band(value),
+            updated: at.to_owned(),
+        },
     );
     save_index(ctx, vault, &index)
 }
@@ -596,5 +618,35 @@ mod tests {
         let said = failure("read", "charter/ops/x", &e).message;
         assert!(!said.contains(VALUE), "{said}");
         assert!(said.contains("charter/ops/x"), "{said}");
+    }
+
+    /// A store that refuses every write.
+    struct Refusing;
+
+    impl Store for Refusing {
+        fn get(&self, _: &str, _: &str) -> Result<Option<Secret>, VaultError> {
+            Ok(None)
+        }
+        fn set(&self, _: &str, _: &str, _: &str) -> Result<(), VaultError> {
+            Err(VaultError::new("refused"))
+        }
+        fn delete(&self, _: &str, _: &str) -> Result<bool, VaultError> {
+            Err(VaultError::new("refused"))
+        }
+    }
+
+    #[test]
+    fn a_vaults_service_is_kept_before_its_first_item_is_written() {
+        // Were it kept only after, an item written by a store that then failed the index
+        // write would sit in the keyring under a service nothing records.
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(dir.path(), Env::of(&[]));
+        let ops = vault("ops");
+
+        assert!(set_with(&Refusing, &ctx, &ops, "API_TOKEN", VALUE, "t").is_err());
+
+        let index = load_index(&ctx, &ops).unwrap();
+        assert!(index.service.is_some_and(|s| s.starts_with("charter/ops/")));
+        assert!(index.keys.is_empty(), "a key the store refused was listed");
     }
 }

@@ -335,6 +335,15 @@ fn remove_unregisters_and_leaves_the_items_and_the_index() {
             .join("plane/.charter/vaults/ops.keys.json")
             .exists()
     );
+    // Said, because registering the name again brings the old secrets back.
+    assert!(
+        text(&out.stderr).contains(
+            "Its secrets stay in the system keyring, named in .charter/vaults/ops.keys.json; \
+             registering 'ops' again as a keyring vault finds them."
+        ),
+        "{}",
+        said(&out)
+    );
     let gone = run(&tmp, &["secret", "list", "ops"]);
     assert_eq!(gone.status.code(), Some(1));
 }

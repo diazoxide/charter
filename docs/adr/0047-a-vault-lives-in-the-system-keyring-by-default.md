@@ -31,8 +31,12 @@ writes and deletes one named entry and has no call that lists entries. So
 - each key's size band (`16–31 bytes`), never its length;
 - when each key was last written.
 
-It never holds a value. It is 0600 and lives under `.charter/`, which git ignores. It is
-rewritten after every write that succeeded. `secret list`, `vault list` and `secret audit` read
+It never holds a value. It is 0600 and lives under `.charter/`, which git ignores. A vault's
+service is written to it before the vault's first item is, and each key's line after its item
+was written or deleted. A failure between the two leaves a key the index lists and the keyring
+does not hold, which `vault verify` names, and never an item no index can find. Two charters
+writing one vault at the same moment are not locked against each other, as a plain-file vault is
+not: the index can lose a key whose item is still in the keyring. `secret list`, `vault list` and `secret audit` read
 only the index, so they never touch the keyring and never make the Keychain ask anything.
 `get`, `exec`, `cp` and `vault verify` read the item. `vault verify` names a key the index holds
 and the keyring does not, for an item deleted behind charter's back.
@@ -43,7 +47,7 @@ would make charter a deputy for reading it.
 
 **No test reaches the operator's keychain.** Which store a build uses is decided in one place
 (`secrets::keyring::store`). A fenced build (every `cargo test` build, and the app's `e2e` build,
-`crate::fence`) keeps values in `.charter/keyring-stub.json` under the plane it was given. A
+`crate::fence`) keeps values in `keyring-stub.json` in the state directory of the plane it was given. A
 test cannot reach the real store however it is written. The recorded-behaviour rows for the
 keyring provider (`keyring-*` in `tests/fixtures/recorded/behaviour.jsonl`) run against that
 stub. They were recorded from this build, because no Python charter had the provider.
@@ -123,6 +127,7 @@ command-line binary cannot carry.
   `--provider plain-file`, the registration it always pinned.
 - `secret audit` covers a keyring vault, from the index's `updated` times.
 - `vault remove` on a keyring vault leaves its items in the keyring and its index on disk, as
-  it leaves a plain-file vault's file.
+  it leaves a plain-file vault's file, and says so: registering the name again as a keyring
+  vault finds them.
 - The index is the only record of a vault's service and keys. Losing it strands the items,
   which are still in Keychain Access under `charter/<vault>/…`.

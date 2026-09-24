@@ -510,12 +510,25 @@ pub fn verify(ctx: &Ctx, name: Option<&str>, io: &mut dyn Io) -> i32 {
 
 /// `cmd_vault_remove`: unregister; the file it pointed at stays on disk.
 pub fn remove(ctx: &Ctx, name: &str, io: &mut dyn Io) -> i32 {
+    // Read before it goes: a keyring vault's items outlive its registration, and registering
+    // the name again finds them through the index, which is worth saying.
+    let keyring = registry::vault(ctx, name)
+        .ok()
+        .filter(|v| v.provider == "keyring");
     match registry::remove_vault(ctx, name) {
         Ok(()) => {
             io.say(Say::Ok(format!(
                 "Vault '{name}' removed from the registry. (Any underlying file is left on disk \
                  untouched.)"
             )));
+            if let Some(v) = keyring {
+                io.say(Say::Info(format!(
+                    "  Its secrets stay in {}, named in {}; registering '{name}' again as a \
+                     keyring vault finds them.",
+                    super::keyring::STORE_NAME,
+                    super::short_path(&ctx.root, &super::keyring::index_path(ctx, &v))
+                )));
+            }
             0
         }
         Err(e) => {

@@ -2155,7 +2155,8 @@ charter-app only (ADR 0047); the Python charter has no keyring provider and neve
 - **Read by:** the same module — `keys`, `listed`, `get`, `ages`, `health`. `secret list`,
   `vault list` and `secret audit` read only this file and never the keyring.
 - **`service`:** `charter/<vault>/<8 lowercase hex>`, made randomly at the vault's first write
-  and kept. A service that does not start `charter/` (or holds a control character) is refused
+  and written to this file BEFORE that first item is, so no item is ever under a service no
+  index records. A service that does not start `charter/` (or holds a control character) is refused
   as corrupt: the file is on disk, and one pointing at another program's item would make
   charter read it.
 - **Git / encoding:** under `.charter/`, so gitignored; indent 2, trailing newline, keys
@@ -2172,8 +2173,9 @@ charter-app only (ADR 0047); the Python charter has no keyring provider and neve
 
 ### `.charter/keyring-stub.json` — a test build's keyring
 
-Written **only** by a fenced build (every `cargo test` build, and the app's `e2e` build —
-`crates/charter-core/src/fence.rs`), which keeps a keyring vault's values here instead of in the
+In the state directory (`.charter/`, or `$CHARTER_HOME` when set). Written **only** by a fenced
+build (every `cargo test` build, and the app's `e2e` build — `crates/charter-core/src/fence.rs`),
+which keeps a keyring vault's values here instead of in the
 operating system's store, so no test can reach the operator's keychain. JSON object
 `"<service>\n<account>" → value`, 0600. **It holds values in plaintext**; a build anyone is
 given never writes it.
