@@ -616,19 +616,20 @@ export const commands = {
 	 */
 	projectHarnessPlugins: (plane: PlaneId) => typedError<HarnessPlugins[], string>(__TAURI_INVOKE("project_harness_plugins", { plane })),
 	/**
-	 *  This project's theme, with every theme it may pick. It takes a survey, as
+	 *  This project's theme, with every theme it may pick — in `workspace`, when one is named, whose
+	 *  `workspace.json` is a layer too (charter-app#281): what the Workspace settings tab shows. It takes a survey, as
 	 *  [`project_extensions`] does, so a pick the extension no longer contributes is said here.
 	 */
-	projectTheme: (plane: PlaneId) => typedError<ProjectTheme, string>(__TAURI_INVOKE("project_theme", { plane })),
+	projectTheme: (plane: PlaneId, workspace: string | null) => typedError<ProjectTheme, string>(__TAURI_INVOKE("project_theme", { plane, workspace })),
 	/**
-	 *  What the window draws while this project is in front, as a file holds it: `null` leaves the
-	 *  window its own theme.
+	 *  What the window draws while this project — and `workspace` in it, when one is named
+	 *  (charter-app#281) — is in front, as a file holds it: `null` leaves the window its own theme.
 	 * 
 	 *  **The record alone**, as [`extensions_on`] is, so it is cheap enough to ask for every project
 	 *  a window holds. A pick the extension does not contribute is left to the window, which only
 	 *  ever holds the themes a survey found, and draws the built-in when the pick is not among them.
 	 */
-	projectThemeDrawn: (plane: PlaneId) => typedError<string | null, string>(__TAURI_INVOKE("project_theme_drawn", { plane })),
+	projectThemeDrawn: (plane: PlaneId, workspace: string | null) => typedError<string | null, string>(__TAURI_INVOKE("project_theme_drawn", { plane, workspace })),
 	/**
 	 *  Every view an approved extension offers this window.
 	 * 
@@ -1668,14 +1669,22 @@ export type ProjectTheme = {
 	 *  approved contributes — whether or not this project has that extension on.
 	 */
 	options: ThemeOption[],
-	/**  What the files pick, in force, as a file holds it; `null` when neither picks one. */
+	/**  What the files pick, in force, as a file holds it; `null` when none picks one. */
 	picked: string | null,
-	/**  `charter.toml` or `charter.local.toml`: the file `picked` came from; `null` with no pick. */
+	/**
+	 *  `charter.toml`, `charter.local.toml` or `workspaces/<ws>/workspace.json`: the file
+	 *  `picked` came from; `null` with no pick.
+	 */
 	file: string | null,
 	/**  What the window draws while this project is in front; `null` leaves it its own theme. */
 	draws: string | null,
 	/**  Why `draws` is not `picked`, when it is not. */
 	why: string | null,
+	/**
+	 *  The workspace's colour as its file holds it — a palette name or `#rrggbb` — when it was
+	 *  asked in a workspace that has one (charter-app#281).
+	 */
+	colour: string | null,
 	/**  Each value a file set that charter did not use, and why. */
 	ignored: ProjectExtensionIgnored[],
 };
@@ -1930,6 +1939,12 @@ export type SidebarWorkspace = {
 	vision: string,
 	todos: string[],
 	chats: OpenChat[],
+	/**
+	 *  Its colour as its `workspace.json` holds it — a palette name or `#rrggbb` — or `null`
+	 *  (charter-app#281). Here because every workspace tab draws its own, whether or not it is
+	 *  in front, and the sidebar is already the one read of every workspace.
+	 */
+	colour: string | null,
 };
 
 /**  Everything the picker draws, read from the plane when it is opened. */

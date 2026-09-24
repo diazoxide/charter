@@ -549,33 +549,40 @@ pub struct ProjectTheme {
     /// charter's own themes, following the system, and every theme an extension this machine
     /// approved contributes — whether or not this project has that extension on.
     pub options: Vec<ThemeOption>,
-    /// What the files pick, in force, as a file holds it; `null` when neither picks one.
+    /// What the files pick, in force, as a file holds it; `null` when none picks one.
     pub picked: Option<String>,
-    /// `charter.toml` or `charter.local.toml`: the file `picked` came from; `null` with no pick.
+    /// `charter.toml`, `charter.local.toml` or `workspaces/<ws>/workspace.json`: the file
+    /// `picked` came from; `null` with no pick.
     pub file: Option<String>,
     /// What the window draws while this project is in front; `null` leaves it its own theme.
     pub draws: Option<String>,
     /// Why `draws` is not `picked`, when it is not.
     pub why: Option<String>,
+    /// The workspace's colour as its file holds it — a palette name or `#rrggbb` — when it was
+    /// asked in a workspace that has one (charter-app#281).
+    pub colour: Option<String>,
     /// Each value a file set that charter did not use, and why.
     pub ignored: Vec<ProjectExtensionIgnored>,
 }
 
-/// This project's theme, with every theme it may pick. It takes a survey, as
+/// This project's theme, with every theme it may pick — in `workspace`, when one is named, whose
+/// `workspace.json` is a layer too (charter-app#281): what the Workspace settings tab shows. It takes a survey, as
 /// [`project_extensions`] does, so a pick the extension no longer contributes is said here.
 #[tauri::command]
 #[specta::specta]
 pub async fn project_theme(
     planes: tauri::State<'_, crate::planes::Planes>,
     plane: crate::planes::PlaneId,
+    workspace: Option<String>,
 ) -> Result<ProjectTheme, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let config = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let workspace = workspace.as_deref();
         project_theme_of(
             &extension::survey(&config),
-            &extension::project::Choices::read(&root),
-            &extension::project::theme::Said::read(&root),
+            &extension::project::Choices::read_in(&root, workspace),
+            &extension::project::theme::Said::read_in(&root, workspace),
         )
     })
     .await
@@ -627,25 +634,30 @@ fn project_theme_of(
             label: format!("{} ({whose})", one.name),
         }
     }));
+    let file = |source| match (source, said.workspace_file()) {
+        (extension::project::Source::Workspace, Some(file)) => Some(file),
+        (source, _) => extension::project::Source::file(source).map(str::to_owned),
+    };
     ProjectTheme {
         options,
         picked: it.picked.as_ref().map(theme::Pick::value),
-        file: it.source.file().map(str::to_owned),
+        file: file(it.source),
         draws: it.draws.as_ref().map(theme::Pick::value),
         why: it.why,
+        colour: it.colour.as_ref().map(theme::Colour::value),
         ignored: it
             .ignored
             .into_iter()
             .map(|one| ProjectExtensionIgnored {
-                file: one.source.file().unwrap_or_default().to_owned(),
+                file: file(one.source).unwrap_or_default(),
                 why: one.why,
             })
             .collect(),
     }
 }
 
-/// What the window draws while this project is in front, as a file holds it: `null` leaves the
-/// window its own theme.
+/// What the window draws while this project — and `workspace` in it, when one is named
+/// (charter-app#281) — is in front, as a file holds it: `null` leaves the window its own theme.
 ///
 /// **The record alone**, as [`extensions_on`] is, so it is cheap enough to ask for every project
 /// a window holds. A pick the extension does not contribute is left to the window, which only
@@ -655,14 +667,16 @@ fn project_theme_of(
 pub async fn project_theme_drawn(
     planes: tauri::State<'_, crate::planes::Planes>,
     plane: crate::planes::PlaneId,
+    workspace: Option<String>,
 ) -> Result<Option<String>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let config = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let workspace = workspace.as_deref();
         project_theme_drawn_of(
             &extension::read(&config),
-            &extension::project::Choices::read(&root),
-            &extension::project::theme::Said::read(&root),
+            &extension::project::Choices::read_in(&root, workspace),
+            &extension::project::theme::Said::read_in(&root, workspace),
         )
     })
     .await
@@ -935,5 +949,38 @@ mod tests {
             None,
             "a project that picks nothing leaves the window its own theme"
         );
+    }
+
+    #[test]
+    fn a_workspaces_theme_names_its_file_carries_its_colour_and_is_what_the_window_draws() {
+        // charter-app#281: the workspace is a layer of the one resolver, for the tab and the
+        // window alike.
+        let (_dir, at, config) = made();
+        let found = extension::install(&config, &at).expect("installed");
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        let shared = "[theme]\nuse = \"charter-light\"\n";
+        let manifest = r#"{"settings": {"theme": {"use": "solarized/Solarized Dark",
+            "colour": "purple"}, "extensions": {"solarized": {"enabled": false}}}}"#;
+        let choices = extension::project::Choices::from_text(Some(shared), None)
+            .in_workspace("alpha", Some(manifest));
+        let said = extension::project::theme::Said::from_text(Some(shared), None)
+            .in_workspace("alpha", Some(manifest));
+
+        let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+        assert_eq!(theme.file.as_deref(), Some("workspaces/alpha/workspace.json"));
+        assert_eq!(theme.colour.as_deref(), Some("purple"));
+        assert_eq!(theme.draws.as_deref(), Some("charter-dark"));
+        assert_eq!(
+            project_theme_drawn_of(&extension::read(&config), &choices, &said).as_deref(),
+            Some("charter-dark"),
+            "the window drew a theme the workspace turned off"
+        );
+
+        let manifest = r#"{"settings": {"theme": {"use": "dark"}}}"#;
+        let said = extension::project::theme::Said::from_text(Some(shared), None)
+            .in_workspace("alpha", Some(manifest));
+        let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+        assert_eq!(theme.draws.as_deref(), Some("charter-light"));
+        assert_eq!(theme.ignored[0].file, "workspaces/alpha/workspace.json");
     }
 }

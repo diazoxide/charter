@@ -16,7 +16,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { BUILT_IN, type Theme, type Token } from "./theme";
+import { BUILT_IN, tinted, type Theme, type Token } from "./theme";
+import { PALETTE } from "./tint";
 
 /** One channel of an `#rrggbb`, as the sRGB number WCAG's formula wants. */
 function channel(hex: string, at: number): number {
@@ -83,12 +84,28 @@ const PAIRS: [Token, Token, number][] = [
   ["text.muted", "layer.workspace", 4.5],
   ["text.muted", "layer.chat", 4.5],
   ["text.primary", "layer.selected", 4.5],
+  // A workspace's colour (charter-app#281): its tab is drawn in its own shade with a mark in its
+  // own accent, and the one in front is primary text on its tinted `layer.selected`.
+  ["accent.base", "layer.workspace", 3],
+  ["text.primary", "layer.workspace", 4.5],
   ["border.subtle", "surface.base", 1.2],
   ["border.strong", "surface.base", 1.5],
 ];
 
-describe.each(Object.keys(BUILT_IN))("%s can be read", (name) => {
-  const theme: Theme = BUILT_IN[name];
+/**
+ * Each built-in as it ships, and **tinted by every colour a workspace can name** (charter-app
+ * #281): the tint turns the accent and the tab shades, so every pair above with one of them in
+ * it is held again at every hue. `tint.ts` keeps each shade's luminance to make this hold by
+ * construction; this is the check that the construction did.
+ */
+const DRAWN: [string, Theme][] = Object.keys(BUILT_IN).flatMap((name) => [
+  [name, BUILT_IN[name]] as [string, Theme],
+  ...Object.keys(PALETTE).map(
+    (colour) => [`${name} tinted ${colour}`, tinted(BUILT_IN[name], colour)] as [string, Theme],
+  ),
+]);
+
+describe.each(DRAWN)("%s can be read", (_name, theme) => {
   it.each(PAIRS)("%s on %s clears %s to 1", (front, back, floor) => {
     const ratio = contrast(theme.values[front], theme.values[back]);
     expect(

@@ -2531,6 +2531,12 @@ export type PlaneReport = {
   /** The workspace it is on, already read as it should be said — `undefined` when it is on
    *  none. The title bar's second segment (`TitleBar.tsx`). */
   where: string | undefined;
+  /** The workspace it is on by its name, `undefined` outside every workspace: whose
+   *  `workspace.json` is a layer of the theme the window draws (charter-app#281). */
+  workspace?: string;
+  /** That workspace's colour, a palette name or `#rrggbb`, or `null`: what the window's accent
+   *  and focus ring are tinted with while it is in front (charter-app#281). */
+  colour?: string | null;
 };
 
 /** What a project asks the WINDOW to do, because the window is what holds projects. */

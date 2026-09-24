@@ -36,6 +36,7 @@ import { Opener } from "./Opener";
 import { Preferences } from "./Preferences";
 import { useExtensionsOn } from "./extensionsOn";
 import { useProjectTheme } from "./projectTheme";
+import { drawTint } from "./theme/theme";
 import { useContributedPanels } from "./Panels";
 import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
@@ -587,25 +588,35 @@ function App() {
     // later close brings back must be the opener rather than a Preferences left behind.
     if (inFront !== undefined) setPreferencesAlone(false);
   }, [inFront]);
-  /** What the project in front has on (charter-app#253), for the one thing that is the window's
-   *  and not a project's to draw: the theme. */
-  const onInFront = useExtensionsOn(inFront);
-  /** The theme the project in front picked (charter-app#273): `null` when it picked none. */
-  const pickInFront = useProjectTheme(inFront);
-  // The theme the project in front has, drawn once it has said what it has on and what it picked
-  // — and every approved extension's with no project in front, which is what the window drew
-  // before projects had a say (ADR 0048). After the first frame, like every extension theme
-  // (`Extensions.tsx`). A project switch redraws it, and `theme.onDrawn` hands it to every
-  // terminal on screen (#216).
+  /** What the project in front last said about itself, when it has said anything yet. The
+   *  palette lists its catalogue and runs its rows, so a row reaches that project's live
+   *  arrangement and no other's. */
+  const saying = inFront === undefined ? undefined : reports[inFront];
+  /** The workspace the project in front is on, when it is on one (charter-app#281): its
+   *  `workspace.json` is a layer of the theme the window draws, between the project's two files. */
+  const workspaceInFront = saying?.workspace;
+  /** What the project in front has on in that workspace (charter-app#253, #280), for the one
+   *  thing that is the window's and not a project's to draw: the theme. */
+  const onInFront = useExtensionsOn(inFront, workspaceInFront);
+  /** The theme the project in front picked there (charter-app#273, #281): `null` when nothing
+   *  picked one. */
+  const pickInFront = useProjectTheme(inFront, workspaceInFront);
+  // The theme the project and workspace in front have, drawn once they have said what they have
+  // on and what they picked — and every approved extension's with no project in front, which is
+  // what the window drew before projects had a say (ADR 0048). After the first frame, like every
+  // extension theme (`Extensions.tsx`). A project or workspace switch redraws it, and
+  // `theme.onDrawn` hands it to every terminal on screen (#216).
   useEffect(() => {
     if (inFront === undefined) void drawThemeFor("every");
     else if (onInFront !== undefined && pickInFront !== undefined)
       void drawThemeFor(onInFront, pickInFront);
   }, [inFront, onInFront, pickInFront]);
-  /** What the project in front last said about itself, when it has said anything yet. The
-   *  palette lists its catalogue and runs its rows, so a row reaches that project's live
-   *  arrangement and no other's. */
-  const saying = inFront === undefined ? undefined : reports[inFront];
+  // And the workspace in front's colour on the window's accent and focus ring (charter-app#281),
+  // live on every switch. The terminal is not told: nothing it draws is tinted.
+  const colourInFront = saying?.colour ?? null;
+  useEffect(() => {
+    drawTint(colourInFront);
+  }, [colourInFront]);
   /** What the last action answered — the project in front's, or this window's own when there
    *  is no project in front to have one. */
   const said = saying?.said ?? report;
@@ -939,6 +950,7 @@ function App() {
       decided: launch !== undefined && !restoring,
       read: saying?.read ?? false,
       workspace: saying?.where,
+      coloured: saying?.colour != null,
       running: runningIn(saying),
     }),
     [inFront, launch, restoring, saying],
