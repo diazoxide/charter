@@ -489,6 +489,9 @@ impl Chats {
             // were closed are spent too, and no new chat lands on a pointer one of them
             // left behind.
             dealt: self.sessions.dealt(),
+            // An ordinary write, which is what makes the flag last one launch: the quit that
+            // restarts charter for an update is the only writer that says otherwise (#251).
+            relaunch_after_update: false,
         }
     }
 
@@ -508,7 +511,7 @@ impl Chats {
         // The view tabs start nothing, so they are simply held until the window asks for them
         // (`reopened_views`) — and written back out with everything else at the next change.
         *lock(&self.views) = record.views.clone();
-        // Every chat here starts a program, synchronously, before there is a window. A
+        // Every chat here starts a program, synchronously, before it has a pane. A
         // record with thousands in it — a runaway, or a file nobody meant — would give an
         // app that hangs on launch with no way to intervene. The cap is far above the
         // fifty the product is for, so it never meets an operator; it is only ever a
@@ -1158,6 +1161,7 @@ mod tests {
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
                     .collect(),
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1306,6 +1310,7 @@ mod tests {
                 views: Vec::new(),
                 chats: vec![chat(&claude, "ide.7", None), was_in_front],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1334,6 +1339,7 @@ mod tests {
                     chat(&claude, "ide.8", None),
                 ],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1354,6 +1360,7 @@ mod tests {
                 views: Vec::new(),
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1388,6 +1395,7 @@ mod tests {
                     },
                 ],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1410,6 +1418,7 @@ mod tests {
                 views: Vec::new(),
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", None)],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1434,6 +1443,7 @@ mod tests {
                     chat(&claude, "ide.8", None),
                 ],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1461,6 +1471,7 @@ mod tests {
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
                     .collect(),
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1482,6 +1493,7 @@ mod tests {
                 views: Vec::new(),
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1504,6 +1516,7 @@ mod tests {
                 views: Vec::new(),
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1529,6 +1542,7 @@ mod tests {
                     chat(&claude, "ide.8", None),
                 ],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1727,6 +1741,7 @@ mod tests {
                 views: Vec::new(),
                 chats: vec![chat(&claude, "ide.7", None), chat(&claude, "ide.8", None)],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );
@@ -1746,6 +1761,7 @@ mod tests {
                 views: Vec::new(),
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
                 dealt: 0,
+                relaunch_after_update: false,
             },
             SIZE,
         );

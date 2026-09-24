@@ -28,6 +28,7 @@
 use std::collections::BTreeMap;
 
 use charter_core::machine;
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::planes::{Asking, Holding, Opening, PlaneId, Planes, Restoring, Showing, restorable};
@@ -380,6 +381,98 @@ pub async fn planes_to_restore(
     })
     .await
     .map_err(|err| format!("reading the projects this window had open did not finish: {err}"))
+}
+
+/// The projects this launch will restore, as the window will open them — or none under
+/// `--no-restore`. The same list [`planes_to_restore`] answers with, read the same way.
+fn restoring_roots(planes: &Planes, restoring: &Restoring) -> Vec<std::path::PathBuf> {
+    if !restoring.wanted() {
+        return Vec::new();
+    }
+    restorable(planes.remembered()).planes
+}
+
+/// What a launch asks before it puts anything back (charter-app#250).
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct RelaunchQuestion {
+    /// Every project with something to put back, the launch's own first.
+    pub projects: Vec<WaitingProject>,
+    /// Whether charter restarted itself to install an update, rather than the operator
+    /// quitting it (charter-app#251). The question then says so, and keeps what was open.
+    pub after_update: bool,
+}
+
+/// One project's share of the question: which, and how much of it would come back.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct WaitingProject {
+    /// The project's root, which is also the id it is held by once it is open.
+    pub plane: String,
+    pub chats: u32,
+    pub views: u32,
+}
+
+/// The operator's answer, as the window sends it.
+#[derive(Debug, Clone, Copy, serde::Deserialize, specta::Type)]
+pub enum RelaunchChoice {
+    ReopenAll,
+    StartFresh,
+}
+
+impl From<RelaunchChoice> for charter_core::reopen::Choice {
+    fn from(choice: RelaunchChoice) -> Self {
+        match choice {
+            RelaunchChoice::ReopenAll => Self::ReopenAll,
+            RelaunchChoice::StartFresh => Self::StartFresh,
+        }
+    }
+}
+
+/// What this launch would put back, for the window to ask about — **or nothing, and then there
+/// is no question**: nothing was open, or the operator has already answered.
+///
+/// Asked BEFORE the window restores anything, and nothing starts until [`relaunch`] has the
+/// answer. On a blocking thread for [`planes_to_restore`]'s reason, and because it reads one
+/// record per project.
+#[tauri::command]
+#[specta::specta]
+pub async fn relaunch_ask(app: tauri::AppHandle) -> Result<Option<RelaunchQuestion>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let planes = app.state::<Planes>();
+        let restoring = restoring_roots(&planes, &app.state::<Restoring>());
+        planes
+            .relaunch_ask(&restoring)
+            .map(|asked| RelaunchQuestion {
+                projects: asked
+                    .projects
+                    .into_iter()
+                    .map(|waiting| WaitingProject {
+                        plane: waiting.root.display().to_string(),
+                        chats: u32::try_from(waiting.chats).unwrap_or(u32::MAX),
+                        views: u32::try_from(waiting.views).unwrap_or(u32::MAX),
+                    })
+                    .collect(),
+                after_update: asked.after_update,
+            })
+    })
+    .await
+    .map_err(|err| format!("reading what this launch would reopen did not finish: {err}"))
+}
+
+/// The operator's answer to [`relaunch_ask`] — or `ReopenAll` from a window that had nothing to
+/// ask. **Every launch sends one**, because the launch's own project is put back here and
+/// nowhere else; a second answer, from a window that reloaded, changes nothing.
+///
+/// On a blocking thread because the answer starts every chat the launch's project held.
+#[tauri::command]
+#[specta::specta]
+pub async fn relaunch(app: tauri::AppHandle, choice: RelaunchChoice) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let planes = app.state::<Planes>();
+        let restoring = restoring_roots(&planes, &app.state::<Restoring>());
+        planes.relaunch(choice.into(), &restoring);
+    })
+    .await
+    .map_err(|err| format!("putting back what was open did not finish: {err}"))
 }
 
 /// A window says what it is holding: its projects as tabs, and which one is in front.

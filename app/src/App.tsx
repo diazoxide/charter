@@ -10,7 +10,13 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import "./styles.css";
-import { commands, type Ask, type PlaneId } from "./bindings";
+import {
+  commands,
+  type Ask,
+  type PlaneId,
+  type RelaunchChoice,
+  type RelaunchQuestion,
+} from "./bindings";
 import {
   catalogue,
   catalogued,
@@ -32,6 +38,7 @@ import { useTabStop } from "./roving";
 import { useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
+import { RelaunchAsk } from "./RelaunchAsk";
 import { fitting, LEAST, useRoom } from "./fits";
 import { Menued, useNoBrowserMenu } from "./Menus";
 import { NewProject } from "./NewProject";
@@ -132,6 +139,20 @@ function App() {
    *  finished saying which projects it holds, so neither the quit nor the arrangement it
    *  writes down may act on what it holds so far. */
   const [restoring, setRestoring] = useState(true);
+  /** The launch's question, while it waits for the operator (charter-app#250): what would be
+   *  put back, and how the answer reaches the restore that is waiting on it. */
+  const [relaunchAsking, setRelaunchAsking] = useState<{
+    question: RelaunchQuestion;
+    answer: (choice: RelaunchChoice) => void;
+  }>();
+  /** Settled when the cold-launch restore is over, so a second launch's directory waits for
+   *  it: opening a project starts its chats, and nothing may start while the launch's
+   *  question is up. */
+  const restoreOver = useMemo(() => {
+    let settle = () => {};
+    const done = new Promise<void>((resolve) => (settle = resolve));
+    return { done, settle };
+  }, []);
   /** Whether this window has ever held a project.
    *
    *  After it has, the opener is no longer the launch reporting what it could not resolve:
@@ -425,6 +446,13 @@ function App() {
    *
    * Run once, after the launch has answered, and only then — the launch's own project is
    * opened by the core before there is a window, and its tab has to be the first one.
+   *
+   * **And not before the operator has answered the launch's question** (charter-app#250):
+   * reopen every session, or start fresh. The core holds the launch's own project back until
+   * `relaunch` has the answer, and the projects below are opened only after it, so nothing
+   * starts while the question is up. A launch with nothing to put back asks nothing and
+   * answers "Reopen all" itself — which is also what a question the core could not read
+   * answers, because the other answer is the one that throws work away.
    */
   const restored = useRef(false);
   useEffect(() => {
@@ -432,8 +460,25 @@ function App() {
     restored.current = true;
     void (async () => {
       try {
-        // The launch's own project, which the core already opened and put the record back
-        // for. Its tab is first and it is the one in front: the operator ran charter THERE.
+        const asked = await commands
+          .relaunchAsk()
+          .catch(() => ({ status: "error" as const, error: "" }));
+        const question = asked.status === "ok" ? asked.data : null;
+        const choice: RelaunchChoice = question
+          ? await new Promise<RelaunchChoice>((answer) =>
+              setRelaunchAsking({
+                question,
+                answer: (chosen) => {
+                  setRelaunchAsking(undefined);
+                  answer(chosen);
+                },
+              }),
+            )
+          : "ReopenAll";
+        // Awaited, so the launch's project has its chats before its tab asks what it holds.
+        await commands.relaunch(choice).catch(() => undefined);
+        // The launch's own project, which the core already opened and has now put the record
+        // back for. Its tab is first and it is the one in front: the operator ran charter THERE.
         const opened = launch.plane;
         if (opened !== null) {
           setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
@@ -458,9 +503,10 @@ function App() {
         // never write its arrangement down and would warn on every quit for the rest of the
         // day, which is a worse failure than the one that caused it.
         setRestoring(false);
+        restoreOver.settle();
       }
     })();
-  }, [launch, openInto]);
+  }, [launch, openInto, restoreOver]);
 
   // Nothing is ever drawn on a project this window does not hold. `showing` is set from
   // several places — a close, a restore, an approval — and a plane that went in between
@@ -498,10 +544,10 @@ function App() {
   // tab rather than being said on screen, which is what tabs were the missing half of.
   useEffect(() => {
     const listening = listen<string>("open-plane", (event) => {
-      void openInto(event.payload, true);
+      void restoreOver.done.then(() => openInto(event.payload, true));
     }).catch(() => undefined);
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
-  }, [openInto]);
+  }, [openInto, restoreOver]);
 
   // Cold start ends when a person can see the window, which is the frame after the one this
   // paints in. The core answers with why that took as long as it did, when it took longer
@@ -1027,6 +1073,13 @@ function App() {
       {extensions && <Extensions onClose={() => setExtensions(false)} />}
 
       {asking && <QuitWarning chats={ending} onQuit={quit} onCancel={dontQuit} />}
+      {relaunchAsking && (
+        <RelaunchAsk
+          question={relaunchAsking.question}
+          nameOf={calledOn}
+          onAnswer={relaunchAsking.answer}
+        />
+      )}
     </main>
   );
 }

@@ -799,8 +799,9 @@ fn close_session(
 
 /// The chats the app already has open — at a launch, the ones put back from the record.
 ///
-/// The window asks this instead of opening its own: putting the record back happens before
-/// there is a window, so that a relaunch does not depend on a webview having run.
+/// The window asks this instead of opening its own: the core puts the record back, once the
+/// window has sent the operator's answer to the launch's question (`opener::relaunch`,
+/// charter-app#250), and a window that reloads asks again rather than starting a second copy.
 #[tauri::command]
 #[specta::specta]
 fn opened_chats(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<OpenChat>, String> {
@@ -1111,6 +1112,8 @@ fn commands() -> Builder<tauri::Wry> {
             opener::open_plane,
             opener::approve_plane,
             opener::planes_to_restore,
+            opener::relaunch_ask,
+            opener::relaunch,
             opener::window_holds_planes,
             opener::create_project,
             open_session,
