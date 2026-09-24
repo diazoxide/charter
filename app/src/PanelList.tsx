@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import * as Popover from "@radix-ui/react-popover";
+import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import clsx from "clsx";
 import {
   CircleDashed,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import type { PanelEmpty, PanelRow } from "./bindings";
 import { EmptyState } from "./EmptyState";
+import { useTabStop } from "./roving";
 
 /**
  * The list a panel is drawn from, and the one the operator asked for by name.
@@ -143,6 +145,13 @@ export function PanelList({
   // list and never the filtered one: a box that vanished when a search narrowed the list to
   // eight rows would take away the control being used.
   const searchable = rows.length > page;
+  // The rows are ONE Tab stop, and Up and Down move along them (charter-app#189, `roving.ts`):
+  // the row whose card is open, or the first that does anything. A read-only row is a `<span>`
+  // and is no stop at all.
+  const stop = useTabStop(
+    open,
+    drawn.filter((row) => row.detail !== null || row.runs !== null).map((row) => row.key),
+  );
 
   if (rows.length === 0) {
     return (
@@ -180,19 +189,21 @@ export function PanelList({
         // those are different facts about a panel whose rows the reader can still get back.
         <p className="none">Nothing here matches “{query.trim()}”.</p>
       ) : (
-        <ul className="panel-rows" aria-label={label}>
-          {drawn.map((row) => (
-            <Row
-              key={row.key}
-              row={row}
-              open={open === row.key}
-              onOpen={(opening) => onOpen(opening ? row.key : undefined)}
-              detail={detailOf?.(row) ?? defaultDetail(row)}
-              onRun={onRun}
-              wrap={wrap}
-            />
-          ))}
-        </ul>
+        <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+          <ul className="panel-rows" aria-label={label}>
+            {drawn.map((row) => (
+              <Row
+                key={row.key}
+                row={row}
+                open={open === row.key}
+                onOpen={(opening) => onOpen(opening ? row.key : undefined)}
+                detail={detailOf?.(row) ?? defaultDetail(row)}
+                onRun={onRun}
+                wrap={wrap}
+              />
+            ))}
+          </ul>
+        </RovingFocusGroup.Root>
       )}
 
       {more > 0 && (
@@ -268,22 +279,25 @@ function Row({
       /* **A row that does something and opens nothing is a plain button that does it.** A
          persona's row opens that persona's tab (`persona.show:<name>`, the operator's ruling of
          2026-09-23): a card beside the row as well would be two surfaces for one persona. */
-      <button
-        type="button"
-        className="row"
-        tabIndex={0}
-        onClick={() => {
-          if (row.runs !== null) onRun?.(row.runs);
-        }}
-      >
-        {body}
-      </button>
+      <RovingFocusGroup.Item asChild tabStopId={row.key}>
+        <button
+          type="button"
+          className="row"
+          onClick={() => {
+            if (row.runs !== null) onRun?.(row.runs);
+          }}
+        >
+          {body}
+        </button>
+      </RovingFocusGroup.Item>
     ) : (
       <Popover.Root open={open} onOpenChange={opened}>
         <Popover.Trigger asChild>
-          <button type="button" className="row" tabIndex={0}>
-            {body}
-          </button>
+          <RovingFocusGroup.Item asChild tabStopId={row.key} active={open}>
+            <button type="button" className="row">
+              {body}
+            </button>
+          </RovingFocusGroup.Item>
         </Popover.Trigger>
         <Popover.Portal>
           <Popover.Content

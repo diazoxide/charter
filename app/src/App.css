@@ -23,6 +23,25 @@ body {
   margin: 0;
 }
 
+/* **Wherever Tab can land, it is seen landing** (charter-app#189). Every stop in the window
+   now says `tabindex`, and a stop with no ring is one the operator has to find by pressing
+   Enter to see what happens. Most controls draw their own ring in this same token, inset,
+   because a ring outside a cell is clipped by the strip it is in; this is the floor under
+   them, at zero specificity (`:where`) so any control's own rule wins. `:focus-visible` and not
+   `:focus`: a click does not draw it. xterm's textarea is excluded — it is off-screen, and the
+   terminal's own cursor is how a pane says it has the keyboard. */
+:where(
+  button,
+  summary,
+  a,
+  [role="tab"],
+  [role="separator"],
+  [tabindex]:not(textarea)
+):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 /* **Every icon in the window, sized once, from the text it sits in.**
  *
  * Lucide puts `lucide` on every `<svg>` it draws, so this one rule is the whole of the icon
@@ -776,7 +795,13 @@ button.show-more:focus-visible {
    is a control that does not exist without a pointer. The focused pane is where a keyboard
    is, so `:focus-within` is true there — including while the terminal itself has the keyboard,
    which is the ordinary case. A pane the operator is not in shows nothing until the pointer
-   is over it. */
+   is over it.
+
+   **And for the focused pane while the keyboard is on its way to it** (charter-app#189):
+   `:focus-within` is false while Tab is still on the strip above, and a hidden control is not
+   in the tab sequence — so the controls Tab is about to reach would not exist yet. The
+   focused pane is the one the palette and these buttons act on, so it is the one that
+   shows them whatever has the keyboard. */
 .pane-doing {
   display: flex;
   gap: 0.15rem;
@@ -788,7 +813,8 @@ button.show-more:focus-visible {
 }
 
 .pane-frame:hover .pane-doing,
-.pane-frame:focus-within .pane-doing {
+.pane-frame:focus-within .pane-doing,
+.pane-frame:has(.pane.focused) .pane-doing {
   visibility: visible;
 }
 
