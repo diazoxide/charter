@@ -104,10 +104,14 @@ import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionView, PanelView } from "./bindings";
+import { useExtensionsOn } from "./extensionsOn";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
+
+/** One empty list, so a prop left out is the same list at every render. */
+const NONE: readonly never[] = [];
 
 /**
  * One project, with everything that belongs to it.
@@ -147,8 +151,8 @@ export function PlaneView({
   window: windowDoes,
   onReport,
   alerts,
-  contributed = [],
-  views = [],
+  contributed: surveyedPanels = NONE,
+  views: surveyedViews = NONE,
   settingsAsked,
 }: {
   plane: PlaneId;
@@ -170,7 +174,8 @@ export function PlaneView({
   alerts?: Alerts;
   /** What approved extensions contribute to the side region. The window's, for the same reason
    *  the alerts are: an extension is installed per machine and never travels in a plane
-   *  (ADR 0041), so one survey serves every project this window holds. */
+   *  (ADR 0041), so one survey serves every project this window holds — and this project keeps
+   *  of it what it has on (ADR 0048). */
   contributed?: readonly PanelView[];
   /** The views approved extensions offer (ADR 0041 stage 2), the window's for the
    *  same reason: one survey per window, not one per project. */
@@ -179,6 +184,21 @@ export function PlaneView({
    *  (`WindowDoing.openSettings`); `undefined` until it is. */
   settingsAsked?: number;
 }) {
+  /**
+   * **What this project has on** (charter-app#253, ADR 0048): the core's answer for this plane's
+   * two files over this machine's approvals. The window's survey is filtered by it here, once, so
+   * the side region, the view buttons and the palette's view rows all read one list. Charter's
+   * own panels (`from` null) are not an extension's and are never filtered.
+   */
+  const on = useExtensionsOn(plane);
+  const contributed = useMemo(
+    () => surveyedPanels.filter((panel) => panel.from === null || (on?.has(panel.from) ?? false)),
+    [on, surveyedPanels],
+  );
+  const views = useMemo(
+    () => surveyedViews.filter((view) => on?.has(view.extension) ?? false),
+    [on, surveyedViews],
+  );
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
    *  It keeps listening while the project is behind another one, which is what lets its tab

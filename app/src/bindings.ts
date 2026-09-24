@@ -481,6 +481,25 @@ export const commands = {
 	 */
 	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
 	/**
+	 *  Every extension this machine has installed, and every one this project's files name, with
+	 *  what each is in this project — `extension::project::resolve`, shaped for the wire.
+	 * 
+	 *  It takes a survey, so it re-hashes every installed extension's directory: an extension that
+	 *  changed since its yes reads as needing approval here, which is the truth the tab is for. It
+	 *  is asked when the tab is opened and after it saves, never on a timer.
+	 */
+	projectExtensions: (plane: PlaneId) => typedError<ProjectExtension[], string>(__TAURI_INVOKE("project_extensions", { plane })),
+	/**
+	 *  The ids of the extensions that are on in this project: what the window keeps of the panels,
+	 *  views and themes it surveyed once, while this project is in front.
+	 * 
+	 *  **The record alone, and no extension's directory** — so it is cheap enough to ask for every
+	 *  project a window holds. What it cannot see, an extension that changed since its yes, the
+	 *  survey already left out of what the window holds, and the executor re-takes the fingerprint
+	 *  at every press. The precedence is `extension::project::resolve`'s, as everywhere else.
+	 */
+	extensionsOn: (plane: PlaneId) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane })),
+	/**
 	 *  Every view an approved extension offers this window.
 	 * 
 	 *  An extension that is new, changed or unreadable offers nothing — the registry's one job, as
@@ -1344,6 +1363,35 @@ export type ProfileRow = {
 	 *  runs; absent when charter has already recorded running exactly this.
 	 */
 	approval: string | null,
+};
+
+/**  One extension in one project, as the Project settings tab draws it. */
+export type ProjectExtension = {
+	id: string,
+	name: string,
+	/**  `on`, `off`, `needs-approval` or `not-installed`. */
+	state: string,
+	/**  `default`, `shared` or `local`: which file decided `state`. */
+	source: string,
+	settings: ProjectExtensionSetting[],
+	/**  Each value a file set that charter did not use, and why. */
+	ignored: string[],
+};
+
+/**  One setting an extension declares, and what this project resolved it to. */
+export type ProjectExtensionSetting = {
+	key: string,
+	title: string,
+	/**  `bool`, `text` or `choice`. */
+	kind: string,
+	/**  The words a `choice` may be; empty otherwise. */
+	choices: string[],
+	/**  What it is when no file sets it, as text (`true`/`false` for a `bool`). */
+	default: string,
+	/**  What it is in this project, as text. */
+	value: string,
+	/**  `default`, `shared` or `local`: which file it came from. */
+	source: string,
 };
 
 /**  Both files. */

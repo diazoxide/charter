@@ -16,6 +16,7 @@
 #![cfg(unix)]
 
 use super::*;
+use crate::extension::project;
 use std::path::PathBuf;
 
 /// An extension directory, a config root, and a place outside both for markers.
@@ -69,6 +70,7 @@ impl Rig {
     fn ask(&self, executor: &Executor) -> Result<Answer, String> {
         executor.ask(
             &self.config(),
+            &project::Choices::default(),
             "probe",
             "stats",
             None,
@@ -329,9 +331,14 @@ fn a_view_the_extension_does_not_declare_starts_nothing() {
     rig.approved(&marking(&marker));
 
     let refused = Executor::default()
-        .ask(&rig.config(), "probe", "elsewhere", None, |_| {
-            serde_json::Value::Null
-        })
+        .ask(
+            &rig.config(),
+            &project::Choices::default(),
+            "probe",
+            "elsewhere",
+            None,
+            |_| serde_json::Value::Null,
+        )
         .expect_err("it ran");
 
     assert!(refused.contains("no view called"), "{refused}");
@@ -474,7 +481,14 @@ fn stopping_everything_kills_a_program_that_is_still_answering() {
         let config = rig.config();
         std::thread::spawn(move || {
             let began = Instant::now();
-            let said = executor.ask(&config, "probe", "stats", None, |_| serde_json::Value::Null);
+            let said = executor.ask(
+                &config,
+                &project::Choices::default(),
+                "probe",
+                "stats",
+                None,
+                |_| serde_json::Value::Null,
+            );
             (said, began.elapsed())
         })
     };
@@ -572,7 +586,14 @@ fn one_extension_is_asked_one_thing_at_a_time() {
         let executor = std::sync::Arc::clone(&executor);
         let config = rig.config();
         std::thread::spawn(move || {
-            executor.ask(&config, "probe", "stats", None, |_| serde_json::Value::Null)
+            executor.ask(
+                &config,
+                &project::Choices::default(),
+                "probe",
+                "stats",
+                None,
+                |_| serde_json::Value::Null,
+            )
         })
     };
     wait_for(&pid);
@@ -618,24 +639,41 @@ fn a_busy_extension_does_not_hold_up_a_different_one() {
     // Asked once before the measurement, so what is timed below is the executor and not macOS
     // assessing a program file it has never seen (see `waiting`).
     executor
-        .ask(&slow.config(), "quick", "stats", None, |_| {
-            serde_json::Value::Null
-        })
+        .ask(
+            &slow.config(),
+            &project::Choices::default(),
+            "quick",
+            "stats",
+            None,
+            |_| serde_json::Value::Null,
+        )
         .expect("the quick one, warmed");
     let stalled = {
         let executor = std::sync::Arc::clone(&executor);
         let config = slow.config();
         std::thread::spawn(move || {
-            executor.ask(&config, "probe", "stats", None, |_| serde_json::Value::Null)
+            executor.ask(
+                &config,
+                &project::Choices::default(),
+                "probe",
+                "stats",
+                None,
+                |_| serde_json::Value::Null,
+            )
         })
     };
     wait_for(&pid);
 
     let began = Instant::now();
     executor
-        .ask(&slow.config(), "quick", "stats", None, |_| {
-            serde_json::Value::Null
-        })
+        .ask(
+            &slow.config(),
+            &project::Choices::default(),
+            "quick",
+            "stats",
+            None,
+            |_| serde_json::Value::Null,
+        )
         .expect("the quick one answered");
     assert!(
         began.elapsed() < Duration::from_secs(2),
@@ -659,10 +697,17 @@ fn the_program_is_asked_one_line_holding_what_was_handed_and_nothing_else() {
     ));
 
     Executor::default()
-        .ask(&rig.config(), "probe", "stats", Some("steward"), |about| {
-            assert_eq!(about, Subject::Personas);
-            serde_json::json!({ "handed": [1, 2] })
-        })
+        .ask(
+            &rig.config(),
+            &project::Choices::default(),
+            "probe",
+            "stats",
+            Some("steward"),
+            |about| {
+                assert_eq!(about, Subject::Personas);
+                serde_json::json!({ "handed": [1, 2] })
+            },
+        )
         .expect("an answer");
 
     let text = std::fs::read_to_string(&asked).expect("the question");
@@ -677,6 +722,89 @@ fn the_program_is_asked_one_line_holding_what_was_handed_and_nothing_else() {
             "charter": PROTOCOL, "extension": "probe", "view": "stats", "about": "personas",
             "focus": "steward", "given": { "handed": [1, 2] }
         })
+    );
+}
+
+// -------------------------------------------------------------------------------------
+// ...in a project that turned it off? (charter-app#253, ADR 0048)
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn an_approved_program_a_project_turned_off_never_starts_in_that_project() {
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.approved(&marking(&marker));
+    let off = project::Choices::from_text(
+        Some("[extensions.probe]\nenabled = true\n"),
+        Some("[extensions.probe]\nenabled = false\n"),
+    );
+
+    let refused = Executor::default()
+        .ask(&rig.config(), &off, "probe", "stats", None, |_| {
+            serde_json::Value::Null
+        })
+        .expect_err("it ran in a project that turned it off");
+
+    assert!(
+        refused.contains("turned off in charter.local.toml"),
+        "{refused}"
+    );
+    assert!(!marker.exists(), "a program the project turned off ran");
+}
+
+#[test]
+fn a_project_cannot_start_a_program_this_machine_has_not_approved() {
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.write(VIEW_MANIFEST, &marking(&marker));
+    extension::install(&rig.config(), &rig.at()).expect("installed");
+    let on = project::Choices::from_text(Some("[extensions.probe]\nenabled = true\n"), None);
+
+    let refused = Executor::default()
+        .ask(&rig.config(), &on, "probe", "stats", None, |_| {
+            serde_json::Value::Null
+        })
+        .expect_err("a project's yes stood in for this machine's");
+
+    assert!(refused.contains("not approved"), "{refused}");
+    assert!(!marker.exists());
+}
+
+#[test]
+fn the_settings_a_project_chose_are_handed_with_the_question() {
+    let rig = Rig::new();
+    let asked = rig.marker("asked");
+    rig.write(
+        r#"{"version":1,"id":"probe","name":"Probe",
+            "settings":[{"key":"window","type":"choice","choices":["7d","30d"],"default":"30d"},
+                        {"key":"compact","type":"bool"}],
+            "contributes":{"runs":"bin/run",
+                           "views":[{"id":"stats","title":"Probe statistics","about":"personas"}]}}"#,
+        &format!(
+            "#!/bin/sh\ncat > '{}'\nprintf '%s\\n' '{ANSWER}'\n",
+            asked.display()
+        ),
+    );
+    let found = extension::install(&rig.config(), &rig.at()).expect("installed");
+    extension::approve(&rig.config(), found.id(), &found.path, &found.fingerprint)
+        .expect("approved");
+    let chose = project::Choices::from_text(
+        Some("[extensions.probe.settings]\nwindow = \"7d\"\n"),
+        Some("[extensions.probe.settings]\ncompact = true\n"),
+    );
+
+    Executor::default()
+        .ask(&rig.config(), &chose, "probe", "stats", None, |_| {
+            serde_json::Value::Null
+        })
+        .expect("an answer");
+
+    let asked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&asked).expect("the question"))
+            .expect("JSON");
+    assert_eq!(
+        asked["settings"],
+        serde_json::json!({ "window": "7d", "compact": true })
     );
 }
 
@@ -735,10 +863,17 @@ fn nothing_is_handed_to_a_program_the_gate_refused() {
     extension::install(&rig.config(), &rig.at()).expect("installed");
 
     let mut handed = false;
-    let _ = Executor::default().ask(&rig.config(), "probe", "stats", None, |_| {
-        handed = true;
-        serde_json::Value::Null
-    });
+    let _ = Executor::default().ask(
+        &rig.config(),
+        &project::Choices::default(),
+        "probe",
+        "stats",
+        None,
+        |_| {
+            handed = true;
+            serde_json::Value::Null
+        },
+    );
     assert!(
         !handed,
         "charter read the plane for an extension it would not run"
@@ -995,9 +1130,14 @@ fn a_helper_that_holds_stdin_and_reads_slowly_cannot_hold_the_question_past_the_
         let config = rig.config();
         std::thread::spawn(move || {
             let began = Instant::now();
-            let said = executor.ask(&config, "probe", "stats", None, |_| {
-                serde_json::Value::String("x".repeat(4 << 20))
-            });
+            let said = executor.ask(
+                &config,
+                &project::Choices::default(),
+                "probe",
+                "stats",
+                None,
+                |_| serde_json::Value::String("x".repeat(4 << 20)),
+            );
             let _ = done.send(began.elapsed());
             said
         })
@@ -1036,10 +1176,17 @@ fn a_change_made_while_the_question_is_built_is_seen_by_the_gate() {
     let planted = rig.at().join("bin/planted.sh");
 
     let refused = Executor::default()
-        .ask(&rig.config(), "probe", "stats", None, |_| {
-            std::fs::write(&planted, "echo planted\n").expect("a planted file");
-            serde_json::Value::Null
-        })
+        .ask(
+            &rig.config(),
+            &project::Choices::default(),
+            "probe",
+            "stats",
+            None,
+            |_| {
+                std::fs::write(&planted, "echo planted\n").expect("a planted file");
+                serde_json::Value::Null
+            },
+        )
         .expect_err("a directory that changed while the question was built ran");
 
     assert!(

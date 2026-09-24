@@ -5,7 +5,12 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ProjectSettings } from "./ProjectSettings";
 import { ViewPane } from "./Views";
 import { SETTINGS_TITLE, SETTINGS_VIEW } from "./tabs";
-import type { ProjectSettings as Both, SettingsFile, SettingsSaved } from "./bindings";
+import type {
+  ProjectExtension,
+  ProjectSettings as Both,
+  SettingsFile,
+  SettingsSaved,
+} from "./bindings";
 
 /**
  * The Project settings tab (charter-app#252): what it shows of the two files, what a save sends
@@ -90,24 +95,34 @@ const NO_LOCAL: SettingsFile = {
   fields: [],
 };
 
-/** The core, as a mock: `project_settings` answers `both`, and `save_project_settings` answers
- *  `saved` and records what it was sent. */
-function core(both: Both, saved?: (sent: Record<string, unknown>) => SettingsSaved) {
+/** The core, as a mock: `project_settings` answers `both`, `project_extensions` answers
+ *  `extensions`, and `save_project_settings` answers `saved` and records what it was sent. */
+function core(
+  both: Both,
+  saved?: (sent: Record<string, unknown>) => SettingsSaved,
+  extensions: ProjectExtension[] = [],
+) {
   const sent: Record<string, unknown>[] = [];
   let reads = 0;
+  let extensionReads = 0;
   mockIPC((cmd, args) => {
     const given = (args ?? {}) as Record<string, unknown>;
     if (cmd === "project_settings") {
       reads += 1;
       return both;
     }
+    if (cmd === "project_extensions") {
+      extensionReads += 1;
+      return extensions;
+    }
+    if (cmd === "extensions_on") return [];
     if (cmd === "save_project_settings") {
       sent.push(given);
       return saved?.(given) ?? { kind: "saved", file: both.shared };
     }
     return undefined;
   });
-  return { sent, reads: () => reads };
+  return { sent, reads: () => reads, extensionReads: () => extensionReads };
 }
 
 async function drawn() {
@@ -320,6 +335,164 @@ describe("the Project settings tab", () => {
 
     expect(screen.getByText(/Never put a secret in either file/)).toHaveTextContent(
       "vault:<vault>/<key>",
+    );
+  });
+});
+
+/** What `project_extensions` answers for a project with three extensions in three states. */
+const EXTENSIONS: ProjectExtension[] = [
+  {
+    id: "acme",
+    name: "Acme",
+    state: "needs-approval",
+    source: "shared",
+    settings: [],
+    ignored: [],
+  },
+  {
+    id: "stats",
+    name: "Persona statistics",
+    state: "off",
+    source: "local",
+    settings: [
+      {
+        key: "window",
+        title: "Window",
+        kind: "choice",
+        choices: ["7d", "30d"],
+        default: "30d",
+        value: "7d",
+        source: "shared",
+      },
+      {
+        key: "compact",
+        title: "Compact",
+        kind: "bool",
+        choices: [],
+        default: "false",
+        value: "false",
+        source: "default",
+      },
+    ],
+    ignored: [
+      "charter.local.toml sets extensions.stats.settings.nope, which stats does not declare — charter hands it nothing",
+    ],
+  },
+  { id: "solarized", name: "Solarized", state: "on", source: "default", settings: [], ignored: [] },
+];
+
+const WITH_EXTENSIONS: Both = {
+  shared: {
+    ...SHARED,
+    fields: [
+      ...SHARED.fields,
+      {
+        path: [{ key: "extensions" }, { key: "acme" }, { key: "enabled" }],
+        value: { kind: "bool", value: true },
+      },
+      {
+        path: [{ key: "extensions" }, { key: "stats" }, { key: "settings" }, { key: "window" }],
+        value: { kind: "text", value: "7d" },
+      },
+    ],
+  },
+  local: {
+    ...LOCAL,
+    fields: [
+      ...LOCAL.fields,
+      {
+        path: [{ key: "extensions" }, { key: "stats" }, { key: "enabled" }],
+        value: { kind: "bool", value: false },
+      },
+    ],
+  },
+};
+
+describe("the Extensions group (charter-app#253)", () => {
+  it("lists every extension in both sections with what it is in this project and where that comes from", async () => {
+    core(WITH_EXTENSIONS, undefined, EXTENSIONS);
+    const { shared, local } = await drawn();
+
+    for (const section of [shared, local]) {
+      const group = within(section).getByRole("group", { name: "Extensions" });
+      expect(group).toHaveTextContent(
+        "Acme: needs approval here — enabled in charter.toml, and this machine has not approved it. Approve it in Extensions.",
+      );
+      expect(group).toHaveTextContent("Persona statistics: off — turned off in charter.local.toml");
+      expect(group).toHaveTextContent("Solarized: on — installed and approved on this machine");
+    }
+    expect(within(shared).getByLabelText("Acme: enabled")).toHaveValue("on");
+    expect(within(shared).getByLabelText("Persona statistics: enabled")).toHaveValue("");
+    expect(within(local).getByLabelText("Persona statistics: enabled")).toHaveValue("off");
+    expect(within(shared).getByLabelText("Persona statistics: Window")).toHaveValue("7d");
+    expect(within(local).getByLabelText("Persona statistics: Window")).toHaveValue("");
+    expect(local).toHaveTextContent("which stats does not declare");
+  });
+
+  it("writes a toggle to the section it is in, as true or false, and not set removes the key", async () => {
+    const { sent } = core(WITH_EXTENSIONS, undefined, EXTENSIONS);
+    const { shared, local } = await drawn();
+    const user = userEvent.setup();
+
+    await user.selectOptions(within(local).getByLabelText("Persona statistics: enabled"), "on");
+    await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].which).toBe("local");
+    expect((sent[0].change as { edits: unknown }).edits).toEqual([
+      {
+        path: [{ key: "extensions" }, { key: "stats" }, { key: "enabled" }],
+        value: { kind: "bool", value: true },
+      },
+    ]);
+
+    await user.selectOptions(within(shared).getByLabelText("Acme: enabled"), "");
+    await user.click(within(shared).getByRole("button", { name: "Save charter.toml" }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect((sent[1].change as { edits: unknown }).edits).toEqual([
+      { path: [{ key: "extensions" }, { key: "acme" }, { key: "enabled" }], value: null },
+    ]);
+  });
+
+  it("writes a declared setting by its kind", async () => {
+    const { sent } = core(WITH_EXTENSIONS, undefined, EXTENSIONS);
+    const { local } = await drawn();
+    const user = userEvent.setup();
+
+    await user.selectOptions(within(local).getByLabelText("Persona statistics: Window"), "30d");
+    await user.selectOptions(within(local).getByLabelText("Persona statistics: Compact"), "on");
+    await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0].change as { edits: unknown }).edits).toEqual([
+      {
+        path: [{ key: "extensions" }, { key: "stats" }, { key: "settings" }, { key: "window" }],
+        value: { kind: "text", value: "30d" },
+      },
+      {
+        path: [{ key: "extensions" }, { key: "stats" }, { key: "settings" }, { key: "compact" }],
+        value: { kind: "bool", value: true },
+      },
+    ]);
+  });
+
+  it("asks what is in force again after a save", async () => {
+    const { extensionReads } = core(WITH_EXTENSIONS, undefined, EXTENSIONS);
+    const { local } = await drawn();
+    const user = userEvent.setup();
+    await waitFor(() => expect(extensionReads()).toBe(1));
+
+    await user.selectOptions(within(local).getByLabelText("Solarized: enabled"), "off");
+    await user.click(within(local).getByRole("button", { name: "Save charter.local.toml" }));
+
+    await waitFor(() => expect(extensionReads()).toBe(2));
+  });
+
+  it("says so when no extension is installed or named", async () => {
+    core({ shared: SHARED, local: LOCAL });
+    const { shared } = await drawn();
+
+    expect(within(shared).getByRole("group", { name: "Extensions" })).toHaveTextContent(
+      "No extension is installed on this machine or named by this project.",
     );
   });
 });

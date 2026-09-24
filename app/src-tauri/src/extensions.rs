@@ -353,6 +353,152 @@ pub async fn forget_extension(id: String) -> Result<(), String> {
     .map_err(|err| format!("forgetting that extension did not finish: {err}"))?
 }
 
+// ---------------------------------------------------------------------------------------
+// Per project (charter-app#253, ADR 0048)
+// ---------------------------------------------------------------------------------------
+
+/// One setting an extension declares, and what this project resolved it to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ProjectExtensionSetting {
+    pub key: String,
+    pub title: String,
+    /// `bool`, `text` or `choice`.
+    pub kind: String,
+    /// The words a `choice` may be; empty otherwise.
+    pub choices: Vec<String>,
+    /// What it is when no file sets it, as text (`true`/`false` for a `bool`).
+    pub default: String,
+    /// What it is in this project, as text.
+    pub value: String,
+    /// `default`, `shared` or `local`: which file it came from.
+    pub source: String,
+}
+
+/// One extension in one project, as the Project settings tab draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ProjectExtension {
+    pub id: String,
+    pub name: String,
+    /// `on`, `off`, `needs-approval` or `not-installed`.
+    pub state: String,
+    /// `default`, `shared` or `local`: which file decided `state`.
+    pub source: String,
+    pub settings: Vec<ProjectExtensionSetting>,
+    /// Each value a file set that charter did not use, and why.
+    pub ignored: Vec<String>,
+}
+
+/// Every extension this machine has installed, and every one this project's files name, with
+/// what each is in this project — `extension::project::resolve`, shaped for the wire.
+///
+/// It takes a survey, so it re-hashes every installed extension's directory: an extension that
+/// changed since its yes reads as needing approval here, which is the truth the tab is for. It
+/// is asked when the tab is opened and after it saves, never on a timer.
+#[tauri::command]
+#[specta::specta]
+pub async fn project_extensions(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+) -> Result<Vec<ProjectExtension>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        project_rows(
+            &extension::survey(&config),
+            &extension::project::Choices::read(&root),
+        )
+    })
+    .await
+    .map_err(|err| format!("reading this project's extensions did not finish: {err}"))
+}
+
+/// [`project_extensions`] without a runtime.
+fn project_rows(
+    seen: &extension::Survey,
+    choices: &extension::project::Choices,
+) -> Vec<ProjectExtension> {
+    let installed = extension::project::Installed::from_survey(seen);
+    extension::project::resolve(&installed, choices)
+        .into_iter()
+        .map(|it| {
+            let declared = installed
+                .iter()
+                .find(|one| one.id == it.id)
+                .map(|one| one.settings.as_slice())
+                .unwrap_or_default();
+            ProjectExtension {
+                settings: it
+                    .settings
+                    .iter()
+                    .filter_map(|resolved| {
+                        let setting = declared.iter().find(|d| d.key == resolved.key)?;
+                        let (kind, choices) = match &setting.kind {
+                            extension::SettingKind::Bool => ("bool", Vec::new()),
+                            extension::SettingKind::Text => ("text", Vec::new()),
+                            extension::SettingKind::Choice(words) => ("choice", words.clone()),
+                        };
+                        Some(ProjectExtensionSetting {
+                            key: setting.key.clone(),
+                            title: setting.title.clone(),
+                            kind: kind.to_owned(),
+                            choices,
+                            default: as_text(&setting.default),
+                            value: as_text(&resolved.value),
+                            source: resolved.source.as_str().to_owned(),
+                        })
+                    })
+                    .collect(),
+                id: it.id,
+                name: it.name,
+                state: it.state.as_str().to_owned(),
+                source: it.source.as_str().to_owned(),
+                ignored: it.ignored,
+            }
+        })
+        .collect()
+}
+
+fn as_text(value: &extension::SettingValue) -> String {
+    match value {
+        extension::SettingValue::Bool(b) => b.to_string(),
+        extension::SettingValue::Text(text) => text.clone(),
+    }
+}
+
+/// The ids of the extensions that are on in this project: what the window keeps of the panels,
+/// views and themes it surveyed once, while this project is in front.
+///
+/// **The record alone, and no extension's directory** — so it is cheap enough to ask for every
+/// project a window holds. What it cannot see, an extension that changed since its yes, the
+/// survey already left out of what the window holds, and the executor re-takes the fingerprint
+/// at every press. The precedence is `extension::project::resolve`'s, as everywhere else.
+#[tauri::command]
+#[specta::specta]
+pub async fn extensions_on(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+) -> Result<Vec<String>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        on_ids(
+            &extension::read(&config),
+            &extension::project::Choices::read(&root),
+        )
+    })
+    .await
+    .map_err(|err| format!("reading this project's extensions did not finish: {err}"))
+}
+
+/// [`extensions_on`] without a runtime.
+fn on_ids(loaded: &extension::Loaded, choices: &extension::project::Choices) -> Vec<String> {
+    extension::project::resolve(&extension::project::Installed::from_record(loaded), choices)
+        .into_iter()
+        .filter(extension::project::Effective::is_on)
+        .map(|it| it.id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +622,53 @@ mod tests {
         let listed = listed(&extension::survey(&config));
 
         assert_eq!(listed.built_in_themes, extension::BUILT_IN_THEMES.to_vec());
+    }
+
+    #[test]
+    fn a_project_that_turns_an_approved_extension_off_has_it_off_and_says_which_file() {
+        let (_dir, at, config) = made();
+        let found = extension::install(&config, &at).expect("installed");
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        let choices = extension::project::Choices::from_text(
+            None,
+            Some("[extensions.solarized]\nenabled = false\n"),
+        );
+
+        let rows = project_rows(&extension::survey(&config), &choices);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.id.as_str(), row.state.as_str(), row.source.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("solarized", "off", "local")]
+        );
+        assert_eq!(
+            on_ids(&extension::read(&config), &choices),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            on_ids(
+                &extension::read(&config),
+                &extension::project::Choices::default()
+            ),
+            vec!["solarized".to_owned()],
+            "a project that says nothing kept the machine-wide answer"
+        );
+    }
+
+    #[test]
+    fn a_project_that_wants_an_unapproved_extension_reads_as_needing_approval_here() {
+        let (_dir, at, config) = made();
+        extension::install(&config, &at).expect("installed");
+        let choices = extension::project::Choices::from_text(
+            Some("[extensions.solarized]\nenabled = true\n"),
+            None,
+        );
+
+        let rows = project_rows(&extension::survey(&config), &choices);
+        assert_eq!(
+            (rows[0].state.as_str(), rows[0].source.as_str()),
+            ("needs-approval", "shared")
+        );
+        assert!(on_ids(&extension::read(&config), &choices).is_empty());
     }
 }

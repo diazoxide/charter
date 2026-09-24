@@ -21,6 +21,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refuse when it next reads the file, in the same words: a forge it cannot resolve, a profile
   in the committed file, a value that looks like a credential. Local is created on the first
   save, and never where git would commit it. ([#252](https://github.com/diazoxide/charter-app/issues/252))
+- **Extensions per project.** Each project can turn an installed extension on or off, and set
+  what it declares, in either section of Project settings: Shared for the team, Local for you,
+  and Local wins key by key. The tab shows every extension with what it is in this project —
+  on, off, *needs approval here*, or *not installed here* — and which file decided it. Approval
+  stays with this machine: a project that enables an extension you have not approved leaves it
+  off until you approve it in Extensions. A project that says nothing keeps every approved
+  extension on, as before. Panels, views and themes follow the project in front, and a view
+  refuses to run in a project that turned its extension off. ([#253](https://github.com/diazoxide/charter-app/issues/253))
 
 ### Fixed
 

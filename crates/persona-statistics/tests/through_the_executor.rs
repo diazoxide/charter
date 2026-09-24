@@ -83,6 +83,8 @@ impl Installed {
         let plane = self.plane();
         executor.ask(
             &self.config(),
+            // What the plane's own files say about extensions, as the window reads them.
+            &charter_core::extension::project::Choices::read(&plane),
             "persona-statistics",
             "statistics",
             focus,

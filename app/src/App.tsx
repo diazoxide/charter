@@ -27,6 +27,8 @@ import { useAboutThisMachine } from "./windowprefs";
 import { ApprovePlane } from "./ApprovePlane";
 import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
+import { drawThemeFor } from "./Extensions";
+import { useExtensionsOn } from "./extensionsOn";
 import { useContributedPanels } from "./Panels";
 import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
@@ -514,6 +516,16 @@ function App() {
    *  Only once the core has said what the launch resolved and the restore has finished
    *  opening what it remembered: both are about to decide whether there is a project here. */
   const openerUp = inFront === undefined && launch !== undefined && !restoring;
+  /** What the project in front has on (charter-app#253), for the one thing that is the window's
+   *  and not a project's to draw: the theme. */
+  const onInFront = useExtensionsOn(inFront);
+  // The theme the project in front may have, drawn once it has said what it has on — and every
+  // approved extension's with no project in front, which is what the window drew before projects
+  // had a say (ADR 0048). After the first frame, like every extension theme (`Extensions.tsx`).
+  useEffect(() => {
+    if (inFront === undefined) void drawThemeFor("every");
+    else if (onInFront !== undefined) void drawThemeFor(onInFront);
+  }, [inFront, onInFront]);
   /** What the project in front last said about itself, when it has said anything yet. The
    *  palette lists its catalogue and runs its rows, so a row reaches that project's live
    *  arrangement and no other's. */

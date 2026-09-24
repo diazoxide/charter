@@ -125,7 +125,13 @@ const STATISTICS = {
 
 /** The core, answering every command the window sends, and recording what it was asked. */
 function core(
-  on: { reopened?: ViewTab[]; chats?: (typeof OPEN_CHAT)[]; offered?: (typeof STATISTICS)[] } = {},
+  on: {
+    reopened?: ViewTab[];
+    chats?: (typeof OPEN_CHAT)[];
+    offered?: (typeof STATISTICS)[];
+    /** What `extensions_on` answers: the extensions this project has on (charter-app#253). */
+    extensionsOn?: string[];
+  } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC((cmd, args) => {
@@ -140,6 +146,7 @@ function core(
     if (cmd === "running_sessions") return [];
     if (cmd === "extension_views") return on.offered ?? [];
     if (cmd === "extension_panels") return [];
+    if (cmd === "extensions_on") return on.extensionsOn ?? ["persona-statistics"];
     if (cmd === "workspace_panels")
       return {
         workspace: "alpha",
@@ -365,5 +372,28 @@ describe("view tabs at a relaunch", () => {
     expect(told.length).toBeGreaterThan(0);
     for (const one of told)
       expect((one.args.views as ViewTab[]).map((view) => view.key)).toEqual(["steward"]);
+  });
+});
+
+describe("a project's own extensions (charter-app#253)", () => {
+  it("offers an extension's view only while the project in front has that extension on", async () => {
+    core({ offered: [STATISTICS], extensionsOn: ["persona-statistics"] });
+    render(<App />);
+    const panel = await screen.findByTestId("panel-personas");
+    expect(await within(panel).findByRole("button", { name: /Statistics/ })).toBeInTheDocument();
+  });
+
+  it("offers nothing from an extension the project turned off", async () => {
+    const { asked } = core({ offered: [STATISTICS], extensionsOn: [] });
+    render(<App />);
+    const panel = await screen.findByTestId("panel-personas");
+    await waitFor(() =>
+      expect(asked.some((one) => one.cmd === "extensions_on" && one.args.plane === PLANE)).toBe(
+        true,
+      ),
+    );
+    await within(panel).findByRole("button", { name: /steward/ });
+
+    expect(within(panel).queryByRole("button", { name: /Statistics/ })).toBeNull();
   });
 });

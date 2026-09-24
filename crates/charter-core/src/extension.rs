@@ -28,10 +28,14 @@
 //!
 //! ADR 0022's argument, one level up. A harness profile is machine-local because a committed
 //! file must not decide how a chat launches; an extension that contributed a palette command
-//! would run on a click, with even less in front of it. So there is no `[extension.<name>]`
-//! table in `charter.toml`, this module never reads a plane, and a project cannot bring one
-//! with it. That also settles the collision above by construction: the two uses of the word
-//! can never appear in one list, because only one of them can come out of a plane.
+//! would run on a click, with even less in front of it. So a project cannot bring one with
+//! it: nothing in a plane names an extension's directory, and this module's registry never reads
+//! a plane. What a plane MAY say, since charter-app#253, is which of the extensions this machine
+//! already approved it has on, and what it sets for them — `[extensions.<id>]`, read by
+//! [`project`] and never by the registry, and never in place of the approval (ADR 0048).
+//!
+//! That also settles the collision above by construction: the two uses of the word can never
+//! appear in one list, because only one of them can come out of a plane.
 //!
 //! # Where the record lives, and why ADR 0034 needs no amendment
 //!
@@ -153,6 +157,8 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+
+pub mod project;
 
 /// The registry, inside [`crate::machine::DIR`] and beside [`crate::machine::FILE`].
 pub const RECORD: &str = "extensions.json";
@@ -324,7 +330,208 @@ pub struct Manifest {
     /// Absent is the ordinary case: an extension that never writes beside itself declares no
     /// state directory and has no exclusion at all.
     pub state: Option<String>,
+    /// The settings a project may choose for it (charter-app#253, ADR 0048), handed to
+    /// [`Self::program`] with each question. Declaring one requires declaring the program: a
+    /// setting nothing reads is a control that does nothing.
+    pub settings: Vec<Setting>,
 }
+
+/// One setting an extension declares: a key a project sets in `[extensions.<id>.settings]`.
+///
+/// **Declared in the manifest, so it is inside the fingerprint** and the operator is shown it
+/// before saying yes. A project chooses a value; it cannot add a key, and a value that is not
+/// one this declaration accepts is ignored with a sentence (`project::resolve`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Setting {
+    /// One segment: letters, digits, '-' and '_'.
+    pub key: String,
+    /// What the form calls it.
+    pub title: String,
+    pub kind: SettingKind,
+    /// What it is when no file sets it.
+    pub default: SettingValue,
+}
+
+/// What a setting holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingKind {
+    Bool,
+    Text,
+    /// One of these words, and nothing else.
+    Choice(Vec<String>),
+}
+
+/// A setting's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingValue {
+    Bool(bool),
+    Text(String),
+}
+
+impl SettingValue {
+    /// As the program is handed it.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Bool(b) => (*b).into(),
+            Self::Text(text) => text.as_str().into(),
+        }
+    }
+}
+
+/// The most settings one extension may declare. Each one is a row in two forms.
+const MOST_SETTINGS: usize = 16;
+
+/// The most a text setting may be, declared or set. A setting is a word or a line, not a file.
+pub const MOST_SETTING_BYTES: usize = 200;
+
+impl Setting {
+    /// `value`, as found in a settings file, if this setting accepts it — or why not, as the end
+    /// of a sentence that starts with what set it.
+    pub fn accepts(&self, value: &toml::Value) -> Result<SettingValue, String> {
+        match (&self.kind, value) {
+            (SettingKind::Bool, toml::Value::Boolean(b)) => Ok(SettingValue::Bool(*b)),
+            (SettingKind::Bool, _) => Err("and it is true or false".into()),
+            (SettingKind::Text, toml::Value::String(text)) if text_ok(text) => {
+                Ok(SettingValue::Text(text.clone()))
+            }
+            (SettingKind::Text, _) => Err(format!(
+                "and it is one line of text of at most {MOST_SETTING_BYTES} bytes"
+            )),
+            (SettingKind::Choice(words), toml::Value::String(text))
+                if words.iter().any(|word| word == text) =>
+            {
+                Ok(SettingValue::Text(text.clone()))
+            }
+            (SettingKind::Choice(words), _) => {
+                Err(format!("and it is one of {}", words.join(", ")))
+            }
+        }
+    }
+}
+
+/// Whether `text` may be a text setting: short, and nothing in it draws as nothing.
+fn text_ok(text: &str) -> bool {
+    text.len() <= MOST_SETTING_BYTES && !text.contains(crate::panel::undrawable)
+}
+
+/// The settings a manifest's top-level `settings` declares, or why charter will not read them.
+fn settings_of(value: &serde_json::Value, program: Option<&str>) -> Result<Vec<Setting>, String> {
+    let list = value
+        .as_array()
+        .ok_or("has a 'settings' that is not an array")?;
+    if list.is_empty() {
+        return Ok(Vec::new());
+    }
+    if program.is_none() {
+        return Err(
+            "declares settings and no program ('runs') to hand them to, so a project \
+                    would be choosing values nothing reads"
+                .into(),
+        );
+    }
+    if list.len() > MOST_SETTINGS {
+        return Err(format!(
+            "declares {} settings, and charter draws at most {MOST_SETTINGS} for one extension",
+            list.len()
+        ));
+    }
+    let mut out: Vec<Setting> = Vec::with_capacity(list.len());
+    for (at, raw) in list.iter().enumerate() {
+        let object = raw
+            .as_object()
+            .ok_or_else(|| format!("declares a setting at {at} that is not an object"))?;
+        for key in object.keys() {
+            if !SETTING_KEYS.contains(&key.as_str()) {
+                return Err(format!(
+                    "declares a setting at {at} carrying {key:?}, which is not part of what a \
+                     setting may say — a setting is {}",
+                    SETTING_KEYS.join(", ")
+                ));
+            }
+        }
+        let key = object
+            .get("key")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("declares a setting at {at} with no key"))?;
+        if !project::key_ok(key) {
+            return Err(format!(
+                "declares the setting {key:?}, and a setting's key is letters, digits, '-' and \
+                 '_', starting with a letter or a digit"
+            ));
+        }
+        if out.iter().any(|seen| seen.key == key) {
+            return Err(format!("declares two settings called {key:?}"));
+        }
+        let title = object
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .unwrap_or(key);
+        if !text_ok(title) {
+            return Err(format!(
+                "declares the setting {key:?} with a title charter will not draw: it is longer \
+                 than {MOST_SETTING_BYTES} bytes or holds a control or invisible formatting \
+                 character"
+            ));
+        }
+        let kind = match object.get("type").and_then(serde_json::Value::as_str) {
+            Some("bool") => SettingKind::Bool,
+            Some("text") => SettingKind::Text,
+            Some("choice") => {
+                let words: Vec<String> = object
+                    .get("choices")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|words| {
+                        words
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if words.is_empty() || words.iter().any(|word| word.is_empty() || !text_ok(word)) {
+                    return Err(format!(
+                        "declares the choice setting {key:?} without a list of words to choose \
+                         from"
+                    ));
+                }
+                SettingKind::Choice(words)
+            }
+            _ => {
+                return Err(format!(
+                    "declares the setting {key:?} with no type charter knows — a setting's type \
+                     is bool, text or choice"
+                ));
+            }
+        };
+        let mut setting = Setting {
+            key: key.to_owned(),
+            title: title.to_owned(),
+            default: match &kind {
+                SettingKind::Bool => SettingValue::Bool(false),
+                SettingKind::Text => SettingValue::Text(String::new()),
+                SettingKind::Choice(words) => SettingValue::Text(words[0].clone()),
+            },
+            kind,
+        };
+        if let Some(default) = object.get("default") {
+            let as_toml = match default {
+                serde_json::Value::Bool(b) => toml::Value::Boolean(*b),
+                serde_json::Value::String(text) => toml::Value::String(text.clone()),
+                _ => toml::Value::Array(Vec::new()),
+            };
+            setting.default = setting.accepts(&as_toml).map_err(|why| {
+                format!("declares the setting {key:?} with a default it would not accept, {why}")
+            })?;
+        }
+        out.push(setting);
+    }
+    Ok(out)
+}
+
+/// The keys a declared setting may carry.
+const SETTING_KEYS: [&str; 5] = ["key", "title", "type", "choices", "default"];
 
 /// One view an extension contributes: a surface the operator opens, filled by its program.
 ///
@@ -781,6 +988,11 @@ fn parse(text: &str) -> Result<Manifest, String> {
         }
     };
 
+    let settings = match doc.get("settings") {
+        None => Vec::new(),
+        Some(value) => settings_of(value, program.as_deref())?,
+    };
+
     Ok(Manifest {
         id: id.to_owned(),
         name,
@@ -789,6 +1001,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
         views,
         program,
         state,
+        settings,
     })
 }
 
@@ -1962,6 +2175,21 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
             crate::handed::what(view.about)
         )
     }));
+    if !found.manifest.settings.is_empty() {
+        // What a project's files can hand the program is part of what the yes covers: a
+        // committed file choosing a value the program then acts on is a channel the operator is
+        // owed a line about (ADR 0048).
+        let titles: Vec<&str> = found
+            .manifest
+            .settings
+            .iter()
+            .map(|setting| setting.title.as_str())
+            .collect();
+        declares.push(format!(
+            "settings a project may choose, handed to its program with each question: {}",
+            titles.join(", ")
+        ));
+    }
     if let Some(program) = &found.manifest.program {
         // **Named as a program charter starts, with what bounds charter puts on it and what it
         // does not.** ADR 0041's amendment: the prompt says what charter will do, and says that
