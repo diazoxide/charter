@@ -16,7 +16,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::registry::{self, Vault};
-use super::{Ctx, VaultError, fingerprint, onepassword, plain_file, reference};
+use super::{Ctx, VaultError, fingerprint, keyring, onepassword, plain_file, reference};
 
 /// One line in charter's voice — `util.info/ok/warn/err`, all on stderr.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +57,7 @@ pub fn provider(ctx: &Ctx, name: &str) -> Result<Vault, VaultError> {
 /// The value of `key`, through the vault's own provider.
 pub fn get_value(ctx: &Ctx, v: &Vault, key: &str) -> Result<String, VaultError> {
     match v.provider.as_str() {
+        "keyring" => keyring::get(ctx, v, key),
         "plain-file" => plain_file::get(ctx, v, key),
         "reference" => reference::get(ctx, v, key),
         _ => onepassword::get(ctx, v, key),
@@ -66,6 +67,7 @@ pub fn get_value(ctx: &Ctx, v: &Vault, key: &str) -> Result<String, VaultError> 
 /// The key names, never the values.
 pub fn keys(ctx: &Ctx, v: &Vault) -> Result<Vec<String>, VaultError> {
     match v.provider.as_str() {
+        "keyring" => keyring::keys(ctx, v),
         "plain-file" => plain_file::keys(ctx, v),
         "reference" => reference::keys(ctx, v),
         _ => onepassword::keys(ctx, v),
@@ -75,6 +77,7 @@ pub fn keys(ctx: &Ctx, v: &Vault) -> Result<Vec<String>, VaultError> {
 /// Store a value.
 pub fn set_value(ctx: &Ctx, v: &Vault, key: &str, value: &str) -> Result<(), VaultError> {
     match v.provider.as_str() {
+        "keyring" => keyring::set(ctx, v, key, value),
         "plain-file" => plain_file::set(ctx, v, key, value, chrono::Local::now().date_naive()),
         "reference" => reference::set(ctx, v, key, value),
         _ => onepassword::set(ctx, v, key, value),
@@ -84,6 +87,7 @@ pub fn set_value(ctx: &Ctx, v: &Vault, key: &str, value: &str) -> Result<(), Vau
 /// Delete a value.
 pub fn delete(ctx: &Ctx, v: &Vault, key: &str) -> Result<(), VaultError> {
     match v.provider.as_str() {
+        "keyring" => keyring::delete(ctx, v, key),
         "plain-file" => plain_file::delete(ctx, v, key),
         "reference" => reference::delete(ctx, v, key),
         _ => onepassword::delete(ctx, v, key),
@@ -93,6 +97,7 @@ pub fn delete(ctx: &Ctx, v: &Vault, key: &str) -> Result<(), VaultError> {
 /// `health()`: `(ok, detail)`, never a value.
 pub fn health(ctx: &Ctx, v: &Vault) -> (bool, String) {
     match v.provider.as_str() {
+        "keyring" => keyring::health(ctx, v),
         "plain-file" => plain_file::health(ctx, v),
         "reference" => reference::health(ctx, v),
         _ => onepassword::health(ctx, v),
@@ -210,8 +215,9 @@ pub fn get(ctx: &Ctx, vault: &str, key: &str, reveal: bool, force: bool, io: &mu
     0
 }
 
-/// `cmd_secret_audit`: secrets older than `days`, for rotation hygiene. Only a plain-file vault
-/// tracks ages; the others manage rotation externally.
+/// `cmd_secret_audit`: secrets older than `days`, for rotation hygiene. A plain-file vault and a
+/// keyring vault track ages (the sidecar, the keys index); the others manage rotation
+/// externally.
 pub fn audit(ctx: &Ctx, vault: &str, days: i64, io: &mut dyn Io) -> i32 {
     let v = match provider(ctx, vault) {
         Ok(v) => v,
@@ -220,14 +226,19 @@ pub fn audit(ctx: &Ctx, vault: &str, days: i64, io: &mut dyn Io) -> i32 {
             return 1;
         }
     };
-    if v.provider != "plain-file" {
-        io.say(Say::Info(format!(
-            "vault '{vault}' ({}) manages rotation externally — no age tracking.",
-            v.provider
-        )));
-        return 0;
-    }
-    let ages = match plain_file::ages(ctx, &v, chrono::Local::now().date_naive()) {
+    let today = chrono::Local::now().date_naive();
+    let ages = match v.provider.as_str() {
+        "plain-file" => plain_file::ages(ctx, &v, today),
+        "keyring" => keyring::ages(ctx, &v, today),
+        _ => {
+            io.say(Say::Info(format!(
+                "vault '{vault}' ({}) manages rotation externally — no age tracking.",
+                v.provider
+            )));
+            return 0;
+        }
+    };
+    let ages = match ages {
         Ok(a) => a,
         Err(e) => {
             io.say(Say::Err(e.message));
@@ -431,7 +442,7 @@ pub fn persona_vault(ctx: &Ctx, name: &str) -> Result<String, String> {
     if !registered {
         return Err(format!(
             "persona '{name}' vault '{vault}' isn't set up on this machine. Create it: charter \
-             vault add {vault} --provider plain-file --persona {name}."
+             vault add {vault} --persona {name}."
         ));
     }
     Ok(vault)

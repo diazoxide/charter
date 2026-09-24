@@ -8,7 +8,7 @@ later prompt — so the transcript is not a safe place for a value, whatever hol
 ## The commands
 
 ```bash
-charter vault add devops --provider plain-file --persona devops   # register (local by default)
+charter vault add devops --persona devops                          # a keyring vault, local by default
 charter secret set devops API_TOKEN --stdin                         # value on stdin, never argv
 charter secret list devops                                          # key names, never values
 charter secret exec devops --env TOKEN=API_TOKEN -- curl -H "Authorization: Bearer $TOKEN" …
@@ -38,7 +38,7 @@ charter persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active
   and charter's own stdin, stdout or stderr under any name are refused before the value is
   read. After that it is an ordinary file: no guard knows charter put a credential there.
 - **`secret set`**, **`secret rm`** and **`secret audit`** (secrets older than `--days`, for a
-  plain-file vault) write and inspect; `set` refuses an empty value unless `--allow-empty`.
+  keyring or plain-file vault) write and inspect; `set` refuses an empty value unless `--allow-empty`.
 - **`persona secret <verb> [--persona <name>]`** runs the same verb on the vault of the active
   persona: its `vault:` field, else the vault tagged with it. `vault: none` says the persona
   holds no credentials.
@@ -51,8 +51,20 @@ the keys and the command — never a value.
 
 ### Providers
 
-- **`plain-file`** — a JSON object of key → value at 0600, `.charter/vaults/<vault>.json` by
-  default. It is **plaintext on disk**. Inside a plane that is a git repository, `vault add`
+- **`keyring`**, the default for `vault add` — the operating system's own credential store:
+  the login Keychain on macOS, the Secret Service on Linux (ADR 0047). Each secret is one item,
+  service `charter/<vault>/<8 hex>` (random per vault, made at its first write) and account
+  `<key>`. A keyring cannot be asked what it holds, so the key names live in a keys index,
+  `.charter/vaults/<vault>.keys.json` (0600, gitignored with the rest of `.charter/`), with each
+  key's size band and when it was last written — never a value. `list`, `vault list` and
+  `audit` read only the index, so they never make the Keychain ask you anything; `get`, `exec`,
+  `cp` and `vault verify` read the item. On macOS an item is readable without a prompt only by
+  the program that created it: any other program — `security find-generic-password -w`, a
+  script, and also the other charter binary (the app and the `charter` command are two) — makes
+  the Keychain ask you first, and "Always Allow" adds it. A charter update is a new binary, so
+  with an ad-hoc signed build the first read after an update asks again.
+- **`plain-file`** (`--provider plain-file`) — a JSON object of key → value at 0600,
+  `.charter/vaults/<vault>.json` by default. It is **plaintext on disk**. Inside a plane that is a git repository, `vault add`
   refuses a `--file` git would commit, and `secret set` checks again before it writes, because
   the registry can be edited by hand or arrive in a commit. A file git already ignores, and
   one outside the plane, is accepted. `vault add` also refuses a file another registered vault

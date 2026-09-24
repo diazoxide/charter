@@ -11,6 +11,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A vault can live in your system's own credential store: the Keychain on macOS, the Secret
+  Service on Linux. `charter vault add <name>` makes one by default, and every `charter secret`
+  and `charter vault` command works on it as on the other kinds. Each secret is its own
+  Keychain item, and on macOS only the charter program that stored it can read it without the
+  Keychain asking you first. A plaintext vault file is now something you ask for, with
+  `--provider plain-file`. ([#233](https://github.com/diazoxide/charter-app/issues/233))
+
 ## [0.1.1] - 2026-09-24
 
 0.1.1 brings back what 0.1.0 left out and a working plane still used: vault access through

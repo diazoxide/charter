@@ -14,10 +14,12 @@
 //! Every route by which a value does leave — `exec`, `cp` and `get --reveal` — writes one
 //! trace event naming the vault, the keys and the command, never a value ([`cmd`]).
 //!
-//! Three providers: `plain-file` (a 0600 JSON object on disk), `reference` (`op://` and
-//! `vault://` URIs resolved through the vendor's CLI at read time) and `1password` (one item
-//! per vault, whose fields are the secrets, read and written through `op`). The registry that
-//! names them is two files, merged per field ([`registry`]).
+//! Four providers: `keyring` (the operating system's own credential store, one item per
+//! secret, the default for a new vault — [`keyring`], ADR 0047), `plain-file` (a 0600 JSON
+//! object on disk), `reference` (`op://` and `vault://` URIs resolved through the vendor's CLI at
+//! read time) and `1password` (one item per vault, whose fields are the secrets, read and
+//! written through `op`). The registry that names them is two files, merged per field
+//! ([`registry`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -26,6 +28,7 @@ pub mod cmd;
 pub mod dotenv;
 pub mod exec;
 pub mod fingerprint;
+pub mod keyring;
 pub mod onepassword;
 pub mod plain_file;
 pub mod reference;

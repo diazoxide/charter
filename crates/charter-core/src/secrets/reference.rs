@@ -252,7 +252,7 @@ pub fn set(ctx: &Ctx, vault: &Vault, key: &str, value: &str) -> Result<(), Vault
              create one. To have charter own the item — creating it and storing the value, with \
              the value on stdin and never in argv:\n      charter vault add <name> --provider \
              1password --op-vault <VAULT>\n      charter secret set <name> {key} --from-file \
-             <path>\n  To keep the value on this machine instead: --provider plain-file.\n  To \
+             <path>\n  To keep the value on this machine instead: --provider keyring.\n  To \
              register an item you created elsewhere: pass its URI here.",
             schemes.join(", ")
         )));

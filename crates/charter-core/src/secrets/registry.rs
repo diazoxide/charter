@@ -16,7 +16,7 @@ use serde_json::{Map, Value};
 use super::{Ctx, VaultError};
 
 /// Provider ids this charter implements — `registry.PROVIDERS`.
-pub const PROVIDERS: [&str; 3] = ["1password", "plain-file", "reference"];
+pub const PROVIDERS: [&str; 4] = ["1password", "keyring", "plain-file", "reference"];
 
 /// Config keys that never travel — `registry.LOCAL_ONLY_KEYS`.
 pub const LOCAL_ONLY_KEYS: [&str; 1] = ["account"];
@@ -172,8 +172,7 @@ pub fn vault_in(doc: &Map<String, Value>, name: &str) -> Result<Vault, VaultErro
         Some(e) if !e.is_empty() => e.clone(),
         _ => {
             return Err(VaultError::not_configured(format!(
-                "no vault named '{name}'. Register one with `charter vault add {name} \
-                 --provider plain-file --file <path>`."
+                "no vault named '{name}'. Register one with `charter vault add {name}`."
             )));
         }
     };

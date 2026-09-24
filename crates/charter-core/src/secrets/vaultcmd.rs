@@ -317,6 +317,18 @@ pub fn add(ctx: &Ctx, req: &AddRequest, io: &mut dyn Io) -> i32 {
                 req.name
             )));
         }
+        "keyring" => {
+            io.say(Say::Info(format!(
+                "  charter keeps each secret as one item in {}, and the key names — never the \
+                 values — in {}.",
+                super::keyring::STORE_NAME,
+                super::short_path(&ctx.root, &super::keyring::index_path(ctx, &v))
+            )));
+            io.say(Say::Info(format!(
+                "  add secrets with: charter secret set {} <key> --stdin",
+                req.name
+            )));
+        }
         "reference" => {
             io.say(Say::Info(
                 "  stores op:// or vault:// URIs; values are fetched at read time.".into(),
@@ -361,9 +373,7 @@ pub fn list(ctx: &Ctx, io: &mut dyn Io) -> i32 {
     let vs = registry::vaults(&doc);
     if vs.is_empty() {
         io.say(Say::Info(
-            "No vaults configured. Add one: charter vault add <name> --provider plain-file --file \
-             <path>"
-                .into(),
+            "No vaults configured. Add one: charter vault add <name>".into(),
         ));
         return 0;
     }
