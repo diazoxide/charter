@@ -571,7 +571,10 @@ fn todo_digest(ask: &Ask, workspace: &str) -> Option<String> {
 
 /// `workspace.last_active`: the newest mtime among a workspace's own files and the session
 /// pointers naming it, as seconds since the epoch.
-fn last_active(root: &Path, name: &str) -> Option<f64> {
+///
+/// Also what [`crate::machine::Store::pin_the_most_active`] ranks a plane's workspaces by, so
+/// "the most recently active" means the same thing there as in the briefing's list of them.
+pub(crate) fn last_active(root: &Path, name: &str) -> Option<f64> {
     let mtime = |p: &Path| {
         std::fs::metadata(p)
             .and_then(|m| m.modified())
