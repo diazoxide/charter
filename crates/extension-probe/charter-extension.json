@@ -1,8 +1,18 @@
 {
-  "version": 3,
+  "version": 2,
   "id": "extension-probe",
   "name": "Extension probe",
-  "capabilities": ["probe", "badges", "repo-columns", "palette", "actions", "writes", "cli"],
+  "capabilities": [
+    "probe",
+    "badges",
+    "repo-columns",
+    "palette",
+    "actions",
+    "writes",
+    "events",
+    "briefing",
+    "cli"
+  ],
   "state": "state",
   "contributes": {
     "runs": "bin/extension-probe",
@@ -40,6 +50,21 @@
       { "id": "jot", "title": "Jot a note", "action": "jot" }
     ],
     "writes": ["notes/"],
+    "events": {
+      "hears": [
+        "workspace-focused",
+        "workspace-created",
+        "workspace-forked",
+        "workspace-removed",
+        "handoff-created",
+        "session-started",
+        "plane-saved"
+      ],
+      "workspace_folder": "probe"
+    },
+    "briefing": {
+      "title": "Probe"
+    },
     "cli": [
       { "name": "echo", "title": "Say its words back", "writes": false },
       { "name": "fail", "title": "Exit with the status it is given", "writes": false },

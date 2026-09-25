@@ -131,6 +131,31 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
             now: hook.now,
         };
         let mut parts = charter_core::briefing::parts(&ask, piece);
+        let workspace = charter_core::briefing::workspace_of(&ask);
+        // Each extension that is on here and adds a section, quoted as data under its name —
+        // and each that hears it told a chat started — within one bounded wait
+        // (charter-app#343). None of it can hold the start past `Bounds::SESSION_START`, and a
+        // machine with no config directory has no extension to ask.
+        if let Some(config) = charter_core::machine::config_root_if_there() {
+            use charter_core::extension::briefing::{self, Asked, Bounds};
+            // `BuiltIn::none()`, as `charter statusline`: the binary does not know where an app
+            // bundle is, so a built-in extension neither briefs nor hears a chat start
+            // (ADR 0041's amendment for charter-app#343).
+            let briefed = briefing::at_session_start(
+                &config,
+                &charter_core::extension::BuiltIn::none(),
+                &charter_core::extension::project::Choices::read_in(hook.root, Some(&workspace)),
+                &Asked {
+                    workspace: workspace.clone(),
+                    persona: env(charter_core::active::PERSONA_ENV).filter(|it| !it.is_empty()),
+                },
+                Bounds::SESSION_START,
+            );
+            parts.extend(briefed.parts);
+            for note in briefed.notes {
+                eprintln!("charter: {note}");
+            }
+        }
         // Reports kept for this workspace because the chat that asked for them has closed
         // (charter-app#259): the next chat to START here is the one that learns them — never a
         // chat already running that compacted or cleared, which would take them as a side
@@ -140,7 +165,6 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
             .get("source")
             .and_then(|v| v.as_str())
             .is_none_or(|source| source == "startup");
-        let workspace = charter_core::briefing::workspace_of(&ask);
         let kept = if starting {
             charter_core::handback::take(
                 hook.root,

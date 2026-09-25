@@ -289,6 +289,68 @@ pub fn open_or_update(
     }
 }
 
+/// Where a pull or merge request stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum State {
+    Open,
+    /// Merged, as `commit` on the target branch: the merge commit, the squash commit, or the
+    /// last commit a rebase merge wrote. `None` when the forge names none.
+    Merged {
+        commit: Option<String>,
+    },
+    /// Closed without merging.
+    Closed,
+}
+
+/// Where `pr` stands on the forge: open, merged, or closed without merging.
+///
+/// A save asks this of the PR it last opened, to learn whether the target branch now holds
+/// the plane's work (charter-app#298). A lookup that fails, or an answer that is none of the
+/// three, is an error and never "open": the caller then leaves the plane where it is.
+pub fn state(repo: &Repo, pr: &Pr) -> Result<State, String> {
+    let (path, doing) = match repo.forge.kind {
+        Kind::GitHub => {
+            let (owner, name) = repo.owner_name();
+            (
+                format!("repos/{}/{}/pulls/{}", quote(owner), quote(name), pr.number),
+                format!("reading pull request #{} of {}", pr.number, repo.path),
+            )
+        }
+        Kind::GitLab => (
+            format!(
+                "projects/{}/merge_requests/{}",
+                quote(&repo.path),
+                pr.number
+            ),
+            format!("reading merge request !{} of {}", pr.number, repo.path),
+        ),
+    };
+    let record = repo.ask(repo.api(None, &path, &[]), &doing)?;
+    let word = record["state"].as_str().unwrap_or("");
+    // GitHub says `closed` for a merged PR too; `merged` (and `merged_at`) tell the two apart.
+    let merged = record["merged"] == Value::Bool(true) || record["merged_at"].is_string();
+    // The commit the merge made on the target: GitHub's `merge_commit_sha` (the merge commit,
+    // the squash commit, or a rebase's last commit); GitLab's squash commit, else its merge
+    // commit. A fast-forward merge on GitLab names neither.
+    let named = |key: &str| {
+        record[key]
+            .as_str()
+            .filter(|sha| !sha.is_empty())
+            .map(str::to_string)
+    };
+    let commit = match repo.forge.kind {
+        Kind::GitHub => named("merge_commit_sha"),
+        Kind::GitLab => named("squash_commit_sha").or_else(|| named("merge_commit_sha")),
+    };
+    match (repo.forge.kind, word) {
+        (Kind::GitHub, "open") | (Kind::GitLab, "opened" | "locked") => Ok(State::Open),
+        (Kind::GitHub, "closed") if merged => Ok(State::Merged { commit }),
+        (Kind::GitHub, "closed") | (Kind::GitLab, "closed") => Ok(State::Closed),
+        (Kind::GitLab, "merged") => Ok(State::Merged { commit }),
+        _ => Err(format!("{doing}: the forge answered the state {word:?}")),
+    }
+}
+
 /// What a GitHub repo allows, and the PR's node id, in one question.
 const SETTINGS: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed rebaseMergeAllowed mergeCommitAllowed squashMergeAllowed pullRequest(number:$number){id}}}";
 

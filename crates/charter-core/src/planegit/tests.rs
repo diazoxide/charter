@@ -1452,12 +1452,23 @@ fn a_plane_whose_mode_is_commit_is_committed_and_the_remote_is_left_where_it_was
 }
 
 #[test]
-fn a_pr_mode_never_pushes_to_the_target_branch_before_charter_can_open_the_pr() {
-    // charter-app#298 builds the rolling save branch. Until then a PR mode commits and stops:
-    // pushing to the target branch is exactly what the operator chose a PR mode to prevent.
+fn a_pr_mode_whose_origin_is_on_no_forge_charter_knows_commits_and_says_so() {
+    // A PR mode opens its PR through the GitHub or GitLab adapter; on any other host a save
+    // commits and goes no further, and the plane carries a notice rather than a block
+    // (charter-app#295). The PR modes against a forge are
+    // `tests/a_pr_mode_save_keeps_one_pr_open_…`, where a stand-in `gh` answers: here nothing
+    // may reach a real one.
     for mode in ["pr", "pr-merge"] {
         let fixture = Fixture::plane();
-        let bare = fixture.with_a_remote();
+        run(
+            &fixture.root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@forge.example.invalid:acme/plane.git",
+            ],
+        );
         fixture.with_settings(&format!("[plane]\nmode = \"{mode}\"\n"));
         std::fs::write(fixture.root.join("work.md"), "work").unwrap();
 
@@ -1465,19 +1476,66 @@ fn a_pr_mode_never_pushes_to_the_target_branch_before_charter_can_open_the_pr() 
 
         assert_eq!(code, 0, "{said}");
         assert_eq!(fixture.head_subject(), "a save");
+        assert!(said.contains("committed only"), "{said}");
+        assert!(!said.contains("cannot open the pull request"), "{said}");
+        let line = journal(&fixture.root).pop().expect("a journal line");
+        assert_eq!(line["outcome"], "committed", "{mode}");
+        let standing = standing(&fixture.root);
+        assert_ne!(standing.stage, Stage::Blocked, "{mode}: {standing:?}");
+        assert!(!standing.pushes, "{mode}");
         assert!(
-            said.contains(&format!(
-                "Not pushed: [plane] mode is {mode} (charter.toml), and this charter cannot \
-                 open the pull request yet."
-            )),
-            "{said}"
-        );
-        assert_eq!(
-            ask(&bare, &["for-each-ref", "--format=%(refname)"]).trim(),
-            "",
-            "{mode}"
+            standing
+                .notice
+                .as_deref()
+                .is_some_and(|why| why.contains("GitHub or GitLab")),
+            "{mode}: {standing:?}"
         );
     }
+}
+
+#[test]
+fn a_commit_left_unpushed_is_pushed_by_the_next_save_even_with_nothing_new_to_commit() {
+    // What a launch's save is for (ADR 0051): the push quitting gave up on, or a commit an agent
+    // made with plain git, is carried on — by a plane that names a mode. One that names none
+    // keeps `charter save`'s recorded "Nothing to save".
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    fixture.with_settings("[plane]\nmode = \"push\"\n");
+    run(
+        &fixture.root,
+        &[
+            "push",
+            "-q",
+            &bare.display().to_string(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    run(
+        &fixture.root,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    run(&fixture.root, &["add", "-A"]);
+    run(&fixture.root, &["commit", "-q", "-m", "by an agent"]);
+    assert_eq!(standing(&fixture.root).stage, Stage::Committed);
+
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: None,
+        sign: false,
+        no_push: false,
+        cwd: &fixture.root,
+    });
+
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("carrying on 1 commit(s)"), "{said}");
+    assert_eq!(
+        ask(&bare, &["log", "-1", "--format=%s", "main"]).trim(),
+        "by an agent",
+        "{said}"
+    );
+    assert_eq!(journal(&fixture.root).pop().unwrap()["outcome"], "saved");
+    assert_eq!(standing(&fixture.root).stage, Stage::Saved);
 }
 
 #[test]

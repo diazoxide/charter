@@ -932,6 +932,8 @@ fn hook_in(plane: &std::path::Path, word: &str, env: &[(&str, &str)]) -> i32 {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("CHARTER_ROOT", plane)
+        // Its own machine store, holding no extension, never the operator's (#343).
+        .env("CHARTER_CONFIG_HOME", plane.join(".no-config-home"))
         .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1112,6 +1114,9 @@ fn every_hook_the_bundled_plugin_wires_answers_an_ordinary_call_with_exit_zero()
                     .env("PATH", "/usr/bin:/bin")
                     .env("CHARTER_ROOT", plane.path())
                     .env("CHARTER_HARNESS", "claude-code")
+                    // Its own machine store, holding no extension, never the operator's: a
+                    // session start asks the extensions this machine approved (#343).
+                    .env("CHARTER_CONFIG_HOME", plane.path().join(".no-config-home"))
                     .env(charter_core::plugin::BINARY_ENV, CHARTER)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())

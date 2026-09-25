@@ -13,6 +13,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Extensions can hear what happens, and add to a chat's briefing.** An extension that asks
+  for the `events` capability is told when a workspace is focused, created, forked or removed,
+  when a handoff is made, when a chat starts and when the plane is saved. It is told after the
+  thing is done, so a slow or broken extension never holds it up or changes how it went. It
+  shows as a note naming the extension instead. A fork copies the folder an extension keeps in
+  each workspace, even while the extension is off. One that asks for `briefing` adds a section
+  to every chat's first message. The section is quoted under its name as data, not
+  instructions, is cut at 1,500 characters, and is left out if it holds text that can't be
+  drawn. The approval dialog says it "adds text to every chat's first message". A chat's start
+  waits at most three seconds for all extensions together. Both need protocol 2.
+  ([#343](https://github.com/diazoxide/charter-app/issues/343))
 - **An extension can be acted on, not only read.** Three capabilities, each named in the
   approval dialog: `palette` adds commands to the palette, named with the extension's name, that
   open one of its views or run one of its actions; `actions` puts the extension's own actions on
@@ -73,6 +84,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `.gitattributes` block that merges the logs and memory indexes which only ever grow line by
   line, so two machines adding to the same one no longer conflict.
   ([#295](https://github.com/diazoxide/charter-app/issues/295))
+- **Saving through a pull request.** A project whose `[plane] mode` is `pr` or `pr-merge` now
+  saves the whole way. Each save commits on the project's branch, pushes it to this machine's
+  own save branch (`[plane] save_branch`, `charter/save/<this machine>-<this clone>` unless
+  you name one),
+  and opens one pull request from there into `[plane] branch`. The next save updates that same
+  pull request. `pr-merge` also asks GitHub or GitLab to merge it once its checks pass. If the
+  forge will not queue the merge, the Saving tab says why and the pull request stays open for
+  you. The Saving tab shows *Pushed — waiting on its pull request* with the link. Once the pull
+  request has merged, by a merge commit, a rebase or a squash, charter moves your branch onto
+  the remote's and keeps anything newer you have not saved. If the pull request was closed
+  without merging, or the branch no longer holds what was pushed, the project is **blocked**
+  and nothing is moved; save again to open a new pull request. A file in the way of the move
+  just waits for the next look. Charter force-pushes only its own save branch, and only over
+  what that clone pushed there itself, so a second machine with the same name never
+  overwrites the first's. It never pushes to the project's branch in these modes. ([#298](https://github.com/diazoxide/charter-app/issues/298))
+- **Commits left behind are carried on.** In a project whose mode pushes, a save with nothing
+  new to commit still pushes the commits this machine has not pushed yet. That covers a push
+  that quitting did not have time for, and a commit a chat made with plain git.
 - **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,
   on by default) saves by itself: 30 seconds after the last change (`autosave_after`), as soon
   as a chat in it ends, and when you quit. At quit it commits at once and gives the push a few

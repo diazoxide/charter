@@ -74,6 +74,10 @@ pub struct Request<'a> {
     pub restore: bool,
     /// The instant the manifest and the fork's note are stamped with.
     pub now: chrono::DateTime<chrono::Utc>,
+    /// The folders extensions keep inside a workspace, each carried like the memory
+    /// (`extension::events::carried`, charter-app#343): whether or not the extension is on,
+    /// because a fork is not the moment to decide an extension's data stays behind.
+    pub extension_folders: &'a [String],
 }
 
 /// One path `fork` could not read, with the errno behind it.
@@ -93,6 +97,7 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
         live,
         restore,
         now,
+        extension_folders,
     } = *request;
     let plane = crate::workspaces::Plane::open(root);
 
@@ -143,7 +148,7 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
     //
     // A `BTreeMap` would order these by name; the report's order is charter's — the charter,
     // then the memory, then the todos — so it is a list.
-    let carried: Vec<(&str, Unread)> = vec![
+    let mut carried: Vec<(&str, Unread)> = vec![
         (
             "workspace.md",
             carry_file(
@@ -175,6 +180,24 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
             ),
         ),
     ];
+    // Then each extension's folder, after charter's own and in name order — only one the parent
+    // has, so a fork of a workspace the extension never wrote in says nothing about it.
+    let mut extension_carried: Vec<&str> = Vec::new();
+    for folder in extension_folders {
+        let from = parent.dir().join(folder);
+        // A clone that happens to share the name is the operator's repository, not the
+        // extension's data: a fork carries a repo by recording it, never by copying it.
+        if std::fs::symlink_metadata(&from).is_err()
+            || std::fs::symlink_metadata(from.join(".git")).is_ok()
+        {
+            continue;
+        }
+        let unread = carry_tree(root, &from, &fresh.dir().join(folder));
+        if unread.is_empty() {
+            extension_carried.push(folder);
+        }
+        carried.push((folder, unread));
+    }
     let missed: Unread = carried
         .iter()
         .flat_map(|(_, unread)| unread.iter().cloned())
@@ -253,6 +276,16 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
         for (path, code) in &missed {
             say(Say::Fail(crate::memstore::cannot_check(root, path, *code)));
         }
+    }
+    if !extension_carried.is_empty() {
+        let folders: Vec<String> = extension_carried
+            .iter()
+            .map(|it| format!("{it}/"))
+            .collect();
+        say(Say::Info(format!(
+            "Carried the folder(s) extensions keep in '{src}': {}",
+            folders.join(", ")
+        )));
     }
     let inherited = fresh.todos().map(|t| t.len()).unwrap_or(0);
     if inherited > 0 {
@@ -561,6 +594,7 @@ mod tests {
                 live,
                 restore: false,
                 now: now(),
+                extension_folders: &[],
             },
             &mut |s| lines.push(s.to_string()),
         );
@@ -595,6 +629,46 @@ mod tests {
         assert!(todos.contains("Write the migration"), "{todos}");
         assert!(
             lines.iter().any(|l| l.contains("Inherited 1 open todo(s)")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_extensions_folder_is_carried_and_a_clone_that_shares_its_name_is_not() {
+        let dir = plane();
+        a_parent(dir.path(), "alpha");
+        let alpha = dir.path().join("workspaces/alpha");
+        std::fs::create_dir_all(alpha.join("notes")).unwrap();
+        std::fs::write(alpha.join("notes/kept.md"), "the extension's").unwrap();
+        std::fs::create_dir_all(alpha.join("svc/.git")).unwrap();
+        std::fs::write(alpha.join("svc/code.rs"), "the operator's").unwrap();
+
+        let mut lines = Vec::new();
+        let code = fork(
+            &Request {
+                root: dir.path(),
+                src: "alpha",
+                new: "gamma",
+                live: false,
+                restore: false,
+                now: now(),
+                extension_folders: &["absent".to_owned(), "notes".to_owned(), "svc".to_owned()],
+            },
+            &mut |s| lines.push(s.to_string()),
+        );
+
+        assert_eq!(code, 0, "{lines:?}");
+        let gamma = dir.path().join("workspaces/gamma");
+        assert_eq!(
+            std::fs::read_to_string(gamma.join("notes/kept.md")).unwrap(),
+            "the extension's"
+        );
+        assert!(!gamma.join("svc").exists(), "a clone was copied");
+        assert!(!gamma.join("absent").exists());
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Carried the folder(s) extensions keep in 'alpha': notes/")),
             "{lines:?}"
         );
     }

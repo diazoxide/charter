@@ -34,8 +34,8 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    // A command (protocol 3) answers as a command-line program does: what it prints, and its
-    // exit status, which charter passes on unchanged.
+    // A command (charter-app#342) answers as a command-line program does: what it prints, and
+    // its exit status, which charter passes on unchanged.
     if let Ok(request) = serde_json::from_str::<serde_json::Value>(&line)
         && extension_probe::command_of(&request).is_some()
     {
@@ -45,23 +45,24 @@ fn main() -> ExitCode {
         let _ = std::io::stdout().flush();
         return ExitCode::from(printed.status);
     }
+    let state = std::env::var_os("CHARTER_EXTENSION_STATE").map(std::path::PathBuf::from);
     let said = match serde_json::from_str(&line) {
-        Ok(request) => extension_probe::answer(&request),
+        Ok(request) => extension_probe::answer(&request, state.as_deref()),
         Err(why) => serde_json::json!({
             "charter": extension_probe::PROTOCOL,
             "error": format!("the request was not JSON: {why}"),
         }),
     };
-    // The facts file is refreshed whenever the probe answers a question (charter-app#340), in
-    // the state directory charter names. A failure to write it is said and never fails the
-    // answer: the badge simply stays as it was.
+    // The facts file is refreshed whenever the probe answers a question or hears an event
+    // (charter-app#340, #343), in the state directory charter names. A failure to write it is
+    // said and never fails the answer: the badge simply stays as it was.
     if said.get("error").is_none()
-        && let Some(state) = std::env::var_os("CHARTER_EXTENSION_STATE")
+        && let Some(state) = &state
     {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |it| it.as_secs());
-        if let Err(why) = extension_probe::refresh_facts(std::path::Path::new(&state), now) {
+        if let Err(why) = extension_probe::refresh_facts(state, now) {
             eprintln!("extension-probe: could not refresh its facts file: {why}");
         }
     }

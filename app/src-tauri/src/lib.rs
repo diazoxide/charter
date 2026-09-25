@@ -14,6 +14,7 @@ mod doctor;
 mod extensions;
 mod handoff;
 mod harness_plugins;
+mod heard;
 mod hooks;
 mod ipc;
 mod lifecycle;
@@ -1210,6 +1211,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<updates::Offer>()
         // What `plane-changed` carries, for the same reason.
         .typ::<planewatch::PlaneChanged>()
+        // What `extension-heard` carries (charter-app#343).
+        .typ::<heard::ExtensionHeard>()
 }
 
 /// Where the generated TypeScript lives.
@@ -1335,6 +1338,9 @@ pub fn run() {
             // (charter-app#339).
             let built_in = extensions::find_built_in(app.path().resource_dir().ok());
             extensions::keep_built_in(built_in.clone());
+            // The executor events are delivered with, and the notes they left
+            // (charter-app#343): the built-ins hear what they declare, as any extension does.
+            app.manage(heard::Heard::with_built_in(built_in.clone()));
             app.manage(views::Views::with_built_in(built_in));
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
@@ -1391,6 +1397,19 @@ pub fn run() {
                         let _ =
                             window.emit(planewatch::CHANGED, &planewatch::PlaneChanged { plane });
                     })
+                })
+                // Auto-save saved a plane: the extensions that hear it are told, as after the
+                // Save button (charter-app#343).
+                .telling_saves({
+                    let app = app.handle().clone();
+                    std::sync::Arc::new(move |plane: PlaneId, root: std::path::PathBuf| {
+                        app.state::<heard::Heard>().tell(
+                            &app,
+                            plane,
+                            root,
+                            charter_core::extension::events::Event::PlaneSaved,
+                        );
+                    })
                 }),
             );
 
@@ -1442,6 +1461,7 @@ pub fn run() {
                 // group, so that nothing an extension was asked to run outlives the window
                 // that asked (`charter_core::executor`).
                 app.state::<views::Views>().stop_all();
+                app.state::<heard::Heard>().stop_all();
                 // Every plane, not "the" plane: each one writes its own record into itself
                 // and ends its own sessions. A failure is not worth refusing to exit over —
                 // the next launch of that plane reads no record and starts empty.

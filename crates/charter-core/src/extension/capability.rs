@@ -45,9 +45,17 @@ pub enum Capability {
     /// shown only while the extension is on for that project or workspace (ADR 0048). Its shape
     /// is `contributes.repo-columns`.
     RepoColumns,
+    /// Events: charter asks its program one question after each core action the manifest says
+    /// it hears — a workspace focused, created, forked or removed, a handoff, a session start, a
+    /// plane save ([`super::events`], charter-app#343). Its shape is `contributes.events`.
+    Events,
+    /// A briefing section: `charter hook sessionstart` asks its program for a section and quotes
+    /// it, as data under the extension's name, in every chat's first message
+    /// ([`super::briefing`], charter-app#343). Its shape is `contributes.briefing`.
+    Briefing,
     /// Commands on the `charter` command line under the extension's own id — `charter <id>
     /// <command> …` — each a request of its own to its program, whose output and exit status
-    /// charter passes back unchanged (charter-app#342, protocol 3). Declared under
+    /// charter passes back unchanged ([`super::cli`], charter-app#342, protocol 2). Its shape is
     /// `contributes.cli`.
     Cli,
 }
@@ -84,6 +92,15 @@ impl Capability {
                 "repo-columns",
                 "charter draws values from its facts file as columns in the repo table",
             ),
+            Self::Events => (
+                "events",
+                "charter starts its program once after each thing it hears about, when that \
+                 thing is already done",
+            ),
+            Self::Briefing => (
+                "briefing",
+                "adds text to every chat's first message, quoted as data under its name",
+            ),
             Self::Cli => (
                 "cli",
                 "adds commands to the charter command line, run as `charter <its id> <command>`; \
@@ -98,8 +115,10 @@ impl Capability {
     pub fn since(self) -> u32 {
         match self {
             Self::Probe | Self::Badges | Self::RepoColumns | Self::Palette => 1,
-            Self::Actions | Self::Writes => 2,
-            Self::Cli => 3,
+            // Events, the briefing and command-line commands are request kinds protocol 2 grew
+            // in charter-app#343 and #342, beside #341's run-action request: 2 was not yet
+            // released, so it holds all four.
+            Self::Actions | Self::Writes | Self::Events | Self::Briefing | Self::Cli => 2,
         }
     }
 
@@ -120,6 +139,8 @@ impl Capability {
             Self::Palette,
             Self::Actions,
             Self::Writes,
+            Self::Events,
+            Self::Briefing,
             Self::Cli,
         ]);
         known
@@ -140,6 +161,8 @@ impl Capability {
             | Self::Palette
             | Self::Actions
             | Self::Writes
+            | Self::Events
+            | Self::Briefing
             | Self::Cli => true,
         }
     }

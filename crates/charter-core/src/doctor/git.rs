@@ -454,6 +454,31 @@ fn stranded_push(d: &Doctor) -> Result<Option<(String, String)>, String> {
     if !rec.get("outcome").is_some_and(truthy) {
         return Ok(None);
     }
+    // A PR mode's record (charter-app#298): its present tense is the save's own, asked of the
+    // target branch rather than the upstream. An open PR is where a PR mode's commits are meant
+    // to wait, so only a block is a finding.
+    if matches!(
+        rec.get("outcome").and_then(serde_json::Value::as_str),
+        Some("pr-open" | "blocked")
+    ) {
+        let Some(rec) = crate::planegit::unlanded(&d.root) else {
+            return Ok(None);
+        };
+        if rec.get("outcome").and_then(serde_json::Value::as_str) != Some("blocked") {
+            return Ok(None);
+        }
+        let why = rec
+            .get("detail")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("the last save could not finish");
+        return Ok(Some((
+            "the plane's save is blocked".to_owned(),
+            format!(
+                "{}. The Saving view says the same; auto-save waits until it is cleared.",
+                crate::shown::readable(why, crate::shown::DISPLAY_LIMIT)
+            ),
+        )));
+    }
     let head = rec
         .get("head")
         .filter(|v| truthy(v))

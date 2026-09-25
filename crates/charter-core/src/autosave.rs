@@ -27,7 +27,8 @@ pub fn on(plane: &Plane) -> bool {
 }
 
 /// Whether a save of a plane standing like this would do anything: files to commit, or commits
-/// a push would carry.
+/// a push would carry — to the target branch, or in a PR mode to the save branch and its pull
+/// request (`standing` counts those as committed until the pull request carries them).
 pub fn worth_saving(standing: &Standing) -> bool {
     !standing.changed.is_empty() || (standing.stage == Stage::Committed && standing.pushes)
 }
@@ -142,13 +143,16 @@ pub fn at_quit(root: &std::path::Path, bound: Duration) -> AtQuit {
     }
     let (told, heard) = std::sync::mpsc::channel();
     let at = root.to_path_buf();
-    let target = plane.branch.value.clone();
     let sign = plane.sign.value;
     std::thread::spawn(move || {
         // The claim goes with the push, and is let go of when the push ends.
         let _claim = claim;
-        let pushed = crate::planegit::push_head(&at, target.as_deref(), sign, &mut |_| {});
-        let _ = told.send(pushed.outcome == crate::planegit::Outcome::Pushed);
+        // As the mode says: the target branch, or the save branch and its pull request.
+        let pushed = crate::planegit::push_saved(&at, sign, &mut |_| {});
+        let _ = told.send(matches!(
+            pushed.outcome,
+            crate::planegit::Outcome::Pushed | crate::planegit::Outcome::PrOpen
+        ));
     });
     match heard.recv_timeout(bound) {
         Ok(true) => AtQuit::Pushed,

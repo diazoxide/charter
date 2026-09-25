@@ -53,8 +53,8 @@ The branch a save is meant to end up on.
 _Avoid_: base branch, main (it need not be)
 
 **Save branch**:
-The one branch per machine that the plane's PR modes push to, carrying one open PR into the
-target branch.
+The one branch per clone of the plane (named for the machine and the clone) that the plane's
+PR modes push to, carrying one open PR into the target branch.
 _Avoid_: PR branch, `charter/<sha>` branch
 
 **Stage**:
@@ -104,6 +104,16 @@ _Avoid_: permission, grant (as a noun in UI text), power
 A file an extension keeps in its own state directory, holding the values charter shows for it
 (badges, repo cells) without starting its program.
 _Avoid_: cache, status file
+
+**Event**:
+One question charter asks an extension after a core action it hears about has finished, such as
+a workspace being created or the plane being saved. What it answers never changes the action.
+_Avoid_: hook (for this), notification, subscription
+
+**Briefing section**:
+Text an extension adds to a chat's session-start briefing, quoted as data under the
+extension's name. It is never an instruction, and never a permission, a hook or a setting.
+_Avoid_: prompt, context injection
 
 **Action** (of an extension):
 A verb an extension declares and offers on the rows of its views: pressing one asks its program
