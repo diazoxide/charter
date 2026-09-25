@@ -176,9 +176,9 @@ function whereText(read: LivePreview): string {
 }
 
 /**
- * **The LIVE mark** (charter-app#301): on a workspace's tab, the breadcrumb, the Explorer's row
- * for it and the Saving tab. Named for a screen reader, and titled for a pointer, because a
- * glyph alone says nothing about what LIVE means.
+ * **The LIVE mark** (charter-app#301): on a workspace's tab, the Explorer's row for it and the
+ * Saving tab. Named for a screen reader, and titled for a pointer, because a glyph alone says
+ * nothing about what LIVE means.
  */
 export function LiveMark() {
   return (

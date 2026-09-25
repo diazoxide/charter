@@ -1,7 +1,6 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { commands, type PlaneSaving, type RepoSaving, type TitleBarRoom } from "./bindings";
 import { SaveIndicator } from "./SavingView";
-import { LiveMark } from "./LiveDialog";
 import { AboutCharter } from "./About";
 import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
@@ -9,16 +8,29 @@ import { NeedsYouMenu, type Needing, type Quiet } from "./NeedsYou";
 import type { Offer } from "./actions";
 
 /**
- * **The window's title bar**: where you are on the left, what charter is on the right.
+ * **The window's title bar**: the project strip on the left, what charter is on the right.
  *
- * The operator asked for it because the bar was *"very very empty"*, and said exactly what
- * goes in it:
+ * ```
+ * ● ● ●  [charter ²] [volaticloud] [▾ 3 more ¹] [+]  ···drag···  ✋2  About  ⟳
+ * ```
  *
- * > in left side lest just write
- * > `{selected project name} / {selected workspace name} / {N sessions running}`
- * >
- * > in right side lets show
- * > `{About Charter …}` `{Update Indicator …}`
+ * **ADR 0054 supersedes the operator's first spec for this bar**, which was a breadcrumb —
+ * *"`{selected project name} / {selected workspace name} / {N sessions running}`"* on the
+ * left and About and the update indicator on the right. The right-hand end is still his. The
+ * left is the project strip now, because the bar is the window's row and the project strip is
+ * the window's strip: `App` holds it for the window, not for a `PlaneView`. The crumb went
+ * rather than squeezing in beside the tabs — the project tab in front says which project, the
+ * workspace strip says which workspace, and a crumb repeating both spent the width the tabs
+ * need. `N chats running` moved to the status line, which is per-project (`StatusLine.tsx`).
+ *
+ * # What gives way when the window is narrow
+ *
+ * **The right-hand end never does, and the project tabs give way before it**: the strip takes
+ * what is left and collapses what it has no room for into its show-more menu, by the rules it
+ * has always had (`fits.ts`, ADR 0039). Width the tabs cannot use is drag region, and **a
+ * minimum stretch of it is always reserved** (`--title-bar-drag` in `App.css`), so a window
+ * full of projects can still be grabbed. It is the strip's margin, outside the box the strip
+ * measures, so the tabs are fitted to what is left after it and nothing here has to know it.
  *
  * # It is a title bar on macOS and a top row everywhere else, and that is not a gate
  *
@@ -30,11 +42,11 @@ import type { Offer } from "./actions";
  * drawing their own title bar above the webview, so there this is the window's first row
  * instead, under the system's bar, with nothing reserved.
  *
- * **Nothing is gated, because the content is right either way.** Where you are and what
+ * **Nothing is gated, because the content is right either way.** The projects and what
  * charter is are worth a row on every platform; the only thing that differs is 78 px of
  * leading padding and which bar the operator thinks of it as. A `#[cfg]` that drew the
- * breadcrumb on one platform and not another would be two windows to keep in step, and the
- * one it left out is the one charter is most often built for in CI.
+ * strip here on one platform and in a row of its own on another would be two windows to keep
+ * in step, and the one it left out is the one charter is most often built for in CI.
  *
  * # It drags, and the parts that must not drag do not
  *
@@ -49,9 +61,13 @@ import type { Offer } from "./actions";
  * **Every control here is a `<button>`, and the TAG is what carries it.** `BUTTON` is in
  * Tauri's `CLICKABLE_TAGS`, so no attribute of ours is load-bearing for this: the `tabIndex={0}`
  * on About, the update item and the needs-you button (charter-app#249) is there for WebKit's
- * tab sequence (charter-app#186, charter-app#189), not for the drag. A scenario written
- * asserting a `tabindex` on every control was refuted by the real app, which is how that came
- * to be written down here rather than assumed.
+ * tab sequence (charter-app#186, charter-app#189), not for the drag. **The project tabs need no
+ * drag rule of their own for the same reason**: each is a `<button>`, and so are its `×`, the
+ * `+` and the show-more button. The strip itself carries a `tabindex` for its one Tab stop
+ * (`roving.ts`), which the walk also stops at, so a press in a gap between its controls does
+ * not drag either; the stretch after the strip does. A scenario written asserting a
+ * `tabindex` on every control was refuted by the real app, which is how that came to be
+ * written down here rather than assumed.
  *
  * **What no test here proves is that the window then moves.** WebDriver dispatches a
  * synthetic event and performs no default action (`docs/ui-primitives.md`), and a synthetic
@@ -63,15 +79,19 @@ import type { Offer } from "./actions";
  * call is refused and the bar is one the operator cannot grab.
  */
 export function TitleBar({
-  crumbs,
+  projects,
   updates,
   room,
   chats,
   needing,
   save,
 }: {
-  /** Where the window is, for the left-hand side. */
-  crumbs: Crumbs;
+  /**
+   * The project strip (ADR 0054), drawn after the room the window controls take. `App` builds
+   * it, because the strip's rows, its pins and its show-more are the window's. Absent — a
+   * window holding no project — draws none, and the right-hand end stays at the right.
+   */
+  projects?: ReactNode;
   /**
    * The updater, as the WINDOW knows it (`Updates.tsx`).
    *
@@ -127,8 +147,9 @@ export function TitleBar({
       data-overlaid={room?.overlaid ? "yes" : "no"}
       style={{ "--window-controls": `${room?.reserved ?? 0}px` } as CSSProperties}
     >
-      <Breadcrumb crumbs={crumbs} />
-      {/* The right-hand end, and the one part of the bar that never gives way. Both controls
+      {projects}
+      {/* The right-hand end, and the part of the bar that never gives way: the strip before it
+          gives way first. Both controls
           are about the app rather than the project, which is why they are up here and not on
           the status line: this bar is the window's. */}
       <span className="title-bar-doing">
@@ -145,163 +166,12 @@ export function TitleBar({
   );
 }
 
-/** Where the window is, in the three parts the operator asked for. */
-export type Crumbs = {
-  /** The project in front, named as its tab names it. `undefined` when the window holds none. */
-  project?: string;
-  /**
-   * Whether the window has finished deciding whether it holds a project at all.
-   *
-   * **The opener's own pair of conditions** (`App.tsx`'s `openerUp`): the core has said what
-   * the launch resolved, and the cold-launch restore has finished opening what it remembered.
-   * Until both, no project and eight projects look identical from here, and "No project open"
-   * on the bar half a second before eight arrive is the same lie the opener is careful not to
-   * tell in a larger font.
-   */
-  decided: boolean;
-  /**
-   * Whether that project's plane has been read at all.
-   *
-   * **Separate from {@link workspace}, because "not yet" and "nowhere" are different claims**
-   * — the same split `StatusLine` makes, and for the same reason: a plane holding no
-   * workspaces answers perfectly well and leaves the window on none of them.
-   */
-  read: boolean;
-  /** The workspace the window is on, already read as it should be said (so `OUTSIDE` has
-   *  become its title). `undefined` when it is on none. */
-  workspace?: string;
-  /** Whether that workspace has a colour (charter-app#281): its clause then carries a mark in the
-   *  window's accent, which is tinted with that colour while it is in front. */
-  coloured?: boolean;
-  /** Whether that workspace is LIVE (charter-app#301): its clause carries the LIVE mark. */
-  live?: boolean;
-  /**
-   * How many of that project's chats are **running**, or `undefined` before the core has said
-   * what it had open.
-   *
-   * **Running, not open**, which is the distinction charter draws and this operator lives by:
-   * he keeps many chats at once and most of them are sitting still. A chat is running when a
-   * hook has said so (`chatState.ts`) — a chat that is waiting for him, one that has finished,
-   * one that failed and one that no hook has ever reported are each not running, and the
-   * needs-you button at the other end of this bar, and the project tab, are where the waiting
-   * ones are counted. A number here that meant "open" would say 50 all day.
-   */
-  running?: number;
-};
-
-/**
- * The left-hand side: `project / workspace / N chats running`.
- *
- * # Every degraded reading is a sentence, never a gap
- *
- * A breadcrumb of slashes with nothing between them is the failure this is written against.
- * So: no project at all replaces the whole row with one sentence rather than drawing two
- * empty segments; a plane that has not answered says so in the same words the status line
- * uses (*reading the plane…*), and one that answered with no workspace says *no workspace*,
- * which is an answer and not an absence.
- *
- * **Zero IS drawn here, and that is deliberately not the footer's rule.** `StatusLine` drops
- * a count at zero — presence is the signal, and a `todo 0` on the line every day is furniture
- * by Friday. This is not a cell in a row of counts: it is the third clause of one sentence the
- * operator asked for, and a sentence that ends at the second slash on a quiet morning reads as
- * charter having failed to count rather than as charter having counted none.
- *
- * # What gives way when the window is narrow
- *
- * The two names truncate, in that order, and the count never does — a project called
- * `charter-app` cut to `charter-a…` is still legible, and `3 chats running` cut to `3 cha…`
- * is a number with no unit. The controls on the right are `flex: none`, so a long name pushes
- * nothing off the window; it shortens itself instead. The whole reading is in `title`, so
- * anything the row had to cut is a hover away.
- */
-export function Breadcrumb({ crumbs }: { crumbs: Crumbs }) {
-  const { project, decided, read, workspace, coloured, live, running } = crumbs;
-  if (project === undefined)
-    return (
-      <span className="crumbs" data-testid="title-crumbs">
-        {/* One sentence, not an empty skeleton. The window holding no project is a state it
-            draws the opener for, and the opener is the thing to read — this row says which
-            state it is in and gets out of the way. */}
-        {decided ? (
-          <span className="none">No project open</span>
-        ) : (
-          <span className="pending">charter is opening…</span>
-        )}
-      </span>
-    );
-
-  const workspaceSaid = read ? (workspace ?? "no workspace") : "reading the plane…";
-  const chatsSaid =
-    running === undefined
-      ? "counting chats…"
-      : running === 0
-        ? "no chats running"
-        : `${running} ${running === 1 ? "chat" : "chats"} running`;
-  return (
-    <span
-      className="crumbs"
-      data-testid="title-crumbs"
-      title={`${project} / ${workspaceSaid} / ${chatsSaid}`}
-    >
-      <span className="crumb crumb-project">{project}</span>
-      <Slash />
-      {coloured === true && workspace !== undefined && (
-        <span className="crumb-mark" aria-hidden="true" data-testid="crumb-mark" />
-      )}
-      <span
-        className={`crumb crumb-workspace${workspace === undefined ? (read ? " none" : " pending") : ""}`}
-      >
-        {workspaceSaid}
-      </span>
-      {live === true && workspace !== undefined && <LiveMark />}
-      <Slash />
-      {/* `flex: none` in the stylesheet: the names give way, the count does not. */}
-      <span
-        className={`crumb crumb-chats${running === undefined ? " pending" : running === 0 ? " none" : ""}`}
-        data-running={running ?? "unknown"}
-      >
-        {chatsSaid}
-      </span>
-    </span>
-  );
-}
-
-/** The separator the operator wrote, hidden from a screen reader — it reads the three clauses,
- *  and a slash between each of them is punctuation spoken aloud. */
-function Slash() {
-  return (
-    <span className="crumb-sep" aria-hidden="true">
-      /
-    </span>
-  );
-}
-
-/**
- * How many of a project's chats are running, out of the report it already sends the window.
- *
- * **The existing answer, asked of nothing.** Every project reports `ending` — its open chats,
- * each with what it is doing — because the quit warning has to list them; the state on each
- * one is `chatState.ts`'s, which is kept current by hooks rather than by polling. Counting
- * here is a filter over a list the window is already holding, so the bar costs no command of
- * its own. A second `chat_states` call would be fifty questions to learn what the window was
- * told.
- *
- * `undefined` until the project has settled, which is the core answering what it already had
- * open. Before that an empty `ending` means *not yet*, and reading it as zero would put
- * "no chats running" on the bar for the first moments of every launch — over a plane that is
- * about to put twenty chats back.
- */
-export function runningIn(report?: { ending: { state: string }[]; settled: boolean }) {
-  if (report === undefined || !report.settled) return undefined;
-  return report.ending.filter((chat) => chat.state === "running").length;
-}
-
 /**
  * What the system has already spent of the title bar, asked once.
  *
  * **After the first paint, never before it.** `main.tsx` is written so that nothing stands
  * between the process starting and the first frame (ADR 0026's 2 s cold start), so this is an
- * effect and the bar reserves nothing until it answers. On macOS the breadcrumb shifts right
+ * effect and the bar reserves nothing until it answers. On macOS the project strip shifts right
  * by the width of the traffic lights a frame later; everywhere else the answer is zero and
  * nothing moves at all. A window that cannot ask draws the bar with nothing reserved, which
  * is wrong on macOS by 78 px and is not a reason to draw no bar.

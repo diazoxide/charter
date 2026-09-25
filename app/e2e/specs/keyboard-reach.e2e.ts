@@ -70,9 +70,10 @@ describe("the window's keyboard reach", () => {
 
   it("reaches the regions in the order they are laid out, top to bottom and left to right", async () => {
     const { tabbed, laidOut, controlsFirst } = await browser.execute(() => {
+      // The project strip is in the title bar (ADR 0054), so it is reached as the title bar:
+      // its tabs first, then the bar's right-hand end.
       const regions: [string, string][] = [
         ["title bar", ".title-bar"],
-        ["projects", '[role="tablist"][aria-label="Projects"]'],
         ["workspaces", '[role="tablist"][aria-label="Workspaces"]'],
         ["chats", '[role="tablist"][aria-label="Tabs"]'],
         ["explorer", 'nav[aria-label="Explorer"]'],
@@ -115,7 +116,7 @@ describe("the window's keyboard reach", () => {
       return { tabbed, laidOut, controlsFirst };
     });
     expect(tabbed).toEqual(laidOut);
-    expect(tabbed.slice(0, 4)).toEqual(["title bar", "projects", "workspaces", "chats"]);
+    expect(tabbed.slice(0, 3)).toEqual(["title bar", "workspaces", "chats"]);
     expect(tabbed[tabbed.length - 1]).toBe("status line");
     expect(controlsFirst).toBe(true);
   });

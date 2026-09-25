@@ -74,7 +74,7 @@ import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
 import { ChatGauge, useChatUsage } from "./ChatGauge";
 import { usePin } from "./Updates";
-import { StatusLine, type Alerts } from "./StatusLine";
+import { StatusLine, runningIn, type Alerts } from "./StatusLine";
 import {
   byLastActivity,
   closeFocusedPane,
@@ -2184,33 +2184,16 @@ export function PlaneView({
       offers,
       run,
       said: report,
-      // Where this project is, for the window's title bar. **Read exactly as the status line
-      // reads it** — the same `focused`, through the same `OUTSIDE_TITLE`, out of the same
-      // `sidebar` — because the two rows would otherwise be two answers to one question at
-      // opposite ends of the window.
+      // Whether the plane has been read: until it has, the window does not know which
+      // workspace's theme to draw (`App.tsx`'s `settledInFront`).
       read: sidebar !== undefined,
-      where: focused === OUTSIDE ? OUTSIDE_TITLE : focused,
       // Which workspace, by name, and its colour: the window draws that workspace's theme and
       // tints its accent with that colour while this project is in front (charter-app#281).
       workspace: ofWorkspace,
       colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
       saving,
-      live: ofWorkspace !== undefined && liveOf(ofWorkspace),
     }),
-    [
-      asking,
-      ending,
-      focused,
-      liveOf,
-      ofWorkspace,
-      offers,
-      quiet,
-      report,
-      run,
-      saving,
-      settled,
-      sidebar,
-    ],
+    [asking, ending, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2650,6 +2633,7 @@ export function PlaneView({
         read={sidebar !== undefined}
         where={focused === OUTSIDE ? OUTSIDE_TITLE : focused}
         workspaces={sidebar?.workspaces.length}
+        running={runningIn({ ending, settled })}
         state={workspaceState}
         doctor={doctor}
         pin={pin}
@@ -2817,12 +2801,9 @@ export type PlaneReport = {
   /** Whether the core has answered what it already had open. Until it has, "no tabs" is
    *  "not yet", and a quit that read it as "nothing is running" would end the lot. */
   settled: boolean;
-  /** Whether its plane has been read at all, for the title bar's breadcrumb. "Not yet" and
-   *  "nowhere" are different claims and {@link where} cannot carry both. */
+  /** Whether its plane has been read at all: until it has, which workspace it is on is not
+   *  known, and the window waits before drawing that workspace's theme. */
   read: boolean;
-  /** The workspace it is on, already read as it should be said — `undefined` when it is on
-   *  none. The title bar's second segment (`TitleBar.tsx`). */
-  where: string | undefined;
   /** The workspace it is on by its name, `undefined` outside every workspace: whose
    *  `workspace.json` is a layer of the theme the window draws (charter-app#281). */
   workspace?: string;
@@ -2831,8 +2812,6 @@ export type PlaneReport = {
   colour?: string | null;
   /** Where this project's unsaved work sits (charter-app#302), once read. */
   saving?: PlaneSaving;
-  /** Whether that workspace is LIVE (charter-app#301): the breadcrumb marks it. */
-  live?: boolean;
 };
 
 /** What a project asks the WINDOW to do, because the window is what holds projects. */

@@ -2,17 +2,20 @@ import { basename } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
 
 /**
- * **The window's title bar**, against the real app (`app/src/TitleBar.tsx`).
+ * **The window's title bar**, against the real app (`app/src/TitleBar.tsx`, ADR 0054).
  *
- * `TitleBar.test.tsx` holds the readings — what each degraded breadcrumb says, what `running`
- * counts, what About draws when the core refuses. Those are props-in/markup-out and jsdom
- * settles them. Three things it cannot settle are here:
+ * `TitleBar.test.tsx` holds what jsdom settles — that the project strip is in the bar with its
+ * counts, its show-more and its `+`, that the breadcrumb is gone, that the right-hand end is
+ * there, and what About draws when the core refuses. Four things it cannot settle are here:
  *
- * - **The bar is really the first thing in the window**, above the project strip and touching
- *   the top edge. jsdom lays nothing out, so document order is the most it could assert, and
- *   document order is exactly what would still be true of a bar drawn 200 px down.
- * - **The breadcrumb names the project the app really opened**, out of the real core, rather
- *   than a string a test handed it.
+ * - **The bar is really the first thing in the window**, touching the top edge, with the
+ *   project strip inside it and the workspace strip under it. jsdom lays nothing out, so
+ *   document order is the most it could assert, and document order is exactly what would
+ *   still be true of a bar drawn 200 px down.
+ * - **The strip names the project the app really opened**, out of the real core, rather than
+ *   a string a test handed it.
+ * - **A stretch of the bar is left to grab** between the strip and the right-hand end, and a
+ *   press there lands on the bar itself rather than on a control.
  * - **The attributes the shipped bundle carries.** A jsdom test renders components; an
  *   operator gets a Vite build inside a WKWebView, and an attribute a transform dropped would
  *   leave every unit test green and the bar undraggable. This is `picker.e2e.ts`'s split for
@@ -45,19 +48,6 @@ async function untilTheStripIsRead(): Promise<void> {
   );
 }
 
-/** Focuses a workspace from the strip, by the tab's own name rather than by its whole text —
- *  a strip tab carries counts beside its name. */
-async function focus(workspace: string): Promise<void> {
-  const tabs = await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements();
-  for (const tab of tabs) {
-    if ((await tab.$(".workspace-name").getText()) === workspace) {
-      await tab.click();
-      return;
-    }
-  }
-  throw new Error(`no ${workspace} on the workspace strip`);
-}
-
 /** The plane the app says it is acting on — the copy this run was given, never the repo's. */
 async function planeRoot(): Promise<string> {
   const said = await $("span.plane code");
@@ -65,26 +55,11 @@ async function planeRoot(): Promise<string> {
   return (await said.getText()).trim();
 }
 
-/** Waits for the breadcrumb to say something, and says what it did say when it never does. */
-async function untilTheBarSays(want: string | RegExp): Promise<void> {
-  const crumbs = await $('[data-testid="title-crumbs"]');
-  await crumbs.waitForExist({ timeout: 20_000 });
-  let last = "";
-  try {
-    await browser.waitUntil(
-      async () => {
-        last = await crumbs.getText();
-        return typeof want === "string" ? last.includes(want) : want.test(last);
-      },
-      { timeout: 30_000, interval: 250 },
-    );
-  } catch {
-    throw new Error(`the title bar never said ${want.toString()}; it said ${JSON.stringify(last)}`);
-  }
-}
+/** The strip in the bar, by its role and name. */
+const PROJECTS = '[data-testid="title-bar"] [role="tablist"][aria-label="Projects"]';
 
 describe("the title bar", () => {
-  it("is the first thing in the window, above the project strip and against the top edge", async () => {
+  it("is the first thing in the window, against the top edge, with the project strip in it", async () => {
     await untilTheStripIsRead();
 
     const bar = await $('[data-testid="title-bar"]');
@@ -93,15 +68,23 @@ describe("the title bar", () => {
     const height = (await bar.getSize("height")) as number;
     // Nothing above it. A pixel of slack, because a fractional layout rounds.
     expect(top).toBeLessThanOrEqual(1);
-    // And the project strip begins where it ends, rather than under it or over it.
-    const strip = await $('[role="tablist"][aria-label="Projects"]');
-    expect((await strip.getLocation("y")) as number).toBeGreaterThanOrEqual(top + height - 1);
+    // The project strip is inside it rather than a row of its own (ADR 0054)…
+    const strip = await $(PROJECTS);
+    await strip.waitForDisplayed({ timeout: 20_000 });
+    const stripTop = (await strip.getLocation("y")) as number;
+    expect(stripTop).toBeGreaterThanOrEqual(top - 1);
+    expect(stripTop + ((await strip.getSize("height")) as number)).toBeLessThanOrEqual(
+      top + height + 1,
+    );
+    // …and the workspace strip begins where the bar ends, rather than under it or over it.
+    const workspaces = await $('[role="tablist"][aria-label="Workspaces"]');
+    expect((await workspaces.getLocation("y")) as number).toBeGreaterThanOrEqual(top + height - 1);
   });
 
   it("is tall enough for the window controls macOS floats over it", async () => {
     // Under `titleBarStyle: "Overlay"` the traffic lights are drawn at the system's own title
     // bar height whatever this element does, so a bar shorter than that has them overlapping
-    // the project strip below. The bound is a floor with room in it, not a pin on a font
+    // the workspace strip below. The bound is a floor with room in it, not a pin on a font
     // metric — and it holds on Linux too, where there is nothing floating over anything and a
     // one-line row is still the shape this is.
     await untilTheStripIsRead();
@@ -111,49 +94,43 @@ describe("the title bar", () => {
     expect(height).toBeLessThanOrEqual(48);
   });
 
-  it("names the project the app really opened, and follows the workspace strip", async () => {
+  it("names the project the app really opened, on the selected tab of the strip in it", async () => {
     await untilTheStripIsRead();
     const name = basename(await planeRoot());
 
-    await untilTheBarSays(name);
-    await focus("alpha");
-    await untilTheBarSays("alpha");
-
-    await focus("beta");
-    await untilTheBarSays("beta");
-
-    // Put back, because one app process serves every spec after this one.
-    await focus("alpha");
-    await untilTheBarSays("alpha");
+    const selected = await $(`${PROJECTS} [role="tab"][aria-selected="true"] .project-name`);
+    await selected.waitForExist({ timeout: 20_000 });
+    expect(await selected.getText()).toBe(name);
   });
 
-  it("counts chats that are RUNNING rather than chats that are open", async () => {
-    // **This suite's harness carries no state hook at all** — the ones that report through
-    // hooks run under `wdio.state.conf.ts`, because the app reads `SHELL` once and one run is
-    // one harness. So however many chats the specs before this one left open, every one of
-    // them reads `unknown`, and that makes this the one place in the scenario suite where the
-    // two numbers are visibly different: a tab strip with chats on it, and a bar that honestly
-    // says none of them is running.
-    //
-    // It is also the case for zero being a sentence here rather than a dropped cell
-    // (`TitleBar.tsx` argues why that differs from the status line's rule): the clause is
-    // still there to read.
+  it("leaves a stretch to grab between the project strip and its right-hand end", async () => {
+    // The tabs give way before the right-hand end does, and never take the whole of what is
+    // left: `--title-bar-drag` is kept free so a window full of projects can still be moved.
+    // A press in the middle of that stretch has to land on the bar itself, which is the
+    // element carrying `data-tauri-drag-region="deep"`, and not on a control.
     await untilTheStripIsRead();
 
-    const clause = await $('[data-testid="title-crumbs"] .crumb-chats');
-    await clause.waitForExist({ timeout: 20_000 });
-    // A settled reading first, so this is never asserted against "counting chats…".
-    await browser.waitUntil(async () => (await clause.getAttribute("data-running")) !== "unknown", {
-      timeout: 30_000,
-      timeoutMsg: "the title bar never finished counting what was running",
-    });
+    const seen = await browser.execute((strip: string) => {
+      const bar = document.querySelector<HTMLElement>('[data-testid="title-bar"]');
+      const tabs = document.querySelector(strip);
+      const end = bar?.querySelector(".title-bar-doing");
+      if (!bar || !tabs || !end) return { gap: -1, least: 0, pressed: "(nothing to measure)" };
+      const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const least =
+        Number.parseFloat(getComputedStyle(bar).getPropertyValue("--title-bar-drag")) * rem;
+      const from = tabs.getBoundingClientRect();
+      const to = end.getBoundingClientRect();
+      const hit = document.elementFromPoint((from.right + to.left) / 2, from.top + from.height / 2);
+      return {
+        gap: to.left - from.right,
+        least,
+        pressed: hit === bar ? "the bar" : (hit?.outerHTML.slice(0, 80) ?? "(nothing)"),
+      };
+    }, PROJECTS);
 
-    // The tab count travels into the assertion so a failure says how many chats were on the
-    // strip at the moment the bar disagreed with it.
-    const open = (await $$('.bar .tabs [role="tab"]').getElements()).length;
-    expect(`${await clause.getText()} · ${open} chat tabs open`).toBe(
-      `no chats running · ${open} chat tabs open`,
-    );
+    expect(seen.least).toBeGreaterThan(0);
+    expect(seen.gap).toBeGreaterThanOrEqual(seen.least - 1);
+    expect(seen.pressed).toBe("the bar");
   });
 
   it("carries the drag region the shipped bundle has to keep, and keeps it off its controls", async () => {
@@ -189,9 +166,11 @@ describe("the title bar", () => {
     });
 
     expect(shape.bar).toBe("deep");
-    // About and the update item. A bar that drew neither would pass a filter over an empty
-    // list, which is the failure this guards against first.
-    expect(shape.controls.length).toBeGreaterThanOrEqual(2);
+    // About, the update item, and the project strip's tab, `×`, `+` buttons and show-more
+    // (ADR 0054) — each a `<button>`, so the walk stops at it and the tabs need no drag rule of
+    // their own. A bar that drew none would pass a filter over an empty list, which is the
+    // failure this guards against first.
+    expect(shape.controls.length).toBeGreaterThanOrEqual(4);
     // Every one of them, and the failure names which one lost it rather than saying "false".
     expect(shape.controls.filter((said) => !said.endsWith("=<button>/presses"))).toEqual([]);
   });

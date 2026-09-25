@@ -36,8 +36,8 @@ import { ago } from "./BottomBar";
  *   argument, it sharpens it: the line carries every region's way back and has none of its own,
  *   which is what makes it the frame rather than a tenant. `FourRegions.test.tsx`'s *"cannot be
  *   put away, because it is not a region"* is the guard.
- * - **It is the frame, not a tenant of it.** `nav.projects` sits above the regions and is not
- *   in the arrangement either. The window is chrome, four regions, chrome; this is the bottom
+ * - **It is the frame, not a tenant of it.** `nav.projects`, in the title bar, sits above the
+ *   regions and is not in the arrangement either. The window is chrome, four regions, chrome; this is the bottom
  *   half of the chrome, and `RegionFrame` is untouched by it — which is also why this change
  *   moved no JSX inside the frame and added no fourth `Panel` to a live group
  *   (charter-app#141's throw is a thing to stay away from, not a thing to test against).
@@ -56,7 +56,8 @@ import { ago } from "./BottomBar";
  *
  * - **A count lives next to the thing it counts.** The todos are the focused workspace's, so
  *   they sit beside its name; the pieces are that workspace's worktrees; `ws N` is how many
- *   others there are.
+ *   others there are; and `N chats running` is the project's, which is why it came here when
+ *   the title bar's breadcrumb went (ADR 0054).
  * - **Zero renders NOTHING.** A `todo 0` present every turn is furniture within a day, and a
  *   real `todo 7` in that spot then draws no more attention than the zero did. Presence is the
  *   signal.
@@ -93,6 +94,7 @@ export function StatusLine({
   read,
   where,
   workspaces,
+  running,
   state,
   alerts,
   doctor,
@@ -117,6 +119,13 @@ export function StatusLine({
   /** How many workspaces this project has, for `ws N`. `undefined` until the plane has been
    *  read. Zero IS drawn: a plane with no workspaces is a fact, not an absence of one. */
   workspaces: number | undefined;
+  /**
+   * How many of this project's chats are running ({@link runningIn}), or `undefined` before
+   * the project has said what it had open. It was the title bar's third clause until the
+   * breadcrumb went (ADR 0054); this line is per-project, and it is where the operator reads
+   * the project in front.
+   */
+  running?: number;
   /** What the core has said about the focused workspace. The counts are read off it and
    *  nothing extra is asked for: `useWorkspaceState` already makes these calls once for the
    *  three regions, and a status line that asked again would be `git status` per clone a
@@ -231,6 +240,14 @@ export function StatusLine({
       {workspaces !== undefined && (
         <span className="status-cell" data-testid="status-workspaces">
           <span className="status-label">ws</span> {workspaces}
+        </span>
+      )}
+
+      {/* The line's rule and not the breadcrumb's: zero is dropped, because presence is the
+          signal, and so is a count the project has not settled yet. */}
+      {running !== undefined && running > 0 && (
+        <span className="status-cell" data-testid="status-running">
+          {running} {running === 1 ? "chat" : "chats"} running
         </span>
       )}
 
@@ -391,4 +408,28 @@ export function pieceCount(state: WorkspaceState): number | undefined {
     total += listed.length;
   }
   return total === 0 ? undefined : total;
+}
+
+/**
+ * How many of a project's chats are running, out of the list the quit warning is given.
+ *
+ * **The existing answer, asked of nothing.** Every project keeps `ending` — its open chats,
+ * each with what it is doing — because the quit warning has to list them; the state on each
+ * one is `chatState.ts`'s, which is kept current by hooks rather than by polling. Counting
+ * here is a filter over a list the project is already holding, so the line costs no command
+ * of its own. A second `chat_states` call would be fifty questions to learn what it was told.
+ *
+ * **Running, not open**, which is the distinction charter draws and this operator lives by:
+ * he keeps many chats at once and most of them are sitting still. A chat that is waiting for
+ * him, one that has finished, one that failed and one that no hook has ever reported are each
+ * not running — the waiting ones are counted on the project tab and in the title bar's ✋
+ * menu. A number that meant "open" would say 50 all day.
+ *
+ * `undefined` until the project has settled, which is the core answering what it already had
+ * open. Before that an empty `ending` means *not yet*, and reading it as zero would be a
+ * number charter cannot stand behind, over a plane that is about to put twenty chats back.
+ */
+export function runningIn(report?: { ending: { state: string }[]; settled: boolean }) {
+  if (report === undefined || !report.settled) return undefined;
+  return report.ending.filter((chat) => chat.state === "running").length;
 }

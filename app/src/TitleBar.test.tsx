@@ -1,19 +1,26 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { StrictMode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { TitleBar, Breadcrumb, runningIn, type Crumbs } from "./TitleBar";
-import type { About, PlaneSaving } from "./bindings";
+import App from "./App";
+import { LEAST, leastAt } from "./fits";
+import { DEFAULT_TEXT } from "./textSize";
+import { TitleBar } from "./TitleBar";
+import type { About, Moved, OpenChat, PlaneSaving } from "./bindings";
 
 /**
- * **The title bar's own rules**, on the components and nothing else.
+ * **The title bar's own rules**, on the component, and **what the bar holds in the window**
+ * (ADR 0054), on the real `App` with the core mocked.
  *
- * The questions this file can answer are the ones a props-in/markup-out test really settles:
- * what each degraded reading of the breadcrumb SAYS, that *running* means running, that the
- * controls are on the bar and are buttons, and that About draws what the core answered out of
- * the changelog rather than a list of its own. `app/e2e/specs/title-bar.e2e.ts` asks the two things jsdom cannot —
- * whether the bar is really the first thing in the window, and whether About names the version
- * the real build announces.
+ * On the component: that the controls are on the bar and are buttons, what it reserves for the
+ * window controls, and that About draws what the core answered out of the changelog rather
+ * than a list of its own. In the window: that the project strip is in the bar and nowhere else,
+ * with its counts, its show-more and its `+`; that the breadcrumb is gone and the running count
+ * is on the status line; and that the right-hand end is still there.
+ * `app/e2e/specs/title-bar.e2e.ts` asks what jsdom cannot — whether the bar is really the
+ * first thing in the window, whether a stretch of it is left to grab, and whether About names
+ * the version the real build announces.
  *
  * **What nothing here proves is that the window moves when the bar is dragged.** That is not a
  * gap in this file: WebDriver dispatches a synthetic event and performs no default action
@@ -29,144 +36,21 @@ import type { About, PlaneSaving } from "./bindings";
  * a test here can read.
  */
 
+vi.mock("./SessionPane", () => ({
+  SessionPane: ({ session }: { session: number }) => (
+    <div data-testid="pane">session {session}</div>
+  ),
+}));
+
+declare global {
+  interface Window {
+    __TAURI_INTERNALS__: { runCallback: (id: number, payload: unknown) => void };
+  }
+}
+
 afterEach(() => {
   cleanup();
   clearMocks();
-});
-
-/** A breadcrumb with everything answered, which each test then takes one answer away from. */
-function crumbs(over: Partial<Crumbs> = {}): Crumbs {
-  return {
-    project: "charter-app",
-    decided: true,
-    read: true,
-    workspace: "alpha",
-    running: 3,
-    ...over,
-  };
-}
-
-/** What the row reads as, with the separators the operator asked for left in. */
-function said(): string {
-  return screen.getByTestId("title-crumbs").textContent ?? "";
-}
-
-describe("the breadcrumb, which says where the window is", () => {
-  it("says project, workspace and how many chats are running", () => {
-    render(<Breadcrumb crumbs={crumbs()} />);
-
-    expect(said()).toBe("charter-app/alpha/3 chats running");
-  });
-
-  it("says one chat rather than 1 chats, because it is a sentence and not a cell", () => {
-    render(<Breadcrumb crumbs={crumbs({ running: 1 })} />);
-
-    expect(said()).toBe("charter-app/alpha/1 chat running");
-  });
-
-  it("says no chats running rather than dropping the clause, which is NOT the footer's rule", () => {
-    // `StatusLine` drops a count at zero — presence is the signal, and a `todo 0` on the line
-    // every day is furniture by Friday. This is the third clause of one sentence, and a
-    // sentence that stops at the second slash on a quiet morning reads as charter having
-    // failed to count rather than as charter having counted none.
-    render(<Breadcrumb crumbs={crumbs({ running: 0 })} />);
-
-    expect(said()).toBe("charter-app/alpha/no chats running");
-  });
-
-  it("says it is still counting rather than saying zero, before the project has settled", () => {
-    // The gap this closes: a plane putting twenty chats back reports an empty `ending` for the
-    // first moments of every launch, and "no chats running" over it would be a wrong number
-    // nobody could tell from a right one.
-    render(<Breadcrumb crumbs={crumbs({ running: undefined })} />);
-
-    expect(said()).toBe("charter-app/alpha/counting chats…");
-  });
-
-  it("tells a plane it has not read from a plane that holds no workspace", () => {
-    // Two different claims, and the workspace's name cannot carry both — the same split
-    // `StatusLine` makes, in the same words, so the top and the bottom of the window agree.
-    render(<Breadcrumb crumbs={crumbs({ read: false, workspace: undefined })} />);
-    expect(said()).toBe("charter-app/reading the plane…/3 chats running");
-    cleanup();
-
-    render(<Breadcrumb crumbs={crumbs({ read: true, workspace: undefined })} />);
-    expect(said()).toBe("charter-app/no workspace/3 chats running");
-  });
-
-  it("replaces the whole row with a sentence when there is no project, rather than drawing a skeleton", () => {
-    // The failure this component is written against: `  /  / ` — two empty segments and two
-    // slashes, which says nothing and looks broken.
-    render(<Breadcrumb crumbs={crumbs({ project: undefined })} />);
-
-    expect(said()).toBe("No project open");
-    expect(said()).not.toContain("/");
-  });
-
-  it("says charter is opening before the window has decided whether it holds a project", () => {
-    // The opener's own pair of conditions (`App.tsx`'s `openerUp`): a cold launch restoring
-    // eight projects holds none for a moment, and "No project open" over it is the same lie
-    // the opener is careful not to tell in a larger font.
-    render(<Breadcrumb crumbs={crumbs({ project: undefined, decided: false })} />);
-
-    expect(said()).toBe("charter is opening…");
-  });
-
-  it("puts the whole reading on the row's title, so what it had to truncate is a hover away", () => {
-    // The names truncate in CSS, which jsdom does not run — what is testable is that nothing
-    // truncated is unrecoverable.
-    render(
-      <Breadcrumb crumbs={crumbs({ project: "a-very-long-project-name", workspace: "svc" })} />,
-    );
-
-    expect(screen.getByTestId("title-crumbs")).toHaveAttribute(
-      "title",
-      "a-very-long-project-name / svc / 3 chats running",
-    );
-  });
-
-  it("hides the separators from a screen reader, which would otherwise read the punctuation", () => {
-    render(<Breadcrumb crumbs={crumbs()} />);
-
-    const marks = screen.getByTestId("title-crumbs").querySelectorAll(".crumb-sep");
-    expect(marks).toHaveLength(2);
-    for (const mark of marks) expect(mark).toHaveAttribute("aria-hidden", "true");
-  });
-});
-
-describe("what `N chats running` counts", () => {
-  const chat = (state: string) => ({ state });
-
-  it("counts a chat that is running and no other state", () => {
-    // The operator runs many chats at once and most of them are sitting still. `open` would
-    // say 50 all day; `running` is the number that changes when something is happening.
-    const report = {
-      settled: true,
-      ending: [
-        chat("running"),
-        chat("waiting"),
-        chat("done"),
-        chat("failed"),
-        chat("unknown"),
-        chat("running"),
-      ],
-    };
-
-    expect(runningIn(report)).toBe(2);
-  });
-
-  it("counts nothing at all until the project has said what it had open", () => {
-    // An empty `ending` before the core has answered is "not yet", never zero — the same
-    // distinction `PlaneReport.settled` exists for, and a quit that got it wrong would end
-    // every chat it had not heard about.
-    expect(runningIn({ settled: false, ending: [] })).toBeUndefined();
-    expect(runningIn({ settled: false, ending: [chat("running")] })).toBeUndefined();
-    expect(runningIn(undefined)).toBeUndefined();
-  });
-
-  it("counts zero once it has settled on nothing, which is an answer", () => {
-    expect(runningIn({ settled: true, ending: [] })).toBe(0);
-  });
 });
 
 describe("the bar itself", () => {
@@ -176,7 +60,7 @@ describe("the bar itself", () => {
     // what stops it. `deep` rather than the bare attribute, because a bare one drags only on a
     // DIRECT press of the element carrying it: on a bar made of text spans that is everywhere
     // except on its own words.
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     expect(screen.getByTestId("title-bar")).toHaveAttribute("data-tauri-drag-region", "deep");
     const about = screen.getByTestId("title-about");
@@ -192,7 +76,7 @@ describe("the bar itself", () => {
     // applies to every button this change added. The update item's trigger beside it has
     // none, which is charter-app#189's open question about the whole window outside its
     // dialogs, and is not something this bar should answer on one button.
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     expect(screen.getByTestId("title-about")).toHaveAttribute("tabindex", "0");
   });
@@ -201,11 +85,11 @@ describe("the bar itself", () => {
     // The answer lands a frame after the first paint (`useTitleBarRoom` says why it is not
     // awaited before the render), and a bar that guessed 78 px on Linux would have a gap in it
     // that nothing filled.
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
     expect(screen.getByTestId("title-bar").style.getPropertyValue("--window-controls")).toBe("0px");
     cleanup();
 
-    render(<TitleBar crumbs={crumbs()} room={{ overlaid: true, reserved: 78 }} />);
+    render(<TitleBar room={{ overlaid: true, reserved: 78 }} />);
     expect(screen.getByTestId("title-bar").style.getPropertyValue("--window-controls")).toBe(
       "78px",
     );
@@ -215,7 +99,7 @@ describe("the bar itself", () => {
   it("draws no update item for a window that wired no updater", () => {
     // The same rule the status line's own controls follow: a caller with nothing to offer
     // offers nothing, rather than a control that answers a press with nothing.
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     expect(screen.queryByTestId("status-update")).not.toBeInTheDocument();
     expect(screen.getByTestId("title-about")).toBeInTheDocument();
@@ -251,7 +135,7 @@ describe("About Charter", () => {
   it("asks nothing until it is opened, because a launch does not pay for a dialog nobody opened", async () => {
     const asked = core();
 
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
     await screen.findByTestId("title-about");
 
     expect(asked).not.toContain("about_charter");
@@ -259,7 +143,7 @@ describe("About Charter", () => {
 
   it("names the version this build is and draws what it brought as Markdown", async () => {
     core();
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     await userEvent.click(screen.getByTestId("title-about"));
     const dialog = await screen.findByRole("dialog");
@@ -279,7 +163,7 @@ describe("About Charter", () => {
       build: { kind: "dev", of: "0.2.0" },
       notes: { version: "Unreleased", date: null, markdown: "- Coming next." },
     });
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     await userEvent.click(screen.getByTestId("title-about"));
     const dialog = await screen.findByRole("dialog");
@@ -292,7 +176,7 @@ describe("About Charter", () => {
 
   it("says plainly when the changelog has no section for this version", async () => {
     core({ version: "0.3.0", build: { kind: "unlisted" }, notes: null });
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     await userEvent.click(screen.getByTestId("title-about"));
     const dialog = await screen.findByRole("dialog");
@@ -308,7 +192,7 @@ describe("About Charter", () => {
       build: { kind: "dev", of: "0.2.0" },
       notes: { version: "Unreleased", date: null, markdown: "" },
     });
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     await userEvent.click(screen.getByTestId("title-about"));
     const dialog = await screen.findByRole("dialog");
@@ -318,7 +202,7 @@ describe("About Charter", () => {
 
   it("points at the releases page, and never at Python charter's news", async () => {
     core();
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     await userEvent.click(screen.getByTestId("title-about"));
     const dialog = await screen.findByRole("dialog");
@@ -336,7 +220,7 @@ describe("About Charter", () => {
     // and an About dialog that answered a failure with a blank panel would read as a version
     // that brought nothing.
     core(new Error("no changelog"));
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     await userEvent.click(screen.getByTestId("title-about"));
     const dialog = await screen.findByRole("dialog");
@@ -348,7 +232,7 @@ describe("About Charter", () => {
 
   it("asks once, because the changelog ships in the binary and cannot change while it runs", async () => {
     const asked = core();
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
 
     await userEvent.click(screen.getByTestId("title-about"));
     await screen.findByTestId("about-version");
@@ -386,7 +270,6 @@ describe("the save indicator (charter-app#294)", () => {
     const opened: string[] = [];
     render(
       <TitleBar
-        crumbs={crumbs()}
         save={{
           saving: saving(),
           busy: false,
@@ -407,7 +290,6 @@ describe("the save indicator (charter-app#294)", () => {
     const saved: string[] = [];
     render(
       <TitleBar
-        crumbs={crumbs()}
         save={{ saving: saving(), busy: false, onOpen: () => {}, onSave: () => saved.push("save") }}
       />,
     );
@@ -417,7 +299,6 @@ describe("the save indicator (charter-app#294)", () => {
 
     render(
       <TitleBar
-        crumbs={crumbs()}
         save={{
           saving: saving({ stage: "saved", changed: [] }),
           busy: false,
@@ -431,7 +312,220 @@ describe("the save indicator (charter-app#294)", () => {
   });
 
   it("draws nothing without a project to save", () => {
-    render(<TitleBar crumbs={crumbs()} />);
+    render(<TitleBar />);
     expect(screen.queryByRole("button", { name: /^Saving:/ })).toBeNull();
+  });
+});
+
+describe("the title bar in the window, which holds the project strip (ADR 0054)", () => {
+  const ONE = "/home/dev/one";
+  const TWO = "/home/dev/two";
+
+  /** A chat the core says a project has open, working in that project's `alpha`. */
+  function chat(root: string, session: number, name: string): OpenChat {
+    return {
+      session,
+      name,
+      cwd: `${root}/workspaces/alpha`,
+      harness: null,
+      in_front: session === 1,
+      resumed: null,
+      fresh: null,
+      profile: null,
+      persona: null,
+      unreported: null,
+      pinned: false,
+      label: null,
+      from: null,
+    };
+  }
+
+  /**
+   * A core holding two projects, `one` in front, each with a workspace `alpha` and one chat in
+   * it. Answers `chat-moved` to every project listening, the way the core pushes one.
+   */
+  function core() {
+    const listeners = new Map<string, number[]>();
+    mockIPC((cmd, args) => {
+      const given = (args ?? {}) as Record<string, unknown>;
+      if (cmd === "plugin:event|listen") {
+        const { event, handler } = given as unknown as { event: string; handler: number };
+        listeners.set(event, [...(listeners.get(event) ?? []), handler]);
+        return 1;
+      }
+      const plane = (given.plane as string | undefined) ?? "";
+      if (cmd === "plane_at_launch") return { plane: null, from: null, why: null };
+      if (cmd === "planes_to_restore") return { planes: [ONE, TWO], active: 0, dropped: [] };
+      if (cmd === "open_plane") return { plane: given.path, ask: null };
+      if (cmd === "plane_sidebar")
+        return {
+          root: plane,
+          workspaces: [
+            {
+              name: "alpha",
+              path: `${plane}/workspaces/alpha`,
+              vision: "",
+              todos: [],
+              chats: [chat(plane, 1, `${plane.split("/").pop()}.1`)],
+            },
+          ],
+          personas: [],
+          persona: null,
+          unfiled: [],
+        };
+      if (cmd === "opened_chats") return [chat(plane, 1, `${plane.split("/").pop()}.1`)];
+      if (cmd === "chat_states") return [];
+      if (cmd === "chats_that_would_not_start") return [];
+      if (cmd === "running_sessions") return [];
+      if (cmd === "recent_planes") return { planes: [], dropped: [], forgetful: null };
+      if (cmd === "extensions_on") return [];
+      return null;
+    });
+    return {
+      /** Says chat 1 in `plane` is now in `state`, and whether it is asking for you. */
+      move(plane: string, state: Moved["state"], sequence: number) {
+        const moved: Moved = {
+          plane,
+          session: 1,
+          state,
+          needs_you: state === "waiting",
+          queue: state === "waiting" ? [1] : [],
+          moved_at: sequence,
+          sequence,
+          reports: [],
+        };
+        for (const handler of listeners.get("chat-moved") ?? [])
+          window.__TAURI_INTERNALS__.runCallback(handler, {
+            event: "chat-moved",
+            id: 1,
+            payload: moved,
+          });
+      },
+    };
+  }
+
+  const bar = () => screen.getByTestId("title-bar");
+  const strip = () => screen.getByRole("tablist", { name: "Projects" });
+
+  it("holds the project tabs, the window's only project strip, each with its needs-you count", async () => {
+    const { move } = core();
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(within(strip()).getByText("two")).toBeInTheDocument());
+
+    move(TWO, "waiting", 1);
+
+    expect(await within(bar()).findByLabelText("1 chats need you in two")).toBeInTheDocument();
+    expect(within(bar()).getByRole("tablist", { name: "Projects" })).toBe(strip());
+  });
+
+  it("holds the project strip's show-more, with what it hides that needs you, and its +", async () => {
+    // Room for one project tab, so `two` is behind the show-more button. jsdom lays nothing
+    // out (#149): the strip answers `clientWidth` by its name, and nothing else is measured.
+    const was = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.getAttribute("aria-label") === "Projects"
+          ? leastAt(LEAST.project, DEFAULT_TEXT.window)
+          : 0;
+      },
+    });
+    try {
+      const { move } = core();
+      render(
+        <StrictMode>
+          <App />
+        </StrictMode>,
+      );
+      await waitFor(() => expect(within(strip()).getByText("one")).toBeInTheDocument());
+
+      move(TWO, "waiting", 1);
+
+      expect(
+        await within(bar()).findByRole("button", {
+          name: "Show 1 project the strip is not showing, where 1 chat needs you",
+        }),
+      ).toBeInTheDocument();
+      expect(within(bar()).getByRole("button", { name: "Open a project…" })).toBeInTheDocument();
+      expect(within(bar()).getByRole("button", { name: "New project…" })).toBeInTheDocument();
+    } finally {
+      if (was) Object.defineProperty(HTMLElement.prototype, "clientWidth", was);
+      else Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+    }
+  });
+
+  it("says no breadcrumb: the project tab and the workspace strip say where the window is", async () => {
+    // ADR 0054: a crumb repeating both spends the width the project tabs need.
+    core();
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tablist", { name: "Workspaces" })).toHaveTextContent("alpha"),
+    );
+
+    expect(bar()).not.toHaveTextContent("alpha");
+    expect(bar()).not.toHaveTextContent(/running|counting chats/);
+  });
+
+  it("leaves how many chats are running to the status line of the project in front", async () => {
+    const { move } = core();
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(within(strip()).getByText("two")).toBeInTheDocument());
+
+    move(ONE, "running", 1);
+    // A chat running in a project behind is that project's line's to say, not this one's.
+    move(TWO, "running", 2);
+
+    const line = screen.getByTestId("status-line");
+    expect(await within(line).findByText("1 chat running")).toBeInTheDocument();
+  });
+
+  it("keeps its right-hand end: the needs-you hand, About and the update item", async () => {
+    const { move } = core();
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(within(strip()).getByText("two")).toBeInTheDocument());
+
+    move(TWO, "waiting", 1);
+
+    expect(
+      await within(bar()).findByRole("button", { name: "1 chat needs you" }),
+    ).toBeInTheDocument();
+    expect(within(bar()).getByTestId("title-about")).toBeInTheDocument();
+    expect(within(bar()).getByTestId("status-update")).toBeInTheDocument();
+  });
+
+  it("drags from anywhere but its controls, and every project tab is a button it stops at", async () => {
+    // Tauri's `deep` handler stops at the first clickable element up the path, and `BUTTON`
+    // is one by its tag. A tab drawn as anything else would drag the window from under it.
+    core();
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(within(strip()).getByText("two")).toBeInTheDocument());
+
+    expect(bar()).toHaveAttribute("data-tauri-drag-region", "deep");
+    for (const name of ["one", "two"]) {
+      const tab = within(strip()).getByText(name).closest("button");
+      expect(tab, `${name}'s tab is not a button`).not.toBeNull();
+      expect(bar().contains(tab)).toBe(true);
+      expect(tab).not.toHaveAttribute("data-tauri-drag-region");
+    }
   });
 });

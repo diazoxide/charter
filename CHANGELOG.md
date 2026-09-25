@@ -167,6 +167,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The project tabs are in the title bar**, after the window controls, and the breadcrumb
+  is gone: the project tab says which project and the workspace strip says which workspace.
+  That is one tab row fewer above the panes. The tabs give way before About, the update
+  button and the ✋ menu do, and a stretch of the bar is always left free to drag the window
+  by. How many chats are running is now on the status line.
+  ([#394](https://github.com/diazoxide/charter-app/issues/394))
 - The alerts drawer no longer repeats what the title bar's save indicator already says about
   the plane: a plane-root alert there now names only a detached HEAD or a branch other than
   the default. Its remedy, in the drawer and on the terminal status line, now reads "save the
