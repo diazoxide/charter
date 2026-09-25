@@ -782,7 +782,7 @@ const SAVES_IN_FORCE: SavingInForce = {
   repos: [
     {
       name: "web",
-      mode: said("pr"),
+      mode: said("off"),
       branch: said(null),
       sign: said("off"),
       autosave: said("off"),
@@ -1046,7 +1046,7 @@ describe("the Repos group (charter-app#300, ADR 0051)", () => {
       /In this project: push, from charter\.toml\./,
     );
     expect(within(sharedRepos).getByLabelText("web: mode")).toHaveAccessibleDescription(
-      /In this project: pr, its default\./,
+      /In this project: off, its default\./,
     );
     expect(within(sharedRepos).getByLabelText("web: branch")).toHaveAccessibleDescription(
       /In this project: the repo's default branch, its default\./,

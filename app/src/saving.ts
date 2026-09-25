@@ -164,24 +164,34 @@ export function repoStageText(repo: RepoSaving): string {
 
 /**
  * **Where a repo's Save goes**, said before anyone presses it (ADR 0051, amended 2026-09-25):
- * the branch it commits on, whether it is pushed, and the pull request it opens — the same
- * steps `reposave` takes, by mode. A save commits every file the clone has changed.
+ * the steps `reposave::save_as` takes, by mode, including where it stops short. A save always
+ * commits every changed file on the branch the clone is on; in a PR mode on the pull
+ * request's base or the default branch, that commit is then pushed as a branch of charter's
+ * own, never to the branch itself.
  */
 export function repoSaveGoesTo(repo: RepoSaving, workspace: string): string {
-  const on = repo.branch ?? "no branch";
+  if (repo.mode === "off") return "Nowhere — charter does not save it";
+  const on = repo.branch;
+  if (on === null) return "Nowhere — the clone is not on a branch; check one out first";
+  const noForge = "its origin is not on a forge charter knows";
   switch (repo.mode) {
-    case "off":
-      return "Nowhere — charter does not save it";
     case "commit":
       return `Commits on ${on} — nothing is pushed`;
     case "push":
-      return `Commits on ${on} and pushes it`;
+      return repo.pushes
+        ? `Commits on ${on} and pushes ${on}`
+        : `Commits on ${on} — nothing is pushed: ${noForge}`;
     case "pr":
     case "pr-merge": {
-      const branch = repo.ownBranch ? `a new branch charter/${workspace}/…` : on;
-      const into = repo.target ?? "the default branch";
-      const merge = repo.mode === "pr-merge" ? ", set to merge itself" : "";
-      return `Commits on ${branch}, pushes it, and opens a pull request into ${into}${merge}`;
+      if (!repo.pushes) return `Commits on ${on}, then stops: ${noForge}`;
+      if (repo.target === null)
+        return `Commits on ${on}, then stops: charter does not know where a pull request goes — set [repos.${repo.name}] branch`;
+      const pushed = repo.ownBranch
+        ? `pushes that commit as charter/${workspace}/… (never to ${on})`
+        : `pushes ${on}`;
+      const merge =
+        repo.mode === "pr-merge" ? ", and asks it to merge itself once its checks pass" : "";
+      return `Commits on ${on}, ${pushed}, and opens a pull request into ${repo.target}${merge}`;
     }
     default:
       return `Saved by mode ${repo.mode}`;

@@ -71,14 +71,18 @@ export function SavingView({
     }
   };
 
-  /** Whether Save all's confirmation is open: it names every tree it would save first. */
-  const [confirming, setConfirming] = useState(false);
+  /** Save all's confirmation, while it is open: every tree it would save, as read when Save all
+   *  was pressed. Held still, so what is saved is exactly what the operator read — the rereads
+   *  that keep the view fresh never add a repo to a list already on screen. */
+  const [confirming, setConfirming] = useState<{
+    plane: PlaneSaving | null;
+    repos: RepoSaving[];
+  }>();
 
   /** Save all: the plane and every repo with something to take, one after another. Only ever
    *  run from its confirmation (ADR 0051, amended 2026-09-25). */
-  const saveEverything = async () => {
-    if (saving === undefined) return;
-    setConfirming(false);
+  const saveEverything = async (what: { plane: PlaneSaving | null; repos: RepoSaving[] }) => {
+    setConfirming(undefined);
     setBusy(true);
     setSaid(null);
     setRefused(null);
@@ -86,10 +90,10 @@ export function SavingView({
     try {
       const got = await saveAll(
         plane,
-        savable(saving),
+        what.plane !== null,
         typed === "" ? null : typed,
         workspace,
-        repos ?? [],
+        what.repos,
       );
       if (got.said.length > 0) setSaid(got.said);
       if (got.refused.length > 0) setRefused(got.refused.join("\n"));
@@ -219,7 +223,12 @@ export function SavingView({
                 type="button"
                 className="panel-view"
                 tabIndex={0}
-                onClick={() => setConfirming(true)}
+                onClick={() =>
+                  setConfirming({
+                    plane: savable(saving) ? saving : null,
+                    repos: (repos ?? []).filter(repoSavable),
+                  })
+                }
                 disabled={busy || !anyToSave}
               >
                 <Save className="node-icon" aria-hidden="true" />
@@ -227,13 +236,13 @@ export function SavingView({
               </button>
             )}
           </div>
-          {confirming && workspace !== undefined && (
+          {confirming !== undefined && workspace !== undefined && (
             <ConfirmSaveAll
-              plane={savable(saving) ? saving : null}
+              plane={confirming.plane}
               workspace={workspace}
-              repos={(repos ?? []).filter(repoSavable)}
-              onSave={() => void saveEverything()}
-              onCancel={() => setConfirming(false)}
+              repos={confirming.repos}
+              onSave={() => void saveEverything(confirming)}
+              onCancel={() => setConfirming(undefined)}
             />
           )}
           {workspace !== undefined && repos !== undefined && repos.length > 0 && (
@@ -392,7 +401,7 @@ function ConfirmSaveAll({
             far as its mode says.
           </AlertDialog.Description>
           <ul className="saving-files" aria-label="What Save all saves">
-            {plane !== null && <li>{`The project — ${filesSaid(plane.changed.length)}`}</li>}
+            {plane !== null && <li>{`The project — ${planeTakes(plane)}`}</li>}
             {repos.map((repo) => (
               <li key={repo.name}>
                 {`${repo.name} on ${repo.branch ?? "no branch"} — ${repoTakes(repo)} — ${repoSaveGoesTo(repo, workspace)}`}
@@ -418,6 +427,15 @@ function ConfirmSaveAll({
 /** "1 file changed", "3 files changed". */
 function filesSaid(n: number): string {
   return `${n} ${n === 1 ? "file" : "files"} changed`;
+}
+
+/** What the project's save would take: its changed files, else the commits a push would carry,
+ *  else the blocked save it tries again. */
+function planeTakes(plane: PlaneSaving): string {
+  if (plane.changed.length > 0) return filesSaid(plane.changed.length);
+  if (plane.stage === "blocked") return "trying its blocked save again";
+  if (plane.ahead === null) return "a branch never pushed";
+  return `${plane.ahead} ${plane.ahead === 1 ? "commit" : "commits"} not pushed`;
 }
 
 /** What a repo's save would take: its changed files, else the commits a push would carry. */
