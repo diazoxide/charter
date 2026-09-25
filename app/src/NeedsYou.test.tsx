@@ -387,8 +387,9 @@ describe("the needs-you count's colours", () => {
     "",
   );
   const rule = (selector: string) =>
-    new RegExp(`(?:^|\\})\\s*${selector.replace(/[.]/g, "\\.")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ??
-    "";
+    new RegExp(
+      `(?:^|\\})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`,
+    ).exec(css)?.[1] ?? "";
 
   it("never writes the button's words in needs-you.base", () => {
     expect(rule(".needs-you-button")).toMatch(/(?:^|[;\s])color:\s*var\(--text-primary\)/);

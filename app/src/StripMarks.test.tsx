@@ -310,9 +310,9 @@ describe("each strip says which layer it is, by shade rather than by indent or l
 
   /** One rule's declarations, by the selector that opens it. */
   const block = (selector: string): string => {
-    const found = new RegExp(`(^|[},])\\s*${selector.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`).exec(
-      css,
-    );
+    const found = new RegExp(
+      `(^|[},])\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`,
+    ).exec(css);
     expect(found, `no ${selector} rule in App.css`).not.toBeNull();
     return found?.[2] ?? "";
   };
