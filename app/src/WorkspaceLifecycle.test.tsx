@@ -77,6 +77,8 @@ function core(
     refusesOver?: Risk[];
     /** The plane's workspaces; none is a plane nobody has made one in yet. */
     workspaces?: string[];
+    /** A forge the operator is not logged in to, as CI's machines are. */
+    loggedOut?: boolean;
     /** Repos whose clone fails, with the core's sentence. */
     cloneFails?: Record<string, string>;
   } = {},
@@ -145,7 +147,9 @@ function core(
           { name: "api", path: "acme/api", description: "" },
           { name: "web", path: "acme/web", description: "" },
         ],
-        trouble: [],
+        trouble: over.loggedOut
+          ? ["gh is not authenticated for github.com. Run: gh auth login"]
+          : [],
       };
     if (cmd === "take_repos") return null;
     if (cmd === "workspace_repos")
@@ -513,7 +517,8 @@ describe("making a workspace", () => {
   it("shows the core's refusal about a name, in the dialog, and stays open", async () => {
     // The window validates no name of its own: `workspace_create` runs `wscmd::ensure`, which
     // is where `contain::workspace_name_ok` is. A second alphabet here would drift.
-    core();
+    // Logged out of the forge, as CI is: the picker's note about that is not the refusal.
+    core({ loggedOut: true });
     render(<App />);
     await settled();
     const dialog = await askToCreate();

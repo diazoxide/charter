@@ -83,13 +83,13 @@ export function RepoPicker({
           Asking your forge which repos you can reach…
         </p>
       ) : "refused" in found ? (
-        <p className="trouble" role="alert">
+        <p className="trouble" role="status">
           {found.refused}
         </p>
       ) : (
         <>
           {found.trouble.map((line) => (
-            <p key={line} className="trouble" role="alert">
+            <p key={line} className="trouble" role="status">
               {line}
             </p>
           ))}
