@@ -619,7 +619,14 @@ const STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 fn tracked_dirty(root: &Path) -> bool {
     let Ok(run) = crate::worktree::git::run(
         root,
-        &["status", "--porcelain=v1", "--branch"],
+        // Without the index refresh a plain `status` does, which takes `index.lock` from
+        // under a save running in the same plane (charter-app#294).
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "--branch",
+        ],
         STATUS_TIMEOUT,
     ) else {
         return false;

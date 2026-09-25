@@ -621,7 +621,16 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
 pub(crate) fn changed_paths(root: &Path) -> Vec<String> {
     let Ok(run) = git::run(
         root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        // `--no-optional-locks`, as `profiles.rs` and `guest.rs` ask: a plain `status`
+        // refreshes the index and takes `index.lock`, and the title bar asks this every ten
+        // seconds — a save's `git add -A` landing inside that window failed on the lock.
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
         git::READ,
     ) else {
         return Vec::new();

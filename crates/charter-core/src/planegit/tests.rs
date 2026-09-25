@@ -2120,3 +2120,29 @@ fn a_fetch_waits_its_turn_behind_a_running_save() {
     drop(running);
     assert!(fetch(&fixture.root, true).is_ok());
 }
+
+#[test]
+fn reading_where_unsaved_work_sits_never_writes_the_index_a_save_needs() {
+    // A plain `git status` refreshes stale stat data and writes `.git/index` under
+    // `index.lock` — which a save's `git add -A` landing at that moment failed on, from the
+    // title bar asking every ten seconds. The read must be read-only.
+    let fixture = Fixture::plane();
+    let index = fixture.root.join(".git/index");
+    let old = std::time::SystemTime::now() - Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&index)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    // A tracked file whose stat data no longer matches the index: a refresh would rewrite it.
+    std::fs::write(fixture.root.join("README.md"), "one\n").unwrap();
+    let before = std::fs::metadata(&index).unwrap().modified().unwrap();
+
+    let _ = standing(&fixture.root);
+
+    assert_eq!(
+        std::fs::metadata(&index).unwrap().modified().unwrap(),
+        before
+    );
+}
