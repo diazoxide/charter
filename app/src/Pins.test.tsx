@@ -233,7 +233,7 @@ describe("a pinned workspace", () => {
   it("is pinned by the palette, and the machine store is asked again", async () => {
     const { asked: asks } = core([chat(1, "one", "alpha")]);
     render(<App />);
-    await vi.waitFor(() => expect(workspaceNames()).toEqual(["alpha"]));
+    await waitFor(() => expect(workspaceNames()).toEqual(["alpha"]));
     const before = asked(asks, "plane_pins").length;
 
     await runFromPalette("Pin workspace beta");

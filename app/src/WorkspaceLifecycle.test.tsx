@@ -1,6 +1,13 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render as renderBare, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -162,7 +169,7 @@ async function askToDelete(workspace: string) {
 
 async function settled() {
   // beta pinned, then alpha, the workspace you are in (ADR 0054).
-  await vi.waitFor(() => expect(strip()).toEqual(["beta", "alpha"]));
+  await waitFor(() => expect(strip()).toEqual(["beta", "alpha"]));
 }
 
 describe("deleting a workspace", () => {

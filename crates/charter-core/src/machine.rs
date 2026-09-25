@@ -175,7 +175,7 @@ pub const MOST_PINNED_WORKSPACES: usize = 32;
 
 /// How many workspaces [`Store::pin_the_most_active`] pins in a plane charter has not pinned
 /// any in before (ADR 0054): an operator with many workspaces works in about three.
-pub const MOST_ACTIVE_PINNED: usize = 3;
+pub const FIRST_OPEN_PINS: usize = 3;
 
 /// The two bounds, counted apart, in one place.
 ///
@@ -945,7 +945,7 @@ impl Store {
         (kept, gone)
     }
 
-    /// Pins the [`MOST_ACTIVE_PINNED`] most recently active workspaces in `plane`, **once**
+    /// Pins the [`FIRST_OPEN_PINS`] most recently active workspaces in `plane`, **once**
     /// (ADR 0054), answering whether it ran.
     ///
     /// The workspace strip draws the pinned workspaces and the one you are in, so a plane
@@ -979,7 +979,7 @@ impl Store {
             })
             .collect();
         ranked.sort_by(|one, other| other.0.total_cmp(&one.0));
-        for (_, name) in ranked.into_iter().take(MOST_ACTIVE_PINNED) {
+        for (_, name) in ranked.into_iter().take(FIRST_OPEN_PINS) {
             if entry.pinned_workspaces.len() >= MOST_PINNED_WORKSPACES {
                 break;
             }
