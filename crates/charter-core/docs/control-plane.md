@@ -136,7 +136,7 @@ control plane itself is identical, and until you choose, nothing is written to y
 all.
 
 Why a repository is not made into a plane unasked is
-[ADR 0035](https://github.com/diazoxide/charter-app/blob/main/docs/adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md)
+[ADR 0035](https://github.com/diazoxide/charter/blob/main/docs/adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md)
 and charter-app spec decision 27. `charter init` anywhere that is not the top of a git repo
 makes the plane right there.
 
@@ -371,7 +371,7 @@ app's version, or one that is not a version at all, is drift.
 
 While this app's own version is at or below `0.62.1` the two lines share numbers, so a pin
 written by hand for this app in that range reads as the older line too. The reasons are
-[ADR 0045](https://github.com/diazoxide/charter-app/blob/main/docs/adr/0045-charters-version-is-the-apps-version.md).
+[ADR 0045](https://github.com/diazoxide/charter/blob/main/docs/adr/0045-charters-version-is-the-apps-version.md).
 
 ## `[harness]` — profiles, and the default
 

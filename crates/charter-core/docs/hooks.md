@@ -625,7 +625,7 @@ Some guards name a narrower move first, and it is usually the one you want:
 **If a guard is wrong about you *every time*, that is not an override problem.** It means
 charter is holding a policy your organisation does not — an org that mandates signed
 commits, say. Switching the guard off locally hides that; the fix belongs in the rule.
-[Open an issue](https://github.com/diazoxide/charter-app/issues).
+[Open an issue](https://github.com/diazoxide/charter/issues).
 
 **The thing that is not an override**, named here so nobody finds it by accident and
 believes they found the switch: removing charter's hooks from `.claude/settings.json`, or

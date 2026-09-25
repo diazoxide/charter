@@ -88,7 +88,7 @@ PRs merged past them; that is what the issue is for.
 
 ### Issue tracker
 
-GitHub Issues on `diazoxide/charter-app`, through `gh`. See `docs/agents/issue-tracker.md`.
+GitHub Issues on `diazoxide/charter`, through `gh`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

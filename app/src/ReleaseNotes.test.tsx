@@ -17,7 +17,7 @@ afterEach(() => {
 
 const SECTION = `### Added
 
-- The **first** thing, with \`code\`. ([#7](https://github.com/diazoxide/charter-app/pull/7))
+- The **first** thing, with \`code\`. ([#7](https://github.com/diazoxide/charter/pull/7))
 - The second thing.
 
 ### Fixed
@@ -57,7 +57,7 @@ describe("ReleaseNotes", () => {
     await userEvent.click(link);
 
     await vi.waitFor(() =>
-      expect(opened).toEqual(["https://github.com/diazoxide/charter-app/pull/7"]),
+      expect(opened).toEqual(["https://github.com/diazoxide/charter/pull/7"]),
     );
   });
 

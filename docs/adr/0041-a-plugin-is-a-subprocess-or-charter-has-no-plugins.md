@@ -10,7 +10,7 @@ the end — what has to be true before a line of runtime ships.
 The work is charter-app's. The record is here because `0001`–`0040` are here and a decision about
 charter's trust boundary kept in the other repository would split the sequence; ADR 0031 made the
 same move for the same reason. Every path below (`crates/charter-core/…`, `app/src-tauri/…`,
-`app/src/…`) is in `diazoxide/charter-app` and every bare `#nnn` is an issue there.
+`app/src/…`) is in `diazoxide/charter` and every bare `#nnn` is an issue there.
 
 **Nothing in this record is implemented.** It is a gate, written before the thing it gates, which
 is the only order in which a gate is worth anything.
@@ -637,7 +637,7 @@ record gates has been built, in charter-app#212 (unmerged when this was written)
 it goes through the gate one item at a time so that whether the gate was honoured is a thing a
 reader checks rather than a thing a brief asserts. The operator has not ruled on any of it.
 
-**What was built**, in `diazoxide/charter-app`:
+**What was built**, in `diazoxide/charter`:
 
 - `crates/charter-core/src/executor.rs` — the executor. It starts an approved extension's
   declared program, hands it one question, reads one answer, and stops it.

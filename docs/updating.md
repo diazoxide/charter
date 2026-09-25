@@ -41,8 +41,8 @@ npx tauri signer generate -w ~/.tauri/charter-updater.key
 #   (on a machine where npx hangs: node node_modules/@tauri-apps/cli/tauri.js signer generate -w ~/.tauri/charter-updater.key)
 #   Give it a password when asked.
 
-gh secret set TAURI_SIGNING_PRIVATE_KEY          --repo diazoxide/charter-app < ~/.tauri/charter-updater.key
-gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo diazoxide/charter-app   # prompts; paste the password
+gh secret set TAURI_SIGNING_PRIVATE_KEY          --repo diazoxide/charter < ~/.tauri/charter-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo diazoxide/charter   # prompts; paste the password
 ```
 
 **Put the private key and its password in your password manager as well.** Every installed
@@ -89,9 +89,9 @@ certificate silently signs with something nobody chose.
 ```sh
 security find-identity -v -p codesigning    # copy the "Developer ID Application: … (TEAMID)" line
 
-base64 -i charter-devid.p12 | gh secret set APPLE_CERTIFICATE --repo diazoxide/charter-app
-gh secret set APPLE_CERTIFICATE_PASSWORD --repo diazoxide/charter-app                     # the .p12 password
-gh secret set APPLE_SIGNING_IDENTITY --repo diazoxide/charter-app \
+base64 -i charter-devid.p12 | gh secret set APPLE_CERTIFICATE --repo diazoxide/charter
+gh secret set APPLE_CERTIFICATE_PASSWORD --repo diazoxide/charter                     # the .p12 password
+gh secret set APPLE_SIGNING_IDENTITY --repo diazoxide/charter \
   --body "Developer ID Application: Your Name (TEAMID)"
 ```
 
@@ -117,7 +117,7 @@ GitHub has no release without a tag, and nothing in CI creates a tag. So you cre
 dev channel hangs on, once:
 
 ```sh
-gh release create dev --repo diazoxide/charter-app --prerelease --target main \
+gh release create dev --repo diazoxide/charter --prerelease --target main \
   --title "dev channel" --notes "The rolling dev channel. Not a release."
 ```
 

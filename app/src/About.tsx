@@ -5,7 +5,7 @@ import { commands, type About } from "./bindings";
 import { ExternalLink, ReleaseNotes } from "./ReleaseNotes";
 
 /** Where every version's notes are, the same text this dialog shows for one of them. */
-const RELEASES = "https://github.com/diazoxide/charter-app/releases";
+const RELEASES = "https://github.com/diazoxide/charter/releases";
 
 /**
  * **About Charter**: which version of the app this is, and what that version brought.
