@@ -548,6 +548,12 @@ export const commands = {
 	 */
 	forgetExtension: (id: string) => typedError<null, string>(__TAURI_INVOKE("forget_extension", { id })),
 	/**
+	 *  Turn a built-in extension on or off on this machine: what the Extensions list offers a
+	 *  built-in in the place of Remove (charter-app#339). Off, it contributes nothing to any
+	 *  project; a project or a workspace can still turn it off on its own, as it can any extension.
+	 */
+	turnExtensionOn: (id: string, on: boolean) => typedError<null, string>(__TAURI_INVOKE("turn_extension_on", { id, on })),
+	/**
 	 *  Every theme in force: the ones approved extensions contribute, and nothing else.
 	 * 
 	 *  An extension that is new, changed or unreadable contributes nothing here. That is the
@@ -991,6 +997,13 @@ export type ExtensionRow = {
 	path: string,
 	/**  `approved`, `new` or `changed`. */
 	standing: string,
+	/**
+	 *  `installed`, or `app` for a built-in extension: one that ships inside charter, is
+	 *  trusted through the app, and is turned off rather than removed (charter-app#339).
+	 */
+	source: string,
+	/**  Whether it is on, on this machine. Only a built-in is ever off. */
+	on: boolean,
 	/**
 	 *  The themes it is contributing **right now** — empty unless it is approved, so the row
 	 *  says what is in force rather than what was asked for.

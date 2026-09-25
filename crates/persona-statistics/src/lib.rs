@@ -346,10 +346,11 @@ fn count(value: usize) -> u32 {
 
 /// Put this program and its manifest in `dir`, as an extension charter can be pointed at.
 ///
-/// **This is how the operator gets it**, and it is the program copying itself rather than a
-/// script beside it, so there is no second thing to keep in step:
-/// `cargo run --release -p persona-statistics -- assemble ~/charter-extensions/persona-statistics`,
-/// then Extensions → install that folder → read what it declares → approve.
+/// **This is how the app gets it**: the release build assembles it into the bundle's resources
+/// (`app/src-tauri/extensions/persona-statistics`, `.github/workflows/release.yml`), where the app
+/// finds it as a built-in extension. It is the program copying itself rather than a script beside
+/// it, so there is no second thing to keep in step. Assembled anywhere else, the directory is an
+/// ordinary extension, which charter refuses to install under this id while the app ships it.
 pub fn assemble(dir: &Path) -> std::io::Result<PathBuf> {
     let me = std::env::current_exe()?;
     std::fs::create_dir_all(dir.join("bin"))?;

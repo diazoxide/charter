@@ -315,14 +315,21 @@ jobs:
       # (`charter_binary()` in app/src-tauri/src/lib.rs): the charter on PATH may be an older
       # install or the Python one, and a hook pointed at either answers a different program's
       # idea of these events. An app launched from Finder has no shell PATH to read anyway.
-      - name: The charter binary the app's hooks run
-        run: cargo build --release --locked -p charter-cli
+      #
+      # And charter's built-in extensions (charter-app#339), built with the same profile and
+      # put in the bundle's resources, where the app looks for them and nowhere else
+      # (`find_built_in` in app/src-tauri/src/extensions.rs). `assemble` is the program copying
+      # itself beside its manifest, the same directory an operator used to add by hand.
+      - name: The charter binary the app's hooks run, and the built-in extensions
+        run: cargo build --release --locked -p charter-cli -p persona-statistics
 
-      - name: Stage it where Tauri's bundler picks it up
+      - name: Stage them where Tauri's bundler picks them up
         run: |
           set -euo pipefail
           mkdir -p app/src-tauri/binaries
           cp target/release/charter "app/src-tauri/binaries/charter-${{ steps.names.outputs.triple }}"
+          rm -rf app/src-tauri/extensions
+          target/release/persona-statistics assemble app/src-tauri/extensions/persona-statistics
 
       # `tauri.release.conf.json` adds only `bundle.externalBin`; this run adds the version it
       # announces. The bundle's version is what the installed app compares a manifest against,
@@ -562,6 +569,30 @@ jobs:
             grep -E 'plugin/' <<<"$listing" || true
             grep -q 'plugin/.claude-plugin/plugin.json' <<<"$listing"
             grep -q 'plugin/hooks/hooks.json' <<<"$listing"
+          fi
+
+      # The built-in extensions (charter-app#339). A bundle without them has no persona
+      # statistics, and one whose program lost its executable bit on the way in has a view that
+      # always refuses — so both fail the build. On macOS the program sits in Contents/Resources,
+      # so the bundle's seal (checked above) covers its bytes as it covers every resource, and
+      # the updater's `.app.tar.gz` is that same directory.
+      - name: The bundle carries charter's built-in extensions, runnable
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ext=target/release/bundle/macos/charter.app/Contents/Resources/extensions/persona-statistics
+            ls -lR "$ext"
+            test -f "$ext/charter-extension.json"
+            test -x "$ext/bin/persona-statistics"
+            tar -tzf target/release/bundle/macos/charter.app.tar.gz 2>/dev/null \
+              | grep 'extensions/persona-statistics/bin/persona-statistics$' \
+              || echo "no updater archive in this run, or it lacks the extension — see above"
+          else
+            listing=$(dpkg -c dist/*.deb)
+            grep -E 'extensions/' <<<"$listing" || true
+            grep -q 'extensions/persona-statistics/charter-extension.json' <<<"$listing"
+            grep -qE '^-rwx.*extensions/persona-statistics/bin/persona-statistics$' <<<"$listing" \
+              || { echo "FAIL: persona-statistics is not in the .deb, or is not executable"; exit 1; }
           fi
 
       - name: Upload

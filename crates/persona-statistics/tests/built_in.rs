@@ -59,7 +59,11 @@ impl Shipped {
 
         let status = std::process::Command::new(env!("CARGO_BIN_EXE_persona-statistics"))
             .arg("assemble")
-            .arg(dir.path().join("charter.app/Contents/Resources/extensions").join(ID))
+            .arg(
+                dir.path()
+                    .join("charter.app/Contents/Resources/extensions")
+                    .join(ID),
+            )
             .status()
             .expect("assemble runs");
         assert!(status.success(), "assemble failed: {status}");
@@ -239,7 +243,9 @@ fn a_project_or_a_workspace_can_turn_it_off_as_any_extension() {
         format!("[persona]\ndefault = \"steward\"\n\n[extensions.{ID}]\nenabled = false\n"),
     )
     .expect("a project turning it off");
-    let refused = shipped.ask(None).expect_err("it ran in a project that turned it off");
+    let refused = shipped
+        .ask(None)
+        .expect_err("it ran in a project that turned it off");
     assert!(refused.contains("turned off in charter.toml"), "{refused}");
 }
 

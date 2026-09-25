@@ -37,6 +37,17 @@
 //! That also settles the collision above by construction: the two uses of the word can never
 //! appear in one list, because only one of them can come out of a plane.
 //!
+//! # A built-in extension is the app's, and is where the app is
+//!
+//! charter ships extensions of its own inside its bundle (charter-app#339). The app hands
+//! [`read`] and [`survey`] where they are ([`BuiltIn`]), and each one is listed as
+//! [`Source::App`] and approved without a prompt, **at that path and nowhere else**: the same
+//! directory copied anywhere else reads as new, a record row claiming the app as its source grants
+//! nothing, and [`install`] refuses another extension with a built-in's id. Its bytes are not held
+//! to a fingerprint, because an update brings new ones and the app's signature is what covers
+//! them. The record keeps only the operator's choice to turn one off on this machine
+//! ([`turn_on`]). ADR 0041's amendment of 2026-09-25 is the threat model.
+//!
 //! # Where the record lives, and why ADR 0034 needs no amendment
 //!
 //! Beside [`crate::machine::FILE`], not inside it: `$CHARTER_CONFIG_HOME/charter/` (else

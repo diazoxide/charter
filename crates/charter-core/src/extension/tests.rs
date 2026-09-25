@@ -751,7 +751,10 @@ fn a_state_directory_that_is_not_there_yet_is_not_itself_a_change() {
     std::fs::write(made.at().join("state/first"), "").expect("its first file");
 
     let now = read_at(&made.at()).expect("an extension");
-    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&now), Standing::Approved);
+    assert_eq!(
+        read(&made.config(), &BuiltIn::none()).standing(&now),
+        Standing::Approved
+    );
 }
 
 #[cfg(unix)]
@@ -1004,7 +1007,10 @@ fn an_extension_that_changed_after_approval_asks_again() {
     );
     let now = read_at(&made.at()).expect("an extension");
 
-    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&now), Standing::Changed);
+    assert_eq!(
+        read(&made.config(), &BuiltIn::none()).standing(&now),
+        Standing::Changed
+    );
 }
 
 #[test]
@@ -1019,7 +1025,10 @@ fn an_extension_approved_at_one_path_is_not_approved_at_another() {
         path: made.dir.path().join("somewhere-else"),
         ..found
     };
-    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&moved), Standing::Changed);
+    assert_eq!(
+        read(&made.config(), &BuiltIn::none()).standing(&moved),
+        Standing::Changed
+    );
 }
 
 #[test]
@@ -1201,7 +1210,11 @@ fn forgetting_takes_the_path_and_the_approval_and_leaves_the_rest() {
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     forget(&made.config(), "solarized").expect("forgotten");
 
-    assert!(read(&made.config(), &BuiltIn::none()).entry("solarized").is_none());
+    assert!(
+        read(&made.config(), &BuiltIn::none())
+            .entry("solarized")
+            .is_none()
+    );
     assert!(
         made.at().join(MANIFEST).exists(),
         "charter deleted an extension's own files, which are not charter's"
@@ -1217,7 +1230,10 @@ fn re_installing_something_that_did_not_change_keeps_its_approval() {
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed again");
 
-    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&found), Standing::Approved);
+    assert_eq!(
+        read(&made.config(), &BuiltIn::none()).standing(&found),
+        Standing::Approved
+    );
 }
 
 #[test]
@@ -1231,7 +1247,10 @@ fn re_installing_something_that_changed_drops_its_approval() {
     );
     let now = install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed again");
 
-    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&now), Standing::New);
+    assert_eq!(
+        read(&made.config(), &BuiltIn::none()).standing(&now),
+        Standing::New
+    );
 }
 
 // -------------------------------------------------------------------------------------
@@ -1772,7 +1791,9 @@ fn only_an_approved_extension_offers_its_views() {
 
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     assert_eq!(
-        survey(&made.config(), &BuiltIn::none()).installed[0].views_in_force().len(),
+        survey(&made.config(), &BuiltIn::none()).installed[0]
+            .views_in_force()
+            .len(),
         1
     );
 
@@ -2043,4 +2064,82 @@ fn a_version_below_the_first_protocol_is_refused() {
     made.manifest(r#"{"version":0,"id":"x","contributes":{"runs":"p"}}"#);
     let why = read_at(&made.at()).expect_err("no extension");
     assert!(why.contains("is version 0"), "{why}");
+}
+
+// ---------------------------------------------------------------------------------------
+// Built-in extensions (charter-app#339)
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn turning_a_built_in_off_keeps_every_installed_extension_and_its_yes() {
+    let made = Made::new();
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+
+    turn_on(&made.config(), "persona-statistics", false).expect("turned off");
+
+    let loaded = read(&made.config(), &BuiltIn::none());
+    assert_eq!(loaded.standing(&found), Standing::Approved);
+    assert!(loaded.registry.off.contains("persona-statistics"));
+    // A built-in this charter does not ship is not an entry: the choice is kept, and nothing
+    // is listed for it.
+    assert!(loaded.entry("persona-statistics").is_none());
+
+    turn_on(&made.config(), "persona-statistics", true).expect("turned on");
+    let loaded = read(&made.config(), &BuiltIn::none());
+    assert!(loaded.registry.off.is_empty());
+    assert_eq!(loaded.standing(&found), Standing::Approved);
+}
+
+#[test]
+fn a_record_row_that_names_the_app_as_its_source_grants_nothing() {
+    let made = Made::new();
+    let at = made.ordinary();
+    let found = read_at(&at).expect("reads");
+    std::fs::create_dir_all(made.config().join("charter")).expect("a config dir");
+    std::fs::write(
+        file(&made.config()),
+        format!(
+            r#"{{"version":1,"extensions":{{"solarized":{{"source":"app","path":"{}","approved":"{}"}}}}}}"#,
+            at.display(),
+            found.fingerprint
+        ),
+    )
+    .expect("a forged record");
+
+    let loaded = read(&made.config(), &BuiltIn::none());
+    assert_eq!(loaded.standing(&found), Standing::New);
+    assert!(
+        survey(&made.config(), &BuiltIn::none())
+            .installed
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_built_in_s_installed_namesake_is_set_aside_and_said() {
+    let made = Made::new();
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    // The app now ships an extension with the same id.
+    let bundle = made.dir.path().join("bundle");
+    let shipped = bundle.join("solarized");
+    std::fs::create_dir_all(&shipped).expect("a bundle");
+    for name in [MANIFEST, "dark.json"] {
+        std::fs::copy(made.at().join(name), shipped.join(name)).expect("a copy");
+    }
+
+    let loaded = read(&made.config(), &BuiltIn::at(bundle));
+    let entry = loaded.entry("solarized").expect("the built-in");
+    assert_eq!(entry.source, Source::App);
+    assert_eq!(entry.path, shipped);
+    assert_eq!(loaded.standing(&found), Standing::New);
+    assert!(
+        loaded
+            .dropped
+            .iter()
+            .any(|why| why.contains("ships this extension itself")),
+        "{:?}",
+        loaded.dropped
+    );
 }

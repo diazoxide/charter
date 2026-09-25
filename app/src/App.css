@@ -2854,6 +2854,18 @@ button.show-more:focus-visible {
   color: var(--state-success);
 }
 
+/* A built-in extension ships inside charter (charter-app#339): said as a quiet tag beside its
+   name, since it is where the extension came from and not whether it is in force. */
+.extension-rows .built-in {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Its on/off, in the place an installed row has Remove; a row, not the picker's divided list. */
+.extension-rows .choice {
+  padding: 0;
+}
+
 /* The one paragraph in this window that must never read as a reassurance. It is charter's own
    sentence about what it cannot stop an extension doing, and it is drawn as the dialog's
    loudest text rather than as small print under the buttons. */
