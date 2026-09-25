@@ -50,6 +50,8 @@ mod tree;
 
 fn main() {
     #[cfg(unix)]
+    text::only_the_apps_own_version_becomes_the_token();
+    #[cfg(unix)]
     replay::main();
     #[cfg(not(unix))]
     println!("recorded behaviour: the recording is of unix runs, and this is not one");
