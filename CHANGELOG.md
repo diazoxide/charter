@@ -51,7 +51,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the project actually uses and which file decided it, and a Shared value that Local overrides
   says so. A value charter would not read is refused on save, in the words `charter doctor`
   uses. The old `[memory] share` choice moved into the Shared Plane group, marked as the
-  deprecated stand-in for Mode, and the rest of the old Plane group is now called General.
+  deprecated stand-in for Mode, and it says whether it is in force or a Mode set in either
+  file wins. The rest of the old Plane group, `[plane] worktrees` included, is now called
+  General.
   ([#300](https://github.com/diazoxide/charter-app/issues/300))
 
 ### Changed

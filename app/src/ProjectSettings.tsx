@@ -71,7 +71,7 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
   const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
   const [theme, setTheme] = useState<ProjectTheme>();
-  const [saving, setSaving] = useState<SavingInForce>();
+  const [saving, setSaving] = useState<Saving>();
   /** The newest read out: an answer to an older one — before a save, or for another plane — is
    *  dropped rather than drawn over what came after it. */
   const reading = useRef(0);
@@ -124,14 +124,15 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
         if (newest()) setHarnesses([]);
       });
     // How far a save goes, as the files decide it. A refusal leaves each control without the
-    // sentence beside it; the files' forms still work.
+    // sentence beside it, and the Plane and Repos groups say why; the files' forms still work.
     void commands
       .projectSavingInForce(plane)
       .then((said) => {
-        if (newest()) setSaving(said.status === "ok" ? said.data : undefined);
+        if (newest())
+          setSaving(said.status === "ok" ? (said.data ?? undefined) : { trouble: said.error });
       })
-      .catch(() => {
-        if (newest()) setSaving(undefined);
+      .catch((err: unknown) => {
+        if (newest()) setSaving({ trouble: String(err) });
       });
     readTheme();
   }, [plane, readTheme]);
@@ -389,24 +390,33 @@ type Group = {
     file: Shown,
     extensions: readonly ProjectExtension[],
     theme: ProjectTheme | undefined,
-    saving: SavingInForce | undefined,
+    saving: Saving,
   ) => Control[];
   /** Sentences about this file the group says under its heading. */
   notes?: (
     file: Shown,
     extensions: readonly ProjectExtension[],
     theme: ProjectTheme | undefined,
+    saving: Saving,
   ) => string[];
   /** For a group that shows what is in force: why `charter.local.toml` had no say in it, as the
    *  core's answer carries it (charter-app#319), or `null` when it had its say. */
   leftOut?: (
     extensions: ProjectExtensions,
     theme: ProjectTheme | undefined,
-    saving: SavingInForce | undefined,
+    saving: Saving,
   ) => string | null;
   /** What the group says when it has no controls; "None in this file." otherwise. */
-  empty?: string;
+  empty?: string | ((saving: Saving) => string);
 };
+
+/** What `project_saving_in_force` answered: nothing yet, the answer, or why it could not. */
+type Saving = SavingInForce | { trouble: string } | undefined;
+
+/** The answer in `saving`, when there is one. */
+function answered(saving: Saving): SavingInForce | undefined {
+  return saving === undefined || "trouble" in saving ? undefined : saving;
+}
 
 const key = (...keys: string[]): SettingsStep[] => keys.map((one) => ({ key: one }));
 
@@ -872,36 +882,60 @@ const REPO_KEYS: readonly SaveKey[] = [
 function planeGroup(section: Which): Group {
   return {
     title: "Plane",
-    note: "How the plane is saved. charter.local.toml overrides charter.toml key by key.",
-    controls: (file, _extensions, _theme, saving) => [
-      ...PLANE_KEYS.map((one) => {
-        const path = key("plane", one.key);
-        const it = saving?.plane[one.key as keyof typeof saving.plane];
-        const marker =
-          it === undefined || typeof it === "boolean"
-            ? null
-            : decided(
-                it,
-                one,
-                file,
-                path,
-                section,
-                one.key === "mode" && saving?.plane.from_share === true,
-              );
-        return saveControl(one, path, one.label, section, marker);
-      }),
-      ...(section === "shared"
-        ? [
-            textAt(key("memory", "share"), "[memory] share (deprecated)", {
-              kind: "choice",
-              choices: ["local", "commit", "push"],
-              hint: "Deprecated: read as Mode — commit and push carry over, local says nothing — only while neither file sets Mode. Set Mode instead.",
-            }),
-          ]
-        : []),
-    ],
-    leftOut: (_extensions, _theme, saving) => saving?.local_left_out ?? null,
+    note: "How the plane is saved. charter.local.toml overrides charter.toml key by key. [plane] worktrees is under General.",
+    controls: (file, _extensions, _theme, asked) => {
+      const saving = answered(asked);
+      return [
+        ...PLANE_KEYS.map((one) => {
+          const path = key("plane", one.key);
+          const it = saving?.plane[one.key as keyof typeof saving.plane];
+          const marker =
+            it === undefined || typeof it === "boolean"
+              ? null
+              : decided(
+                  it,
+                  one,
+                  file,
+                  path,
+                  section,
+                  one.key === "mode" && saving?.plane.from_share === true,
+                );
+          return saveControl(one, path, one.label, section, marker);
+        }),
+        ...(section === "shared"
+          ? [
+              textAt(key("memory", "share"), "[memory] share (deprecated)", {
+                kind: "choice",
+                choices: ["local", "commit", "push"],
+                hint: [SHARE_HINT, shareMarker(file, saving)].filter(Boolean).join(" "),
+              }),
+            ]
+          : []),
+      ];
+    },
+    notes: (_file, _extensions, _theme, saving) =>
+      saving !== undefined && "trouble" in saving
+        ? [`What this project uses could not be read: ${saving.trouble}`]
+        : [],
+    leftOut: (_extensions, _theme, saving) => answered(saving)?.plane_left_out ?? null,
   };
+}
+
+const SHARE_HINT =
+  "Deprecated: read as Mode — commit and push carry over, local says nothing — only while neither file sets Mode. Set Mode instead.";
+
+/**
+ * Whether `[memory] share` is what the plane's mode is, as the end of its hint: ADR 0051's
+ * marker for a Shared value something else overrides. Only a share that says something —
+ * `commit` or `push` — can be in force or overridden; `local` says nothing either way.
+ */
+function shareMarker(file: Shown, saving: SavingInForce | undefined): string {
+  if (saving === undefined) return "";
+  if (saving.plane.from_share) return "In force as Mode.";
+  const share = shown(valueAt(file, key("memory", "share")));
+  if ((share === "commit" || share === "push") && saving.plane.mode.value !== null)
+    return `Not in force — Mode from ${where(saving.plane.mode.source)} wins.`;
+  return "";
 }
 
 /**
@@ -913,9 +947,12 @@ function reposGroup(section: Which): Group {
   return {
     title: "Repos",
     note: "How each workspace repo is saved, by its name in inventory/repos.json. A repo's defaults are mode pr and auto-save off.",
-    empty: "No repo is catalogued in inventory/repos.json or named by either file.",
+    empty: (saving) =>
+      saving !== undefined && "trouble" in saving
+        ? `The repos and how each is saved could not be read: ${saving.trouble}`
+        : "No repo is catalogued in inventory/repos.json or named by either file.",
     controls: (file, _extensions, _theme, saving) =>
-      (saving?.repos ?? []).flatMap((repo) =>
+      (answered(saving)?.repos ?? []).flatMap((repo) =>
         REPO_KEYS.map((one) => {
           const path = key("repos", repo.name, one.key);
           const it = repo[one.key as keyof typeof repo];
@@ -923,7 +960,7 @@ function reposGroup(section: Which): Group {
           return saveControl(one, path, `${repo.name}: ${one.label}`, section, marker);
         }),
       ),
-    leftOut: (_extensions, _theme, saving) => saving?.local_left_out ?? null,
+    leftOut: (_extensions, _theme, saving) => answered(saving)?.repos_left_out ?? null,
   };
 }
 
@@ -1079,7 +1116,7 @@ function Section({
   theme: ProjectTheme | undefined;
   /** How far a save goes in this project, for the Plane and Repos groups; a workspace's tab has
    *  neither. */
-  saving?: SavingInForce;
+  saving?: Saving;
   /** Sends a change against the text it was typed over: `null` for a file not there yet. */
   send: (base: string | null, change: SettingsChange) => Promise<Sent>;
   onSaved: () => void;
@@ -1112,7 +1149,7 @@ function Section({
   const controls = groups.map((group) => ({
     group,
     controls: group.controls(file, extensions.extensions, theme, inForce),
-    notes: group.notes?.(file, extensions.extensions, theme) ?? [],
+    notes: group.notes?.(file, extensions.extensions, theme, inForce) ?? [],
     leftOut: groupsSayLeftOut ? (group.leftOut?.(extensions, theme, inForce) ?? null) : null,
   }));
   const all = controls.flatMap((one) => one.controls);
@@ -1195,7 +1232,13 @@ function Section({
             <legend>{group.title}</legend>
             {group.note && <p className="settings-hint">{group.note}</p>}
             {leftOut !== null && <p className="settings-hint">{leftOut}</p>}
-            {under.length === 0 && <p className="none">{group.empty ?? "None in this file."}</p>}
+            {under.length === 0 && (
+              <p className="none">
+                {typeof group.empty === "function"
+                  ? group.empty(inForce)
+                  : (group.empty ?? "None in this file.")}
+              </p>
+            )}
             {under.map((control) => (
               <SettingControl
                 key={control.id}

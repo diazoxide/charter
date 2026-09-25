@@ -2001,10 +2001,12 @@ export type SavingInForce = {
 	 */
 	repos: RepoInForce[],
 	/**
-	 *  Why `charter.local.toml` had no say in any of it, when git would carry it and it set
-	 *  something here (charter-app#319).
+	 *  Why `charter.local.toml` had no say in `[plane]`, when git would carry it and it set a
+	 *  save key there (charter-app#319): what the Plane group says.
 	 */
-	local_left_out: string | null,
+	plane_left_out: string | null,
+	/**  The same for `[repos]`: what the Repos group says. */
+	repos_left_out: string | null,
 };
 
 /**

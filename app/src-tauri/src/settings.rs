@@ -237,9 +237,11 @@ pub struct SavingInForce {
     /// One per repo `inventory/repos.json` catalogues, in its order, then one per repo only a
     /// file's `[repos]` names.
     pub repos: Vec<RepoInForce>,
-    /// Why `charter.local.toml` had no say in any of it, when git would carry it and it set
-    /// something here (charter-app#319).
-    pub local_left_out: Option<String>,
+    /// Why `charter.local.toml` had no say in `[plane]`, when git would carry it and it set a
+    /// save key there (charter-app#319): what the Plane group says.
+    pub plane_left_out: Option<String>,
+    /// The same for `[repos]`: what the Repos group says.
+    pub repos_left_out: Option<String>,
 }
 
 /// The plane's and each repo's save settings in force — `planesave::Settings`, the one
@@ -300,7 +302,8 @@ pub(crate) fn saving_in_force(root: &std::path::Path) -> SavingInForce {
                 }
             })
             .collect(),
-        local_left_out: settings.local_left_out.clone(),
+        plane_left_out: settings.plane_left_out.clone(),
+        repos_left_out: settings.repos_left_out.clone(),
     }
 }
 
@@ -710,7 +713,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(got.local_left_out, None);
+        assert_eq!((got.plane_left_out, got.repos_left_out), (None, None));
     }
 
     #[test]

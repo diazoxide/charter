@@ -346,25 +346,45 @@ fn carried_local(local: &str) -> tempfile::TempDir {
     dir
 }
 
+/// Whether `why` is the ignore check's sentence for a Local file git would carry.
+fn is_the_checks(why: Option<&str>) -> bool {
+    why.is_some_and(|why| why.contains("charter reads nothing in it"))
+}
+
 #[test]
-fn a_left_out_local_file_that_set_a_save_setting_keeps_the_ignore_checks_sentence() {
-    for local in ["[plane]\nmode = \"push\"\n", "[repos.api]\nsign = true\n"] {
-        let dir = carried_local(local);
-        let why = Settings::read(dir.path()).local_left_out;
-        assert!(
-            why.as_deref()
-                .is_some_and(|why| why.contains("charter reads nothing in it")),
-            "{local:?}: {why:?}"
-        );
-        std::fs::write(dir.path().join(".gitignore"), "/charter.local.toml\n").unwrap();
-        assert_eq!(Settings::read(dir.path()).local_left_out, None, "{local:?}");
-    }
+fn a_left_out_local_file_that_set_a_plane_key_keeps_the_sentence_for_the_plane_alone() {
+    let dir = carried_local("[plane]\nmode = \"push\"\n");
+    let read = Settings::read(dir.path());
+    assert!(
+        is_the_checks(read.plane_left_out.as_deref()),
+        "{:?}",
+        read.plane_left_out
+    );
+    assert_eq!(read.repos_left_out, None);
+    std::fs::write(dir.path().join(".gitignore"), "/charter.local.toml\n").unwrap();
+    assert_eq!(Settings::read(dir.path()).plane_left_out, None);
+}
+
+#[test]
+fn a_left_out_local_file_that_set_a_repo_keeps_the_sentence_for_the_repos_alone() {
+    let dir = carried_local("[repos.api]\nsign = true\n");
+    let read = Settings::read(dir.path());
+    assert!(
+        is_the_checks(read.repos_left_out.as_deref()),
+        "{:?}",
+        read.repos_left_out
+    );
+    assert_eq!(read.plane_left_out, None);
+    std::fs::write(dir.path().join(".gitignore"), "/charter.local.toml\n").unwrap();
+    assert_eq!(Settings::read(dir.path()).repos_left_out, None);
 }
 
 #[test]
 fn a_left_out_local_file_that_set_no_save_setting_says_nothing_about_saving() {
-    let dir = carried_local("[harness]\ndefault = \"claude\"\n");
-    assert_eq!(Settings::read(dir.path()).local_left_out, None);
+    // `worktrees` is `[plane]`'s, but not a save key.
+    let dir = carried_local("[harness]\ndefault = \"claude\"\n[plane]\nworktrees = \"../w\"\n");
+    let read = Settings::read(dir.path());
+    assert_eq!((read.plane_left_out, read.repos_left_out), (None, None));
 }
 
 #[test]

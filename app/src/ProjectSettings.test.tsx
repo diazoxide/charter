@@ -131,7 +131,8 @@ const NO_SAVING: SavingInForce = {
     autosave_after: said("1m"),
   },
   repos: [],
-  local_left_out: null,
+  plane_left_out: null,
+  repos_left_out: null,
 };
 
 /** The core, as a mock: `project_settings` answers `both`, `project_extensions` answers
@@ -144,7 +145,7 @@ function core(
   extensions: ProjectExtension[] = [],
   theme: ProjectTheme | (() => ProjectTheme) = NO_PICK,
   leftOut: string | null = null,
-  saving: SavingInForce = NO_SAVING,
+  saving: SavingInForce | { trouble: string } = NO_SAVING,
 ) {
   const themeNow = () => (typeof theme === "function" ? theme() : theme);
   const sent: Record<string, unknown>[] = [];
@@ -160,7 +161,10 @@ function core(
     }
     if (cmd === "project_saving_in_force") {
       savingReads += 1;
-      return { ...saving, local_left_out: leftOut };
+      if ("trouble" in saving) throw saving.trouble;
+      return leftOut === null
+        ? saving
+        : { ...saving, plane_left_out: leftOut, repos_left_out: leftOut };
     }
     if (cmd === "project_extensions") {
       extensionReads += 1;
@@ -793,7 +797,8 @@ const SAVES_IN_FORCE: SavingInForce = {
       autosave_after: said("1m"),
     },
   ],
-  local_left_out: null,
+  plane_left_out: null,
+  repos_left_out: null,
 };
 
 describe("the Plane group (charter-app#300, ADR 0051)", () => {
@@ -918,8 +923,23 @@ describe("the Plane group (charter-app#300, ADR 0051)", () => {
     expect(within(plane).getByLabelText("Auto-save after")).toHaveValue("soon");
   });
 
-  it("shows [memory] share in Shared only, as the deprecated alias of Mode", async () => {
-    core({ shared: SHARED, local: LOCAL }, undefined, [], NO_PICK, null, {
+  /** Both files, with `charter.toml` holding `[memory] share = word`. */
+  const sharing = (word: string): Both => ({
+    shared: {
+      ...SHARED,
+      fields: SHARED.fields.map((field) =>
+        field.path[0]?.key === "memory"
+          ? { ...field, value: { kind: "text" as const, value: word } }
+          : field,
+      ),
+    },
+    local: LOCAL,
+  });
+  const SHARE_HINT =
+    "Deprecated: read as Mode — commit and push carry over, local says nothing — only while neither file sets Mode. Set Mode instead.";
+
+  it("shows [memory] share in Shared only, as the deprecated alias of Mode, marked in force", async () => {
+    core(sharing("commit"), undefined, [], NO_PICK, null, {
       ...NO_SAVING,
       plane: { ...NO_SAVING.plane, mode: said("commit", "shared"), from_share: true },
     });
@@ -927,16 +947,67 @@ describe("the Plane group (charter-app#300, ADR 0051)", () => {
 
     const plane = within(shared).getByRole("group", { name: "Plane" });
     const share = within(plane).getByLabelText("[memory] share (deprecated)");
-    expect(share).toHaveValue("local");
-    expect(share).toHaveAccessibleDescription(
-      "Deprecated: read as Mode — commit and push carry over, local says nothing — only while neither file sets Mode. Set Mode instead.",
+    expect(share).toHaveValue("commit");
+    await waitFor(() =>
+      expect(share).toHaveAccessibleDescription(`${SHARE_HINT} In force as Mode.`),
     );
     expect(within(local).queryByLabelText("[memory] share (deprecated)")).toBeNull();
+    expect(within(plane).getByLabelText("Mode")).toHaveAccessibleDescription(
+      /In this project: commit, from \[memory\] share in charter\.toml, the deprecated alias\./,
+    );
+  });
+
+  it("marks a [memory] share that a Mode in either file overrides as not in force", async () => {
+    core(sharing("push"), undefined, [], NO_PICK, null, {
+      ...NO_SAVING,
+      plane: { ...NO_SAVING.plane, mode: said("pr", "local") },
+    });
+    const { shared } = await drawn();
+
+    const share = within(shared).getByLabelText("[memory] share (deprecated)");
     await waitFor(() =>
-      expect(within(plane).getByLabelText("Mode")).toHaveAccessibleDescription(
-        /In this project: commit, from \[memory\] share in charter\.toml, the deprecated alias\./,
+      expect(share).toHaveAccessibleDescription(
+        `${SHARE_HINT} Not in force — Mode from charter.local.toml wins.`,
       ),
     );
+  });
+
+  it("gives a [memory] share of local, which says nothing, no marker", async () => {
+    core(sharing("local"), undefined, [], NO_PICK, null, {
+      ...NO_SAVING,
+      plane: { ...NO_SAVING.plane, mode: said("pr", "shared") },
+    });
+    const { shared } = await drawn();
+
+    const plane = within(shared).getByRole("group", { name: "Plane" });
+    await waitFor(() =>
+      expect(within(plane).getByLabelText("Mode")).toHaveAccessibleDescription(/In this project/),
+    );
+    expect(within(plane).getByLabelText("[memory] share (deprecated)")).toHaveAccessibleDescription(
+      SHARE_HINT,
+    );
+  });
+
+  it("says where [plane] worktrees is", async () => {
+    core({ shared: SHARED, local: LOCAL });
+    const { shared } = await drawn();
+
+    expect(within(shared).getByRole("group", { name: "Plane" })).toHaveTextContent(
+      "[plane] worktrees is under General.",
+    );
+  });
+
+  it("says what is in force could not be read, rather than drawing a marker", async () => {
+    core(SAVES, undefined, [], NO_PICK, null, { trouble: "the plane is not held" });
+    const { shared } = await drawn();
+
+    const plane = within(shared).getByRole("group", { name: "Plane" });
+    await waitFor(() =>
+      expect(plane).toHaveTextContent(
+        "What this project uses could not be read: the plane is not held",
+      ),
+    );
+    expect(within(plane).getByLabelText("Mode")).not.toHaveAccessibleDescription(/In this project/);
   });
 
   it("asks what is in force again after a save", async () => {
@@ -1042,6 +1113,35 @@ describe("the Repos group (charter-app#300, ADR 0051)", () => {
         value: { kind: "bool", value: true },
       },
     ]);
+  });
+
+  it("says the repos could not be read when the survey failed, not that there are none", async () => {
+    core(SAVES, undefined, [], NO_PICK, null, { trouble: "the plane is not held" });
+    const { shared } = await drawn();
+
+    const repos = within(shared).getByRole("group", { name: "Repos" });
+    await waitFor(() =>
+      expect(repos).toHaveTextContent(
+        "The repos and how each is saved could not be read: the plane is not held",
+      ),
+    );
+    expect(repos).not.toHaveTextContent("No repo is catalogued");
+  });
+
+  it("says Local was left out only in the group whose table it set", async () => {
+    core(
+      { shared: SHARED, local: { ...LOCAL, refusals: [LEFT_OUT] } },
+      undefined,
+      [],
+      NO_PICK,
+      null,
+      { ...SAVES_IN_FORCE, repos_left_out: LEFT_OUT },
+    );
+    const { shared } = await drawn();
+
+    const repos = within(shared).getByRole("group", { name: "Repos" });
+    await waitFor(() => expect(within(repos).getAllByText(LEFT_OUT)).toHaveLength(1));
+    expect(within(shared).getByRole("group", { name: "Plane" })).not.toHaveTextContent(LEFT_OUT);
   });
 
   it("says so when no repo is catalogued or named", async () => {

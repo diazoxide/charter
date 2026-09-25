@@ -69,11 +69,13 @@ pub struct Repo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub plane: Plane,
-    /// Why `charter.local.toml` had no say, when git would carry it and it set something in
-    /// `[plane]` or `[repos]` ([`crate::settings::LayerText::left_out_where`], charter-app#319):
-    /// what the settings tab's Plane and Repos groups say, so a Local value not applied is
-    /// never shown without its reason.
-    pub local_left_out: Option<String>,
+    /// Why `charter.local.toml` had no say in `[plane]`, when git would carry it and it set a
+    /// save key there ([`crate::settings::LayerText::left_out_where`], charter-app#319): what
+    /// the settings tab's Plane group says, so a Local value not applied is never shown
+    /// without its reason.
+    pub plane_left_out: Option<String>,
+    /// The same, for `[repos]`: what the Repos group says.
+    pub repos_left_out: Option<String>,
     files: Files,
 }
 
@@ -113,7 +115,8 @@ impl Settings {
                 autosave: files.or(&["plane"], "autosave", toml::Value::as_bool, true),
                 autosave_after: files.or(&["plane"], "autosave_after", quiet_period, QUIET),
             },
-            local_left_out: None,
+            plane_left_out: None,
+            repos_left_out: None,
             files,
         }
     }
@@ -125,7 +128,8 @@ impl Settings {
         use crate::settings::{Which, layer_text};
         let local = layer_text(root, Which::Local);
         Self {
-            local_left_out: local.left_out_where(says_saving),
+            plane_left_out: local.left_out_where(sets_a_plane_key),
+            repos_left_out: local.left_out_where(|top| top.contains_key("repos")),
             ..Self::from_text(layer_text(root, Which::Shared).text(), local.text())
         }
     }
@@ -263,12 +267,10 @@ impl Mode {
     }
 }
 
-/// Whether a file's top table says anything this module reads: a `[plane]` save key, or a
-/// `[repos]` table.
-fn says_saving(top: &toml::Table) -> bool {
-    let plane = table_at(top, &["plane"])
-        .is_some_and(|plane| PLANE_KEYS.iter().any(|key| plane.contains_key(*key)));
-    plane || top.contains_key("repos")
+/// Whether a file's top table sets one of `[plane]`'s save keys.
+fn sets_a_plane_key(top: &toml::Table) -> bool {
+    table_at(top, &["plane"])
+        .is_some_and(|plane| PLANE_KEYS.iter().any(|key| plane.contains_key(*key)))
 }
 
 /// The top table of `text`, or an empty one when the text is not TOML.
