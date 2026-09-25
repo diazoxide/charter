@@ -42,6 +42,15 @@ change hashes the declared version into the fingerprint in place of the executor
 capability that needs a later
 protocol is refused in a manifest that names an earlier one.
 
+**Protocol 2 is the first bump, made by charter-app#343.** Events and the briefing are request
+kinds of their own: an event request carries `event` (and `workspace`, `from` where the event
+has them) and is answered `{"charter": 2}` or an `error`; a briefing request carries
+`briefing` (`workspace`, `persona`) and is answered with `section`, a string. A view is asked
+as in protocol 1. From that change the executor asks each extension in the protocol its
+manifest declares and holds the answer to it, `CHARTER_PROTOCOL` is the declared one, and the
+fingerprint hashes the declared protocol where it hashed the executor's — which is the same
+bytes for protocol 1, so no extension approved before it is asked again.
+
 **The vocabulary grows one capability per change.** Each change adds the capability to
 `crates/charter-core/src/extension/capability.rs`. The same change adds it to the
 `extension-probe` crate's manifest and proves it through the real registry and executor:
@@ -63,6 +72,8 @@ the second would be a yes to nothing.
 | `probe` | nothing (test builds only) | none | charter-app#338 |
 | `badges` | draws values from the facts file as badges in the status bar and the terminal footer | `badges`: `id`, `label`, `surfaces` (`status-bar`, `footer`), `fresh_seconds` | charter-app#340 |
 | `repo-columns` | draws values from the facts file as extra columns in the repo table | `repo-columns`: `id`, `title`, `fresh_seconds` | charter-app#340 |
+| `events` | asks the program one question after each core action it hears has finished; a fork carries the folder it keeps in each workspace (protocol 2) | `events`: `hears` (`workspace-focused`, `workspace-created`, `workspace-forked`, `workspace-removed`, `handoff-created`, `session-started`, `plane-saved`), `workspace_folder` | charter-app#343 |
+| `briefing` | adds text to every chat's first message, quoted as data under the extension's name (protocol 2) | `briefing`: `title` | charter-app#343 |
 
 ### Process life
 

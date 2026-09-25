@@ -96,7 +96,9 @@
 //! what it asks charter to do for it beyond what follows ([`capability`], ADR 0053). A word in
 //! that list this charter does not know refuses the whole manifest, by name. Badges and repo
 //! columns ([`facts`]) are declared data too: charter draws them from a facts file in the
-//! state directory and never starts the program to do it.
+//! state directory and never starts the program to do it. Events ([`events`]) and a briefing
+//! section ([`briefing`]) are the two that start the program without the operator opening
+//! anything — after a core action it hears, and when a chat starts — and the prompt says so.
 //!
 //! Themes, panels (`crate::panel`, ADR 0043), and **views**. A theme and a panel are
 //! declarative data against a closed vocabulary charter owns, charter chooses the consumer, and

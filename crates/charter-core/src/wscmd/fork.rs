@@ -185,7 +185,11 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
     let mut extension_carried: Vec<&str> = Vec::new();
     for folder in extension_folders {
         let from = parent.dir().join(folder);
-        if std::fs::symlink_metadata(&from).is_err() {
+        // A clone that happens to share the name is the operator's repository, not the
+        // extension's data: a fork carries a repo by recording it, never by copying it.
+        if std::fs::symlink_metadata(&from).is_err()
+            || std::fs::symlink_metadata(from.join(".git")).is_ok()
+        {
             continue;
         }
         let unread = carry_tree(root, &from, &fresh.dir().join(folder));
@@ -625,6 +629,46 @@ mod tests {
         assert!(todos.contains("Write the migration"), "{todos}");
         assert!(
             lines.iter().any(|l| l.contains("Inherited 1 open todo(s)")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_extensions_folder_is_carried_and_a_clone_that_shares_its_name_is_not() {
+        let dir = plane();
+        a_parent(dir.path(), "alpha");
+        let alpha = dir.path().join("workspaces/alpha");
+        std::fs::create_dir_all(alpha.join("notes")).unwrap();
+        std::fs::write(alpha.join("notes/kept.md"), "the extension's").unwrap();
+        std::fs::create_dir_all(alpha.join("svc/.git")).unwrap();
+        std::fs::write(alpha.join("svc/code.rs"), "the operator's").unwrap();
+
+        let mut lines = Vec::new();
+        let code = fork(
+            &Request {
+                root: dir.path(),
+                src: "alpha",
+                new: "gamma",
+                live: false,
+                restore: false,
+                now: now(),
+                extension_folders: &["absent".to_owned(), "notes".to_owned(), "svc".to_owned()],
+            },
+            &mut |s| lines.push(s.to_string()),
+        );
+
+        assert_eq!(code, 0, "{lines:?}");
+        let gamma = dir.path().join("workspaces/gamma");
+        assert_eq!(
+            std::fs::read_to_string(gamma.join("notes/kept.md")).unwrap(),
+            "the extension's"
+        );
+        assert!(!gamma.join("svc").exists(), "a clone was copied");
+        assert!(!gamma.join("absent").exists());
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Carried the folder(s) extensions keep in 'alpha': notes/")),
             "{lines:?}"
         );
     }

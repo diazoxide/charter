@@ -18,6 +18,9 @@
 //!    process — ADR 0041's minimum capability is *"one round trip per deliberate human
 //!    action"*, and a process that lives only as long as the round trip has no state for a
 //!    later question to find and no time in which to be doing anything nobody asked for.
+//!    Since charter-app#343 an event an extension hears ([`Executor::tell`]) and a chat's
+//!    start ([`Executor::brief`]) are questions too — asked without a press, which the approval
+//!    prompt says ([`how_it_runs`]) — and each is still one process, gated and bounded alike.
 //! 3. **Bounded in every direction charter controls** — time ([`DEADLINE`]), the answer's size
 //!    ([`MOST_ANSWER_BYTES`]), what is kept of its stderr ([`MOST_STDERR_BYTES`]), and one
 //!    question in flight per extension. A stalled, looping, flooding or crashing program costs
