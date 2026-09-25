@@ -36,6 +36,6 @@ pub fn tell(root: &Path, event: &Event) {
 /// The folders a fork carries for the extensions this machine approved.
 pub fn carried() -> Vec<String> {
     charter_core::machine::config_root_if_there()
-        .map(|config| events::carried(&config))
+        .map(|config| events::carried(&config, &charter_core::extension::BuiltIn::none()))
         .unwrap_or_default()
 }

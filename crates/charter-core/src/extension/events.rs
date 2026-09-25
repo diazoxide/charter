@@ -292,7 +292,7 @@ pub fn deliver(
     event: &Event,
 ) -> Vec<String> {
     let kind = event.kind();
-    let loaded = super::read(config_root);
+    let loaded = super::read(config_root, executor.built_in());
     // An unreadable record approves nothing; the Extensions list is where it is said.
     if loaded.unreadable.is_some() {
         return Vec::new();
@@ -303,7 +303,7 @@ pub fn deliver(
         .registry
         .entries
         .iter()
-        .filter(|(_, entry)| entry.approved.is_some())
+        .filter(|(_, entry)| entry.in_force())
         .filter_map(|(id, entry)| {
             let declared = super::manifest_at(&entry.path).ok()?;
             (declared.hears(kind) && super::facts::on_here(id, &declared, choices))
@@ -357,8 +357,11 @@ fn happened(event: &Event) -> String {
 /// The workspace folders a fork copies: the one each extension this machine approved declares,
 /// **whether or not it is on** in the project — see the module docstring. Only an extension
 /// whose bytes on disk are still the ones approved names one; the rest name nothing.
-pub fn carried(config_root: &Path) -> Vec<String> {
-    let loaded = super::read(config_root);
+///
+/// A built-in ([`super::BuiltIn`]) is one only at its bundle path, as everywhere; one turned off
+/// on this machine is carried like one a project turned off.
+pub fn carried(config_root: &Path, built_in: &super::BuiltIn) -> Vec<String> {
+    let loaded = super::read(config_root, built_in);
     if loaded.unreadable.is_some() {
         return Vec::new();
     }
@@ -366,7 +369,7 @@ pub fn carried(config_root: &Path) -> Vec<String> {
         .registry
         .entries
         .iter()
-        .filter(|(_, entry)| entry.approved.is_some())
+        .filter(|(_, entry)| entry.approved.is_some() || entry.source == super::Source::App)
         .filter_map(|(id, entry)| {
             // The manifest alone first, so an extension that keeps no folder costs no hash.
             let declared = super::manifest_at(&entry.path).ok()?;

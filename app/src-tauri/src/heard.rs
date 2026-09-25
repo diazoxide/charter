@@ -51,6 +51,14 @@ pub(crate) struct ExtensionHeard {
 }
 
 impl Heard {
+    /// Delivering with an executor that knows the app's built-in extensions (charter-app#339).
+    pub(crate) fn with_built_in(built_in: charter_core::extension::BuiltIn) -> Self {
+        Self {
+            executor: Arc::new(Executor::with_built_in(built_in)),
+            ..Self::default()
+        }
+    }
+
     /// Kill every extension program still being told something. The app's `Exit`.
     pub(crate) fn stop_all(&self) {
         self.executor.stop_all();
@@ -136,9 +144,21 @@ mod tests {
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
             .expect("runnable");
         let config = dir.join("config");
-        let found = extension::install(&config, &ext).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &ext).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         config
+    }
+
+    /// A `Heard` whose programs are given long enough that a busy machine starting one is not
+    /// what a test here measures (charter-app#303 found the same of the executor's deadline).
+    fn roomy() -> Heard {
+        Heard {
+            executor: Arc::new(
+                Executor::default().with_deadline(std::time::Duration::from_secs(30)),
+            ),
+            ..Heard::default()
+        }
     }
 
     fn created() -> Event {
@@ -151,7 +171,7 @@ mod tests {
     fn an_extension_that_hears_it_is_told_and_leaves_no_note() {
         let dir = tempfile::tempdir().expect("a directory");
         let config = hearing(dir.path(), r#"{"charter":2}"#);
-        let heard = Heard::default();
+        let heard = roomy();
         let root = dir.path().join("plane");
         std::fs::create_dir_all(&root).expect("a plane");
 
@@ -166,7 +186,7 @@ mod tests {
     fn a_failure_is_kept_as_a_note_for_that_project_and_no_other() {
         let dir = tempfile::tempdir().expect("a directory");
         let config = hearing(dir.path(), r#"{"charter":2,"error":"broken"}"#);
-        let heard = Heard::default();
+        let heard = roomy();
         let root = dir.path().join("plane");
         std::fs::create_dir_all(&root).expect("a plane");
 

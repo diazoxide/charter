@@ -86,7 +86,8 @@ impl Rig {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
             .expect("runnable");
-        let found = extension::install(&self.config(), &ext).expect("installed");
+        let found = extension::install(&self.config(), &extension::BuiltIn::none(), &ext)
+            .expect("installed");
         extension::approve(&self.config(), found.id(), &found.path, &found.fingerprint)
             .expect("approved");
     }

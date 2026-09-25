@@ -165,16 +165,17 @@ struct Came {
 /// that hears it that a chat started — bounded by `bounds`. See the module docstring.
 pub fn at_session_start(
     config_root: &Path,
+    built_in: &super::BuiltIn,
     choices: &Choices,
     asked: &Asked,
     bounds: Bounds,
 ) -> AtSessionStart {
     let began = Instant::now();
-    let asking = who(config_root, choices);
+    let asking = who(config_root, built_in, choices);
     if asking.is_empty() {
         return AtSessionStart::default();
     }
-    let executor = Arc::new(Executor::with_deadline(bounds.each));
+    let executor = Arc::new(Executor::with_built_in(built_in.clone()).with_deadline(bounds.each));
     let (send, receive) = std::sync::mpsc::channel::<(usize, Came)>();
     for (at, one) in asking.iter().enumerate() {
         let executor = Arc::clone(&executor);
@@ -192,7 +193,7 @@ pub fn at_session_start(
             .spawn(move || {
                 // The gate first, so that an extension that changed on disk adds nothing to
                 // the chat at all; `brief` and `tell` take it again before they start anything.
-                if let Err(why) = crate::executor::cleared(&config_root, &id) {
+                if let Err(why) = crate::executor::cleared(&config_root, executor.built_in(), &id) {
                     let _ = mine.send((
                         at,
                         Came {
@@ -315,8 +316,8 @@ pub fn at_session_start(
 
 /// Every approved extension on in the project that adds a section or hears a chat start, by id.
 /// The manifest alone: the fingerprint is re-taken by the executor before anything starts.
-fn who(config_root: &Path, choices: &Choices) -> Vec<Asking> {
-    let loaded = super::read(config_root);
+fn who(config_root: &Path, built_in: &super::BuiltIn, choices: &Choices) -> Vec<Asking> {
+    let loaded = super::read(config_root, built_in);
     if loaded.unreadable.is_some() {
         return Vec::new();
     }
@@ -324,7 +325,7 @@ fn who(config_root: &Path, choices: &Choices) -> Vec<Asking> {
         .registry
         .entries
         .iter()
-        .filter(|(_, entry)| entry.approved.is_some())
+        .filter(|(_, entry)| entry.in_force())
         .filter_map(|(id, entry)| {
             let declared = super::manifest_at(&entry.path).ok()?;
             let hears_start = declared.hears(Kind::SessionStarted);

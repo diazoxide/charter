@@ -279,9 +279,14 @@ pub struct Installed {
 
 impl Installed {
     /// Every extension a survey found, with its standing as the survey took it.
+    ///
+    /// **A built-in turned off on this machine is not here at all** (charter-app#339): the
+    /// machine's choice comes before a project's, as its approval does, so no project file can
+    /// turn back on what the operator turned off for this machine.
     pub fn from_survey(seen: &super::Survey) -> Vec<Self> {
         seen.installed
             .iter()
+            .filter(|row| row.on)
             .map(|row| Self {
                 id: row.id.clone(),
                 name: row
@@ -300,16 +305,18 @@ impl Installed {
 
     /// Every extension the record names, approved when the record holds a yes — the answer
     /// without reading a single extension's directory. Its settings are not known, so it is for
-    /// asking what is on and nothing else.
+    /// asking what is on and nothing else. A built-in is approved through the app, and one
+    /// turned off on this machine is left out, as [`Self::from_survey`] leaves it.
     pub fn from_record(loaded: &super::Loaded) -> Vec<Self> {
         loaded
             .registry
             .entries
             .iter()
+            .filter(|(_, entry)| entry.on)
             .map(|(id, entry)| Self {
                 id: id.clone(),
                 name: id.clone(),
-                approved: entry.approved.is_some(),
+                approved: entry.approved.is_some() || entry.source == super::Source::App,
                 settings: Vec::new(),
             })
             .collect()

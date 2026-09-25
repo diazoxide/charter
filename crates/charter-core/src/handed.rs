@@ -17,13 +17,15 @@
 //! # Personas: names, the default, and when each memory was written
 //!
 //! The first subject, and the one the persona statistics view is about. For each persona the
-//! plane has, its name, whether the plane defaults to it, and the stamp each of its memories
-//! was written under (`_<date> <time> · <kind>_`, the store's own line — [`crate::workspaces::Entry::stamp`]).
-//! **Never a title and never a body.** Statistics are counts over time, and a count over time
-//! needs a time and nothing else.
+//! plane has, its name, whether the plane defaults to it, and the day each of its memories was
+//! written. **Never a title and never a body.** Statistics are counts over time, and a count
+//! over time needs a time and nothing else.
 //!
-//! The read is the one the persona card already does (`personas::memories`), once per persona,
-//! when the operator opens a view — never on a workspace focus, never on a timer.
+//! The read is `charter persona stats`'s ([`crate::personaverbs::stats::written`]), once per
+//! persona, when the operator opens a view — never on a workspace focus, never on a timer. It is
+//! that one and not the persona card's (charter-app#339): the view and the CLI count the same
+//! memories and date them on the same day, so they give the same numbers. A memory's day is
+//! what `memstore.memory_date` finds — the stamp line's date, else a `YYYYMMDD-` file name.
 
 use std::path::Path;
 
@@ -50,23 +52,20 @@ pub fn what(about: Subject) -> &'static str {
     }
 }
 
-/// How a memory's stamp is written, by charter and by the Python charter alike
-/// (`memstore.py`: `now.strftime('%Y-%m-%d %H:%M')`).
+/// How `now` is written: a memory stamp's spelling (`memstore.py`:
+/// `now.strftime('%Y-%m-%d %H:%M')`).
 const STAMP: &str = "%Y-%m-%d %H:%M";
 
-/// The time a memory's stamp says, in [`STAMP`]'s spelling, or `""` when it says none.
+/// How a memory's day is written.
+const DAY: &str = "%Y-%m-%d";
+
+/// A memory's day as charter hands it, or `""` for one with none.
 ///
-/// **This is what keeps [`what`]'s "never what a memory says" true, and it cannot be a lookup.**
-/// [`crate::workspaces`]' reader takes the first line of a memory that starts with `_` as its
-/// stamp, wherever it is — which is right for the file charter writes and wrong for one written
-/// by hand or by another tool: with no stamp line, the first `_emphasis_` or `__init__.py` in the
-/// body is taken instead, and handing that string would hand the body. So what leaves here is not
-/// the string that was read: it is a time *parsed* out of it and written again by charter, and a
-/// line that does not parse as one leaves as nothing. What a program can learn from a memory is
-/// therefore a minute, whatever the file holds.
-fn when(stamp: &str) -> String {
-    chrono::NaiveDateTime::parse_from_str(stamp.trim(), STAMP)
-        .map(|at| at.format(STAMP).to_string())
+/// **This is what keeps [`what`]'s "never what a memory says" true.** What leaves here is never a
+/// string read out of the file: it is a date *parsed* out of it and written again by charter, so
+/// whatever a file holds, a program learns a day from it and nothing else.
+fn day(date: Option<chrono::NaiveDate>) -> String {
+    date.map(|date| date.format(DAY).to_string())
         .unwrap_or_default()
 }
 
@@ -98,17 +97,17 @@ fn personas_within(root: &Path, now: chrono::NaiveDateTime, most: usize) -> serd
             "default".into(),
             serde_json::Value::Bool(default.as_deref() == Some(name.as_str())),
         );
-        match crate::personas::memories(root, &name) {
-            Ok(memories) => {
+        match refused(root, &name) {
+            None => {
                 let mut written = Vec::new();
-                for memory in memories {
+                for date in crate::personaverbs::stats::written(root, &name) {
                     if handed == most {
                         truncated = true;
                         break;
                     }
-                    // A memory with no stamp line is still a memory: it is counted, and it has
-                    // no date. An empty string says that without inventing one.
-                    written.push(serde_json::Value::String(when(&memory.stamp)));
+                    // A memory with no date is still a memory: it is counted, and it has no
+                    // date. An empty string says that without inventing one.
+                    written.push(serde_json::Value::String(day(date)));
                     handed += 1;
                 }
                 row.insert("written".into(), serde_json::Value::Array(written));
@@ -116,7 +115,7 @@ fn personas_within(root: &Path, now: chrono::NaiveDateTime, most: usize) -> serd
             }
             // charter's own sentence about why this persona's store could not be read, which
             // is a fact about the plane and not about any memory in it.
-            Err(why) => {
+            Some(why) => {
                 row.insert("written".into(), serde_json::Value::Array(Vec::new()));
                 row.insert("refused".into(), serde_json::Value::String(why));
             }
@@ -131,6 +130,17 @@ fn personas_within(root: &Path, now: chrono::NaiveDateTime, most: usize) -> serd
     doc.insert("personas".into(), serde_json::Value::Array(listed));
     doc.insert("truncated".into(), serde_json::Value::Bool(truncated));
     serde_json::Value::Object(doc)
+}
+
+/// Why charter will not read `name`'s memories, when it will not: a name it refuses, or a store
+/// that leads out of the plane. The persona card's two refusals, in its words.
+fn refused(root: &Path, name: &str) -> Option<String> {
+    crate::personas::name_refusal(root, name).or_else(|| {
+        let store = root.join("personas").join(name).join("memory");
+        crate::contain::readable(root, &store)
+            .err()
+            .map(|why| why.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -186,7 +196,7 @@ mod tests {
             .filter_map(serde_json::Value::as_str)
             .collect();
         written.sort_unstable();
-        assert_eq!(written, ["2026-09-20 10:00", "2026-09-21 10:00"]);
+        assert_eq!(written, ["2026-09-20", "2026-09-21"]);
         let release = listed
             .iter()
             .find(|row| row["name"] == "release")
@@ -319,13 +329,33 @@ mod tests {
     }
 
     #[test]
-    fn a_stamp_is_handed_as_the_time_it_says_and_nothing_after_it() {
-        assert_eq!(when("2026-09-22 10:00"), "2026-09-22 10:00");
-        assert_eq!(when(" 2026-09-22 10:00 "), "2026-09-22 10:00");
-        // A stamp-shaped start with words after it is not a stamp.
-        assert_eq!(when("2026-09-22 10:00 and the password"), "");
-        assert_eq!(when("2026-09-22"), "");
-        assert_eq!(when("the prod password is hunter2"), "");
-        assert_eq!(when(""), "");
+    fn a_memory_is_dated_as_charter_persona_stats_dates_it() {
+        // No stamp line, and a `YYYYMMDD-` file name: the CLI's RECENT column counts it on that
+        // day, so the view is handed that day (charter-app#339).
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = dir.path().join("personas").join("steward");
+        std::fs::create_dir_all(at.join("memory")).expect("a persona");
+        std::fs::write(at.join("persona.md"), "---\nrole: x\n---\n").expect("a definition");
+        std::fs::write(
+            at.join("memory").join("20260919-note.md"),
+            "# a note\n\nwritten by hand\n",
+        )
+        .expect("a memory");
+        std::fs::write(
+            at.join("memory").join("iso.md"),
+            "# iso\n\n_2026-09-18T08:00 · persistent_\n\nbody\n",
+        )
+        .expect("a memory");
+
+        let handed = personas(dir.path(), at_noon());
+
+        let mut written: Vec<&str> = handed["personas"][0]["written"]
+            .as_array()
+            .expect("dates")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        written.sort_unstable();
+        assert_eq!(written, ["2026-09-18", "2026-09-19"]);
     }
 }

@@ -238,6 +238,10 @@ pub struct Executor {
     /// gives an executor another (charter-app#303), so that a test whose subject is not the
     /// deadline is not failed by a busy machine taking five seconds to start its program.
     deadline: Duration,
+    /// The running app's built-in extensions ([`extension::BuiltIn`]): none unless the app says
+    /// where its bundle has them. Held here because the executor is the app's, made once when
+    /// the app knows where it is, and a question never carries where the app is.
+    built_in: extension::BuiltIn,
 }
 
 impl Default for Executor {
@@ -246,6 +250,7 @@ impl Default for Executor {
             table: Mutex::default(),
             freed: Condvar::new(),
             deadline: DEADLINE,
+            built_in: extension::BuiltIn::none(),
         }
     }
 }
@@ -264,14 +269,25 @@ struct Table {
 }
 
 impl Executor {
+    /// An executor for an app whose built-in extensions are `built_in` (charter-app#339).
+    pub fn with_built_in(built_in: extension::BuiltIn) -> Self {
+        Self {
+            built_in,
+            ..Self::default()
+        }
+    }
+
+    /// The built-in extensions this executor starts (charter-app#339), for a caller that asks
+    /// the record which extensions to ask ([`crate::extension::events::deliver`]).
+    pub fn built_in(&self) -> &extension::BuiltIn {
+        &self.built_in
+    }
+
     /// An executor whose programs have `deadline` instead of [`DEADLINE`]: for the session-start
     /// briefing, which holds a chat's start and so gives each program less
     /// ([`crate::extension::briefing::Bounds`]), and for a test whose subject is not the deadline.
-    pub fn with_deadline(deadline: Duration) -> Self {
-        Self {
-            deadline,
-            ..Self::default()
-        }
+    pub fn with_deadline(self, deadline: Duration) -> Self {
+        Self { deadline, ..self }
     }
 
     /// Ask `extension`'s program about `view`, or say why charter will not.
@@ -309,7 +325,7 @@ impl Executor {
         // The record alone first: whether this is an extension the operator said yes to at all.
         // **Before the project is asked anything**, so that no project file can stand in for this
         // machine's yes (ADR 0048).
-        let loaded = extension::read(config_root);
+        let loaded = extension::read(config_root, &self.built_in);
         let entry = approved(&loaded, extension)?;
         // Then only its manifest, for which view was asked and what that view is about.
         let declared =
@@ -375,7 +391,7 @@ impl Executor {
         event: &extension::events::Event,
     ) -> Result<(), String> {
         supported()?;
-        let loaded = extension::read(config_root);
+        let loaded = extension::read(config_root, &self.built_in);
         let entry = approved(&loaded, extension)?;
         let declared =
             extension::manifest_at(&entry.path).map_err(|why| could_not_reread(extension, &why))?;
@@ -414,7 +430,7 @@ impl Executor {
         asked: serde_json::Value,
     ) -> Result<String, String> {
         supported()?;
-        let loaded = extension::read(config_root);
+        let loaded = extension::read(config_root, &self.built_in);
         let entry = approved(&loaded, extension)?;
         let declared =
             extension::manifest_at(&entry.path).map_err(|why| could_not_reread(extension, &why))?;
@@ -1163,8 +1179,12 @@ fn supported() -> Result<(), String> {
 /// says *means ask* — *"a missing file, a malformed one, an entry that is not a fingerprint, a
 /// link, a FIFO, a planted giant — each reads as no record, never as approval"* — and each says
 /// so in words the operator can act on.
-pub fn cleared(config_root: &Path, extension: &str) -> Result<Extension, String> {
-    let loaded = extension::read(config_root);
+pub fn cleared(
+    config_root: &Path,
+    built_in: &extension::BuiltIn,
+    extension: &str,
+) -> Result<Extension, String> {
+    let loaded = extension::read(config_root, built_in);
     let entry = approved(&loaded, extension)?;
     fingerprinted(&loaded, extension, &entry)
 }
@@ -1184,7 +1204,14 @@ fn approved(loaded: &extension::Loaded, extension: &str) -> Result<extension::En
              nothing to start. Install it from Extensions."
         ));
     };
-    if entry.approved.is_none() {
+    if !entry.on {
+        return Err(format!(
+            "'{extension}' is turned off on this machine, so charter will not start its program. \
+             Turn it on in Extensions to use this view."
+        ));
+    }
+    // A built-in's yes is the app's, and the gate's second half holds it to the app's bundle.
+    if entry.source == extension::Source::Installed && entry.approved.is_none() {
         return Err(format!(
             "you have not approved '{extension}', so charter will not start its program. Open \
              Extensions to see what it declares and decide."

@@ -128,7 +128,7 @@ fn a_badge_in_the_footer(plane: &Path, value: &str, age: i64) -> PathBuf {
     )
     .expect("a facts file");
     let config = plane.join("config");
-    let found = extension::install(&config, &ext).expect("installed");
+    let found = extension::install(&config, &extension::BuiltIn::none(), &ext).expect("installed");
     extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
     config
 }

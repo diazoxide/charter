@@ -61,6 +61,8 @@ type Row = {
   name: string;
   path: string;
   standing: string;
+  source: string;
+  on: boolean;
   themes_in_force: string[];
   declares: string[];
   refused: string | null;
@@ -89,6 +91,7 @@ function core({
     if (cmd === "install_extension") return ASK;
     if (cmd === "approve_extension") return null;
     if (cmd === "forget_extension") return null;
+    if (cmd === "set_extension_on") return null;
     throw new Error(`the window asked for ${cmd}, which this test did not expect`);
   });
   return asked;
@@ -99,13 +102,67 @@ const newRow: Row = {
   name: "Solarized",
   path: "/home/dev/ext/solarized",
   standing: "new",
+  source: "installed",
+  on: true,
   themes_in_force: [],
   declares: ASK.declares,
   refused: null,
   ask: ASK,
 };
 
+/** Persona statistics as the app ships it (charter-app#339). */
+const builtInRow: Row = {
+  id: "persona-statistics",
+  name: "Persona statistics",
+  path: "/Applications/charter.app/Contents/Resources/extensions/persona-statistics",
+  standing: "approved",
+  source: "app",
+  on: true,
+  themes_in_force: [],
+  declares: ["a view, “Statistics”"],
+  refused: null,
+  ask: null,
+};
+
 describe("the extension registry", () => {
+  it("marks a built-in extension built-in, with no Remove and no question to ask", async () => {
+    core({ rows: [builtInRow, { ...newRow, standing: "approved", ask: null }] });
+    render(<Extensions onClose={() => undefined} />);
+
+    const row = (await screen.findByText("Persona statistics")).closest("li") as HTMLElement;
+    expect(within(row).getByText("built-in")).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+    // An installed one is still removed, as before.
+    const installed = screen.getByText("Solarized").closest("li") as HTMLElement;
+    expect(within(installed).getByRole("button", { name: "Remove" })).toBeInTheDocument();
+    expect(within(installed).queryByText("built-in")).not.toBeInTheDocument();
+  });
+
+  it("turns a built-in off on this machine rather than removing it", async () => {
+    const asked = core({ rows: [builtInRow] });
+    render(<Extensions onClose={() => undefined} />);
+
+    const on = await screen.findByRole("checkbox", { name: /on, on this machine/i });
+    expect(on).toBeChecked();
+    await userEvent.click(on);
+
+    await vi.waitFor(() =>
+      expect(asked).toContainEqual({
+        cmd: "set_extension_on",
+        args: { id: "persona-statistics", on: false },
+      }),
+    );
+  });
+
+  it("says a built-in turned off on this machine contributes nothing", async () => {
+    core({ rows: [{ ...builtInRow, on: false }] });
+    render(<Extensions onClose={() => undefined} />);
+
+    expect(await screen.findByRole("checkbox", { name: /on, on this machine/i })).not.toBeChecked();
+    expect(screen.getByText(/off on this machine — contributing nothing/)).toBeInTheDocument();
+  });
+
   it("names charter's own themes as well as the installed ones", async () => {
     core({ rows: [newRow] });
     render(<Extensions onClose={() => undefined} />);

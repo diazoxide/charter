@@ -25,6 +25,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   waits at most three seconds for all extensions together. Extensions now speak protocol 2,
   and one written for protocol 1 is asked exactly as before.
   ([#343](https://github.com/diazoxide/charter-app/issues/343))
+- **Persona statistics comes with the app.** charter now ships its own extensions, and persona
+  statistics is the first: there is no folder to assemble and add by hand, and no approval to
+  give, because the app's signature covers it. The Extensions list marks it "built-in" and
+  offers turning it off on this machine in the place of Remove. A project or a workspace can
+  still turn it off, as it can any extension. A copy of it anywhere else is an ordinary
+  extension that has to be approved. If you added it by hand before, that copy is set aside and
+  the built-in one is used. Its numbers are now `charter persona stats`'s: it counts the same
+  memories and dates them the same way, and "recent" means the last 14 days in both. For
+  extension authors: a view about personas is now handed the day each memory was written,
+  rather than its minute. ([#339](https://github.com/diazoxide/charter-app/issues/339))
 - **Extensions can show badges and repo columns.** An extension that asks for the `badges`
   capability can show values in the status bar and in `charter statusline`'s footer, and one
   that asks for `repo-columns` can add columns to the repo table in the bottom bar. It declares

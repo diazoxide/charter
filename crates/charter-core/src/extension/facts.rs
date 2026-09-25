@@ -423,8 +423,13 @@ pub struct Facts {
 ///
 /// `choices` is asked for only when an approved extension has something for this surface, so a
 /// machine with no extension reads no project file for it.
+///
+/// `built_in` is the running app's built-in extensions (charter-app#339), which are approved
+/// through the app at their place in its bundle, and contribute nothing while turned off on this
+/// machine. `charter statusline` passes none: the CLI does not know where an app is.
 pub fn gather(
     config_root: &Path,
+    built_in: &super::BuiltIn,
     choices: impl FnOnce() -> super::project::Choices,
     now: DateTime<Utc>,
     reading: Reading,
@@ -432,13 +437,14 @@ pub fn gather(
     let mut choices = Some(choices);
     let mut read_choices: Option<super::project::Choices> = None;
     let mut facts = Facts::default();
-    let loaded = super::read(config_root);
+    let loaded = super::read(config_root, built_in);
     // An unreadable record approves nothing; the Extensions list is where it is said.
     if loaded.unreadable.is_some() {
         return facts;
     }
     for (id, entry) in &loaded.registry.entries {
-        if entry.approved.is_none() {
+        let approved = entry.approved.is_some() || entry.source == super::Source::App;
+        if !approved || !entry.on {
             continue;
         }
         // The manifest alone first, so an extension with nothing for this surface costs no

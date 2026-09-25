@@ -138,8 +138,12 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
         // machine with no config directory has no extension to ask.
         if let Some(config) = charter_core::machine::config_root_if_there() {
             use charter_core::extension::briefing::{self, Asked, Bounds};
+            // `BuiltIn::none()`, as `charter statusline`: the binary does not know where an app
+            // bundle is, so a built-in extension neither briefs nor hears a chat start
+            // (ADR 0041's amendment for charter-app#343).
             let briefed = briefing::at_session_start(
                 &config,
+                &charter_core::extension::BuiltIn::none(),
                 &charter_core::extension::project::Choices::read_in(hook.root, Some(&workspace)),
                 &Asked {
                     workspace: workspace.clone(),

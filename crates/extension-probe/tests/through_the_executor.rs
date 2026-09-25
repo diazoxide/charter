@@ -45,7 +45,8 @@ impl Probe {
     /// Assembled, installed and approved: the two clicks.
     fn approved() -> Self {
         let probe = Self::assembled();
-        let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+        let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+            .expect("installed");
         extension::approve(&probe.config(), found.id(), &found.path, &found.fingerprint)
             .expect("approved");
         probe
@@ -115,7 +116,8 @@ fn the_probe_is_asked_through_the_executor_and_answers_what_it_was_handed() {
 #[test]
 fn the_approval_prompt_names_every_capability_the_probe_asks_for() {
     let probe = Probe::assembled();
-    let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
     assert_eq!(
         found.manifest.capabilities,
         [
@@ -152,7 +154,7 @@ fn changing_the_capabilities_after_approval_is_asked_about_again_and_runs_nothin
         refused.contains("changed since you approved it"),
         "{refused}"
     );
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     assert_eq!(survey.installed[0].standing, extension::Standing::Changed);
 }
 
@@ -161,7 +163,7 @@ fn a_capability_this_charter_does_not_know_is_refused_by_name_and_nothing_is_loa
     let probe = Probe::assembled();
     probe.manifest_sets("capabilities", serde_json::json!(["teleport"]));
 
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("an unknown capability was installed");
     let said = refused.to_string();
     assert!(
@@ -169,7 +171,12 @@ fn a_capability_this_charter_does_not_know_is_refused_by_name_and_nothing_is_loa
         "{said}"
     );
     // Never partly loaded: nothing was recorded, so there is nothing to approve and nothing runs.
-    assert!(extension::read(&probe.config()).registry.entries.is_empty());
+    assert!(
+        extension::read(&probe.config(), &extension::BuiltIn::none())
+            .registry
+            .entries
+            .is_empty()
+    );
     let not_run = probe
         .ask()
         .expect_err("an extension nobody installed answered");
@@ -181,7 +188,7 @@ fn an_installed_extension_that_later_asks_for_an_unknown_capability_contributes_
     let probe = Probe::approved();
     probe.manifest_sets("capabilities", serde_json::json!(["probe", "teleport"]));
 
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     let row = &survey.installed[0];
     assert!(row.views_in_force().is_empty());
     let why = row.refused.as_deref().expect("a sentence");
@@ -206,7 +213,13 @@ impl Probe {
     }
 
     fn facts_as(&self, reading: Reading, choices: &extension::project::Choices) -> facts::Facts {
-        facts::gather(&self.config(), || choices.clone(), now(), reading)
+        facts::gather(
+            &self.config(),
+            &extension::BuiltIn::none(),
+            || choices.clone(),
+            now(),
+            reading,
+        )
     }
 
     fn facts_file(&self) -> PathBuf {
@@ -232,7 +245,8 @@ fn seconds_ago(seconds: i64) -> i64 {
 #[test]
 fn the_probe_declares_a_badge_and_a_repo_column_and_the_prompt_lists_both() {
     let probe = Probe::assembled();
-    let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
     let asked = extension::prompt(&found, extension::Standing::New);
     assert!(
         asked.declares.iter().any(|line| line
@@ -436,7 +450,7 @@ fn repo_columns_and_badges_follow_the_project_and_the_workspace_turning_it_off()
 fn a_contribution_without_its_capability_is_refused_by_name() {
     let probe = Probe::assembled();
     probe.manifest_sets("capabilities", serde_json::json!(["probe", "repo-columns"]));
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("a contribution without its capability was installed")
         .to_string();
     assert!(refused.contains("\"badges\""), "{refused}");
@@ -453,7 +467,7 @@ fn a_capability_that_declares_nothing_is_refused_by_name() {
         .expect("contributes")
         .remove("repo-columns");
     std::fs::write(&at, doc.to_string()).expect("written");
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("a capability declaring nothing was installed")
         .to_string();
     assert!(refused.contains("\"repo-columns\""), "{refused}");
@@ -605,7 +619,7 @@ fn a_slow_event_handler_is_stopped_at_the_deadline_and_is_a_note() {
     probe.behaves(serde_json::json!({ "sleep_ms": 10_000 }));
     let began = std::time::Instant::now();
     let notes = probe.deliver_with(
-        &Executor::with_deadline(std::time::Duration::from_millis(500)),
+        &Executor::default().with_deadline(std::time::Duration::from_millis(500)),
         &Event::PlaneSaved,
     );
     assert!(
@@ -677,7 +691,8 @@ fn two_events_a_moment_apart_are_both_heard() {
 #[test]
 fn the_approval_prompt_names_the_events_the_folder_and_the_briefing_section() {
     let probe = Probe::assembled();
-    let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
     let asked = extension::prompt(&found, extension::Standing::New);
     for line in [
         "the capability “events” — charter starts its program once after each thing it hears \
@@ -719,7 +734,7 @@ fn the_approval_prompt_names_the_events_the_folder_and_the_briefing_section() {
 fn a_manifest_speaking_protocol_1_cannot_ask_for_events_or_a_briefing() {
     let probe = Probe::assembled();
     probe.manifest_sets("version", serde_json::json!(1));
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("a protocol-1 manifest asked for a protocol-2 capability")
         .to_string();
     assert!(
@@ -739,7 +754,7 @@ fn an_event_nobody_declared_is_refused_by_name() {
         serde_json::from_str(&std::fs::read_to_string(&at).expect("the manifest")).expect("JSON");
     doc["contributes"]["events"]["hears"] = serde_json::json!(["repo-cloned"]);
     std::fs::write(&at, doc.to_string()).expect("written");
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("an unknown event was installed")
         .to_string();
     assert!(
@@ -751,17 +766,23 @@ fn an_event_nobody_declared_is_refused_by_name() {
 #[test]
 fn a_workspace_folder_is_named_for_a_fork_only_while_the_extension_is_approved() {
     let probe = Probe::approved();
-    assert_eq!(events::carried(&probe.config()), ["probe"]);
+    assert_eq!(
+        events::carried(&probe.config(), &extension::BuiltIn::none()),
+        ["probe"]
+    );
     // Off in the project changes nothing: the machine's approval is what names it.
     std::fs::write(
         probe.plane().join("charter.toml"),
         "[extensions.extension-probe]\nenabled = false\n",
     )
     .expect("written");
-    assert_eq!(events::carried(&probe.config()), ["probe"]);
+    assert_eq!(
+        events::carried(&probe.config(), &extension::BuiltIn::none()),
+        ["probe"]
+    );
     // Changed on disk names nothing.
     std::fs::write(probe.ext().join("README"), "added after the yes").expect("written");
-    assert!(events::carried(&probe.config()).is_empty());
+    assert!(events::carried(&probe.config(), &extension::BuiltIn::none()).is_empty());
 }
 
 #[test]
@@ -772,7 +793,7 @@ fn a_workspace_folder_that_is_one_of_charters_own_is_refused() {
         serde_json::from_str(&std::fs::read_to_string(&at).expect("the manifest")).expect("JSON");
     doc["contributes"]["events"]["workspace_folder"] = serde_json::json!("memory");
     std::fs::write(&at, doc.to_string()).expect("written");
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("a workspace folder of charter's own was installed")
         .to_string();
     assert!(refused.contains("one of charter's own"), "{refused}");
@@ -795,6 +816,7 @@ impl Probe {
     fn briefed(&self, bounds: Bounds) -> AtSessionStart {
         briefing::at_session_start(
             &self.config(),
+            &extension::BuiltIn::none(),
             &extension::project::Choices::read(&self.plane()),
             &Asked {
                 workspace: "alpha".into(),
@@ -937,4 +959,50 @@ fn an_extension_that_changed_on_disk_adds_nothing_to_a_chats_start() {
 fn a_machine_with_no_extension_adds_nothing_to_a_chats_start() {
     let probe = Probe::assembled();
     assert_eq!(probe.briefed(ROOMY), AtSessionStart::default());
+}
+
+#[test]
+fn a_built_in_hears_and_briefs_while_on_and_does_neither_once_turned_off_on_this_machine() {
+    // The probe as one of the app's own (charter-app#339): approved by where it is, and
+    // turned off per machine rather than removed.
+    let probe = Probe::assembled();
+    let bundle = probe.dir.path().join("bundle");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_extension-probe"))
+        .arg("assemble")
+        .arg(bundle.join("extension-probe"))
+        .status()
+        .expect("assemble runs");
+    assert!(status.success());
+    let built_in = extension::BuiltIn::at(bundle.clone());
+    let state = bundle.join("extension-probe/state");
+    let heard = || {
+        std::fs::read_to_string(state.join(extension_probe::HEARD))
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    let choices = extension::project::Choices::read(&probe.plane());
+    let brief = || {
+        briefing::at_session_start(
+            &probe.config(),
+            &built_in,
+            &choices,
+            &Asked {
+                workspace: "alpha".into(),
+                persona: None,
+            },
+            ROOMY,
+        )
+    };
+
+    let executor = Executor::with_built_in(built_in.clone());
+    assert!(events::deliver(&executor, &probe.config(), &choices, &Event::PlaneSaved).is_empty());
+    assert_eq!(heard(), 1);
+    assert_eq!(brief().parts.len(), 1);
+    assert_eq!(heard(), 2, "the chat start was told too");
+
+    extension::set_on(&probe.config(), &built_in, "extension-probe", false).expect("turned off");
+    assert!(events::deliver(&executor, &probe.config(), &choices, &Event::PlaneSaved).is_empty());
+    assert_eq!(brief(), AtSessionStart::default());
+    assert_eq!(heard(), 2, "a built-in turned off heard something");
 }

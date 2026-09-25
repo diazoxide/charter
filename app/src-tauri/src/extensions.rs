@@ -19,8 +19,41 @@
 //! and hands back the question; [`approve_extension`] takes the answer, carrying back the
 //! fingerprint that was on screen (charter-app#123's shape).
 
+use std::sync::OnceLock;
+
 use charter_core::extension;
 use tauri_plugin_dialog::DialogExt;
+
+/// Where this app's bundle keeps its built-in extensions, relative to its resource directory.
+pub(crate) const BUILT_IN_DIR: &str = "extensions";
+
+/// The running app's built-in extensions, kept once at launch ([`keep_built_in`]).
+static BUILT_IN: OnceLock<extension::BuiltIn> = OnceLock::new();
+
+/// This app's built-in extensions, in its resources (charter-app#339).
+///
+/// **From the app's resource path and from nothing else** — `Contents/Resources/extensions` in
+/// a macOS bundle, `/usr/lib/charter/extensions` in a `.deb` and an AppImage. That path is the
+/// whole of what makes an extension built in (`extension::BuiltIn`), so it is taken from where
+/// the running app is and never from a file, a setting or the environment. A build with none in
+/// its resources — a development build, a test — has none, and every built-in is simply absent.
+pub(crate) fn find_built_in(resources: Option<std::path::PathBuf>) -> extension::BuiltIn {
+    resources
+        .map(|dir| dir.join(BUILT_IN_DIR))
+        .filter(|dir| dir.is_dir())
+        .map_or_else(extension::BuiltIn::none, extension::BuiltIn::at)
+}
+
+/// Keep what [`find_built_in`] found for the life of the process: `setup`'s, once. A second
+/// call changes nothing, so the answer cannot move while the app runs.
+pub(crate) fn keep_built_in(found: extension::BuiltIn) {
+    let _ = BUILT_IN.set(found);
+}
+
+/// The running app's built-in extensions, as [`keep_built_in`] kept them; none before it ran.
+pub(crate) fn built_in() -> extension::BuiltIn {
+    BUILT_IN.get().cloned().unwrap_or_default()
+}
 
 /// The question charter asks before an extension contributes anything.
 ///
@@ -90,6 +123,11 @@ pub struct ExtensionRow {
     pub path: String,
     /// `approved`, `new` or `changed`.
     pub standing: String,
+    /// `installed`, or `app` for a built-in extension: one that ships inside charter, is
+    /// trusted through the app, and is turned off rather than removed (charter-app#339).
+    pub source: String,
+    /// Whether it is on, on this machine. Only a built-in is ever off.
+    pub on: bool,
     /// The themes it is contributing **right now** — empty unless it is approved, so the row
     /// says what is in force rather than what was asked for.
     pub themes_in_force: Vec<String>,
@@ -147,7 +185,7 @@ pub struct ExtensionTheme {
 #[specta::specta]
 pub async fn extension_themes() -> Result<Vec<ExtensionTheme>, String> {
     let root = config_root()?;
-    tauri::async_runtime::spawn_blocking(move || in_force(&extension::survey(&root)))
+    tauri::async_runtime::spawn_blocking(move || in_force(&extension::survey(&root, &built_in())))
         .await
         .map_err(|err| format!("reading this machine's themes did not finish: {err}"))
 }
@@ -166,9 +204,11 @@ pub async fn extension_themes() -> Result<Vec<ExtensionTheme>, String> {
 #[specta::specta]
 pub async fn extension_panels() -> Result<Vec<crate::panels::PanelView>, String> {
     let root = config_root()?;
-    tauri::async_runtime::spawn_blocking(move || panels_in_force(&extension::survey(&root)))
-        .await
-        .map_err(|err| format!("reading this machine's panels did not finish: {err}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        panels_in_force(&extension::survey(&root, &built_in()))
+    })
+    .await
+    .map_err(|err| format!("reading this machine's panels did not finish: {err}"))
 }
 
 /// [`extension_panels`] with the survey already taken, so the shaping is testable without a
@@ -223,7 +263,7 @@ fn config_root() -> Result<std::path::PathBuf, String> {
 #[specta::specta]
 pub async fn installed_extensions() -> Result<InstalledExtensions, String> {
     let root = config_root()?;
-    tauri::async_runtime::spawn_blocking(move || listed(&extension::survey(&root)))
+    tauri::async_runtime::spawn_blocking(move || listed(&extension::survey(&root, &built_in())))
         .await
         .map_err(|err| format!("reading this machine's extensions did not finish: {err}"))
 }
@@ -252,6 +292,8 @@ fn listed(seen: &extension::Survey) -> InstalledExtensions {
                         .map_or_else(|| row.id.clone(), |found| found.manifest.name.clone()),
                     path: row.path.display().to_string(),
                     standing: row.standing.as_str().to_owned(),
+                    source: row.source.as_str().to_owned(),
+                    on: row.on,
                     themes_in_force: row
                         .themes_in_force()
                         .iter()
@@ -305,8 +347,9 @@ pub async fn install_extension(path: String) -> Result<ExtensionAsk, String> {
     let root = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         let at = std::path::PathBuf::from(path);
-        let found = extension::install(&root, &at).map_err(|why| why.to_string())?;
-        let standing = extension::read(&root).standing(&found);
+        let built_in = built_in();
+        let found = extension::install(&root, &built_in, &at).map_err(|why| why.to_string())?;
+        let standing = extension::read(&root, &built_in).standing(&found);
         Ok(ExtensionAsk::from(extension::prompt(&found, standing)))
     })
     .await
@@ -351,6 +394,20 @@ pub async fn forget_extension(id: String) -> Result<(), String> {
     })
     .await
     .map_err(|err| format!("forgetting that extension did not finish: {err}"))?
+}
+
+/// Turn a built-in extension on or off on this machine: what the Extensions list offers a
+/// built-in in the place of Remove (charter-app#339). Off, it contributes nothing to any
+/// project; a project or a workspace can still turn it off on its own, as it can any extension.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_extension_on(id: String, on: bool) -> Result<(), String> {
+    let root = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        extension::set_on(&root, &built_in(), &id, on).map_err(|why| why.to_string())
+    })
+    .await
+    .map_err(|err| format!("turning that extension on or off did not finish: {err}"))?
 }
 
 // ---------------------------------------------------------------------------------------
@@ -428,7 +485,7 @@ pub async fn project_extensions(
     let config = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         project_rows(
-            &extension::survey(&config),
+            &extension::survey(&config, &built_in()),
             &extension::project::Choices::read_in(&root, workspace.as_deref()),
         )
     })
@@ -562,7 +619,7 @@ pub async fn extensions_on(
     let config = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
         on_ids(
-            &extension::read(&config),
+            &extension::read(&config, &built_in()),
             &extension::project::Choices::read_in(&root, workspace.as_deref()),
         )
     })
@@ -666,6 +723,7 @@ fn facts_in(
     use extension::facts;
     let read = facts::gather(
         config,
+        &built_in(),
         || extension::project::Choices::read_in(root, workspace),
         now,
         facts::Reading::Window,
@@ -763,7 +821,7 @@ pub async fn project_theme(
     tauri::async_runtime::spawn_blocking(move || {
         let workspace = workspace.as_deref();
         project_theme_of(
-            &extension::survey(&config),
+            &extension::survey(&config, &built_in()),
             &extension::project::Choices::read_in(&root, workspace),
             &extension::project::theme::Said::read_in(&root, workspace),
         )
@@ -858,7 +916,7 @@ pub async fn project_theme_drawn(
     tauri::async_runtime::spawn_blocking(move || {
         let workspace = workspace.as_deref();
         project_theme_drawn_of(
-            &extension::read(&config),
+            &extension::read(&config, &built_in()),
             &extension::project::Choices::read_in(&root, workspace),
             &extension::project::theme::Said::read_in(&root, workspace),
         )
@@ -927,7 +985,8 @@ mod tests {
         )
         .expect("a facts file");
         let config = dir.path().join("config");
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         (dir, config)
     }
@@ -981,9 +1040,9 @@ mod tests {
     #[test]
     fn a_row_that_is_not_approved_carries_the_question_to_ask_about_it() {
         let (_dir, at, config) = made();
-        extension::install(&config, &at).expect("installed");
+        extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
 
-        let listed = listed(&extension::survey(&config));
+        let listed = listed(&extension::survey(&config, &extension::BuiltIn::none()));
         let row = &listed.extensions[0];
         assert_eq!(row.standing, "new");
         assert!(
@@ -1000,6 +1059,43 @@ mod tests {
     }
 
     #[test]
+    fn a_built_in_is_listed_as_the_app_s_approved_and_on_with_nothing_to_ask() {
+        let (dir, at, config) = made();
+        // The app's resources, as a bundle lays them out, holding the extension.
+        let resources = dir.path().join("Resources");
+        let shipped = resources.join(BUILT_IN_DIR).join("solarized");
+        std::fs::create_dir_all(&shipped).expect("a bundle");
+        for name in [extension::MANIFEST, "dark.json"] {
+            std::fs::copy(at.join(name), shipped.join(name)).expect("a copy");
+        }
+        let built_in = find_built_in(Some(resources));
+
+        let shown = listed(&extension::survey(&config, &built_in));
+        let row = &shown.extensions[0];
+        assert_eq!(row.source, "app");
+        assert_eq!(row.standing, "approved");
+        assert!(row.on);
+        assert!(row.ask.is_none(), "a built-in was asked about");
+        assert_eq!(row.themes_in_force, ["Solarized Dark"]);
+
+        extension::set_on(&config, &built_in, "solarized", false).expect("turned off");
+        let shown = listed(&extension::survey(&config, &built_in));
+        let row = &shown.extensions[0];
+        assert!(!row.on);
+        assert!(row.themes_in_force.is_empty(), "it contributed while off");
+    }
+
+    #[test]
+    fn an_app_with_nothing_in_its_resources_has_no_built_in() {
+        let dir = tempfile::tempdir().expect("a directory");
+        assert_eq!(
+            find_built_in(Some(dir.path().to_path_buf())),
+            extension::BuiltIn::none()
+        );
+        assert_eq!(find_built_in(None), extension::BuiltIn::none());
+    }
+
+    #[test]
     fn a_state_directory_is_carried_to_the_window_as_the_core_words_it() {
         // charter-app#152. `fingerprint_note` says charter read every file in the directory;
         // the one directory it did not read has to reach the same screen, in the core's own
@@ -1011,9 +1107,9 @@ mod tests {
                 "contributes":{"themes":[{"name":"Solarized Dark","file":"dark.json"}]}}"#,
         )
         .expect("a manifest with a state directory");
-        extension::install(&config, &at).expect("installed");
+        extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
 
-        let listed = listed(&extension::survey(&config));
+        let listed = listed(&extension::survey(&config, &extension::BuiltIn::none()));
         let ask = listed.extensions[0].ask.as_ref().expect("a question");
         assert_eq!(
             ask.state_note.as_deref(),
@@ -1027,10 +1123,11 @@ mod tests {
         // reading, which is `profiletrust::approval_needed`'s reason for never asking about a
         // built-in.
         let (_dir, at, config) = made();
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
 
-        let listed = listed(&extension::survey(&config));
+        let listed = listed(&extension::survey(&config, &extension::BuiltIn::none()));
         let row = &listed.extensions[0];
         assert_eq!(row.standing, "approved");
         assert_eq!(row.themes_in_force, vec!["Solarized Dark".to_owned()]);
@@ -1040,10 +1137,10 @@ mod tests {
     #[test]
     fn a_row_charter_could_not_read_says_why_and_still_lists_what_it_declared() {
         let (_dir, at, config) = made();
-        extension::install(&config, &at).expect("installed");
+        extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         std::fs::remove_file(at.join(extension::MANIFEST)).expect("the manifest");
 
-        let listed = listed(&extension::survey(&config));
+        let listed = listed(&extension::survey(&config, &extension::BuiltIn::none()));
         let row = &listed.extensions[0];
         assert!(row.refused.is_some(), "it went quiet");
         assert!(row.themes_in_force.is_empty());
@@ -1056,14 +1153,15 @@ mod tests {
     #[test]
     fn only_an_approved_extensions_theme_is_ever_in_force() {
         let (_dir, at, config) = made();
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         assert!(
-            in_force(&extension::survey(&config)).is_empty(),
+            in_force(&extension::survey(&config, &extension::BuiltIn::none())).is_empty(),
             "an unapproved extension's theme reached the window"
         );
 
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
-        let themes = in_force(&extension::survey(&config));
+        let themes = in_force(&extension::survey(&config, &extension::BuiltIn::none()));
         assert_eq!(themes.len(), 1);
         assert_eq!(themes[0].extension, "solarized");
         assert_eq!(themes[0].name, "Solarized Dark");
@@ -1071,7 +1169,7 @@ mod tests {
 
         std::fs::write(at.join("dark.json"), r#"{"tokens":{}}"#).expect("a changed theme");
         assert!(
-            in_force(&extension::survey(&config)).is_empty(),
+            in_force(&extension::survey(&config, &extension::BuiltIn::none())).is_empty(),
             "a theme that changed after approval was still drawn"
         );
     }
@@ -1079,7 +1177,7 @@ mod tests {
     #[test]
     fn the_window_is_told_charters_own_themes_as_well() {
         let (_dir, _at, config) = made();
-        let listed = listed(&extension::survey(&config));
+        let listed = listed(&extension::survey(&config, &extension::BuiltIn::none()));
 
         assert_eq!(listed.built_in_themes, extension::BUILT_IN_THEMES.to_vec());
     }
@@ -1087,14 +1185,19 @@ mod tests {
     #[test]
     fn a_project_that_turns_an_approved_extension_off_has_it_off_and_says_which_file() {
         let (_dir, at, config) = made();
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         let choices = extension::project::Choices::from_text(
             None,
             Some("[extensions.solarized]\nenabled = false\n"),
         );
 
-        let rows = project_rows(&extension::survey(&config), &choices).extensions;
+        let rows = project_rows(
+            &extension::survey(&config, &extension::BuiltIn::none()),
+            &choices,
+        )
+        .extensions;
         assert_eq!(
             rows.iter()
                 .map(|row| (row.id.as_str(), row.state.as_str(), row.source.as_str()))
@@ -1102,12 +1205,15 @@ mod tests {
             vec![("solarized", "off", "local")]
         );
         assert_eq!(
-            on_ids(&extension::read(&config), &choices),
+            on_ids(
+                &extension::read(&config, &extension::BuiltIn::none()),
+                &choices
+            ),
             Vec::<String>::new()
         );
         assert_eq!(
             on_ids(
-                &extension::read(&config),
+                &extension::read(&config, &extension::BuiltIn::none()),
                 &extension::project::Choices::default()
             ),
             vec!["solarized".to_owned()],
@@ -1119,7 +1225,8 @@ mod tests {
     fn a_workspace_that_turns_an_extension_off_has_it_off_there_and_names_its_file() {
         // charter-app#280: the focused workspace's settings are a layer of what the window keeps.
         let (_dir, at, config) = made();
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         let choices = extension::project::Choices::default().in_workspace(
             "alpha",
@@ -1128,44 +1235,69 @@ mod tests {
             ),
         );
 
-        let rows = project_rows(&extension::survey(&config), &choices).extensions;
+        let rows = project_rows(
+            &extension::survey(&config, &extension::BuiltIn::none()),
+            &choices,
+        )
+        .extensions;
         assert_eq!(
             (rows[0].state.as_str(), rows[0].source.as_str()),
             ("off", "workspace")
         );
         assert_eq!(rows[0].ignored[0].file, "workspaces/alpha/workspace.json");
-        assert!(on_ids(&extension::read(&config), &choices).is_empty());
+        assert!(
+            on_ids(
+                &extension::read(&config, &extension::BuiltIn::none()),
+                &choices
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn a_project_that_wants_an_unapproved_extension_reads_as_needing_approval_here() {
         let (_dir, at, config) = made();
-        extension::install(&config, &at).expect("installed");
+        extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         let choices = extension::project::Choices::from_text(
             Some("[extensions.solarized]\nenabled = true\n"),
             None,
         );
 
-        let rows = project_rows(&extension::survey(&config), &choices).extensions;
+        let rows = project_rows(
+            &extension::survey(&config, &extension::BuiltIn::none()),
+            &choices,
+        )
+        .extensions;
         assert_eq!(
             (rows[0].state.as_str(), rows[0].source.as_str()),
             ("needs-approval", "shared")
         );
-        assert!(on_ids(&extension::read(&config), &choices).is_empty());
+        assert!(
+            on_ids(
+                &extension::read(&config, &extension::BuiltIn::none()),
+                &choices
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn a_projects_theme_offers_every_approved_theme_and_says_why_one_turned_off_is_not_drawn() {
         // charter-app#273.
         let (_dir, at, config) = made();
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         let shared = "[theme]\nuse = \"solarized/Solarized Dark\"\n";
         let local = "[extensions.solarized]\nenabled = false\n";
         let choices = extension::project::Choices::from_text(Some(shared), Some(local));
         let said = extension::project::theme::Said::from_text(Some(shared), Some(local));
 
-        let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+        let theme = project_theme_of(
+            &extension::survey(&config, &extension::BuiltIn::none()),
+            &choices,
+            &said,
+        );
         assert_eq!(
             theme
                 .options
@@ -1190,7 +1322,12 @@ mod tests {
             )
         );
         assert_eq!(
-            project_theme_drawn_of(&extension::read(&config), &choices, &said).as_deref(),
+            project_theme_drawn_of(
+                &extension::read(&config, &extension::BuiltIn::none()),
+                &choices,
+                &said
+            )
+            .as_deref(),
             Some("charter-dark"),
             "the window drew a theme the project turned off"
         );
@@ -1198,12 +1335,17 @@ mod tests {
         let choices = extension::project::Choices::from_text(Some(shared), None);
         let said = extension::project::theme::Said::from_text(Some(shared), None);
         assert_eq!(
-            project_theme_drawn_of(&extension::read(&config), &choices, &said).as_deref(),
+            project_theme_drawn_of(
+                &extension::read(&config, &extension::BuiltIn::none()),
+                &choices,
+                &said
+            )
+            .as_deref(),
             Some("solarized/Solarized Dark")
         );
         assert_eq!(
             project_theme_drawn_of(
-                &extension::read(&config),
+                &extension::read(&config, &extension::BuiltIn::none()),
                 &choices,
                 &extension::project::theme::Said::default()
             ),
@@ -1217,7 +1359,8 @@ mod tests {
         // charter-app#281: the workspace is a layer of the one resolver, for the tab and the
         // window alike.
         let (_dir, at, config) = made();
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         let shared = "[theme]\nuse = \"charter-light\"\n";
         let manifest = r#"{"settings": {"theme": {"use": "solarized/Solarized Dark",
@@ -1227,7 +1370,11 @@ mod tests {
         let said = extension::project::theme::Said::from_text(Some(shared), None)
             .in_workspace("alpha", Some(manifest));
 
-        let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+        let theme = project_theme_of(
+            &extension::survey(&config, &extension::BuiltIn::none()),
+            &choices,
+            &said,
+        );
         assert_eq!(
             theme.file.as_deref(),
             Some("workspaces/alpha/workspace.json")
@@ -1235,7 +1382,12 @@ mod tests {
         assert_eq!(theme.colour.as_deref(), Some("purple"));
         assert_eq!(theme.draws.as_deref(), Some("charter-dark"));
         assert_eq!(
-            project_theme_drawn_of(&extension::read(&config), &choices, &said).as_deref(),
+            project_theme_drawn_of(
+                &extension::read(&config, &extension::BuiltIn::none()),
+                &choices,
+                &said
+            )
+            .as_deref(),
             Some("charter-dark"),
             "the window drew a theme the workspace turned off"
         );
@@ -1243,7 +1395,11 @@ mod tests {
         let manifest = r#"{"settings": {"theme": {"use": "dark"}}}"#;
         let said = extension::project::theme::Said::from_text(Some(shared), None)
             .in_workspace("alpha", Some(manifest));
-        let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+        let theme = project_theme_of(
+            &extension::survey(&config, &extension::BuiltIn::none()),
+            &choices,
+            &said,
+        );
         assert_eq!(theme.draws.as_deref(), Some("charter-light"));
         assert_eq!(theme.ignored[0].file, "workspaces/alpha/workspace.json");
     }
@@ -1257,7 +1413,8 @@ mod tests {
         // charter-app#319: a value set in Local and not applied is never shown without its
         // reason, so each answer carries the ignore check's sentence — the Local section's.
         let (_dir, at, config) = made();
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         let plane = test_plane(SHARED, LOCAL, false);
         let root = plane.path();
@@ -1268,7 +1425,10 @@ mod tests {
             let choices = extension::project::Choices::read_in(root, workspace);
             let said = extension::project::theme::Said::read_in(root, workspace);
 
-            let rows = project_rows(&extension::survey(&config), &choices);
+            let rows = project_rows(
+                &extension::survey(&config, &extension::BuiltIn::none()),
+                &choices,
+            );
             assert_eq!(rows.local_left_out.as_deref(), Some(why.as_str()));
             assert_eq!(
                 (
@@ -1278,7 +1438,11 @@ mod tests {
                 ("on", "default"),
                 "{workspace:?}: Local's off was applied"
             );
-            let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+            let theme = project_theme_of(
+                &extension::survey(&config, &extension::BuiltIn::none()),
+                &choices,
+                &said,
+            );
             assert_eq!(theme.local_left_out.as_deref(), Some(why.as_str()));
             assert_eq!(theme.picked.as_deref(), Some("charter-light"));
         }
@@ -1287,7 +1451,8 @@ mod tests {
     #[test]
     fn a_local_file_that_is_read_leaves_nothing_out_and_decides() {
         let (_dir, at, config) = made();
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
         let plane = test_plane(SHARED, LOCAL, true);
         let root = plane.path();
@@ -1296,7 +1461,10 @@ mod tests {
             let choices = extension::project::Choices::read_in(root, workspace);
             let said = extension::project::theme::Said::read_in(root, workspace);
 
-            let rows = project_rows(&extension::survey(&config), &choices);
+            let rows = project_rows(
+                &extension::survey(&config, &extension::BuiltIn::none()),
+                &choices,
+            );
             assert_eq!(rows.local_left_out, None, "{workspace:?}");
             assert_eq!(
                 (
@@ -1306,7 +1474,11 @@ mod tests {
                 ("off", "local"),
                 "{workspace:?}"
             );
-            let theme = project_theme_of(&extension::survey(&config), &choices, &said);
+            let theme = project_theme_of(
+                &extension::survey(&config, &extension::BuiltIn::none()),
+                &choices,
+                &said,
+            );
             assert_eq!(theme.local_left_out, None, "{workspace:?}");
             assert_eq!(theme.picked.as_deref(), Some("charter-dark"));
         }
