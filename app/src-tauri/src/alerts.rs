@@ -55,6 +55,29 @@ pub(crate) fn of(plane: PlaneId, root: &Path) -> PlaneAlerts {
     }
 }
 
+/// The core's alert as the drawer shows it beside the title bar's save indicator
+/// (charter-app#332): a plane root's uncommitted and unpushed findings are what the indicator
+/// already says, so the drawer keeps only what it does not — a detached HEAD, a branch that is
+/// not the default — and drops the row when nothing is left. The terminal status line, which has
+/// no indicator, still gets the whole row from the core.
+fn beside_the_indicator(alert: &alerts::Alert) -> Option<alerts::Alert> {
+    match alert {
+        alerts::Alert::PlaneRoot {
+            name,
+            detached,
+            off,
+            ..
+        } => (*detached || off.is_some()).then(|| alerts::Alert::PlaneRoot {
+            name: name.clone(),
+            dirty: false,
+            detached: *detached,
+            off: off.clone(),
+            memory: None,
+        }),
+        other => Some(other.clone()),
+    }
+}
+
 /// The rows, and why the reading stopped where it did.
 fn rows(root: &Path) -> (Vec<AlertRow>, Option<String>) {
     let reading = alerts::read(&alerts::Asking {
@@ -66,6 +89,7 @@ fn rows(root: &Path) -> (Vec<AlertRow>, Option<String>) {
         reading
             .alerts
             .iter()
+            .filter_map(beside_the_indicator)
             .map(|alert| {
                 let shown = alert.shown();
                 AlertRow {
@@ -114,5 +138,35 @@ mod tests {
         let (alerts, stopped) = rows(&root);
         assert!(stopped.is_some(), "{alerts:?}");
         assert!(alerts.is_empty());
+    }
+
+    #[test]
+    fn the_drawer_leaves_to_the_save_indicator_what_it_already_says_about_the_plane_root() {
+        let dirty = alerts::Alert::PlaneRoot {
+            name: "plane".into(),
+            dirty: true,
+            detached: false,
+            off: None,
+            memory: Some(alerts::Memory::NotPushed),
+        };
+        assert_eq!(beside_the_indicator(&dirty), None);
+
+        let off = alerts::Alert::PlaneRoot {
+            name: "plane".into(),
+            dirty: true,
+            detached: false,
+            off: Some(("work".into(), "main".into())),
+            memory: Some(alerts::Memory::NotPushed),
+        };
+        assert_eq!(
+            beside_the_indicator(&off),
+            Some(alerts::Alert::PlaneRoot {
+                name: "plane".into(),
+                dirty: false,
+                detached: false,
+                off: Some(("work".into(), "main".into())),
+                memory: None,
+            })
+        );
     }
 }

@@ -1,3 +1,4 @@
+import { LiveMark } from "./LiveDialog";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
@@ -97,6 +98,7 @@ import { useTabStop } from "./roving";
  */
 export function Explorer({
   workspace,
+  live = false,
   state,
   chats,
   states,
@@ -108,6 +110,8 @@ export function Explorer({
 }: {
   /** The focused workspace, or nothing when the strip is on the chats that are in none. */
   workspace: string | undefined;
+  /** Whether that workspace is LIVE (charter-app#301): its row carries the mark. */
+  live?: boolean;
   state: WorkspaceState;
   /** The chats working in this workspace, so a piece can say what is already running in it. */
   chats: readonly OpenChat[];
@@ -226,6 +230,7 @@ export function Explorer({
             >
               <Folders className="node-icon" />
               <span className="spot-name">{workspace}</span>
+              {live && <LiveMark />}
               <span className="spot-what">the workspace itself</span>
             </button>
           </RovingFocusGroup.Item>

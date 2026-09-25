@@ -4447,3 +4447,13 @@ button.show-more:focus-visible {
 .project-unsaved[data-stage="blocked"] {
   background: var(--state-failed);
 }
+/* The LIVE mark (charter-app#301): a workspace published with the plane. */
+.live-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-base);
+}
+.live-mark svg {
+  width: 0.9em;
+  height: 0.9em;
+}

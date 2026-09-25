@@ -801,6 +801,7 @@ function App() {
       openSaving: windowDoes.openSaving,
       // A workspace is a project's, and there is no project here to have one.
       openWorkspaceSettings: () => undefined,
+      switchLive: () => undefined,
       openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),
@@ -973,6 +974,7 @@ function App() {
       read: saying?.read ?? false,
       workspace: saying?.where,
       coloured: saying?.colour != null,
+      live: saying?.live === true,
       running: runningIn(saying),
     }),
     [inFront, launch, restoring, saying],

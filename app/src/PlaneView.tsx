@@ -58,6 +58,7 @@ import {
   type Ran,
 } from "./actions";
 import { usePlaneSaving } from "./saving";
+import { LiveDialog, LiveMark } from "./LiveDialog";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { Menued } from "./Menus";
 import { NewWorkspace } from "./NewWorkspace";
@@ -236,6 +237,8 @@ export function PlaneView({
   /** This project's save standing (charter-app#302): every project reads its own, so the project
    *  strip can mark the ones with unsaved work and the title bar can show the one in front. */
   const { saving } = usePlaneSaving(plane);
+  /** The workspace whose LIVE/LOCAL confirmation is open (charter-app#301). */
+  const [liveAsk, setLiveAsk] = useState<string>();
   /**
    * The workspace the operator last PICKED, which is not always the one drawn.
    *
@@ -899,6 +902,17 @@ export function PlaneView({
    * kept as assertions in `tabs.test.ts`, "the workspace strip at fifty chats", where a
    * third nested scan fails a test instead of being a surprise.
    */
+  /** Whether `workspace` is LIVE, as the plane was last read (charter-app#301). */
+  const liveOf = useCallback(
+    (workspace: string) =>
+      sidebar?.workspaces.some((ws) => ws.name === workspace && ws.live) ?? false,
+    [sidebar],
+  );
+  const liveNames = useMemo(
+    () => (sidebar?.workspaces ?? []).filter((ws) => ws.live).map((ws) => ws.name),
+    [sidebar],
+  );
+
   const workspaceMarks = (workspace: string) => {
     const waiting = states.needsYou.filter((session) => filedIn(session) === workspace).length;
     const here = tabsIn(tabs, workspace, filedIn).length;
@@ -913,6 +927,9 @@ export function PlaneView({
           <span className="workspace-mark" aria-hidden="true" style={tintOf(workspace)} />
         )}
         <span className="workspace-name">{called}</span>
+        {/* LIVE, said: published with the plane (charter-app#301). LOCAL is the default and
+            draws nothing. */}
+        {liveOf(workspace) && <LiveMark />}
         <Pin held={pinnedWorkspaces.includes(workspace)} what="workspace" />
         {/* How many chats are open over there. With the strip below showing one workspace's
             chats, this is the answer to "where are the other forty". */}
@@ -1355,10 +1372,10 @@ export function PlaneView({
    * where the operator is still standing.
    */
   const makeWorkspace = useCallback(
-    async (name: string, vision: string) => {
+    async (name: string, vision: string, live: boolean) => {
       setBusyMaking(true);
       const answer = await commands
-        .workspaceCreate(plane, name, vision.trim() === "" ? null : vision)
+        .workspaceCreate(plane, name, vision.trim() === "" ? null : vision, live)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       setBusyMaking(false);
       if (answer.status === "error") {
@@ -1721,6 +1738,7 @@ export function PlaneView({
       openSettings: windowDoes.openSettings,
       openSaving: windowDoes.openSaving,
       openWorkspaceSettings,
+      switchLive: (workspace: string) => setLiveAsk(workspace),
       openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),
@@ -1849,6 +1867,7 @@ export function PlaneView({
         : catalogue({
             tabs,
             workspaces: strips,
+            live: liveNames,
             focused,
             worktree,
             pieces,
@@ -1902,6 +1921,7 @@ export function PlaneView({
       views,
       extensionCommands,
       worktree,
+      liveNames,
     ],
   );
 
@@ -2080,8 +2100,22 @@ export function PlaneView({
       workspace: ofWorkspace,
       colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
       saving,
+      live: ofWorkspace !== undefined && liveOf(ofWorkspace),
     }),
-    [asking, ending, focused, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar],
+    [
+      asking,
+      ending,
+      focused,
+      liveOf,
+      ofWorkspace,
+      offers,
+      quiet,
+      report,
+      run,
+      saving,
+      settled,
+      sidebar,
+    ],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2410,6 +2444,7 @@ export function PlaneView({
           explorer: (
             <Explorer
               workspace={ofWorkspace}
+              live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
               state={workspaceState}
               chats={workspaceChats}
               states={states}
@@ -2541,7 +2576,7 @@ export function PlaneView({
           plane={plane}
           trouble={workspaceTrouble}
           making={busyMaking}
-          onCreate={(name, vision) => void makeWorkspace(name, vision)}
+          onCreate={(name, vision, live) => void makeWorkspace(name, vision, live)}
           onCancel={() => {
             setMakingWorkspace(false);
             setWorkspaceTrouble(undefined);
@@ -2591,6 +2626,20 @@ export function PlaneView({
             return undefined;
           }}
           onCancel={() => setAskingAction(undefined)}
+        />
+      )}
+
+      {liveAsk !== undefined && (
+        <LiveDialog
+          plane={plane}
+          workspace={liveAsk}
+          onClose={() => setLiveAsk(undefined)}
+          onDone={(said) => {
+            setLiveAsk(undefined);
+            setReport({ from: `workspace.live:${liveAsk}`, refused: false, words: said.join(" ") });
+            // Read the plane again: the marks come from what is on disk, not from this press.
+            setReplan((asked) => asked + 1);
+          }}
         />
       )}
 
@@ -2685,6 +2734,8 @@ export type PlaneReport = {
   colour?: string | null;
   /** Where this project's unsaved work sits (charter-app#302), once read. */
   saving?: PlaneSaving;
+  /** Whether that workspace is LIVE (charter-app#301): the breadcrumb marks it. */
+  live?: boolean;
 };
 
 /** What a project asks the WINDOW to do, because the window is what holds projects. */
