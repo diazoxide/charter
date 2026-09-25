@@ -69,9 +69,9 @@ them, so the strip never scrolls and never loses its `+`.
 order to work in it. **An existing plane is pinned once, on first open after this ships**: the
 three most recently active workspaces (`last_active`, which `charter-core/src/briefing.rs`
 already computes), **and only if nothing is pinned there yet**: a plane the operator has
-already arranged is left as it is. The fact that the migration ran is recorded in the machine store beside the
-pins (ADR 0040), so an operator who later unpins everything is not re-pinned. With no pins at
-all, the strip draws the current workspace and the show-more button.
+already arranged is left as it is. The fact that the migration ran is recorded in the machine
+store beside the pins (ADR 0040), so an operator who later unpins everything is not re-pinned.
+With no pins at all, the strip draws the current workspace and the show-more button.
 
 Rejected:
 
