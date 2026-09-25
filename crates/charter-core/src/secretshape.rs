@@ -290,6 +290,41 @@ pub fn secret_kind(text: &str) -> Option<&'static str> {
     None
 }
 
+/// The KIND of credential `text` holds by a rule that code does not trip, or `None` — what a
+/// workspace repo's save refuses (ADR 0051), where [`secret_kind`]'s credential-assignment rule
+/// would refuse `password: String`.
+///
+/// Only shapes that are a credential and nothing else: a PEM private key block, an AWS access
+/// key, an AgentMail key, and a token behind one of [`CREDENTIAL_PREFIXES`] with at least
+/// sixteen token characters after it. A JWT is left out: test fixtures carry them by the
+/// hundred, and a signed token is not a key to anything by itself.
+pub fn token_kind(text: &str) -> Option<&'static str> {
+    for (label, rx, _) in compiled() {
+        if matches!(
+            *label,
+            "private key (PEM)" | "AWS access key" | "AgentMail key"
+        ) && rx.is_match(text)
+        {
+            return Some(label);
+        }
+    }
+    static TOKEN: OnceLock<Regex> = OnceLock::new();
+    let token = TOKEN.get_or_init(|| {
+        let prefixes: Vec<String> = CREDENTIAL_PREFIXES
+            .iter()
+            .map(|p| regex::escape(p))
+            .collect();
+        Regex::new(&format!(
+            r"(?:^|[^A-Za-z0-9_-])(?:{})[A-Za-z0-9_-]{{16,}}",
+            prefixes.join("|")
+        ))
+        .expect("a pattern this module wrote")
+    });
+    token
+        .is_match(text)
+        .then_some("a token by its forge's prefix")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,5 +510,26 @@ mod tests {
         // outranks a credential assignment at the top.
         let text = "password: hunter2is\n\neyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0\n";
         assert_eq!(secret_kind(text), Some("JWT"));
+    }
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::token_kind;
+
+    #[test]
+    fn a_token_or_a_private_key_is_named_and_ordinary_code_is_not() {
+        let key = ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\nabc\n"].concat();
+        assert_eq!(token_kind(&key), Some("private key (PEM)"));
+        let gh = ["let t = \"ghp", "_0123456789abcdefABCDEF\";"].concat();
+        assert_eq!(token_kind(&gh), Some("a token by its forge's prefix"));
+        for code in [
+            "struct Login { password: String, token: Option<String> }",
+            "let key = \"sk-short\";",
+            "fn mask_ghp_prefix() {}",
+            "api_key = os.environ['API_KEY']",
+        ] {
+            assert_eq!(token_kind(code), None, "{code}");
+        }
     }
 }

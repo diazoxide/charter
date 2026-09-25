@@ -196,12 +196,16 @@ pub fn at_quit(root: &std::path::Path, bound: Duration) -> AtQuit {
 
 /// Save one workspace repo as the app quits, when its `[repos.<name>] autosave` is on — and
 /// only then (ADR 0051). The same shape as [`at_quit`]: the commit at once, the push and any
-/// pull request given no more than `bound`. The chats have ended by now, so no turn is in
-/// flight to wait for.
+/// pull request given no more than `bound`.
+///
+/// `mid_turn` is who was mid-turn where they could write this clone **before the quit ended
+/// the chats**. Their turns were cut off, so what they left is half-written: the repo is not
+/// saved, and the journal says so as skipped.
 pub fn repo_at_quit(
     plane: &std::path::Path,
     workspace: &str,
     repo: &crate::repos::Repo,
+    mid_turn: &[String],
     bound: Duration,
 ) -> AtQuit {
     let settings = crate::planesave::Settings::read(plane).repo(&repo.name);
@@ -212,6 +216,25 @@ pub fn repo_at_quit(
     let Some(claim) = crate::planegit::Claim::within(&repo.path, bound) else {
         return AtQuit::Nothing;
     };
+    let cut_off = || mid_turn.to_vec();
+    if !mid_turn.is_empty() {
+        // The save sees them and journals itself as skipped.
+        crate::reposave::save_claimed(
+            &crate::reposave::Request {
+                plane,
+                workspace,
+                name: &repo.name,
+                clone: &repo.path,
+                message: None,
+                no_push: true,
+                mid_turn: &cut_off,
+            },
+            crate::planegit::Trigger::Quit,
+            &claim,
+            &mut |_| {},
+        );
+        return AtQuit::Nothing;
+    }
     let request = |no_push| crate::reposave::Request {
         plane,
         workspace,
@@ -219,7 +242,7 @@ pub fn repo_at_quit(
         clone: &repo.path,
         message: None,
         no_push,
-        mid_turn: &[],
+        mid_turn: &crate::reposave::nobody_working,
     };
     if standing.changed > 0 {
         let code = crate::reposave::save_claimed(
@@ -251,7 +274,7 @@ pub fn repo_at_quit(
                 clone: &clone,
                 message: None,
                 no_push: false,
-                mid_turn: &[],
+                mid_turn: &crate::reposave::nobody_working,
             },
             crate::planegit::Trigger::Quit,
             &claim,

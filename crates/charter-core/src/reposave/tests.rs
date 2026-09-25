@@ -85,7 +85,7 @@ impl Fixture {
                 clone: &self.clone,
                 message: None,
                 no_push: false,
-                mid_turn,
+                mid_turn: &|| mid_turn.to_vec(),
             },
             trigger,
             &mut say,
@@ -382,7 +382,7 @@ fn quitting_saves_a_repo_only_when_its_auto_save_is_on() {
             path: f.clone.clone(),
         };
         assert_eq!(
-            repo_at_quit(&f.plane, "alpha", &repo, bound),
+            repo_at_quit(&f.plane, "alpha", &repo, &[], bound),
             AtQuit::Nothing,
             "{toml:?}"
         );
@@ -396,10 +396,253 @@ fn quitting_saves_a_repo_only_when_its_auto_save_is_on() {
         path: f.clone.clone(),
     };
     assert_eq!(
-        repo_at_quit(&f.plane, "alpha", &repo, bound),
+        repo_at_quit(&f.plane, "alpha", &repo, &[], bound),
         AtQuit::Pushed
     );
     assert_eq!(f.remote_has("main"), Some(f.head()));
     let triggers: Vec<_> = f.journal().iter().map(|l| l["trigger"].clone()).collect();
     assert!(triggers.iter().all(|t| t == "quit"), "{triggers:?}");
+}
+
+impl Fixture {
+    /// A save whose `mid_turn` answers each of `answers` in turn, the last one again after.
+    fn save_asked(&self, trigger: Trigger, answers: &[&[&str]]) -> (u8, String) {
+        let asked = std::cell::Cell::new(0);
+        let mid_turn = || {
+            let n = asked.get();
+            asked.set(n + 1);
+            answers[n.min(answers.len() - 1)]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let mut said = String::new();
+        let mut say = |line: Say| {
+            said.push_str(&line.to_string());
+            said.push('\n');
+        };
+        let code = save_as(
+            &Request {
+                plane: &self.plane,
+                workspace: "alpha",
+                name: "widget",
+                clone: &self.clone,
+                message: None,
+                no_push: false,
+                mid_turn: &mid_turn,
+            },
+            trigger,
+            &mut say,
+        );
+        (code, said)
+    }
+
+    fn write(&self, path: &str, text: &str) {
+        let at = self.clone.join(path);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, text).unwrap();
+    }
+}
+
+#[test]
+fn a_turn_that_starts_while_a_save_waits_is_seen_again_right_before_anything_is_staged() {
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    f.write("half.md", "half-written");
+    let head = f.head();
+
+    // Nobody at the door; somebody by the time the save reaches `git add`.
+    let (code, said) = f.save_asked(Trigger::Manual, &[&[], &["alpha.4"]]);
+
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("alpha.4 is mid-turn in alpha"), "{said}");
+    assert_eq!(f.head(), head, "the half-written turn was committed");
+    let staged = run(&f.clone, &["diff", "--cached", "--name-only"]);
+    assert_eq!(staged.trim(), "", "it was staged");
+    let line = &f.journal()[0];
+    assert_eq!(line["outcome"], "skipped");
+}
+
+#[test]
+fn quitting_while_a_turn_was_cut_off_leaves_the_repo_and_journals_why() {
+    use crate::autosave::{AtQuit, repo_at_quit};
+    let f = Fixture::new("[repos.widget]\nmode = \"push\"\nautosave = true\n");
+    f.write("half.md", "half-written");
+    let head = f.head();
+    let repo = repos::Repo {
+        name: "widget".into(),
+        path: f.clone.clone(),
+    };
+
+    let got = repo_at_quit(
+        &f.plane,
+        "alpha",
+        &repo,
+        &["alpha.2".to_owned()],
+        std::time::Duration::from_secs(20),
+    );
+
+    assert_eq!(got, AtQuit::Nothing);
+    assert_eq!(f.head(), head, "a killed turn was committed");
+    let line = &f.journal()[0];
+    assert_eq!(
+        (line["trigger"].as_str(), line["outcome"].as_str()),
+        (Some("quit"), Some("skipped"))
+    );
+    assert!(
+        line["detail"]
+            .as_str()
+            .unwrap()
+            .contains("alpha.2 is mid-turn"),
+        "{line}"
+    );
+}
+
+#[test]
+fn a_save_branch_carries_on_past_a_quit_or_a_failed_push_that_named_no_branch() {
+    let f = Fixture::new("[repos.widget]\nmode = \"pr\"\n");
+    let first = f.head();
+    let branch = format!("charter/alpha/{}", &first[..7]);
+    run(&f.clone, &["branch", &branch]);
+    // The newest journal lines name no branch: a quit's commit, then a push that failed.
+    for outcome in ["committed", "failed"] {
+        planegit::journal_append(
+            &f.plane,
+            &serde_json::json!({"target": "repo:alpha/widget", "outcome": outcome, "branch": null}),
+        );
+    }
+    f.write("more.md", "more");
+    run(&f.clone, &["add", "-A"]);
+    run(&f.clone, &["commit", "-q", "-m", "more"]);
+    let head = f.head();
+
+    let got = save_branch(
+        &Request {
+            plane: &f.plane,
+            workspace: "alpha",
+            name: "widget",
+            clone: &f.clone,
+            message: None,
+            no_push: false,
+            mid_turn: &nobody_working,
+        },
+        "main",
+        &head,
+    );
+
+    assert_eq!(
+        got.as_deref(),
+        Ok(branch.as_str()),
+        "a second PR would be opened"
+    );
+    assert_eq!(
+        run(&f.clone, &["rev-parse", &branch]).trim(),
+        head,
+        "not moved forward"
+    );
+}
+
+#[test]
+fn a_secret_shaped_file_is_refused_by_name_and_its_value_never_said() {
+    for (path, text, kind) in [
+        (
+            ".env",
+            "DB_PASSWORD=hunter2hunter2\n",
+            "an environment file",
+        ),
+        ("config/.env.production", "X=1\n", "an environment file"),
+        ("keys/id_ed25519", "k\n", "an SSH private key"),
+        ("certs/server.pem", "c\n", "a key or certificate store"),
+        ("credentials.json", "{}\n", "a credentials file"),
+        (
+            ".npmrc",
+            "//registry.npmjs.org/:_authToken=npm_abcdefghijklmnopqrstuvwx\n",
+            "a package registry token",
+        ),
+        (
+            "src/deploy.sh",
+            "TOKEN=ghp_0123456789abcdefABCDEF0123\n",
+            "a token by its forge's prefix",
+        ),
+        (
+            "notes/key.txt",
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n",
+            "private key (PEM)",
+        ),
+    ] {
+        let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+        f.write(path, text);
+        let head = f.head();
+
+        let (code, said) = f.save();
+
+        assert_eq!(code, 1, "{path}: {said}");
+        assert!(said.contains(&format!("{path} ({kind})")), "{path}: {said}");
+        for secret in ["hunter2", "npm_abcdef", "ghp_0123", "MIIE"] {
+            assert!(!said.contains(secret), "{path} said its value: {said}");
+        }
+        assert_eq!(f.head(), head, "{path} was committed");
+        assert_eq!(f.journal()[0]["outcome"], "blocked", "{path}");
+    }
+}
+
+#[test]
+fn ordinary_code_and_the_files_that_only_look_like_secrets_are_saved() {
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    f.write(
+        "src/login.rs",
+        "struct Login { password: String, token: String }\n",
+    );
+    f.write(".env.example", "DB_PASSWORD=\n");
+    f.write("keys/id_ed25519.pub", "ssh-ed25519 AAAA\n");
+    f.write(".npmrc", "registry=https://registry.npmjs.org/\n");
+
+    let (code, said) = f.save();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(f.journal()[0]["outcome"], "committed");
+}
+
+#[test]
+fn taking_a_secret_file_out_of_the_tree_is_not_refused() {
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    f.write(".env", "X=1\n");
+    run(&f.clone, &["add", "-A"]);
+    run(&f.clone, &["commit", "-q", "-m", "oops"]);
+    std::fs::remove_file(f.clone.join(".env")).unwrap();
+
+    let (code, said) = f.save();
+
+    assert_eq!(code, 0, "{said}");
+}
+
+#[test]
+fn a_protected_feature_branch_in_pr_mode_names_the_fix_that_applies() {
+    let f = Fixture::new("[repos.widget]\nmode = \"pr\"\n");
+    std::fs::create_dir_all(f.plane.join("inventory")).unwrap();
+    std::fs::write(
+        f.plane.join("inventory/repos.json"),
+        r#"{"repos": [{"name": "widget", "default_branch": "main"}]}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(f.bare.join("hooks")).unwrap();
+    stand_in::program(
+        &f.bare,
+        "hooks/pre-receive",
+        "#!/bin/sh\necho 'GH006: Protected branch update failed for refs/heads/release.' >&2\nexit 1\n",
+    );
+    run(&f.clone, &["checkout", "-q", "-b", "release"]);
+    f.write("a.md", "a");
+
+    let (code, said) = f.save();
+
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("release is protected and takes no direct push"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Set [repos.widget] branch = \"release\""),
+        "{said}"
+    );
+    assert!(!said.contains("mode = \"pr\""), "{said}");
 }

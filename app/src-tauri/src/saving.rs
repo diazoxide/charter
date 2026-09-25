@@ -283,8 +283,10 @@ pub async fn save_repo(
 ) -> Result<Vec<String>, String> {
     let held = planes.held(&plane)?;
     let root = held.root().to_path_buf();
-    let mid_turn = held.mid_turn_in(&workspace);
     tauri::async_runtime::spawn_blocking(move || {
+        // Asked on this thread, twice — before the save and right before `git add` — so a
+        // turn that starts while the save waits is still seen.
+        let mid_turn = || held.mid_turn_in(&workspace);
         save_repo_in(&root, &workspace, &name, message.as_deref(), &mid_turn)
     })
     .await
@@ -326,7 +328,7 @@ pub fn save_repo_in(
     workspace: &str,
     name: &str,
     message: Option<&str>,
-    mid_turn: &[String],
+    mid_turn: &dyn Fn() -> Vec<String>,
 ) -> Result<Vec<String>, String> {
     let found = charter_core::repos::clones(root, workspace).map_err(|why| why.to_string())?;
     let repo = found
@@ -559,8 +561,10 @@ mod tests {
         let (dir, clone) = plane_with_a_repo("[repos.widget]\nmode = \"commit\"\n");
         std::fs::write(clone.join("a.md"), "a").unwrap();
 
-        let err = save_repo_in(dir.path(), "alpha", "widget", None, &["alpha.2".to_owned()])
-            .expect_err("held back");
+        let err = save_repo_in(dir.path(), "alpha", "widget", None, &|| {
+            vec!["alpha.2".to_owned()]
+        })
+        .expect_err("held back");
 
         assert_eq!(
             err,
@@ -572,8 +576,14 @@ mod tests {
             "changed"
         );
 
-        let said = save_repo_in(dir.path(), "alpha", "widget", Some(" from the row "), &[])
-            .expect("saved once the turn ended");
+        let said = save_repo_in(
+            dir.path(),
+            "alpha",
+            "widget",
+            Some(" from the row "),
+            &Vec::new,
+        )
+        .expect("saved once the turn ended");
         assert!(said.iter().any(|l| l.contains("from the row")), "{said:?}");
         assert_eq!(repos_saving(dir.path(), "alpha").unwrap()[0].stage, "saved");
         let last = &saving_of(dir.path()).journal[0];
@@ -587,7 +597,7 @@ mod tests {
     fn a_repo_the_workspace_does_not_hold_is_refused_by_name() {
         let (dir, _clone) = plane_with_a_repo("");
         assert_eq!(
-            save_repo_in(dir.path(), "alpha", "gadget", None, &[]).unwrap_err(),
+            save_repo_in(dir.path(), "alpha", "gadget", None, &Vec::new).unwrap_err(),
             "alpha holds no clone called gadget"
         );
     }

@@ -104,7 +104,7 @@ mod repo_saves {
                     clone: &self.clone,
                     message: None,
                     no_push: false,
-                    mid_turn: &[],
+                    mid_turn: &reposave::nobody_working,
                 },
                 Trigger::Manual,
                 &mut say,
@@ -151,7 +151,7 @@ mod repo_saves {
             .to_string()
     }
 
-    const BODY: &str = "body=Saved by charter from the alpha workspace ([repos.widget] mode = pr).";
+    const BODY: &str = "body=Saved by charter from the alpha workspace ([repos.widget] mode = pr).\n\n<!-- charter-save -->";
 
     fn lookup(scene: &Scene, head: &str, out: &str) -> PathBuf {
         scene.gh_api(
@@ -311,8 +311,7 @@ mod repo_saves {
         let r = repo(host, "[repos.widget]\nmode = \"pr-merge\"\n");
         support::git(&r.clone, &["checkout", "-q", "-b", "feature/y"]);
         r.commit("c.md", "a change");
-        let body =
-            "body=Saved by charter from the alpha workspace ([repos.widget] mode = pr-merge).";
+        let body = "body=Saved by charter from the alpha workspace ([repos.widget] mode = pr-merge).\n\n<!-- charter-save -->";
         lookup(&scene, "feature/y", "[]");
         create(&scene, "feature/y", "a change", body, 12);
         scene.answers(
@@ -371,6 +370,45 @@ mod repo_saves {
         let line = r.last();
         assert_eq!(line["outcome"], "pr-open");
         assert!(line["detail"].as_str().unwrap().contains("clean status"));
+    }
+
+    #[test]
+    fn a_pr_a_person_opened_from_the_branch_is_never_rewritten_nor_set_to_merge() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // pr-merge, on a branch the operator already opened a PR from by hand. Nothing but the
+        // lookup is written down: a PATCH, or any auto-merge question, would fail the save.
+        let host = "repo-theirs.test";
+        let scene = Scene::new(host);
+        let r = repo(host, "[repos.widget]\nmode = \"pr-merge\"\n");
+        support::git(&r.clone, &["checkout", "-q", "-b", "feature/z"]);
+        r.commit("d.md", "their change");
+        let looked = lookup(
+            &scene,
+            "feature/z",
+            &format!(
+                r#"[{{"number": 8, "html_url": "https://{host}/acme/widget/pull/8", "body": "My own words."}}]"#
+            ),
+        );
+
+        let (code, said) = r.save();
+
+        assert_eq!(code, 0, "{said}");
+        assert!(was_asked(&looked));
+        assert_eq!(
+            r.remote("feature/z"),
+            r.head(),
+            "the branch is still pushed"
+        );
+        assert!(
+            said.contains("already has a pull request charter did not open, #8"),
+            "{said}"
+        );
+        assert!(!said.contains("auto-merge"), "{said}");
+        let line = r.last();
+        assert_eq!(line["pr"], format!("https://{host}/acme/widget/pull/8"));
     }
 
     const SETTINGS: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed rebaseMergeAllowed mergeCommitAllowed squashMergeAllowed pullRequest(number:$number){id}}}";

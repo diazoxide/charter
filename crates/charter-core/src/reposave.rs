@@ -29,10 +29,13 @@
 //! - **No rebase.** The plane's push rebases onto a remote that moved; a repo's push does not.
 //!   A clone's history is its developers', and nothing rewrites anyone's history (ADR 0051): a
 //!   push the remote refuses leaves the repo blocked, in git's words.
-//! - **No secret scan.** The plane's guard reads memory and ref files, which a clone does not
-//!   have, and its credential-assignment rule refuses ordinary code (`password: String`). A
-//!   repo's code reaches its remote through its own review — a pull request in the default
-//!   modes — and its own checks.
+//! - **Not the plane's secret rule.** The plane's guard reads memory and ref files with a
+//!   credential-assignment rule that refuses ordinary code (`password: String`). A repo save
+//!   refuses by a narrower rule instead, [`secret_files`]: a file named like a credential, or a
+//!   private key or a forge token in anything staged (ADR 0051).
+//! - **Nobody else's pull request.** An open PR from the same branch that charter did not open
+//!   — its head is not under `charter/` and its body has no [`pr::MARKER`] — keeps its title,
+//!   its description and its merging; the save names it and leaves it.
 //!
 //! # A session mid-turn
 //!
@@ -48,6 +51,7 @@ use crate::planegit::{self, Claim, Stage, Trigger};
 use crate::planesave::{self, Mode};
 use crate::repocmd::{Say, Sink};
 use crate::repos::{self, Head};
+use crate::shown;
 use crate::worktree::git;
 
 /// What a repo save was asked for.
@@ -63,9 +67,16 @@ pub struct Request<'a> {
     pub message: Option<&'a str>,
     /// Commit only, whatever the mode: the commit a quit makes before its bounded push.
     pub no_push: bool,
-    /// The chats in the workspace that are mid-turn, by the names the window shows. Any at
-    /// all, and the save waits.
-    pub mid_turn: &'a [String],
+    /// The chats that are mid-turn where they could be writing this clone, by the names the
+    /// window shows. Any at all, and the save waits. **Asked, not handed over**: it is asked
+    /// once before the save starts and again right before `git add -A`, because a turn can
+    /// start while a save waits for its claim or its first git call.
+    pub mid_turn: &'a dyn Fn() -> Vec<String>,
+}
+
+/// A [`Request::mid_turn`] that says no chat is working: nothing in this process can be.
+pub fn nobody_working() -> Vec<String> {
+    Vec::new()
 }
 
 /// The journal's `target` for a repo.
@@ -94,12 +105,14 @@ pub fn already_saving(workspace: &str, name: &str) -> String {
 /// Save a repo, as `trigger` asked. Returns the exit status; every save that ran leaves one
 /// line in the plane's save journal.
 ///
-/// A save held back by a session mid-turn journals nothing: nothing was attempted. The
-/// window's button hears why (exit 1); an auto-save hears nothing and tries next cycle.
+/// A save held back by a session mid-turn before it starts journals nothing: nothing was
+/// attempted. The window's button hears why (exit 1); an auto-save hears nothing and tries next
+/// cycle. A save at quit is journalled as skipped, since there is no next cycle to try in.
 pub fn save_as(request: &Request, trigger: Trigger, say: Sink) -> u8 {
-    if !request.mid_turn.is_empty() {
+    let busy = (request.mid_turn)();
+    if !busy.is_empty() && trigger != Trigger::Quit {
         if matches!(trigger, Trigger::Manual | Trigger::Cli) {
-            say(Say::Fail(waiting_for(request.workspace, request.mid_turn)));
+            say(Say::Fail(waiting_for(request.workspace, &busy)));
             return 1;
         }
         return 0;
@@ -142,7 +155,7 @@ pub fn save_claimed(request: &Request, trigger: Trigger, _claim: &Claim, say: Si
         attempt.outcome = "skipped";
         0
     } else {
-        commit_push(request, &repo, mode, &mut attempt, say)
+        commit_push(request, trigger, &repo, mode, &mut attempt, say)
     };
     if attempt.detail.is_empty()
         && let Some(refused) = refused
@@ -205,6 +218,7 @@ fn rev(clone: &Path, what: &str) -> Option<String> {
 
 fn commit_push(
     request: &Request,
+    trigger: Trigger,
     repo: &planesave::Repo,
     mode: Mode,
     attempt: &mut Attempt,
@@ -236,6 +250,20 @@ fn commit_push(
         }
     };
 
+    // Asked again at the last moment before anything is staged: a turn that started while
+    // this save waited must not have its half-written files committed.
+    let busy = (request.mid_turn)();
+    if !busy.is_empty() {
+        let why = waiting_for(request.workspace, &busy);
+        attempt.outcome = "skipped";
+        attempt.detail = why.clone();
+        if matches!(trigger, Trigger::Manual | Trigger::Cli) {
+            say(Say::Fail(why));
+            return 1;
+        }
+        return 0;
+    }
+
     // As the plane's save: the add's exit status decides, never the probe after it.
     // Untimed, as the plane's: an `add` killed at a deadline leaves `index.lock` behind.
     let added = git::run_untimed(clone, &["add", "-A"]);
@@ -263,6 +291,33 @@ fn commit_push(
                     })
                     .unwrap_or_default();
             attempt.files = staged.len();
+            // What a save must never carry to a remote: a secret-shaped file, or a private key
+            // or a live token in anything it stages (ADR 0051, for a repo). Asked of the index,
+            // as the plane's guard asks it, and refused before the commit exists; what was
+            // staged stays staged, as the plane's refusal leaves it.
+            let flagged = secret_files(clone, &staged);
+            if !flagged.is_empty() {
+                let named: Vec<String> = flagged
+                    .iter()
+                    .map(|(path, kind)| {
+                        format!("{} ({kind})", shown::readable(path, shown::DISPLAY_LIMIT))
+                    })
+                    .collect();
+                let why = format!(
+                    "a secret-shaped file would be committed in {at}: {}",
+                    named.join(", ")
+                );
+                say(Say::Fail(format!("Not saved: {why}.")));
+                say(Say::Info(
+                    "  Take it out of the tree or add it to .gitignore, then save again. Secrets \
+                     belong in a vault."
+                        .into(),
+                ));
+                attempt.outcome = "blocked";
+                attempt.detail = why;
+                attempt.commit = rev(clone, "HEAD");
+                return 1;
+            }
             let msg = match request.message {
                 Some(text) if !text.trim().is_empty() => text.trim().to_string(),
                 _ => summary(&staged),
@@ -407,11 +462,21 @@ fn commit_push(
             .collect::<Vec<_>>()
             .join("\n");
         let why = if planegit::is_protected_rejection(all) {
-            format!(
-                "{remote_branch} takes no direct push. Set [repos.{}] mode = \"pr\" to save \
-                 it through a pull request",
-                request.name
-            )
+            let fix = if mode.opens_a_pr() {
+                // Already a PR mode, on a branch that is neither the default nor the base: the
+                // branch itself is protected, so saves go through a PR into it instead.
+                format!(
+                    "Set [repos.{}] branch = \"{remote_branch}\" to save it through a pull \
+                     request into it, or work on another branch",
+                    request.name
+                )
+            } else {
+                format!(
+                    "Set [repos.{}] mode = \"pr\" to save it through a pull request",
+                    request.name
+                )
+            };
+            format!("{remote_branch} is protected and takes no direct push. {fix}")
         } else if ["fetch first", "non-fast-forward"]
             .iter()
             .any(|s| all.contains(s))
@@ -468,10 +533,11 @@ fn commit_push(
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
     let body = format!(
-        "Saved by charter from the {} workspace ([repos.{}] mode = {}).",
+        "Saved by charter from the {} workspace ([repos.{}] mode = {}).\n\n{}",
         request.workspace,
         request.name,
-        mode.as_str()
+        mode.as_str(),
+        pr::MARKER
     );
     let opened = match pr::open_or_update(&repo_on_forge, &remote_branch, &base, &title, &body) {
         Ok(opened) => opened,
@@ -484,7 +550,20 @@ fn commit_push(
         }
     };
     attempt.outcome = "pr-open";
-    attempt.pr = Some(opened.url.clone());
+    attempt.pr = Some(opened.pr.url.clone());
+    if !opened.ours {
+        // Somebody's own PR from this branch: its title, its body and whether it merges are
+        // theirs. The push has already reached it, which is what a save of their branch is.
+        let said = format!(
+            "{remote_branch} already has a pull request charter did not open, #{}: {} — \
+             charter left its title, description and merging alone",
+            opened.pr.number, opened.pr.url
+        );
+        say(Say::Info(said.clone()));
+        attempt.detail = said;
+        return 0;
+    }
+    let opened = opened.pr;
     say(Say::Done(format!(
         "Pull request #{} from {remote_branch} into {base}: {}",
         opened.number, opened.url
@@ -514,16 +593,41 @@ fn commit_push(
 }
 
 /// The branch a PR-mode save pushes when the clone stands on its PR's base or its default
-/// branch: the one the last save of this repo pushed, while HEAD still descends from it, else
+/// branch: one an earlier save of this repo pushed, while HEAD still descends from it, else
 /// a fresh `charter/<workspace>/<short-sha>` at HEAD. Created or moved forward locally too, so
 /// the operator can see it; never moved backwards or sideways.
 fn save_branch(request: &Request, on: &str, head_sha: &str) -> Result<String, String> {
     let clone = request.clone;
     let prefix = format!("charter/{}/", request.workspace);
-    let reuse = last_entry(request.plane, request.workspace, request.name)
-        .and_then(|line| line.get("branch")?.as_str().map(str::to_owned))
+    // The newest journal line that NAMES one — a quit's commit-only line or a failed push
+    // names none, and must not break the chain — then every local branch charter made here,
+    // newest first. The first that HEAD still descends from carries on.
+    let wanted = target(request.workspace, request.name);
+    let journalled = planegit::journal(request.plane)
+        .into_iter()
+        .rev()
+        .filter(|line| line.get("target").and_then(serde_json::Value::as_str) == Some(&wanted))
+        .find_map(|line| line.get("branch")?.as_str().map(str::to_owned))
+        .filter(|name| name.starts_with(&prefix));
+    let local = git::run(
+        clone,
+        &[
+            "for-each-ref",
+            "--sort=-committerdate",
+            "--format=%(refname:short)",
+            &format!("refs/heads/{prefix}"),
+        ],
+        git::READ,
+    )
+    .ok()
+    .filter(git::Run::ok)
+    .map(|run| run.out.lines().map(str::to_owned).collect::<Vec<_>>())
+    .unwrap_or_default();
+    let reuse = journalled
+        .into_iter()
+        .chain(local)
         .filter(|name| name.starts_with(&prefix) && planesave::branch_ok(name))
-        .filter(|name| {
+        .find(|name| {
             git::run(
                 clone,
                 &[
@@ -560,6 +664,79 @@ fn save_branch(request: &Request, on: &str, head_sha: &str) -> Result<String, St
         return Err(format!("charter could not create {name}: {said}"));
     }
     Ok(name)
+}
+
+/// The names a file of credentials goes by, whatever is in it.
+fn secret_name(name: &str) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    let example = [".example", ".sample", ".template", ".dist"]
+        .iter()
+        .any(|suffix| lower.ends_with(suffix));
+    if lower == ".env" || (lower.starts_with(".env.") && !example) {
+        return Some("an environment file");
+    }
+    if ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"].contains(&lower.as_str()) {
+        return Some("an SSH private key");
+    }
+    if [".pem", ".p12", ".pfx", ".key"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+    {
+        return Some("a key or certificate store");
+    }
+    if lower == "credentials.json" {
+        return Some("a credentials file");
+    }
+    None
+}
+
+/// The staged files of `staged` a repo save refuses, each with what it looks like — **the
+/// narrower rule a repo takes** (ADR 0051). The plane's own guard reads its memory and ref
+/// files with a credential-assignment rule that ordinary code trips (`password: String`), so a
+/// clone is asked two things instead:
+///
+/// - a file whose NAME is a credential's: `.env` and `.env.*` (not `.example`, `.sample`,
+///   `.template`, `.dist`), an SSH private key, `*.pem`, `*.p12`, `*.pfx`, `*.key`,
+///   `credentials.json`, and a `.npmrc` or `.pypirc` that holds a token or a password;
+/// - a private key block or a live token by its forge's own prefix in any file's staged text
+///   ([`crate::secretshape::token_kind`]).
+///
+/// Asked of the staged blob (`git show :<path>`), as the plane's guard asks it. What was found
+/// is named by path and kind, never by value.
+fn secret_files(clone: &Path, staged: &[String]) -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    for path in staged {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        if let Some(kind) = secret_name(name) {
+            // A deletion is staged too, and taking a secret out is not what this refuses.
+            if git::run(clone, &["cat-file", "-e", &format!(":{path}")], git::READ)
+                .is_ok_and(|r| r.ok())
+            {
+                out.push((path.clone(), kind));
+            }
+            continue;
+        }
+        let Ok(blob) = git::run(clone, &["show", &format!(":{path}")], git::READ) else {
+            continue;
+        };
+        if !blob.ok() {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        if (lower == ".npmrc" || lower == ".pypirc")
+            && blob.out.lines().any(|line| {
+                let line = line.to_ascii_lowercase();
+                (line.contains("_authtoken") || line.contains("password")) && line.contains('=')
+            })
+        {
+            out.push((path.clone(), "a package registry token"));
+            continue;
+        }
+        if let Some(kind) = crate::secretshape::token_kind(&blob.out) {
+            out.push((path.clone(), kind));
+        }
+    }
+    out
 }
 
 /// The repo's default branch: its `default_branch` in `inventory/repos.json`, else what the

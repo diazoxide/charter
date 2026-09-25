@@ -304,7 +304,8 @@ impl State {
                             clone: &repo.path,
                             message: None,
                             no_push: false,
-                            mid_turn: busy,
+                            // Asked again right before `git add`, not answered from this look.
+                            mid_turn: &|| mid_turn(&workspace),
                         },
                         trigger,
                         &mut |_| {},
@@ -364,16 +365,20 @@ pub fn plane_fetch(
 /// slow hook is left to finish on its own rather than holding the app open.
 ///
 /// Each plane's repos are saved beside it — only those whose `[repos.<name>] autosave` is on.
-pub fn at_quit(roots: Vec<PathBuf>) {
+///
+/// `roots` carries, beside each plane, who was mid-turn in which workspace before the quit
+/// ended the chats: those workspaces' repos are not saved, and their journal says why.
+pub fn at_quit(roots: Vec<(PathBuf, HashMap<String, Vec<String>>)>) {
     let (done, finished) = mpsc::channel();
     let mut started = 0;
-    for root in roots {
+    for (root, cut_off) in roots {
         for (workspace, repo) in auto_saved_repos(&root) {
             let done = done.clone();
             let plane = root.clone();
+            let busy = cut_off.get(&workspace).cloned().unwrap_or_default();
             started += 1;
             std::thread::spawn(move || {
-                autosave::repo_at_quit(&plane, &workspace, &repo, QUIT_BOUND);
+                autosave::repo_at_quit(&plane, &workspace, &repo, &busy, QUIT_BOUND);
                 let _ = done.send(());
             });
         }
@@ -566,6 +571,40 @@ mod tests {
         assert!(!state.look_at_repos(root, at + Duration::from_secs(331), None, &idle));
         assert!(state.look_at_repos(root, at + Duration::from_secs(332), None, &idle));
         assert_eq!(repo_commits(root), 1);
+    }
+
+    #[test]
+    fn a_turn_that_starts_during_a_repo_auto_save_is_seen_right_before_it_stages() {
+        let (dir, clone) = plane_with_a_repo(
+            "[repos.widget]\nmode = \"commit\"\nautosave = true\nautosave_after = \"30s\"\n",
+        );
+        let root = dir.path();
+        let mut state = State::default();
+        let at = Instant::now();
+        let idle = |_: &str| Vec::new();
+        state.look_at_repos(root, at, None, &idle);
+        std::fs::write(clone.join("a.md"), "a").unwrap();
+        state.look_at_repos(root, at + Duration::from_secs(1), None, &idle);
+
+        // Nobody at this look; somebody by the time the save asks again.
+        let asked = std::cell::Cell::new(0);
+        let starting = |_: &str| {
+            asked.set(asked.get() + 1);
+            if asked.get() > 2 {
+                vec!["alpha.1".to_owned()]
+            } else {
+                Vec::new()
+            }
+        };
+        state.look_at_repos(root, at + Duration::from_secs(40), None, &starting);
+
+        assert_eq!(
+            repo_commits(root),
+            0,
+            "a turn's half-written file was committed"
+        );
+        let line = planegit::journal(root).pop().expect("the skipped save");
+        assert_eq!(line["outcome"], "skipped");
     }
 
     #[test]

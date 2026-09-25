@@ -45,7 +45,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never pushes to the default branch. A repo is saved only between turns. A save you press while
   a chat in that workspace is working is refused, with a sentence naming the chat. Auto-save
   skips that round. Repos are saved by themselves only when `[repos.<name>] autosave = true`,
-  which is off by default, and quitting saves only those.
+  which is off by default, and quitting saves only those, and not one whose chat's turn the
+  quit cut off. A pull request you opened yourself from the branch is never rewritten or set to
+  merge. A repo save refuses a secret-shaped file (`.env`, a private key, `credentials.json`, a
+  `.npmrc` with a token, …) or a private key or forge token in what it would commit, and names
+  the file.
   ([#299](https://github.com/diazoxide/charter-app/issues/299))
 - **Persona statistics comes with the app.** charter now ships its own extensions, and persona
   statistics is the first: there is no folder to assemble and add by hand, and no approval to

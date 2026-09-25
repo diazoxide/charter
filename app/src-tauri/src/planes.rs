@@ -354,8 +354,13 @@ impl Held {
     /// what a save of that workspace's repos waits for (charter-app#299, ADR 0051).
     ///
     /// **Mid-turn is the hook state `running`**, and nothing else: charter never reads a
-    /// harness's output to decide (ADR 0018). A chat is in a workspace when it works there,
-    /// which is how the sidebar files it (`plane_sidebar`).
+    /// harness's output to decide (ADR 0018).
+    ///
+    /// **Who could be writing the clone is wider than who is filed under the workspace.** A
+    /// chat counts when it works in the workspace, in a worktree of one of its clones wherever
+    /// `$CHARTER_WORKTREES` or `[plane] worktrees` put that, or anywhere that is in no other
+    /// workspace — the plane root, where working in a clone is done from a steward's chat. Only
+    /// a chat that is plainly in another workspace is left out.
     pub fn mid_turn_in(&self, workspace: &str) -> Vec<String> {
         let on_disk = charter_core::workspaces::Plane::open(&self.root);
         let board = self.hooks.shared_board();
@@ -365,14 +370,28 @@ impl Held {
             .filter(|open| {
                 open.cwd
                     .as_deref()
-                    .and_then(|cwd| on_disk.workspace_of(cwd))
-                    .as_deref()
-                    == Some(workspace)
+                    .and_then(|cwd| workspace_working_in(&on_disk, cwd))
+                    .is_none_or(|there| there == workspace)
             })
             .filter(|open| {
                 hooks::held_board(&board).state(open.session) == charter_core::state::State::Running
             })
             .map(|open| open.label.clone().unwrap_or(open.name))
+            .collect()
+    }
+
+    /// [`Held::mid_turn_in`] for every workspace of the plane, keyed by workspace — asked
+    /// before a quit ends the chats, so the turns it cuts off are known (ADR 0051).
+    pub fn mid_turn_everywhere(&self) -> HashMap<String, Vec<String>> {
+        charter_core::workspaces::Plane::open(&self.root)
+            .workspaces()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|workspace| {
+                let busy = self.mid_turn_in(&workspace);
+                (workspace, busy)
+            })
+            .filter(|(_, busy)| !busy.is_empty())
             .collect()
     }
 
@@ -387,6 +406,20 @@ impl Held {
             let _ = worker.poker().send(poke);
         }
     }
+}
+
+/// The workspace a chat working in `cwd` could be writing a clone of: the one `cwd` is in, or —
+/// for a linked worktree anywhere on disk — the one its main clone is in. `None` for a
+/// directory in no workspace at all.
+pub(crate) fn workspace_working_in(
+    plane: &charter_core::workspaces::Plane,
+    cwd: &Path,
+) -> Option<String> {
+    plane.workspace_of(cwd).or_else(|| {
+        cwd.ancestors()
+            .find_map(charter_core::plane::main_worktree_of)
+            .and_then(|main| plane.workspace_of(&main))
+    })
 }
 
 /// Told whenever a chat moves, whichever plane it is in. The event carries its plane, so one
@@ -1181,7 +1214,12 @@ impl Planes {
     /// Empties the registry, then lets go of each plane it held. See [`Self::let_go_of_all`].
     fn let_go_of_every_plane(&self, to_update: bool) {
         let all: Vec<_> = self.map().drain().map(|(_, held)| held).collect();
-        let roots: Vec<_> = all.iter().map(|held| held.root.clone()).collect();
+        // Before the chats are ended: a turn this quit cuts off leaves its repo half-written,
+        // and that repo is not saved (charter-app#299).
+        let roots: Vec<_> = all
+            .iter()
+            .map(|held| (held.root.clone(), held.mid_turn_everywhere()))
+            .collect();
         for held in all {
             held.let_go(to_update);
         }
@@ -3303,6 +3341,138 @@ mod tests {
 
         a_stop_from(&held, session);
         assert_eq!(becomes(&[]), Vec::<String>::new(), "the turn ended");
+    }
+
+    /// git for a fixture, never through the developer's own config or signer.
+    fn fixture_git(dir: &Path, args: &[&str]) {
+        let mut command = std::process::Command::new("git");
+        command
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid");
+        let out = charter_core::forklock::output(&mut command).expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A clone at `at` with one commit and an identity of its own.
+    fn fixture_clone(at: &Path) {
+        std::fs::create_dir_all(at).unwrap();
+        fixture_git(at, &["init", "-q", "-b", "main"]);
+        fixture_git(at, &["config", "user.name", "t"]);
+        fixture_git(at, &["config", "user.email", "t@example.invalid"]);
+        std::fs::write(at.join("README.md"), "one").unwrap();
+        fixture_git(at, &["add", "-A"]);
+        fixture_git(at, &["commit", "-q", "-m", "one"]);
+    }
+
+    /// A chat called `name` working in `cwd`, mid-turn: its prompt has been sent, and the
+    /// board has heard it.
+    fn a_chat_mid_turn_in(held: &Held, cwd: &Path, name: &str) -> u32 {
+        let mut chat = one_chat_on("/bin/cat").chats.remove(0);
+        chat.cwd = Some(cwd.to_path_buf());
+        chat.name = name.to_owned();
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+        a_prompt_to(held, session);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while held.hooks().now(session).state != "running" {
+            assert!(
+                std::time::Instant::now() < until,
+                "the prompt never reached the board"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        session
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_that_could_be_writing_the_clone_from_outside_the_workspace_is_counted_too() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+        let beta_clone = root.join("workspaces/beta/gadget");
+        fixture_clone(&beta_clone);
+        // A worktree of beta's clone, relocated out of the plane as `$CHARTER_WORKTREES` does.
+        let relocated = dir.path().join("elsewhere/gadget-piece");
+        fixture_git(
+            &beta_clone,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "piece",
+                &relocated.display().to_string(),
+            ],
+        );
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+
+        a_chat_mid_turn_in(&held, &root, "steward.1");
+        a_chat_mid_turn_in(&held, &relocated, "beta.2");
+
+        // The plane root is in no workspace, so it could be writing either; the relocated
+        // worktree is beta's, wherever it is on disk.
+        assert_eq!(held.mid_turn_in("alpha"), ["steward.1"]);
+        let mut beta = held.mid_turn_in("beta");
+        beta.sort();
+        assert_eq!(beta, ["beta.2", "steward.1"]);
+        let everywhere = held.mid_turn_everywhere();
+        assert_eq!(everywhere.get("alpha").map(Vec::len), Some(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quitting_does_not_save_a_repo_whose_workspace_had_a_turn_cut_off() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        std::fs::write(
+            root.join(charter_core::plane::MANIFEST),
+            "[repos.widget]\nmode = \"commit\"\nautosave = true\n",
+        )
+        .unwrap();
+        let clone = root.join("workspaces/alpha/widget");
+        fixture_clone(&clone);
+        std::fs::write(clone.join("half.md"), "half-written").unwrap();
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        a_chat_mid_turn_in(&held, &clone, "alpha.1");
+        drop(held);
+
+        planes.let_go_of_all();
+
+        let skipped = charter_core::planegit::journal(&root)
+            .into_iter()
+            .find(|line| line["target"] == "repo:alpha/widget")
+            .expect("the repo's quit is in the journal");
+        assert_eq!(skipped["outcome"], "skipped", "{skipped}");
+        assert!(
+            skipped["detail"]
+                .as_str()
+                .unwrap()
+                .contains("alpha.1 is mid-turn"),
+            "{skipped}"
+        );
+        assert!(
+            charter_core::repos::state_of(&clone).unwrap().untracked > 0,
+            "the cut-off turn's file was committed"
+        );
     }
 
     #[cfg(unix)]
