@@ -34,31 +34,36 @@ use charter_core::extension;
 /// Run `argv` here when it names a core-owned alias or an installed extension, or `None` to hand
 /// it to clap. `answers` says whether clap answers a first word itself.
 pub fn intercept(argv: &[OsString], answers: impl Fn(&str) -> bool) -> Option<ExitCode> {
-    let words: Vec<&str> = argv.iter().skip(1).map_while(|it| it.to_str()).collect();
+    // Every word as text, the one reading of the command line both the routing and the request
+    // take: a word that is not UTF-8 goes lossily, since the request is JSON.
+    let words = rest_of(argv, 1);
     if let Some(forward) = extension::cli::alias_of(&words) {
-        let rest = rest_of(argv, 1 + forward.words.len());
-        return Some(run(forward.extension, forward.command, &rest));
+        return Some(run(
+            forward.extension,
+            forward.command,
+            &words[forward.words.len()..],
+        ));
     }
-    let first = *words.first()?;
+    let first = words.first()?.as_str();
     if first.starts_with('-') || answers(first) || !extension::project::id_ok(first) {
         return None;
     }
     // Installed, in whatever standing: the executor is what says it is not approved, turned off
     // or changed. A word nothing installed is called goes on to clap.
     let config_root = charter_core::machine::config_root_if_there()?;
-    extension::read(&config_root, &extension::BuiltIn::none()).entry(first)?;
-    let Some(command) = words.get(1) else {
-        return Some(list_commands(&config_root, first));
-    };
-    let rest = rest_of(argv, 3);
-    Some(run(first, command, &rest))
+    let entry = extension::read(&config_root, &extension::BuiltIn::none())
+        .entry(first)?
+        .clone();
+    match words.get(1).map(String::as_str) {
+        None => Some(list_commands(&entry.path, first, ExitCode::FAILURE)),
+        Some("--help" | "-h") => Some(list_commands(&entry.path, first, ExitCode::SUCCESS)),
+        Some(command) => Some(run(first, command, &words[2..])),
+    }
 }
 
-/// What charter says after clap's own error for a first word nothing answered.
-pub fn note_after_an_unknown_word(argv: &[OsString]) {
-    let Some(first) = argv.get(1).and_then(|it| it.to_str()) else {
-        return;
-    };
+/// What charter says after clap's own error for a first word nothing answered — `first`, which
+/// clap does not answer.
+pub fn note_after_an_unknown_word(first: &str) {
     if first.starts_with('-') || !extension::project::id_ok(first) {
         return;
     }
@@ -102,9 +107,8 @@ fn run(extension: &str, command: &str, args: &[String]) -> ExitCode {
                 eprintln!("charter: {seen}");
             }
             let _ = std::io::stderr().flush();
-            // An exit status is a byte to the shell; one outside it is what the shell would have
-            // made of it.
-            ExitCode::from(u8::try_from(ran.status.rem_euclid(256)).unwrap_or(1))
+            // A program's own exit status is 0 to 255 on unix, the one platform that runs one.
+            ExitCode::from(u8::try_from(ran.status).unwrap_or(1))
         }
         Err(why) => {
             eprintln!("charter: {why}");
@@ -124,23 +128,26 @@ fn choices() -> extension::project::Choices {
     extension::project::Choices::read_in(here.plane.root(), workspace.as_deref())
 }
 
-/// `charter <extension>` with no command: what it adds, as usage.
-fn list_commands(config_root: &std::path::Path, id: &str) -> ExitCode {
-    let entry = extension::read(config_root, &extension::BuiltIn::none())
-        .entry(id)
-        .cloned();
-    let declared = entry.map(|entry| extension::manifest_at(&entry.path));
-    match declared {
-        Some(Ok(manifest)) if !manifest.cli.is_empty() => {
+/// `charter <extension>` with no command, or with `--help`: what it adds, as usage, from its
+/// manifest at `dir` — a listing, and never evidence that it may run (the executor asks that).
+/// `code` is how it exits when it could list them.
+fn list_commands(dir: &std::path::Path, id: &str, code: ExitCode) -> ExitCode {
+    match extension::manifest_at(dir) {
+        Ok(manifest) if !manifest.cli.is_empty() => {
             eprintln!("usage: charter {id} <command> …\n\n'{id}' adds these commands:");
             for command in &manifest.cli {
                 let writes = if command.writes { " (writes)" } else { "" };
                 eprintln!("  {} — {}{writes}", command.name, command.title);
             }
+            code
         }
-        Some(Ok(_)) => eprintln!("charter: '{id}' adds no commands to charter's command line."),
-        Some(Err(why)) => eprintln!("charter: charter could not read '{id}': {why}"),
-        None => eprintln!("charter: no extension called '{id}' is installed on this machine."),
+        Ok(_) => {
+            eprintln!("charter: '{id}' adds no commands to charter's command line.");
+            ExitCode::FAILURE
+        }
+        Err(why) => {
+            eprintln!("charter: charter could not read '{id}': {why}");
+            ExitCode::FAILURE
+        }
     }
-    ExitCode::FAILURE
 }

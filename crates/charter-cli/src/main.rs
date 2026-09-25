@@ -2217,13 +2217,21 @@ fn main() -> ExitCode {
     if let Some(code) = extcmd::intercept(&argv, |word| parser.find_subcommand(word).is_some()) {
         return code;
     }
-    let unknown_word = argv.clone();
+    // The first word, when clap does not answer it: what the line after clap's own error names.
+    // clap reports a bad word under a core command with the same error kind, and that one is
+    // not about extensions.
+    let unknown_first = argv
+        .get(1)
+        .map(|word| word.to_string_lossy().into_owned())
+        .filter(|word| parser.find_subcommand(word).is_none());
     let cli = match Cli::try_parse_from(argv) {
         Ok(cli) => cli,
         Err(err) => {
             let _ = err.print();
-            if err.kind() == clap::error::ErrorKind::InvalidSubcommand {
-                extcmd::note_after_an_unknown_word(&unknown_word);
+            if err.kind() == clap::error::ErrorKind::InvalidSubcommand
+                && let Some(word) = &unknown_first
+            {
+                extcmd::note_after_an_unknown_word(word);
             }
             return match err.exit_code() {
                 0 => ExitCode::SUCCESS,

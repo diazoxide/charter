@@ -330,11 +330,15 @@ enum Asked<'a> {
 /// exited.
 enum Said {
     Line(Vec<u8>),
-    Whole {
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
-        status: i32,
-    },
+    Whole(Printed),
+}
+
+/// Everything a command's program printed, and the status it exited with.
+#[derive(Debug, Default)]
+struct Printed {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    status: i32,
 }
 
 /// What [`Executor::put`] came back with, before it is shaped into an [`Answer`] or an [`Acted`].
@@ -343,7 +347,7 @@ struct Put {
     /// A briefing's answer: its section, as the program wrote it.
     section: Option<String>,
     /// A command's output and status; `None` for every other request.
-    whole: Option<(Vec<u8>, Vec<u8>, i32)>,
+    whole: Option<Printed>,
     gate: Duration,
     round_trip: Duration,
     overreach: Option<String>,
@@ -596,7 +600,11 @@ impl Executor {
             Asked::Command { name, args },
             |_| serde_json::Value::Null,
         )?;
-        let (stdout, stderr, status) = put.whole.unwrap_or_default();
+        let Printed {
+            stdout,
+            stderr,
+            status,
+        } = put.whole.unwrap_or_default();
         Ok(Ran {
             stdout,
             stderr,
@@ -749,11 +757,10 @@ impl Executor {
                 .any(|it| it.id == action && it.deletes),
             (None, _) => false,
         };
-        let watched: &[String] = match &commanded {
-            Some(command) if !command.writes => &[],
-            _ => &found.manifest.writes,
-        };
-        let overreach = before.and_then(|before| before.overreach(extension, watched, may_delete));
+        // Watched against what it was told it may write: `found.manifest` is `declared`, checked
+        // above.
+        let overreach =
+            before.and_then(|before| before.overreach(extension, may_write, may_delete));
         let with_report = |why: String| match &overreach {
             Some(seen) => format!("{why} {seen}"),
             None => why,
@@ -761,15 +768,11 @@ impl Executor {
 
         let line = match said.map_err(with_report)? {
             Said::Line(line) => line,
-            Said::Whole {
-                stdout,
-                stderr,
-                status,
-            } => {
+            Said::Whole(printed) => {
                 return Ok(Put {
                     blocks: None,
                     section: None,
-                    whole: Some((stdout, stderr, status)),
+                    whole: Some(printed),
                     gate,
                     round_trip,
                     overreach,
@@ -1056,7 +1059,7 @@ impl Executor {
             let stop = Arc::clone(&stop);
             std::thread::Builder::new()
                 .name(format!("extension {extension} stderr"))
-                .spawn(move || drain(&err_ours, &stop, kept))
+                .spawn(move || drain(&err_ours, &stop, kept, whole.then_some(until)))
                 .map_err(could_not)?
         };
 
@@ -1093,7 +1096,11 @@ impl Executor {
 
         let status = running.stop();
         stop.store(true, Ordering::Relaxed);
-        let (said, overflowed) = tail.join().unwrap_or_default();
+        let Drained {
+            kept: said,
+            overflowed,
+            ended,
+        } = tail.join().unwrap_or_default();
         let wrote = writer.join().unwrap_or(false);
 
         let last_words = || {
@@ -1120,12 +1127,21 @@ impl Executor {
                      what it printed on.",
                     MOST_ANSWER_BYTES >> 10
                 )),
+                // Something it started still holds its stderr, or it was still being read when
+                // charter stopped reading: what was read is not all of it, and a command's
+                // output is passed on whole or not at all.
+                Heard::Line(_) if !ended => Err(format!(
+                    "'{extension}' exited, and its stderr did not end within {} seconds — \
+                     something it started may still hold it open — so charter passes none of \
+                     what it printed on.",
+                    self.deadline.as_secs()
+                )),
                 Heard::Line(stdout) => match status.and_then(|status| status.code()) {
-                    Some(status) => Ok(Said::Whole {
+                    Some(status) => Ok(Said::Whole(Printed {
                         stdout,
                         stderr: said,
                         status,
-                    }),
+                    })),
                     None => Err(format!(
                         "'{extension}' was killed by a signal, so charter passes none of what it \
                          printed on.{}",
@@ -1467,20 +1483,37 @@ pub(crate) fn channel() -> std::io::Result<Channel> {
     })
 }
 
-/// Read a program's stderr until it closes or charter says stop, keeping the last `most` bytes,
-/// and whether there was more than that.
+/// What [`drain`] read of a program's stderr.
+#[cfg(unix)]
+#[derive(Debug, Default)]
+struct Drained {
+    /// The last `most` bytes of it.
+    kept: Vec<u8>,
+    /// Whether there was more than that.
+    overflowed: bool,
+    /// Whether it was read to its end, rather than cut off at [`STDERR_AFTER_STOP`] — so what
+    /// is kept is all of it, and a command's stderr can be passed on as it was written.
+    ended: bool,
+}
+
+/// Read a program's stderr until it closes or charter says stop, keeping the last `most` bytes.
+///
+/// `whole_by` is for a command, whose stderr is passed on rather than quoted: once stopped, the
+/// drain goes on to the end of it as long as that deadline allows, rather than for only
+/// [`STDERR_AFTER_STOP`].
 #[cfg(unix)]
 fn drain(
     err_ours: &std::os::unix::net::UnixStream,
     stop: &std::sync::atomic::AtomicBool,
     most: usize,
-) -> (Vec<u8>, bool) {
+    whole_by: Option<Instant>,
+) -> Drained {
     use std::io::Read;
     use std::sync::atomic::Ordering;
     let mut err_ours = err_ours;
     let _ = err_ours.set_read_timeout(Some(Duration::from_millis(50)));
     let mut kept: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 1024];
+    let mut chunk = vec![0u8; 16 << 10];
     // When charter said stop. What a program wrote just before it died is still in the socket,
     // and it is the part worth quoting, so the drain goes on after stop — but for a bounded
     // TIME, not a bounded number of bytes: a process that escaped the group (`setsid`) can hold
@@ -1489,16 +1522,21 @@ fn drain(
     // Either way the cost was this thread, and the extension's one slot, held with it.
     let mut stopped_at: Option<Instant> = None;
     let mut overflowed = false;
+    let mut ended = false;
     loop {
         if stopped_at.is_none() && stop.load(Ordering::Relaxed) {
             stopped_at = Some(Instant::now());
         }
+        let waiting = whole_by.is_some_and(|by| Instant::now() < by);
         // `>` against `>=` differs at one instant of a clock no test can land on.
-        if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) {
+        if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) && !waiting {
             break;
         }
         match err_ours.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) => {
+                ended = true;
+                break;
+            }
             Ok(got) => {
                 kept.extend_from_slice(&chunk[..got]);
                 // At exactly the bound the cut is 0, so `>=` here changes nothing.
@@ -1508,11 +1546,15 @@ fn drain(
                     kept.drain(..cut);
                 }
             }
-            Err(_) if stopped_at.is_none() => {}
+            Err(_) if stopped_at.is_none() || waiting => {}
             Err(_) => break,
         }
     }
-    (kept, overflowed)
+    Drained {
+        kept,
+        overflowed,
+        ended,
+    }
 }
 
 /// Write the whole question to the program, by `until` or not at all, then close charter's
@@ -1973,7 +2015,9 @@ fn listen(ours: &std::os::unix::net::UnixStream, until: Instant) -> Heard {
             return Heard::TooLate;
         }
         // Not a broken socket: see `listen_to_the_end` — macOS refuses the deadline on a socket
-        // whose program has already closed its end, and the read then returns at once.
+        // whose program has already closed its end, and the read then returns at once. Seen
+        // here too, not only for a command: a program that crashed part way through a line
+        // read as "charter lost its connection" in one run of three on this change's machine.
         let _ = ours.set_read_timeout(Some(left));
         match ours.read(&mut chunk) {
             Ok(0) => return Heard::Nothing(!heard.is_empty()),

@@ -197,7 +197,9 @@ extension's write from a chat's in the same moment, and the sentence says so.
   its exit status are passed back to the caller unchanged, each bounded at 512 KiB and read to
   the end within the normal deadline. A program that is still running at the deadline, is
   killed by a signal, or prints more is a refusal of charter's own, and none of its output is
-  passed on.
+  passed on. **The deadline is the executor's 5 seconds, unchanged.** "Process life is
+  unchanged" (charter-app#336). A command that needs longer, streams its output or reads the
+  caller's stdin is a change to process life, and it is its own decision, not a capability's.
 - **The naming rule above is enforced where the id is read.** An id that is one of charter's
   own command words refuses the whole manifest, for every extension, so at install, at
   approval and at every later read. The list is `extension::cli::CORE_WORDS`. The core cannot

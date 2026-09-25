@@ -186,6 +186,48 @@ fn an_extension_with_no_command_named_lists_the_ones_it_has() {
         "{}",
         ran.stderr
     );
+    // And asked for help, the same list is the answer rather than a refusal.
+    let help = setup.charter(&["extension-probe", "--help"]);
+    assert_eq!(help.code, 0);
+    assert!(
+        help.stderr.contains("echo — Say its words back"),
+        "{}",
+        help.stderr
+    );
+}
+
+#[test]
+fn a_command_of_an_extension_the_project_turned_off_says_so_and_does_not_run() {
+    let setup = Setup::approved();
+    std::fs::write(
+        setup.plane().join("charter.toml"),
+        "schema = 1\n\n[extensions.extension-probe]\nenabled = false\n",
+    )
+    .expect("the project turns it off");
+    let ran = setup.charter(&["extension-probe", "stamp"]);
+    assert_eq!(ran.stdout, b"");
+    assert!(
+        ran.stderr.contains("is turned off in charter.toml"),
+        "{}",
+        ran.stderr
+    );
+    assert_eq!(ran.code, 1);
+    assert!(!setup.plane().join("notes").exists(), "it ran");
+}
+
+#[test]
+fn a_bad_word_under_a_core_command_is_clap_s_error_alone() {
+    // clap says a nested word is unknown the same way it says a first one is; the line about
+    // extensions is only about a first word.
+    let setup = Setup::approved();
+    let ran = setup.charter(&["ws", "bogus"]);
+    assert_eq!(ran.code, 1);
+    assert!(
+        ran.stderr.contains("unrecognized subcommand 'bogus'"),
+        "{}",
+        ran.stderr
+    );
+    assert!(!ran.stderr.contains("No extension"), "{}", ran.stderr);
 }
 
 #[test]
