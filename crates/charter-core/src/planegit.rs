@@ -431,6 +431,9 @@ pub struct Standing {
     pub push_failed: Option<String>,
     /// The files the last rebase conflicted in, when that is why it is blocked.
     pub conflicts: Vec<String>,
+    /// What a save cannot do here that is not a block — a PR mode on a remote no forge adapter
+    /// serves, where a save still commits and goes no further.
+    pub notice: Option<String>,
 }
 
 /// Where the plane at `root`'s unsaved work sits.
@@ -454,8 +457,10 @@ pub fn standing(root: &Path) -> Standing {
             behind: None,
             push_failed: None,
             conflicts: Vec::new(),
+            notice: None,
         };
     };
+    let here_branch = here.clone();
     let branch = plane.branch.value.clone().unwrap_or(here);
     let pushes = matches!(plane.mode.value, None | Some(crate::planesave::Mode::Push))
         && origin_https(root).is_some();
@@ -487,34 +492,48 @@ pub fn standing(root: &Path) -> Standing {
                 .collect()
         })
         .unwrap_or_default();
+    let notice = plane
+        .mode
+        .value
+        .filter(|mode| mode.opens_a_pr() && origin_https(root).is_none())
+        .map(|mode| {
+            format!(
+                "[plane] mode is {}, and this plane's origin is not a GitHub or GitLab forge \
+                 charter knows, so a save goes no further than a commit",
+                mode.as_str()
+            )
+        });
+    // Every block is read from what is true now, never kept as a note: a block resolved by
+    // hand — a rebase finished in a terminal, a secret removed, the right branch checked out —
+    // is gone the moment it is, because auto-save waits while a plane is blocked and would
+    // never write the line that cleared a stored one.
     let blocked = matches!(outcome.as_deref(), Some("conflict" | "stranded"))
         .then(|| said("detail").unwrap_or_else(|| outcome.clone().unwrap_or_default()))
-        // A PR mode on a remote no forge adapter serves can go no further than a commit.
+        // The plane on another branch than the one it saves into: a save commits and does not
+        // push (#293), and that is the operator's to settle.
         .or_else(|| {
             plane
-                .mode
+                .branch
                 .value
-                .filter(|mode| mode.opens_a_pr() && origin_https(root).is_none())
-                .map(|mode| {
-                    format!(
-                        "[plane] mode is {}, and this plane's origin is not a GitHub or GitLab \
-                         forge charter knows",
-                        mode.as_str()
-                    )
+                .as_deref()
+                .filter(|target| *target != here_branch)
+                .map(|target| {
+                    format!("this plane is on {here_branch}, and [plane] branch is {target}")
                 })
         })
-        // And the last save's own refusal — a secret the scan caught — until a save goes
-        // through: the journal's newest line says how the last attempt ended.
+        // A secret the next save would refuse: a changed memory or ref file that holds one now.
+        // Asked of the files as they are, so removing it clears the block at once.
         .or_else(|| {
-            journal(root)
-                .last()
-                .filter(|line| line["outcome"] == "blocked")
-                .map(|line| {
-                    line["detail"]
-                        .as_str()
-                        .unwrap_or("the last save was refused")
-                        .to_owned()
+            changed
+                .iter()
+                .filter(|path| path.contains("/memory/") || path.contains("/refs/"))
+                .any(|path| {
+                    std::fs::read_to_string(root.join(path))
+                        .ok()
+                        .and_then(|text| secretshape::secret_kind(&text))
+                        .is_some()
                 })
+                .then(|| SECRET_REFUSED.to_owned())
         });
     let stage = if blocked.is_some() {
         Stage::Blocked
@@ -539,6 +558,7 @@ pub fn standing(root: &Path) -> Standing {
         behind,
         push_failed,
         conflicts,
+        notice,
     }
 }
 
@@ -1355,6 +1375,9 @@ impl Drop for Claim {
     }
 }
 
+/// The journal's words for a save the secret scan refused — matched whole, never searched for.
+pub const SECRET_REFUSED: &str = "a secret-shaped value in a memory or ref file";
+
 /// The sentence a save refused for [`Claim`] says.
 pub const ALREADY_SAVING: &str = "A save of this plane is already running — wait for it to finish.";
 
@@ -1951,7 +1974,7 @@ fn commit_push(
                 .into(),
         ));
         attempt.outcome = "blocked";
-        attempt.detail = "a secret-shaped value in a memory or ref file".into();
+        attempt.detail = SECRET_REFUSED.into();
         return 1;
     }
 

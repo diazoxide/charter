@@ -688,13 +688,30 @@ pub fn ensure_gitattributes(path: &Path) -> Result<bool, String> {
         Err(e) => return Err(strerror(&e)),
     };
     let block = merge_rules_block();
-    let next = match (text.find(MERGE_RULES_BEGIN), text.find(MERGE_RULES_END)) {
-        (Some(start), Some(end)) if end > start => {
-            let end = end + MERGE_RULES_END.len();
-            format!("{}{block}{}", &text[..start], &text[end..])
+    // Whole lines only, and only a COMPLETE block: the last BEGIN line with an END line after
+    // it. A BEGIN or an END on its own is something somebody edited, and is left exactly as
+    // it is — the rules are added below it, and the next run finds that complete block.
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let is = |line: &str, marker: &str| line.trim_end_matches(['\n', '\r']) == marker;
+    let complete = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is(line, MERGE_RULES_BEGIN))
+        .filter_map(|(start, _)| {
+            lines[start + 1..]
+                .iter()
+                .position(|line| is(line, MERGE_RULES_END))
+                .map(|offset| (start, start + 1 + offset))
+        })
+        .next_back();
+    let next = match complete {
+        Some((start, end)) => {
+            let before: String = lines[..start].concat();
+            let after: String = lines[end + 1..].concat();
+            format!("{before}{block}\n{after}")
         }
-        _ if text.is_empty() => format!("{block}\n"),
-        _ => format!("{}\n{block}\n", text.trim_end_matches('\n')),
+        None if text.is_empty() => format!("{block}\n"),
+        None => format!("{}\n{block}\n", text.trim_end_matches('\n')),
     };
     if next == text {
         return Ok(false);
@@ -1309,6 +1326,29 @@ mod merge_rules_tests {
         assert!(now.starts_with("*.png binary\n"), "{now}");
         assert!(!now.contains("old.jsonl"), "{now}");
         assert_eq!(now.matches(MERGE_RULES_BEGIN).count(), 1, "{now}");
+    }
+
+    #[test]
+    fn a_half_block_somebody_edited_is_left_as_it_is_and_the_rules_are_written_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitattributes");
+        for start in [
+            format!("{MERGE_RULES_BEGIN}\nmine\n"),
+            format!("{MERGE_RULES_END}\nx\n"),
+        ] {
+            std::fs::write(&path, &start).unwrap();
+            assert!(ensure_gitattributes(&path).unwrap());
+            let once = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                once.starts_with(&start),
+                "the half block was touched: {once}"
+            );
+            assert!(
+                !ensure_gitattributes(&path).unwrap(),
+                "a second run changed it"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), once);
+        }
     }
 }
 

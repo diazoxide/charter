@@ -89,6 +89,7 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
               </div>
             </div>
           )}
+          {saving.notice !== null && <p className="settings-hint">{saving.notice}</p>}
           {saving.pushFailed !== null && (
             <p className="settings-hint">{`The last push did not land: ${saving.pushFailed}`}</p>
           )}

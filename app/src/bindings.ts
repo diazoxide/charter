@@ -1759,6 +1759,8 @@ export type PlaneSaving = {
 	live: string[],
 	/**  The files the last rebase conflicted in, when that is why the save is blocked. */
 	conflicts: string[],
+	/**  What a save cannot do here that is not a block (a PR mode with no forge to open it on). */
+	notice: string | null,
 	/**  `[plane] mode`, or `null` when the plane names none. */
 	mode: string | null,
 	/**

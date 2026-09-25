@@ -86,15 +86,23 @@ const BLOCKED_FOR: f64 = 600.0;
 /// or at once for a secret. The app's alone, not the core's: the terminal status line reads the
 /// core's alerts, and the Saving view is where this one is resolved.
 fn save_blocked(root: &Path, now: f64) -> Option<AlertRow> {
-    let standing = charter_core::planegit::standing(root);
+    use charter_core::planegit;
+    let standing = planegit::standing(root);
     let why = standing.blocked?;
-    let since = charter_core::planegit::journal(root)
-        .last()
-        .and_then(|line| line["at"].as_f64())
-        .or_else(|| charter_core::planegit::push_record(root).and_then(|r| r["at"].as_f64()))
-        .unwrap_or(now);
-    let secret = why.contains("secret");
-    if !secret && now - since < BLOCKED_FOR {
+    // A secret is said at once: that save never goes through without somebody.
+    let secret = why == planegit::SECRET_REFUSED;
+    // Otherwise from when the cause began, read from the cause itself: the push record for a
+    // conflict or a stranded push, the journal line that recorded a branch mismatch. No cause
+    // with a time, no alert — never a clock that restarts on every look.
+    let since = if !standing.conflicts.is_empty() || planegit::unlanded(root).is_some() {
+        planegit::push_record(root).and_then(|r| r["at"].as_f64())
+    } else {
+        planegit::journal(root)
+            .last()
+            .filter(|line| line["outcome"] == "blocked")
+            .and_then(|line| line["at"].as_f64())
+    };
+    if !secret && since.is_none_or(|since| now - since < BLOCKED_FOR) {
         return None;
     }
     Some(AlertRow {
@@ -244,6 +252,13 @@ mod tests {
     #[test]
     fn a_save_blocked_by_a_secret_is_said_at_once() {
         let dir = blocked_plane("a secret-shaped value in a memory or ref file", now());
+        let memory = dir.path().join("personas/steward/memory");
+        std::fs::create_dir_all(&memory).unwrap();
+        std::fs::write(
+            memory.join("m.md"),
+            "token: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n",
+        )
+        .unwrap();
         let row = save_blocked(dir.path(), now()).expect("said at once");
         assert_eq!(
             (row.severity.as_str(), row.subject.as_str()),
@@ -255,7 +270,13 @@ mod tests {
     #[test]
     fn any_other_block_is_said_after_ten_minutes_and_not_before() {
         let at = now();
-        let dir = blocked_plane("the remote changed the same lines in: notes.md", at);
+        // The plane on another branch than it saves into, recorded by the save that stopped.
+        let dir = blocked_plane("this plane is on main, and [plane] branch is trunk", at);
+        std::fs::write(
+            dir.path().join("charter.toml"),
+            "[plane]\nmode = \"push\"\nbranch = \"trunk\"\n",
+        )
+        .unwrap();
         assert!(save_blocked(dir.path(), at + 60.0).is_none());
         assert!(save_blocked(dir.path(), at + 601.0).is_some());
     }

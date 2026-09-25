@@ -2300,7 +2300,9 @@ fn a_save_the_secret_scan_refused_is_blocked_until_a_save_goes_through() {
 }
 
 #[test]
-fn a_pr_mode_on_a_remote_no_forge_adapter_serves_is_blocked_and_says_why() {
+fn a_pr_mode_on_a_remote_no_forge_adapter_serves_keeps_committing_and_says_why_it_goes_no_further()
+{
+    // Not blocked: auto-save pauses on blocked, and a commit is still what a save can do here.
     let fixture = Fixture::plane();
     run(
         &fixture.root,
@@ -2310,11 +2312,11 @@ fn a_pr_mode_on_a_remote_no_forge_adapter_serves_is_blocked_and_says_why() {
 
     let got = standing(&fixture.root);
 
-    assert_eq!(got.stage, Stage::Blocked);
+    assert_ne!(got.stage, Stage::Blocked);
     assert_eq!(
-        got.blocked.as_deref(),
+        got.notice.as_deref(),
         Some(
-            "[plane] mode is pr, and this plane's origin is not a GitHub or GitLab forge charter knows"
+            "[plane] mode is pr, and this plane's origin is not a GitHub or GitLab forge charter knows, so a save goes no further than a commit"
         )
     );
 }
@@ -2338,4 +2340,29 @@ fn a_memory_file_deleted_is_saved_because_a_deletion_carries_no_secret() {
 
     assert_eq!(code, 0, "{said}");
     assert_eq!(ask(&fixture.root, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_block_resolved_by_hand_clears_without_a_save() {
+    // A secret the scan caught: blocked while the file is unsaved, not once it is gone.
+    let fixture = Fixture::plane();
+    let leak = fixture.root.join("personas/steward/memory/m.md");
+    std::fs::write(&leak, "token: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n").unwrap();
+    let _ = fixture.just_save();
+    assert_eq!(standing(&fixture.root).stage, Stage::Blocked);
+    std::fs::remove_file(&leak).unwrap();
+    assert_ne!(standing(&fixture.root).stage, Stage::Blocked);
+
+    // The plane on another branch than [plane] branch: blocked while it is, not after.
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    fixture.with_settings("[plane]\nmode = \"push\"\nbranch = \"trunk\"\n");
+    let got = standing(&fixture.root);
+    assert_eq!(got.stage, Stage::Blocked, "{got:?}");
+    assert_eq!(
+        got.blocked.as_deref(),
+        Some("this plane is on main, and [plane] branch is trunk")
+    );
+    run(&fixture.root, &["checkout", "-q", "-b", "trunk"]);
+    assert_ne!(standing(&fixture.root).stage, Stage::Blocked);
 }
