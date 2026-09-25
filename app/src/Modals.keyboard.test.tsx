@@ -684,6 +684,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     expect(await reachableByKeyboard()).toEqual([
       'input "Name"',
       'textarea "What it is for (optional)"',
+      'checkbox "Live"',
       'button "Create workspace"',
       'button "Cancel"',
     ]);

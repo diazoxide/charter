@@ -131,10 +131,10 @@ pub(crate) fn ran(code: u8, said: Vec<Say>) -> Result<Vec<String>, String> {
 /// the dialog would be a second answer to what a workspace may be called, and the two would
 /// drift the first time either moved.
 ///
-/// LOCAL, never LIVE, and it selects nothing: `--live` commits a workspace's manifest and
-/// memory into the plane's own git, and `--use` writes a session lock that belongs to a
-/// terminal. Neither is a default the window may take on the operator's behalf; both are
-/// `charter workspace live` and `charter workspace use`, which still exist.
+/// LOCAL unless the dialog's Live box was ticked (charter-app#301): a LIVE workspace's manifest
+/// and memory are published with the plane, so that is the operator's choice, never a default,
+/// and a workspace born LIVE is saved at once, as switching one to LIVE is. It selects nothing:
+/// `--use` writes a session lock that belongs to a terminal.
 // Its plane is a `PlaneId` the registry vouches for, like every other command's
 // (charter-app#127). Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
@@ -144,13 +144,29 @@ pub fn workspace_create(
     plane: PlaneId,
     name: String,
     vision: Option<String>,
+    live: bool,
 ) -> Result<Vec<String>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    create_in(&root, &name, vision.as_deref())
+    let mut said = create_in(&root, &name, vision.as_deref(), live)?;
+    if live && let Some(not_saved) = crate::live::save_after(&root, &mut said) {
+        said.push(not_saved);
+    }
+    Ok(said)
+}
+
+/// A workspace for another module's test, as the window would make it: LOCAL.
+#[cfg(test)]
+pub(crate) fn create_for_tests(root: &Path, name: &str) {
+    create_in(root, name, None, false).expect("a workspace for the test");
 }
 
 /// The creation itself, against a root the registry has already vouched for.
-fn create_in(root: &Path, name: &str, vision: Option<&str>) -> Result<Vec<String>, String> {
+fn create_in(
+    root: &Path,
+    name: &str,
+    vision: Option<&str>,
+    live: bool,
+) -> Result<Vec<String>, String> {
     // An empty box is no vision, not a vision that is empty: `set_vision` would otherwise write
     // an empty `## Vision` section into the workspace's charter and charter would read it back
     // as one that had been recorded.
@@ -162,7 +178,7 @@ fn create_in(root: &Path, name: &str, vision: Option<&str>) -> Result<Vec<String
             root,
             name,
             vision,
-            live: false,
+            live,
             use_it: false,
             force: false,
             repos: &[],
@@ -298,7 +314,7 @@ mod tests {
     fn a_workspace_is_created_with_the_baseline_the_cli_gives_it() {
         let (_dir, root) = plane();
 
-        let said = create_in(&root, "alpha", None).expect("a plain name is created");
+        let said = create_in(&root, "alpha", None, false).expect("a plain name is created");
 
         let ws = root.join("workspaces/alpha");
         assert!(ws.join("workspace.json").exists(), "{said:?}");
@@ -318,8 +334,8 @@ mod tests {
         let (_dir, root) = plane();
 
         for bad in ["../escape", "/absolute", ".hidden", "", "has space"] {
-            let refused =
-                create_in(&root, bad, None).expect_err(&format!("'{bad}' is not a workspace name"));
+            let refused = create_in(&root, bad, None, false)
+                .expect_err(&format!("'{bad}' is not a workspace name"));
             assert!(
                 refused.contains("invalid workspace name"),
                 "{bad}: {refused}"
@@ -336,9 +352,9 @@ mod tests {
     fn a_vision_is_recorded_and_an_empty_box_is_not_a_vision() {
         let (_dir, root) = plane();
 
-        create_in(&root, "alpha", Some("  ship the thing  ")).expect("created");
-        create_in(&root, "beta", Some("   ")).expect("created");
-        create_in(&root, "gamma", None).expect("created");
+        create_in(&root, "alpha", Some("  ship the thing  "), false).expect("created");
+        create_in(&root, "beta", Some("   "), false).expect("created");
+        create_in(&root, "gamma", None, false).expect("created");
 
         // Read back the way charter reads it, which answers "" for its own placeholder — so
         // "no vision" is the core's own judgement and not this test's reading of a file.
@@ -377,7 +393,7 @@ mod tests {
     #[test]
     fn an_empty_workspace_is_deleted() {
         let (_dir, root) = plane();
-        create_in(&root, "alpha", None).expect("created");
+        create_in(&root, "alpha", None, false).expect("created");
 
         let said = remove_in(&root, "alpha", false).expect("nothing is at risk in it");
 

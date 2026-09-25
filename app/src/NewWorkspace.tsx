@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from "react";
+import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Dialog from "@radix-ui/react-dialog";
 
 /**
@@ -36,11 +37,14 @@ export function NewWorkspace({
   plane: string;
   trouble?: string;
   making: boolean;
-  onCreate: (name: string, vision: string) => void;
+  /** `live`: born LIVE, its charter, memory and todos published with the plane (charter-app#301). */
+  onCreate: (name: string, vision: string, live: boolean) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState("");
   const [vision, setVision] = useState("");
+  const [live, setLive] = useState(false);
+  const liveId = useId();
   const nameId = useId();
   const visionId = useId();
   // The name box, focused by the dialog itself: it is the one thing that has to be answered,
@@ -48,7 +52,7 @@ export function NewWorkspace({
   const box = useRef<HTMLInputElement>(null);
   const ready = name.trim() !== "" && !making;
   const create = () => {
-    if (ready) onCreate(name.trim(), vision);
+    if (ready) onCreate(name.trim(), vision, live);
   };
   return (
     <Dialog.Root
@@ -108,6 +112,28 @@ export function NewWorkspace({
             <p className="came-back">
               Recorded in <code>workspace.md</code>, the living charter a fork inherits. You can add
               it later with <code>charter workspace vision</code>.
+            </p>
+
+            {/* LOCAL unless ticked: publishing is the operator's choice, never a default. */}
+            <div className="choice">
+              <Checkbox.Root
+                id={liveId}
+                className="box"
+                checked={live}
+                onCheckedChange={(next) => setLive(next === true)}
+                tabIndex={0}
+              >
+                <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
+              </Checkbox.Root>
+              <label className="who" htmlFor={liveId}>
+                Live
+              </label>
+            </div>
+            <p className="came-back">
+              A live workspace&apos;s charter, memory and todos are committed with the plane and
+              published by every save — ticked, the plane is saved as soon as it is made, the way
+              the Saving tab says this plane saves (and not at all while it has not been told). Left
+              unticked, they stay on this machine.
             </p>
 
             {/* Verbatim, and in the dialog rather than behind it: the operator is still

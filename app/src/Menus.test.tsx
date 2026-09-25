@@ -65,6 +65,7 @@ describe("what a menu lists", () => {
       "Focus workspace alpha",
       "Pin workspace alpha",
       "Workspace settings…",
+      "Make alpha live…",
       "New workspace…",
     ]);
     expect(shown.below).toEqual(["Delete workspace alpha"]);
@@ -396,6 +397,7 @@ describe("a real contextmenu event, with the suppressor live", () => {
       "Focus workspace alpha",
       "Pin workspace alpha",
       "Workspace settings…",
+      "Make alpha live…",
       "New workspace…",
       "Delete workspace alpha",
     ]);
