@@ -428,3 +428,26 @@ fn a_plane_with_no_inventory_lists_the_repos_its_files_name() {
             .is_empty()
     );
 }
+
+#[test]
+fn the_save_branch_is_the_one_named_or_this_clones_own() {
+    // Two clones on one machine, or two machines with one name, never share a save branch
+    // (charter-app#298): the default names the host and the plane's own path.
+    let one = tempfile::tempdir().unwrap();
+    let two = tempfile::tempdir().unwrap();
+    let plane = settings("", "").plane;
+    let first = plane.save_branch_or_default(one.path());
+    assert!(
+        first.starts_with(&format!("charter/save/{}-", crate::dispatch::host())),
+        "{first}"
+    );
+    assert!(branch_ok(&first), "{first}");
+    assert_eq!(first, plane.save_branch_or_default(one.path()), "stable");
+    assert_ne!(first, plane.save_branch_or_default(two.path()));
+    assert_eq!(
+        settings("", "[plane]\nsave_branch = \"charter/save/laptop\"\n")
+            .plane
+            .save_branch_or_default(one.path()),
+        "charter/save/laptop"
+    );
+}
