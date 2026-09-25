@@ -82,3 +82,17 @@ it at all: prove it and write it into the source, as `realpath` in `pypath.rs` d
 When the nightly is not clean it keeps one issue in this repo up to date, and closes it when the
 nightly is clean again. Five consecutive red nights went unread in September 2026 while fifty
 PRs merged past them; that is what the issue is for.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `diazoxide/charter-app`, through `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles, each label named as its role. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the root. See `docs/agents/domain.md`.
