@@ -1,6 +1,6 @@
 These entries are the Python charter's `docs/news/`, taken whole from
-https://github.com/diazoxide/charter at commit 50d31dc. That is where they came from and nothing
-more: no check ties this copy to that repository any more. The Python oracle that compared it
+https://github.com/diazoxide/charter-plane at commit 50d31dc. That is where they came from and
+nothing more: no check ties this copy to that repository any more. The Python oracle that compared it
 byte for byte is gone (ADR 0046) and the corpus is frozen history (ADR 0045), so it changes only
 when somebody edits a file here on purpose.
 
@@ -19,7 +19,8 @@ These are the Python charter's notes about its own releases, 0.44.0 to 0.62.1, a
 entries it had staged when it stopped. None of them is news about this app, whose release notes
 are `CHANGELOG.md`, and nothing is added here. They stay compiled in, read-only, so `charter
 news` can still say what a plane pinned on the Python line skipped. `news::HISTORY_REPO` keeps
-linking each entry into `diazoxide/charter` by tag, because that is where each one was published.
+linking each entry into `diazoxide/charter-plane` by tag, because that is where each one was
+published.
 
 NO FILE IN HERE IS NOT AN ENTRY
 

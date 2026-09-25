@@ -103,7 +103,7 @@ and the reason they are in it is that a four-region table is exactly the documen
 will use to conclude that anything not in the table was considered and dropped.
 
 - **The `ctx` and `cache` gauges have no home, and the history they need is being written.** The
-  gauges are zone 3 of charter's own footer. [ADR 0019](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0019-the-frame-owns-the-surface.md)
+  gauges are zone 3 of charter's own footer. [ADR 0019](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0019-the-frame-owns-the-surface.md)
   recorded the gap for the tmux frame — *"A framed Claude Code session has no context/cache gauge
   on any surface"* — and **that bullet is marked closed by #413**: the frame's top strip draws
   `statusline.recorded_context_gauge` from the recorded history, and `statusline.main` writes the

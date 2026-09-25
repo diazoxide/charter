@@ -96,8 +96,8 @@ release notes are `CHANGELOG.md`. Nothing is added to the corpus.
   `--until` to where the corpus ends, `news::history_ends`. That function was
   `news::shipped_version` and it is renamed, because it is no longer the version of anything
   this binary ships. Defaulting to the app's version would make every range empty.
-- Each entry still links into `diazoxide/charter` by its release tag, because that is where the
-  note was published. The constant is `news::HISTORY_REPO`. It is a pointer to history, and
+- Each entry still links into `diazoxide/charter-plane` by its release tag, because that is
+  where the note was published. The constant is `news::HISTORY_REPO`. It is a pointer to history, and
   nothing in this app is published from there.
 - The pin dialog's news list is the corpus between the pin and the app's version, and only on
   drift. The corpus names no version of this app, so the list is empty. The field stays for the

@@ -13,6 +13,11 @@ workspaces. It is the project's database, and a change counts once it reaches th
 remote.
 _Avoid_: control plane (in UI text), config repo, charter repo
 
+**charter-plane**:
+The charter project's own plane: the one charter is developed from, public as an example of a
+plane. It is not the product. The product, the app and its core, is **charter**.
+_Avoid_: charter (for the plane), the charter repo
+
 **Project**:
 One plane as the app has it open. The app can hold several.
 _Avoid_: instance

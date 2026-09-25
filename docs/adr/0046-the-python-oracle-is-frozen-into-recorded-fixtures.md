@@ -1,7 +1,7 @@
 # The Python oracle is frozen into recorded fixtures
 
 Until 2026-09-23 CI ran the Python charter beside the Rust one. `uv` installed `charter-cp` from
-`diazoxide/charter` at commit `50d31dc`, and three jobs compared the two: every plane-writing
+`diazoxide/charter-plane` at commit `50d31dc`, and three jobs compared the two: every plane-writing
 scenario (`tests/differential/run.py` and `doctor_scenarios.py`), 200,000 generated command lines
 through the shell reader (`shellseg.py`), and 50,000 cases through the plane-root guards
 (`planeroot.py`). A fourth job regenerated the fixture planes from the same commit
@@ -13,7 +13,7 @@ depricate old charter and keep it as plane repo. so it means one moment we need 
 without old charter dependency"*. Asked why CI still ran the Python charter at all, he answered
 with that ruling. So the oracle is frozen: its answers are recorded once, as files in this
 repository, and CI compares the Rust `charter` against those files. Nothing in charter-app's code,
-tests or CI installs Python charter or contacts `diazoxide/charter` or PyPI's `charter-cp` any
+tests or CI installs Python charter or contacts `diazoxide/charter-plane` or PyPI's `charter-cp` any
 more.
 
 ## What was recorded, and how

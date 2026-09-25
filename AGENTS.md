@@ -3,7 +3,8 @@
 Read the spec before changing behaviour: [`docs/spec.md`](docs/spec.md). The decisions and their
 reasons are in [`docs/adr/`](docs/adr/), starting at ADR 0025; the plane on disk is
 [`docs/plane-format.md`](docs/plane-format.md). ADRs 0001 to 0024 are the Python charter's and stay
-in `diazoxide/charter` as history (ADR 0044). A new decision is the next number in `docs/adr/`.
+in `diazoxide/charter-plane` as history (ADR 0044). A new decision is the next number in
+`docs/adr/`.
 
 ## Priorities, in order
 
@@ -21,7 +22,7 @@ in `diazoxide/charter` as history (ADR 0044). A new decision is the next number 
   without that document changing first.
 - **Nothing depends on the Python charter, shipped or not.** No message, doc page or code path in
   the app or the `charter` binary tells anyone to install or run it, and nothing in CI or the
-  tests installs it or contacts `diazoxide/charter`: its answers are frozen into recorded
+  tests installs it or contacts `diazoxide/charter-plane`: its answers are frozen into recorded
   fixtures (ADR 0044, ADR 0045, ADR 0046). No Python in the shipped path.
 - **A recorded answer changes only on purpose.** `tests/fixtures/recorded/behaviour.jsonl` is
   what the Python charter answered for 404 scenarios, replayed against every build by

@@ -100,7 +100,7 @@ repository it writes `charter.toml`, `personas/`, `workspaces/`, `.charter/` and
 `.gitignore` rules (`_GITIGNORE_BASELINE`, `_ensure_gitignore`) into that repository, and then
 *offers* — as a printed command, because charter cannot prompt — `charter init --clone-this-repo`,
 which clones the repo into `workspaces/default/<name>/`. The offer exists already, as a
-consequence of [ADR 0007](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) removing the embedded shape; it is pinned by
+consequence of [ADR 0007](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) removing the embedded shape; it is pinned by
 `tests/test_init_first_clone.py` and ported to Rust in `crates/charter-core/src/scaffold/`.
 
 **The default reverses.** `charter init` on an existing repo adopts that repo as the plane's first

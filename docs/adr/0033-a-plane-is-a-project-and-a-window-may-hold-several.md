@@ -35,7 +35,7 @@ So charter-app has one plane per process, decided once, from one directory, at s
 a directory that has, or will get, a `charter.toml`.
 
 There is no second container. charter already has exactly one thing that holds personas,
-workspaces, todos, memory and vaults, and [ADR 0007](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) deleted the
+workspaces, todos, memory and vaults, and [ADR 0007](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0007-one-plane-shape.md) deleted the
 *second plane shape* precisely so that no function would ever again have to ask which shape it
 was in. A "project" that was not a plane would be the embedded shape returning under a friendlier
 name, with every one of those forks reopened. The word changes and nothing else does: what the

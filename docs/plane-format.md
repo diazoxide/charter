@@ -1,10 +1,10 @@
 # The plane format
 
-> Moved here from diazoxide/charter's `docs/plane-format.md` (at commit `0ae0961d`) by
+> Moved here from diazoxide/charter-plane's `docs/plane-format.md` (at commit `0ae0961d`) by
 > [ADR 0044](adr/0044-charter-apps-design-record-lives-in-charter-app.md). The text is unchanged.
 > A path it names that is not in this repository — `docs/research/…`, `docs/superpowers/…`,
 > `charter/*.py`, an ADR numbered below 0025 — is in
-> [diazoxide/charter](https://github.com/diazoxide/charter/tree/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7).
+> [diazoxide/charter-plane](https://github.com/diazoxide/charter-plane/tree/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7).
 
 A **control plane** is a directory marked by `charter.toml`. This document records what is
 inside one: every file and every field the Python `charter` reads or writes, as it does today

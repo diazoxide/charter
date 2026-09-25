@@ -12,7 +12,7 @@ name: stress
 #
 # Measured on `main` on 2026-09-23, three runs: 8–9.6 minutes on macOS and 6–7 on Ubuntu,
 # about sixteen runner-minutes a run and two of the twenty concurrent jobs this account
-# shares with `diazoxide/charter`. It is NOT what a CI run waits for — the shell reader's
+# shares with `diazoxide/charter-plane`. It is NOT what a CI run waits for — the shell reader's
 # shards finish last — so skipping it buys back slots, not wall clock: the run for #203
 # started seven of its jobs three to five minutes late and took 13 minutes to its
 # neighbours' 11.

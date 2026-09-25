@@ -15,7 +15,7 @@ Real harness output, recorded off a pseudo-terminal, for benchmarks (spec §Limi
 ## The oracle corpora are frozen
 
 The four `shellseg-*` and `planeroot-*` corpora were recorded **once, on 2026-09-23, from the
-Python charter pinned at 50d31dc** (`diazoxide/charter`), by the differential harnesses that
+Python charter pinned at 50d31dc** (`diazoxide/charter-plane`), by the differential harnesses that
 used to live in `tests/differential/` (`shellseg.py`, `planeroot.py`). Those harnesses are
 retired: charter-app is standalone, and nothing in its code or CI installs or asks the Python
 charter any more. The recordings are the app's contract from that day on. They are replayed with
