@@ -13,6 +13,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Extensions can add commands to `charter`.** An extension that asks for the `cli`
+  capability runs as `charter <its id> <command> …`, from a terminal, a script or a chat. What
+  its program prints and its exit status come back unchanged. Each command says whether it
+  writes; the approval dialog lists the ones that do, and they are held to the plane paths the
+  extension declares, with anything else they change reported. A chat's call goes through the
+  same guard as any `charter` call, and a persona's grant never lets one that writes run
+  without asking. An extension turned off, not yet approved or changed since you approved it
+  says so and runs nothing. An extension can never take one of charter's own words as its id.
+  `charter <id>` alone lists its commands. The command line doesn't reach the app's built-in
+  extensions yet. ([#342](https://github.com/diazoxide/charter-app/issues/342))
 - **Extensions can hear what happens, and add to a chat's briefing.** An extension that asks
   for the `events` capability is told when a workspace is focused, created, forked or removed,
   when a handoff is made, when a chat starts and when the plane is saved. It is told after the

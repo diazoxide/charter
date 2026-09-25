@@ -196,25 +196,31 @@ pub const HOW_IT_RUNS: &str = "charter starts it only when you open one of this 
      with anything it started. A program set on outliving that can, because it runs as you do.";
 
 /// [`HOW_IT_RUNS`] for a program that is also started without the operator opening or running
-/// anything — because it hears events or adds a briefing section (charter-app#343). **"Never on
-/// its own" would be false of it**, so it says when charter does start it instead, and keeps
-/// every bound.
+/// anything in the window — because it hears events or adds a briefing section (charter-app#343),
+/// or because a command line runs one of its commands (charter-app#342). **"Never on its own"
+/// would be false of it**, so it says when charter does start it instead, and keeps every bound.
 pub fn how_it_runs(manifest: &extension::Manifest) -> String {
-    let mut when: Vec<&str> = Vec::new();
+    let mut when: Vec<String> = Vec::new();
     if !manifest.views.is_empty() {
-        when.push("when you open one of this extension's views");
+        when.push("when you open one of this extension's views".to_owned());
     }
     if !manifest.actions.is_empty() {
-        when.push("when you run one of its actions");
+        when.push("when you run one of its actions".to_owned());
+    }
+    if !manifest.cli.is_empty() {
+        when.push(format!(
+            "when you or a chat run one of its commands (`charter {} <command>`)",
+            manifest.id
+        ));
     }
     if manifest.events.is_some() {
-        when.push("after each thing it hears about has happened");
+        when.push("after each thing it hears about has happened".to_owned());
     }
     if manifest.briefing.is_some() {
-        when.push("when a chat starts, for its briefing section");
+        when.push("when a chat starts, for its briefing section".to_owned());
     }
     let when = match when.as_slice() {
-        [one] => (*one).to_owned(),
+        [one] => one.clone(),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
         [] => String::new(),
     };

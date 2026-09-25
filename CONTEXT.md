@@ -126,6 +126,18 @@ A row an extension adds to the palette, named with the extension's name, that op
 views or runs one of its actions.
 _Avoid_: shortcut, menu item
 
+**Extension command**:
+A command an extension adds to the `charter` command line, run as `charter <extension id>
+<command> …`. It says whether it writes, and what its program prints and its exit status reach
+the caller unchanged. An extension's id is never one of charter's own command words.
+_Avoid_: subcommand (unqualified), plugin command, palette command (for this)
+
+**Core-owned alias**:
+A core command whose words forward to an extension command and give its output, so a plane's
+instructions keep working when a feature moves into an extension (`charter ws todo` once todos
+does).
+_Avoid_: shim, redirect
+
 **Write paths**:
 The plane-relative paths an extension declares it writes. charter hands them resolved with
 each request and reports a change outside them; it does not stop one.

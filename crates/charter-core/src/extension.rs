@@ -110,6 +110,8 @@
 //! state directory and never starts the program to do it. Events ([`events`]) and a briefing
 //! section ([`briefing`]) are the two that start the program without the operator opening
 //! anything — after a core action it hears, and when a chat starts — and the prompt says so.
+//! Commands ([`cli`]) start it from the `charter` command line, under the extension's own id,
+//! which is why an id may never be one of charter's own command words.
 //!
 //! Themes, panels (`crate::panel`, ADR 0043), and **views**. A theme and a panel are
 //! declarative data against a closed vocabulary charter owns, charter chooses the consumer, and
@@ -2728,14 +2730,18 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         declares.push(
             if manifest.views.is_empty()
                 && manifest.actions.is_empty()
+                && manifest.cli.is_empty()
                 && manifest.events.is_none()
                 && manifest.briefing.is_none()
             {
                 format!(
-                    "a program, {program} — it declares no view or action, hears no event and \
-                     adds no briefing section, so nothing ever asks charter to start it"
+                    "a program, {program} — it declares no view, action or command, hears no \
+                     event and adds no briefing section, so nothing ever asks charter to start it"
                 )
-            } else if manifest.events.is_none() && manifest.briefing.is_none() {
+            } else if manifest.cli.is_empty()
+                && manifest.events.is_none()
+                && manifest.briefing.is_none()
+            {
                 format!("a program, {program} — {}", crate::executor::HOW_IT_RUNS)
             } else {
                 format!(

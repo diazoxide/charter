@@ -1469,3 +1469,29 @@ fn an_extension_whose_id_is_a_core_command_word_is_refused_and_never_installed()
         );
     }
 }
+
+#[test]
+fn the_prompt_says_a_program_with_only_commands_is_started_when_a_command_is_run() {
+    let probe = Probe::assembled();
+    probe.manifest_sets("capabilities", serde_json::json!(["cli"]));
+    probe.manifest_sets(
+        "contributes",
+        serde_json::json!({
+            "runs": "bin/extension-probe",
+            "cli": [{ "name": "echo", "title": "Say its words back", "writes": false }],
+        }),
+    );
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
+    let asked = extension::prompt(&found, extension::Standing::New).declares;
+    let program = asked
+        .iter()
+        .find(|it| it.starts_with("a program,"))
+        .expect("the program's line");
+    assert!(
+        program.contains(
+            "when you or a chat run one of its commands (`charter extension-probe <command>`)"
+        ) && !program.contains("nothing ever asks"),
+        "{program}"
+    );
+}
