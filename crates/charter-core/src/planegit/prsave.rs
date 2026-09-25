@@ -326,23 +326,24 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
     )));
 
     let (title, body) = describe(root, &target, &save);
-    let opened = match pr::open_or_update(&repo, &save, &target, &title, &body) {
-        Ok(opened) => opened,
-        Err(why) => {
-            say(Say::Warn(format!(
-                "Pushed {save}, but the pull request into {target} could not be opened: {why}"
-            )));
-            return record_push(
-                root,
-                PushResult {
-                    landed: Some(save),
-                    detail: why,
-                    ..PushResult::of(Outcome::Failed, &target)
-                },
-                &head,
-            );
-        }
-    };
+    let pr::Opened { pr: opened, ours } =
+        match pr::open_or_update(&repo, &save, &target, &title, &body) {
+            Ok(opened) => opened,
+            Err(why) => {
+                say(Say::Warn(format!(
+                    "Pushed {save}, but the pull request into {target} could not be opened: {why}"
+                )));
+                return record_push(
+                    root,
+                    PushResult {
+                        landed: Some(save),
+                        detail: why,
+                        ..PushResult::of(Outcome::Failed, &target)
+                    },
+                    &head,
+                );
+            }
+        };
     kept.pr = Some(KeptPr {
         number: opened.number,
         url: opened.url.clone(),
@@ -355,7 +356,14 @@ pub(super) fn push(root: &Path, plane: &Plane, sign: bool, say: Sink) -> PushRes
         opened.url
     )));
     let mut detail = String::new();
-    if mode == Mode::PrMerge {
+    if !ours {
+        // A save branch somebody set by hand can carry a PR a person opened: it was left exactly
+        // as it was, and nothing more is asked of the forge about it (#299's rule).
+        detail = "the open pull request from the save branch is not charter's, so it was left \
+                  as it was"
+            .into();
+        say(Say::Info(format!("  {detail}.")));
+    } else if mode == Mode::PrMerge {
         match pr::request_auto_merge(&repo, &opened, &head) {
             Ok(AutoMerge::Queued) => say(Say::Info(
                 "  It merges by itself once its checks pass.".into(),
