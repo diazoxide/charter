@@ -3406,7 +3406,8 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Status:** **internal**. Only the app and `charter save` write it, and only the Saving view
   reads it. Deleted ⇒ the Saving view's history starts empty.
 - **Written by:** `crates/charter-core/src/planegit.rs` `save_as`, the one save function
-  (charter-app#293, ADR 0051), once per attempt, with `profiletrust::write_private`.
+  (charter-app#293, ADR 0051), and `crates/charter-core/src/reposave.rs` `save_as` for a
+  workspace repo (charter-app#299), once per attempt, with `profiletrust::write_private`.
 - **Read by:** the Saving view (its last 50 entries).
 - **Git:** gitignored (under `/.charter/`).
 - **Fields:**
@@ -3415,7 +3416,11 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
   - `trigger`: one of `manual`, `quiet`, `session-end`, `quit`, `launch`, `cli`, `live`
   - `mode`
   - `files`: a count
-  - `commit`: a sha or null
+  - `commit`: a sha or null. For a repo, HEAD once the save was done with it — the commit it
+    made or pushed
+  - `branch`: for a repo, the remote branch the save pushed (the branch the clone is on, or
+    `charter/<workspace>/<short-sha>` in a PR mode on the default branch); absent or null
+    otherwise
   - `pr`: a url or null
   - `ms`: the duration
   - `outcome`: one of `saved`, `committed`, `pushed`, `pr-open`, `blocked`, `offline`,

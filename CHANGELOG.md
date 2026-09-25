@@ -34,6 +34,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   extension. That is a report, not a fence: an extension still runs as you. The protocol is now
   2; an extension written for protocol 1 is asked exactly as before and keeps its approval.
   ([#341](https://github.com/diazoxide/charter-app/issues/341))
+- **Workspace repos are saved too, each by its own mode.** The Saving tab has a row for every
+  repo in the workspace: its stage, the branch it is on, its pull request and its own Save
+  button, with *Save all* for the project and every repo at once. The title bar counts the
+  workspace's repos in: *1 repo changed*. A repo is saved by `[repos.<name>] mode`, `pr` by
+  default. A save commits on the branch the repo is on. `push` pushes that branch. `pr` pushes it
+  and opens or updates a pull request into `branch`, the repo's default branch by default.
+  `pr-merge` also asks for auto-merge, and says so when the forge won't queue it. On the default
+  branch itself, a PR mode pushes a new `charter/<workspace>/<short-sha>` branch instead, so it
+  never pushes to the default branch. A repo is saved only between turns. A save you press while
+  a chat in that workspace is working is refused, with a sentence naming the chat. Auto-save
+  skips that round. Repos are saved by themselves only when `[repos.<name>] autosave = true`,
+  which is off by default, and quitting saves only those, and not one whose chat's turn the
+  quit cut off. A pull request you opened yourself from the branch is never rewritten or set to
+  merge. A repo save refuses a secret-shaped file (`.env`, a private key, `credentials.json`, a
+  `.npmrc` with a token, …) or a private key or forge token in what it would commit, and names
+  the file.
+  ([#299](https://github.com/diazoxide/charter-app/issues/299))
 - **Persona statistics comes with the app.** charter now ships its own extensions, and persona
   statistics is the first: there is no folder to assemble and add by hand, and no approval to
   give, because the app's signature covers it. The Extensions list marks it "built-in" and

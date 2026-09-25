@@ -70,7 +70,11 @@ and `autosave = false`.
 all call it, so the CLI follows `mode` too. What a save does:
 
 - **Stages:** the whole tree (`git add -A`). `.gitignore` is the only way to leave something out.
-- **Checks:** the secret scan still refuses.
+- **Checks:** the secret scan still refuses. A workspace repo's save uses a narrower rule,
+  because the plane's credential-assignment rule refuses ordinary code: it refuses a staged file
+  whose name is a credential's (`.env`, an SSH private key, `*.pem`, `credentials.json`, a
+  `.npmrc` holding a token, and the like) and any staged text holding a private key block or a
+  token with a forge's own prefix (charter-app#299).
 - **Commit message:** generated from what changed, grouped as `charter save` already prints it.
   A manual save may replace it.
 - **Signing:** `sign`, default `false`. A push refused for an unsigned commit tells the operator

@@ -177,6 +177,19 @@ impl Settings {
         out
     }
 
+    /// Every repo either file has a `[repos.<name>]` table for, sorted, each once — the only
+    /// repos whose `autosave` can be on.
+    pub fn repo_tables(&self) -> Vec<String> {
+        let mut names: Vec<String> = [&self.files.shared, &self.files.local]
+            .into_iter()
+            .filter_map(|top| top.get("repos")?.as_table())
+            .flat_map(|repos| repos.keys().cloned())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// How the repo called `name` is saved.
     pub fn repo(&self, name: &str) -> Repo {
         let path = ["repos", name];

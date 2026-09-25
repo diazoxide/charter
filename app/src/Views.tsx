@@ -284,7 +284,7 @@ export function ViewPane({
         ) : isSaving(view) ? (
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
              plane, so a pane that comes to show another project's starts from its own read. */
-          <SavingView key={plane} plane={plane} />
+          <SavingView key={plane} plane={plane} workspace={workspace} />
         ) : isPreferences(view) ? (
           /* The machine's, not the plane's (charter-app#283): the same surface whichever
              project's strip it was opened on. */

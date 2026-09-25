@@ -4438,6 +4438,29 @@ button.show-more:focus-visible {
   font-size: 1em;
   color: var(--text-primary);
 }
+/* One row per workspace repo (charter-app#299): a table, so "which of these is unsaved" reads
+   down a column. */
+.saving-repos {
+  width: 100%;
+  border-collapse: collapse;
+}
+.saving-repos th,
+.saving-repos td {
+  padding: 0.2rem 0.6rem 0.2rem 0;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.saving-repos thead th {
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.saving-repos tr[data-stage="blocked"] td {
+  color: var(--state-failed);
+}
 .saving-question {
   display: flex;
   flex-direction: column;

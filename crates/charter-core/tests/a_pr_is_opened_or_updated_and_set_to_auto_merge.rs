@@ -91,7 +91,8 @@ mod prs {
             "release",
             "Save from mac",
             "memory: 2 files\n@not-a-file",
-        );
+        )
+        .map(|opened| opened.pr);
         assert_eq!(
             opened,
             Ok(Pr {
@@ -139,7 +140,8 @@ mod prs {
             "release",
             "Save from mac",
             "newer",
-        );
+        )
+        .map(|opened| opened.pr);
         assert_eq!(
             opened,
             Ok(Pr {
@@ -147,6 +149,84 @@ mod prs {
                 url: "https://pr-update.test/acme/widget/pull/7".into()
             })
         );
+        assert!(was_asked(&updated));
+    }
+
+    #[test]
+    fn a_pr_a_person_opened_from_the_same_branch_is_left_as_it_is() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // Their own branch, their own words: no PATCH is written down, so one would fail.
+        let scene = Scene::new("pr-theirs.test");
+        scene.gh_api(
+            "repos/acme/widget/pulls?state=open&head=acme:feature%2Fx&base=main&per_page=1",
+            0,
+            r#"[{"number": 9, "html_url": "https://pr-theirs.test/acme/widget/pull/9", "body": "Hand-written."}]"#,
+            "",
+        );
+        let opened = pr::open_or_update(
+            &repo(&scene, "github", "acme/widget"),
+            "feature/x",
+            "main",
+            "charter save: 1 file",
+            "body",
+        );
+        assert_eq!(
+            opened,
+            Ok(pr::Opened {
+                pr: Pr {
+                    number: 9,
+                    url: "https://pr-theirs.test/acme/widget/pull/9".into()
+                },
+                ours: false
+            })
+        );
+    }
+
+    #[test]
+    fn a_pr_whose_body_carries_charters_marker_is_charters_to_update() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("pr-marked.test");
+        scene.gh_api(
+            "repos/acme/widget/pulls?state=open&head=acme:feature%2Fx&base=main&per_page=1",
+            0,
+            &format!(
+                r#"[{{"number": 5, "html_url": "https://pr-marked.test/acme/widget/pull/5", "body": "Saved.\n\n{}"}}]"#,
+                pr::MARKER
+            ),
+            "",
+        );
+        let updated = scene.answers(
+            "gh",
+            &[
+                "api",
+                "--hostname",
+                "pr-marked.test",
+                "-X",
+                "PATCH",
+                "repos/acme/widget/pulls/5",
+                "-f",
+                "title=t",
+                "-f",
+                "body=b",
+            ],
+            0,
+            r#"{"number": 5, "html_url": "https://pr-marked.test/acme/widget/pull/5"}"#,
+            "",
+        );
+        let opened = pr::open_or_update(
+            &repo(&scene, "github", "acme/widget"),
+            "feature/x",
+            "main",
+            "t",
+            "b",
+        );
+        assert_eq!(opened.map(|o| (o.pr.number, o.ours)), Ok((5, true)));
         assert!(was_asked(&updated));
     }
 
@@ -257,7 +337,8 @@ mod prs {
             "release",
             "Save from mac",
             "body",
-        );
+        )
+        .map(|opened| opened.pr);
         assert_eq!(
             opened,
             Ok(Pr {
@@ -305,7 +386,8 @@ mod prs {
             "release",
             "Save from mac",
             "newer",
-        );
+        )
+        .map(|opened| opened.pr);
         assert_eq!(opened.map(|p| p.number), Ok(4));
         assert!(was_asked(&updated));
     }
@@ -349,7 +431,8 @@ mod prs {
             "release",
             "t",
             "b",
-        );
+        )
+        .map(|opened| opened.pr);
         assert_eq!(
             opened.map(|p| p.number),
             Ok(10),

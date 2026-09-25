@@ -181,6 +181,12 @@ impl PushResult {
 /// (ADR 0046) and their setups cannot move; a NEW forge scenario has to make the same check by
 /// hand: key `url.<local>.insteadOf` on the HTTPS base and leave `origin` in the SSH form.
 pub fn origin_https(root: &Path) -> Option<String> {
+    origin_https_of(root, root)
+}
+
+/// [`origin_https`] for a clone of a workspace: its own `origin`, placed on a forge the plane
+/// at `plane` declares or a kind's default host.
+pub fn origin_https_of(plane: &Path, root: &Path) -> Option<String> {
     let url = git::run(root, &["remote", "get-url", "origin"], git::READ)
         .ok()
         .map(|r| r.line().trim().to_string())
@@ -188,7 +194,7 @@ pub fn origin_https(root: &Path) -> Option<String> {
     if url.is_empty() {
         return None;
     }
-    let forge = forge::resolve_host(&url, root)?;
+    let forge = forge::resolve_host(&url, plane)?;
     let (https_base, ssh_forms) = forge.insteadof();
     if url.starts_with(&https_base) {
         return Some(url);
@@ -629,7 +635,7 @@ pub fn standing(root: &Path) -> Standing {
 }
 
 /// `git rev-list --count <range>`, or `None` when git cannot count it — a ref that is not there.
-fn count(root: &Path, range: &str) -> Option<u32> {
+pub(crate) fn count(root: &Path, range: &str) -> Option<u32> {
     git::run(root, &["rev-list", "--count", range], git::READ)
         .ok()
         .filter(git::Run::ok)
@@ -832,13 +838,13 @@ const PROTECTED_SIGNATURES: [&str; 6] = [
     "not allowed to push",
 ];
 
-fn is_protected_rejection(stderr: &str) -> bool {
+pub(crate) fn is_protected_rejection(stderr: &str) -> bool {
     let blob = stderr.to_lowercase();
     PROTECTED_SIGNATURES.iter().any(|s| blob.contains(s))
 }
 
 /// The last four lines of what git said, which is what charter repeats.
-fn tail(run: &git::Run) -> String {
+pub(crate) fn tail(run: &git::Run) -> String {
     // stderr when there IS any, exactly as Python's `p.stderr or p.stdout or ""` chooses.
     let text = if run.err.is_empty() {
         &run.out
@@ -930,7 +936,7 @@ fn land_via_branch(
 /// `charter save`, and the hook that ran it, for ever. A plane's save commits a handful of
 /// files and replays the few commits the remote does not have yet, so two minutes is ample
 /// and still ends.
-const WRITE: Duration = Duration::from_secs(120);
+pub(crate) const WRITE: Duration = Duration::from_secs(120);
 
 /// How the rebase onto a remote that moved ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1005,7 +1011,7 @@ fn unmerged(root: &Path) -> Vec<String> {
 /// `commit.gpgsign` either way: a save that is not asked to sign never runs a signer, and one
 /// that is — `--sign`, or `[plane] sign = true` (ADR 0051) — is signed whatever the machine's
 /// default says.
-fn gpgsign(sign: bool) -> &'static str {
+pub(crate) fn gpgsign(sign: bool) -> &'static str {
     if sign {
         "commit.gpgsign=true"
     } else {
@@ -1022,7 +1028,7 @@ const UNWRITTEN: &str = "failed to write commit object";
 ///
 /// git prints `Rebasing (1/1)` with a carriage return and no newline, so the line the signer's
 /// error lands on starts with it; a line is read from its last `\r`.
-fn signer_said(err: &str) -> String {
+pub(crate) fn signer_said(err: &str) -> String {
     let before = err.split(UNWRITTEN).next().unwrap_or_default();
     let said: Vec<&str> = before
         .lines()
@@ -1604,7 +1610,7 @@ pub fn journal(root: &Path) -> Vec<serde_json::Value> {
 /// Read, then renamed over, with no lock: two saves finishing at the same instant — the app's
 /// auto-save and a `charter save` — can lose one line between them. The file is never torn,
 /// because the rename is atomic, and a lost line costs one row of the Saving view's history.
-fn journal_append(root: &Path, entry: &serde_json::Value) {
+pub(crate) fn journal_append(root: &Path, entry: &serde_json::Value) {
     let path = journal_path(root);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -1623,7 +1629,7 @@ fn journal_append(root: &Path, entry: &serde_json::Value) {
 }
 
 /// Seconds since the epoch, as the push record writes them.
-fn now() -> f64 {
+pub(crate) fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())

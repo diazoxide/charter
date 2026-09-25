@@ -204,8 +204,30 @@ fn own_mr(listing: &Value) -> Option<&Value> {
     })
 }
 
+/// The line charter puts in the body of every pull request it writes, so it can tell its own
+/// from one a person opened from the same branch.
+pub const MARKER: &str = "<!-- charter-save -->";
+
+/// What [`open_or_update`] found or made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opened {
+    pub pr: Pr,
+    /// Whether the PR is charter's: one it opened now, or an open one whose head branch is
+    /// under `charter/` or whose body carries [`MARKER`]. A PR that is not charter's was left
+    /// exactly as it was, and nothing may be asked of the forge about it — auto-merge above all.
+    pub ours: bool,
+}
+
+/// Whether an open PR is charter's to rewrite: its head branch is one charter names, or its
+/// body carries [`MARKER`].
+fn is_ours(head: &str, body: Option<&str>) -> bool {
+    head.starts_with("charter/") || body.is_some_and(|b| b.contains(MARKER))
+}
+
 /// Open a pull request (a merge request on GitLab) from `head` into `base`, or update the one
-/// already open for that pair with `title` and `body`.
+/// already open for that pair with `title` and `body` — **when that one is charter's**. A PR a
+/// person opened from the same branch is never rewritten: its page is answered with
+/// [`Opened::ours`] false, and the caller says so.
 ///
 /// A lookup that fails is an error and never "there is none": reading it as none would open a
 /// second PR every time the forge hiccuped.
@@ -215,7 +237,7 @@ pub fn open_or_update(
     base: &str,
     title: &str,
     body: &str,
-) -> Result<Pr, String> {
+) -> Result<Opened, String> {
     match repo.forge.kind {
         Kind::GitHub => {
             let (owner, name) = repo.owner_name();
@@ -231,6 +253,9 @@ pub fn open_or_update(
             let args = match first(&found) {
                 Some(open) => {
                     let pr = pr_of(open, "number", "html_url", &doing)?;
+                    if !is_ours(head, open.get("body").and_then(Value::as_str)) {
+                        return Ok(Opened { pr, ours: false });
+                    }
                     repo.api(
                         Some("PATCH"),
                         &format!("{pulls}/{}", pr.number),
@@ -249,7 +274,8 @@ pub fn open_or_update(
                 ),
             };
             let doing = format!("opening a pull request from {head} into {base}");
-            pr_of(&repo.ask(args, &doing)?, "number", "html_url", &doing)
+            let pr = pr_of(&repo.ask(args, &doing)?, "number", "html_url", &doing)?;
+            Ok(Opened { pr, ours: true })
         }
         Kind::GitLab => {
             let mrs = format!("projects/{}/merge_requests", quote(&repo.path));
@@ -263,6 +289,12 @@ pub fn open_or_update(
             let args = match own_mr(&found) {
                 Some(open) => {
                     let mr = pr_of(open, "iid", "web_url", &doing)?;
+                    if !is_ours(head, open.get("description").and_then(Value::as_str)) {
+                        return Ok(Opened {
+                            pr: mr,
+                            ours: false,
+                        });
+                    }
                     repo.api(
                         Some("PUT"),
                         &format!("{mrs}/{}", mr.number),
@@ -284,7 +316,8 @@ pub fn open_or_update(
                 ),
             };
             let doing = format!("opening a merge request from {head} into {base}");
-            pr_of(&repo.ask(args, &doing)?, "iid", "web_url", &doing)
+            let pr = pr_of(&repo.ask(args, &doing)?, "iid", "web_url", &doing)?;
+            Ok(Opened { pr, ours: true })
         }
     }
 }

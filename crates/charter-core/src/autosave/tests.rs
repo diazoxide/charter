@@ -164,3 +164,72 @@ fn commits_a_save_would_not_push_are_not_worth_a_save() {
         );
     }
 }
+
+// -- a workspace repo (charter-app#299) ------------------------------------------------- //
+
+fn repo(toml: &str) -> crate::planesave::Repo {
+    Settings::from_text(Some(toml), None).repo("widget")
+}
+
+fn repo_standing(stage: Stage, changed: u32) -> crate::reposave::Standing {
+    crate::reposave::Standing {
+        name: "widget".into(),
+        mode: crate::planesave::Mode::Pr,
+        mode_from: "charter.toml",
+        autosave: true,
+        stage,
+        branch: Some("feature/x".into()),
+        changed,
+        ahead: None,
+        pr: None,
+        blocked: None,
+        head: Some("0123456".into()),
+        pushes: true,
+    }
+}
+
+#[test]
+fn a_repo_is_never_saved_by_itself_unless_its_table_turns_auto_save_on() {
+    let at = Instant::now();
+    let changed = repo_standing(Stage::Changed, 1);
+    for toml in [
+        "",
+        "[repos.widget]\nmode = \"push\"\n",
+        "[repos.widget]\nautosave = true\nmode = \"off\"\n",
+    ] {
+        let mut quiet = Quiet::default();
+        for s in [0, 31, 400, 4000] {
+            assert_eq!(
+                quiet.tick_repo(at + Duration::from_secs(s), &repo(toml), &changed),
+                Decision::Wait,
+                "{toml:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_repo_with_auto_save_on_is_saved_after_its_own_quiet_period() {
+    let at = Instant::now();
+    let on = repo("[repos.widget]\nautosave = true\nautosave_after = \"2m\"\n");
+    let changed = repo_standing(Stage::Changed, 1);
+    let mut quiet = Quiet::default();
+
+    assert_eq!(quiet.tick_repo(at, &on, &changed), Decision::Wait);
+    assert_eq!(
+        quiet.tick_repo(at + Duration::from_secs(119), &on, &changed),
+        Decision::Wait
+    );
+    assert_eq!(
+        quiet.tick_repo(at + Duration::from_secs(120), &on, &changed),
+        Decision::Save
+    );
+    // Blocked pauses it.
+    let mut quiet = Quiet::default();
+    let blocked = repo_standing(Stage::Blocked, 1);
+    quiet.tick_repo(at, &on, &blocked);
+    assert_eq!(
+        quiet.tick_repo(at + Duration::from_secs(600), &on, &blocked),
+        Decision::Wait
+    );
+}
