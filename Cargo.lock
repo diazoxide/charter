@@ -691,14 +691,14 @@ checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
 
 [[package]]
 name = "changelog"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "parse-changelog",
 ]
 
 [[package]]
 name = "charter-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "changelog",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "charter-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "charter-core",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "charter-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "alacritty_terminal",
  "charter-core",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "extension-probe"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "charter-core",
  "chrono",
@@ -1513,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "fake-harness"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "charter-core",
  "clap",
@@ -3609,7 +3609,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "persona-statistics"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "charter-core",
  "chrono",
@@ -4043,7 +4043,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "release-manifest"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "charter-core",
  "minisign",
@@ -4866,7 +4866,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stand-in"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "tempfile",
 ]
