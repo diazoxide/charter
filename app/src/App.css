@@ -4400,3 +4400,15 @@ button.show-more:focus-visible {
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
 }
+
+/* A project with unsaved work, on its tab (charter-app#302). */
+.project-unsaved {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--state-waiting);
+  flex: none;
+}
+.project-unsaved[data-stage="blocked"] {
+  background: var(--state-failed);
+}
