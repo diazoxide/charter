@@ -157,7 +157,7 @@ pub enum PersonaCommand {
     Stats {
         /// Only this persona (default: all + _shared).
         name: Option<String>,
-        /// Window for the RECENT column (default 14).
+        /// Window for the RECENT column (`stats::RECENT_DAYS` by default).
         #[arg(
             long,
             default_value_t = charter_core::personaverbs::stats::RECENT_DAYS,

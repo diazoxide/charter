@@ -20,8 +20,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still turn it off, as it can any extension. A copy of it anywhere else is an ordinary
   extension that has to be approved. If you added it by hand before, that copy is set aside and
   the built-in one is used. Its numbers are now `charter persona stats`'s: it counts the same
-  memories and dates them the same way, and "recent" means the last 14 days in both.
-  ([#339](https://github.com/diazoxide/charter-app/issues/339))
+  memories and dates them the same way, and "recent" means the last 14 days in both. For
+  extension authors: a view about personas is now handed the day each memory was written,
+  rather than its minute. ([#339](https://github.com/diazoxide/charter-app/issues/339))
 - **An extension says which capabilities it asks for.** An extension's `charter-extension.json`
   can list them in `capabilities`. The approval dialog and the Extensions list name each one,
   and changing the list asks you again. An extension that asks for a capability this charter

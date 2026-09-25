@@ -119,7 +119,7 @@ export function Extensions({ onClose }: { onClose: () => void }) {
   };
 
   const turn = async (id: string, on: boolean) => {
-    const said = await commands.turnExtensionOn(id, on);
+    const said = await commands.setExtensionOn(id, on);
     if (said.status === "error") return setWent(said.error);
     await reread();
   };

@@ -46,7 +46,7 @@
 //! nothing, and [`install`] refuses another extension with a built-in's id. Its bytes are not held
 //! to a fingerprint, because an update brings new ones and the app's signature is what covers
 //! them. The record keeps only the operator's choice to turn one off on this machine
-//! ([`turn_on`]). ADR 0041's amendment of 2026-09-25 is the threat model.
+//! ([`set_on`]). ADR 0041's amendment of 2026-09-25 is the threat model.
 //!
 //! # Where the record lives, and why ADR 0034 needs no amendment
 //!
@@ -1901,8 +1901,8 @@ fn supported() -> io::Result<()> {
 /// **The built-ins are added whatever the record says**, because they are not in it: they are
 /// the app's, found where `built_in` says the app has them, and trusted through the app. What the
 /// record adds is only the operator's choice to turn one off on this machine. A record charter
-/// cannot read therefore leaves every built-in on — the one place an unreadable record does not
-/// mean "less", and it cannot mean "trusted" either, since a built-in's trust never came from it.
+/// cannot read leaves every built-in listed and **off**: it cannot say whether the operator turned
+/// one off, and "every unreadable state means ask" leans to the side that contributes nothing.
 ///
 /// A row for an installed extension with a built-in's id is set aside, and said in
 /// [`Loaded::dropped`]: charter ships that extension itself now, and the one id can be one
@@ -1918,7 +1918,10 @@ pub fn read(config_root: &Path, built_in: &BuiltIn) -> Loaded {
                 copy.path.display()
             ));
         }
-        let on = !loaded.registry.off.contains(&id);
+        // Off when the record says so, and off when charter could not read whether it does:
+        // an unreadable record cannot make a built-in less trusted, but it must not quietly
+        // undo the operator's "off" either.
+        let on = loaded.unreadable.is_none() && !loaded.registry.off.contains(&id);
         loaded.registry.entries.insert(
             id,
             Entry {
@@ -2252,15 +2255,25 @@ pub fn approve(config_root: &Path, id: &str, at: &Path, fingerprint: &str) -> io
 /// is never removed — the app would bring it back at the next read — so this is what the
 /// Extensions list offers in the place of Remove. It grants nothing: a row this writes says
 /// only `"on": false`, and [`usable`] reads nothing else from a built-in's row.
-pub fn turn_on(config_root: &Path, id: &str, on: bool) -> io::Result<()> {
+///
+/// **Only a built-in the running app ships**: an installed extension is removed, not turned off,
+/// and an off row written under its id would take the place of its row and its yes.
+pub fn set_on(config_root: &Path, built_in: &BuiltIn, id: &str, on: bool) -> io::Result<()> {
     supported()?;
-    if !crate::contain::segment_ok(id) || !id.chars().all(ok_in_an_id) {
+    if !built_in.found().contains_key(id) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("{id:?} is not an extension id"),
+            format!(
+                "'{id}' is not built in to this charter, so it is not turned on or off here. An \
+                 extension you installed is removed instead."
+            ),
         ));
     }
     update(config_root, |registry| {
+        // A copy the operator installed under this id before the app shipped it is already set
+        // aside at every read ([`read`]); the record has room for one row per id, and from here
+        // it is the built-in's.
+        registry.entries.remove(id);
         if on {
             registry.off.remove(id);
         } else {
@@ -2302,7 +2315,7 @@ pub struct Surveyed {
     pub standing: Standing,
     /// Where it came from: installed by the operator, or built into the app.
     pub source: Source,
-    /// Whether it is on, on this machine ([`turn_on`]). Off, it contributes nothing.
+    /// Whether it is on, on this machine ([`set_on`]). Off, it contributes nothing.
     pub on: bool,
 }
 

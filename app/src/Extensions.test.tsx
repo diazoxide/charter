@@ -91,7 +91,7 @@ function core({
     if (cmd === "install_extension") return ASK;
     if (cmd === "approve_extension") return null;
     if (cmd === "forget_extension") return null;
-    if (cmd === "turn_extension_on") return null;
+    if (cmd === "set_extension_on") return null;
     throw new Error(`the window asked for ${cmd}, which this test did not expect`);
   });
   return asked;
@@ -149,7 +149,7 @@ describe("the extension registry", () => {
 
     await vi.waitFor(() =>
       expect(asked).toContainEqual({
-        cmd: "turn_extension_on",
+        cmd: "set_extension_on",
         args: { id: "persona-statistics", on: false },
       }),
     );

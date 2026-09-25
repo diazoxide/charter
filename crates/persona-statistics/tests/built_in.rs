@@ -207,7 +207,7 @@ fn new_bytes_inside_the_bundle_are_trusted_as_an_update_brings_them() {
 #[test]
 fn turned_off_on_this_machine_it_offers_nothing_and_is_not_started() {
     let shipped = Shipped::new();
-    extension::turn_on(&shipped.config(), ID, false).expect("turned off");
+    extension::set_on(&shipped.config(), &shipped.built_in(), ID, false).expect("turned off");
 
     let survey = extension::survey(&shipped.config(), &shipped.built_in());
     let row = survey
@@ -231,7 +231,7 @@ fn turned_off_on_this_machine_it_offers_nothing_and_is_not_started() {
         "a project still has it on"
     );
 
-    extension::turn_on(&shipped.config(), ID, true).expect("turned back on");
+    extension::set_on(&shipped.config(), &shipped.built_in(), ID, true).expect("turned back on");
     shipped.ask(None).expect("it answers again");
 }
 
@@ -247,6 +247,34 @@ fn a_project_or_a_workspace_can_turn_it_off_as_any_extension() {
         .ask(None)
         .expect_err("it ran in a project that turned it off");
     assert!(refused.contains("turned off in charter.toml"), "{refused}");
+}
+
+#[test]
+fn a_workspace_can_turn_it_off_while_the_project_has_it_on() {
+    let shipped = Shipped::new();
+    let ws = shipped.plane().join("workspaces/alpha");
+    std::fs::create_dir_all(&ws).expect("a workspace");
+    std::fs::write(
+        ws.join("workspace.json"),
+        format!(r#"{{"settings": {{"extensions": {{"{ID}": {{"enabled": false}}}}}}}}"#),
+    )
+    .expect("a workspace turning it off");
+    let plane = shipped.plane();
+    let executor = Executor::with_built_in(shipped.built_in());
+    let ask = |workspace: Option<&str>| {
+        executor.ask(
+            &shipped.config(),
+            &extension::project::Choices::read_in(&plane, workspace),
+            ID,
+            "statistics",
+            None,
+            |_| handed::personas(&plane, noon()),
+        )
+    };
+
+    let refused = ask(Some("alpha")).expect_err("it ran in a workspace that turned it off");
+    assert!(refused.contains("workspace.json"), "{refused}");
+    ask(None).expect("the project, outside the workspace, still has it on");
 }
 
 #[test]

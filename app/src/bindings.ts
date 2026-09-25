@@ -552,7 +552,7 @@ export const commands = {
 	 *  built-in in the place of Remove (charter-app#339). Off, it contributes nothing to any
 	 *  project; a project or a workspace can still turn it off on its own, as it can any extension.
 	 */
-	turnExtensionOn: (id: string, on: boolean) => typedError<null, string>(__TAURI_INVOKE("turn_extension_on", { id, on })),
+	setExtensionOn: (id: string, on: boolean) => typedError<null, string>(__TAURI_INVOKE("set_extension_on", { id, on })),
 	/**
 	 *  Every theme in force: the ones approved extensions contribute, and nothing else.
 	 * 

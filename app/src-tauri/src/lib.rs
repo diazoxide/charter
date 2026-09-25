@@ -1328,6 +1328,7 @@ pub fn run() {
             // built-in extensions, found here in its resources and nowhere else
             // (charter-app#339).
             let built_in = extensions::find_built_in(app.path().resource_dir().ok());
+            extensions::keep_built_in(built_in.clone());
             app.manage(views::Views::with_built_in(built_in));
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification

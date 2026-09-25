@@ -27,10 +27,10 @@ use tauri_plugin_dialog::DialogExt;
 /// Where this app's bundle keeps its built-in extensions, relative to its resource directory.
 pub(crate) const BUILT_IN_DIR: &str = "extensions";
 
-/// The running app's built-in extensions, found once at launch ([`find_built_in`]).
+/// The running app's built-in extensions, kept once at launch ([`keep_built_in`]).
 static BUILT_IN: OnceLock<extension::BuiltIn> = OnceLock::new();
 
-/// Find this app's built-in extensions in its own resources, once, at launch (charter-app#339).
+/// This app's built-in extensions, in its resources (charter-app#339).
 ///
 /// **From the app's resource path and from nothing else** — `Contents/Resources/extensions` in
 /// a macOS bundle, `/usr/lib/charter/extensions` in a `.deb` and an AppImage. That path is the
@@ -38,15 +38,19 @@ static BUILT_IN: OnceLock<extension::BuiltIn> = OnceLock::new();
 /// the running app is and never from a file, a setting or the environment. A build with none in
 /// its resources — a development build, a test — has none, and every built-in is simply absent.
 pub(crate) fn find_built_in(resources: Option<std::path::PathBuf>) -> extension::BuiltIn {
-    let found = resources
+    resources
         .map(|dir| dir.join(BUILT_IN_DIR))
         .filter(|dir| dir.is_dir())
-        .map_or_else(extension::BuiltIn::none, extension::BuiltIn::at);
-    let _ = BUILT_IN.set(found.clone());
-    found
+        .map_or_else(extension::BuiltIn::none, extension::BuiltIn::at)
 }
 
-/// The running app's built-in extensions, as [`find_built_in`] found them; none before it ran.
+/// Keep what [`find_built_in`] found for the life of the process: `setup`'s, once. A second
+/// call changes nothing, so the answer cannot move while the app runs.
+pub(crate) fn keep_built_in(found: extension::BuiltIn) {
+    let _ = BUILT_IN.set(found);
+}
+
+/// The running app's built-in extensions, as [`keep_built_in`] kept them; none before it ran.
 pub(crate) fn built_in() -> extension::BuiltIn {
     BUILT_IN.get().cloned().unwrap_or_default()
 }
@@ -397,10 +401,10 @@ pub async fn forget_extension(id: String) -> Result<(), String> {
 /// project; a project or a workspace can still turn it off on its own, as it can any extension.
 #[tauri::command]
 #[specta::specta]
-pub async fn turn_extension_on(id: String, on: bool) -> Result<(), String> {
+pub async fn set_extension_on(id: String, on: bool) -> Result<(), String> {
     let root = config_root()?;
     tauri::async_runtime::spawn_blocking(move || {
-        extension::turn_on(&root, &id, on).map_err(|why| why.to_string())
+        extension::set_on(&root, &built_in(), &id, on).map_err(|why| why.to_string())
     })
     .await
     .map_err(|err| format!("turning that extension on or off did not finish: {err}"))?
@@ -866,7 +870,7 @@ mod tests {
         assert!(row.ask.is_none(), "a built-in was asked about");
         assert_eq!(row.themes_in_force, ["Solarized Dark"]);
 
-        extension::turn_on(&config, "solarized", false).expect("turned off");
+        extension::set_on(&config, &built_in, "solarized", false).expect("turned off");
         let shown = listed(&extension::survey(&config, &built_in));
         let row = &shown.extensions[0];
         assert!(!row.on);

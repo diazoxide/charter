@@ -2070,25 +2070,75 @@ fn a_version_below_the_first_protocol_is_refused() {
 // Built-in extensions (charter-app#339)
 // ---------------------------------------------------------------------------------------
 
+/// A bundle in `made` shipping one built-in, `stats`, which declares a view.
+fn bundle(made: &Made) -> BuiltIn {
+    let root = made.dir.path().join("bundle");
+    let dir = root.join("stats");
+    std::fs::create_dir_all(dir.join("bin")).expect("a bundle");
+    std::fs::write(
+        dir.join(MANIFEST),
+        r#"{"version":1,"id":"stats","name":"Stats","contributes":{"runs":"bin/p",
+            "views":[{"id":"stats","title":"Statistics","about":"personas"}]}}"#,
+    )
+    .expect("a manifest");
+    std::fs::write(dir.join("bin/p"), "#!/bin/sh\n").expect("a program");
+    BuiltIn::at(root)
+}
+
 #[test]
 fn turning_a_built_in_off_keeps_every_installed_extension_and_its_yes() {
     let made = Made::new();
-    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
+    let built_in = bundle(&made);
+    let found = install(&made.config(), &built_in, &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
 
-    turn_on(&made.config(), "persona-statistics", false).expect("turned off");
+    set_on(&made.config(), &built_in, "stats", false).expect("turned off");
 
-    let loaded = read(&made.config(), &BuiltIn::none());
+    let loaded = read(&made.config(), &built_in);
     assert_eq!(loaded.standing(&found), Standing::Approved);
-    assert!(loaded.registry.off.contains("persona-statistics"));
-    // A built-in this charter does not ship is not an entry: the choice is kept, and nothing
-    // is listed for it.
-    assert!(loaded.entry("persona-statistics").is_none());
+    assert!(!loaded.entry("stats").expect("the built-in").on);
+    // With no app shipping it, the choice is kept and nothing is listed for it.
+    let elsewhere = read(&made.config(), &BuiltIn::none());
+    assert!(elsewhere.registry.off.contains("stats"));
+    assert!(elsewhere.entry("stats").is_none());
 
-    turn_on(&made.config(), "persona-statistics", true).expect("turned on");
-    let loaded = read(&made.config(), &BuiltIn::none());
+    set_on(&made.config(), &built_in, "stats", true).expect("turned on");
+    let loaded = read(&made.config(), &built_in);
+    assert!(loaded.entry("stats").expect("the built-in").on);
+    assert_eq!(loaded.standing(&found), Standing::Approved);
+}
+
+#[test]
+fn an_unreadable_record_leaves_every_built_in_off_rather_than_forgetting_it_was_off() {
+    let made = Made::new();
+    let built_in = bundle(&made);
+    set_on(&made.config(), &built_in, "stats", false).expect("turned off");
+    std::fs::write(file(&made.config()), "{ not json").expect("a broken record");
+
+    let seen = survey(&made.config(), &built_in);
+    let row = seen
+        .installed
+        .iter()
+        .find(|row| row.id == "stats")
+        .expect("listed, so the list can say why");
+    assert!(!row.on);
+    assert!(row.views_in_force().is_empty());
+    assert!(seen.unreadable.is_some());
+}
+
+#[test]
+fn only_a_built_in_is_turned_off_and_an_installed_one_keeps_its_row() {
+    let made = Made::new();
+    let built_in = bundle(&made);
+    let found = install(&made.config(), &built_in, &made.ordinary()).expect("installed");
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+
+    let refused = set_on(&made.config(), &built_in, "solarized", false)
+        .expect_err("an installed extension was turned off rather than removed");
+    assert!(refused.to_string().contains("not built in"), "{refused}");
+    let loaded = read(&made.config(), &built_in);
+    assert_eq!(loaded.standing(&found), Standing::Approved);
     assert!(loaded.registry.off.is_empty());
-    assert_eq!(loaded.standing(&found), Standing::Approved);
 }
 
 #[test]

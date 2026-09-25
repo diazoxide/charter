@@ -584,15 +584,30 @@ jobs:
             ls -lR "$ext"
             test -f "$ext/charter-extension.json"
             test -x "$ext/bin/persona-statistics"
-            tar -tzf target/release/bundle/macos/charter.app.tar.gz 2>/dev/null \
-              | grep 'extensions/persona-statistics/bin/persona-statistics$' \
-              || echo "no updater archive in this run, or it lacks the extension — see above"
+            # The updater's archive, when this run made one: the bytes the minisign signature is
+            # over. Listed once into a variable, then searched (see the plugin check's note on
+            # SIGPIPE). The `.app.zip` is `ditto` of the same `.app`, and the `.dmg` wraps it.
+            archive=target/release/bundle/macos/charter.app.tar.gz
+            if [ -e "$archive" ]; then
+              listing=$(tar -tzvf "$archive")
+              grep -qE '^-rwx.*extensions/persona-statistics/bin/persona-statistics$' <<<"$listing" \
+                || { echo "FAIL: the updater archive lacks a runnable persona-statistics"; exit 1; }
+            fi
           else
             listing=$(dpkg -c dist/*.deb)
-            grep -E 'extensions/' <<<"$listing" || true
             grep -q 'extensions/persona-statistics/charter-extension.json' <<<"$listing"
             grep -qE '^-rwx.*extensions/persona-statistics/bin/persona-statistics$' <<<"$listing" \
               || { echo "FAIL: persona-statistics is not in the .deb, or is not executable"; exit 1; }
+            # The AppImage, when this run made one: what the Linux updater replaces, and what
+            # its signature is over. Unpacked by its own runtime, which starts nothing of charter.
+            for img in dist/charter-*.AppImage; do
+              [ -e "$img" ] || continue
+              unpacked=$(mktemp -d)
+              (cd "$unpacked" && "$OLDPWD/$img" --appimage-extract >/dev/null)
+              test -x "$unpacked"/squashfs-root/usr/lib/*/extensions/persona-statistics/bin/persona-statistics \
+                || { echo "FAIL: $img lacks a runnable persona-statistics"; exit 1; }
+              rm -rf "$unpacked"
+            done
           fi
 
       - name: Upload
