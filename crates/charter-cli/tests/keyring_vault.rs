@@ -69,6 +69,9 @@ fn run_with_stdin(tmp: &tempfile::TempDir, args: &[&str], stdin: &str) -> Output
         .stdin(Stdio::piped())
         .spawn()
         .expect("the binary runs");
+    // Strict, not `stand_in::feed`: every caller sets a value from `--stdin`, so charter
+    // reading the whole of it is part of what is under test, and a closed pipe here is a
+    // failure rather than an answer.
     child
         .stdin
         .take()

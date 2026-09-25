@@ -295,12 +295,7 @@ fn the_guard_still_refuses_a_vault_read_wrapped_in_secret_exec() {
             .stdin(Stdio::piped())
             .spawn()
             .expect("the binary runs");
-        child
-            .stdin
-            .take()
-            .expect("a pipe")
-            .write_all(payload.to_string().as_bytes())
-            .expect("the payload");
+        stand_in::feed(&mut child, payload.to_string().as_bytes());
         let out = child.wait_with_output().expect("the hook answers");
         text(&out.stdout)
     };
@@ -410,6 +405,8 @@ fn set_writes_the_value_and_its_date_at_0600() {
         .stdin(Stdio::piped())
         .spawn()
         .expect("runs");
+    // Strict, not `stand_in::feed`: the value arrives on stdin, so charter reading it is the
+    // subject, and a closed pipe here is a failure rather than an answer.
     child
         .stdin
         .take()

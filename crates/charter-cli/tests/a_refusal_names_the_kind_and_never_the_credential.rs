@@ -15,7 +15,6 @@
 //! differential happens to use: the rule is about the classifier's answer, not about one
 //! brief.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -76,18 +75,9 @@ fn handoff(root: &Path, brief: &str) -> Output {
         command.env_remove(name);
     }
     let mut child = command.spawn().expect("the binary runs");
-    // A refusal can come before charter reads the brief, closing the pipe under this write;
-    // that is the refusal the caller asserts on, not a failure of the helper.
-    match child
-        .stdin
-        .take()
-        .expect("a pipe")
-        .write_all(brief.as_bytes())
-    {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
-        Err(error) => panic!("the brief is written: {error}"),
-    }
+    // A refusal can come before charter reads the brief; `feed` leaves that to the caller,
+    // which asserts on it.
+    stand_in::feed(&mut child, brief.as_bytes());
     child.wait_with_output().expect("the binary finishes")
 }
 

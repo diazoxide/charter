@@ -1,6 +1,6 @@
 [package]
 name = "stand-in"
-description = "Writes a program a test is about to run, so the run never loses to ETXTBSY"
+description = "Writes a program a test is about to run, so the run never loses to ETXTBSY, and feeds its stdin, so a test never loses to EPIPE"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

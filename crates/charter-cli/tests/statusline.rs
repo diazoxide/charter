@@ -10,7 +10,6 @@
 //! A comment cannot stop that. This can: take the record out of either branch and a test goes
 //! red.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -42,12 +41,7 @@ fn statusline(plane: &Path, payload: &str, env: &[(&str, &str)]) -> Ran {
         .stderr(Stdio::piped())
         .spawn()
         .expect("charter runs");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("the payload is written");
+    stand_in::feed(&mut child, payload.as_bytes());
     let done = child.wait_with_output().expect("charter finishes");
     Ran {
         out: String::from_utf8_lossy(&done.stdout).into_owned(),

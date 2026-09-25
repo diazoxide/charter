@@ -273,7 +273,6 @@ impl Setup {
 
     /// What `charter hook pretooluse` answers a chat's Bash call of `command`.
     fn guard(&self, command: &str) -> String {
-        use std::io::Write;
         let payload = serde_json::json!({"session_id": "s-1", "cwd": ".", "tool_name": "Bash",
             "tool_input": {"command": command}})
         .to_string();
@@ -290,12 +289,7 @@ impl Setup {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("charter runs");
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(payload.as_bytes())
-            .expect("the payload is written");
+        stand_in::feed(&mut child, payload.as_bytes());
         let out = child.wait_with_output().expect("charter finishes");
         String::from_utf8_lossy(&out.stdout).into_owned()
     }

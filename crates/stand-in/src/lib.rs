@@ -157,3 +157,29 @@ fn put_in_place(beside: &Path, path: PathBuf) -> PathBuf {
         .unwrap_or_else(|e| panic!("{} is put in place: {e}", path.display()));
     path
 }
+
+/// Writes `bytes` to `child`'s standard input and closes it, and lets the child have
+/// answered without reading them.
+///
+/// A command under test may refuse, or answer, before it reads its stdin — a hook word that
+/// has nothing to do exits at once — and then this write meets a closed pipe. Whether it
+/// does is a race between this write and the child's exit, so a plain `write_all().expect()`
+/// fails a test only sometimes, and before its real assertions: main went red that way in
+/// `hook.rs` on b93e58e and a68cf8e, after the same race was fixed one file at a time
+/// (#228, #323). A closed pipe here is an answer, and the caller asserts on it; any other
+/// write error still fails.
+///
+/// A test whose meaning is that the child *consumed* the payload — a value set from
+/// `--stdin` — should not use this: a strict write is part of what it checks.
+///
+/// Relies on `SIGPIPE` being ignored, which the Rust runtime does before `main`, so the
+/// write returns `EPIPE` instead of killing the test.
+pub fn feed(child: &mut std::process::Child, bytes: &[u8]) {
+    use std::io::Write as _;
+    let mut stdin = child.stdin.take().expect("the child's stdin is piped");
+    match stdin.write_all(bytes) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("the payload is written: {error}"),
+    }
+}

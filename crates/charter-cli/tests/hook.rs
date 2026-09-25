@@ -4,7 +4,6 @@
 //! Whatever is wrong — no app, a socket that has gone, a payload that will not parse, a word
 //! charter does not know — the hook gets out of the way, quickly and quietly.
 
-use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -32,12 +31,7 @@ fn hook(word: &str, payload: &str, env: &[(&str, &str)]) -> i32 {
         .stderr(Stdio::piped())
         .spawn()
         .expect("charter runs");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("the payload is written");
+    stand_in::feed(&mut child, payload.as_bytes());
     child.wait().expect("charter finishes").code().unwrap_or(-1)
 }
 
@@ -213,12 +207,7 @@ fn run_hook(cwd: &std::path::Path, args: &[&str], payload: &str) -> (i32, String
         .stderr(Stdio::piped())
         .spawn()
         .expect("charter runs");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("the payload is written");
+    stand_in::feed(&mut child, payload.as_bytes());
     let out = child.wait_with_output().expect("charter finishes");
     (
         out.status.code().unwrap_or(-1),
@@ -427,12 +416,7 @@ fn guard(cwd: &std::path::Path, payload: &str, env: &[(&str, &str)]) -> (i32, St
         .stderr(Stdio::piped())
         .spawn()
         .expect("charter runs");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("the payload is written");
+    stand_in::feed(&mut child, payload.as_bytes());
     let out = child.wait_with_output().expect("charter finishes");
     (
         out.status.code().unwrap_or(-1),
@@ -656,12 +640,7 @@ fn the_guard_answers_the_command_line_the_plugin_actually_writes() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("charter runs");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(bash("charter handoff beta").as_bytes())
-        .expect("written");
+    stand_in::feed(&mut child, bash("charter handoff beta").as_bytes());
     let out = child.wait_with_output().expect("charter finishes");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
 
@@ -752,12 +731,7 @@ fn the_command_line_the_charter_plugin_actually_writes_is_answered() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("charter runs");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(b"{}")
-        .expect("written");
+    stand_in::feed(&mut child, b"{}");
     let out = child.wait_with_output().expect("charter finishes");
 
     assert_eq!(
@@ -1124,21 +1098,8 @@ fn every_hook_the_bundled_plugin_wires_answers_an_ordinary_call_with_exit_zero()
                     .spawn()
                     .expect("sh runs");
                 // A hook may answer without reading its payload at all (a no-op word exits at
-                // once), and then this write meets a closed pipe. That is an answer, not a
-                // failure: CI once went red on exactly that race (#228). Any other write error
-                // still fails the test.
-                if let Err(e) = child
-                    .stdin
-                    .take()
-                    .expect("stdin")
-                    .write_all(payload.as_bytes())
-                {
-                    assert_eq!(
-                        e.kind(),
-                        std::io::ErrorKind::BrokenPipe,
-                        "{event}: writing the payload failed: {e}"
-                    );
-                }
+                // once); `feed` takes that closed pipe as the answer it is (#228).
+                stand_in::feed(&mut child, payload.as_bytes());
                 let out = child.wait_with_output().expect("it finishes");
                 let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
                 assert_eq!(

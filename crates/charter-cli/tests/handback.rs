@@ -5,7 +5,6 @@
 //! The app leaves a report in the plane (`charter_core::handback`); these are the hooks that
 //! pick it up, run the way a harness runs them.
 
-use std::io::Write;
 use std::process::{Command, Stdio};
 
 use charter_core::handback::{self, For, Handback};
@@ -61,12 +60,7 @@ fn hook_with(
         .stderr(Stdio::piped())
         .spawn()
         .expect("charter runs");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(payload.as_bytes())
-        .expect("the payload is written");
+    stand_in::feed(&mut child, payload.as_bytes());
     let out = child.wait_with_output().expect("charter finishes");
     assert_eq!(out.status.code(), Some(0));
     String::from_utf8(out.stdout).expect("UTF-8")
