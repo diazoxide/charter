@@ -85,7 +85,7 @@ describe("the alerts drawer", () => {
             severity: "bad",
             subject: "plane root",
             detail: "beta-plane · memory commit not pushed",
-            remedy: "work belongs in a workspace clone",
+            remedy: "save the plane, or move the work to a workspace clone",
           }),
         ]),
       ],

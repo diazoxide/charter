@@ -63,6 +63,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The alerts drawer no longer repeats what the title bar's save indicator already says about
+  the plane: a plane-root alert there now names only a detached HEAD or a branch other than
+  the default. Its remedy, in the drawer and on the terminal status line, now reads "save the
+  plane, or move the work to a workspace clone".
+  ([#332](https://github.com/diazoxide/charter-app/issues/332))
 - `charter save` follows `[plane] mode`. `off` commits nothing, `commit` stops after the
   commit, and `push` pushes to `[plane] branch` when one is set. Until charter can open the
   pull request, `pr` and `pr-merge` commit but never push to the target branch. A plane that
