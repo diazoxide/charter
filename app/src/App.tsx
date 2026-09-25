@@ -17,8 +17,8 @@ import {
   type RelaunchChoice,
   type RelaunchQuestion,
 } from "./bindings";
-import { UnsavedMark, savable } from "./SavingView";
-import { repoSavable, saveAll, tellSaved, useRepoSaving } from "./saving";
+import { UnsavedMark } from "./SavingView";
+import { tellSaved, useRepoSaving } from "./saving";
 import {
   catalogue,
   catalogued,
@@ -997,8 +997,9 @@ function App() {
   // Read by the project itself and reported (charter-app#302), so the strip and the bar are
   // one reading of each project, not two.
   const saving = inFront === undefined ? undefined : reports[inFront]?.saving;
-  /** The workspace in front's repos, which the indicator counts in and its save saves too
-   *  (charter-app#299). */
+  /** The workspace in front's repos, which the indicator counts in (charter-app#299). Its save
+   *  never saves them: a repo is a developer's, and pushing one is the Saving tab's Save all,
+   *  asked first (ADR 0051, amended 2026-09-25). */
   const repoWorkspace = saying?.workspace;
   const repos = useRepoSaving(inFront, repoWorkspace);
   /** The project a save from the bar is running in: busy is that project's, not the window's. */
@@ -1007,22 +1008,16 @@ function App() {
     const plane = inFrontNow.current;
     if (plane === undefined) return;
     setSavingIn(plane);
-    const behind = (repos ?? []).filter(repoSavable);
-    const saved =
-      behind.length === 0
-        ? commands.savePlane(plane, null).then((answer) => answer.status === "error")
-        : saveAll(plane, saving !== undefined && savable(saving), null, repoWorkspace, behind).then(
-            (all) => all.refused.length > 0,
-          );
-    void saved
-      .then((refused) => {
-        if (refused) windowDoes.openSaving(plane);
+    void commands
+      .savePlane(plane, null)
+      .then((answer) => {
+        if (answer.status === "error") windowDoes.openSaving(plane);
       })
       .finally(() => {
         setSavingIn(undefined);
         tellSaved();
       });
-  }, [repoWorkspace, repos, saving, windowDoes]);
+  }, [windowDoes]);
 
   const pressNeeding = useCallback((plane: string, offer: Offer) => {
     if (offer.does.verb === "showChat") setShowing({ at: "plane", plane });

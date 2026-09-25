@@ -162,6 +162,32 @@ export function repoStageText(repo: RepoSaving): string {
   }
 }
 
+/**
+ * **Where a repo's Save goes**, said before anyone presses it (ADR 0051, amended 2026-09-25):
+ * the branch it commits on, whether it is pushed, and the pull request it opens — the same
+ * steps `reposave` takes, by mode. A save commits every file the clone has changed.
+ */
+export function repoSaveGoesTo(repo: RepoSaving, workspace: string): string {
+  const on = repo.branch ?? "no branch";
+  switch (repo.mode) {
+    case "off":
+      return "Nowhere — charter does not save it";
+    case "commit":
+      return `Commits on ${on} — nothing is pushed`;
+    case "push":
+      return `Commits on ${on} and pushes it`;
+    case "pr":
+    case "pr-merge": {
+      const branch = repo.ownBranch ? `a new branch charter/${workspace}/…` : on;
+      const into = repo.target ?? "the default branch";
+      const merge = repo.mode === "pr-merge" ? ", set to merge itself" : "";
+      return `Commits on ${branch}, pushes it, and opens a pull request into ${into}${merge}`;
+    }
+    default:
+      return `Saved by mode ${repo.mode}`;
+  }
+}
+
 /** What saving everything said: every line, and every refusal in the core's words. */
 export type SavedAll = { said: string[]; refused: string[] };
 

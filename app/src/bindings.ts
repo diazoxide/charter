@@ -2142,7 +2142,7 @@ export type RepoInForce = {
 /**  One workspace repo's save standing, for its row in the Saving view (charter-app#299). */
 export type RepoSaving = {
 	name: string,
-	/**  `[repos.<name>] mode`: `pr` when neither file says. */
+	/**  `[repos.<name>] mode`: `off` when neither file says. */
 	mode: string,
 	/**  The file that decided the mode, or `default`. */
 	modeFrom: string,
@@ -2163,6 +2163,18 @@ export type RepoSaving = {
 	blocked: string | null,
 	/**  Whether a save would push. */
 	pushes: boolean,
+	/**
+	 *  Where a PR mode's pull request goes: `[repos.<name>] branch`, else the repo's default
+	 *  branch; `null` in the other modes, or when charter cannot tell — so the row and the Save
+	 *  all confirmation can say where a save goes before anyone presses it.
+	 */
+	target: string | null,
+	/**
+	 *  Whether a PR mode's save would commit on a branch of charter's own,
+	 *  `charter/<workspace>/…`, because the clone stands on its pull request's base or on the
+	 *  repo's default branch — a PR mode never pushes either (`reposave`).
+	 */
+	ownBranch: boolean,
 };
 
 /**  One clone's git state, and what the forge cache last recorded for its branch. */

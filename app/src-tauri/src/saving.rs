@@ -229,7 +229,7 @@ pub fn save_as(
 #[serde(rename_all = "camelCase")]
 pub struct RepoSaving {
     pub name: String,
-    /// `[repos.<name>] mode`: `pr` when neither file says.
+    /// `[repos.<name>] mode`: `off` when neither file says.
     pub mode: String,
     /// The file that decided the mode, or `default`.
     pub mode_from: String,
@@ -248,6 +248,14 @@ pub struct RepoSaving {
     pub blocked: Option<String>,
     /// Whether a save would push.
     pub pushes: bool,
+    /// Where a PR mode's pull request goes: `[repos.<name>] branch`, else the repo's default
+    /// branch; `null` in the other modes, or when charter cannot tell — so the row and the Save
+    /// all confirmation can say where a save goes before anyone presses it.
+    pub target: Option<String>,
+    /// Whether a PR mode's save would commit on a branch of charter's own,
+    /// `charter/<workspace>/…`, because the clone stands on its pull request's base or on the
+    /// repo's default branch — a PR mode never pushes either (`reposave`).
+    pub own_branch: bool,
 }
 
 /// Every clone in `workspace`, as the Saving view draws them. Read from git and the journal,
@@ -296,12 +304,30 @@ pub async fn save_repo(
 /// [`workspace_saving`], without a runtime.
 pub fn repos_saving(root: &Path, workspace: &str) -> Result<Vec<RepoSaving>, String> {
     let found = charter_core::repos::clones(root, workspace).map_err(|why| why.to_string())?;
+    let settings = planesave::Settings::read(root);
     Ok(found
         .repos
         .iter()
         .map(|repo| {
             let standing = reposave::standing(root, workspace, repo);
+            let opens_a_pr = matches!(
+                standing.mode,
+                planesave::Mode::Pr | planesave::Mode::PrMerge
+            );
+            let default = opens_a_pr
+                .then(|| reposave::default_branch(root, &repo.name, &repo.path))
+                .flatten();
+            let target = opens_a_pr
+                .then(|| settings.repo(&repo.name).branch.value.or(default.clone()))
+                .flatten();
+            let own_branch = opens_a_pr
+                && standing
+                    .branch
+                    .as_ref()
+                    .is_some_and(|on| Some(on) == target.as_ref() || Some(on) == default.as_ref());
             RepoSaving {
+                target,
+                own_branch,
                 stage: if standing.mode == planesave::Mode::Off {
                     "off".to_owned()
                 } else {
@@ -546,6 +572,32 @@ mod tests {
         assert_eq!((row.stage.as_str(), row.changed), ("changed", 1));
         assert_eq!(row.branch.as_deref(), Some("main"));
         assert!(!row.autosave, "a repo's auto-save is off by default");
+    }
+
+    #[test]
+    fn a_pr_mode_row_says_where_its_pull_request_goes_and_whether_it_needs_a_branch_of_its_own() {
+        // On `main`, the PR's base: the save would cut `charter/alpha/…` rather than push main.
+        let (dir, clone) = plane_with_a_repo("[repos.widget]\nmode = \"pr\"\nbranch = \"main\"\n");
+        let row = &repos_saving(dir.path(), "alpha").unwrap()[0];
+        assert_eq!(
+            (row.target.as_deref(), row.own_branch),
+            (Some("main"), true)
+        );
+
+        // On a feature branch, the save pushes that branch and opens the PR from it.
+        git(&clone, &["checkout", "-q", "-b", "feature/x"]);
+        let row = &repos_saving(dir.path(), "alpha").unwrap()[0];
+        assert_eq!(
+            (row.target.as_deref(), row.own_branch),
+            (Some("main"), false)
+        );
+    }
+
+    #[test]
+    fn a_row_that_opens_no_pull_request_names_no_target() {
+        let (dir, _clone) = plane_with_a_repo("[repos.widget]\nmode = \"push\"\n");
+        let row = &repos_saving(dir.path(), "alpha").unwrap()[0];
+        assert_eq!((row.target.as_deref(), row.own_branch), (None, false));
     }
 
     #[test]

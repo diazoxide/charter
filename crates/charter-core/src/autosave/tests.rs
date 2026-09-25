@@ -211,7 +211,7 @@ fn a_repo_is_never_saved_by_itself_unless_its_table_turns_auto_save_on() {
 #[test]
 fn a_repo_with_auto_save_on_is_saved_after_its_own_quiet_period() {
     let at = Instant::now();
-    let on = repo("[repos.widget]\nautosave = true\nautosave_after = \"2m\"\n");
+    let on = repo("[repos.widget]\nmode = \"pr\"\nautosave = true\nautosave_after = \"2m\"\n");
     let changed = repo_standing(Stage::Changed, 1);
     let mut quiet = Quiet::default();
 

@@ -57,14 +57,25 @@ The operator ruled against that split. The marker is what stops a local `mode = 
 silently disagreeing with a team whose repo takes only PRs.
 
 **Each workspace repo has its own table.** `[repos.<name>]`, keyed by the repo's name in
-`inventory/repos.json`, takes the same keys as `[plane]`, but its defaults are `mode = "pr"`
+`inventory/repos.json`, takes the same keys as `[plane]`, but its defaults are `mode = "off"`
 and `autosave = false`.
+
+> **Amended 2026-09-25, by the operator.** The default was `mode = "pr"`, and the title bar's
+> save button saved the active workspace's repos along with the plane. One press could commit a
+> developer's half-finished work in several repos, push their branches and open pull requests,
+> and the button did not say it had become *Save all*. Now:
+> - the title bar's save saves **the plane only**;
+> - *Save all* is in the Saving tab alone, behind a confirmation that names each repo, its
+>   branch, how many files, and where its save goes;
+> - a repo nobody configured is **`off`**: charter never commits, pushes or opens a PR for it
+>   until `[repos.<name>] mode` says how;
+> - each repo row says where its own Save goes before it is pressed.
 
 - **Why it is keyed by repo, not by workspace:** a repo's rules belong to its remote, not to
   whichever workspace it was cloned into.
-- **Why the defaults are safer than the plane's:** code is not a database, and pushing someone's
-  half-finished change to `main` by default is the one irreversible mistake this design could
-  make.
+- **Why the defaults are safer than the plane's:** code is not a database, and a developer's
+  branch is theirs. Even a commit on it is an action nobody asked for, so the default does
+  nothing at all.
 
 **One save function.** `charter-core` saves. The window's buttons, auto-save and `charter save`
 all call it, so the CLI follows `mode` too. What a save does:
@@ -145,11 +156,12 @@ and the `MEMORY.md` indexes. Any other conflict makes the plane or repo **blocke
 It can also be **blocked** or **offline**. In the window:
 
 - **The title-bar indicator** shows the furthest-back stage across the plane and the active
-  workspace's repos, with a count and incoming changes (↓N). It has a save button.
+  workspace's repos, with a count and incoming changes (↓N). Its save button saves the plane
+  only.
 - **The Saving view** is a view tab (tabs hold views, not only chats). It has:
-  - one row per repo, built on the existing `workspace_repos`, with a stage, a branch, a PR link
-    and its own save button;
-  - *Save all*;
+  - one row per repo, built on the existing `workspace_repos`, with a stage, a branch, a PR link,
+    where its save goes, and its own save button;
+  - *Save all*, behind a confirmation that lists what it would save;
   - the last 50 entries of a local save journal in `.charter/`, which records the trigger, mode,
     files, commit or PR, duration and outcome.
 - **Blocked:**

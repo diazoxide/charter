@@ -304,6 +304,8 @@ function repo(over: Partial<RepoSaving> = {}): RepoSaving {
     pr: null,
     blocked: null,
     pushes: true,
+    target: "main",
+    ownBranch: false,
     ...over,
   };
 }
@@ -382,17 +384,61 @@ describe("SavingView, with the workspace's repos (charter-app#299)", () => {
     });
   });
 
-  it("saves the plane and every repo with something to save, from Save all", async () => {
+  it("says on each row where its Save goes, before anyone presses it", async () => {
+    coreWithRepos(standing(), [
+      [
+        repo({ name: "api", stage: "changed", changed: 3, branch: "feature/x" }),
+        repo({ name: "web", stage: "changed", changed: 1, ownBranch: true }),
+        repo({ name: "cli", mode: "pr-merge", branch: "fix/y", target: "develop" }),
+        repo({ name: "lib", mode: "push", branch: "feature/z", target: null }),
+        repo({ name: "doc", mode: "commit", target: null }),
+        repo({ name: "off", mode: "off", stage: "off", target: null }),
+      ],
+    ]);
+    render(<SavingView plane={PLANE} workspace="alpha" />);
+
+    const table = await screen.findByRole("table", { name: "Repos in alpha" });
+    const goes = within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getByTestId("save-goes-to").textContent);
+    expect(goes).toEqual([
+      "Commits on feature/x, pushes it, and opens a pull request into main",
+      "Commits on a new branch charter/alpha/…, pushes it, and opens a pull request into main",
+      "Commits on fix/y, pushes it, and opens a pull request into develop, set to merge itself",
+      "Commits on feature/z and pushes it",
+      "Commits on main — nothing is pushed",
+      "Nowhere — charter does not save it",
+    ]);
+  });
+
+  it("asks before Save all, naming each repo, its branch, its files and where it goes", async () => {
     const asked = coreWithRepos(standing({ stage: "changed", changed: ["a.md"] }), [
       [
-        repo({ name: "api", stage: "changed", changed: 1 }),
+        repo({ name: "api", stage: "changed", changed: 1, branch: "feature/x" }),
         repo({ name: "web", stage: "saved" }),
-        repo({ name: "cli", stage: "committed", ahead: 1 }),
+        repo({ name: "cli", stage: "committed", ahead: 2, branch: "fix/y", mode: "push" }),
       ],
     ]);
     render(<SavingView plane={PLANE} workspace="alpha" />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Save all" }));
+
+    const asking = await screen.findByRole("alertdialog", {
+      name: "Save the project and 2 repos?",
+    });
+    expect(
+      within(within(asking).getByRole("list", { name: "What Save all saves" }))
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual([
+      "The project — 1 file changed",
+      "api on feature/x — 1 file changed — Commits on feature/x, pushes it, and opens a pull request into main",
+      "cli on fix/y — 2 commits not pushed — Commits on fix/y and pushes it",
+    ]);
+    expect(asked.some((a) => a.cmd === "save_plane" || a.cmd === "save_repo")).toBe(false);
+
+    await userEvent.click(within(asking).getByRole("button", { name: "Save all 3" }));
 
     await waitFor(() =>
       expect(
@@ -402,5 +448,19 @@ describe("SavingView, with the workspace's repos (charter-app#299)", () => {
       ).toEqual(["plane", "api", "cli"]),
     );
     expect((await screen.findByRole("status")).textContent).toContain("✓ Committed the plane");
+  });
+
+  it("saves nothing when Save all is cancelled", async () => {
+    const asked = coreWithRepos(standing({ stage: "saved", changed: [] }), [
+      [repo({ name: "api", stage: "changed", changed: 1 })],
+    ]);
+    render(<SavingView plane={PLANE} workspace="alpha" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save all" }));
+    const asking = await screen.findByRole("alertdialog", { name: "Save 1 repo?" });
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(asked.some((a) => a.cmd === "save_plane" || a.cmd === "save_repo")).toBe(false);
   });
 });

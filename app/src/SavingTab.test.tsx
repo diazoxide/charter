@@ -177,13 +177,15 @@ describe("the save indicator, with the workspace's repos (charter-app#299)", () 
       pr: null,
       blocked: null,
       pushes: true,
+      target: "main",
+      ownBranch: false,
       ...over,
     };
   }
 
-  /** A saved plane on workspace `alpha`, whose one repo has two files unsaved until
-   *  `save_repo` is asked. */
-  function coreWithARepo(): { asked: string[] } {
+  /** The plane in `plane` on workspace `alpha`, whose one repo has two files unsaved; every
+   *  save asked of the core is recorded. */
+  function coreWithARepo(plane: PlaneSaving): { asked: string[] } {
     const asked: string[] = [];
     mockIPC((cmd, args) => {
       if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
@@ -208,12 +210,11 @@ describe("the save indicator, with the workspace's repos (charter-app#299)", () 
             },
           ],
         };
-      if (cmd === "plane_saving") return standing({ stage: "saved", changed: [] });
+      if (cmd === "plane_saving")
+        return asked.includes("save_plane") ? standing({ stage: "saved", changed: [] }) : plane;
       if (cmd === "workspace_saving") {
         expect((args as { workspace: string }).workspace).toBe("alpha");
-        return asked.includes("save_repo")
-          ? [repo({ stage: "pr-open", changed: 0, pr: "https://x.test/pull/1" })]
-          : [repo()];
+        return [repo()];
       }
       if (cmd === "save_repo" || cmd === "save_plane") {
         asked.push(cmd);
@@ -224,20 +225,24 @@ describe("the save indicator, with the workspace's repos (charter-app#299)", () 
     return { asked };
   }
 
-  it("shows the furthest-back stage across the plane and the repos, and saves what is behind", async () => {
-    const { asked } = coreWithARepo();
+  it("counts the repos in, but saves only the project from the bar (ADR 0051, amended 2026-09-25)", async () => {
+    const { asked } = coreWithARepo(standing());
+    render(<App />);
+
+    const bar = screen.getByTestId("title-bar");
+    await userEvent.click(await within(bar).findByRole("button", { name: "Save the project" }));
+
+    await waitFor(() => expect(asked).toEqual(["save_plane"]));
+    expect(await within(bar).findByRole("button", { name: "Saving: 1 repo changed" })).toBeTruthy();
+    expect(asked).not.toContain("save_repo");
+  });
+
+  it("offers no save in the bar when only a repo has something to save", async () => {
+    coreWithARepo(standing({ stage: "saved", changed: [] }));
     render(<App />);
 
     const bar = screen.getByTestId("title-bar");
     expect(await within(bar).findByRole("button", { name: "Saving: 1 repo changed" })).toBeTruthy();
-
-    await userEvent.click(within(bar).getByRole("button", { name: "Save all" }));
-
-    await waitFor(() => expect(asked).toEqual(["save_repo"]));
-    expect(
-      await within(bar).findByRole("button", {
-        name: "Saving: 1 repo waiting on its pull request",
-      }),
-    ).toBeTruthy();
+    expect(within(bar).queryByRole("button", { name: /^Save / })).toBeNull();
   });
 });
