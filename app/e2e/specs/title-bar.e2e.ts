@@ -138,20 +138,17 @@ describe("the title bar", () => {
   });
 
   it("leaves the project strip room for two tabs in a narrow window, whatever the save indicator says", async () => {
-    // The right-hand end never gives way (ADR 0054), so whatever it spends the tabs lose. The
-    // save indicator used to spend it on a whole sentence: a plane that is not a git repository
-    // — which is every fixture plane — said *"Blocked: this plane is not a git repository, so
-    // there is nothing to commit to"* at 437 px, and in a 1024 px window, after the traffic
-    // lights and the drag stretch, the strip had room for ONE project tab. A second project
-    // opened into show-more, which is how `projects.e2e.ts` failed on the macOS runner and on
-    // nothing else. The words are capped now; the whole sentence is the indicator's `title`
-    // and the Saving view's.
+    // The right-hand end never gives way (ADR 0054), so whatever it spends the tabs lose. A
+    // save indicator saying a whole sentence once left a 1024 px window room for ONE project
+    // tab, and `projects.e2e.ts` failed on the macOS runner; `.save-indicator-words` in
+    // `App.css` has the numbers. Every fixture plane is not a git repository, so the bar here
+    // says that sentence.
     //
     // **Room, measured the way the strip measures it** (`fits.useRoom`): the strip's width
     // less its own controls, against the floor each tab is drawn at (`--least`). Two tabs fit
     // exactly when that room is at least twice the floor (`fits.capacity`).
     await untilTheStripIsRead();
-    await $('[data-testid="title-bar"] button[aria-label^="Saving:"]').waitForExist({
+    await $('[data-testid="title-bar"] [aria-label^="Saving:"]').waitForExist({
       timeout: 20_000,
     });
 
