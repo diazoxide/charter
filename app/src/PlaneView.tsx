@@ -685,8 +685,9 @@ export function PlaneView({
         setPinnedWorkspaces(Array.isArray(said?.workspaces) ? said.workspaces : []);
         setDanglingPins(Array.isArray(said?.missing) ? said.missing : []);
       })
-      // A window that cannot ask draws nothing pinned, which is the plane's own order — the
-      // arrangement an operator who has pinned nothing already has.
+      // A window that cannot ask draws nothing pinned: the workspace strip holds the one you
+      // are in, and the rest are behind its show-more — the arrangement an operator who has
+      // pinned nothing already has (ADR 0054).
       .catch(() => undefined);
     return () => {
       gone = true;
@@ -906,7 +907,7 @@ export function PlaneView({
   /**
    * What a workspace is drawn as: its name, its pin, and the two counts.
    *
-   * **One definition, used by the strip and by the menu of what the strip has no room for.**
+   * **One definition, used by the strip and by the menu of what the strip is not drawing.**
    * They are the same workspace and a second copy of the markup is a second answer — the
    * rule the catalogue already follows for words, applied to marks.
    *
@@ -945,7 +946,7 @@ export function PlaneView({
     return (
       <>
         {/* Its colour, as a mark in its own accent (charter-app#281) — on the strip and in the
-            menu of what the strip has no room for, which is why it is here and not a style of
+            menu of what the strip is not drawing, which is why it is here and not a style of
             the tab alone. Hidden from a screen reader: the name says which workspace. */}
         {colour !== null && (
           <span className="workspace-mark" aria-hidden="true" style={tintOf(workspace)} />
@@ -1048,8 +1049,9 @@ export function PlaneView({
   );
 
   /**
-   * And what the workspace strip's show-more menu lists: the workspaces it has no room for,
-   * **most recently moved first** — the chat strip's rule one level up (ADR 0039, ADR 0054).
+   * And what the workspace strip's show-more menu lists: the workspaces it is not drawing —
+   * the ones nobody pinned and you are not in, and any pins it had no room for — **most
+   * recently moved first** — the chat strip's rule one level up (ADR 0039, ADR 0054).
    *
    * A workspace moved when the last of its chats did. One nothing has been heard about reads
    * `0` and keeps the strip's order, for `byLastActivity`'s reason.
@@ -2297,7 +2299,7 @@ export function PlaneView({
           </RovingFocusGroup.Root>
           {/* This strip's own controls, in the shape the project strip above already has
               (`App.tsx`): the `+` that makes one more of what the strip lists, then what the
-              strip had no room for. `.strip-doing` and not a `.more` of its own, because the
+              strip is not drawing. `.strip-doing` and not a `.more` of its own, because the
               two strips now hold the same two things and a second class name would be a
               second place to dress them.
 
@@ -3242,6 +3244,10 @@ export type Hidden = {
 
 /**
  * The mark on something the operator pinned (ADR 0039).
+ *
+ * **On the workspace strip a pin is also what puts a tab there at all** (ADR 0054): that strip
+ * draws the pinned workspaces and the one you are in. On the other two a pin draws its tab
+ * first.
  *
  * **A mark and not a button, and that is the whole of pinning's surface on a strip.** A `📌`
  * control on every tab is fifty more controls on the one strip that already broke at fifty
