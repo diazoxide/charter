@@ -222,8 +222,19 @@ pub fn state_of(tree: &Path) -> Result<TreeState, Unreadable> {
         path: tree.display().to_string(),
         why,
     };
-    let seen = git::run(tree, &["status", "--porcelain=v1", "--branch"], git::READ)
-        .map_err(|err| unreadable(err.to_string()))?;
+    // Read-only, as a poll must be: a plain `status` takes `index.lock` to refresh the index,
+    // and an agent's `git add` in the same clone would fail on it.
+    let seen = git::run(
+        tree,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "--branch",
+        ],
+        git::READ,
+    )
+    .map_err(|err| unreadable(err.to_string()))?;
     if !seen.ok() {
         let why = match seen.code {
             // The deadline passed, so git was killed and said nothing. Its own sentence,
