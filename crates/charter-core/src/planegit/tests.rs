@@ -2144,6 +2144,178 @@ fn reading_where_unsaved_work_sits_never_writes_the_index_a_save_needs() {
     assert_eq!(
         std::fs::metadata(&index).unwrap().modified().unwrap(),
         before
+
+// --------------------------------------------------------------------------------------- //
+// the blocked state and its ways out (charter-app#295)                                      //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn two_machines_appending_to_the_same_log_and_index_both_save_by_the_union_merge_rules() {
+    let fixture = Fixture::plane();
+    // The rules `init` writes, committed as a plane carries them.
+    crate::scaffold::ensure_gitattributes(&fixture.root.join(".gitattributes")).unwrap();
+    std::fs::create_dir_all(fixture.root.join("personas/_dispatch")).unwrap();
+    std::fs::write(
+        fixture.root.join("personas/_dispatch/2026-09.a.jsonl"),
+        "{\"n\":0}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.root.join("personas/steward/memory/MEMORY.md"),
+        "- [one](one.md)\n",
+    )
+    .unwrap();
+    run(&fixture.root, &["add", "-A"]);
+    run(
+        &fixture.root,
+        &["commit", "-q", "-m", "the rules and the files"],
+    );
+    let bare = fixture.with_a_remote();
+    run(
+        &fixture.root,
+        &[
+            "push",
+            "-q",
+            &bare.display().to_string(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+
+    // Somebody else appends to both and pushes first.
+    let theirs = fixture.root.parent().unwrap().join("theirs");
+    run(
+        fixture.root.parent().unwrap(),
+        &[
+            "clone",
+            "-q",
+            &bare.display().to_string(),
+            &theirs.display().to_string(),
+        ],
+    );
+    run(&theirs, &["config", "user.name", "Other"]);
+    run(&theirs, &["config", "user.email", "other@example.invalid"]);
+    append(
+        &theirs.join("personas/_dispatch/2026-09.a.jsonl"),
+        "{\"n\":1}\n",
+    );
+    append(
+        &theirs.join("personas/steward/memory/MEMORY.md"),
+        "- [theirs](theirs.md)\n",
+    );
+    run(&theirs, &["commit", "-q", "-am", "theirs"]);
+    run(&theirs, &["push", "-q", "origin", "main"]);
+
+    // This machine appends to the same two files, and saves.
+    append(
+        &fixture.root.join("personas/_dispatch/2026-09.a.jsonl"),
+        "{\"n\":2}\n",
+    );
+    append(
+        &fixture.root.join("personas/steward/memory/MEMORY.md"),
+        "- [mine](mine.md)\n",
+    );
+    let (code, said) = fixture.just_save();
+
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("Pushed main"), "{said}");
+    let index =
+        std::fs::read_to_string(fixture.root.join("personas/steward/memory/MEMORY.md")).unwrap();
+    assert!(
+        index.contains("theirs.md") && index.contains("mine.md"),
+        "{index}"
+    );
+}
+
+fn append(path: &Path, text: &str) {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+}
+
+#[test]
+fn a_conflict_names_the_files_it_is_in() {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    std::fs::write(fixture.root.join("notes.md"), "base\n").unwrap();
+    run(&fixture.root, &["add", "-A"]);
+    run(&fixture.root, &["commit", "-q", "-m", "base"]);
+    run(
+        &fixture.root,
+        &[
+            "push",
+            "-q",
+            &bare.display().to_string(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    let theirs = fixture.root.parent().unwrap().join("theirs");
+    run(
+        fixture.root.parent().unwrap(),
+        &[
+            "clone",
+            "-q",
+            &bare.display().to_string(),
+            &theirs.display().to_string(),
+        ],
+    );
+    run(&theirs, &["config", "user.name", "Other"]);
+    run(&theirs, &["config", "user.email", "other@example.invalid"]);
+    std::fs::write(theirs.join("notes.md"), "theirs\n").unwrap();
+    run(&theirs, &["commit", "-q", "-am", "theirs"]);
+    run(&theirs, &["push", "-q", "origin", "main"]);
+    std::fs::write(fixture.root.join("notes.md"), "mine\n").unwrap();
+
+    let (_, said) = fixture.just_save();
+
+    let got = standing(&fixture.root);
+    assert_eq!(got.stage, Stage::Blocked, "{said}");
+    assert_eq!(got.conflicts, ["notes.md"], "{got:?}");
+}
+
+#[test]
+fn a_save_the_secret_scan_refused_is_blocked_until_a_save_goes_through() {
+    let fixture = Fixture::plane();
+    std::fs::write(
+        fixture.root.join("personas/steward/memory/m.md"),
+        "token: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n",
+    )
+    .unwrap();
+    let _ = fixture.just_save();
+
+    let got = standing(&fixture.root);
+    assert_eq!(got.stage, Stage::Blocked, "{got:?}");
+    assert!(
+        got.blocked.as_deref().unwrap_or("").contains("secret"),
+        "{got:?}"
+    );
+
+    std::fs::write(fixture.root.join("personas/steward/memory/m.md"), "clean\n").unwrap();
+    let (code, said) = fixture.just_save();
+    assert_eq!(code, 0, "{said}");
+    assert_ne!(standing(&fixture.root).stage, Stage::Blocked);
+}
+
+#[test]
+fn a_pr_mode_on_a_remote_no_forge_adapter_serves_is_blocked_and_says_why() {
+    let fixture = Fixture::plane();
+    run(
+        &fixture.root,
+        &["remote", "add", "origin", "git@git.corp:team/plane.git"],
+    );
+    fixture.with_settings("[plane]\nmode = \"pr\"\n");
+
+    let got = standing(&fixture.root);
+
+    assert_eq!(got.stage, Stage::Blocked);
+    assert_eq!(
+        got.blocked.as_deref(),
+        Some(
+            "[plane] mode is pr, and this plane's origin is not a GitHub or GitLab forge charter knows"
+        )
     );
 }
 

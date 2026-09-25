@@ -55,6 +55,8 @@ pub struct PlaneSaving {
     pub push_failed: Option<String>,
     /// The LIVE workspaces, whose charter, memory and todos a save publishes (charter-app#301).
     pub live: Vec<String>,
+    /// The files the last rebase conflicted in, when that is why the save is blocked.
+    pub conflicts: Vec<String>,
     /// `[plane] mode`, or `null` when the plane names none.
     pub mode: Option<String>,
     /// Where the mode came from: `charter.toml`, `charter.local.toml`, `[memory] share`, or
@@ -167,6 +169,7 @@ pub fn saving_of(root: &Path) -> PlaneSaving {
         live: charter_core::wscmd::live_workspaces(root)
             .into_iter()
             .collect(),
+        conflicts: standing.conflicts,
         mode: plane.mode.value.map(|m| m.as_str().to_owned()),
         mode_from,
         journal,

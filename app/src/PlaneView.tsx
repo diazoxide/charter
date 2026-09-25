@@ -57,7 +57,7 @@ import {
   type Project,
   type Ran,
 } from "./actions";
-import { usePlaneSaving } from "./saving";
+import { usePlaneSaving, WAY_OUT, type WayOut } from "./saving";
 import { LiveDialog, LiveMark } from "./LiveDialog";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { Menued } from "./Menus";
@@ -1034,6 +1034,44 @@ export function PlaneView({
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
   /** A new tab whose chat starts in that directory — this one, and not the next. */
   const newTabIn = useCallback((path: string) => void ask({ tab: true, in: path }), [ask]);
+
+  /**
+   * **A blocked save's two ways out** (charter-app#295), asked by the Saving tab: a chat started
+   * in the plane — the picker, so the operator chooses who resolves it — or a plain terminal
+   * there, a shell with no harness, for somebody who resolves a conflict with git by hand.
+   */
+  useEffect(() => {
+    const out = (event: Event) => {
+      const asked = (event as CustomEvent<WayOut>).detail;
+      if (asked.plane !== plane || sidebar === undefined) return;
+      if (asked.way === "chat") {
+        newTabIn(sidebar.root);
+        return;
+      }
+      void commands
+        .openSession(
+          plane,
+          null,
+          [],
+          sidebar.root,
+          "terminal",
+          STARTING_SIZE.columns,
+          STARTING_SIZE.rows,
+        )
+        .then((opened) => {
+          if (opened.status === "error") {
+            setTrouble(opened.error);
+            return;
+          }
+          const session = opened.data;
+          setStartedIn((was) => ({ ...was, [session]: OUTSIDE }));
+          change((tabs) => openTab(tabs, session, "terminal", "shell"));
+        })
+        .catch((err: unknown) => setTrouble(String(err)));
+    };
+    window.addEventListener(WAY_OUT, out);
+    return () => window.removeEventListener(WAY_OUT, out);
+  }, [change, newTabIn, plane, sidebar]);
 
   /** A row was picked: the chat starts on that profile, with that persona, either drawing
    *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in

@@ -174,8 +174,26 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
     {
         want.insert(PathBuf::from(dir), Node::Dir);
     }
+    // And the one file charter-app writes that the Python charter did not: the merge rules
+    // (ADR 0051, docs/plane-format.md `.gitattributes`), which make two machines' appends to
+    // the plane's logs and memory indexes merge instead of conflict.
+    want.insert(
+        PathBuf::from(".gitattributes"),
+        Node::File(MERGE_RULES.as_bytes().to_vec()),
+    );
     assert_eq!(tree(&scene.plane), want);
 }
+
+/// The `.gitattributes` block, exactly as `docs/plane-format.md` records it.
+const MERGE_RULES: &str = "# >>> charter merge rules (managed by charter) >>>
+personas/_dispatch/*.jsonl merge=union
+personas/_skills/*.jsonl merge=union
+workspaces/*/pieces/*.jsonl merge=union
+workspaces/*/changes/log/*.jsonl merge=union
+personas/*/memory/MEMORY.md merge=union
+workspaces/*/memory/MEMORY.md merge=union
+# <<< charter merge rules <<<
+";
 
 #[test]
 fn running_init_twice_leaves_the_tree_the_first_run_left() {
@@ -221,6 +239,7 @@ fn a_file_already_at_every_path_init_writes_is_left_byte_for_byte() {
     scene.write("personas/ops/persona.md", "---\nname: ops\n---\n");
     scene.write("inventory/repos.json", "{}");
     scene.write("workspaces/alpha/workspace.md", "# alpha\n");
+    scene.write(".gitattributes", &format!("*.png binary\n{MERGE_RULES}"));
     let before = tree(&scene.plane);
 
     let out = scene.init();

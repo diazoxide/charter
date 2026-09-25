@@ -581,7 +581,9 @@ key refuses.
   `# >>> charter merge rules (managed by charter) >>>` and `# <<< charter merge rules <<<`.
   Lines outside the block are the operator's own.
 - **Status:** **stable**. It is committed, and git reads it.
-- **Written by:** charter-app's `init` and `reinit` (ADR 0051). Not built yet.
+- **Written by:** charter-app's `init` and `reinit`, through
+  `crates/charter-core/src/scaffold/mod.rs` `ensure_gitattributes` (charter-app#295, ADR 0051):
+  the block is replaced where it is, or added at the end, and every other line is kept.
 - **Read by:** git, on every merge and rebase a save makes.
 - **Git:** committed.
 - **Encoding details:** the block holds exactly these lines, in this order. Each names a file
@@ -3350,6 +3352,7 @@ Only the **latest** sighting is kept (whole-file overwrite).
 | `detail` | str | git's own words | stable | `charter/planegit.py:282` |
 | `head` | str | the sha being pushed | stable | `charter/planegit.py:282` |
 | `at` | float epoch | when | stable | `charter/planegit.py:282` |
+| `conflicts` | array of str, optional | **charter-app only.** The files a rebase onto the remote conflicted in, read before the rebase was undone; present only when there were some (charter-app#295). | stable | `crates/charter-core/src/planegit.rs` `record_push` |
 
 In charter-app the save journal (below) takes over this record's job for saves made by
 charter-app. `charter save` keeps writing this record until its contract moves (ADR 0051).

@@ -105,6 +105,8 @@ pub struct PushResult {
     pub landed: Option<String>,
     pub url: Option<String>,
     pub detail: String,
+    /// The files a rebase onto the remote conflicted in (charter-app#295).
+    pub conflicts: Vec<String>,
 }
 
 impl PushResult {
@@ -115,6 +117,7 @@ impl PushResult {
             landed: None,
             url: None,
             detail: String::new(),
+            conflicts: Vec::new(),
         }
     }
 }
@@ -245,7 +248,7 @@ pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or_default();
-    let doc = serde_json::json!({
+    let mut doc = serde_json::json!({
         "outcome": res.outcome.word(),
         "branch": res.branch,
         "landed": res.landed,
@@ -254,6 +257,10 @@ pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
         "head": head,
         "at": at,
     });
+    // Only when there are some, so a record without a conflict is the record it always was.
+    if !res.conflicts.is_empty() {
+        doc["conflicts"] = serde_json::json!(res.conflicts);
+    }
     // NOT gated on `within_plane`: the state directory is machine-local and `$CHARTER_HOME`
     // may legitimately put it outside the plane, so that question is the wrong one to ask
     // about this file. `private_dir` refuses a state directory that is a symlink, and
@@ -422,6 +429,8 @@ pub struct Standing {
     /// Why the last push did not land, when it failed rather than conflicted — offline, a
     /// token, the forge down. Not blocked: auto-save tries again later.
     pub push_failed: Option<String>,
+    /// The files the last rebase conflicted in, when that is why it is blocked.
+    pub conflicts: Vec<String>,
 }
 
 /// Where the plane at `root`'s unsaved work sits.
@@ -444,6 +453,7 @@ pub fn standing(root: &Path) -> Standing {
             pushes: false,
             behind: None,
             push_failed: None,
+            conflicts: Vec::new(),
         };
     };
     let branch = plane.branch.value.clone().unwrap_or(here);
@@ -467,8 +477,45 @@ pub fn standing(root: &Path) -> Standing {
         .flatten();
     let push_failed = (outcome.as_deref() == Some(Outcome::Failed.word()))
         .then(|| said("detail").unwrap_or_else(|| "the push failed".into()));
+    let conflicts: Vec<String> = record
+        .as_ref()
+        .and_then(|r| r.get("conflicts"))
+        .and_then(serde_json::Value::as_array)
+        .map(|all| {
+            all.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
     let blocked = matches!(outcome.as_deref(), Some("conflict" | "stranded"))
-        .then(|| said("detail").unwrap_or_else(|| outcome.clone().unwrap_or_default()));
+        .then(|| said("detail").unwrap_or_else(|| outcome.clone().unwrap_or_default()))
+        // A PR mode on a remote no forge adapter serves can go no further than a commit.
+        .or_else(|| {
+            plane
+                .mode
+                .value
+                .filter(|mode| mode.opens_a_pr() && origin_https(root).is_none())
+                .map(|mode| {
+                    format!(
+                        "[plane] mode is {}, and this plane's origin is not a GitHub or GitLab \
+                         forge charter knows",
+                        mode.as_str()
+                    )
+                })
+        })
+        // And the last save's own refusal — a secret the scan caught — until a save goes
+        // through: the journal's newest line says how the last attempt ended.
+        .or_else(|| {
+            journal(root)
+                .last()
+                .filter(|line| line["outcome"] == "blocked")
+                .map(|line| {
+                    line["detail"]
+                        .as_str()
+                        .unwrap_or("the last save was refused")
+                        .to_owned()
+                })
+        });
     let stage = if blocked.is_some() {
         Stage::Blocked
     } else if !changed.is_empty() {
@@ -491,6 +538,7 @@ pub fn standing(root: &Path) -> Standing {
         pushes,
         behind,
         push_failed,
+        conflicts,
     }
 }
 
@@ -796,7 +844,8 @@ enum Rebased {
     /// The plane's commits were replayed onto the remote's.
     Replayed,
     /// git stopped on its own — the trees conflict, it refused, or it died.
-    Conflict,
+    /// Carries the files it conflicted in, read before the rebase is undone.
+    Conflict(Vec<String>),
     /// Asked to sign (`--sign`), git could not write a replayed commit: the signer refused.
     /// Carries what the signer said (charter-app#267).
     Unsigned(String),
@@ -833,8 +882,29 @@ fn rebase_onto_fetched(root: &Path, sign: bool, deadline: Duration) -> Rebased {
         Ok(run) if run.ok() => Rebased::Replayed,
         Ok(run) if run.code.is_none() && started.elapsed() >= deadline => Rebased::OutOfTime,
         Ok(run) if sign && run.err.contains(UNWRITTEN) => Rebased::Unsigned(signer_said(&run.err)),
-        _ => Rebased::Conflict,
+        _ => Rebased::Conflict(unmerged(root)),
     }
+}
+
+/// The files a stopped rebase left unmerged, before it is undone — what the Saving view names.
+fn unmerged(root: &Path) -> Vec<String> {
+    git::run(
+        root,
+        &["diff", "--name-only", "--diff-filter=U", "-z"],
+        git::READ,
+    )
+    .map(|r| {
+        let mut out: Vec<String> = r
+            .out
+            .split('\0')
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    })
+    .unwrap_or_default()
 }
 
 /// The `-c` that decides signing for one git command, beating the operator's own
@@ -1014,14 +1084,30 @@ fn push_head_within(
         } else {
             match rebase_onto_fetched(root, sign, deadline) {
                 Rebased::Replayed => {}
-                Rebased::Conflict => {
+                Rebased::Conflict(conflicts) => {
                     let _ = git::run(root, &["rebase", "--abort"], WRITE);
                     say(Say::Warn(
                         "Committed locally, but rebase hit a conflict — resolve manually, then \
                          `charter save`."
                             .into(),
                     ));
-                    return record_push(root, PushResult::of(Outcome::Conflict, &branch), &head);
+                    let detail = if conflicts.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "the remote changed the same lines in: {}",
+                            conflicts.join(", ")
+                        )
+                    };
+                    return record_push(
+                        root,
+                        PushResult {
+                            detail,
+                            conflicts,
+                            ..PushResult::of(Outcome::Conflict, &branch)
+                        },
+                        &head,
+                    );
                 }
                 Rebased::Unsigned(signer) => {
                     // Stopped, not retried unsigned as the commit is: the commit stays on this

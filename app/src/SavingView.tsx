@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import { CircleAlert, CircleCheck, CircleDot, LoaderCircle, Save } from "lucide-react";
 import { commands, type PlaneId, type PlaneSaving, type SaveEntry } from "./bindings";
-import { tellSaved, usePlaneSaving } from "./saving";
+import { askWayOut, tellSaved, usePlaneSaving } from "./saving";
 
 /**
  * **The Saving view** (charter-app#294, ADR 0051): where this plane's unsaved work sits, what
@@ -59,6 +59,35 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
             <p className="settings-hint">
               {`Live workspaces, published by every save: ${saving.live.join(", ")}`}
             </p>
+          )}
+          {saving.stage === "blocked" && (
+            <div className="saving-question" role="group" aria-label="Ways out">
+              {saving.conflicts.length > 0 && (
+                <ul className="saving-files" aria-label="Where it conflicts">
+                  {saving.conflicts.map((path) => (
+                    <li key={path}>{path}</li>
+                  ))}
+                </ul>
+              )}
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="panel-view"
+                  tabIndex={0}
+                  onClick={() => askWayOut(plane, "chat")}
+                >
+                  Resolve in a chat
+                </button>
+                <button
+                  type="button"
+                  className="panel-view"
+                  tabIndex={0}
+                  onClick={() => askWayOut(plane, "terminal")}
+                >
+                  Open terminal here
+                </button>
+              </div>
+            </div>
           )}
           {saving.pushFailed !== null && (
             <p className="settings-hint">{`The last push did not land: ${saving.pushFailed}`}</p>

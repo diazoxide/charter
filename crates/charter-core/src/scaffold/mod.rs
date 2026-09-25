@@ -335,6 +335,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
             }
         }
     }
+    merge_rules(&mut run, root);
 
     let settings_ok = settings_gate(&mut run, root);
     if settings_ok {
@@ -451,6 +452,7 @@ pub fn reinit(place: &Place) -> Outcome {
             }
         }
     }
+    merge_rules(&mut run, root);
 
     let settings_ok = settings_gate(&mut run, root);
     if settings_ok {
@@ -634,6 +636,73 @@ fn fold(entries: &[String]) -> Vec<String> {
 ///
 /// The presence check is Python's to the letter, including its one substring test
 /// (`.charter/` anywhere in the body) and its whole-line tests for the rest.
+/// The plane's `.gitattributes` merge rules, written through the same gate as `.gitignore`.
+fn merge_rules(run: &mut Run, root: &Path) {
+    if let Some(path) = run.gate(root, ".gitattributes") {
+        match ensure_gitattributes(&path) {
+            Ok(true) => run.created.push(".gitattributes (merge rules)".to_owned()),
+            Ok(false) => run.present.push(".gitattributes (merge rules)".to_owned()),
+            Err(e) => {
+                run.err(format!("could not read or write {} ({e})", path.display()));
+                run.failed = true;
+            }
+        }
+    }
+}
+
+/// The first line of charter's managed block in the plane's `.gitattributes` (ADR 0051).
+pub const MERGE_RULES_BEGIN: &str = "# >>> charter merge rules (managed by charter) >>>";
+/// Its last line.
+pub const MERGE_RULES_END: &str = "# <<< charter merge rules <<<";
+
+/// The files a plane only ever grows by whole lines, merged by git's `union` driver so two
+/// machines appending to them never conflict (`docs/plane-format.md`, `.gitattributes`).
+const MERGE_RULES: [&str; 6] = [
+    "personas/_dispatch/*.jsonl merge=union",
+    "personas/_skills/*.jsonl merge=union",
+    "workspaces/*/pieces/*.jsonl merge=union",
+    "workspaces/*/changes/log/*.jsonl merge=union",
+    "personas/*/memory/MEMORY.md merge=union",
+    "workspaces/*/memory/MEMORY.md merge=union",
+];
+
+/// The managed block, exactly as the plane format records it.
+fn merge_rules_block() -> String {
+    let mut out = vec![MERGE_RULES_BEGIN];
+    out.extend(MERGE_RULES);
+    out.push(MERGE_RULES_END);
+    out.join("\n")
+}
+
+/// Write the managed block into the plane's `.gitattributes`: replace the one there, or add it
+/// at the end, keeping every line outside it. `Ok(true)` when the file changed.
+///
+/// A BEGIN with no END after it is left as it is — half a managed block is something somebody
+/// edited — and the block is added below it.
+pub fn ensure_gitattributes(path: &Path) -> Result<bool, String> {
+    // A file that is not there is empty; one that cannot be read is said, in the OS's words,
+    // rather than written over as if it were empty.
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(strerror(&e)),
+    };
+    let block = merge_rules_block();
+    let next = match (text.find(MERGE_RULES_BEGIN), text.find(MERGE_RULES_END)) {
+        (Some(start), Some(end)) if end > start => {
+            let end = end + MERGE_RULES_END.len();
+            format!("{}{block}{}", &text[..start], &text[end..])
+        }
+        _ if text.is_empty() => format!("{block}\n"),
+        _ => format!("{}\n{block}\n", text.trim_end_matches('\n')),
+    };
+    if next == text {
+        return Ok(false);
+    }
+    std::fs::write(path, next).map_err(|e| strerror(&e))?;
+    Ok(true)
+}
+
 fn ensure_gitignore(path: &Path) -> Result<bool, String> {
     if !path.exists() {
         std::fs::write(path, GITIGNORE_BASELINE).map_err(|e| strerror(&e))?;
@@ -1206,6 +1275,44 @@ fn first_clone_name(root: &Path) -> String {
 }
 
 #[cfg(test)]
+mod merge_rules_tests {
+    use super::*;
+
+    #[test]
+    fn the_merge_rules_are_written_once_kept_beside_anyone_elses_and_brought_up_to_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitattributes");
+
+        assert!(ensure_gitattributes(&path).unwrap(), "a fresh file");
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(first.starts_with(MERGE_RULES_BEGIN), "{first}");
+        assert!(
+            first.contains("personas/_dispatch/*.jsonl merge=union\n"),
+            "{first}"
+        );
+        assert!(first.trim_end().ends_with(MERGE_RULES_END), "{first}");
+        assert!(
+            !ensure_gitattributes(&path).unwrap(),
+            "twice changes nothing"
+        );
+
+        // Somebody's own line, and a block an older charter wrote: kept, and replaced.
+        std::fs::write(
+            &path,
+            format!(
+                "*.png binary\n{MERGE_RULES_BEGIN}\nold.jsonl merge=union\n{MERGE_RULES_END}\n"
+            ),
+        )
+        .unwrap();
+        assert!(ensure_gitattributes(&path).unwrap());
+        let now = std::fs::read_to_string(&path).unwrap();
+        assert!(now.starts_with("*.png binary\n"), "{now}");
+        assert!(!now.contains("old.jsonl"), "{now}");
+        assert_eq!(now.matches(MERGE_RULES_BEGIN).count(), 1, "{now}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1417,12 +1524,13 @@ mod tests {
             ".claude/settings.json (env, ask: charter handoff)"
         };
         let mut said = vec![
-            Say::Ok("Initialized control plane (schema 1) — 8 item(s) written.".to_owned()),
+            Say::Ok("Initialized control plane (schema 1) — 9 item(s) written.".to_owned()),
             Say::Info("  + charter.toml".to_owned()),
             Say::Info("  + personas/".to_owned()),
             Say::Info("  + inventory/".to_owned()),
             Say::Info("  + workspaces/".to_owned()),
             Say::Info("  + .gitignore".to_owned()),
+            Say::Info("  + .gitattributes (merge rules)".to_owned()),
             Say::Info(format!("  + {settings_item}")),
             Say::Info("  + opencode.json (ask: charter handoff)".to_owned()),
             Say::Info("  + personas/steward/ (front door, declared in charter.toml)".to_owned()),
@@ -1462,7 +1570,8 @@ mod tests {
                 ),
                 Say::Info(
                     "  already present: charter.toml, personas/, inventory/, workspaces/, \
-                     .gitignore, .claude/settings.json (env), .claude/settings.json (ask: \
+                     .gitignore, .gitattributes (merge rules), .claude/settings.json (env), \
+                     .claude/settings.json (ask: \
                      charter handoff), opencode.json (ask: charter handoff), \
                      .claude/settings.json (plane-root guard already wired)"
                         .to_owned()
@@ -1538,7 +1647,8 @@ mod tests {
 
         let outcome = init(&at(&root, false), &plain());
 
-        let mut created = "charter.toml, personas/, .gitignore, .claude/settings.json (env), \
+        let mut created = "charter.toml, personas/, .gitignore, .gitattributes (merge rules), \
+                           .claude/settings.json (env), \
                            .claude/settings.json (ask: charter handoff), opencode.json (ask: \
                            charter handoff), personas/steward/ (front door, declared in \
                            charter.toml)"
@@ -1934,8 +2044,8 @@ mod tests {
                         .to_owned()
                 ),
                 Say::Info(
-                    "  already present: personas/, workspaces/, .claude/settings.json \
-                     (plane-root guard already wired)"
+                    "  already present: personas/, workspaces/, .gitattributes (merge rules), \
+                     .claude/settings.json (plane-root guard already wired)"
                         .to_owned()
                 ),
             ]
@@ -1962,7 +2072,7 @@ mod tests {
         let outcome = reinit(&at(&root, true));
 
         let mut added = "personas/, inventory/, workspaces/, .gitignore (/charter.local.toml), \
-                         .claude/settings.json (env)"
+                         .gitattributes (merge rules), .claude/settings.json (env)"
             .to_owned();
         let mut said = Vec::new();
         if guard_created {
@@ -1991,7 +2101,9 @@ mod tests {
         let outcome = reinit(&at(&root, true));
 
         let mut created =
-            "workspaces/, .gitignore (/charter.local.toml), .claude/settings.json (env)".to_owned();
+            "workspaces/, .gitignore (/charter.local.toml), .gitattributes (merge rules), \
+             .claude/settings.json (env)"
+                .to_owned();
         let mut present = "personas/".to_owned();
         if guard_created {
             created.push_str(&format!(", {guard}"));

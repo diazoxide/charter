@@ -78,6 +78,41 @@ fn beside_the_indicator(alert: &alerts::Alert) -> Option<alerts::Alert> {
     }
 }
 
+/// How long a save may stay blocked before the drawer says so (ADR 0051). A secret the scan
+/// caught is said at once: that save never goes through without somebody.
+const BLOCKED_FOR: f64 = 600.0;
+
+/// The drawer's row for a plane whose save is blocked, once it has been for [`BLOCKED_FOR`] —
+/// or at once for a secret. The app's alone, not the core's: the terminal status line reads the
+/// core's alerts, and the Saving view is where this one is resolved.
+fn save_blocked(root: &Path, now: f64) -> Option<AlertRow> {
+    let standing = charter_core::planegit::standing(root);
+    let why = standing.blocked?;
+    let since = charter_core::planegit::journal(root)
+        .last()
+        .and_then(|line| line["at"].as_f64())
+        .or_else(|| charter_core::planegit::push_record(root).and_then(|r| r["at"].as_f64()))
+        .unwrap_or(now);
+    let secret = why.contains("secret");
+    if !secret && now - since < BLOCKED_FOR {
+        return None;
+    }
+    Some(AlertRow {
+        severity: "bad".to_owned(),
+        subject: "save".to_owned(),
+        detail: format!("the plane's save is blocked: {why}"),
+        remedy: "Open the Saving tab: resolve it in a chat, or in a terminal".to_owned(),
+    })
+}
+
+/// Seconds since the epoch, as the journal writes them.
+fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
 /// The rows, and why the reading stopped where it did.
 fn rows(root: &Path) -> (Vec<AlertRow>, Option<String>) {
     let reading = alerts::read(&alerts::Asking {
@@ -103,6 +138,7 @@ fn rows(root: &Path) -> (Vec<AlertRow>, Option<String>) {
                     remedy: shown.remedy,
                 }
             })
+            .chain(save_blocked(root, now()))
             .collect(),
         reading.stopped,
     )
@@ -168,5 +204,59 @@ mod tests {
                 memory: None,
             })
         );
+    }
+
+    fn blocked_plane(detail: &str, at: f64) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("charter.toml"), "[plane]\nmode = \"push\"\n").unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["add", "-A"],
+            &["-c", "commit.gpgsign=false", "commit", "-q", "-m", "one"],
+        ] {
+            let mut command = std::process::Command::new("git");
+            command
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.invalid");
+            charter_core::forklock::output(&mut command).expect("git runs");
+        }
+        let journal = charter_core::planegit::journal_path(root);
+        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+        std::fs::write(
+            journal,
+            format!(
+                "{}\n",
+                serde_json::json!({"at": at, "outcome": "blocked", "detail": detail})
+            ),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_save_blocked_by_a_secret_is_said_at_once() {
+        let dir = blocked_plane("a secret-shaped value in a memory or ref file", now());
+        let row = save_blocked(dir.path(), now()).expect("said at once");
+        assert_eq!(
+            (row.severity.as_str(), row.subject.as_str()),
+            ("bad", "save")
+        );
+        assert!(row.detail.contains("secret-shaped"), "{row:?}");
+    }
+
+    #[test]
+    fn any_other_block_is_said_after_ten_minutes_and_not_before() {
+        let at = now();
+        let dir = blocked_plane("the remote changed the same lines in: notes.md", at);
+        assert!(save_blocked(dir.path(), at + 60.0).is_none());
+        assert!(save_blocked(dir.path(), at + 601.0).is_some());
     }
 }
