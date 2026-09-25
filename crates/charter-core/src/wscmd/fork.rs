@@ -74,6 +74,10 @@ pub struct Request<'a> {
     pub restore: bool,
     /// The instant the manifest and the fork's note are stamped with.
     pub now: chrono::DateTime<chrono::Utc>,
+    /// The folders extensions keep inside a workspace, each carried like the memory
+    /// (`extension::events::carried`, charter-app#343): whether or not the extension is on,
+    /// because a fork is not the moment to decide an extension's data stays behind.
+    pub extension_folders: &'a [String],
 }
 
 /// One path `fork` could not read, with the errno behind it.
@@ -93,6 +97,7 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
         live,
         restore,
         now,
+        extension_folders,
     } = *request;
     let plane = crate::workspaces::Plane::open(root);
 
@@ -143,7 +148,7 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
     //
     // A `BTreeMap` would order these by name; the report's order is charter's — the charter,
     // then the memory, then the todos — so it is a list.
-    let carried: Vec<(&str, Unread)> = vec![
+    let mut carried: Vec<(&str, Unread)> = vec![
         (
             "workspace.md",
             carry_file(
@@ -175,6 +180,20 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
             ),
         ),
     ];
+    // Then each extension's folder, after charter's own and in name order — only one the parent
+    // has, so a fork of a workspace the extension never wrote in says nothing about it.
+    let mut extension_carried: Vec<&str> = Vec::new();
+    for folder in extension_folders {
+        let from = parent.dir().join(folder);
+        if std::fs::symlink_metadata(&from).is_err() {
+            continue;
+        }
+        let unread = carry_tree(root, &from, &fresh.dir().join(folder));
+        if unread.is_empty() {
+            extension_carried.push(folder);
+        }
+        carried.push((folder, unread));
+    }
     let missed: Unread = carried
         .iter()
         .flat_map(|(_, unread)| unread.iter().cloned())
@@ -253,6 +272,13 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
         for (path, code) in &missed {
             say(Say::Fail(crate::memstore::cannot_check(root, path, *code)));
         }
+    }
+    if !extension_carried.is_empty() {
+        let folders: Vec<String> = extension_carried.iter().map(|it| format!("{it}/")).collect();
+        say(Say::Info(format!(
+            "Carried the folder(s) extensions keep in '{src}': {}",
+            folders.join(", ")
+        )));
     }
     let inherited = fresh.todos().map(|t| t.len()).unwrap_or(0);
     if inherited > 0 {
@@ -561,6 +587,7 @@ mod tests {
                 live,
                 restore: false,
                 now: now(),
+                extension_folders: &[],
             },
             &mut |s| lines.push(s.to_string()),
         );

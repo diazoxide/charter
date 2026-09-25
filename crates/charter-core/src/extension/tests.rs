@@ -204,10 +204,10 @@ fn a_manifest_that_is_not_json_is_refused() {
 fn a_manifest_of_another_version_is_refused_rather_than_guessed_at() {
     let made = Made::new();
     made.ordinary();
-    made.manifest(r#"{"version":2,"id":"x","contributes":{"runs":"p"}}"#);
+    made.manifest(r#"{"version":3,"id":"x","contributes":{"runs":"p"}}"#);
 
     let why = read_at(&made.at()).expect_err("no extension");
-    assert!(why.contains("is version 2"), "{why}");
+    assert!(why.contains("is version 3, and this charter reads versions 1 to 2"), "{why}");
 }
 
 #[test]
@@ -2034,7 +2034,7 @@ fn an_unknown_capability_is_named_in_the_refusal_even_beside_a_known_one() {
         "{why}"
     );
     assert!(
-        why.contains("This charter knows probe, badges, repo-columns."),
+        why.contains("This charter knows probe, badges, repo-columns, events, briefing."),
         "{why}"
     );
 }
