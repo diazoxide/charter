@@ -23,7 +23,9 @@
 //!   the window set;
 //! - **how the operator arranged what this file already names** — which of those planes are
 //!   pinned, and which workspaces inside them ([`Recent::pinned`],
-//!   [`Recent::pinned_workspaces`]);
+//!   [`Recent::pinned_workspaces`]), and whether charter has pinned a plane's most active
+//!   workspaces for them once ([`Recent::most_active_pinned`], ADR 0054), which is a fact
+//!   about those pins and not a sixth thing;
 //! - **which stream this machine takes charter from** ([`Store::channel`]).
 //!
 //! **The fourth was three until ADR 0040, and the fifth is newer still; the count is
@@ -170,6 +172,10 @@ pub const MOST_PINNED: usize = 32;
 /// workspaces at ADR 0026's limits, and a plane claiming a thousand pinned workspaces is a
 /// file charter did not write.
 pub const MOST_PINNED_WORKSPACES: usize = 32;
+
+/// How many workspaces [`Store::pin_the_most_active`] pins in a plane charter has not pinned
+/// any in before (ADR 0054): an operator with many workspaces works in about three.
+pub const FIRST_OPEN_PINS: usize = 3;
 
 /// The two bounds, counted apart, in one place.
 ///
@@ -761,6 +767,14 @@ pub struct Recent {
     /// is the plane's own, filtered. Two operators who pin the same two workspaces see them in
     /// the same order, which is the plane's.
     pub pinned_workspaces: std::collections::BTreeSet<String>,
+    /// Whether [`Store::pin_the_most_active`] has run for this plane (ADR 0054).
+    ///
+    /// **Beside the pins, because it is a fact about them**: that this operator's workspace
+    /// pins in this plane were started for them once, so that what is pinned now is theirs.
+    /// Without it an operator who unpinned everything would be pinned again at the next open,
+    /// and the strip would be arranging itself. Forgetting the plane forgets it with the pins,
+    /// and the next open pins again — which is the arrangement a first open gets.
+    pub most_active_pinned: bool,
 }
 
 /// One window, and the planes it had open as tabs.
@@ -810,6 +824,7 @@ impl Store {
                 trust: None,
                 pinned: false,
                 pinned_workspaces: std::collections::BTreeSet::new(),
+                most_active_pinned: false,
             },
         };
         self.recents.insert(0, entry);
@@ -928,6 +943,56 @@ impl Store {
             .cloned()
             .collect();
         (kept, gone)
+    }
+
+    /// Pins the [`FIRST_OPEN_PINS`] most recently active workspaces in `plane`, **once**
+    /// (ADR 0054), answering whether it ran.
+    ///
+    /// The workspace strip draws the pinned workspaces and the one you are in, so a plane
+    /// opened before that rule, or opened here for the first time, would draw almost nothing.
+    /// This is its one-time arrangement: the workspaces most recently worked in, ranked by
+    /// `briefing`'s `last_active` so "most recently active" means what the session-start
+    /// briefing means by it. **Only in a plane the operator has pinned nothing in**: one they
+    /// have arranged already is theirs, and it is marked done without a pin added.
+    ///
+    /// **Once, and recorded** ([`Recent::most_active_pinned`]). An operator who then unpins
+    /// everything is not pinned again: a strip that pins and unpins on its own is the moving
+    /// target ADR 0039 refused. A plane charter does not remember has nowhere to record it
+    /// and is not touched; one whose workspaces cannot be listed is left to try again at the
+    /// next open, because recording a run that pinned nothing it could see would be a lie
+    /// the operator pays for with an empty strip.
+    pub fn pin_the_most_active(&mut self, plane: &Path) -> bool {
+        let Some(entry) = self.recents.iter_mut().find(|one| one.plane == plane) else {
+            return false;
+        };
+        if entry.most_active_pinned {
+            return false;
+        }
+        // The operator has arranged this plane already, and adding to it would be the strip
+        // arranging itself. Spent, so unpinning everything later does not set it off either.
+        if !entry.pinned_workspaces.is_empty() {
+            entry.most_active_pinned = true;
+            return false;
+        }
+        let Ok(names) = crate::workspaces::Plane::open(plane).workspaces() else {
+            return false;
+        };
+        let mut ranked: Vec<(f64, String)> = names
+            .into_iter()
+            .map(|name| {
+                let when = crate::briefing::last_active(plane, &name).unwrap_or(0.0);
+                (when, name)
+            })
+            .collect();
+        ranked.sort_by(|one, other| other.0.total_cmp(&one.0));
+        for (_, name) in ranked.into_iter().take(FIRST_OPEN_PINS) {
+            if entry.pinned_workspaces.len() >= MOST_PINNED_WORKSPACES {
+                break;
+            }
+            entry.pinned_workspaces.insert(name);
+        }
+        entry.most_active_pinned = true;
+        true
     }
 
     /// Record that the operator approved `plane` while it contributed `contributed`.
@@ -1521,6 +1586,12 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
             trust: raw.get("trust").and_then(trust_of),
             pinned,
             pinned_workspaces: pinned_workspaces_of(raw.get("pinnedWorkspaces"), dropped),
+            // Anything but `true` is "not yet", which costs one pinning at the next open. The
+            // other direction would leave a strip with nothing on it but where you are.
+            most_active_pinned: raw
+                .get("mostActivePinned")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
         });
     }
 
@@ -1706,6 +1777,8 @@ struct RecentOnDisk {
     pinned: bool,
     #[serde(rename = "pinnedWorkspaces", skip_serializing_if = "Vec::is_empty")]
     pinned_workspaces: Vec<String>,
+    #[serde(rename = "mostActivePinned", skip_serializing_if = "is_false")]
+    most_active_pinned: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -1768,6 +1841,7 @@ impl From<&Store> for OnDisk {
                             .take(MOST_PINNED_WORKSPACES)
                             .cloned()
                             .collect(),
+                        most_active_pinned: entry.most_active_pinned,
                         trust: entry.trust.as_ref().map(|trust| TrustOnDisk {
                             approved: trust.approved,
                             plugins: trust.contributed.plugins.clone(),
@@ -3235,6 +3309,121 @@ mod tests {
         let (kept, _) = store.pinned_workspaces(Path::new("/planes/a"), &["zeta", "beta", "alpha"]);
 
         assert_eq!(kept, ["zeta", "alpha"]);
+    }
+
+    /// A plane on disk holding these workspaces, each last active at the second given: its
+    /// `workspace.md` was last written then, which is what `briefing`'s `last_active` reads.
+    fn a_plane_with_workspaces(at: &Path, active: &[(&str, u64)]) -> PathBuf {
+        let plane = a_plane(at);
+        for (name, when) in active {
+            let charter = plane.join("workspaces").join(name).join("workspace.md");
+            std::fs::create_dir_all(charter.parent().unwrap()).unwrap();
+            std::fs::write(&charter, "").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&charter)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(*when))
+                .unwrap();
+        }
+        plane
+    }
+
+    #[test]
+    fn the_first_open_pins_the_three_most_recently_active_workspaces() {
+        let planes = tempfile::tempdir().unwrap();
+        let plane = a_plane_with_workspaces(
+            &planes.path().join("p"),
+            &[
+                ("alpha", 1_000),
+                ("beta", 4_000),
+                ("gamma", 2_000),
+                ("delta", 3_000),
+            ],
+        );
+        let mut store = Store::default();
+        store.remember(&plane, 1);
+
+        assert!(store.pin_the_most_active(&plane));
+
+        let (kept, _) = store.pinned_workspaces(&plane, &["alpha", "beta", "delta", "gamma"]);
+        assert_eq!(kept, ["beta", "delta", "gamma"]);
+    }
+
+    #[test]
+    fn the_most_active_are_pinned_once_and_never_again_after_everything_is_unpinned() {
+        // An operator who unpinned everything said so. A strip that pinned again at the next
+        // launch would be the one that pins on its own, which ADR 0054 refuses.
+        let machine = machine();
+        let planes = tempfile::tempdir().unwrap();
+        let plane = a_plane_with_workspaces(
+            &planes.path().join("p"),
+            &[("alpha", 1_000), ("beta", 2_000)],
+        );
+        let mut store = Store::default();
+        store.remember(&plane, 1);
+        store.pin_the_most_active(&plane);
+        for name in ["alpha", "beta"] {
+            store.pin_workspace(&plane, name, false).unwrap();
+        }
+        write(machine.path(), &store).unwrap();
+        let mut back = read(machine.path()).store;
+
+        assert!(!back.pin_the_most_active(&plane));
+
+        let (kept, _) = back.pinned_workspaces(&plane, &["alpha", "beta"]);
+        assert!(kept.is_empty(), "{kept:?}");
+    }
+
+    #[test]
+    fn a_plane_the_operator_already_pinned_in_is_left_as_they_arranged_it() {
+        // Their pins are their arrangement. Adding three they did not choose would be the
+        // strip rearranging itself, so the one-time pinning is spent without pinning anything,
+        // and unpinning later does not set it off either.
+        let planes = tempfile::tempdir().unwrap();
+        let plane = a_plane_with_workspaces(
+            &planes.path().join("p"),
+            &[("alpha", 1_000), ("beta", 2_000), ("gamma", 3_000)],
+        );
+        let mut store = Store::default();
+        store.remember(&plane, 1);
+        store.pin_workspace(&plane, "alpha", true).unwrap();
+
+        assert!(!store.pin_the_most_active(&plane));
+        let (kept, _) = store.pinned_workspaces(&plane, &["alpha", "beta", "gamma"]);
+        assert_eq!(kept, ["alpha"]);
+
+        store.pin_workspace(&plane, "alpha", false).unwrap();
+        assert!(!store.pin_the_most_active(&plane));
+        let (kept, _) = store.pinned_workspaces(&plane, &["alpha", "beta", "gamma"]);
+        assert!(kept.is_empty(), "{kept:?}");
+    }
+
+    #[test]
+    fn a_workspace_made_after_the_first_open_is_pinned_beside_the_most_active() {
+        // The window pins a workspace it made (ADR 0054). That is the operator's pin, and it
+        // must not set the one-time pinning off again over the ones they left unpinned.
+        let planes = tempfile::tempdir().unwrap();
+        let plane = a_plane_with_workspaces(
+            &planes.path().join("p"),
+            &[
+                ("alpha", 1_000),
+                ("beta", 2_000),
+                ("gamma", 3_000),
+                ("delta", 4_000),
+            ],
+        );
+        let mut store = Store::default();
+        store.remember(&plane, 1);
+        store.pin_the_most_active(&plane);
+        a_plane_with_workspaces(&plane, &[("epsilon", 5_000)]);
+
+        assert_eq!(store.pin_workspace(&plane, "epsilon", true), Ok(true));
+        assert!(!store.pin_the_most_active(&plane));
+
+        let there = ["alpha", "beta", "delta", "epsilon", "gamma"];
+        let (kept, _) = store.pinned_workspaces(&plane, &there);
+        assert_eq!(kept, ["beta", "delta", "epsilon", "gamma"]);
     }
 
     #[test]

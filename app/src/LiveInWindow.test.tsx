@@ -45,6 +45,9 @@ function core() {
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "chat_states") return [];
+    // The operator has pinned every workspace, so every one is on the strip and can be
+    // clicked there: the strip draws what is pinned and the one you are in (ADR 0054).
+    if (cmd === "plane_pins") return { project: false, workspaces: ["alpha", "beta"], missing: [] };
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,

@@ -893,14 +893,21 @@ impl Planes {
     ///
     /// **Never an approval.** `Store::remember` carries an existing [`machine::Trust`] over
     /// and creates none, so opening a plane a hundred times does not become consent to it.
+    ///
+    /// **And the first open pins its most active workspaces** (ADR 0054), in the same write:
+    /// the workspace strip draws what is pinned, so a plane nobody has pinned anything in
+    /// would otherwise open to a strip holding only the workspace you are in. The store
+    /// records that it did, so every later open leaves the pins as the operator left them.
     fn remember(&self, root: &Path) {
         let Some(config) = self.config.as_deref() else {
             return;
         };
         let when = now();
         let plane = root.to_path_buf();
-        if let Err(why) = machine::update(config, move |store| store.remember(&plane, when))
-            && why.kind() != std::io::ErrorKind::Unsupported
+        if let Err(why) = machine::update(config, move |store| {
+            store.remember(&plane, when);
+            store.pin_the_most_active(&plane);
+        }) && why.kind() != std::io::ErrorKind::Unsupported
         {
             eprintln!(
                 "charter: {} was opened but not added to the list of recent planes ({why})",

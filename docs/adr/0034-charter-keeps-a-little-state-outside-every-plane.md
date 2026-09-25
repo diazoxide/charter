@@ -65,6 +65,15 @@ this record's own test: it is about the machine (one binary serves every plane o
 be on two channels), it is false inside any one plane, and deleting it costs the operator one
 preference, which falls back to stable. Every way of not knowing it reads as stable, never dev.
 
+**Amended by ADR 0054 (2026-09-25): beside the workspace pins, whether charter has pinned a
+plane's most active workspaces for the operator once** (`Recent::most_active_pinned`). It is not
+a seventh fact. It is part of the fifth, because it describes those pins: the workspace strip
+draws what is pinned, so the first open of a plane with no workspace pins pins its three most
+recently active workspaces (one the operator already pinned in is left alone), and this records
+that it happened so that an operator who unpins everything is not pinned again.
+It passes this record's test. Deleting it costs one re-pinning at the next open, and every plane
+still opens with everything it had.
+
 **And never plane content.** No workspace names, no todos, no memory, no chat names, no persona,
 nothing a plane's own files already say. The test to apply to any field somebody wants to add:
 *deleting this file must cost the operator their arrangement and their approvals and nothing

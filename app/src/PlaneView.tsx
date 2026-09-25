@@ -685,8 +685,9 @@ export function PlaneView({
         setPinnedWorkspaces(Array.isArray(said?.workspaces) ? said.workspaces : []);
         setDanglingPins(Array.isArray(said?.missing) ? said.missing : []);
       })
-      // A window that cannot ask draws nothing pinned, which is the plane's own order — the
-      // arrangement an operator who has pinned nothing already has.
+      // A window that cannot ask draws nothing pinned: the workspace strip holds the one you
+      // are in, and the rest are behind its show-more — the arrangement an operator who has
+      // pinned nothing already has (ADR 0054).
       .catch(() => undefined);
     return () => {
       gone = true;
@@ -837,8 +838,9 @@ export function PlaneView({
     [ofWorkspace],
   );
 
-  /** The workspaces the strip shows: this project's, plus the one for chats outside them all
-   *  when there are any. In the plane's own order, which is the sidebar's. */
+  /** Every workspace the window can bring forward: this project's, plus the one for chats
+   *  outside them all when there are any. In the plane's own order, which is the sidebar's.
+   *  The palette lists all of them; the strip draws fewer (`onWorkspaceStrip`, below). */
   const strips = useMemo(() => {
     if (sidebar === undefined) return [];
     const names = sidebar.workspaces.map((ws) => ws.name);
@@ -855,18 +857,35 @@ export function PlaneView({
     ];
   }, [filedIn, pinnedWorkspaces, sidebar, tabs]);
 
-  /** And which of them the workspace strip has room to draw. The same rule as the chats'
-   *  one level up, because the operator's complaint was about all of them: a strip that
-   *  scrolls says nothing about what is past its edge. */
-  const { strip: workspaceStrip, width: workspaceRoom } = useRoom(strips.length);
+  /**
+   * What the workspace strip draws: **the pinned workspaces, and the one you are in** (ADR
+   * 0054). Everything else is behind its show-more button.
+   *
+   * An operator with many workspaces works in about three, and filling the width with whatever
+   * fits put the workspaces nobody was working in beside the three that mattered. So the pins
+   * are the strip, in the order `strips` holds them, and the workspace in front is drawn after
+   * them when it is not one of them — ADR 0039's "the selected tab is always drawn", which is
+   * what says where you are — and goes back behind show-more when you leave it. Nothing else
+   * earns a tab: a workspace that needs you is counted on the show-more button, never moved
+   * onto the strip under the operator's hand.
+   */
+  const onWorkspaceStrip = useMemo(
+    () => strips.filter((name) => pinnedWorkspaces.includes(name) || name === focused),
+    [focused, pinnedWorkspaces, strips],
+  );
+
+  /** And which of those the strip has room to draw. The same rule as the chats' one level
+   *  down: when the pins alone do not fit, what does not fit goes behind show-more too, so the
+   *  strip never scrolls and never loses its `+`. */
+  const { strip: workspaceStrip, width: workspaceRoom } = useRoom(onWorkspaceStrip.length);
   // The floors grow with the window's text (charter-app#283, `fits.leastAt`).
   const windowText = useTextSizes().window;
   const workspaceLeast = leastAt(LEAST.workspace, windowText);
   const chatLeast = leastAt(LEAST.chat, windowText);
-  const workspacesShown = useMemo(
-    () => fitting(strips, focused, workspaceRoom, workspaceLeast),
-    [focused, strips, workspaceRoom, workspaceLeast],
-  );
+  const workspacesShown = useMemo(() => {
+    const { shown } = fitting(onWorkspaceStrip, focused, workspaceRoom, workspaceLeast);
+    return { shown, hidden: strips.filter((name) => !shown.includes(name)) };
+  }, [focused, onWorkspaceStrip, strips, workspaceRoom, workspaceLeast]);
 
   /**
    * **Each workspace's colour** (charter-app#281), as the core read it out of its
@@ -888,7 +907,7 @@ export function PlaneView({
   /**
    * What a workspace is drawn as: its name, its pin, and the two counts.
    *
-   * **One definition, used by the strip and by the menu of what the strip has no room for.**
+   * **One definition, used by the strip and by the menu of what the strip is not drawing.**
    * They are the same workspace and a second copy of the markup is a second answer — the
    * rule the catalogue already follows for words, applied to marks.
    *
@@ -927,7 +946,7 @@ export function PlaneView({
     return (
       <>
         {/* Its colour, as a mark in its own accent (charter-app#281) — on the strip and in the
-            menu of what the strip has no room for, which is why it is here and not a style of
+            menu of what the strip is not drawing, which is why it is here and not a style of
             the tab alone. Hidden from a screen reader: the name says which workspace. */}
         {colour !== null && (
           <span className="workspace-mark" aria-hidden="true" style={tintOf(workspace)} />
@@ -1030,8 +1049,9 @@ export function PlaneView({
   );
 
   /**
-   * And what the workspace strip's show-more menu lists: the workspaces it has no room for,
-   * **most recently moved first** — the chat strip's rule one level up (ADR 0039, ADR 0054).
+   * And what the workspace strip's show-more menu lists: the workspaces it is not drawing —
+   * the ones nobody pinned and you are not in, and any pins it had no room for — **most
+   * recently moved first** — the chat strip's rule one level up (ADR 0039, ADR 0054).
    *
    * A workspace moved when the last of its chats did. One nothing has been heard about reads
    * `0` and keeps the strip's order, for `byLastActivity`'s reason.
@@ -1433,6 +1453,20 @@ export function PlaneView({
     setMakingWorkspace(true);
   }, []);
 
+  /** Pins or unpins one workspace. It goes in the machine store, so what the store now says
+   *  is asked again rather than assumed — `pinning` is what asks. */
+  const pinWorkspace = useCallback(
+    async (workspace: string, pinned: boolean): Promise<Ran> => {
+      const said = await commands
+        .pinWorkspace(plane, workspace, pinned)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return { ok: false, refused: said.error };
+      setPinning((asked) => asked + 1);
+      return { ok: true };
+    },
+    [plane],
+  );
+
   /**
    * Makes it, through `charter workspace create`.
    *
@@ -1454,15 +1488,20 @@ export function PlaneView({
       }
       setMakingWorkspace(false);
       setWorkspaceTrouble(undefined);
+      // **Made here, so pinned** (ADR 0054): the operator made it in order to work in it, and
+      // the workspace strip draws what is pinned. A pin the store refused leaves the
+      // workspace made and says why, beside what charter said about making it.
+      const pinned = await pinWorkspace(name, true);
+      const words = pinned.ok ? answer.data : [...answer.data, pinned.refused];
       // charter's own lines, which say where it landed and whether it is LOCAL or LIVE.
-      setReport({ from: "workspace.create", refused: false, words: answer.data.join(" ") });
+      setReport({ from: "workspace.create", refused: false, words: words.join(" ") });
       // The plane is read again rather than this window writing the workspace into its own
       // copy of the sidebar, and the strip lands on what was just made: it holds no chats, so
       // `picked` is the only thing that can put the window in it.
       setPicked(name);
       setReplan((asked) => asked + 1);
     },
-    [plane],
+    [pinWorkspace, plane],
   );
 
   /** Asks for a new vault. It makes nothing: the dialog asks, and `vault_create` makes one. */
@@ -1725,20 +1764,6 @@ export function PlaneView({
     backToTheTab.current = false;
     chatStrip.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
   }, [renaming]);
-
-  /** Pins or unpins one workspace. It goes in the machine store, so what the store now says
-   *  is asked again rather than assumed — `pinning` is what asks. */
-  const pinWorkspace = useCallback(
-    async (workspace: string, pinned: boolean): Promise<Ran> => {
-      const said = await commands
-        .pinWorkspace(plane, workspace, pinned)
-        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (said.status === "error") return { ok: false, refused: said.error };
-      setPinning((asked) => asked + 1);
-      return { ok: true };
-    },
-    [plane],
-  );
 
   /**
    * Runs an extension's action from the palette (charter-app#341): on nothing in particular, in
@@ -2274,7 +2299,7 @@ export function PlaneView({
           </RovingFocusGroup.Root>
           {/* This strip's own controls, in the shape the project strip above already has
               (`App.tsx`): the `+` that makes one more of what the strip lists, then what the
-              strip had no room for. `.strip-doing` and not a `.more` of its own, because the
+              strip is not drawing. `.strip-doing` and not a `.more` of its own, because the
               two strips now hold the same two things and a second class name would be a
               second place to dress them.
 
@@ -3219,6 +3244,10 @@ export type Hidden = {
 
 /**
  * The mark on something the operator pinned (ADR 0039).
+ *
+ * **On the workspace strip a pin is also what puts a tab there at all** (ADR 0054): that strip
+ * draws the pinned workspaces and the one you are in. On the other two a pin draws its tab
+ * first.
  *
  * **A mark and not a button, and that is the whole of pinning's surface on a strip.** A `📌`
  * control on every tab is fifty more controls on the one strip that already broke at fifty

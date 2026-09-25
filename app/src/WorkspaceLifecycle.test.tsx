@@ -1,6 +1,13 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render as renderBare, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -81,6 +88,15 @@ function core(
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "chat_states") return [];
+    // beta is pinned, so it is on the strip beside alpha, the workspace you are in: the strip
+    // draws what is pinned and the one you are in (ADR 0054). alpha is left unpinned so its
+    // own menu offers to pin it.
+    if (cmd === "plane_pins")
+      return {
+        project: false,
+        workspaces: ["beta"].filter((name) => !gone.includes(name)),
+        missing: [],
+      };
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,
@@ -152,7 +168,8 @@ async function askToDelete(workspace: string) {
 }
 
 async function settled() {
-  await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
+  // beta pinned, then alpha, the workspace you are in (ADR 0054).
+  await waitFor(() => expect(strip()).toEqual(["beta", "alpha"]));
 }
 
 describe("deleting a workspace", () => {
@@ -230,7 +247,7 @@ describe("deleting a workspace", () => {
     // the rest of the window `aria-hidden`, which is the surface behaving correctly
     // (`docs/ui-primitives.md`). Cancelled, the workspace is still there.
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(strip()).toEqual(["alpha", "beta"]);
+    expect(strip()).toEqual(["beta", "alpha"]);
   });
 
   it("only then offers to force, and the button names what it discards", async () => {
@@ -338,7 +355,7 @@ describe("deleting a workspace", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     expect(calls("workspace_remove")).toEqual([]);
-    expect(strip()).toEqual(["alpha", "beta"]);
+    expect(strip()).toEqual(["beta", "alpha"]);
   });
 
   it("goes through workspace_remove and never through anything else", async () => {
