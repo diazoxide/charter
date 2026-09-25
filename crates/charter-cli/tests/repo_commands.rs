@@ -659,6 +659,46 @@ fn discover_writes_the_inventory_and_the_topology_from_what_the_forge_answered()
 }
 
 #[test]
+fn discover_keeps_a_repo_only_another_operators_login_could_see() {
+    // The inventory is tracked and every operator's login reaches different repos: this run
+    // not seeing `private-tool` is not a reason to take it from everyone (ADR 0055).
+    let w = World::new();
+    stub_gh(&w, true);
+    std::fs::create_dir_all(w.root.join("inventory")).unwrap();
+    std::fs::write(
+        w.root.join("inventory/repos.json"),
+        json!({"group": "acme", "count": 1, "repos": [
+            {"name": "private-tool", "path_with_namespace": "acme/private-tool",
+             "ssh_url": "git@github.com:acme/private-tool.git", "default_branch": "main",
+             "kind": "app", "stack": "go", "description": "", "topics": [],
+             "web_url": "https://github.com/acme/private-tool", "forge": "github"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+
+    let out = w.charter_with(&["discover", "--no-docs"], &[("GH_TOKEN", TOKEN)]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    let doc: Value = serde_json::from_str(
+        &std::fs::read_to_string(w.root.join("inventory/repos.json")).unwrap(),
+    )
+    .unwrap();
+    let names: Vec<&str> = doc["repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["legacy", "private-tool", "widget"]);
+    assert!(
+        !stderr(&out).contains("No longer in group"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn the_token_reaches_the_forge_cli_through_its_environment_and_never_its_argv() {
     let w = World::new();
     stub_gh(&w, true);

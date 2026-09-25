@@ -786,3 +786,22 @@ fn a_chat_started_in_a_workspace_is_handed_that_workspaces_plugin_choices_betwee
         "a chat outside the workspace is not handed its choices"
     );
 }
+
+#[test]
+fn a_chat_started_in_no_directory_starts_in_the_plane_not_where_the_app_was_launched() {
+    charter_core::unsteered!();
+    // A plane with no workspace yet has nowhere else to start its outer chat, and the window
+    // sends no directory for it. Left unset, the terminal takes the app's own directory,
+    // which is `/` for an app opened from the Finder or the Dock.
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+    let start = Start {
+        cwd: None,
+        ..plane.start("work")
+    };
+
+    let ready = start::ready(&start, plane.root()).expect("it starts");
+
+    assert_eq!(ready.cwd.as_deref(), Some(plane.root()));
+}

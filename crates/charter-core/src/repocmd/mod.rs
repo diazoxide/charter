@@ -38,6 +38,7 @@ use std::fmt;
 pub mod clone;
 pub mod discover;
 pub mod docs;
+pub mod reachable;
 pub mod status;
 mod submodules;
 pub mod sync;

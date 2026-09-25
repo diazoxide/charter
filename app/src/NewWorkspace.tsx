@@ -1,6 +1,8 @@
 import { useId, useRef, useState } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Dialog from "@radix-ui/react-dialog";
+import type { PlaneId } from "./bindings";
+import { RepoPicker } from "./RepoPicker";
 
 /**
  * Making a workspace, asked where the answer is given.
@@ -23,10 +25,16 @@ import * as Dialog from "@radix-ui/react-dialog";
  * `workspace.md` is the living charter a fork inherits, and charter nags about an empty one on
  * every command — but a workspace with no vision is a workspace, and the core's own line
  * explains how to add one afterwards.
+ *
+ * **Its repos are picked from what the operator's own forge login reaches** (ADR 0055), and
+ * cloned after the workspace is made — the dialog closes at once and each repo lands on its
+ * own. Picking none is a workspace with no repos, which is still a workspace.
  */
 export function NewWorkspace({
   /** What the plane is called, so the dialog says where the workspace is going. */
   plane,
+  /** Which plane, for the repo picker to ask about. */
+  planeId,
   /** Why the last attempt made nothing — **the core's sentence, unchanged**. */
   trouble,
   /** Whether charter is making it right now, so the answer cannot be given twice. */
@@ -35,15 +43,17 @@ export function NewWorkspace({
   onCancel,
 }: {
   plane: string;
+  planeId: PlaneId;
   trouble?: string;
   making: boolean;
   /** `live`: born LIVE, its charter, memory and todos published with the plane (charter-app#301). */
-  onCreate: (name: string, vision: string, live: boolean) => void;
+  onCreate: (name: string, vision: string, live: boolean, repos: string[]) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState("");
   const [vision, setVision] = useState("");
   const [live, setLive] = useState(false);
+  const [repos, setRepos] = useState<ReadonlySet<string>>(new Set());
   const liveId = useId();
   const nameId = useId();
   const visionId = useId();
@@ -52,7 +62,7 @@ export function NewWorkspace({
   const box = useRef<HTMLInputElement>(null);
   const ready = name.trim() !== "" && !making;
   const create = () => {
-    if (ready) onCreate(name.trim(), vision, live);
+    if (ready) onCreate(name.trim(), vision, live, [...repos].sort());
   };
   return (
     <Dialog.Root
@@ -112,6 +122,12 @@ export function NewWorkspace({
             <p className="came-back">
               Recorded in <code>workspace.md</code>, the living charter a fork inherits. You can add
               it later with <code>charter workspace vision</code>.
+            </p>
+
+            <RepoPicker plane={planeId} picked={repos} onPicked={setRepos} />
+            <p className="came-back">
+              Optional. Each one is cloned into the workspace after it is made, and you can add or
+              remove repos later in its settings.
             </p>
 
             {/* LOCAL unless ticked: publishing is the operator's choice, never a default. */}

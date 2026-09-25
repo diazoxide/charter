@@ -409,6 +409,34 @@ export const commands = {
 	 */
 	workspaceFocused: (plane: PlaneId, workspace: string) => typedError<null, string>(__TAURI_INVOKE("workspace_focused", { plane, workspace })),
 	/**
+	 *  The repos the operator's own forge login reaches, asked now and held nowhere (ADR 0055).
+	 * 
+	 *  On a blocking thread: it is one forge call per page and per host, each with the forge
+	 *  CLI's own deadline.
+	 */
+	reachableRepos: (plane: PlaneId) => typedError<ReachableRepos, string>(__TAURI_INVOKE("reachable_repos", { plane })),
+	/**
+	 *  Add the repos the operator picked to the inventory, beside what it lists, so each can be
+	 *  cloned by name (ADR 0055). Asked once for a whole pick, before the clones.
+	 */
+	takeRepos: (plane: PlaneId, repos: string[]) => typedError<null, string>(__TAURI_INVOKE("take_repos", { plane, repos })),
+	/**
+	 *  Clone ONE repo into a workspace: `charter clone <repo> -w <workspace>`.
+	 * 
+	 *  One per call, and the window calls it once per repo in turn: that is what lets it show each
+	 *  repo's own state as it lands and retry one that failed, and no two calls race to write the
+	 *  workspace's manifest. On a blocking thread, because a clone can take the network's two
+	 *  minutes.
+	 */
+	cloneRepo: (plane: PlaneId, workspace: string, repo: string) => typedError<string[], string>(__TAURI_INVOKE("clone_repo", { plane, workspace, repo })),
+	/**
+	 *  Take one repo out of a workspace, clone and manifest row both (ADR 0055).
+	 * 
+	 *  **The guard is inside the delete**, exactly as [`workspace_remove`]'s is: this calls
+	 *  `wscmd::drop::drop_repo` and nothing else, and there is no `force`.
+	 */
+	dropRepo: (plane: PlaneId, workspace: string, repo: string) => typedError<string[], Refused>(__TAURI_INVOKE("drop_repo", { plane, workspace, repo })),
+	/**
 	 *  What git says about each of the focused workspace's clones, and what the forge cache
 	 *  last recorded for the branch each is on.
 	 * 
@@ -1984,6 +2012,24 @@ export type ProjectTheme = {
 	 *  `Said::local_left_out`.
 	 */
 	local_left_out: string | null,
+};
+
+/**  One repo the picker offers: what the operator reads to choose it. */
+export type ReachableRepo = {
+	/**  The name it is cloned under, and asked for by. */
+	name: string,
+	/**  `owner/name` on its forge. */
+	path: string,
+	description: string,
+};
+
+/**
+ *  What the picker draws: the repos this operator's forge logins reach, and a sentence for
+ *  each forge that did not answer.
+ */
+export type ReachableRepos = {
+	repos: ReachableRepo[],
+	trouble: string[],
 };
 
 /**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */

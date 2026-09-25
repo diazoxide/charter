@@ -11,6 +11,7 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { forgetRepoClones } from "./repoClones";
 
 /**
  * Making a workspace and deleting one, from the window.
@@ -41,6 +42,7 @@ const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMo
 afterEach(() => {
   cleanup();
   clearMocks();
+  forgetRepoClones();
 });
 
 const PLANE = "/home/dev/plane";
@@ -73,6 +75,12 @@ function core(
     atRisk?: Risk[];
     refuses?: boolean;
     refusesOver?: Risk[];
+    /** The plane's workspaces; none is a plane nobody has made one in yet. */
+    workspaces?: string[];
+    /** A forge the operator is not logged in to, as CI's machines are. */
+    loggedOut?: boolean;
+    /** Repos whose clone fails, with the core's sentence. */
+    cloneFails?: Record<string, string>;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -103,7 +111,7 @@ function core(
         personas: ["steward"],
         persona: "steward",
         unfiled: [],
-        workspaces: ["alpha", "beta"]
+        workspaces: (over.workspaces ?? ["alpha", "beta"])
           .filter((name) => !gone.includes(name))
           .map((name) => ({
             name,
@@ -132,6 +140,29 @@ function core(
         throw { said: refusalOver(refusesOver), at_risk: refusesOver };
       gone.push(String(got.workspace));
       return [`✓ Removed workspace '${String(got.workspace)}' and its clones.`];
+    }
+    if (cmd === "reachable_repos")
+      return {
+        repos: [
+          { name: "api", path: "acme/api", description: "" },
+          { name: "web", path: "acme/web", description: "" },
+        ],
+        trouble: over.loggedOut
+          ? ["gh is not authenticated for github.com. Run: gh auth login"]
+          : [],
+      };
+    if (cmd === "take_repos") return null;
+    if (cmd === "workspace_repos")
+      return { workspace: got.workspace, repos: [{ name: "api" }], cache_refused: null };
+    if (cmd === "drop_repo")
+      throw {
+        said: "Refusing to remove 'api' — this would discard work: api: uncommitted changes. Push or commit first.",
+        at_risk: [{ what: "api", said: "api: uncommitted changes" }],
+      };
+    if (cmd === "clone_repo") {
+      const fails = over.cloneFails?.[String(got.repo)];
+      if (fails !== undefined) throw fails;
+      return [`✓ ${String(got.repo)} cloned`];
     }
     if (cmd === "workspace_create") {
       const name = String(got.name);
@@ -486,7 +517,8 @@ describe("making a workspace", () => {
   it("shows the core's refusal about a name, in the dialog, and stays open", async () => {
     // The window validates no name of its own: `workspace_create` runs `wscmd::ensure`, which
     // is where `contain::workspace_name_ok` is. A second alphabet here would drift.
-    core();
+    // Logged out of the forge, as CI is: the picker's note about that is not the refusal.
+    core({ loggedOut: true });
     render(<App />);
     await settled();
     const dialog = await askToCreate();
@@ -514,6 +546,86 @@ describe("making a workspace", () => {
   });
 });
 
+describe("a plane with no workspace yet", () => {
+  it("offers to create one in the middle of the window, and keeps the strip's `+`", async () => {
+    // The first workspace could be made only from the palette: the strip and its `+` were
+    // drawn only once a workspace existed, and the empty window offered a chat.
+    const { calls } = core({ workspaces: [] });
+    render(<App />);
+
+    const empty = await screen.findByTestId("empty-plane");
+    expect(empty).toHaveTextContent("No workspaces yet");
+    const row = screen.getByRole("tablist", { name: "Workspaces" }).parentElement as HTMLElement;
+    expect(within(row).getByRole("button", { name: "New workspace…" })).toBeInTheDocument();
+
+    await userEvent.click(within(empty).getByRole("button", { name: "Create a workspace" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "first");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+
+    expect(calls("workspace_create").map((one) => one.args.name)).toEqual(["first"]);
+  });
+});
+
+describe("picking a new workspace's repos (ADR 0055)", () => {
+  async function createWithRepos(repos: string[]) {
+    await menuOn("alpha");
+    await userEvent.click(screen.getByRole("menuitem", { name: "New workspace…" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "gamma");
+    for (const repo of repos)
+      await userEvent.click(await within(dialog).findByRole("checkbox", { name: repo }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+  }
+
+  it("makes the workspace first, then clones each picked repo in turn", async () => {
+    const { asked } = core();
+    render(<App />);
+    await settled();
+
+    await createWithRepos(["web", "api"]);
+
+    await vi.waitFor(() =>
+      expect(
+        asked
+          .filter((one) => ["workspace_create", "take_repos", "clone_repo"].includes(one.cmd))
+          .map((one) => [one.cmd, one.args.repos ?? one.args.repo ?? one.args.name]),
+      ).toEqual([
+        ["workspace_create", "gamma"],
+        ["take_repos", ["api", "web"]],
+        ["clone_repo", "api"],
+        ["clone_repo", "web"],
+      ]),
+    );
+    expect(await screen.findByText("Cloned api, web into gamma.")).toBeInTheDocument();
+  });
+
+  it("says which repo did not clone, in the core's words, and clones the rest", async () => {
+    const { calls } = core({ cloneFails: { api: "api: clone failed — no access." } });
+    render(<App />);
+    await settled();
+
+    await createWithRepos(["api", "web"]);
+
+    expect(await screen.findByText(/Could not clone api into gamma/)).toHaveTextContent(
+      "api: clone failed — no access.",
+    );
+    expect(calls("clone_repo").map((one) => one.args.repo)).toEqual(["api", "web"]);
+  });
+
+  it("clones nothing when nothing was picked", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+
+    await createWithRepos([]);
+
+    await vi.waitFor(() => expect(calls("workspace_create")).toHaveLength(1));
+    expect(calls("take_repos")).toEqual([]);
+    expect(calls("clone_repo")).toEqual([]);
+  });
+});
+
 describe("a workspace's settings (charter-app#280)", () => {
   it("open from the workspace tab's menu, in a tab on that workspace's strip, about that workspace", async () => {
     const { calls } = core();
@@ -538,6 +650,26 @@ describe("a workspace's settings (charter-app#280)", () => {
         selected: true,
       }),
     ).toHaveTextContent("beta");
+  });
+
+  it("untick a repo to remove it, and show the core's refusal when it holds work", async () => {
+    // ADR 0055: the guard is inside `drop_repo`, and the window only draws what it said.
+    const { calls } = core();
+    render(<App />);
+    await settled();
+    await menuOn("beta");
+    await userEvent.click(screen.getByRole("menuitem", { name: /Workspace settings/ }));
+    const repos = await screen.findByRole("group", { name: "Repos" });
+
+    const api = await within(repos).findByRole("checkbox", { name: "api" });
+    await waitFor(() => expect(api).toBeChecked());
+    await userEvent.click(api);
+    await userEvent.click(within(repos).getByRole("button", { name: "Remove 1" }));
+
+    expect(await within(repos).findByRole("alert")).toHaveTextContent("api: uncommitted changes");
+    expect(calls("drop_repo").map((one) => one.args)).toEqual([
+      { plane: PLANE, workspace: "beta", repo: "api" },
+    ]);
   });
 
   it("filter what the window draws by the focused workspace's answer", async () => {

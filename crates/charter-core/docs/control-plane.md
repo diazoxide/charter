@@ -277,7 +277,8 @@ default = "default"
 
 A control plane isn't limited to one forge. Declare a `[[forge]]` block per forge and
 `charter discover` queries each in turn, merging the results into one
-`inventory/repos.json`. This is the non-obvious case — most control planes need only one
+`inventory/repos.json` — and into what it already lists, since each engineer's login reaches
+different repos (a repo leaves it only through `exclude`). This is the non-obvious case — most control planes need only one
 block — but it's fully supported:
 
 ```toml

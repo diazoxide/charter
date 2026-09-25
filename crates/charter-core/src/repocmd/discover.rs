@@ -1,5 +1,6 @@
-//! `charter discover`: refresh `inventory/repos.json` from every forge the plane declares,
-//! then regenerate `docs/topology.md`. Python's `cmd_discover` and `cmd_docs`.
+//! `charter discover`: add what every forge the plane declares lists to `inventory/repos.json`,
+//! then regenerate `docs/topology.md`. Python's `cmd_discover` and `cmd_docs`, except that
+//! Python replaced the list and this adds to it (ADR 0055).
 //!
 //! **Nothing is saved until every forge has answered.** A forge that fails refuses the whole
 //! command before the inventory is touched, so a partial multi-forge failure can never wipe
@@ -85,14 +86,6 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
         batches.push(records);
     }
 
-    let merged = match inventory::merge(&batches) {
-        Ok(merged) => merged,
-        Err(why) => {
-            say(Say::Plain(why));
-            return 1;
-        }
-    };
-
     let group = forge::group_of(&cfg, 0);
     let previous = match inventory::load(root, &group) {
         Ok(doc) => doc,
@@ -105,6 +98,26 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
         .iter()
         .map(|r| py_str(r.get("name").unwrap_or(&Value::Null)))
         .collect();
+    // What this run's login could not see stays: another operator's login may reach it
+    // (ADR 0055). Only an exclude takes a repo out.
+    let kept: Vec<Value> = inventory::listed(&previous)
+        .into_iter()
+        .filter(|r| {
+            let name = r.get("name").and_then(Value::as_str).unwrap_or_default();
+            !to_query
+                .iter()
+                .any(|(_, _, exclude)| exclude.iter().any(|e| e == name))
+        })
+        .collect();
+    let mut every = vec![kept];
+    every.extend(batches);
+    let merged = match inventory::merge(&every) {
+        Ok(merged) => merged,
+        Err(why) => {
+            say(Say::Plain(why));
+            return 1;
+        }
+    };
     let doc = match inventory::save(root, &group, &merged) {
         Ok(doc) => doc,
         Err(why) => {

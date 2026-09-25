@@ -27,6 +27,17 @@ A clone of a code repository that a workspace holds. It has its own remote and i
 and it is never part of the plane's commits.
 _Avoid_: clone (as a noun in UI text), guest checkout, project
 
+**Inventory**:
+The plane's list of repos it can clone (`inventory/repos.json`), committed and shared. It only
+grows: `discover` and the repo picker add to it, and a repo leaves it only through an exclude.
+_Avoid_: repo list (for what the picker shows), catalogue
+
+**Reachable repos**:
+The repos your own forge login can reach under the plane's owners, as the repo picker shows
+them. Asked each time the picker opens and never saved, because each engineer reaches different
+ones.
+_Avoid_: discovered repos, the inventory
+
 **LIVE / LOCAL**:
 Whether a workspace's charter, memory and todos are published with the plane (LIVE) or stay on
 this machine (LOCAL, the default).

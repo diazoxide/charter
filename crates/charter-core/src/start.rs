@@ -225,7 +225,10 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
         command: argv,
         args: added,
         env,
-        cwd: start.cwd.clone(),
+        // Where the checks above stood, never the bare request: a chat asked to start in no
+        // directory would otherwise take the app's own, which is `/` for an app opened from
+        // the Finder or the Dock.
+        cwd: Some(here),
         harness,
         session,
         how,

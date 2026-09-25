@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ENDS_IT } from "./actions";
+import type { PlaneId } from "./bindings";
 import { AboutCharter } from "./About";
 import { AlertsDrawer } from "./AlertsDrawer";
 import { DeleteWorkspace } from "./DeleteWorkspace";
@@ -679,11 +680,29 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     cleanup();
 
     // Two text boxes were reachable and the button that acts on them was not.
-    render(<NewWorkspace plane="plane" making={false} onCreate={() => {}} onCancel={() => {}} />);
+    // Its repo picker asks the forge as it opens (ADR 0055), answered here with one repo.
+    mockIPC((cmd) => {
+      if (cmd === "reachable_repos")
+        return { repos: [{ name: "svc", path: "acme/svc", description: "" }], trouble: [] };
+      return null;
+    });
+    render(
+      <NewWorkspace
+        plane="plane"
+        planeId={"p1" as PlaneId}
+        making={false}
+        onCreate={() => {}}
+        onCancel={() => {}}
+      />,
+    );
     await userEvent.type(screen.getByLabelText("Name"), "svc");
+    await screen.findByRole("checkbox", { name: "svc" });
     expect(await reachableByKeyboard()).toEqual([
       'input "Name"',
       'textarea "What it is for (optional)"',
+      'input "Repos"',
+      'button "Refresh"',
+      'checkbox "svc"',
       'checkbox "Live"',
       'button "Create workspace"',
       'button "Cancel"',

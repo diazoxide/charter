@@ -285,6 +285,55 @@ mod child {
     }
 
     #[test]
+    fn the_repos_an_operator_can_reach_are_asked_as_that_operator_and_kept_to_the_planes_owner() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        // Asked of `user/repos`, never `users/<owner>/repos`: GitHub answers the second with a
+        // personal account's public repos only, and the operator's private ones are the point.
+        let scene = Scene::new("reach-gh.test");
+        let raw = json!([
+            {"name": "widget", "full_name": "Acme/widget"},
+            {"name": "elsewhere", "full_name": "other/elsewhere"},
+            {"name": "gadget", "full_name": "acme/gadget"},
+        ]);
+        scene.gh_api(
+            "user/repos?affiliation=owner,collaborator,organization_member&per_page=100&page=1",
+            0,
+            &raw.to_string(),
+            "",
+        );
+
+        let repos = scene.forge("github").list_accessible("acme").unwrap();
+
+        assert_eq!(names(&repos), ["widget", "gadget"]);
+    }
+
+    #[test]
+    fn a_gitlab_operator_is_shown_the_projects_they_are_a_member_of_under_the_group() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("reach-gl.test");
+        let raw = json!([
+            {"path": "api", "path_with_namespace": "grp/sub/api"},
+            {"path": "other", "path_with_namespace": "grpx/other"},
+        ]);
+        scene.glab_api(
+            "projects?membership=true&archived=false&per_page=100&page=1",
+            0,
+            &raw.to_string(),
+            "",
+        );
+
+        let repos = scene.forge("gitlab").list_accessible("grp").unwrap();
+
+        assert_eq!(names(&repos), ["api"]);
+    }
+
+    #[test]
     fn a_github_record_is_normalised_to_the_shape_every_backend_produces() {
         charter_core::unsteered!();
         if !in_child() {

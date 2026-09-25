@@ -296,6 +296,156 @@ fn remove_in(root: &Path, workspace: &str, force: bool) -> Result<Vec<String>, R
     })
 }
 
+/// One repo the picker offers: what the operator reads to choose it.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct ReachableRepo {
+    /// The name it is cloned under, and asked for by.
+    pub name: String,
+    /// `owner/name` on its forge.
+    pub path: String,
+    pub description: String,
+}
+
+/// What the picker draws: the repos this operator's forge logins reach, and a sentence for
+/// each forge that did not answer.
+#[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
+pub struct ReachableRepos {
+    pub repos: Vec<ReachableRepo>,
+    pub trouble: Vec<String>,
+}
+
+/// The repos the operator's own forge login reaches, asked now and held nowhere (ADR 0055).
+///
+/// On a blocking thread: it is one forge call per page and per host, each with the forge
+/// CLI's own deadline.
+// Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
+#[tauri::command]
+#[specta::specta]
+pub async fn reachable_repos(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<ReachableRepos, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || reachable_in(&root))
+        .await
+        .map_err(|err| format!("the forge listing did not finish: {err}"))?
+}
+
+fn reachable_in(root: &Path) -> Result<ReachableRepos, String> {
+    let found = charter_core::repocmd::reachable::reachable(root)?;
+    let text = |r: &serde_json::Value, key: &str| {
+        r.get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    Ok(ReachableRepos {
+        repos: found
+            .repos
+            .iter()
+            .map(|r| ReachableRepo {
+                name: text(r, "name"),
+                path: text(r, "path_with_namespace"),
+                description: text(r, "description"),
+            })
+            .collect(),
+        trouble: found.trouble,
+    })
+}
+
+/// Add the repos the operator picked to the inventory, beside what it lists, so each can be
+/// cloned by name (ADR 0055). Asked once for a whole pick, before the clones.
+// Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
+#[tauri::command]
+#[specta::specta]
+pub async fn take_repos(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    repos: Vec<String>,
+) -> Result<(), String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        charter_core::repocmd::reachable::take(&root, &repos)
+    })
+    .await
+    .map_err(|err| format!("the inventory was not updated: {err}"))?
+}
+
+/// Clone ONE repo into a workspace: `charter clone <repo> -w <workspace>`.
+///
+/// One per call, and the window calls it once per repo in turn: that is what lets it show each
+/// repo's own state as it lands and retry one that failed, and no two calls race to write the
+/// workspace's manifest. On a blocking thread, because a clone can take the network's two
+/// minutes.
+// Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
+#[tauri::command]
+#[specta::specta]
+pub async fn clone_repo(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+) -> Result<Vec<String>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || clone_into(&root, &workspace, &repo))
+        .await
+        .map_err(|err| format!("the clone did not finish: {err}"))?
+}
+
+fn clone_into(root: &Path, workspace: &str, repo: &str) -> Result<Vec<String>, String> {
+    let author = wscmd::ensure::author();
+    let mut said = Vec::new();
+    let code = charter_core::repocmd::clone::clone(
+        &charter_core::repocmd::clone::Request {
+            root,
+            ws: workspace,
+            repos: &[repo.to_string()],
+            now: chrono::Utc::now(),
+            author: &author,
+        },
+        &mut |line: Say| said.push(line),
+    );
+    ran(code, said)
+}
+
+/// Take one repo out of a workspace, clone and manifest row both (ADR 0055).
+///
+/// **The guard is inside the delete**, exactly as [`workspace_remove`]'s is: this calls
+/// `wscmd::drop::drop_repo` and nothing else, and there is no `force`.
+// Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
+#[tauri::command]
+#[specta::specta]
+pub async fn drop_repo(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+) -> Result<Vec<String>, Refused> {
+    let root = planes
+        .held(&plane)
+        .map_err(|why| Refused {
+            said: why,
+            at_risk: Vec::new(),
+        })?
+        .root()
+        .to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || drop_in(&root, &workspace, &repo))
+        .await
+        .map_err(|err| Refused {
+            said: format!("the removal did not finish: {err}"),
+            at_risk: Vec::new(),
+        })?
+}
+
+fn drop_in(root: &Path, workspace: &str, repo: &str) -> Result<Vec<String>, Refused> {
+    let mut said = Vec::new();
+    let done = wscmd::drop::drop_repo(root, workspace, repo, &mut |line: Say| said.push(line));
+    ran(done.code, said).map_err(|said| Refused {
+        said,
+        at_risk: done.refused_over.into_iter().map(AtRisk::from).collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,6 +609,33 @@ mod tests {
         );
         assert!(clone.exists(), "the guard fired, so nothing was deleted");
         assert!(clone.join("README.md").exists());
+    }
+
+    #[test]
+    fn unticking_a_dirty_repo_is_refused_with_the_list_it_was_refused_on() {
+        // The picker's removal goes through the same guard, and the window gets the reading
+        // that refused it, not a second one (charter-app#182).
+        let (_dir, root) = plane();
+        let clone = clone_in(&root, "alpha", "svc");
+        std::fs::write(clone.join("README.md"), "changed\n").expect("a change");
+
+        let refused = drop_in(&root, "alpha", "svc").expect_err("a dirty clone is refused");
+
+        assert_eq!(refused.at_risk.len(), 1, "{refused:?}");
+        assert_eq!(refused.at_risk[0].what, "svc");
+        assert!(clone.join("README.md").exists());
+    }
+
+    #[test]
+    fn unticking_a_clean_repo_removes_only_that_clone() {
+        let (_dir, root) = plane();
+        let gone = clone_in(&root, "alpha", "gone");
+        let kept = clone_in(&root, "alpha", "kept");
+
+        drop_in(&root, "alpha", "gone").expect("a clean clone is removed");
+
+        assert!(!gone.exists());
+        assert!(kept.exists());
     }
 
     #[test]
