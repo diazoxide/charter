@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "extension-probe",
+  "name": "Extension probe",
+  "capabilities": ["probe"],
+  "contributes": {
+    "runs": "bin/extension-probe",
+    "views": [
+      {
+        "id": "probe",
+        "title": "Probe",
+        "about": "personas"
+      }
+    ]
+  }
+}

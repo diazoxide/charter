@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **An extension says which capabilities it asks for.** An extension's `charter-extension.json`
+  can list them in `capabilities`. The approval dialog and the Extensions list name each one,
+  and changing the list asks you again. An extension that asks for a capability this charter
+  doesn't know is refused as a whole, with a sentence naming it. This version knows none yet;
+  each one arrives in its own release. An extension with no `capabilities` loads exactly as
+  before and keeps its approval. `version` in the manifest is now the protocol its program
+  speaks. ([#338](https://github.com/diazoxide/charter-app/issues/338))
 - **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,
   on by default) saves by itself: 30 seconds after the last change (`autosave_after`), as soon
   as a chat in it ends, and when you quit. At quit it commits at once and gives the push a few

@@ -1,0 +1,23 @@
+[package]
+name = "extension-probe"
+version.workspace = true
+description = "Test-only: the extension that asks for every capability charter grants, so each one is proven through the real executor"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# **No dependency on charter-core**, for persona-statistics' reason: an extension is written the
+# way a stranger would write one, knowing the protocol and nothing of charter's insides. The
+# test that drives it through the real registry and executor is what depends on the core.
+[dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+charter-core = { workspace = true, features = ["fenced"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

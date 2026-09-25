@@ -1,9 +1,9 @@
 //! The extension registry: what has contributed what to this window, and what the operator
 //! agreed to.
 //!
-//! **This is ADR 0041's item 2 — "an extension registry with no executor" — and there
-//! is still no executor here.** Nothing in this module spawns a process, opens a socket or
-//! evaluates anything. It answers three questions and no others: what an extension *is*, what
+//! **The runtime exists, and it is not in this module.** Nothing here spawns a process, opens
+//! a socket or evaluates anything. This module answers three questions and no others: what an
+//! extension *is* — including which [capabilities](capability) it asks for (ADR 0053) — what
 //! this machine has installed, and what the operator approved each one to contribute.
 //!
 //! **The executor is [`crate::executor`], and it was built against this list rather than
@@ -82,8 +82,8 @@
 //!
 //! ADR 0041's honesty paragraph is the reason [`RUNS_AS_YOU`] is a constant in this file and
 //! is carried into the dialog rather than written out again there. **A subprocess does not
-//! confine an extension below the operator.** When the executor lands it will run as the same
-//! user, with the same filesystem and the same ability to `exec`; it will be able to read
+//! confine an extension below the operator.** A program the executor starts runs as the same
+//! user, with the same filesystem and the same ability to `exec`; it is able to read
 //! `.charter/vaults/`, write `machine.json` and edit `charter.local.toml` without asking
 //! charter for anything. What this module records is **what charter will do on an extension's
 //! behalf** — its own conduct — and a consent surface that implied a cage would manufacture
@@ -91,6 +91,10 @@
 //! shipped to the window with the question, and pinned by a test.
 //!
 //! # What is *in* the vocabulary today
+//!
+//! A manifest's `version` is the protocol its program speaks, and its `capabilities` list is
+//! what it asks charter to do for it beyond what follows ([`capability`], ADR 0053). A word in
+//! that list this charter does not know refuses the whole manifest, by name.
 //!
 //! Themes, panels (`crate::panel`, ADR 0043), and **views**. A theme and a panel are
 //! declarative data against a closed vocabulary charter owns, charter chooses the consumer, and
@@ -158,7 +162,10 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+pub mod capability;
 pub mod project;
+
+pub use capability::Capability;
 
 /// The registry, inside [`crate::machine::DIR`] and beside [`crate::machine::FILE`].
 pub const RECORD: &str = "extensions.json";
@@ -294,6 +301,13 @@ pub struct Theme {
 /// What an extension says it is, as its manifest declares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
+    /// The protocol its program speaks, as the manifest's `version` says it (ADR 0053). A
+    /// manifest from before capabilities says `1`, which is the only protocol there is yet.
+    pub protocol: u32,
+    /// The capabilities it asks charter for ([`capability`]), in the order it names them.
+    /// Empty for a manifest that names none, which is every manifest written before the list
+    /// existed.
+    pub capabilities: Vec<Capability>,
     /// How charter names it in the record. One path segment, so that an id can never be a
     /// path — the record is keyed by it and a `../` here would be a key that means a file.
     pub id: String,
@@ -825,15 +839,31 @@ fn parse(text: &str) -> Result<Manifest, String> {
         serde_json::from_str(text).map_err(|why| format!("is not JSON: {why}"))?;
     let doc = doc.as_object().ok_or("is not a JSON object")?;
 
-    match doc.get("version").and_then(serde_json::Value::as_u64) {
-        Some(found) if found == u64::from(VERSION) => {}
+    // **`version` is the protocol the extension speaks** (ADR 0053), and not the record's
+    // [`VERSION`]: the two were the same number by coincidence, and they move apart the day a
+    // capability changes what a request or an answer holds. charter keeps answering every
+    // protocol up to its own, so a manifest written for an older charter keeps loading.
+    let protocol = match doc.get("version").and_then(serde_json::Value::as_u64) {
+        Some(found) if (1..=u64::from(crate::executor::PROTOCOL)).contains(&found) => {
+            u32::try_from(found).map_err(|_| "has a version charter cannot hold".to_owned())?
+        }
         Some(found) => {
+            let reads = match crate::executor::PROTOCOL {
+                1 => "version 1".to_owned(),
+                newest => format!("versions 1 to {newest}"),
+            };
             return Err(format!(
-                "is version {found}, and this charter reads version {VERSION}"
+                "is version {found}, and this charter reads {reads}"
             ));
         }
         None => return Err("says no version, so charter cannot say what it means".into()),
-    }
+    };
+    // Before anything it would be asked to do: a capability this charter does not know refuses
+    // the whole manifest, so nothing below is ever loaded for less than it asked for.
+    let capabilities = match doc.get("capabilities") {
+        None => Vec::new(),
+        Some(value) => capability::declared(value)?,
+    };
 
     let id = doc
         .get("id")
@@ -999,6 +1029,8 @@ fn parse(text: &str) -> Result<Manifest, String> {
     };
 
     Ok(Manifest {
+        protocol,
+        capabilities,
         id: id.to_owned(),
         name,
         themes,
@@ -2171,12 +2203,23 @@ pub struct Prompt {
 
 /// The question to ask about `found`.
 pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
+    // **Each capability first, one line each** (ADR 0053): what the extension asks charter to
+    // do for it is the part of the yes that grows, so it is what the operator reads first.
+    // `declares` is also what the Extensions list shows under each row, so the list and the
+    // dialog name the same capabilities from the one place.
     let mut declares: Vec<String> = found
         .manifest
-        .themes
+        .capabilities
         .iter()
-        .map(|theme| format!("a theme, “{}”", theme.name))
+        .map(|capability| capability.asks())
         .collect();
+    declares.extend(
+        found
+            .manifest
+            .themes
+            .iter()
+            .map(|theme| format!("a theme, “{}”", theme.name)),
+    );
     declares.extend(found.manifest.panels.iter().map(crate::panel::declares));
     declares.extend(found.manifest.views.iter().map(|view| {
         format!(

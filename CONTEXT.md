@@ -75,3 +75,47 @@ _Avoid_: behind (in UI text)
 Where a setting's value comes from: `charter.toml` (committed, the team's) or
 `charter.local.toml` (this machine's). A Local value overrides the Shared one key by key.
 _Avoid_: global/user, project/personal
+
+### Core and extensions
+
+**Core**:
+What charter does itself, on every platform, with no extension on. A plane's instructions and
+the session-start briefing may depend only on the core.
+_Avoid_: built-ins (for core features), platform
+
+**Extension**:
+A directory the operator installs and approves on this machine, whose manifest declares what it
+contributes and which capabilities it asks for. Its program runs as the operator, one question
+at a time.
+_Avoid_: plugin, add-on, module
+
+**Built-in extension**:
+An extension that ships inside the app and is trusted through the app's signature rather than
+an approval prompt. A copy of one anywhere else is an ordinary extension.
+_Avoid_: bundled plugin, first-party plugin, core extension
+
+**Capability**:
+One thing charter does for an extension that asked for it in its manifest and was approved,
+such as showing a badge or adding a CLI command. It describes charter's conduct, never a limit
+on the extension.
+_Avoid_: permission, grant (as a noun in UI text), power
+
+**Facts file**:
+A file an extension keeps in its own state directory, holding the values charter shows for it
+(badges, repo cells) without starting its program.
+_Avoid_: cache, status file
+
+**Harness plugin**:
+A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own always means
+this, never a charter extension.
+_Avoid_: extension (for this), charter plugin
+
+**Vault**:
+A named set of secrets charter keeps in the system keyring and hands to a command, never to
+the model and never to an extension. Vaults are core.
+_Avoid_: secret store, keychain (as the name of the concept)
+
+**Forge extension**:
+An extension about a code host's pull requests, merge requests or issues, which reaches the
+forge through `gh` or `glab`'s own login and never through a secret charter hands it.
+_Avoid_: forge plugin, GitHub integration

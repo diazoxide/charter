@@ -26,12 +26,13 @@ import { forgetTheirTheme, theirThemeOnce } from "./windowprefs";
  * What has contributed what to this window, and the question charter asks before anything new
  * contributes at all.
  *
- * **This is ADR 0041's item 2, and there is no runtime behind it.** An extension is a
- * directory the operator points at; charter reads its manifest, hashes it and everything it
- * declares, lists what it says it brings, and puts none of it in force until it is approved.
- * Today the only thing it can bring that charter acts on is a theme, which is declarative data
- * against a vocabulary charter owns and has nothing to isolate. A declared program is listed
- * and is not started, because there is nothing here that starts one.
+ * **This is ADR 0041's registry, and the runtime is behind it, not in it.** An extension is a
+ * directory the operator points at; charter reads its manifest, hashes its whole directory,
+ * lists what it says it brings — each capability it asks for first (ADR 0053), then its themes,
+ * panels, views and program — and puts none of it in force until it is approved. A declared
+ * program is started by the core's executor when the operator opens one of its views, and
+ * never from here: this dialog only reads, asks and records the answer. A manifest asking for a
+ * capability this charter does not know is listed as refused, in the core's sentence naming it.
  *
  * **It is called an extension and not a plugin, everywhere, deliberately.** `enabledPlugins` in
  * the first-open dialog is Claude Code's plugin list, travelling in a project's committed

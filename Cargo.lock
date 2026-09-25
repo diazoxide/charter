@@ -1501,6 +1501,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "extension-probe"
+version = "0.2.0"
+dependencies = [
+ "charter-core",
+ "chrono",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "fake-harness"
 version = "0.2.0"
 dependencies = [

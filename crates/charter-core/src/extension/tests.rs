@@ -463,8 +463,8 @@ fn the_theme_text_handed_on_is_the_text_that_was_hashed() {
 
 #[test]
 fn a_declared_program_is_hashed_but_its_bytes_are_not_kept() {
-    // Nothing consumes them — there is no executor — and holding a program in memory at every
-    // launch is a cost with no reader.
+    // Nothing consumes them — the executor starts a program by path, and never from bytes held
+    // here — and holding a program in memory at every launch is a cost with no reader.
     let made = Made::new();
     made.manifest(r#"{"version":1,"id":"x","contributes":{"runs":"bin/x"}}"#);
     made.file("bin/x", "#!/bin/sh\n");
@@ -1980,4 +1980,67 @@ fn a_view_title_of_exactly_two_hundred_bytes_is_drawn_and_one_more_is_not() {
         let refused = views(serde_json::json!([a_view("v", &title)])).expect_err("refused");
         assert!(refused.contains("will not draw on a button"), "{refused}");
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Capabilities (ADR 0053)
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_manifest_in_the_format_before_capabilities_loads_as_it_did_and_keeps_its_approval() {
+    // No `capabilities`, `version` 1: every manifest written before the list existed. It asks
+    // for nothing, and its fingerprint is the one it had, so no operator is asked again.
+    let made = Made::new();
+    made.ordinary();
+    let found = read_at(&made.at()).expect("an extension");
+
+    assert!(found.manifest.capabilities.is_empty());
+    assert_eq!(found.manifest.protocol, 1);
+    assert_eq!(
+        found.fingerprint, "856644aa9b9df7019cc8a4f85ebd2111df9f0b8d76c2fe979522e839d74cc1bf",
+        "the fingerprint of a manifest in today's format moved, which re-asks every operator"
+    );
+}
+
+#[test]
+fn a_capabilities_that_is_not_a_list_of_distinct_words_is_refused() {
+    let made = Made::new();
+    made.ordinary();
+    for (capabilities, said) in [
+        (r#""probe""#, "is not a list of words"),
+        ("[1]", "is not a word"),
+        (r#"["probe","probe"]"#, "\"probe\" twice"),
+    ] {
+        made.manifest(&format!(
+            r#"{{"version":1,"id":"solarized","capabilities":{capabilities},
+                "contributes":{{"themes":[{{"name":"Solarized Dark","file":"dark.json"}}]}}}}"#
+        ));
+        let why = read_at(&made.at()).expect_err("no extension");
+        assert!(why.contains(said), "{capabilities}: {why}");
+    }
+}
+
+#[test]
+fn an_unknown_capability_is_named_in_the_refusal_even_beside_a_known_one() {
+    let made = Made::new();
+    made.ordinary();
+    made.manifest(
+        r#"{"version":1,"id":"solarized","capabilities":["probe","badges"],
+            "contributes":{"themes":[{"name":"Solarized Dark","file":"dark.json"}]}}"#,
+    );
+    let why = read_at(&made.at()).expect_err("no extension");
+    assert!(
+        why.contains("asks for the capability \"badges\", which this charter does not know"),
+        "{why}"
+    );
+    assert!(why.contains("This charter knows probe."), "{why}");
+}
+
+#[test]
+fn a_version_below_the_first_protocol_is_refused() {
+    let made = Made::new();
+    made.ordinary();
+    made.manifest(r#"{"version":0,"id":"x","contributes":{"runs":"p"}}"#);
+    let why = read_at(&made.at()).expect_err("no extension");
+    assert!(why.contains("is version 0"), "{why}");
 }
