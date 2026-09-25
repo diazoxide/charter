@@ -17,7 +17,8 @@ import {
   type RelaunchChoice,
   type RelaunchQuestion,
 } from "./bindings";
-import { tellSaved, usePlaneSaving } from "./saving";
+import { UnsavedMark } from "./SavingView";
+import { tellSaved } from "./saving";
 import {
   catalogue,
   catalogued,
@@ -880,6 +881,10 @@ function App() {
     <>
       <span className="project-name">{project.name}</span>
       <Pin held={pinnedProjects.includes(project.plane)} what="project" />
+      {/* Whether it has work not yet saved, or a save that is blocked (charter-app#302) —
+          every project's, not only the one in front, because a project behind is where work
+          is forgotten. */}
+      <UnsavedMark saving={reports[project.plane]?.saving} name={project.name} />
       {/* What is waiting for you over there. It is the reason a project behind the one on
           screen goes on listening rather than being torn down. */}
       {(reports[project.plane]?.asking.length ?? 0) > 0 && (
@@ -1006,7 +1011,9 @@ function App() {
    * save button saves with the generated message; a refusal opens the project's Saving tab,
    * whose journal holds the refusal's own words.
    */
-  const { saving } = usePlaneSaving(inFront);
+  // Read by the project itself and reported (charter-app#302), so the strip and the bar are
+  // one reading of each project, not two.
+  const saving = inFront === undefined ? undefined : reports[inFront]?.saving;
   /** The project a save from the bar is running in: busy is that project's, not the window's. */
   const [savingIn, setSavingIn] = useState<PlaneId>();
   const saveInFront = useCallback(() => {
