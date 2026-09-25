@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use charter_core::executor::{Acted, Executor, On};
+use charter_core::executor::{Acted, Executor, On, Ran};
 use charter_core::panel::Block;
 use charter_core::{extension, handed};
 
@@ -404,6 +404,7 @@ fn the_approval_prompt_names_every_capability_the_probe_asks_for() {
             extension::Capability::Writes,
             extension::Capability::Events,
             extension::Capability::Briefing,
+            extension::Capability::Cli,
         ],
         "the probe's own manifest asks for every capability charter grants"
     );
@@ -432,6 +433,7 @@ fn changing_the_capabilities_after_approval_is_asked_about_again_and_runs_nothin
     probe.manifest_sets(
         "capabilities",
         serde_json::json!([
+            "cli",
             "briefing",
             "events",
             "writes",
@@ -1310,4 +1312,186 @@ fn a_built_in_hears_and_briefs_while_on_and_does_neither_once_turned_off_on_this
     assert!(events::deliver(&executor, &probe.config(), &choices, &Event::PlaneSaved).is_empty());
     assert_eq!(brief(), AtSessionStart::default());
     assert_eq!(heard(), 2, "a built-in turned off heard something");
+}
+
+// ---------------------------------------------------------------------------------------
+// CLI commands under the extension's own id (charter-app#342)
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn the_approval_prompt_lists_the_commands_that_write_and_not_the_ones_that_read() {
+    let probe = Probe::assembled();
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
+    let asked = extension::prompt(&found, extension::Standing::New).declares;
+    assert!(
+        asked.iter().any(|it| it
+            == "a command that writes, `charter extension-probe stamp` — Stamp a note; it \
+                writes to the plane paths listed here"),
+        "{asked:#?}"
+    );
+    assert!(
+        !asked
+            .iter()
+            .any(|it| it.contains("`charter extension-probe echo`")),
+        "a reading command is listed: {asked:#?}"
+    );
+    assert!(
+        asked
+            .iter()
+            .any(|it| it.starts_with("the capability “cli” — ")),
+        "{asked:#?}"
+    );
+}
+
+impl Probe {
+    /// Run the probe's command `name` with `args`, as `charter extension-probe <name> <args…>`
+    /// does from this probe's plane.
+    fn command(&self, name: &str, args: &[&str]) -> Result<Ran, String> {
+        let args: Vec<String> = args.iter().map(|&it| it.to_owned()).collect();
+        Executor::default().command(
+            &self.config(),
+            &extension::project::Choices::read(&self.plane()),
+            "extension-probe",
+            name,
+            &args,
+        )
+    }
+}
+
+#[test]
+fn a_command_passes_its_output_and_exit_status_back_unchanged() {
+    let probe = Probe::approved();
+    let ran = probe
+        .command("echo", &["one", "two  three"])
+        .expect("it ran");
+    assert_eq!(ran.stdout, b"one two  three\n");
+    assert_eq!(ran.stderr, b"echoed 2 words\n");
+    assert_eq!(ran.status, 0);
+    assert_eq!(ran.overreach, None);
+
+    let failed = probe.command("fail", &["7"]).expect("it ran");
+    assert_eq!(failed.stdout, b"");
+    assert_eq!(failed.stderr, b"failing with 7, as asked\n");
+    assert_eq!(failed.status, 7);
+}
+
+#[test]
+fn an_unapproved_changed_or_turned_off_extension_says_so_and_runs_no_command() {
+    // Installed and never approved.
+    let probe = Probe::assembled();
+    extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
+    let refused = probe
+        .command("stamp", &[])
+        .expect_err("an unapproved command ran");
+    assert!(refused.contains("you have not approved"), "{refused}");
+    assert_eq!(probe.notes(), 0);
+
+    // Approved, then changed on disk.
+    let probe = Probe::approved();
+    probe.manifest_sets("name", serde_json::json!("Extension probe, edited"));
+    let refused = probe
+        .command("stamp", &[])
+        .expect_err("a changed command ran");
+    assert!(
+        refused.contains("changed since you approved it"),
+        "{refused}"
+    );
+    assert_eq!(probe.notes(), 0);
+
+    // Approved, and turned off by the project it is run in.
+    let probe = Probe::approved();
+    std::fs::write(
+        probe.plane().join("charter.toml"),
+        "[extensions.extension-probe]\nenabled = false\n",
+    )
+    .expect("the project turns it off");
+    let refused = probe
+        .command("stamp", &[])
+        .expect_err("a turned-off command ran");
+    assert!(
+        refused.contains("is turned off in charter.toml"),
+        "{refused}"
+    );
+    assert_eq!(probe.notes(), 0);
+}
+
+#[test]
+fn a_command_the_extension_does_not_declare_is_refused_naming_the_ones_it_has() {
+    let probe = Probe::approved();
+    let refused = probe.command("teleport", &[]).expect_err("it ran");
+    assert_eq!(
+        refused,
+        "'extension-probe' has no command called 'teleport'. It has: echo, fail, scribble, \
+         stamp."
+    );
+}
+
+#[test]
+fn a_command_that_writes_writes_inside_its_paths_and_one_that_reads_is_reported_for_writing() {
+    let probe = Probe::approved();
+    let stamped = probe.command("stamp", &[]).expect("it ran");
+    assert_eq!(stamped.stdout, b"stamped note-1.md\n");
+    assert_eq!(stamped.overreach, None);
+    assert_eq!(probe.notes(), 1);
+
+    let plane = probe.plane().display().to_string();
+    let scribbled = probe.command("scribble", &[&plane]).expect("it ran");
+    assert_eq!(scribbled.status, 0);
+    let seen = scribbled.overreach.expect("a report");
+    assert!(
+        seen.contains("'extension-probe'") && seen.contains("notes/note-2.md"),
+        "{seen}"
+    );
+}
+
+#[test]
+fn an_extension_whose_id_is_a_core_command_word_is_refused_and_never_installed() {
+    for word in ["status", "ws", "hook", "help"] {
+        let probe = Probe::assembled();
+        probe.manifest_sets("id", serde_json::json!(word));
+        let refused =
+            extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+                .expect_err("a core word was installed")
+                .to_string();
+        assert!(
+            refused.contains(&format!(
+                "has the id \"{word}\", which is one of charter's own commands"
+            )),
+            "{refused}"
+        );
+        assert!(
+            extension::read(&probe.config(), &extension::BuiltIn::none())
+                .registry
+                .entries
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn the_prompt_says_a_program_with_only_commands_is_started_when_a_command_is_run() {
+    let probe = Probe::assembled();
+    probe.manifest_sets("capabilities", serde_json::json!(["cli"]));
+    probe.manifest_sets(
+        "contributes",
+        serde_json::json!({
+            "runs": "bin/extension-probe",
+            "cli": [{ "name": "echo", "title": "Say its words back", "writes": false }],
+        }),
+    );
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
+    let asked = extension::prompt(&found, extension::Standing::New).declares;
+    let program = asked
+        .iter()
+        .find(|it| it.starts_with("a program,"))
+        .expect("the program's line");
+    assert!(
+        program.contains(
+            "when you or a chat run one of its commands (`charter extension-probe <command>`)"
+        ) && !program.contains("nothing ever asks"),
+        "{program}"
+    );
 }

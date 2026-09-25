@@ -53,6 +53,11 @@ pub enum Capability {
     /// it, as data under the extension's name, in every chat's first message
     /// ([`super::briefing`], charter-app#343). Its shape is `contributes.briefing`.
     Briefing,
+    /// Commands on the `charter` command line under the extension's own id — `charter <id>
+    /// <command> …` — each a request of its own to its program, whose output and exit status
+    /// charter passes back unchanged ([`super::cli`], charter-app#342, protocol 2). Its shape is
+    /// `contributes.cli`.
+    Cli,
 }
 
 impl Capability {
@@ -96,6 +101,12 @@ impl Capability {
                 "briefing",
                 "adds text to every chat's first message, quoted as data under its name",
             ),
+            Self::Cli => (
+                "cli",
+                "adds commands to the charter command line, run as `charter <its id> <command>`; \
+                 each one starts its program, and charter passes back what it prints and its \
+                 exit status. The ones that write are listed here",
+            ),
         }
     }
 
@@ -104,9 +115,10 @@ impl Capability {
     pub fn since(self) -> u32 {
         match self {
             Self::Probe | Self::Badges | Self::RepoColumns | Self::Palette => 1,
-            // Events and the briefing are request kinds protocol 2 grew in charter-app#343,
-            // beside #341's run-action request: 2 was not yet released, so it holds all three.
-            Self::Actions | Self::Writes | Self::Events | Self::Briefing => 2,
+            // Events, the briefing and command-line commands are request kinds protocol 2 grew
+            // in charter-app#343 and #342, beside #341's run-action request: 2 was not yet
+            // released, so it holds all four.
+            Self::Actions | Self::Writes | Self::Events | Self::Briefing | Self::Cli => 2,
         }
     }
 
@@ -129,6 +141,7 @@ impl Capability {
             Self::Writes,
             Self::Events,
             Self::Briefing,
+            Self::Cli,
         ]);
         known
     }
@@ -149,7 +162,8 @@ impl Capability {
             | Self::Actions
             | Self::Writes
             | Self::Events
-            | Self::Briefing => true,
+            | Self::Briefing
+            | Self::Cli => true,
         }
     }
 

@@ -10,7 +10,8 @@
     "actions",
     "writes",
     "events",
-    "briefing"
+    "briefing",
+    "cli"
   ],
   "state": "state",
   "contributes": {
@@ -63,6 +64,12 @@
     },
     "briefing": {
       "title": "Probe"
-    }
+    },
+    "cli": [
+      { "name": "echo", "title": "Say its words back", "writes": false },
+      { "name": "fail", "title": "Exit with the status it is given", "writes": false },
+      { "name": "scribble", "title": "Say it only reads, and write a note", "writes": false },
+      { "name": "stamp", "title": "Stamp a note", "writes": true }
+    ]
   }
 }

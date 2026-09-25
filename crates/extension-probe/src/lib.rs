@@ -22,13 +22,19 @@
 //!   `sweep` deletes them and does NOT say so, `careful` asks first and writes nothing, and
 //!   `stray` writes outside `notes/` — each the case a test proves charter reports or refuses.
 //!   Run from a view's row, an action answers the view refreshed.
+//! - **its commands** (`cli`, charter-app#342) are run as `charter extension-probe <command>`,
+//!   and answer as a command-line program does — on stdout and stderr, and with an exit status —
+//!   rather than with a line of JSON: `echo` says its words back, `fail <n>` exits with `n`,
+//!   `stamp` writes a note in `notes/` and says it writes, and `scribble <plane>` writes one while
+//!   saying it only reads.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-/// The protocol this program speaks: 2, which has actions and plane writes (charter-app#341)
-/// and events and the briefing section (charter-app#343).
+/// The protocol this program speaks: 2, which has actions and plane writes (charter-app#341),
+/// events and the briefing section (charter-app#343), and commands on the command line
+/// (charter-app#342).
 pub const PROTOCOL: u64 = 2;
 
 /// The manifest this program is installed with, so `assemble` writes the one that is tested.
@@ -36,6 +42,79 @@ pub const MANIFEST: &str = include_str!("../charter-extension.json");
 
 /// The file `stray` writes, in the plane and outside every path the probe declares.
 pub const STRAY: &str = "stray.txt";
+
+/// What a command printed and the status it exits with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Printed {
+    pub stdout: String,
+    pub stderr: String,
+    pub status: u8,
+}
+
+/// The command a request asks to run, if it asks for one (charter-app#342).
+pub fn command_of(request: &Value) -> Option<&str> {
+    request.get("command").and_then(Value::as_str)
+}
+
+/// Run the command a request names, as a command-line program: what it prints and its status.
+pub fn run_command(request: &Value) -> Printed {
+    let said = |stdout: String, stderr: String, status: u8| Printed {
+        stdout,
+        stderr,
+        status,
+    };
+    let args: Vec<&str> = request
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|args| args.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let writes: Vec<&str> = request
+        .get("writes")
+        .and_then(Value::as_array)
+        .map(|it| it.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    match command_of(request).unwrap_or_default() {
+        "echo" => said(
+            format!("{}\n", args.join(" ")),
+            format!("echoed {} words\n", args.len()),
+            0,
+        ),
+        "fail" => {
+            let status = args.first().and_then(|it| it.parse().ok()).unwrap_or(1);
+            said(
+                String::new(),
+                format!("failing with {status}, as asked\n"),
+                status,
+            )
+        }
+        "stamp" => match notes(&writes).and_then(|notes| jot(&notes)) {
+            Ok(name) => said(format!("stamped {name}\n"), String::new(), 0),
+            Err(why) => said(String::new(), format!("{why}\n"), 1),
+        },
+        "scribble" => {
+            let Some(plane) = args.first() else {
+                return said(String::new(), "scribble needs a plane\n".into(), 2);
+            };
+            match jot(&Path::new(plane).join("notes")) {
+                Ok(name) => said(format!("scribbled {name}\n"), String::new(), 0),
+                Err(why) => said(String::new(), format!("{why}\n"), 1),
+            }
+        }
+        other => said(
+            String::new(),
+            format!("the probe has no command {other:?}\n"),
+            2,
+        ),
+    }
+}
+
+/// Write one more note in `notes`, and say its name.
+fn jot(notes: &Path) -> Result<String, String> {
+    std::fs::create_dir_all(notes).map_err(|why| format!("no notes directory: {why}"))?;
+    let name = format!("note-{}.md", count(notes) + 1);
+    std::fs::write(notes.join(&name), "a note\n").map_err(|why| format!("could not jot: {why}"))?;
+    Ok(name)
+}
 
 /// The file in the state directory a test writes to make the probe misbehave on purpose —
 /// `{"sleep_ms": 3000}`, `{"fail": true}`, `{"section": "…"}`. The state directory is outside
@@ -168,10 +247,7 @@ fn acted(request: &Value) -> Result<Option<Value>, String> {
     };
     match action {
         "jot" => {
-            std::fs::create_dir_all(&notes).map_err(|why| format!("no notes directory: {why}"))?;
-            let next = count(&notes) + 1;
-            std::fs::write(notes.join(format!("note-{next}.md")), "a note\n")
-                .map_err(|why| format!("could not jot: {why}"))?;
+            jot(&notes)?;
             done(view(request, &writes))
         }
         "forget" | "sweep" => {

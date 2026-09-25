@@ -110,6 +110,8 @@
 //! state directory and never starts the program to do it. Events ([`events`]) and a briefing
 //! section ([`briefing`]) are the two that start the program without the operator opening
 //! anything — after a core action it hears, and when a chat starts — and the prompt says so.
+//! Commands ([`cli`]) start it from the `charter` command line, under the extension's own id,
+//! which is why an id may never be one of charter's own command words.
 //!
 //! Themes, panels (`crate::panel`, ADR 0043), and **views**. A theme and a panel are
 //! declarative data against a closed vocabulary charter owns, charter chooses the consumer, and
@@ -180,6 +182,7 @@ use std::path::{Component, Path, PathBuf};
 pub mod acting;
 pub mod briefing;
 pub mod capability;
+pub mod cli;
 pub mod events;
 pub mod facts;
 pub mod project;
@@ -187,6 +190,7 @@ pub mod writes;
 
 pub use acting::{Action, Command, Does};
 pub use capability::Capability;
+pub use cli::CliCommand;
 
 /// The registry, inside [`crate::machine::DIR`] and beside [`crate::machine::FILE`].
 pub const RECORD: &str = "extensions.json";
@@ -382,6 +386,9 @@ pub struct Manifest {
     pub badges: Vec<facts::DeclaredBadge>,
     /// The repo-table columns it declares (the `repo-columns` capability, [`facts`]).
     pub repo_columns: Vec<facts::DeclaredColumn>,
+    /// The commands it adds to the `charter` command line under its id ([`cli`], the `cli`
+    /// capability): each one a request of its own to [`Self::program`].
+    pub cli: Vec<CliCommand>,
     /// The events it hears, and the folder it keeps in each workspace (the `events`
     /// capability, [`events`]). `None` for an extension that hears nothing.
     pub events: Option<events::Declared>,
@@ -1064,6 +1071,11 @@ fn parse(text: &str) -> Result<Manifest, String> {
             "has the id {id:?}, which does not start with a letter or a digit"
         ));
     }
+    // An id is what a command line reaches an extension by, so it is never a core word — for
+    // every extension, whether or not it adds commands today (charter-app#342).
+    if let Some(why) = cli::takes_a_core_word(id) {
+        return Err(why);
+    }
     let name = doc
         .get("name")
         .and_then(serde_json::Value::as_str)
@@ -1292,6 +1304,10 @@ fn parse(text: &str) -> Result<Manifest, String> {
         None => Vec::new(),
         Some(value) => writes::writes_of(value)?,
     };
+    let cli = match contributes.get(Capability::Cli.as_str()) {
+        None => Vec::new(),
+        Some(value) => cli::commands_of(value, program.as_deref(), !writes.is_empty())?,
+    };
 
     Ok(Manifest {
         protocol,
@@ -1311,6 +1327,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
         repo_columns,
         events,
         briefing,
+        cli,
     })
 }
 
@@ -2676,6 +2693,14 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
     declares.extend(found.manifest.palette.iter().map(|command| {
         acting::declares_command(command, &found.manifest.name, &found.manifest.actions)
     }));
+    declares.extend(
+        found
+            .manifest
+            .cli
+            .iter()
+            .filter(|command| command.writes)
+            .map(|command| cli::declares(command, found.id())),
+    );
     if !found.manifest.writes.is_empty() {
         declares.push(format!(
             "plane paths it writes: {}",
@@ -2705,14 +2730,18 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         declares.push(
             if manifest.views.is_empty()
                 && manifest.actions.is_empty()
+                && manifest.cli.is_empty()
                 && manifest.events.is_none()
                 && manifest.briefing.is_none()
             {
                 format!(
-                    "a program, {program} — it declares no view or action, hears no event and \
-                     adds no briefing section, so nothing ever asks charter to start it"
+                    "a program, {program} — it declares no view, action or command, hears no \
+                     event and adds no briefing section, so nothing ever asks charter to start it"
                 )
-            } else if manifest.events.is_none() && manifest.briefing.is_none() {
+            } else if manifest.cli.is_empty()
+                && manifest.events.is_none()
+                && manifest.briefing.is_none()
+            {
                 format!("a program, {program} — {}", crate::executor::HOW_IT_RUNS)
             } else {
                 format!(

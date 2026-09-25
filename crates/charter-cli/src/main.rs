@@ -34,6 +34,7 @@ use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
+mod extcmd;
 mod extensions;
 mod guard;
 mod handoff;
@@ -2206,10 +2207,32 @@ fn main() -> ExitCode {
     // `secret exec`'s `-- <command…>` is the child's, flags included, and is peeled off before
     // the parser can read any of it as charter's — `cli._split_exec_command`.
     let (argv, graft) = secret::split_exec(std::env::args_os().collect());
+    // An extension's command, or a core-owned alias onto one (charter-app#342) — asked only
+    // about a first word clap does not answer itself, so a core word is always the core's.
+    let mut parser = {
+        use clap::CommandFactory;
+        Cli::command()
+    };
+    parser.build();
+    if let Some(code) = extcmd::intercept(&argv, |word| parser.find_subcommand(word).is_some()) {
+        return code;
+    }
+    // The first word, when clap does not answer it: what the line after clap's own error names.
+    // clap reports a bad word under a core command with the same error kind, and that one is
+    // not about extensions.
+    let unknown_first = argv
+        .get(1)
+        .map(|word| word.to_string_lossy().into_owned())
+        .filter(|word| parser.find_subcommand(word).is_none());
     let cli = match Cli::try_parse_from(argv) {
         Ok(cli) => cli,
         Err(err) => {
             let _ = err.print();
+            if err.kind() == clap::error::ErrorKind::InvalidSubcommand
+                && let Some(word) = &unknown_first
+            {
+                extcmd::note_after_an_unknown_word(word);
+            }
             return match err.exit_code() {
                 0 => ExitCode::SUCCESS,
                 _ => ExitCode::FAILURE,
@@ -2606,6 +2629,51 @@ fn harness_listing(set: &ProfileSet, check: &profiles::IgnoreCheck) -> String {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod core_word_tests {
+    use super::*;
+    use clap::CommandFactory;
+    use std::collections::BTreeSet;
+
+    /// Every word this binary's parser answers as its first argument: each command's name,
+    /// every other name clap takes for it, and clap's own `help` — read off the parser, so a
+    /// command added to it is in this set the day it is added.
+    fn words_the_parser_answers() -> BTreeSet<String> {
+        let mut root = Cli::command();
+        root.build();
+        root.get_subcommands()
+            .flat_map(|sub| {
+                std::iter::once(sub.get_name().to_owned())
+                    .chain(sub.get_all_aliases().map(str::to_owned))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_word_charter_answers_is_one_no_extension_may_take() {
+        // **charter-app#342: an extension can never take over a core word.** The refusal lives
+        // in the core, which the app calls to approve an extension and which cannot read this
+        // parser — so this is where the list it refuses by is held to the parser, both ways.
+        // A new core command that is not in `CORE_WORDS` fails here, in the change adding it.
+        let parser = words_the_parser_answers();
+        let refused: BTreeSet<String> = charter_core::extension::cli::CORE_WORDS
+            .iter()
+            .map(|&word| word.to_owned())
+            .collect();
+        let unprotected: Vec<&String> = parser.difference(&refused).collect();
+        assert!(
+            unprotected.is_empty(),
+            "`charter {unprotected:?}` is a core command an extension could still take as its \
+             id — add it to charter_core::extension::cli::CORE_WORDS"
+        );
+        let stale: Vec<&String> = refused.difference(&parser).collect();
+        assert!(
+            stale.is_empty(),
+            "CORE_WORDS refuses {stale:?}, which is no longer a word charter answers"
+        );
+    }
 }
 
 #[cfg(test)]

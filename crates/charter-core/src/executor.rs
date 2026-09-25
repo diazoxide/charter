@@ -126,8 +126,11 @@ use crate::panel::{self, Subject};
 ///   declares plane writes may write, on every request. And (charter-app#343) two more kinds,
 ///   each a request of its own: an event the extension hears ([`Executor::tell`], `event`,
 ///   answered `{"charter": 2}` or an `error`), and its section of a chat's session-start
-///   briefing ([`Executor::brief`], `briefing`, answered with `section`). Protocol 2 was not yet
-///   released when they were added, so it holds all three.
+///   briefing ([`Executor::brief`], `briefing`, answered with `section`). And (charter-app#342)
+///   one more, *run command `<name>` with `<args>`* from the `charter` command line
+///   ([`Executor::command`], `command` and `args`), whose answer is not a line of JSON: what the
+///   program prints on stdout and stderr, and its exit status, passed back as they are.
+///   Protocol 2 was not yet released when they were added, so it holds all four.
 pub const PROTOCOL: u32 = 2;
 
 /// How long a program has, from being started to its answer's last byte.
@@ -193,25 +196,31 @@ pub const HOW_IT_RUNS: &str = "charter starts it only when you open one of this 
      with anything it started. A program set on outliving that can, because it runs as you do.";
 
 /// [`HOW_IT_RUNS`] for a program that is also started without the operator opening or running
-/// anything — because it hears events or adds a briefing section (charter-app#343). **"Never on
-/// its own" would be false of it**, so it says when charter does start it instead, and keeps
-/// every bound.
+/// anything in the window — because it hears events or adds a briefing section (charter-app#343),
+/// or because a command line runs one of its commands (charter-app#342). **"Never on its own"
+/// would be false of it**, so it says when charter does start it instead, and keeps every bound.
 pub fn how_it_runs(manifest: &extension::Manifest) -> String {
-    let mut when: Vec<&str> = Vec::new();
+    let mut when: Vec<String> = Vec::new();
     if !manifest.views.is_empty() {
-        when.push("when you open one of this extension's views");
+        when.push("when you open one of this extension's views".to_owned());
     }
     if !manifest.actions.is_empty() {
-        when.push("when you run one of its actions");
+        when.push("when you run one of its actions".to_owned());
+    }
+    if !manifest.cli.is_empty() {
+        when.push(format!(
+            "when you or a chat run one of its commands (`charter {} <command>`)",
+            manifest.id
+        ));
     }
     if manifest.events.is_some() {
-        when.push("after each thing it hears about has happened");
+        when.push("after each thing it hears about has happened".to_owned());
     }
     if manifest.briefing.is_some() {
-        when.push("when a chat starts, for its briefing section");
+        when.push("when a chat starts, for its briefing section".to_owned());
     }
     let when = match when.as_slice() {
-        [one] => (*one).to_owned(),
+        [one] => one.clone(),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
         [] => String::new(),
     };
@@ -258,6 +267,26 @@ pub struct Acted {
     pub actions: Vec<extension::Action>,
 }
 
+/// What a command printed and how it ended (charter-app#342): **the program's own bytes and its
+/// own exit status**, for the `charter` command line to pass back as they are.
+#[derive(Debug, Clone)]
+pub struct Ran {
+    /// Everything it wrote to its stdout, as it wrote it.
+    pub stdout: Vec<u8>,
+    /// Everything it wrote to its stderr, as it wrote it.
+    pub stderr: Vec<u8>,
+    /// Its exit status. Only a program that exited on its own is a `Ran`: one charter stopped,
+    /// or one killed by a signal, is a refusal that says so.
+    pub status: i32,
+    /// As [`Answer::gate`].
+    pub gate: Duration,
+    /// As [`Answer::round_trip`].
+    pub round_trip: Duration,
+    /// As [`Answer::overreach`]. A command that says it only reads is held to no path at all,
+    /// so any change to the plane while it ran is named here.
+    pub overreach: Option<String>,
+}
+
 /// What an action is run on: the view and the row it was pressed on, or nothing at all for an
 /// action a palette command runs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -292,6 +321,24 @@ enum Asked<'a> {
         on: On<'a>,
         confirmed: bool,
     },
+    /// *Run command `<name>` with `<args>`* (protocol 2, charter-app#342), from the `charter`
+    /// command line.
+    Command { name: &'a str, args: &'a [String] },
+}
+
+/// What a program said: one answer line, or — for a command — everything it printed and how it
+/// exited.
+enum Said {
+    Line(Vec<u8>),
+    Whole(Printed),
+}
+
+/// Everything a command's program printed, and the status it exited with.
+#[derive(Debug, Default)]
+struct Printed {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    status: i32,
 }
 
 /// What [`Executor::put`] came back with, before it is shaped into an [`Answer`] or an [`Acted`].
@@ -299,6 +346,8 @@ struct Put {
     blocks: Option<Vec<panel::Block>>,
     /// A briefing's answer: its section, as the program wrote it.
     section: Option<String>,
+    /// A command's output and status; `None` for every other request.
+    whole: Option<Printed>,
     gate: Duration,
     round_trip: Duration,
     overreach: Option<String>,
@@ -522,8 +571,53 @@ impl Executor {
         })
     }
 
+    /// Run `extension`'s command `name` with `args`, as `charter <extension> <name> <args…>`
+    /// does, or say why charter will not (charter-app#342) — **the request the command line
+    /// asks**: *run command `<name>` with `<args>`*, in protocol 2.
+    ///
+    /// Everything [`Self::ask`] does, it does — the record first, the project's on or off, the
+    /// fingerprint re-taken over the whole tree now, one process, the deadline and the kill — so
+    /// an extension turned off, never approved or changed on disk since its yes runs nothing
+    /// and says which. What differs is the answer: not a line of JSON but **whatever the program
+    /// prints on stdout and stderr, and its exit status**, read to the end within the deadline
+    /// and each bounded by [`MOST_ANSWER_BYTES`], for the caller to pass on unchanged.
+    ///
+    /// A command that writes is handed the plane paths its extension declares, resolved, and a
+    /// change outside them is reported ([`Ran::overreach`]); one that says it only reads is
+    /// handed none, and any change is reported. It is handed nothing of the plane otherwise.
+    pub fn command(
+        &self,
+        config_root: &Path,
+        project: &extension::project::Choices,
+        extension: &str,
+        name: &str,
+        args: &[String],
+    ) -> Result<Ran, String> {
+        let put = self.put(
+            config_root,
+            project,
+            extension,
+            Asked::Command { name, args },
+            |_| serde_json::Value::Null,
+        )?;
+        let Printed {
+            stdout,
+            stderr,
+            status,
+        } = put.whole.unwrap_or_default();
+        Ok(Ran {
+            stdout,
+            stderr,
+            status,
+            gate: put.gate,
+            round_trip: put.round_trip,
+            overreach: put.overreach,
+        })
+    }
+
     /// Put one request to `extension`'s program: the gate, the question, the conversation, the
-    /// watch on the plane, the answer. [`Self::ask`] and [`Self::act`] are its two shapes.
+    /// watch on the plane, the answer. [`Self::ask`], [`Self::act`], [`Self::tell`],
+    /// [`Self::brief`] and [`Self::command`] are its shapes.
     fn put(
         &self,
         config_root: &Path,
@@ -545,9 +639,14 @@ impl Executor {
         // Then the project the question was asked in: whether it has this extension on, and what
         // it set for it — `project::resolve`, the one answer every consumer takes.
         let settings = in_this_project(project, extension, &declared)?;
+        let mut commanded: Option<extension::CliCommand> = None;
         let (view, focus) = match asked {
             Asked::View { view, focus } => {
                 (Some(declared_view(extension, &declared, view)?), focus)
+            }
+            Asked::Command { name, .. } => {
+                commanded = Some(declared_command(extension, &declared, name)?);
+                (None, None)
             }
             Asked::Action {
                 action,
@@ -593,9 +692,15 @@ impl Executor {
         // watch compares with after (charter-app#341).
         let handing = Instant::now();
         let given = view.as_ref().map(|view| hand(view.about));
+        // What a command may write: the declared paths for one that says it writes, and none for
+        // one that says it only reads — so that anything it changes is reported.
+        let may_write: &[String] = match &commanded {
+            Some(command) if !command.writes => &[],
+            _ => &declared.writes,
+        };
         let writes = match project.plane() {
             Some(plane) if declared.protocol >= 2 => {
-                Some(extension::writes::resolve(plane, &declared.writes))
+                Some(extension::writes::resolve(plane, may_write))
             }
             None if declared.protocol >= 2 => Some(Vec::new()),
             _ => None,
@@ -635,22 +740,46 @@ impl Executor {
             _ => self.hold(extension)?,
         };
         let started = Instant::now();
-        let line = self.converse(extension, &found, &at, &request);
+        let said = self.converse(extension, &found, &at, &request, commanded.is_some());
         let round_trip = started.elapsed();
 
         // **After every question, however it ended** — a program that wrote outside its paths
         // and then crashed wrote outside its paths. The report goes with the refusal as well as
         // with the answer.
-        let may_delete = matches!(asked, Asked::Action { action, .. }
-            if found.manifest.actions.iter().any(|it| it.id == action && it.deletes));
-        let overreach = before
-            .and_then(|before| before.overreach(extension, &found.manifest.writes, may_delete));
+        // A command that writes may remove what is inside its paths; one that reads may change
+        // nothing at all.
+        let may_delete = match (&commanded, asked) {
+            (Some(command), _) => command.writes,
+            (None, Asked::Action { action, .. }) => found
+                .manifest
+                .actions
+                .iter()
+                .any(|it| it.id == action && it.deletes),
+            (None, _) => false,
+        };
+        // Watched against what it was told it may write: `found.manifest` is `declared`, checked
+        // above.
+        let overreach =
+            before.and_then(|before| before.overreach(extension, may_write, may_delete));
         let with_report = |why: String| match &overreach {
             Some(seen) => format!("{why} {seen}"),
             None => why,
         };
 
-        let line = line.map_err(with_report)?;
+        let line = match said.map_err(with_report)? {
+            Said::Line(line) => line,
+            Said::Whole(printed) => {
+                return Ok(Put {
+                    blocks: None,
+                    section: None,
+                    whole: Some(printed),
+                    gate,
+                    round_trip,
+                    overreach,
+                    actions: found.manifest.actions.clone(),
+                });
+            }
+        };
         let protocol = found.manifest.protocol;
         let (answered, section) = match asked {
             // An event's answer is that it heard, or an `error`: nothing charter draws.
@@ -690,6 +819,7 @@ impl Executor {
         Ok(Put {
             blocks: answered,
             section,
+            whole: None,
             gate,
             round_trip,
             overreach,
@@ -829,14 +959,15 @@ impl Executor {
         found: &Extension,
         program: &Path,
         request: &[u8],
-    ) -> Result<Vec<u8>, String> {
+        whole: bool,
+    ) -> Result<Said, String> {
         #[cfg(unix)]
         {
-            self.converse_on_unix(extension, found, program, request)
+            self.converse_on_unix(extension, found, program, request, whole)
         }
         #[cfg(not(unix))]
         {
-            let _ = (extension, found, program, request);
+            let _ = (extension, found, program, request, whole);
             Err(REFUSED_HERE.to_owned())
         }
     }
@@ -848,7 +979,8 @@ impl Executor {
         found: &Extension,
         program: &Path,
         request: &[u8],
-    ) -> Result<Vec<u8>, String> {
+        whole: bool,
+    ) -> Result<Said, String> {
         use std::os::fd::OwnedFd;
         use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
@@ -914,14 +1046,20 @@ impl Executor {
         let until = Instant::now() + self.deadline;
 
         // Its stderr is drained while it runs — a program that logs more than a socket buffer
-        // would otherwise stall on its own diagnostics and read as hung — and only the tail is
-        // kept.
+        // would otherwise stall on its own diagnostics and read as hung. For a view or an action
+        // only the tail is kept, to quote; for a command all of it is, up to the answer's bound,
+        // because it is passed on.
+        let kept = if whole {
+            MOST_ANSWER_BYTES
+        } else {
+            MOST_STDERR_BYTES
+        };
         let stop = Arc::new(AtomicBool::new(false));
         let tail = {
             let stop = Arc::clone(&stop);
             std::thread::Builder::new()
                 .name(format!("extension {extension} stderr"))
-                .spawn(move || drain(&err_ours, &stop))
+                .spawn(move || drain(&err_ours, &stop, kept, whole.then_some(until)))
                 .map_err(could_not)?
         };
 
@@ -940,7 +1078,14 @@ impl Executor {
             }
         };
 
-        let heard = listen(&ours, until);
+        let heard = if whole {
+            listen_to_the_end(&ours, until)
+        } else {
+            listen(&ours, until)
+        };
+        // A command's status is its own only if it exits by itself, so it is waited for — within
+        // the same deadline — before anything is killed.
+        let exited = whole && matches!(heard, Heard::Line(_)) && running.exits_by(until);
         // **The conversation is over, whatever the program or anything it started still
         // holds.** Shutting charter's end down wakes the writer if it is still in a `write` —
         // a helper that left the group and holds the program's stdin, reading a byte a second,
@@ -951,7 +1096,11 @@ impl Executor {
 
         let status = running.stop();
         stop.store(true, Ordering::Relaxed);
-        let said = tail.join().unwrap_or_default();
+        let Drained {
+            kept: said,
+            overflowed,
+            ended,
+        } = tail.join().unwrap_or_default();
         let wrote = writer.join().unwrap_or(false);
 
         let last_words = || {
@@ -966,8 +1115,62 @@ impl Executor {
                 )
             }
         };
+        if whole {
+            return match heard {
+                Heard::Line(_) if !exited => Err(format!(
+                    "'{extension}' closed its output and did not exit within {} seconds, so \
+                     charter stopped it and passes none of what it printed on.",
+                    self.deadline.as_secs()
+                )),
+                Heard::Line(_) if overflowed => Err(format!(
+                    "'{extension}' printed more than {} KiB on stderr, so charter passes none of \
+                     what it printed on.",
+                    MOST_ANSWER_BYTES >> 10
+                )),
+                // Something it started still holds its stderr, or it was still being read when
+                // charter stopped reading: what was read is not all of it, and a command's
+                // output is passed on whole or not at all.
+                Heard::Line(_) if !ended => Err(format!(
+                    "'{extension}' exited, and its stderr did not end within {} seconds — \
+                     something it started may still hold it open — so charter passes none of \
+                     what it printed on.",
+                    self.deadline.as_secs()
+                )),
+                Heard::Line(stdout) => match status.and_then(|status| status.code()) {
+                    Some(status) => Ok(Said::Whole(Printed {
+                        stdout,
+                        stderr: said,
+                        status,
+                    })),
+                    None => Err(format!(
+                        "'{extension}' was killed by a signal, so charter passes none of what it \
+                         printed on.{}",
+                        last_words()
+                    )),
+                },
+                Heard::TooLate => Err(format!(
+                    "'{extension}' did not finish within {} seconds, so charter stopped it and \
+                     passes none of what it printed on.{}",
+                    self.deadline.as_secs(),
+                    last_words()
+                )),
+                Heard::TooMuch => Err(format!(
+                    "'{extension}' printed more than {} KiB, so charter stopped it and passes none \
+                     of it on.",
+                    MOST_ANSWER_BYTES >> 10
+                )),
+                Heard::Nothing(_) => Err(format!(
+                    "'{extension}' ended without charter reading its output.{}",
+                    last_words()
+                )),
+                Heard::Broken(why) => Err(format!(
+                    "charter lost its connection to '{extension}''s program: {why}.{}",
+                    last_words()
+                )),
+            };
+        }
         match heard {
-            Heard::Line(line) => Ok(line),
+            Heard::Line(line) => Ok(Said::Line(line)),
             Heard::TooLate => Err(format!(
                 "'{extension}' did not answer within {} seconds, so charter stopped it. It was \
                  asked one question{}.{}",
@@ -1057,6 +1260,33 @@ impl<'a> Running<'a> {
             extension,
             group,
             child: Some(child),
+        }
+    }
+
+    /// Whether it has exited by `until`, **without reaping it** — `waitid` with `WNOWAIT` — so
+    /// that [`Self::stop`] still kills the group before the leader is reaped, in the order
+    /// [`Executor::stop_all`] relies on, and still reads the status it exited with.
+    fn exits_by(&self, until: Instant) -> bool {
+        use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+        let Some(pid) = self
+            .child
+            .as_ref()
+            .and_then(|child| Pid::from_raw(i32::try_from(child.id()).ok()?))
+        else {
+            return false;
+        };
+        let asking = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        loop {
+            match waitid(WaitId::Pid(pid), asking) {
+                Ok(Some(_)) => return true,
+                Ok(None) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(_) => return false,
+            }
+            if Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
 
@@ -1253,18 +1483,37 @@ pub(crate) fn channel() -> std::io::Result<Channel> {
     })
 }
 
-/// Read a program's stderr until it closes or charter says stop, keeping the tail.
+/// What [`drain`] read of a program's stderr.
+#[cfg(unix)]
+#[derive(Debug, Default)]
+struct Drained {
+    /// The last `most` bytes of it.
+    kept: Vec<u8>,
+    /// Whether there was more than that.
+    overflowed: bool,
+    /// Whether it was read to its end, rather than cut off at [`STDERR_AFTER_STOP`] — so what
+    /// is kept is all of it, and a command's stderr can be passed on as it was written.
+    ended: bool,
+}
+
+/// Read a program's stderr until it closes or charter says stop, keeping the last `most` bytes.
+///
+/// `whole_by` is for a command, whose stderr is passed on rather than quoted: once stopped, the
+/// drain goes on to the end of it as long as that deadline allows, rather than for only
+/// [`STDERR_AFTER_STOP`].
 #[cfg(unix)]
 fn drain(
     err_ours: &std::os::unix::net::UnixStream,
     stop: &std::sync::atomic::AtomicBool,
-) -> Vec<u8> {
+    most: usize,
+    whole_by: Option<Instant>,
+) -> Drained {
     use std::io::Read;
     use std::sync::atomic::Ordering;
     let mut err_ours = err_ours;
     let _ = err_ours.set_read_timeout(Some(Duration::from_millis(50)));
     let mut kept: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 1024];
+    let mut chunk = vec![0u8; 16 << 10];
     // When charter said stop. What a program wrote just before it died is still in the socket,
     // and it is the part worth quoting, so the drain goes on after stop — but for a bounded
     // TIME, not a bounded number of bytes: a process that escaped the group (`setsid`) can hold
@@ -1272,29 +1521,40 @@ fn drain(
     // takes to trickle that many (measured: a byte a millisecond held a 64 KiB cap for 86 s).
     // Either way the cost was this thread, and the extension's one slot, held with it.
     let mut stopped_at: Option<Instant> = None;
+    let mut overflowed = false;
+    let mut ended = false;
     loop {
         if stopped_at.is_none() && stop.load(Ordering::Relaxed) {
             stopped_at = Some(Instant::now());
         }
+        let waiting = whole_by.is_some_and(|by| Instant::now() < by);
         // `>` against `>=` differs at one instant of a clock no test can land on.
-        if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) {
+        if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) && !waiting {
             break;
         }
         match err_ours.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) => {
+                ended = true;
+                break;
+            }
             Ok(got) => {
                 kept.extend_from_slice(&chunk[..got]);
                 // At exactly the bound the cut is 0, so `>=` here changes nothing.
-                if kept.len() > MOST_STDERR_BYTES {
-                    let cut = kept.len() - MOST_STDERR_BYTES;
+                if kept.len() > most {
+                    overflowed = true;
+                    let cut = kept.len() - most;
                     kept.drain(..cut);
                 }
             }
-            Err(_) if stopped_at.is_none() => {}
+            Err(_) if stopped_at.is_none() || waiting => {}
             Err(_) => break,
         }
     }
-    kept
+    Drained {
+        kept,
+        overflowed,
+        ended,
+    }
 }
 
 /// Write the whole question to the program, by `until` or not at all, then close charter's
@@ -1506,6 +1766,32 @@ fn declared_action(
         })
 }
 
+/// The command called `name` in `manifest`, or the sentence for its absence — naming the ones
+/// it has, since the caller is at a command line with nothing else to look at.
+fn declared_command(
+    extension: &str,
+    manifest: &extension::Manifest,
+    name: &str,
+) -> Result<extension::CliCommand, String> {
+    manifest
+        .cli
+        .iter()
+        .find(|it| it.name == name)
+        .cloned()
+        .ok_or_else(|| {
+            let has: Vec<&str> = manifest.cli.iter().map(|it| it.name.as_str()).collect();
+            if has.is_empty() {
+                format!("'{extension}' adds no commands to charter's command line.")
+            } else {
+                format!(
+                    "'{extension}' has no command called '{}'. It has: {}.",
+                    crate::shown::readable(name, 64),
+                    has.join(", ")
+                )
+            }
+        })
+}
+
 /// What charter says about an action that asks first and was not said yes to.
 fn unconfirmed(extension: &str, action: &extension::Action) -> String {
     let why = if action.deletes {
@@ -1662,6 +1948,12 @@ fn request_line(
         Asked::Briefing(chat) => {
             doc.insert("briefing".into(), chat.clone());
         }
+        // A command is its name and its words, as the command line was given them, and nothing
+        // about a view (charter-app#342).
+        Asked::Command { name, args } => {
+            doc.insert("command".into(), name.into());
+            doc.insert("args".into(), args.to_vec().into());
+        }
         Asked::View { .. } | Asked::Action { .. } => {
             if let Asked::Action { action, .. } = asked {
                 doc.insert("action".into(), action.into());
@@ -1722,9 +2014,11 @@ fn listen(ours: &std::os::unix::net::UnixStream, until: Instant) -> Heard {
         if left.is_zero() {
             return Heard::TooLate;
         }
-        if ours.set_read_timeout(Some(left)).is_err() {
-            return Heard::Broken("its read deadline could not be set".into());
-        }
+        // Not a broken socket: see `listen_to_the_end` — macOS refuses the deadline on a socket
+        // whose program has already closed its end, and the read then returns at once. Seen
+        // here too, not only for a command: a program that crashed part way through a line
+        // read as "charter lost its connection" in one run of three on this change's machine.
+        let _ = ours.set_read_timeout(Some(left));
         match ours.read(&mut chunk) {
             Ok(0) => return Heard::Nothing(!heard.is_empty()),
             // **A reset is the program ending, not the connection breaking.** On Linux a stream
@@ -1781,6 +2075,52 @@ fn listen(ours: &std::os::unix::net::UnixStream, until: Instant) -> Heard {
         }
     }
     Heard::Line(line)
+}
+
+/// Read everything a command's program writes on `ours` until it closes its output, by `until`
+/// — a command's answer is all of its stdout, not one line (charter-app#342). The whole of it
+/// comes back as [`Heard::Line`].
+#[cfg(unix)]
+fn listen_to_the_end(ours: &std::os::unix::net::UnixStream, until: Instant) -> Heard {
+    use std::io::Read;
+    let mut ours = ours;
+    let mut heard: Vec<u8> = Vec::new();
+    let mut chunk = vec![0u8; 16 << 10];
+    loop {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Heard::TooLate;
+        }
+        // **A refusal to set the deadline is not a broken socket here.** macOS answers `EINVAL`
+        // to `SO_RCVTIMEO` on a socket whose far end has closed — a command that printed and
+        // exited before charter read it all, the ordinary case (measured: one run in three).
+        // A read then returns at once with what is left and then the end, so it is read without
+        // a new deadline; the one set on an earlier turn, if any, still bounds it.
+        let _ = ours.set_read_timeout(Some(left));
+        match ours.read(&mut chunk) {
+            // A reset is the program ending, as for `listen`.
+            Ok(0) => return Heard::Line(heard),
+            Err(why) if why.kind() == std::io::ErrorKind::ConnectionReset => {
+                return Heard::Line(heard);
+            }
+            Ok(got) => {
+                heard.extend_from_slice(&chunk[..got]);
+                if heard.len() > MOST_ANSWER_BYTES {
+                    return Heard::TooMuch;
+                }
+            }
+            Err(why)
+                if matches!(
+                    why.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Heard::TooLate;
+            }
+            Err(why) if why.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(why) => return Heard::Broken(why.to_string()),
+        }
+    }
 }
 
 /// Kill a program's whole process group.
