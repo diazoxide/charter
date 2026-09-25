@@ -184,14 +184,4 @@ describe("a workspace's theme and colour", () => {
     expect(workspaceTab("gamma")).not.toHaveAttribute("data-colour");
     expect(workspaceTab("gamma").querySelector(".workspace-mark")).toBeNull();
   });
-
-  it("marks the title bar's workspace while a coloured workspace is in front", async () => {
-    core();
-    render(<App />);
-    const crumbs = await screen.findByTestId("title-crumbs");
-    await waitFor(() => expect(within(crumbs).getByTestId("crumb-mark")).toBeInTheDocument());
-
-    await userEvent.click(workspaceTab("beta"));
-    await waitFor(() => expect(within(crumbs).queryByTestId("crumb-mark")).toBeNull());
-  });
 });

@@ -60,7 +60,7 @@ import {
   type WindowDoing,
 } from "./PlaneView";
 import type { Alerts } from "./StatusLine";
-import { TitleBar, runningIn, useTitleBarRoom, type Crumbs } from "./TitleBar";
+import { TitleBar, useTitleBarRoom } from "./TitleBar";
 import type { Needing, Quiet } from "./NeedsYou";
 import { useUpdates } from "./Updates";
 import { noTabs, PREFERENCES_TITLE } from "./tabs";
@@ -958,34 +958,6 @@ function App() {
   const titleBarRoom = useTitleBarRoom();
 
   /**
-   * Where the window is, for the title bar's left-hand side.
-   *
-   * **Every part of it is already known, and nothing here asks the core a second time.** The
-   * project is the tab's own name; the workspace is the same `focused` the status line draws,
-   * carried up in the project's report; the count is a filter over the `ending` list the quit
-   * warning is already given, whose per-chat state is what the hooks pushed. `runningIn`
-   * holds the rule that a chat has to be *running* and not merely open.
-   */
-  const crumbs = useMemo<Crumbs>(
-    () => ({
-      // **The same `undefined` the opener keys on**, so the bar and the window below it are
-      // never in two different states: `inFront` is already guarded against a project the
-      // window has stopped holding.
-      project: inFront === undefined ? undefined : calledOn(inFront),
-      // And the same pair of conditions the opener waits for, for the reason `openerUp` gives:
-      // both are about to decide whether this window has a project, and "No project open" on
-      // the bar half a second before eight projects arrive is the same lie in a smaller font.
-      decided: launch !== undefined && !restoring,
-      read: saying?.read ?? false,
-      workspace: saying?.where,
-      coloured: saying?.colour != null,
-      live: saying?.live === true,
-      running: runningIn(saying),
-    }),
-    [inFront, launch, restoring, saying],
-  );
-
-  /**
    * **Every project's chats asking, for the title bar's list** (charter-app#249), in the order
    * the project strip draws the projects and each project's queue in its own order.
    *
@@ -1059,12 +1031,109 @@ function App() {
 
   return (
     <main className="window">
-      {/* The window's own title bar. Above the project strip, because on
-          macOS it IS the title bar — the system's traffic lights float over it — and on every
-          other platform it is the window's first row under the system's own bar.
-          `TitleBar.tsx` argues the shape, the drag region and what moved here. */}
+      {/* The window's own title bar, and the project strip is in it (ADR 0054): on macOS it
+          IS the title bar — the system's traffic lights float over it — and on every other
+          platform it is the window's first row under the system's own bar. `TitleBar.tsx`
+          argues the shape, the drag region and what moved here.
+
+          The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it holds
+          any — including one, because `+` is how it gets a second and `×` is the way back to
+          the opener. Named, because the chat tabs and the workspaces are tablists too and a
+          query for `role="tab"` across the whole window would mix all three. */}
       <TitleBar
-        crumbs={crumbs}
+        projects={
+          planes.length > 0 && (
+            // One Tab stop for the strip, the project in front, and the arrows along it
+            // (charter-app#189, `roving.ts`). Its own controls after the tabs are stops of
+            // their own.
+            <RovingFocusGroup.Root asChild orientation="horizontal" {...projectStop}>
+              <nav
+                className="projects"
+                role="tablist"
+                aria-label="Projects"
+                ref={projectStrip}
+                style={{ "--least": `${projectLeast}px` } as CSSProperties}
+              >
+                {projectsShown.shown.map((project) => {
+                  const at = drawn.indexOf(project);
+                  return (
+                    /* Right-click is the third reader of the same catalogue (`Menus.tsx`).
+                       `asChild`, so the strip gains no wrapper element: this IS the `span` it
+                       always was — which is what #171's `flex: 1 1 0` cells require. */
+                    <Menued
+                      key={project.plane}
+                      on={{ on: "project", plane: project.plane }}
+                      offers={stripFound}
+                      onPress={press}
+                    >
+                      <span className="project">
+                        <RovingFocusGroup.Item
+                          asChild
+                          tabStopId={project.plane}
+                          active={project.plane === inFront}
+                        >
+                          <button
+                            role="tab"
+                            aria-selected={project.plane === inFront}
+                            onKeyDown={(event) => closeOnDelete(event, strip.close[at], press)}
+                            // The path, because two projects can share a directory name and
+                            // the name is all the tab has room for.
+                            title={project.plane}
+                            onClick={() => {
+                              const offer = strip.switchTo[at];
+                              if (offer.available) press(offer);
+                            }}
+                          >
+                            {projectMarks(project)}
+                          </button>
+                        </RovingFocusGroup.Item>
+                        <Closer offer={strip.close[at]} onPress={press} />
+                      </span>
+                    </Menued>
+                  );
+                })}
+                {/* The strip's own controls, and the one part of this strip that never
+                    collapses. They are inside the tablist because a `role="tab"` has to be owned
+                    by the tablist it belongs to, so `useRoom` is told to take their width off the
+                    room the tabs get rather than leaving the tabs to be squeezed under them.
+
+                    **A `+` and not a labelled button** — the operator's: *"open-project button
+                    is not looks like separate button, but it should looks like new tab, without
+                    label — just icon."* It is the same shape as the chat strip's `New tab` one
+                    level down: the `+` at the end of a strip makes one more of what the strip
+                    lists. Its accessible name is still the catalogue's `Open a project…`.
+
+                    **And beside it, the other half of the same sentence** — *"also we need to
+                    have create new project button too"* (charter-app#178). Two controls and not
+                    one menu: opening a project the operator already has and making one that does
+                    not exist yet are different acts, and the second writes to disk. It is drawn
+                    exactly as its neighbour is — one `Doer` over the catalogue's
+                    `project.create`, icon-only, named `New project…` by the same row the palette
+                    and the tab's menu read — so there is still one place those words are written
+                    down. It is second because opening one is the commoner act; both are always
+                    available, including with no project open, which is exactly the window that
+                    needs them.
+
+                    And the projects there was no room for, in the same component the chat strip
+                    uses, so an operator learns one control for all three strips. */}
+                <span className="strip-doing" ref={projectControls}>
+                  <Doer offer={strip.open} onPress={press} iconOnly />
+                  <Doer offer={strip.create} onPress={press} iconOnly />
+                  <ShowMore
+                    noun="project"
+                    hidden={projectsShown.hidden.map((project) => ({
+                      key: project.plane,
+                      offer: strip.switchTo[drawn.indexOf(project)],
+                      needs: askingIn(project),
+                      children: projectMarks(project),
+                    }))}
+                    onPress={press}
+                  />
+                </span>
+              </nav>
+            </RovingFocusGroup.Root>
+          )
+        }
         updates={updates}
         room={titleBarRoom}
         chats={ending}
@@ -1081,100 +1150,6 @@ function App() {
             : undefined
         }
       />
-      {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
-          holds any — including one, because `+` is how it gets a second and `×` is the way
-          back to the opener. Named, because the chat tabs and the workspaces are tablists
-          too and a query for `role="tab"` across the whole window would mix all three. */}
-      {planes.length > 0 && (
-        // One Tab stop for the strip, the project in front, and the arrows along it
-        // (charter-app#189, `roving.ts`). Its own controls after the tabs are stops of their own.
-        <RovingFocusGroup.Root asChild orientation="horizontal" {...projectStop}>
-          <nav
-            className="projects"
-            role="tablist"
-            aria-label="Projects"
-            ref={projectStrip}
-            style={{ "--least": `${projectLeast}px` } as CSSProperties}
-          >
-            {projectsShown.shown.map((project) => {
-              const at = drawn.indexOf(project);
-              return (
-                /* Right-click is the third reader of the same catalogue (`Menus.tsx`). `asChild`,
-                 so the strip gains no wrapper element: this IS the `span` it always was — which
-                 is what #171's `flex: 1 1 0` cells require. */
-                <Menued
-                  key={project.plane}
-                  on={{ on: "project", plane: project.plane }}
-                  offers={stripFound}
-                  onPress={press}
-                >
-                  <span className="project">
-                    <RovingFocusGroup.Item
-                      asChild
-                      tabStopId={project.plane}
-                      active={project.plane === inFront}
-                    >
-                      <button
-                        role="tab"
-                        aria-selected={project.plane === inFront}
-                        onKeyDown={(event) => closeOnDelete(event, strip.close[at], press)}
-                        // The path, because two projects can share a directory name and the name is
-                        // all the tab has room for.
-                        title={project.plane}
-                        onClick={() => {
-                          const offer = strip.switchTo[at];
-                          if (offer.available) press(offer);
-                        }}
-                      >
-                        {projectMarks(project)}
-                      </button>
-                    </RovingFocusGroup.Item>
-                    <Closer offer={strip.close[at]} onPress={press} />
-                  </span>
-                </Menued>
-              );
-            })}
-            {/* The strip's own controls, and the one part of this strip that never collapses.
-              They are inside the tablist because a `role="tab"` has to be owned by the
-              tablist it belongs to, so `useRoom` is told to take their width off the room
-              the tabs get rather than leaving the tabs to be squeezed under them.
-
-              **A `+` and not a labelled button** — the operator's: *"open-project button is
-              not looks like separate button, but it should looks like new tab, without label
-              — just icon."* It is the same shape as the chat strip's `New tab` one level
-              down: the `+` at the end of a strip makes one more of what the strip lists. Its
-              accessible name is still the catalogue's `Open a project…`.
-
-              **And beside it, the other half of the same sentence** — *"also we need to have
-              create new project button too"* (charter-app#178). Two controls and not one
-              menu: opening a project the operator already has and making one that does not
-              exist yet are different acts, and the second writes to disk. It is drawn exactly
-              as its neighbour is — one `Doer` over the catalogue's `project.create`, icon-only,
-              named `New project…` by the same row the palette and the tab's menu read — so
-              there is still one place those words are written down. It is second because
-              opening one is the commoner act; both are always available, including with no
-              project open, which is exactly the window that needs them.
-
-              And the projects there was no room for, in the same component the chat strip
-              uses, so an operator learns one control for all three strips. */}
-            <span className="strip-doing" ref={projectControls}>
-              <Doer offer={strip.open} onPress={press} iconOnly />
-              <Doer offer={strip.create} onPress={press} iconOnly />
-              <ShowMore
-                noun="project"
-                hidden={projectsShown.hidden.map((project) => ({
-                  key: project.plane,
-                  offer: strip.switchTo[drawn.indexOf(project)],
-                  needs: askingIn(project),
-                  children: projectMarks(project),
-                }))}
-                onPress={press}
-              />
-            </span>
-          </nav>
-        </RovingFocusGroup.Root>
-      )}
-
       {/* What the last action answered. Said here only while the palette is down: it is modal
           and draws over this line, and shows the same words itself rather than leaving the
           operator to guess at a sentence behind the overlay. One state, two places it can be

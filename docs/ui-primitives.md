@@ -638,8 +638,9 @@ component library gets added on.
 
 ## The title bar added no primitive either, and inherited a rule from Tauri
 
-The window's title bar (`app/src/TitleBar.tsx`) is a `<header>`, three `<span>`s and two
-buttons. The one thing about it that is not ordinary markup is the drag region, and that is a
+The window's title bar (`app/src/TitleBar.tsx`) is a `<header>` holding the project strip — the
+same Radix roving-focus tablist it was in its own row (ADR 0054) — and a `<span>` of buttons at
+its right-hand end. The one thing about it that is not ordinary markup is the drag region, and that is a
 **third-party rule the window now depends on** — the same class of thing as WebKit's tab
 sequence above, so it is written down here for the same reason.
 

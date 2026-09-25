@@ -96,8 +96,8 @@ the core reads) or a `#rrggbb` whose hue is taken, and the window turns only the
 - on that workspace's own tab and on the chat strip, which holds its chats, the same and
   `layer.workspace`, `layer.chat`, `layer.selected` (`theme.TINTED_TABS`), set on the element as
   custom properties by `tintVariables`. Each workspace tab carries its own tint whether or not it
-  is in front: a `.workspace-mark` dot in its accent and its own shade. The title bar's workspace
-  carries the same dot, `.crumb-mark`.
+  is in front: a `.workspace-mark` dot in its accent and its own shade. (The title bar's
+  breadcrumb carried the same dot until ADR 0054 took the breadcrumb away.)
 
 Never the text, never `layer.project` (the project strip is not a workspace's), never the
 terminal. `app/src/theme/tint.ts` does the arithmetic in OKLCH and then keeps each token's

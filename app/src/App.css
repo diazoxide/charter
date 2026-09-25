@@ -102,7 +102,9 @@ body {
    tabs have some padding from left, they should be like project tabs without padding."* An
    indent is ambiguous by construction — a row that begins 1.1rem in looks exactly like a row
    somebody padded — and it cost the two inner strips a whole tab's worth of room at ADR 0026's
-   widths for a fact it never managed to state. All three rows now begin at the same x.
+   widths for a fact it never managed to state. The rows begin at the same x — except that the
+   project strip is in the title bar now (ADR 0054), and on macOS that starts after the traffic
+   lights.
 
    **What carries the depth in its place is a shade, and nothing else.** He asked for the
    layers to differ in the same breath — *"lets make some different styles/collor for each
@@ -141,16 +143,18 @@ body {
   gap: 0;
 }
 
-/* The projects this window holds, above everything one of them draws (ADR 0033) — and the
-   widest, tallest row in the window, because it is the one that holds the other two. */
+/* The projects this window holds, above everything one of them draws (ADR 0033), and the
+   widest tabs in the window, because a project is the thing that holds the other two. It is
+   drawn in the title bar (ADR 0054), so the bar's height is its height; the rest of how it sits
+   there is with the bar, at the end of this file. */
 .projects {
-  min-height: 2.3rem;
   background: var(--layer-project);
 }
 
-/* The workspaces of the project in front: the middle of the three strips (ADR 0036). It begins
-   at the same x as the project row above it — the inset #171 put here is gone (charter-app
-   #193) — and its shade, one step up from the project row's, is what says which row this is. */
+/* The workspaces of the project in front: the middle of the three strips (ADR 0036). The first
+   row under the title bar, and it begins at the window's left edge — the inset #171 put here is
+   gone (charter-app #193) — and its shade, one step up from the project strip's, is what says
+   which row this is. */
 .workspaces {
   display: flex;
   align-items: stretch;
@@ -3106,7 +3110,8 @@ h2.sidebar-title .node-icon {
    were editing this stylesheet the night it landed.
    ========================================================================================== */
 
-/* **The window's title bar**: where you are on the left, what charter is on the right.
+/* **The window's title bar**: the project strip on the left, what charter is on the right
+   (ADR 0054).
 
    On macOS `titleBarStyle: "Overlay"` stops the system drawing a bar of its own and leaves the
    traffic lights floating over the webview, so this element IS the title bar and has to start
@@ -3117,15 +3122,25 @@ h2.sidebar-title .node-icon {
 
    `min-height` is a floor and not a height: macOS places the traffic lights at ITS standard
    title bar height whatever this element does, so a bar shorter than that would have them
-   overlapping the project strip below. `surface.deep` is the theme's colour for the top of the
-   window, which is what the project strip under it already uses — the two read as one frame. */
+   overlapping the workspace strip below. No padding above or below, so a project tab's cell
+   is the whole height of the bar. `surface.deep` is the theme's colour for the top of the
+   window; the project strip in it draws `layer.project`, which both built-in themes set to the
+   same value, so the two read as one frame. A theme that parts them gets a strip a shade apart
+   from the bar around it, which is the depth signal `layer.*` exists to give.
+
+   **`--title-bar-drag` is the stretch of bar that is always left to grab.** Width the project
+   tabs cannot use is drag region already; this is the least of it, so a window full of
+   projects can still be moved. It is the strip's margin rather than a gap in the flex row,
+   because the strip measures its own box (`fits.useRoom`) and a margin is outside that box:
+   the tabs are fitted to what is left after it, and the arithmetic needs no copy of it. */
 .title-bar {
+  --title-bar-drag: 5rem;
   display: flex;
   flex: none;
   gap: 0.75rem;
   align-items: center;
   min-height: 2.1rem;
-  padding: 0.1rem 0.6rem 0.1rem calc(var(--window-controls, 0px) + 0.6rem);
+  padding: 0 0.6rem 0 calc(var(--window-controls, 0px) + 0.6rem);
   font-size: 0.8rem;
   background: var(--surface-deep);
   border-bottom: 1px solid var(--border-subtle);
@@ -3136,84 +3151,23 @@ h2.sidebar-title .node-icon {
   user-select: none;
 }
 
-/* The left-hand side: `project / workspace / N chats running`. It takes what is left after the
-   controls, and `min-width: 0` is what lets it shrink below its own content so that the names
-   inside it can truncate — without it a flex item's floor is its text and a long project name
-   would push the controls off the window. */
-.crumbs {
-  display: flex;
+/* The project strip, in the bar. It takes what the right-hand end and the drag stretch leave,
+   and gives way before either: `min-width: 0` lets it shrink below its tabs, and the tabs it
+   then has no room for go into its show-more menu. Its tabs keep the window's text size
+   rather than the bar's smaller one, because they are the outermost strip and not a caption. */
+.title-bar .projects {
   flex: 1 1 auto;
-  gap: 0.4rem;
-  align-items: baseline;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
+  align-self: stretch;
+  margin-inline-end: var(--title-bar-drag);
+  font-size: 1rem;
 }
 
-/* The two names give way, in that order, and the count never does: `3 chats running` cut to
-   `3 cha…` is a number with no unit, while `charter-app` cut to `charter-a…` is still legible.
-   `flex-shrink` is the whole of that rule — the workspace gives up twice as much as the
-   project, because the project is the thing that holds it. */
-.crumb {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.crumb-project {
-  flex: 0 1 auto;
-  min-width: 2.5rem;
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-/* The workspace in front's colour, before its name (charter-app#281): the window's accent is
-   tinted with it while that workspace is in front, so the dot needs no colour of its own. The
-   same size as the tab's mark, so the two read as one thing. */
-.crumb-mark {
-  flex: none;
-  align-self: center;
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 999px;
-  background: var(--accent-base);
-}
-
-.crumb-workspace {
-  flex: 0 2 auto;
-  min-width: 2.5rem;
-  color: var(--text-secondary);
-}
-
-/* Never truncated, never wrapped: it is the shortest clause and the only one that is a fact
-   rather than a name. */
-.crumb-chats {
-  flex: none;
-  color: var(--text-muted);
-}
-
-/* The separator the operator asked for. Quieter than either side of it, so the eye reads the
-   three clauses rather than the punctuation. */
-.crumb-sep {
-  flex: none;
-  color: var(--border-strong);
-}
-
-/* A reading charter is still waiting for, and one it has and is empty. Both are sentences
-   rather than gaps (`TitleBar.tsx` argues why), so both are drawn in the muted colour the rest
-   of the window uses for exactly that. */
-.crumbs .pending,
-.crumbs .none {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-/* The right-hand end, which never gives way. */
+/* The right-hand end, which never gives way. At the far end whether or not there is a strip
+   before it: a window holding no project draws none. */
 .title-bar-doing {
   display: flex;
   flex: none;
+  margin-inline-start: auto;
   gap: 0.4rem;
   align-items: center;
 }
@@ -4425,6 +4379,20 @@ h2.sidebar-title .node-icon {
 }
 .save-indicator[data-stage="blocked"] svg {
   color: var(--state-failed);
+}
+
+/* **The words are capped, because the bar's right-hand end never gives way** (ADR 0054) and
+   what it spends the project tabs lose. A stage can be a whole sentence — a plane that is not a
+   git repository says *"Blocked: this plane is not a git repository, so there is nothing to
+   commit to"*, 437 px of it — and in a 1024 px window that left the strip room for one project
+   tab. The short stages ("Saved", "2 repos changed · 3 incoming") fit whole; a sentence is cut
+   with an ellipsis, and is read in full from the button's `title` or the Saving view it opens.
+   `title-bar.e2e.ts` holds the window to room for two tabs. */
+.save-indicator-words {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The Saving view (charter-app#294). */

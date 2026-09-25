@@ -274,14 +274,15 @@ describe("the window's tab order", () => {
     await theWholeWindow();
     const stops = sequenceIn(document.body).map(said);
     expect(stops).toEqual([
-      // The title bar: the needs-you button first (charter-app#249), then the app's own two.
-      "button 2 chats need you",
-      "button About Charter — what this version brought",
-      "button Updates — … channel, nothing new known",
-      // The project strip: ONE stop for its tabs, then its own controls.
+      // The title bar, left to right (ADR 0054). The project strip first: ONE stop for its
+      // tabs, then its own controls…
       "tab plane2",
       "button Open a project…",
       "button New project…",
+      // …then the right-hand end: the needs-you button (charter-app#249), then the app's own two.
+      "button 2 chats need you",
+      "button About Charter — what this version brought",
+      "button Updates — … channel, nothing new known",
       // The workspace strip.
       "tab alpha32",
       "button New workspace…",

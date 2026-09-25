@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { StatusLine } from "./StatusLine";
+import { StatusLine, runningIn } from "./StatusLine";
 import type { FactBadge, Panels, PanelTodo, Piece } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
@@ -299,5 +299,40 @@ describe("an extension's badges (charter-app#340)", () => {
     draw({ badges: [] });
 
     expect(screen.queryByTestId(/^status-badge-/)).toBeNull();
+  });
+});
+
+describe("what `N chats running` counts", () => {
+  const chat = (state: string) => ({ state });
+
+  it("counts a chat that is running and no other state", () => {
+    // The operator runs many chats at once and most of them are sitting still. `open` would
+    // say 50 all day; `running` is the number that changes when something is happening.
+    const report = {
+      settled: true,
+      ending: [
+        chat("running"),
+        chat("waiting"),
+        chat("done"),
+        chat("failed"),
+        chat("unknown"),
+        chat("running"),
+      ],
+    };
+
+    expect(runningIn(report)).toBe(2);
+  });
+
+  it("counts nothing at all until the project has said what it had open", () => {
+    // An empty `ending` before the core has answered is "not yet", never zero — the same
+    // distinction `PlaneReport.settled` exists for, and a quit that got it wrong would end
+    // every chat it had not heard about.
+    expect(runningIn({ settled: false, ending: [] })).toBeUndefined();
+    expect(runningIn({ settled: false, ending: [chat("running")] })).toBeUndefined();
+    expect(runningIn(undefined)).toBeUndefined();
+  });
+
+  it("counts zero once it has settled on nothing, which is an answer", () => {
+    expect(runningIn({ settled: true, ending: [] })).toBe(0);
   });
 });

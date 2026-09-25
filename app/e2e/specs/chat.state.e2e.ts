@@ -83,6 +83,19 @@ describe("what a chat is doing", () => {
     await until("running");
   });
 
+  it("counts the running chat on the status line, where the title bar's count moved", async () => {
+    // ADR 0054 took the breadcrumb off the title bar, and `N chats running` with it. This is
+    // the one run whose harness reports through hooks, so it is the one place a scenario can
+    // see a chat that is really running, counted.
+    await until("running");
+    const count = await $('[data-testid="status-line"] [data-testid="status-running"]');
+    await count.waitForExist({
+      timeout: 20_000,
+      timeoutMsg: "the status line never counted the running chat",
+    });
+    expect(await count.getText()).toBe("1 chat running");
+  });
+
   it("shows the chat waiting on you once the harness's turn ends, and queues it", async () => {
     // Nothing has ASKED for the operator while the turn is running — and this run's profile
     // is declared `codex`, so this chat is exactly the one charter-app#52 is about: it cannot
