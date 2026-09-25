@@ -4381,6 +4381,20 @@ h2.sidebar-title .node-icon {
   color: var(--state-failed);
 }
 
+/* **The words are capped, because the bar's right-hand end never gives way** (ADR 0054) and
+   what it spends the project tabs lose. A stage can be a whole sentence — a plane that is not a
+   git repository says *"Blocked: this plane is not a git repository, so there is nothing to
+   commit to"*, 437 px of it — and in a 1024 px window that left the strip room for one project
+   tab. The short stages ("Saved", "2 repos changed · 3 incoming") fit whole; a sentence is cut
+   with an ellipsis, and is read in full from the button's `title` or the Saving view it opens.
+   `title-bar.e2e.ts` holds the window to room for two tabs. */
+.save-indicator-words {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The Saving view (charter-app#294). */
 .saving {
   display: flex;

@@ -137,6 +137,53 @@ describe("the title bar", () => {
     expect(seen.pressed).toBe("the bar");
   });
 
+  it("leaves the project strip room for two tabs in a narrow window, whatever the save indicator says", async () => {
+    // The right-hand end never gives way (ADR 0054), so whatever it spends the tabs lose. The
+    // save indicator used to spend it on a whole sentence: a plane that is not a git repository
+    // — which is every fixture plane — said *"Blocked: this plane is not a git repository, so
+    // there is nothing to commit to"* at 437 px, and in a 1024 px window, after the traffic
+    // lights and the drag stretch, the strip had room for ONE project tab. A second project
+    // opened into show-more, which is how `projects.e2e.ts` failed on the macOS runner and on
+    // nothing else. The words are capped now; the whole sentence is the indicator's `title`
+    // and the Saving view's.
+    //
+    // **Room, measured the way the strip measures it** (`fits.useRoom`): the strip's width
+    // less its own controls, against the floor each tab is drawn at (`--least`). Two tabs fit
+    // exactly when that room is at least twice the floor (`fits.capacity`).
+    await untilTheStripIsRead();
+    await $('[data-testid="title-bar"] button[aria-label^="Saving:"]').waitForExist({
+      timeout: 20_000,
+    });
+
+    const was = await browser.getWindowSize();
+    await browser.setWindowSize(1024, 768);
+    try {
+      let seen = { window: 0, room: 0, least: 0 };
+      await browser.waitUntil(
+        async () => {
+          seen = await browser.execute((strip: string) => {
+            const tabs = document.querySelector<HTMLElement>(strip);
+            const controls = tabs?.querySelector<HTMLElement>(".strip-doing");
+            return {
+              window: window.innerWidth,
+              room: (tabs?.clientWidth ?? 0) - (controls?.offsetWidth ?? 0),
+              least: Number.parseFloat(tabs?.style.getPropertyValue("--least") ?? "") || 0,
+            };
+          }, PROJECTS);
+          return seen.window <= 1024;
+        },
+        { timeout: 20_000, timeoutMsg: "the window never became 1024 px wide" },
+      );
+
+      expect(seen.least).toBeGreaterThan(0);
+      expect(seen.room).toBeGreaterThanOrEqual(2 * seen.least);
+    } finally {
+      // One app process serves the whole run, and every spec after this one expects the
+      // window it was built for.
+      await browser.setWindowSize(was.width, was.height);
+    }
+  });
+
   it("carries the drag region the shipped bundle has to keep, and keeps it off its controls", async () => {
     // `deep` and not the bare attribute: Tauri's handler
     // (`tauri/src/window/scripts/drag.js`) walks the composed path up from what was pressed,
