@@ -263,6 +263,33 @@ describe("the workspace strip's show-more button", () => {
 
     expect(menuRows(".workspace-name")).toEqual(["gamma", "beta"]);
   });
+
+  it("lists the rest most recently active first", async () => {
+    // Nothing needs you, and gamma's chat moved last: the menu's own rule (ADR 0039).
+    const { move } = threeWorkspaces();
+    render(<App />);
+    await waitFor(() => expect(showMore("workspace")).toBeInTheDocument());
+    move(asking(PLANE, 6, [], 1));
+
+    await userEvent.click(showMore("workspace"));
+
+    expect(menuRows(".workspace-name")).toEqual(["gamma", "beta"]);
+  });
+
+  it("adds up every hidden workspace's count", async () => {
+    const { move } = threeWorkspaces();
+    render(<App />);
+    await waitFor(() => expect(showMore("workspace")).toBeInTheDocument());
+
+    move(asking(PLANE, 5, [5], 1));
+    move(asking(PLANE, 6, [5, 6], 2));
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Show 2 workspaces the strip is not showing, where 2 chats need you",
+      }),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("the project strip's show-more button", () => {

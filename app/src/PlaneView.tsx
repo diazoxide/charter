@@ -1019,10 +1019,33 @@ export function PlaneView({
    * ending a chat is still two presses and never one from a menu under the cursor, which is
    * the rule this menu was built with and did not have to change.
    */
+  /** How many of a tab's chats need you: every one of its panes' that is in the queue, split
+   *  or not. Its share of the chat strip's show-more count when the strip is not drawing it. */
+  const waitingOn = (id: number) =>
+    panesOf(tabs, id).filter((pane) => states.needsYou.includes(pane.session)).length;
+
   const notShowing = useMemo(
     () => byLastActivity(hidden, tabs, lastMoved),
     [hidden, lastMoved, tabs],
   );
+
+  /**
+   * And what the workspace strip's show-more menu lists: the workspaces it has no room for,
+   * **most recently moved first** — the chat strip's rule one level up (ADR 0039, ADR 0054).
+   *
+   * A workspace moved when the last of its chats did. One nothing has been heard about reads
+   * `0` and keeps the strip's order, for `byLastActivity`'s reason.
+   */
+  const workspacesNotShowing = useMemo(() => {
+    const movedIn = (workspace: string) =>
+      Math.max(
+        0,
+        ...tabsIn(tabs, workspace, filedIn)
+          .flatMap((id) => panesOf(tabs, id))
+          .map((pane) => lastMoved(pane.session)),
+      );
+    return [...workspacesShown.hidden].sort((one, other) => movedIn(other) - movedIn(one));
+  }, [filedIn, lastMoved, tabs, workspacesShown.hidden]);
 
   // The tab that was in front on this strip, remembered so that coming back to a workspace
   // comes back to the chat that was on screen there.
@@ -2274,7 +2297,7 @@ export function PlaneView({
             <Doer offer={by("workspace.create")} onPress={press} iconOnly />
             <ShowMore
               noun="workspace"
-              hidden={workspacesShown.hidden.map((workspace) => ({
+              hidden={workspacesNotShowing.map((workspace) => ({
                 key: workspace,
                 offer: by(`workspace.focus:${workspace}`),
                 needs: waitingIn(workspace),
@@ -2384,9 +2407,7 @@ export function PlaneView({
             hidden={notShowing.map((id) => ({
               key: String(id),
               offer: by(`tab.select:${id}`),
-              // Every one of its panes' chats that is in the queue, split or not.
-              needs: panesOf(tabs, id).filter((pane) => states.needsYou.includes(pane.session))
-                .length,
+              needs: waitingOn(id),
               children: <TabMarks tabs={tabs} id={id} states={states} />,
             }))}
             onPress={press}
@@ -3082,6 +3103,10 @@ export const MARKS: Record<string, typeof Plus> = {
  * because it needs you: that would move tabs under the operator's hand, which is the one
  * thing ADR 0039 refuses, and the count and the title bar's ✋ menu already say it.
  *
+ * **After those, the caller's order.** The chat and workspace strips hand their rows in most
+ * recently moved first. The project strip hands its rows in the strip's order, because the
+ * window holds no count of when a project last moved — each project's is its own `PlaneView`'s.
+ *
  * **Only rows that bring a tab forward.** Every row is the catalogue's `tab.select:<id>`,
  * which is the same row the tab itself is and the same row the palette lists. Nothing
  * destructive is in here: a tab's `×` sits under the pointer on a surface the operator chose
@@ -3131,7 +3156,7 @@ export function ShowMore({
   const many = hidden.length === 1 ? `1 ${noun}` : `${hidden.length} ${noun}s`;
   // What is waiting behind it, from the same queue each row's own count is read from.
   const needs = hidden.reduce((sum, one) => sum + one.needs, 0);
-  const waiting =
+  const needsSaid =
     needs === 0 ? "" : `, where ${needs === 1 ? "1 chat needs" : `${needs} chats need`} you`;
   // What needs you first, and the caller's order inside each half: `sort` is stable.
   const listed = [...hidden].sort((one, other) => Number(other.needs > 0) - Number(one.needs > 0));
@@ -3145,7 +3170,7 @@ export function ShowMore({
       <Menu.Trigger asChild>
         <button
           className={arrived ? "show-more arrived" : "show-more"}
-          aria-label={`Show ${many} the strip is not showing${waiting}`}
+          aria-label={`Show ${many} the strip is not showing${needsSaid}`}
           tabIndex={0}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => setOpen((up) => !up)}
@@ -3185,7 +3210,9 @@ export type Hidden = {
   key: string;
   /** The row that brings it forward. Nothing is listed for an id the catalogue has dropped. */
   offer?: Offer;
-  /** How many chats in it need you, counted the way its own tab counts them. */
+  /** How many chats in it need you, read from the same queue as the tab counts: a
+   *  workspace's or a project's is its tab's own count, and a chat tab's is how many of its
+   *  panes' chats are in the queue. */
   needs: number;
   children: ReactNode;
 };
