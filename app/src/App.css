@@ -358,9 +358,11 @@ body {
    waiting for the operator is the one thing in this window that exists to be seen**, so it is
    the only mark on a strip drawn in a colour charter chose — a workspace's own colour is the
    operator's (above) — and it is drawn in the weight of a
-   number rather than the weight of a label. */
+   number rather than the weight of a label. A show-more button draws the same mark for what it
+   hides (ADR 0054), because a hidden workspace's count is still a chat waiting on you. */
 .workspace-needs,
-.project-needs {
+.project-needs,
+.show-more-needs {
   padding: 0 0.32rem;
   border-radius: 999px;
   background: var(--needs-you-base);

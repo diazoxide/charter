@@ -880,6 +880,11 @@ function App() {
     projectsShown.shown.map((project) => project.plane),
   );
 
+  /** How many chats in `project` need you: its tab's count, and its share of the count on the
+   *  show-more button when the strip is not drawing it (ADR 0054). Its own report's queue for
+   *  both, so the button goes down exactly when the tab would. */
+  const askingIn = (project: Project) => reports[project.plane]?.asking.length ?? 0;
+
   /** What a project is drawn as, on the strip and in the menu of what the strip had no room
    *  for. One definition, because they are the same project. */
   const projectMarks = (project: Project) => (
@@ -892,13 +897,13 @@ function App() {
       <UnsavedMark saving={reports[project.plane]?.saving} name={project.name} />
       {/* What is waiting for you over there. It is the reason a project behind the one on
           screen goes on listening rather than being torn down. */}
-      {(reports[project.plane]?.asking.length ?? 0) > 0 && (
+      {askingIn(project) > 0 && (
         <span
           className="project-needs"
-          data-needs={reports[project.plane]?.asking.length}
-          aria-label={`${reports[project.plane]?.asking.length} chats need you in ${project.name}`}
+          data-needs={askingIn(project)}
+          aria-label={`${askingIn(project)} chats need you in ${project.name}`}
         >
-          {reports[project.plane]?.asking.length}
+          {askingIn(project)}
         </span>
       )}
     </>
@@ -1160,6 +1165,7 @@ function App() {
                 hidden={projectsShown.hidden.map((project) => ({
                   key: project.plane,
                   offer: strip.switchTo[drawn.indexOf(project)],
+                  needs: askingIn(project),
                   children: projectMarks(project),
                 }))}
                 onPress={press}

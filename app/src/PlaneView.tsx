@@ -913,8 +913,14 @@ export function PlaneView({
     [sidebar],
   );
 
+  /** How many chats in `workspace` need you: its tab's count, and its share of the count on
+   *  the show-more button when the strip is not drawing it (ADR 0054). One reading of the
+   *  queue for both, so the button goes down exactly when the tab would. */
+  const waitingIn = (workspace: string) =>
+    states.needsYou.filter((session) => filedIn(session) === workspace).length;
+
   const workspaceMarks = (workspace: string) => {
-    const waiting = states.needsYou.filter((session) => filedIn(session) === workspace).length;
+    const waiting = waitingIn(workspace);
     const here = tabsIn(tabs, workspace, filedIn).length;
     const called = workspace === OUTSIDE ? OUTSIDE_TITLE : workspace;
     const colour = colourOf(workspace);
@@ -2271,6 +2277,7 @@ export function PlaneView({
               hidden={workspacesShown.hidden.map((workspace) => ({
                 key: workspace,
                 offer: by(`workspace.focus:${workspace}`),
+                needs: waitingIn(workspace),
                 children: workspaceMarks(workspace),
               }))}
               onPress={press}
@@ -2377,6 +2384,9 @@ export function PlaneView({
             hidden={notShowing.map((id) => ({
               key: String(id),
               offer: by(`tab.select:${id}`),
+              // Every one of its panes' chats that is in the queue, split or not.
+              needs: panesOf(tabs, id).filter((pane) => states.needsYou.includes(pane.session))
+                .length,
               children: <TabMarks tabs={tabs} id={id} states={states} />,
             }))}
             onPress={press}
@@ -3065,6 +3075,13 @@ export const MARKS: Record<string, typeof Plus> = {
  * read rather than a surface you aim at, and the boundary between the two rules is exactly
  * whether the thing moves under your hand.
  *
+ * **And it carries the needs-you count of everything it hides** (ADR 0054). The operator's
+ * constraint was that hiding a workspace must never hide a chat that needs you, so the
+ * button draws the sum of its rows' counts in the red their own tabs draw it in, says it in
+ * its name, and lists the rows that need you first. Nothing hidden is moved onto the strip
+ * because it needs you: that would move tabs under the operator's hand, which is the one
+ * thing ADR 0039 refuses, and the count and the title bar's ✋ menu already say it.
+ *
  * **Only rows that bring a tab forward.** Every row is the catalogue's `tab.select:<id>`,
  * which is the same row the tab itself is and the same row the palette lists. Nothing
  * destructive is in here: a tab's `×` sits under the pointer on a surface the operator chose
@@ -3088,7 +3105,8 @@ export function ShowMore({
    * strip's, unchanged, because that is the name the operator reads on that strip.
    */
   noun: string;
-  /** What to list, already in the order it is listed in. */
+  /** What to list, in the order it is listed in among the rows that need you and among the
+   *  rows that do not. The first come first, whatever the order they were handed in. */
   hidden: readonly Hidden[];
   onPress: (offer: Offer) => void;
 }) {
@@ -3111,6 +3129,12 @@ export function ShowMore({
   // Nothing is hidden, so there is nothing to say there is more OF.
   if (hidden.length === 0) return null;
   const many = hidden.length === 1 ? `1 ${noun}` : `${hidden.length} ${noun}s`;
+  // What is waiting behind it, from the same queue each row's own count is read from.
+  const needs = hidden.reduce((sum, one) => sum + one.needs, 0);
+  const waiting =
+    needs === 0 ? "" : `, where ${needs === 1 ? "1 chat needs" : `${needs} chats need`} you`;
+  // What needs you first, and the caller's order inside each half: `sort` is stable.
+  const listed = [...hidden].sort((one, other) => Number(other.needs > 0) - Number(one.needs > 0));
   return (
     // **Not modal.** A modal Radix surface marks the rest of the window `aria-hidden` (which
     // `docs/ui-primitives.md` records the dialogs doing), and this is a menu on a strip, not
@@ -3121,18 +3145,19 @@ export function ShowMore({
       <Menu.Trigger asChild>
         <button
           className={arrived ? "show-more arrived" : "show-more"}
-          aria-label={`Show ${many} the strip is not showing`}
+          aria-label={`Show ${many} the strip is not showing${waiting}`}
           tabIndex={0}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => setOpen((up) => !up)}
         >
           {hidden.length} more
+          {needs > 0 && <span className="show-more-needs">{needs}</span>}
           <ChevronDown />
         </button>
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content className="more-menu" align="end" sideOffset={4} collisionPadding={8}>
-          {hidden.map(({ key, offer, children }) => {
+          {listed.map(({ key, offer, children }) => {
             if (!offer) return null;
             return (
               <Menu.Item
@@ -3160,6 +3185,8 @@ export type Hidden = {
   key: string;
   /** The row that brings it forward. Nothing is listed for an id the catalogue has dropped. */
   offer?: Offer;
+  /** How many chats in it need you, counted the way its own tab counts them. */
+  needs: number;
   children: ReactNode;
 };
 
