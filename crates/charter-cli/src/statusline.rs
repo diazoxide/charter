@@ -255,6 +255,8 @@ pub fn run(
     // blank line, exactly as charter's is. Claude Code reads the block; the blank line is
     // charter's and copying it is what makes the two outputs comparable at all.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Where the extension record is, for the badges an extension draws here (charter-app#340).
+    let config = charter_core::machine::config_root_if_there();
     println!(
         "{}",
         footer::render(
@@ -264,6 +266,7 @@ pub fn run(
                 env: &tui::ambient,
                 cwd: &cwd,
                 now,
+                config: config.as_deref(),
             },
         )
     );

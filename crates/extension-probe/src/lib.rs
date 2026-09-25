@@ -58,6 +58,44 @@ fn said(request: &Value) -> Result<String, String> {
     ))
 }
 
+/// The repo the probe fills its column for. It knows nothing of the plane — a program is handed
+/// its view's subject and nothing else — so it names the one repo its tests clone.
+pub const REPO: &str = "svc";
+
+/// The facts file's name inside the state directory (`charter_core::extension::facts::FILE`,
+/// which a stranger's extension would know from the documentation, not by linking the core).
+pub const FACTS: &str = "facts.json";
+
+/// The facts file after one more answer: its `asked` badge and its `asked` cell for [`REPO`]
+/// count the questions answered, as of `now` (Unix seconds). `previous` is the file as it was,
+/// when there was one charter could read.
+pub fn facts_after(previous: Option<&Value>, now: u64) -> Value {
+    let asked = previous
+        .and_then(|it| it.pointer("/badges/asked/value"))
+        .and_then(Value::as_str)
+        .and_then(|it| it.parse::<u64>().ok())
+        .unwrap_or(0)
+        + 1;
+    let field = json!({ "value": asked.to_string(), "at": now });
+    json!({
+        "badges": { "asked": field },
+        "repo-columns": { "asked": { REPO: field } },
+    })
+}
+
+/// Rewrite the facts file in `state` after an answer — **whenever it answers a question**, as
+/// the facts file's contract asks. By rename, so charter never reads half of one.
+pub fn refresh_facts(state: &Path, now: u64) -> std::io::Result<()> {
+    std::fs::create_dir_all(state)?;
+    let at = state.join(FACTS);
+    let previous = std::fs::read_to_string(&at)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let beside = state.join(".facts.json.new");
+    std::fs::write(&beside, facts_after(previous.as_ref(), now).to_string())?;
+    std::fs::rename(&beside, &at)
+}
+
 /// Put this program and its manifest in `dir`, the folder charter is pointed at.
 pub fn assemble(dir: &Path) -> std::io::Result<PathBuf> {
     let me = std::env::current_exe()?;

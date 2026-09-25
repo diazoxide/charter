@@ -361,6 +361,8 @@ describe("deleting a workspace", () => {
       // The workspace in front changed, and its theme is a layer of what the window draws
       // (charter-app#281).
       "project_theme_drawn",
+      // And so are the badges and repo columns its extensions show (charter-app#340).
+      "extension_facts",
       "plane_sidebar",
       "plane_pins",
       "workspace_panels",

@@ -33,6 +33,7 @@ fn ambient<'a>(env: &'a dyn Fn(&str) -> Option<String>, cwd: &'a Path) -> Ambien
         env,
         cwd,
         now: chrono::DateTime::from_timestamp(1_772_000_000, 0).unwrap(),
+        config: None,
     }
 }
 

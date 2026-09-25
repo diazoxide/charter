@@ -4,7 +4,8 @@ import { Health, type DoctorState } from "./Doctor";
 import { RegionToggle } from "./RegionFrame";
 import type { Placement, RegionId } from "./regions";
 import { PinItem } from "./Updates";
-import type { PinReport } from "./bindings";
+import type { FactBadge, PinReport } from "./bindings";
+import { ago } from "./BottomBar";
 
 /**
  * **charter's status line**: one line at the very bottom of the window, under everything.
@@ -97,6 +98,7 @@ export function StatusLine({
   doctor,
   pin,
   regions,
+  badges,
 }: {
   /** The project's root directory — the path that used to sit in the top-right corner. */
   plane: string;
@@ -152,6 +154,12 @@ export function StatusLine({
     placed: readonly Placement[];
     onToggle: (id: RegionId) => void;
   };
+  /**
+   * The badges the extensions on in this project and workspace show here (charter-app#340),
+   * read from each one's facts file by the core — `extension_facts`, which never starts a
+   * program. Absent or empty draws none.
+   */
+  badges?: readonly FactBadge[];
 }) {
   const todos = todoCount(state);
   const pieces = pieceCount(state);
@@ -217,6 +225,22 @@ export function StatusLine({
           <span className="status-label">ws</span> {workspaces}
         </span>
       )}
+
+      {/* An extension's badges: after charter's own counts, because they are about where you
+          are too and they are the least of it — the row's order is its truncation order. A
+          stale one is dimmed whole and says its age, so an old count never reads as a current
+          one. */}
+      {badges?.map((badge) => (
+        <span
+          key={`${badge.extension}/${badge.id}`}
+          className={badge.stale ? "status-cell status-badge stale" : "status-cell status-badge"}
+          data-testid={`status-badge-${badge.extension}-${badge.id}`}
+          title={`${badge.label}, from ${badge.name}'s facts file — ${ago(badge.age_seconds)}`}
+        >
+          <span className="status-label">{badge.label}</span> {badge.value}
+          {badge.stale && <span className="status-age"> · {ago(badge.age_seconds)}</span>}
+        </span>
+      ))}
 
       <AlertsButton alerts={alerts} />
 

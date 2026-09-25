@@ -41,6 +41,19 @@ fn main() -> ExitCode {
             "error": format!("the request was not JSON: {why}"),
         }),
     };
+    // The facts file is refreshed whenever the probe answers a question (charter-app#340), in
+    // the state directory charter names. A failure to write it is said and never fails the
+    // answer: the badge simply stays as it was.
+    if said.get("error").is_none()
+        && let Some(state) = std::env::var_os("CHARTER_EXTENSION_STATE")
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |it| it.as_secs());
+        if let Err(why) = extension_probe::refresh_facts(std::path::Path::new(&state), now) {
+            eprintln!("extension-probe: could not refresh its facts file: {why}");
+        }
+    }
     let mut out = std::io::stdout().lock();
     if writeln!(out, "{said}").and_then(|()| out.flush()).is_err() {
         return ExitCode::FAILURE;

@@ -2025,15 +2025,18 @@ fn an_unknown_capability_is_named_in_the_refusal_even_beside_a_known_one() {
     let made = Made::new();
     made.ordinary();
     made.manifest(
-        r#"{"version":1,"id":"solarized","capabilities":["probe","badges"],
+        r#"{"version":1,"id":"solarized","capabilities":["probe","teleport"],
             "contributes":{"themes":[{"name":"Solarized Dark","file":"dark.json"}]}}"#,
     );
     let why = read_at(&made.at()).expect_err("no extension");
     assert!(
-        why.contains("asks for the capability \"badges\", which this charter does not know"),
+        why.contains("asks for the capability \"teleport\", which this charter does not know"),
         "{why}"
     );
-    assert!(why.contains("This charter knows probe."), "{why}");
+    assert!(
+        why.contains("This charter knows probe, badges, repo-columns."),
+        "{why}"
+    );
 }
 
 #[test]

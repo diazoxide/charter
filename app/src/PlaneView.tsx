@@ -64,6 +64,7 @@ import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
+import { useExtensionFacts } from "./extensionFacts";
 import { usePlaneChanged } from "./planeChanged";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -755,6 +756,8 @@ export function PlaneView({
     [on, surveyedViews],
   );
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
+  /** The badges and repo columns the extensions on here show (charter-app#340). */
+  const facts = useExtensionFacts(plane, ofWorkspace);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
   const doctor = useDoctor(plane);
@@ -2386,6 +2389,7 @@ export function PlaneView({
               state={workspaceState}
               offers={found}
               onPress={press}
+              columns={facts.columns}
             />
           ),
         }}
@@ -2468,6 +2472,7 @@ export function PlaneView({
         doctor={doctor}
         pin={pin}
         alerts={alerts}
+        badges={facts.badges}
         /* Which regions are drawn (ADR 0038), handed over as the arrangement already reads
            them. **The slots are flattened here and not there**: the arrangement is this
            project's, `inSlots` is the module that knows what order a side's regions come in,

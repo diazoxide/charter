@@ -12,7 +12,7 @@ import {
   SkipForward,
   TriangleAlert,
 } from "lucide-react";
-import type { Piece, RepoState } from "./bindings";
+import type { FactCell, FactColumn, Piece, RepoState } from "./bindings";
 import { Menued } from "./Menus";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
@@ -98,9 +98,16 @@ export function BottomBar({
   state,
   offers,
   onPress,
+  columns = [],
 }: {
   workspace: string | undefined;
   state: WorkspaceState;
+  /**
+   * The columns the extensions on in this project and workspace add (charter-app#340), filled
+   * per repo from each one's facts file by the core — `extension_facts`, which never starts a
+   * program. Read-only like every other cell here: a value, never a control.
+   */
+  columns?: readonly FactColumn[];
   /** The catalogue by id, which is what a repo row's menu is drawn out of. */
   offers: Catalogued;
   onPress: (offer: Offer) => void;
@@ -135,6 +142,15 @@ export function BottomBar({
               <th scope="col">Changes</th>
               <th scope="col">Worktrees</th>
               <th scope="col">Pipeline</th>
+              {columns.map((column) => (
+                <th
+                  scope="col"
+                  key={`${column.extension}/${column.id}`}
+                  title={`From the extension ${column.extension}`}
+                >
+                  {column.title}
+                </th>
+              ))}
             </tr>
           </thead>
           {names.map((name) => (
@@ -147,6 +163,7 @@ export function BottomBar({
               reading={reading}
               offers={offers}
               onPress={onPress}
+              columns={columns}
             />
           ))}
           {panels.absent.map((name) => (
@@ -158,7 +175,7 @@ export function BottomBar({
                 </th>
                 {/* Membership without a clone. Said, because a repo the workspace means to
                     hold and nobody has cloned is not the same as one that is not listed. */}
-                <td className="branch none" colSpan={4}>
+                <td className="branch none" colSpan={4 + columns.length}>
                   not cloned here
                 </td>
               </tr>
@@ -216,6 +233,7 @@ function RepoRows({
   reading,
   offers,
   onPress,
+  columns,
 }: {
   name: string;
   state: RepoState | undefined;
@@ -224,6 +242,7 @@ function RepoRows({
   reading: boolean;
   offers: Catalogued;
   onPress: (offer: Offer) => void;
+  columns: readonly FactColumn[];
 }) {
   const tree = pieces !== undefined && pieces.length > 0;
   return (
@@ -267,13 +286,20 @@ function RepoRows({
             <Worktrees pieces={pieces} refused={piecesRefused} />
           </td>
           <CiCell name={name} state={state} reading={reading} />
+          {columns.map((column) => (
+            <FactCellOf
+              key={`${column.extension}/${column.id}`}
+              testId={`fact-${column.extension}-${column.id}-${name}`}
+              cell={column.cells.find((cell) => cell.repo === name)}
+            />
+          ))}
         </tr>
       </Menued>
       {tree && (
         <tr className="worktree-tree-row">
           {/* The whole width, because a tree indented inside one column of five would be
               three characters wide at the window sizes this region is given. */}
-          <td colSpan={5}>
+          <td colSpan={5 + columns.length}>
             <ul className="worktree-tree" data-testid={`worktree-tree-${name}`}>
               {pieces.map((piece) => (
                 <li key={piece.piece}>
@@ -300,6 +326,18 @@ function RepoRows({
         </tr>
       )}
     </tbody>
+  );
+}
+
+/** One extension's value for one repo. Empty when its facts file named no value for this repo
+ *  — never another repo's. A stale value is dimmed and says how old it is. */
+function FactCellOf({ testId, cell }: { testId: string; cell: FactCell | undefined }) {
+  if (cell === undefined) return <td className="fact" data-testid={testId} />;
+  return (
+    <td className={cell.stale ? "fact stale" : "fact"} data-testid={testId}>
+      {cell.value}
+      {cell.stale && <span className="stamp"> · {ago(cell.age_seconds)}</span>}
+    </td>
   );
 }
 
