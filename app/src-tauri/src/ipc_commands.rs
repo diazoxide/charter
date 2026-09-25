@@ -103,6 +103,7 @@ macro_rules! app_commands {
                 vaults::vault_identity_put,
                 extensions::project_extensions,
                 extensions::extensions_on,
+                extensions::extension_facts,
                 harness_plugins::project_harness_plugins,
                 extensions::project_theme,
                 extensions::project_theme_drawn,

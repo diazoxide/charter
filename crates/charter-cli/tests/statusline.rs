@@ -106,6 +106,71 @@ fn the_turns_tokens_are_recorded_when_the_line_is_drawn_too() {
     assert_eq!(recorded(&at), "90,10,90,42\n");
 }
 
+/// An approved extension beside `plane` that declares one footer badge and fills it with
+/// `value`, true `age` seconds ago — a facts file and no program, so nothing could be started
+/// to draw it. Its config home is `<plane>/config`.
+fn a_badge_in_the_footer(plane: &Path, value: &str, age: i64) -> PathBuf {
+    use charter_core::extension;
+    let ext = plane.join("ext");
+    std::fs::create_dir_all(ext.join("state")).expect("the extension's state directory");
+    std::fs::write(
+        ext.join(extension::MANIFEST),
+        r#"{"version": 1, "id": "prs", "name": "Pull requests", "state": "state",
+            "capabilities": ["badges"],
+            "contributes": {"badges": [{"id": "open", "label": "PRs", "surfaces": ["footer"],
+                                        "fresh_seconds": 600}]}}"#,
+    )
+    .expect("a manifest");
+    let at = chrono::Utc::now().timestamp() - age;
+    std::fs::write(
+        ext.join("state").join(extension::facts::FILE),
+        format!(r#"{{"badges": {{"open": {{"value": "{value}", "at": {at}}}}}}}"#),
+    )
+    .expect("a facts file");
+    let config = plane.join("config");
+    let found = extension::install(&config, &ext).expect("installed");
+    extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+    config
+}
+
+#[test]
+fn an_approved_extensions_footer_badge_is_drawn_from_its_facts_file() {
+    let (_keep, at) = plane();
+    let config = a_badge_in_the_footer(&at, "4", 0);
+    let config = config.to_str().expect("a path");
+
+    let ran = statusline(
+        &at,
+        A_TURN,
+        &[("COLUMNS", "80"), ("CHARTER_CONFIG_HOME", config)],
+    );
+    let badge = ran
+        .out
+        .lines()
+        .find(|line| line.contains("PRs"))
+        .unwrap_or_else(|| panic!("no badge: {:?}", ran.out));
+    assert!(badge.contains("\u{1b}[2mPRs\u{1b}[0m 4"), "{badge:?}");
+    assert_eq!(ran.code, 0);
+}
+
+#[test]
+fn a_footer_badge_older_than_its_freshness_is_dimmed_with_its_age() {
+    let (_keep, at) = plane();
+    let config = a_badge_in_the_footer(&at, "4", 2 * 3600);
+    let config = config.to_str().expect("a path");
+
+    let ran = statusline(
+        &at,
+        A_TURN,
+        &[("COLUMNS", "80"), ("CHARTER_CONFIG_HOME", config)],
+    );
+    assert!(
+        ran.out.contains("\u{1b}[2mPRs 4 · 2h ago\u{1b}[0m"),
+        "{:?}",
+        ran.out
+    );
+}
+
 #[test]
 fn the_footer_names_the_surfaces_it_does_not_draw() {
     // The rule this build is held to: an omitted section is NAMED, never merely absent. An

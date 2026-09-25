@@ -627,6 +627,16 @@ export const commands = {
 	 */
 	extensionsOn: (plane: PlaneId, workspace: string | null) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane, workspace })),
 	/**
+	 *  The status bar's badges and the repo table's extra columns for `plane`, in `workspace` when
+	 *  one is named — read from each extension's facts file by the core's one reader
+	 *  (`extension::facts::gather`), **which never starts a program**.
+	 * 
+	 *  Asked when a workspace is focused and after an extension answers a view, which is when its
+	 *  facts file is refreshed. It re-takes each contributing extension's fingerprint, so it runs
+	 *  off the thread that draws.
+	 */
+	extensionFacts: (plane: PlaneId, workspace: string | null) => typedError<ExtensionFacts, string>(__TAURI_INVOKE("extension_facts", { plane, workspace })),
+	/**
 	 *  Every harness charter knows, with what it has installed on this machine and what this
 	 *  project has each plugin at — in `workspace`, when one is named, with that workspace's
 	 *  settings as the layer between Shared and Local (charter-app#282): what the Workspace settings
@@ -990,6 +1000,14 @@ export type ExtensionAsk = {
 	state_note: string | null,
 };
 
+/**  What the extensions on in a project (and workspace) show in the window. */
+export type ExtensionFacts = {
+	badges: FactBadge[],
+	columns: FactColumn[],
+	/**  What contributed nothing and should have, in the core's words. */
+	notes: string[],
+};
+
 /**  One row of "what has contributed what to this window". */
 export type ExtensionRow = {
 	id: string,
@@ -1049,6 +1067,37 @@ export type ExtensionView = {
 	title: string,
 	/**  What it is about (`panel::Subject`) — which decides where the window offers it. */
 	about: string,
+};
+
+/**  One status-bar badge, as the window draws it. */
+export type FactBadge = {
+	extension: string,
+	/**  What a person calls the extension, for the badge's title. */
+	name: string,
+	id: string,
+	label: string,
+	value: string,
+	/**  How long ago the extension said it was true. */
+	age_seconds: number,
+	/**  Older than it declared fresh: dimmed, with its age. */
+	stale: boolean,
+};
+
+/**  One repo-table cell. */
+export type FactCell = {
+	repo: string,
+	value: string,
+	age_seconds: number,
+	stale: boolean,
+};
+
+/**  One extra column in the repo table. */
+export type FactColumn = {
+	extension: string,
+	id: string,
+	title: string,
+	/**  One per repo the facts file filled, by repo name. A repo it did not name has none. */
+	cells: FactCell[],
 };
 
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */

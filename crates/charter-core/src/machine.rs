@@ -247,6 +247,26 @@ pub fn config_root() -> Option<PathBuf> {
     found
 }
 
+/// [`config_root`], for a reader that only reads: `None` as well when there is no directory
+/// there yet, since a store that does not exist holds nothing to read.
+///
+/// **For `charter statusline`'s hot path** (charter-app#340), which reads the extension record
+/// for badges every turn. A fenced test build refuses a store outside its fence, and a store
+/// that is not there yet cannot be shown to be inside it — its path does not resolve — so the
+/// fence is asked only about a store that exists. Nothing is read from one that does not.
+pub fn config_root_if_there() -> Option<PathBuf> {
+    let found = rooted(
+        std::env::var_os(HOME_VAR),
+        std::env::var_os("XDG_CONFIG_HOME"),
+        dirs::home_dir(),
+    )?;
+    if !found.is_dir() {
+        return None;
+    }
+    crate::fence::hold(crate::fence::Act::Store, &found);
+    Some(found)
+}
+
 /// [`config_root`]'s ladder, with the three answers handed in.
 ///
 /// Split out because the environment is the one thing this module's tests cannot drive:

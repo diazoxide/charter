@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { StatusLine } from "./StatusLine";
-import type { Panels, PanelTodo, Piece } from "./bindings";
+import type { FactBadge, Panels, PanelTodo, Piece } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
@@ -255,5 +255,49 @@ describe("the region toggles", () => {
     expect(first?.className).toBe("regions-doing");
     const buttons = within(first as HTMLElement).getAllByRole("button");
     expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Explorer", "Attention"]);
+  });
+});
+
+describe("an extension's badges (charter-app#340)", () => {
+  const badge = (over: Partial<FactBadge> = {}): FactBadge => ({
+    extension: "prs",
+    name: "Pull requests",
+    id: "open",
+    label: "PRs",
+    value: "3",
+    age_seconds: 20,
+    stale: false,
+    ...over,
+  });
+
+  it("draws each badge's label and value, from its facts file", () => {
+    draw({ badges: [badge()] });
+
+    const drawn = screen.getByTestId("status-badge-prs-open");
+    expect(drawn).toHaveTextContent("PRs 3");
+    expect(drawn).not.toHaveClass("stale");
+    expect(drawn.getAttribute("title")).toContain("Pull requests");
+  });
+
+  it("dims a value older than its extension declared fresh, and says how old it is", () => {
+    draw({ badges: [badge({ stale: true, age_seconds: 7200 })] });
+
+    const drawn = screen.getByTestId("status-badge-prs-open");
+    expect(drawn).toHaveClass("stale");
+    expect(drawn).toHaveTextContent("PRs 3 · 2h ago");
+  });
+
+  it("says why an extension shows nothing, rather than letting its badge vanish", () => {
+    draw({ factNotes: ["Pull requests changed since you approved it"] });
+
+    const said = screen.getByTestId("status-fact-notes");
+    expect(said).toHaveTextContent("1 extension note");
+    expect(said.getAttribute("title")).toBe("Pull requests changed since you approved it");
+  });
+
+  it("draws no badge when no extension has one", () => {
+    draw({ badges: [] });
+
+    expect(screen.queryByTestId(/^status-badge-/)).toBeNull();
   });
 });

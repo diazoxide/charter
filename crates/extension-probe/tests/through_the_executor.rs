@@ -118,8 +118,12 @@ fn the_approval_prompt_names_every_capability_the_probe_asks_for() {
     let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
     assert_eq!(
         found.manifest.capabilities,
-        [extension::Capability::Probe],
-        "the probe's own manifest asks for its capability"
+        [
+            extension::Capability::Probe,
+            extension::Capability::Badges,
+            extension::Capability::RepoColumns
+        ],
+        "the probe's own manifest asks for its capabilities"
     );
 
     let asked = extension::prompt(&found, extension::Standing::New);
@@ -136,7 +140,10 @@ fn changing_the_capabilities_after_approval_is_asked_about_again_and_runs_nothin
     // The list is inside the manifest's bytes, so the fingerprint covers it: an extension that
     // changes what it asks for after the yes is refused at the press, not run on the old yes.
     let probe = Probe::approved();
-    probe.manifest_sets("capabilities", serde_json::json!([]));
+    probe.manifest_sets(
+        "capabilities",
+        serde_json::json!(["repo-columns", "badges", "probe"]),
+    );
 
     let refused = probe.ask().expect_err("it ran on the old approval");
     assert!(
@@ -179,4 +186,308 @@ fn an_installed_extension_that_later_asks_for_an_unknown_capability_contributes_
     assert!(why.contains("\"teleport\""), "{why}");
     let not_run = probe.ask().expect_err("it ran");
     assert!(not_run.contains("\"teleport\""), "{not_run}");
+}
+
+// ---------------------------------------------------------------------------------------
+// The facts file: badges and repo columns (charter-app#340)
+// ---------------------------------------------------------------------------------------
+
+use charter_core::extension::facts::{self, Reading, Surface};
+
+impl Probe {
+    /// What the one core reader says for this probe's plane, as the window asks it.
+    fn facts(&self) -> facts::Facts {
+        self.facts_as(
+            Reading::Window,
+            &extension::project::Choices::read(&self.plane()),
+        )
+    }
+
+    fn facts_as(&self, reading: Reading, choices: &extension::project::Choices) -> facts::Facts {
+        facts::gather(&self.config(), || choices.clone(), now(), reading)
+    }
+
+    fn facts_file(&self) -> PathBuf {
+        self.ext().join("state").join(facts::FILE)
+    }
+
+    /// Write the facts file by hand, as a broken or hostile extension would.
+    fn facts_are(&self, text: &str) {
+        std::fs::create_dir_all(self.ext().join("state")).expect("the state directory");
+        std::fs::write(self.facts_file(), text).expect("written");
+    }
+}
+
+/// The clock the reader measures ages against.
+fn now() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+}
+
+fn seconds_ago(seconds: i64) -> i64 {
+    now().timestamp() - seconds
+}
+
+#[test]
+fn the_probe_declares_a_badge_and_a_repo_column_and_the_prompt_lists_both() {
+    let probe = Probe::assembled();
+    let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+    let asked = extension::prompt(&found, extension::Standing::New);
+    assert!(
+        asked.declares.iter().any(|line| line
+            == "a badge, “asked” — shown in the status bar and the terminal footer, read from \
+                its facts file and fresh for 1h; charter never starts its program to draw it"),
+        "{:#?}",
+        asked.declares
+    );
+    assert!(
+        asked.declares.iter().any(|line| line
+            == "a repo column, “Asked” — a column in the repo table, read from its facts file \
+                and fresh for 1h; charter never starts its program to draw it"),
+        "{:#?}",
+        asked.declares
+    );
+}
+
+#[test]
+fn nothing_is_shown_and_no_program_is_started_until_the_probe_is_asked_a_question() {
+    let probe = Probe::approved();
+
+    // The reader never starts the program: before a question there is no facts file, and
+    // reading the facts does not make one.
+    let before = probe.facts();
+    assert!(before.badges.is_empty(), "{before:#?}");
+    assert!(
+        before.columns.iter().all(|it| it.cells.is_empty()),
+        "{before:#?}"
+    );
+    assert!(before.notes.is_empty(), "{before:#?}");
+    assert!(
+        !probe.facts_file().exists(),
+        "reading the facts started the probe"
+    );
+
+    probe.ask().expect("an answer");
+
+    let after = probe.facts();
+    let badge = after.badges.first().expect("the probe's badge");
+    assert_eq!(
+        (badge.extension.as_str(), badge.label.as_str()),
+        ("extension-probe", "asked")
+    );
+    assert_eq!(badge.value, "1");
+    assert!(!badge.stale);
+    assert_eq!(badge.surfaces, [Surface::StatusBar, Surface::Footer]);
+    let column = after.columns.first().expect("the probe's column");
+    assert_eq!(column.title, "Asked");
+    let cell = column.cells.get(extension_probe::REPO).expect("a cell");
+    assert_eq!(cell.value, "1");
+}
+
+#[test]
+fn the_footer_draws_the_probes_badge_from_the_same_reader() {
+    let probe = Probe::approved();
+    probe.ask().expect("an answer");
+
+    let footer = probe.facts_as(
+        Reading::Footer,
+        &extension::project::Choices::read(&probe.plane()),
+    );
+    assert_eq!(footer.badges.len(), 1, "{footer:#?}");
+    assert!(footer.columns.is_empty(), "the footer has no repo table");
+
+    let config = probe.config();
+    let drawn = charter_core::footer::render(
+        &probe.plane(),
+        &serde_json::Value::Null,
+        &charter_core::footer::Ambient {
+            env: &|name| (name == "COLUMNS").then(|| "120".to_owned()),
+            cwd: &probe.plane(),
+            now: now(),
+            config: Some(&config),
+        },
+    );
+    assert!(drawn.contains("asked"), "{drawn}");
+}
+
+#[test]
+fn a_value_older_than_its_freshness_is_marked_stale_with_its_age() {
+    let probe = Probe::approved();
+    probe.facts_are(&format!(
+        r#"{{"badges": {{"asked": {{"value": "7", "at": {}}}}}}}"#,
+        seconds_ago(3 * 3600)
+    ));
+    let badge = probe.facts().badges.remove(0);
+    assert!(badge.stale, "{badge:#?}");
+    assert!(
+        (3 * 3600..3 * 3600 + 60).contains(&badge.age_seconds),
+        "{badge:#?}"
+    );
+}
+
+#[test]
+fn a_field_the_manifest_does_not_declare_contributes_nothing_and_is_reported() {
+    let probe = Probe::approved();
+    probe.facts_are(&format!(
+        r#"{{"badges": {{"asked": {{"value": "1", "at": {at}}},
+                        "smuggled": {{"value": "9", "at": {at}}}}},
+            "repo-columns": {{"hidden": {{"svc": {{"value": "9", "at": {at}}}}}}}}}"#,
+        at = seconds_ago(0)
+    ));
+    let read = probe.facts();
+    assert_eq!(read.badges.len(), 1, "{read:#?}");
+    assert_eq!(read.badges[0].id, "asked");
+    assert!(read.columns.iter().all(|it| it.id != "hidden"));
+    assert!(
+        read.notes
+            .iter()
+            .any(|it| it.contains("\"smuggled\"") && it.contains("does not declare")),
+        "{:#?}",
+        read.notes
+    );
+    assert!(
+        read.notes.iter().any(|it| it.contains("\"hidden\"")),
+        "{:#?}",
+        read.notes
+    );
+}
+
+#[test]
+fn an_oversized_facts_file_contributes_nothing_and_says_why() {
+    let probe = Probe::approved();
+    probe.facts_are(&format!(
+        r#"{{"badges": {{"asked": {{"value": "1", "at": {}}}}}, "pad": "{}"}}"#,
+        seconds_ago(0),
+        "x".repeat(usize::try_from(facts::MOST_BYTES).expect("small"))
+    ));
+    let read = probe.facts();
+    assert!(read.badges.is_empty(), "{read:#?}");
+    assert!(
+        read.notes
+            .iter()
+            .any(|it| it.contains("charter reads no more than")),
+        "{:#?}",
+        read.notes
+    );
+}
+
+#[test]
+fn a_malformed_facts_file_contributes_nothing_and_says_why() {
+    let probe = Probe::approved();
+    probe.facts_are("{\"badges\": ");
+    let read = probe.facts();
+    assert!(read.badges.is_empty(), "{read:#?}");
+    assert!(
+        read.notes.iter().any(|it| it.contains("is not JSON")),
+        "{:#?}",
+        read.notes
+    );
+}
+
+#[test]
+fn an_extension_that_changed_on_disk_contributes_no_badge_and_no_cell() {
+    let probe = Probe::approved();
+    probe.ask().expect("an answer");
+    std::fs::write(probe.ext().join("README"), "added after the yes").expect("written");
+
+    let read = probe.facts();
+    assert!(read.badges.is_empty(), "{read:#?}");
+    assert!(read.columns.is_empty(), "{read:#?}");
+    assert!(
+        read.notes
+            .iter()
+            .any(|it| it.contains("changed since you approved it")),
+        "{:#?}",
+        read.notes
+    );
+}
+
+#[test]
+fn repo_columns_and_badges_follow_the_project_and_the_workspace_turning_it_off() {
+    let probe = Probe::approved();
+    probe.ask().expect("an answer");
+
+    let off = extension::project::Choices::from_text(
+        Some("[extensions.extension-probe]\nenabled = false\n"),
+        None,
+    );
+    let read = probe.facts_as(Reading::Window, &off);
+    assert!(
+        read.columns.is_empty() && read.badges.is_empty(),
+        "{read:#?}"
+    );
+
+    let off_in_workspace = extension::project::Choices::from_text(None, None).in_workspace(
+        "alpha",
+        Some(r#"{"settings": {"extensions": {"extension-probe": {"enabled": false}}}}"#),
+    );
+    let read = probe.facts_as(Reading::Window, &off_in_workspace);
+    assert!(
+        read.columns.is_empty() && read.badges.is_empty(),
+        "{read:#?}"
+    );
+
+    let on = extension::project::Choices::from_text(None, None);
+    assert_eq!(probe.facts_as(Reading::Window, &on).columns.len(), 1);
+}
+
+#[test]
+fn a_contribution_without_its_capability_is_refused_by_name() {
+    let probe = Probe::assembled();
+    probe.manifest_sets("capabilities", serde_json::json!(["probe", "repo-columns"]));
+    let refused = extension::install(&probe.config(), &probe.ext())
+        .expect_err("a contribution without its capability was installed")
+        .to_string();
+    assert!(refused.contains("\"badges\""), "{refused}");
+}
+
+#[test]
+fn a_capability_that_declares_nothing_is_refused_by_name() {
+    let probe = Probe::assembled();
+    let at = probe.ext().join(extension::MANIFEST);
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&at).expect("the manifest")).expect("JSON");
+    doc["contributes"]
+        .as_object_mut()
+        .expect("contributes")
+        .remove("repo-columns");
+    std::fs::write(&at, doc.to_string()).expect("written");
+    let refused = extension::install(&probe.config(), &probe.ext())
+        .expect_err("a capability declaring nothing was installed")
+        .to_string();
+    assert!(refused.contains("\"repo-columns\""), "{refused}");
+}
+
+#[test]
+fn a_facts_file_full_of_undeclared_fields_costs_a_surface_a_few_sentences() {
+    let probe = Probe::approved();
+    let junk: Vec<String> = (0..500)
+        .map(|n| format!(r#""junk{n}": {{"value": "1", "at": {}}}"#, seconds_ago(0)))
+        .collect();
+    probe.facts_are(&format!(r#"{{"badges": {{{}}}}}"#, junk.join(",")));
+
+    let read = probe.facts();
+    assert!(read.notes.len() <= 3, "{:#?}", read.notes);
+    assert!(
+        read.notes
+            .last()
+            .is_some_and(|it| it.contains("more problems")),
+        "{:#?}",
+        read.notes
+    );
+}
+
+#[test]
+fn a_badges_section_charter_cannot_read_leaves_the_columns_filled() {
+    let probe = Probe::approved();
+    probe.facts_are(&format!(
+        r#"{{"badges": [], "repo-columns": {{"asked": {{"svc": {{"value": "5", "at": {}}}}}}}}}"#,
+        seconds_ago(0)
+    ));
+
+    let read = probe.facts();
+    assert!(read.badges.is_empty());
+    assert_eq!(
+        read.columns[0].cells.get("svc").map(|it| it.value.as_str()),
+        Some("5")
+    );
 }

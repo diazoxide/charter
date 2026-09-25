@@ -2413,6 +2413,13 @@ button.show-more:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* An extension's value older than it declared fresh (charter-app#340), here and in the repo
+   table: dimmed whole, with its age beside it, so an old count never reads as a current one. */
+.status-badge.stale,
+.state-bar .fact.stale {
+  color: var(--text-muted);
+}
+
 /* The alerts button, and the auto margin that divides the line: what is true of where you are
    on the left, what you can open and which project it is on the right. */
 .status-alerts {

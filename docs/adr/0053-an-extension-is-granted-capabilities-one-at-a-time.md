@@ -49,7 +49,20 @@ declared, fingerprinted, approved, run, answered, and refused when asked for wro
 writes the capability's own amendment to ADR 0041 in that change. Until the first real
 capability lands, the vocabulary holds one word, `probe`. It grants nothing, and only a build
 carrying the plane fence knows it: a test build, or the app's `e2e` build that the scenario tests
-drive. A release build knows no capability and refuses every word.
+drive. A release build does not know it and refuses it like any unknown word.
+
+**A capability with a shape comes as a pair with it.** A manifest that has `contributes.<word>`
+for a capability it does not list is refused, and so is one that lists a capability with a shape
+and declares nothing under its word. The first would be a contribution the prompt never named;
+the second would be a yes to nothing.
+
+**The vocabulary so far:**
+
+| Word | What charter does | Its shape, under `contributes` | Change |
+|---|---|---|---|
+| `probe` | nothing (test builds only) | none | charter-app#338 |
+| `badges` | draws values from the facts file as badges in the status bar and the terminal footer | `badges`: `id`, `label`, `surfaces` (`status-bar`, `footer`), `fresh_seconds` | charter-app#340 |
+| `repo-columns` | draws values from the facts file as extra columns in the repo table | `repo-columns`: `id`, `title`, `fresh_seconds` | charter-app#340 |
 
 ### Process life
 
@@ -66,6 +79,14 @@ without starting the extension.** It has a size cap, and each field has a declar
 It supplies values only for fields the manifest declared. charter reports undeclared fields, and
 they contribute nothing. The extension rewrites the file whenever it is asked a question or sent
 an event. One reader in the core serves the status bar, the terminal footer and the repo table.
+
+As built in charter-app#340: the file is `<state>/facts.json`, at most 64 KiB, and holds
+`{"badges": {"<id>": {"value", "at"}}, "repo-columns": {"<id>": {"<repo>": {"value", "at"}}}}`,
+where `at` is Unix seconds. A manifest that declares a badge or a column must name a state
+directory. The reader (`extension::facts::gather`) asks the record, then the manifest, then the
+project and workspace (ADR 0048), and only then re-takes the fingerprint and reads the file, so
+an extension with nothing for a surface costs that surface no hash. A value older than its
+`fresh_seconds` is drawn dimmed with its age.
 
 ### Write scope
 
