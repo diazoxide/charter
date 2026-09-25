@@ -688,6 +688,62 @@ fn a_memory_commit_pushed_under_another_name_is_named_by_that_name() {
     );
 }
 
+/// The head of `root`, as a PR mode's push record names it.
+fn head_of(root: &Path) -> String {
+    let head = crate::forklock::output(
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "HEAD"]),
+    )
+    .unwrap();
+    String::from_utf8(head.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn a_pr_modes_open_pull_request_is_where_its_commits_are_meant_to_wait() {
+    // `pr` and `pr-merge` push to the save branch and wait on a PR by design (charter-app#298):
+    // not a memory commit gone astray.
+    let (_d, root) = repo_plane();
+    std::fs::create_dir_all(root.join(".charter")).unwrap();
+    std::fs::write(
+        root.join(".charter/plane-push.json"),
+        format!(
+            r#"{{"outcome": "pr-open", "branch": "main", "landed": "charter/save/mac", "url": "https://x.invalid/pull/12", "number": 12, "head": "{}"}}"#,
+            head_of(&root)
+        ),
+    )
+    .unwrap();
+    let r = one(&root, "plane root");
+    assert_eq!(
+        (r.status, r.detail.as_str()),
+        (Status::Ok, "clean on main"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_pr_mode_save_that_is_blocked_says_why_in_its_own_words() {
+    let (_d, root) = repo_plane();
+    std::fs::create_dir_all(root.join(".charter")).unwrap();
+    std::fs::write(
+        root.join(".charter/plane-push.json"),
+        format!(
+            r#"{{"outcome": "blocked", "branch": "main", "detail": "pull request #12 was closed without merging", "head": "{}"}}"#,
+            head_of(&root)
+        ),
+    )
+    .unwrap();
+    let r = one(&root, "plane root");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(r.detail, "the plane's save is blocked");
+    assert!(
+        r.hint
+            .contains("pull request #12 was closed without merging"),
+        "{r:?}"
+    );
+}
+
 #[test]
 fn an_index_lock_being_written_is_stated_and_a_crashed_one_is_a_warning() {
     let (_d, root) = repo_plane();

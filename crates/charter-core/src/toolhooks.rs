@@ -528,12 +528,15 @@ pub fn memory_share_note(root: &Path) -> &'static str {
             "It reaches the team with the plane's next save — `charter save` pushes it."
         }
         Some(Mode::Pr) => {
-            "It is committed with the plane's next save; this plane's `[plane] mode` is `pr`, \
-             and this charter does not open that pull request yet."
+            "It reaches the team once a person merges the plane's pull request — this plane's \
+             `[plane] mode` is `pr`, so the next save pushes it to this machine's save branch \
+             and opens or updates that pull request."
         }
         Some(Mode::PrMerge) => {
-            "It is committed with the plane's next save; this plane's `[plane] mode` is \
-             `pr-merge`, and this charter does not open that pull request yet."
+            "It reaches the team once the plane's pull request merges by itself — this plane's \
+             `[plane] mode` is `pr-merge`, so the next save pushes it to this machine's save \
+             branch, opens or updates that pull request, and sets it to merge when its checks \
+             pass."
         }
     }
 }

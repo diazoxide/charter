@@ -26,21 +26,29 @@ fi
 q="$dir/question.$$"
 printf '%s\037' "${0##*/}" > "$q"
 for a in "$@"; do printf '%s\037' "$a" >> "$q"; done
+# The same question written down twice is answered twice, in the order it was written: the
+# first answer not yet given is the one given.
+spent=
 for want in "$dir"/*.args; do
   [ -f "$want" ] || continue
   if cmp -s "$q" "$want"; then
-    rm -f "$q"
     base=${want%.args}
     if ! mkdir "$base.asked" 2>/dev/null; then
-      echo "stand-in: asked twice: $want" >&2
-      exit 98
+      spent=$want
+      continue
     fi
+    rm -f "$q"
     env > "$base.env"
     cat "$base.out"
     cat "$base.err" >&2
     exit "$(cat "$base.code")"
   fi
 done
+if [ -n "$spent" ]; then
+  rm -f "$q"
+  echo "stand-in: asked twice: $spent" >&2
+  exit 98
+fi
 echo "stand-in: nobody wrote down the question in $q" >&2
 exit 99
 "#;
@@ -112,11 +120,13 @@ impl Scene {
         }
     }
 
-    /// Write down that `cli args…` is answered with `code`, `out` and `err`.
+    /// Write down that `cli args…` is answered with `code`, `out` and `err`. Written twice, the
+    /// question is answered twice, first with what was written first.
     pub fn answers(&self, cli: &str, args: &[&str], code: i32, out: &str, err: &str) -> PathBuf {
         let n = self.written.get();
         self.written.set(n + 1);
-        let base = self.dir.join(format!("q{n}"));
+        // Zero-padded, so the shell's sorted glob reads them in the order they were written.
+        let base = self.dir.join(format!("q{n:04}"));
         let mut asked = format!("{cli}\x1f");
         for arg in args {
             asked.push_str(arg);

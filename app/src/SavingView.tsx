@@ -311,9 +311,13 @@ function stageWords(saving: PlaneSaving): string {
 
 function modeText(saving: PlaneSaving): string {
   const mode = saving.mode === null ? "Mode: not set" : `Mode: ${saving.mode} (${saving.modeFrom})`;
-  const reach = saving.pushes
-    ? `a save pushes to ${saving.branch}`
-    : "a save commits and goes no further";
+  const reach = !saving.pushes
+    ? "a save commits and goes no further"
+    : saving.mode === "pr" || saving.mode === "pr-merge"
+      ? `a save pushes to this machine's save branch and keeps a pull request open into ${saving.branch}${
+          saving.mode === "pr-merge" ? ", set to merge when its checks pass" : ""
+        }`
+      : `a save pushes to ${saving.branch}`;
   return `${mode} — ${reach}`;
 }
 

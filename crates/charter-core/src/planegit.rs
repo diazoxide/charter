@@ -67,7 +67,8 @@ use crate::worktree::git;
 pub enum Outcome {
     /// It landed on the branch HEAD is on.
     Pushed,
-    /// The branch requires a pull request → it landed on `charter/<sha>`.
+    /// The branch requires a pull request → it landed on `charter/<sha>`. `push` mode's
+    /// fallback, and `charter save`'s recorded one; the PR modes use a save branch instead.
     Branched,
     /// The branch requires a pull request and THAT push failed too.
     Stranded,
@@ -77,6 +78,13 @@ pub enum Outcome {
     Conflict,
     /// No origin on a forge charter knows — nothing to push to.
     Unreachable,
+    /// A PR mode pushed it to the save branch, and one pull request is open from there into
+    /// the target branch (charter-app#298).
+    PrOpen,
+    /// A PR mode cannot go further without a person: its pull request was closed without
+    /// merging, the target branch no longer holds what was pushed, or somebody else pushed to
+    /// this machine's save branch.
+    Blocked,
 }
 
 impl Outcome {
@@ -89,6 +97,8 @@ impl Outcome {
             Outcome::Failed => "failed",
             Outcome::Conflict => "conflict",
             Outcome::Unreachable => "unreachable",
+            Outcome::PrOpen => "pr-open",
+            Outcome::Blocked => "blocked",
         }
     }
 }
@@ -104,6 +114,8 @@ pub struct PushResult {
     /// and worlds apart in consequence.
     pub landed: Option<String>,
     pub url: Option<String>,
+    /// The pull request's number, when a PR mode opened or updated one.
+    pub number: Option<u64>,
     pub detail: String,
     /// The files a rebase onto the remote conflicted in (charter-app#295).
     pub conflicts: Vec<String>,
@@ -116,6 +128,7 @@ impl PushResult {
             branch: branch.to_string(),
             landed: None,
             url: None,
+            number: None,
             detail: String::new(),
             conflicts: Vec::new(),
         }
@@ -191,8 +204,10 @@ pub fn origin_https(root: &Path) -> Option<String> {
 /// A one-click "open a pull request for this branch" URL, or `None`. Python's `_compare_url`.
 ///
 /// A plain HTTPS link, deliberately: it closes the pull-request-gated workflow with no API call
-/// and no extra token scope. [`forge::pr`] can now open the PR itself, into an explicit base;
-/// the save's PR modes replace this link with it (ADR 0051, #298). Which form to build is decided by RESOLVING the forge, never by
+/// and no extra token scope. The PR modes open their PR through [`forge::pr`] instead, into an
+/// explicit base (ADR 0051, #298); this link is left to `push` mode's protected-branch
+/// fallback, where it is still resolved against the repo's default branch. Which form to
+/// build is decided by RESOLVING the forge, never by
 /// looking for a hostname inside the URL string: a self-hosted GitLab with a
 /// `mirrors/github.com/…` namespace was handed GitHub's compare URL by the substring check
 /// this replaces.
@@ -253,6 +268,7 @@ pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
         "branch": res.branch,
         "landed": res.landed,
         "url": res.url,
+        "number": res.number,
         "detail": res.detail,
         "head": head,
         "at": at,
@@ -310,9 +326,19 @@ pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
 /// never inside it. One component is left to walk — the record's own name — and that is
 /// exactly the component a link or a FIFO can be.
 pub fn push_record(root: &Path) -> Option<serde_json::Value> {
-    let path = push_record_path(root);
-    let mut open = crate::contain::open_no_link(path.parent()?, &path).ok()?;
-    crate::reopen::refuse_unusable(&path, &open.metadata().ok()?).ok()?;
+    let doc = read_json(&push_record_path(root))?;
+    let has_outcome = doc
+        .get("outcome")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|w| !w.is_empty());
+    (doc.is_object() && has_outcome).then_some(doc)
+}
+
+/// A JSON file in the state directory, read as [`push_record`] reads its own: no link, no FIFO,
+/// nothing bigger than a record, and `None` for anything unreadable.
+fn read_json(path: &Path) -> Option<serde_json::Value> {
+    let mut open = crate::contain::open_no_link(path.parent()?, path).ok()?;
+    crate::reopen::refuse_unusable(path, &open.metadata().ok()?).ok()?;
     let text = {
         use std::io::Read;
         let mut text = String::new();
@@ -324,12 +350,9 @@ pub fn push_record(root: &Path) -> Option<serde_json::Value> {
             .ok()?;
         text
     };
-    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let has_outcome = doc
-        .get("outcome")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|w| !w.is_empty());
-    (doc.is_object() && has_outcome).then_some(doc)
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .filter(serde_json::Value::is_object)
 }
 
 /// An object name as charter writes one: hex, and the length `rev-parse` answers with.
@@ -367,6 +390,9 @@ pub fn is_spent(root: &Path, head: &str) -> bool {
 pub fn unlanded(root: &Path) -> Option<serde_json::Value> {
     let rec = push_record(root)?;
     let head = rec.get("head").and_then(serde_json::Value::as_str)?;
+    if prsave::is_pr_record(&rec) {
+        return prsave::still_holds(root, &rec, head).then_some(rec);
+    }
     (!is_spent(root, head)).then_some(rec)
 }
 
@@ -461,8 +487,27 @@ pub fn standing(root: &Path) -> Standing {
         };
     };
     let here_branch = here.clone();
+    let head = git::run(root, &["rev-parse", "HEAD"], git::READ)
+        .map(|r| r.line().trim().to_string())
+        .unwrap_or_default();
     let branch = plane.branch.value.clone().unwrap_or(here);
-    let pushes = matches!(plane.mode.value, None | Some(crate::planesave::Mode::Push))
+    // A PR mode whose settings cannot work on a forge charter knows — a save_branch that is
+    // the target branch itself — is blocked until they are fixed, read from the settings as
+    // they are now (charter-app#298). A PR mode on a remote no forge adapter serves is the
+    // notice below, not a block.
+    let misconfigured = plane
+        .mode
+        .value
+        .filter(|mode| mode.opens_a_pr() && origin_https(root).is_some())
+        .and_then(|_| prsave::config(root, &plane).err());
+    let pushes = matches!(
+        plane.mode.value,
+        None | Some(
+            crate::planesave::Mode::Push
+                | crate::planesave::Mode::Pr
+                | crate::planesave::Mode::PrMerge
+        )
+    ) && misconfigured.is_none()
         && origin_https(root).is_some();
     let changed = changed_paths(root);
     let ahead = count(root, &format!("refs/remotes/origin/{branch}..HEAD"));
@@ -477,9 +522,18 @@ pub fn standing(root: &Path) -> Standing {
             .map(str::to_string)
     };
     let outcome = said("outcome");
-    let pr = (outcome.as_deref() == Some(Outcome::Branched.word()))
+    let pr = matches!(outcome.as_deref(), Some("branched" | "pr-open"))
         .then(|| said("url"))
-        .flatten();
+        .flatten()
+        .or_else(|| {
+            // A PR mode's open PR stays known when a later save failed (charter-app#298).
+            plane
+                .mode
+                .value
+                .is_some_and(crate::planesave::Mode::opens_a_pr)
+                .then(|| prsave::known_pr_url(root))
+                .flatten()
+        });
     let push_failed = (outcome.as_deref() == Some(Outcome::Failed.word()))
         .then(|| said("detail").unwrap_or_else(|| "the push failed".into()));
     let conflicts: Vec<String> = record
@@ -507,39 +561,51 @@ pub fn standing(root: &Path) -> Standing {
     // hand — a rebase finished in a terminal, a secret removed, the right branch checked out —
     // is gone the moment it is, because auto-save waits while a plane is blocked and would
     // never write the line that cleared a stored one.
-    let blocked = matches!(outcome.as_deref(), Some("conflict" | "stranded"))
-        .then(|| said("detail").unwrap_or_else(|| outcome.clone().unwrap_or_default()))
-        // The plane on another branch than the one it saves into: a save commits and does not
-        // push (#293), and that is the operator's to settle.
-        .or_else(|| {
-            plane
-                .branch
-                .value
-                .as_deref()
-                .filter(|target| *target != here_branch)
-                .map(|target| {
-                    format!("this plane is on {here_branch}, and [plane] branch is {target}")
-                })
-        })
-        // A secret the next save would refuse: a changed memory or ref file that holds one now.
-        // Asked of the files as they are, so removing it clears the block at once.
-        .or_else(|| {
-            changed
-                .iter()
-                .filter(|path| path.contains("/memory/") || path.contains("/refs/"))
-                .any(|path| {
-                    std::fs::read_to_string(root.join(path))
-                        .ok()
-                        .and_then(|text| secretshape::secret_kind(&text))
-                        .is_some()
-                })
-                .then(|| SECRET_REFUSED.to_owned())
-        });
+    // A PR mode's `blocked` record (charter-app#298) holds only while the plane is still on the
+    // commit it is about and that commit is not on the target (`unlanded`): moving the plane
+    // off it by hand, or a save that opens a new pull request, clears it.
+    let blocked = matches!(
+        outcome.as_deref(),
+        Some("conflict" | "stranded" | "blocked")
+    )
+    .then(|| said("detail").unwrap_or_else(|| outcome.clone().unwrap_or_default()))
+    .or(misconfigured)
+    // The plane on another branch than the one it saves into: a save commits and does not
+    // push (#293), and that is the operator's to settle.
+    .or_else(|| {
+        plane
+            .branch
+            .value
+            .as_deref()
+            .filter(|target| *target != here_branch)
+            .map(|target| format!("this plane is on {here_branch}, and [plane] branch is {target}"))
+    })
+    // A secret the next save would refuse: a changed memory or ref file that holds one now.
+    // Asked of the files as they are, so removing it clears the block at once.
+    .or_else(|| {
+        changed
+            .iter()
+            .filter(|path| path.contains("/memory/") || path.contains("/refs/"))
+            .any(|path| {
+                std::fs::read_to_string(root.join(path))
+                    .ok()
+                    .and_then(|text| secretshape::secret_kind(&text))
+                    .is_some()
+            })
+            .then(|| SECRET_REFUSED.to_owned())
+    });
+    // A PR mode's pull request carries the commit it was last pushed at; a commit made since
+    // is not in it yet.
+    let waiting = match outcome.as_deref() {
+        Some("branched") => pr.is_some(),
+        Some("pr-open") => said("head").as_deref() == Some(head.as_str()),
+        _ => false,
+    };
     let stage = if blocked.is_some() {
         Stage::Blocked
     } else if !changed.is_empty() {
         Stage::Changed
-    } else if pr.is_some() {
+    } else if waiting {
         Stage::PrOpen
     } else if pushes && ahead != Some(0) {
         // Nothing to count against is not nothing unpushed: say committed, never saved.
@@ -647,7 +713,13 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
     if !fetched.ok() {
         return Err(tail(&fetched));
     }
+    // A pull request a PR mode opened may have merged, or been closed, since the last look:
+    // settled before the fast-forward below, which a merged PR's squash would never allow.
     let behind = count(root, &format!("HEAD..refs/remotes/origin/{branch}")).unwrap_or(0);
+    let settled = fast_forward
+        && here == branch
+        && prsave::settle(root, &plane, &branch, plane.sign.value, None, &mut |_| {})
+            == prsave::Settled::Moved;
     let mine = count(root, &format!("refs/remotes/origin/{branch}..HEAD")).unwrap_or(0);
     // The repository's own directory, which is a file's target for a worktree plane.
     let git_dir = git::run(root, &["rev-parse", "--absolute-git-dir"], git::READ)
@@ -655,6 +727,7 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
         .filter(git::Run::ok)
         .map_or_else(|| root.join(".git"), |r| PathBuf::from(r.line().trim()));
     let can_move = fast_forward
+        && !settled
         && behind > 0
         && here == branch
         && mine == 0
@@ -669,7 +742,8 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
         ]
         .iter()
         .any(|marker| git_dir.join(marker).exists());
-    let moved = can_move
+    let moved = settled
+        || can_move
         // Untimed: a merge checks out a tree, and a killed one leaves it half-written.
         && git::run_untimed(
             root,
@@ -1824,6 +1898,33 @@ fn commit_push(
     };
     match probe.code {
         Some(0) => {
+            // Commits a save of an explicit pushing mode left behind — pushed at quit past its
+            // bound, or made by an agent with plain git — are carried on by the next save,
+            // which is what a launch's save is for (ADR 0051). A plane that names no mode
+            // keeps `charter save`'s recorded answer.
+            // In a PR mode, a known PR is settled by any save, so a clean `charter save` is how
+            // a plane with auto-save off moves onto its merged PR.
+            let pr_known = plane
+                .mode
+                .value
+                .is_some_and(crate::planesave::Mode::opens_a_pr)
+                && prsave::knows_a_pr(root);
+            let unpushed = unpushed(root, plane);
+            if !request.no_push && (unpushed.is_some() || pr_known) {
+                say(Say::Info(match unpushed {
+                    Some(n) => format!(
+                        "Nothing new to commit — carrying on {n} commit(s) this machine has not \
+                         saved yet."
+                    ),
+                    None => "Nothing new to commit — asking after the open pull request.".into(),
+                }));
+                attempt.outcome = "committed";
+                attempt.commit = git::run(root, &["rev-parse", "HEAD"], git::READ)
+                    .ok()
+                    .map(|r| r.line().trim().to_string())
+                    .filter(|sha| !sha.is_empty());
+                return carry(request, plane, sign, attempt, say);
+            }
             say(Say::Info(
                 "Nothing to save — the control-plane working tree is clean.".into(),
             ));
@@ -2045,6 +2146,54 @@ fn commit_push(
         staged.len()
     )));
 
+    carry(request, plane, sign, attempt, say)
+}
+
+/// How many commits a clean plane has that its mode would still push: `None` unless the plane
+/// names a mode past `commit` and the target branch on the remote lacks commits HEAD has —
+/// and, in a PR mode, the pull request does not already carry HEAD.
+fn unpushed(root: &Path, plane: &crate::planesave::Plane) -> Option<u32> {
+    use crate::planesave::Mode;
+    let mode = plane.mode.value?;
+    if !matches!(mode, Mode::Push | Mode::Pr | Mode::PrMerge) {
+        return None;
+    }
+    let branch = match &plane.branch.value {
+        Some(branch) => branch.clone(),
+        None => git::run(root, &["rev-parse", "--abbrev-ref", "HEAD"], git::READ)
+            .ok()?
+            .line()
+            .trim()
+            .to_string(),
+    };
+    let ahead = count(root, &format!("refs/remotes/origin/{branch}..HEAD"))?;
+    if ahead == 0 {
+        return None;
+    }
+    if mode.opens_a_pr()
+        && let Some(rec) = unlanded(root)
+        && rec.get("outcome").and_then(serde_json::Value::as_str) == Some("pr-open")
+    {
+        let head = git::run(root, &["rev-parse", "HEAD"], git::READ)
+            .map(|r| r.line().trim().to_string())
+            .unwrap_or_default();
+        if rec.get("head").and_then(serde_json::Value::as_str) == Some(head.as_str()) {
+            return None;
+        }
+    }
+    Some(ahead)
+}
+
+/// Take a plane whose work is committed as far as its mode goes: nowhere, a push to the target
+/// branch, or the save branch and its pull request.
+fn carry(
+    request: &Request,
+    plane: &crate::planesave::Plane,
+    sign: bool,
+    attempt: &mut Attempt,
+    say: Sink,
+) -> u8 {
+    let root = request.root;
     if request.no_push {
         say(Say::Info("Skipped push (--no-push).".into()));
         return 0;
@@ -2055,24 +2204,15 @@ fn commit_push(
     } else {
         "[plane] mode"
     };
-    match plane.mode.value {
-        Some(crate::planesave::Mode::Commit) => {
-            say(Say::Info(format!("Not pushed: {key} is commit ({file}).")));
-            return 0;
-        }
-        Some(mode @ (crate::planesave::Mode::Pr | crate::planesave::Mode::PrMerge)) => {
-            // charter-app#298 builds the save branch and the pull request. Until then, the
-            // one push a PR mode must never make is to the target branch.
-            say(Say::Info(format!(
-                "Not pushed: {key} is {} ({file}), and this charter cannot open the pull \
-                 request yet.",
-                mode.as_str()
-            )));
-            return 0;
-        }
-        _ => {}
+    if plane.mode.value == Some(crate::planesave::Mode::Commit) {
+        say(Say::Info(format!("Not pushed: {key} is commit ({file}).")));
+        return 0;
     }
-    if origin_https(root).is_none() {
+    let pr_mode = plane
+        .mode
+        .value
+        .is_some_and(crate::planesave::Mode::opens_a_pr);
+    if !pr_mode && origin_https(root).is_none() {
         say(Say::Warn(
             "origin isn't on a forge charter knows (gitlab.com/github.com/…) — committed \
              locally; push manually."
@@ -2106,7 +2246,11 @@ fn commit_push(
             return 0;
         }
     }
-    let pushed = push_head(root, target, sign, say);
+    let pushed = if pr_mode {
+        prsave::push(root, plane, sign, say)
+    } else {
+        push_head(root, target, sign, say)
+    };
     // The push may have rebased: the commit that landed is HEAD now.
     attempt.commit = git::run(root, &["rev-parse", "HEAD"], git::READ)
         .ok()
@@ -2114,15 +2258,33 @@ fn commit_push(
         .filter(|sha| !sha.is_empty());
     attempt.outcome = match pushed.outcome {
         Outcome::Pushed => "saved",
-        Outcome::Branched => "pr-open",
+        Outcome::Branched | Outcome::PrOpen => "pr-open",
         Outcome::Unreachable => "committed",
-        Outcome::Conflict => "blocked",
+        Outcome::Conflict | Outcome::Blocked => "blocked",
         Outcome::Stranded | Outcome::Failed => "failed",
     };
     attempt.pr = pushed.url.clone();
     attempt.detail = pushed.detail.clone();
     u8::from(pushed.outcome == Outcome::Stranded)
 }
+
+/// Push what a save of the plane at `root` committed, as its mode says: to the target branch,
+/// or — in a PR mode — to the save branch, with its pull request opened or updated. What
+/// quitting runs once its commit is made ([`crate::autosave::at_quit`]).
+pub fn push_saved(root: &Path, sign: bool, say: Sink) -> PushResult {
+    let plane = crate::planesave::Settings::read(root).plane;
+    if plane
+        .mode
+        .value
+        .is_some_and(crate::planesave::Mode::opens_a_pr)
+    {
+        prsave::push(root, &plane, sign, say)
+    } else {
+        push_head(root, plane.branch.value.as_deref(), sign, say)
+    }
+}
+
+mod prsave;
 
 #[cfg(test)]
 mod tests;

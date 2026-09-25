@@ -11,7 +11,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use charter_core::forge::pr::{self, AutoMerge, Pr, Repo};
+use charter_core::forge::pr::{self, AutoMerge, Pr, Repo, State};
 use support::forge_cli::{Scene, in_a_child, in_child, was_asked};
 
 #[test]
@@ -813,5 +813,108 @@ mod prs {
         assert!(done.status.success(), "{done:?}");
         let said = Repo::of_clone(&plane, &none).unwrap_err();
         assert!(said.contains("has no origin"), "{said}");
+    }
+
+    #[test]
+    fn a_github_prs_state_is_open_merged_or_closed_without_merging() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("pr-state.test");
+        let repo = repo(&scene, "github", "acme/widget");
+        for (number, answer, want) in [
+            (
+                1,
+                r#"{"state": "open", "merged": false, "merged_at": null}"#,
+                State::Open,
+            ),
+            (
+                2,
+                r#"{"state": "closed", "merged": true, "merged_at": "2026-09-25T00:00:00Z", "merge_commit_sha": "abc123"}"#,
+                State::Merged {
+                    commit: Some("abc123".into()),
+                },
+            ),
+            (
+                3,
+                r#"{"state": "closed", "merged": false, "merged_at": null}"#,
+                State::Closed,
+            ),
+        ] {
+            scene.gh_api(&format!("repos/acme/widget/pulls/{number}"), 0, answer, "");
+            let pr = Pr {
+                number,
+                url: format!("https://pr-state.test/acme/widget/pull/{number}"),
+            };
+            assert_eq!(pr::state(&repo, &pr), Ok(want), "#{number}");
+        }
+    }
+
+    #[test]
+    fn a_gitlab_mrs_state_is_open_merged_or_closed_without_merging() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("mr-state.test");
+        let repo = repo(&scene, "gitlab", "acme/plat/widget");
+        for (number, answer, want) in [
+            (1, r#"{"iid": 1, "state": "opened"}"#, State::Open),
+            (
+                2,
+                r#"{"iid": 2, "state": "merged", "merge_commit_sha": "m1", "squash_commit_sha": null}"#,
+                State::Merged {
+                    commit: Some("m1".into()),
+                },
+            ),
+            (
+                4,
+                r#"{"iid": 4, "state": "merged", "merge_commit_sha": null, "squash_commit_sha": "s1"}"#,
+                State::Merged {
+                    commit: Some("s1".into()),
+                },
+            ),
+            (
+                5,
+                r#"{"iid": 5, "state": "merged", "merge_commit_sha": null, "squash_commit_sha": null}"#,
+                State::Merged { commit: None },
+            ),
+            (3, r#"{"iid": 3, "state": "closed"}"#, State::Closed),
+        ] {
+            scene.glab_api(
+                &format!("projects/acme%2Fplat%2Fwidget/merge_requests/{number}"),
+                0,
+                answer,
+                "",
+            );
+            let pr = Pr {
+                number,
+                url: format!("https://mr-state.test/acme/plat/widget/-/merge_requests/{number}"),
+            };
+            assert_eq!(pr::state(&repo, &pr), Ok(want), "!{number}");
+        }
+    }
+
+    #[test]
+    fn a_state_the_forge_would_not_give_is_an_error_and_never_read_as_open() {
+        charter_core::unsteered!();
+        if !in_child() {
+            return;
+        }
+        let scene = Scene::new("pr-state-fails.test");
+        let repo = repo(&scene, "github", "acme/widget");
+        scene.gh_api("repos/acme/widget/pulls/4", 1, "", "HTTP 502: Bad Gateway");
+        scene.gh_api("repos/acme/widget/pulls/5", 0, r#"{"state": "draft"}"#, "");
+        let four = Pr {
+            number: 4,
+            url: "x".into(),
+        };
+        let five = Pr {
+            number: 5,
+            url: "y".into(),
+        };
+        assert!(pr::state(&repo, &four).unwrap_err().contains("HTTP 502"));
+        assert!(pr::state(&repo, &five).unwrap_err().contains("draft"));
     }
 }

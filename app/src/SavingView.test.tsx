@@ -159,6 +159,38 @@ describe("SavingView", () => {
     ).toBeTruthy();
   });
 
+  it("says a PR mode pushes to its save branch and keeps a pull request open, and links it", async () => {
+    core([
+      standing({
+        mode: "pr",
+        stage: "pr-open",
+        branch: "release",
+        pr: "https://github.com/acme/plane/pull/12",
+      }),
+    ]);
+    render(<SavingView plane={PLANE} />);
+    expect(await screen.findByText("Pushed — waiting on its pull request")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Mode: pr (charter.toml) — a save pushes to this machine's save branch and keeps a pull request open into release",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: "https://github.com/acme/plane/pull/12" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/plane/pull/12");
+    cleanup();
+
+    core([standing({ mode: "pr-merge", branch: "release" })]);
+    render(<SavingView plane={PLANE} />);
+    expect(
+      await screen.findByText(
+        "Mode: pr-merge (charter.toml) — a save pushes to this machine's save branch and keeps a pull request open into release, set to merge when its checks pass",
+      ),
+    ).toBeTruthy();
+  });
+
   it("offers a save for commits only when a save would push them", async () => {
     core([standing({ stage: "committed", ahead: 2 })]);
     render(<SavingView plane={PLANE} />);

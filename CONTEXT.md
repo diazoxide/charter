@@ -53,8 +53,8 @@ The branch a save is meant to end up on.
 _Avoid_: base branch, main (it need not be)
 
 **Save branch**:
-The one branch per machine that the plane's PR modes push to, carrying one open PR into the
-target branch.
+The one branch per clone of the plane (named for the machine and the clone) that the plane's
+PR modes push to, carrying one open PR into the target branch.
 _Avoid_: PR branch, `charter/<sha>` branch
 
 **Stage**:

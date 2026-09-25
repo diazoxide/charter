@@ -186,6 +186,7 @@ row), and the status of that field where it differs from its file's.
   - [`mcp-approved.json`](#mcp-approvedjson)
   - [`agent-personas.json`](#agent-personasjson)
   - [`plane-push.json`](#plane-pushjson)
+  - [`save-branch.json`](#save-branchjson)
   - [`save-journal.jsonl`](#save-journaljsonl)
   - [`ws-edit-nudge/<sid>-<workspace>`](#ws-edit-nudgesid-workspace)
   - [`ws-autosave/<workspace>`](#ws-autosaveworkspace)
@@ -384,7 +385,7 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
 | `[plane].worktrees` | str | optional; `None` = `workspaces/<ws>/.worktrees/` | Relocated worktree root. Relative resolves against ROOT; a committed value must satisfy `contain.plane_adjacent` or it is ignored (doctor warns). `$CHARTER_WORKTREES` overrides and is unrestricted. | stable | `charter/instance.py:488`, `charter/config.py:82` |
 | `[plane].mode` | str | optional; closed set `off`,`commit`,`push`,`pr`,`pr-merge`; absent = `[memory].share`'s alias when that is `commit` or `push`, else **ask once** (the Saving view asks before anything is pushed); a new plane is written with `push` | **charter-app only.** How far a save of the plane goes, as a ladder: `off` never commits; `commit` commits locally; `push` also pushes to `branch`; `pr` pushes to `save_branch` and opens or updates one PR/MR into `branch`; `pr-merge` also sets that PR to auto-merge. `pr`/`pr-merge` on an origin that is not a GitHub or GitLab forge charter knows is a config error (doctor, the settings tab) and saves fall back to `commit` with the plane **blocked**. Unknown value → refused by the settings tab, read as absent. | stable | ADR 0051 (accepted, not built) |
 | `[plane].branch` | str | optional; default the branch the plane has checked out | **charter-app only.** The *target* branch the plane is saved into. A save whose plane has another branch checked out commits and does not push: pushing would rebase that branch onto this one (ADR 0051). | stable | ADR 0051 (accepted, not built) |
-| `[plane].save_branch` | str | optional; default `charter/save/<host>` | **charter-app only.** The one rolling branch per machine that `pr`/`pr-merge` push to; one PR from it is kept open and updated by every save. Replaces the per-push `charter/<sha>` branch. | stable | ADR 0051 (accepted, not built) |
+| `[plane].save_branch` | str | optional; default `charter/save/<host>-<clone>`: `<host>` is the machine's name as the dispatch log writes it, `<clone>` the first six hex digits of the SHA-256 of the plane's absolute path, so two clones, or two machines with one name, never share one | **charter-app only.** The one rolling branch per clone that `pr`/`pr-merge` push to; one PR from it is kept open and updated by every save. Replaces the per-push `charter/<sha>` branch for the PR modes. Only this branch is ever force-pushed, with `--force-with-lease` against the commit this clone last pushed there (`save-branch.json`); with none kept it is leased as absent, and an existing branch is pushed over only when its tip is already in HEAD's history — otherwise the plane is blocked. Must not be the target branch (a config error, and the plane is blocked). A value shared in `charter.toml` is one branch for every clone, and the lease then blocks all but the first. | stable | ADR 0051; `crates/charter-core/src/planegit/prsave.rs` (charter-app#298) |
 | `[plane].sign` | bool | optional; default `false` | **charter-app only.** Sign save commits. A push refused for an unsigned commit tells the operator to set this. | stable | ADR 0051 (accepted, not built) |
 | `[plane].autosave` | bool | optional; default `true` | **charter-app only.** Save by itself: after `autosave_after` of quiet, when a session ends, and when the app quits (the push gets about five seconds; the next launch pushes what was left). Also fast-forwards a clean tree from the remote every five minutes and on window focus; with `false`, incoming commits are shown, not pulled. | stable | ADR 0051 (accepted, not built) |
 | `[plane].autosave_after` | str | optional; default `"30s"`; a whole number followed by `s` or `m` | **charter-app only.** The quiet period after the last change before an auto-save. | stable | ADR 0051 (accepted, not built) |
@@ -3345,10 +3346,11 @@ Only the **latest** sighting is kept (whole-file overwrite).
 
 | Field | Type | Meaning | Status | Source |
 |---|---|---|---|---|
-| `outcome` | str, one of `pushed`/`branched`/`stranded`/`failed`/`conflict`/`unreachable` | what the push did; a record without it reads as absent | stable | `charter/planegit.py:190`–`:195`, `:300` |
+| `outcome` | str, one of `pushed`/`branched`/`stranded`/`failed`/`conflict`/`unreachable`, and in charter-app `pr-open`/`blocked` | what the push did; a record without it reads as absent. `pr-open`: a PR mode pushed `head` to the save branch (`landed`) and its PR into `branch` is open (`url`, `number`). `blocked`: a PR mode cannot go further without a person — its PR was closed without merging, the merged target no longer matches what was pushed, or somebody else pushed to the save branch (`detail` says which) | stable | `charter/planegit.py:190`–`:195`, `:300`; `crates/charter-core/src/planegit/prsave.rs` |
 | `branch` | str | branch charter tried to advance | stable | `charter/planegit.py:281` |
 | `landed` | str \| null | the branch it actually reached | stable | `charter/planegit.py:281` |
 | `url` | str \| null | PR/MR url | stable | `charter/planegit.py:282` |
+| `number` | int \| null | **charter-app only.** The PR's number (a GitLab MR's `iid`), written with `pr-open` and `blocked`; what the next save or fetch asks the forge about | stable | `crates/charter-core/src/planegit.rs` `record_push` |
 | `detail` | str | git's own words | stable | `charter/planegit.py:282` |
 | `head` | str | the sha being pushed | stable | `charter/planegit.py:282` |
 | `at` | float epoch | when | stable | `charter/planegit.py:282` |
@@ -3356,6 +3358,30 @@ Only the **latest** sighting is kept (whole-file overwrite).
 
 In charter-app the save journal (below) takes over this record's job for saves made by
 charter-app. `charter save` keeps writing this record until its contract moves (ADR 0051).
+
+A `pr-open` or `blocked` record is judged against the remote-tracking target branch
+(`refs/remotes/origin/<branch>`) rather than `@{upstream}`, and only while HEAD is `head` or
+descends from it: a plane moved off that commit by hand is no longer the plane the record is
+about. The next save or fetch settles a `pr-open` record by asking the forge where the PR stands
+(charter-app#298).
+
+### `save-branch.json`
+- **Format:** JSON object, `indent=2`
+- **Status:** **internal** — what a PR mode's saves keep about this clone's save branch, apart
+  from `plane-push.json` because that record is rewritten by every push, failures included
+  (charter-app#298). Deleted ⇒ the next push leases the save branch as absent (and is blocked
+  if the remote has one whose tip HEAD does not contain), and a PR opened before is not
+  settled by charter: the plane stays on its commits until moved by hand.
+- **Written by:** `crates/charter-core/src/planegit/prsave.rs` `Kept::write`, with
+  `profiletrust::write_private`: after each push to the save branch, after each PR opened or
+  updated, and when a PR is settled (merged and moved onto, or closed).
+- **Read by:** the same module, on every PR-mode save and fetch; `standing` for the PR's link.
+- **Git:** gitignored (under `/.charter/`).
+- **Fields:**
+  - `branch`: the save branch the rest is about; anything kept about another is ignored
+  - `pushed`: the commit this clone last pushed to it — what the next push is leased against
+  - `pr`: `null`, or the PR last opened or updated and not yet settled: `number`, `url`,
+    `head` (the commit it was last pushed at) and `target` (the branch it goes into)
 
 ### `save-journal.jsonl`
 - **Format:** JSON Lines, one object per save attempt, appended. Capped at the newest 500

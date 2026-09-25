@@ -51,6 +51,22 @@ pub struct Plane {
     pub autosave_after: Resolved<Duration>,
 }
 
+impl Plane {
+    /// The branch the PR modes push to: `save_branch`, or `charter/save/<host>-<clone>` — this
+    /// machine's name, as the dispatch log names it ([`crate::dispatch::host`]), and six hex
+    /// digits of a hash of the plane's own path. The path is what keeps two clones apart: two
+    /// on one machine, or two machines with one name, never share a save branch.
+    pub fn save_branch_or_default(&self, root: &std::path::Path) -> String {
+        use sha2::Digest;
+        self.save_branch.value.clone().unwrap_or_else(|| {
+            let at = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+            let digest = sha2::Sha256::digest(at.to_string_lossy().as_bytes());
+            let clone: String = digest.iter().take(3).map(|b| format!("{b:02x}")).collect();
+            format!("charter/save/{}-{clone}", crate::dispatch::host())
+        })
+    }
+}
+
 /// How one workspace repo is saved: `[repos.<name>]`, keyed by the repo's name in
 /// `inventory/repos.json`, so one table governs every workspace's clone of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
