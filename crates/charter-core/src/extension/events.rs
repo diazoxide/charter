@@ -100,15 +100,28 @@ impl Kind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// The operator brought a workspace to the front in the window.
-    WorkspaceFocused { workspace: String },
-    WorkspaceCreated { workspace: String },
+    WorkspaceFocused {
+        workspace: String,
+    },
+    WorkspaceCreated {
+        workspace: String,
+    },
     /// `workspace` is the fork, `from` the workspace it was forked from.
-    WorkspaceForked { workspace: String, from: String },
-    WorkspaceRemoved { workspace: String },
+    WorkspaceForked {
+        workspace: String,
+        from: String,
+    },
+    WorkspaceRemoved {
+        workspace: String,
+    },
     /// A handoff was written for a new chat in `workspace`.
-    HandoffCreated { workspace: String },
+    HandoffCreated {
+        workspace: String,
+    },
     /// A chat started in `workspace` (`charter hook sessionstart`).
-    SessionStarted { workspace: String },
+    SessionStarted {
+        workspace: String,
+    },
     PlaneSaved,
 }
 

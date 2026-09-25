@@ -207,7 +207,10 @@ fn a_manifest_of_another_version_is_refused_rather_than_guessed_at() {
     made.manifest(r#"{"version":3,"id":"x","contributes":{"runs":"p"}}"#);
 
     let why = read_at(&made.at()).expect_err("no extension");
-    assert!(why.contains("is version 3, and this charter reads versions 1 to 2"), "{why}");
+    assert!(
+        why.contains("is version 3, and this charter reads versions 1 to 2"),
+        "{why}"
+    );
 }
 
 #[test]

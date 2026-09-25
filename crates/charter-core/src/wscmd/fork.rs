@@ -274,7 +274,10 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
         }
     }
     if !extension_carried.is_empty() {
-        let folders: Vec<String> = extension_carried.iter().map(|it| format!("{it}/")).collect();
+        let folders: Vec<String> = extension_carried
+            .iter()
+            .map(|it| format!("{it}/"))
+            .collect();
         say(Say::Info(format!(
             "Carried the folder(s) extensions keep in '{src}': {}",
             folders.join(", ")

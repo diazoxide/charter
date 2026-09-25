@@ -1237,8 +1237,11 @@ export function PlaneView({
       change((tabs) =>
         showWorkspace(tabs, workspace, filedIn, lastFront.current[workspace], isPinned),
       );
+      // Reported to the extensions that hear it (charter-app#343). Not awaited: the core tells
+      // them on a thread of its own, and the strip has already moved.
+      void commands.workspaceFocused(plane, workspace).catch(() => undefined);
     },
-    [change, filedIn, isPinned],
+    [change, filedIn, isPinned, plane],
   );
 
   /** What a chat is called here: the tab holding it, or its session number. */

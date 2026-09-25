@@ -70,6 +70,7 @@ macro_rules! app_commands {
                 workspaces::workspace_create,
                 workspaces::workspace_at_risk,
                 workspaces::workspace_remove,
+                workspaces::workspace_focused,
                 workspace_repos,
                 alerts_everywhere,
                 start_options,

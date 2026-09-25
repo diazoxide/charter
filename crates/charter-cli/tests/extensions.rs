@@ -312,7 +312,11 @@ fn a_fork_tells_an_extension_that_is_on_which_workspace_it_came_from() {
     let asked = rig.asked();
     assert_eq!(asked.len(), 1, "{asked:#?}");
     assert_eq!(
-        (&asked[0]["event"], &asked[0]["workspace"], &asked[0]["from"]),
+        (
+            &asked[0]["event"],
+            &asked[0]["workspace"],
+            &asked[0]["from"]
+        ),
         (
             &serde_json::json!("workspace-forked"),
             &serde_json::json!("beta"),

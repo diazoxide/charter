@@ -637,16 +637,23 @@ pub struct ExtensionFacts {
 #[specta::specta]
 pub async fn extension_facts(
     planes: tauri::State<'_, crate::planes::Planes>,
+    heard: tauri::State<'_, crate::heard::Heard>,
     plane: crate::planes::PlaneId,
     workspace: Option<String>,
 ) -> Result<ExtensionFacts, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let config = config_root()?;
-    tauri::async_runtime::spawn_blocking(move || {
+    // What events this project reported left behind, drawn with the facts file's own notes:
+    // both are an extension that should have shown or heard something and did not
+    // (charter-app#343, `heard.rs`).
+    let missed = heard.notes_for(&root);
+    let mut read = tauri::async_runtime::spawn_blocking(move || {
         facts_in(&config, &root, workspace.as_deref(), chrono::Utc::now())
     })
     .await
-    .map_err(|err| format!("reading this project's extension facts did not finish: {err}"))
+    .map_err(|err| format!("reading this project's extension facts did not finish: {err}"))?;
+    read.notes.extend(missed);
+    Ok(read)
 }
 
 /// [`extension_facts`] without a runtime.

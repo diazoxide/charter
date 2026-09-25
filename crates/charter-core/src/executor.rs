@@ -1407,7 +1407,10 @@ fn briefing_line(
     one_line(extension, doc)
 }
 
-fn one_line(extension: &str, doc: serde_json::Map<String, serde_json::Value>) -> Result<Vec<u8>, String> {
+fn one_line(
+    extension: &str,
+    doc: serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<u8>, String> {
     let mut line = serde_json::to_vec(&serde_json::Value::Object(doc))
         .map_err(|why| format!("charter could not write the question for '{extension}': {why}"))?;
     line.push(b'\n');
@@ -1526,11 +1529,7 @@ fn kill_group(_group: i32) {}
 ///
 /// **An answer says which protocol it is in.** A program written against a different one is
 /// refused with the number named, rather than half-read under rules it was not written to.
-fn read_answer(
-    extension: &str,
-    line: &[u8],
-    protocol: u32,
-) -> Result<Vec<panel::Block>, String> {
+fn read_answer(extension: &str, line: &[u8], protocol: u32) -> Result<Vec<panel::Block>, String> {
     let doc = answered(extension, line, protocol, &["blocks"])?;
     let blocks = doc.get("blocks").ok_or_else(|| {
         format!("'{extension}' answered neither 'blocks' nor 'error', so there is nothing to draw")

@@ -233,6 +233,23 @@ describe("the workspace strip", () => {
     expect(panes()).toEqual([]);
   });
 
+  it("tells the extensions that hear it when the operator focuses a workspace (charter-app#343)", async () => {
+    // The report and nothing else: the core tells the extensions on a thread of its own, and
+    // the window never waits for it — so the strip has moved before anything answers.
+    const { asked } = core();
+    render(<App />);
+    await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
+
+    await focus("beta");
+
+    expect(focused()).toEqual(["beta"]);
+    await vi.waitFor(() =>
+      expect(
+        asked.filter(({ cmd }) => cmd === "workspace_focused").map(({ args }) => args),
+      ).toEqual([{ plane: PLANE, workspace: "beta" }]),
+    );
+  });
+
   it("says a workspace has no chats rather than leaving another workspace's on screen", async () => {
     core();
     render(<App />);

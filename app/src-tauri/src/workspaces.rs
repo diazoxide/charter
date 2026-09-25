@@ -48,6 +48,7 @@
 
 use std::path::Path;
 
+use charter_core::extension::events::Event;
 use charter_core::repocmd::Say;
 use charter_core::wscmd;
 
@@ -140,13 +141,47 @@ pub(crate) fn ran(code: u8, said: Vec<Say>) -> Result<Vec<String>, String> {
 #[tauri::command]
 #[specta::specta]
 pub fn workspace_create(
+    app: tauri::AppHandle,
     planes: tauri::State<'_, Planes>,
+    heard: tauri::State<'_, crate::heard::Heard>,
     plane: PlaneId,
     name: String,
     vision: Option<String>,
 ) -> Result<Vec<String>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    create_in(&root, &name, vision.as_deref())
+    let made = create_in(&root, &name, vision.as_deref());
+    // Told once it is made, on a thread of its own: nothing an extension answers can change
+    // what this answers (charter-app#343).
+    if made.is_ok() {
+        heard.tell(
+            &app,
+            plane,
+            root,
+            Event::WorkspaceCreated { workspace: name },
+        );
+    }
+    made
+}
+
+/// The operator brought a workspace to the front: tell the extensions that hear it
+/// (charter-app#343). It does nothing else and answers nothing — focusing is the window's own
+/// state, and this is only the report of it.
+// Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
+#[tauri::command]
+#[specta::specta]
+pub fn workspace_focused(
+    app: tauri::AppHandle,
+    planes: tauri::State<'_, Planes>,
+    heard: tauri::State<'_, crate::heard::Heard>,
+    plane: PlaneId,
+    workspace: String,
+) -> Result<(), String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    if !charter_core::contain::workspace_name_ok(&workspace) {
+        return Err(format!("'{workspace}' is not a workspace's name"));
+    }
+    heard.tell(&app, plane, root, Event::WorkspaceFocused { workspace });
+    Ok(())
 }
 
 /// The creation itself, against a root the registry has already vouched for.
@@ -210,7 +245,9 @@ fn at_risk_in(root: &Path, workspace: &str) -> Vec<AtRisk> {
 #[tauri::command]
 #[specta::specta]
 pub fn workspace_remove(
+    app: tauri::AppHandle,
     planes: tauri::State<'_, Planes>,
+    heard: tauri::State<'_, crate::heard::Heard>,
     plane: PlaneId,
     workspace: String,
     force: bool,
@@ -223,7 +260,11 @@ pub fn workspace_remove(
         })?
         .root()
         .to_path_buf();
-    remove_in(&root, &workspace, force)
+    let removed = remove_in(&root, &workspace, force);
+    if removed.is_ok() {
+        heard.tell(&app, plane, root, Event::WorkspaceRemoved { workspace });
+    }
+    removed
 }
 
 /// The removal itself, against a root the registry has already vouched for.

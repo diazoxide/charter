@@ -355,7 +355,10 @@ fn quoted(
     }
     // Refused whole: a line break is the one control character a section may hold, because it
     // is how a section has lines; `\r` is not, since it draws a line over the one before it.
-    if text.chars().any(|c| c != '\n' && crate::panel::undrawable(c)) {
+    if text
+        .chars()
+        .any(|c| c != '\n' && crate::panel::undrawable(c))
+    {
         return Err(
             "it holds a control or invisible formatting character, which charter will not put \
              in front of a chat"

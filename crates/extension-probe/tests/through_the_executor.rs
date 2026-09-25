@@ -667,7 +667,10 @@ fn two_events_a_moment_apart_are_both_heard() {
         });
         (first.join().expect("first"), second.join().expect("second"))
     });
-    assert!(first.is_empty() && second.is_empty(), "{first:?} {second:?}");
+    assert!(
+        first.is_empty() && second.is_empty(),
+        "{first:?} {second:?}"
+    );
     assert_eq!(probe.heard().len(), 2, "{:?}", probe.heard());
 }
 
@@ -720,8 +723,10 @@ fn a_manifest_speaking_protocol_1_cannot_ask_for_events_or_a_briefing() {
         .expect_err("a protocol-1 manifest asked for a protocol-2 capability")
         .to_string();
     assert!(
-        refused.contains("asks for the capability \"events\" and speaks protocol 1, which does \
-             not have it"),
+        refused.contains(
+            "asks for the capability \"events\" and speaks protocol 1, which does \
+             not have it"
+        ),
         "{refused}"
     );
 }
@@ -825,7 +830,10 @@ fn the_probe_adds_a_section_quoted_as_data_under_its_name_and_hears_the_chat_sta
 #[test]
 fn every_line_of_a_section_is_quoted_and_it_is_cut_at_its_limit() {
     let probe = Probe::approved();
-    let long = format!("first line\n{}", "x".repeat(briefing::MOST_SECTION_CHARS * 2));
+    let long = format!(
+        "first line\n{}",
+        "x".repeat(briefing::MOST_SECTION_CHARS * 2)
+    );
     probe.behaves(serde_json::json!({ "section": long }));
     let part = probe.briefed(ROOMY).parts.remove(0);
     assert!(part.contains("\n> first line\n> xxx"), "{part}");
@@ -905,10 +913,7 @@ fn a_turned_off_extension_adds_nothing_to_a_chats_start_and_is_asked_nothing() {
         "[extensions.extension-probe]\nenabled = false\n",
     )
     .expect("written");
-    assert_eq!(
-        probe.briefed(ROOMY),
-        AtSessionStart::default()
-    );
+    assert_eq!(probe.briefed(ROOMY), AtSessionStart::default());
     assert!(probe.heard().is_empty());
     assert!(!probe.facts_file().exists(), "the probe was started");
 }
@@ -931,8 +936,5 @@ fn an_extension_that_changed_on_disk_adds_nothing_to_a_chats_start() {
 #[test]
 fn a_machine_with_no_extension_adds_nothing_to_a_chats_start() {
     let probe = Probe::assembled();
-    assert_eq!(
-        probe.briefed(ROOMY),
-        AtSessionStart::default()
-    );
+    assert_eq!(probe.briefed(ROOMY), AtSessionStart::default());
 }

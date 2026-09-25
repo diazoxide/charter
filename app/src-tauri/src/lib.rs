@@ -14,6 +14,7 @@ mod doctor;
 mod extensions;
 mod handoff;
 mod harness_plugins;
+mod heard;
 mod hooks;
 mod ipc;
 mod lifecycle;
@@ -1204,6 +1205,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<updates::Offer>()
         // What `plane-changed` carries, for the same reason.
         .typ::<planewatch::PlaneChanged>()
+        // What `extension-heard` carries (charter-app#343).
+        .typ::<heard::ExtensionHeard>()
 }
 
 /// Where the generated TypeScript lives.
@@ -1326,6 +1329,8 @@ pub fn run() {
             // The extension executor (ADR 0041 stage 2). Managed for the table of
             // programs it is running, which `Exit` below empties.
             app.manage(views::Views::default());
+            // The executor events are delivered with, and the notes they left (charter-app#343).
+            app.manage(heard::Heard::default());
             // What each window is holding, and which of its projects it has in front. Empty
             // until a window says, and an empty answer means "not looking", so a notification
             // is sent rather than suppressed.
@@ -1432,6 +1437,7 @@ pub fn run() {
                 // group, so that nothing an extension was asked to run outlives the window
                 // that asked (`charter_core::executor`).
                 app.state::<views::Views>().stop_all();
+                app.state::<heard::Heard>().stop_all();
                 // Every plane, not "the" plane: each one writes its own record into itself
                 // and ends its own sessions. A failure is not worth refusing to exit over —
                 // the next launch of that plane reads no record and starts empty.

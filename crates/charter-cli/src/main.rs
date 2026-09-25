@@ -34,8 +34,8 @@ use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
-mod guard;
 mod extensions;
+mod guard;
 mod handoff;
 mod hooks;
 mod memory;

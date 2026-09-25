@@ -84,14 +84,27 @@ pub async fn plane_saving(
 #[tauri::command]
 #[specta::specta]
 pub async fn save_plane(
+    app: tauri::AppHandle,
     planes: tauri::State<'_, Planes>,
+    heard: tauri::State<'_, crate::heard::Heard>,
     plane: PlaneId,
     message: Option<String>,
 ) -> Result<Vec<String>, String> {
     let root = planes.held(&plane)?.root().to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || save(&root, message.as_deref()))
+    let at = root.clone();
+    let saved = tauri::async_runtime::spawn_blocking(move || save(&at, message.as_deref()))
         .await
-        .map_err(|err| format!("the save did not finish: {err}"))?
+        .map_err(|err| format!("the save did not finish: {err}"))?;
+    // Told once it is saved, on a thread of its own (charter-app#343).
+    if saved.is_ok() {
+        heard.tell(
+            &app,
+            plane,
+            root,
+            charter_core::extension::events::Event::PlaneSaved,
+        );
+    }
+    saved
 }
 
 /// Answer the question a plane with no mode is asked once (ADR 0051): how far its saves go.
