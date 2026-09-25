@@ -65,15 +65,28 @@ impl Drop for Worker {
     }
 }
 
+/// Told when auto-save saved the plane at a root, so the extensions that hear a plane being
+/// saved are told as they are after the Save button (charter-app#343).
+pub type Saved = Arc<dyn Fn(PlaneId, PathBuf) + Send + Sync + 'static>;
+
 impl Worker {
-    /// Start looking at the plane at `root`. `changed` tells the window it moved.
-    pub fn start(plane: PlaneId, root: PathBuf, changed: crate::planewatch::Changed) -> Self {
+    /// Start looking at the plane at `root`. `changed` tells the window it moved, and `saved`
+    /// that it saved it.
+    pub fn start(
+        plane: PlaneId,
+        root: PathBuf,
+        changed: crate::planewatch::Changed,
+        saved: Saved,
+    ) -> Self {
         let (poke, poked) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = Arc::clone(&stop);
         let spawned = std::thread::Builder::new()
             .name("charter-autosave".into())
-            .spawn(move || run(&root, &poked, &stopping, &|| changed(plane.clone())));
+            .spawn(move || {
+                let told = || saved(plane.clone(), root.clone());
+                run(&root, &poked, &stopping, &|| changed(plane.clone()), &told);
+            });
         let thread = spawned
             .map_err(|why| eprintln!("charter: auto-save did not start ({why}); save by hand"))
             .ok();
@@ -87,7 +100,7 @@ impl Worker {
 }
 
 /// The loop: a look every [`LOOK_EVERY`] or at a poke, until the worker is dropped.
-fn run(root: &Path, poked: &Receiver<Poke>, stop: &AtomicBool, tell: &dyn Fn()) {
+fn run(root: &Path, poked: &Receiver<Poke>, stop: &AtomicBool, tell: &dyn Fn(), saved: &dyn Fn()) {
     let mut state = State::default();
     let mut poke = None;
     loop {
@@ -96,6 +109,9 @@ fn run(root: &Path, poked: &Receiver<Poke>, stop: &AtomicBool, tell: &dyn Fn()) 
         }
         if state.look(root, Instant::now(), poke) {
             tell();
+        }
+        if std::mem::take(&mut state.saved) {
+            saved();
         }
         poke = match poked.recv_timeout(LOOK_EVERY) {
             Ok(poke) => Some(poke),
@@ -111,6 +127,8 @@ struct State {
     quiet: Quiet,
     launched: bool,
     fetched: Option<Instant>,
+    /// The last look saved the plane, and nobody has been told yet.
+    saved: bool,
 }
 
 impl State {
@@ -157,7 +175,7 @@ impl State {
         });
         if let Some(trigger) = trigger {
             // A refusal is in the journal, in its own words; the stage says blocked.
-            let _ = crate::saving::save_as(root, None, trigger);
+            self.saved = crate::saving::save_as(root, None, trigger).is_ok();
             did = true;
         }
         did
@@ -324,6 +342,7 @@ mod tests {
             PlaneId::for_tests(dir.path()),
             dir.path().to_path_buf(),
             Arc::new(|_| {}),
+            Arc::new(|_, _| {}),
         );
         let held_by_a_chat = worker.poker();
 

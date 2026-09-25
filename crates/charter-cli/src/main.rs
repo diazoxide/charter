@@ -26,7 +26,7 @@ use std::process::ExitCode;
 
 use std::time::Duration;
 
-use charter_core::extension::events::Event as Heard;
+use charter_core::extension::events::Event as ExtensionEvent;
 use charter_core::hookwire::{self, Report, SOCKET_ENV};
 use charter_core::profiles::{self, ProfileSet, Source};
 use charter_core::shown;
@@ -1431,7 +1431,7 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
         _ => return None,
     };
     if code == 0 && matches!(command, Command::Save { .. }) {
-        extensions::told(&root, &Heard::PlaneSaved);
+        extensions::tell(&root, &ExtensionEvent::PlaneSaved);
     }
     Some(ExitCode::from(code))
 }
@@ -1632,7 +1632,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
     let say: &mut dyn FnMut(charter_core::repocmd::Say) = &mut sink;
     // What the extensions that hear it are told once the verb is done and has said everything
     // it says (charter-app#343).
-    let mut heard: Option<Heard> = None;
+    let mut heard: Vec<ExtensionEvent> = Vec::new();
     let code = match verb {
         WorkspaceCommand::Remove { name, force } => {
             // The list it refused on is the window's (charter-app#182): a terminal has already
@@ -1645,7 +1645,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             // which are `session`/`active-file` in charter's own vocabulary.
             if code == 0 {
                 reset_active_after_removal(&here, name, say);
-                heard = Some(Heard::WorkspaceRemoved {
+                heard.push(ExtensionEvent::WorkspaceRemoved {
                     workspace: name.clone(),
                 });
             }
@@ -1661,10 +1661,19 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             let Some(now) = pinned(now) else {
                 return Some(ExitCode::FAILURE);
             };
+            // `--create` makes one that is not there, which is a workspace being created too.
+            let there_before = Plane::open(&root)
+                .workspace(name)
+                .is_ok_and(|ws| ws.dir().exists());
             let code =
                 wscmd::select::use_workspace(&root, name, &here.ids, *create, *force, now, say);
             if code == 0 {
-                heard = Some(Heard::WorkspaceFocused {
+                if !there_before {
+                    heard.push(ExtensionEvent::WorkspaceCreated {
+                        workspace: name.clone(),
+                    });
+                }
+                heard.push(ExtensionEvent::WorkspaceFocused {
                     workspace: name.clone(),
                 });
             }
@@ -1697,7 +1706,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
                 say,
             );
             if code == 0 {
-                heard = Some(Heard::WorkspaceCreated {
+                heard.push(ExtensionEvent::WorkspaceCreated {
                     workspace: name.clone(),
                 });
             }
@@ -1753,7 +1762,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
                 say,
             );
             if !there_before && made_here() {
-                heard = Some(Heard::WorkspaceForked {
+                heard.push(ExtensionEvent::WorkspaceForked {
                     workspace: new.clone(),
                     from: src.clone(),
                 });
@@ -1815,8 +1824,8 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
         }
         _ => unreachable!("filtered above"),
     };
-    if let Some(event) = &heard {
-        extensions::told(&root, event);
+    for event in &heard {
+        extensions::tell(&root, event);
     }
     Some(ExitCode::from(code))
 }
@@ -2435,9 +2444,9 @@ fn main() -> ExitCode {
             },
         );
         if code == ExitCode::SUCCESS {
-            extensions::told(
+            extensions::tell(
                 here.plane.root(),
-                &Heard::HandoffCreated {
+                &ExtensionEvent::HandoffCreated {
                     workspace: workspace.clone(),
                 },
             );

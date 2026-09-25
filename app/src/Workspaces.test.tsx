@@ -238,7 +238,7 @@ describe("the workspace strip", () => {
     // the window never waits for it — so the strip has moved before anything answers.
     const { asked } = core();
     render(<App />);
-    await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
+    await waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
 
     await focus("beta");
 

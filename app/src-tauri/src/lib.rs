@@ -1392,6 +1392,19 @@ pub fn run() {
                         let _ =
                             window.emit(planewatch::CHANGED, &planewatch::PlaneChanged { plane });
                     })
+                })
+                // Auto-save saved a plane: the extensions that hear it are told, as after the
+                // Save button (charter-app#343).
+                .telling_saves({
+                    let app = app.handle().clone();
+                    std::sync::Arc::new(move |plane: PlaneId, root: std::path::PathBuf| {
+                        app.state::<heard::Heard>().tell(
+                            &app,
+                            plane,
+                            root,
+                            charter_core::extension::events::Event::PlaneSaved,
+                        );
+                    })
                 }),
             );
 

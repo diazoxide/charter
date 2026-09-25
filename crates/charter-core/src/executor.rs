@@ -396,7 +396,7 @@ impl Executor {
             |found| found.protocol == declared.protocol && found.hears(kind),
             Waits::Yes,
         )?;
-        answered(extension, &heard.line, declared.protocol, &[]).map(|_| ())
+        reply_of(extension, &heard.line, declared.protocol, &[]).map(|_| ())
     }
 
     /// Ask `extension`'s program for its section of a chat's session-start briefing, or say why
@@ -433,7 +433,7 @@ impl Executor {
             |found| found.protocol == declared.protocol && found.briefing == declared.briefing,
             Waits::No,
         )?;
-        let doc = answered(extension, &heard.line, declared.protocol, &["section"])?;
+        let doc = reply_of(extension, &heard.line, declared.protocol, &["section"])?;
         match doc.get("section") {
             Some(serde_json::Value::String(text)) => Ok(text.clone()),
             Some(serde_json::Value::Null) | None => Ok(String::new()),
@@ -503,6 +503,8 @@ impl Executor {
         for group in table.running.values() {
             kill_group(*group);
         }
+        // An event waiting its turn ([`Self::hold_within`]) hears it now, and starts nothing.
+        self.freed.notify_all();
     }
 
     /// Which extensions have a program running right now. For a test, and for anything that
@@ -1533,7 +1535,7 @@ fn kill_group(_group: i32) {}
 /// **An answer says which protocol it is in.** A program written against a different one is
 /// refused with the number named, rather than half-read under rules it was not written to.
 fn read_answer(extension: &str, line: &[u8], protocol: u32) -> Result<Vec<panel::Block>, String> {
-    let doc = answered(extension, line, protocol, &["blocks"])?;
+    let doc = reply_of(extension, line, protocol, &["blocks"])?;
     let blocks = doc.get("blocks").ok_or_else(|| {
         format!("'{extension}' answered neither 'blocks' nor 'error', so there is nothing to draw")
     })?;
@@ -1543,7 +1545,7 @@ fn read_answer(extension: &str, line: &[u8], protocol: u32) -> Result<Vec<panel:
 /// An answer line read as far as every kind of question shares: one JSON object, in the
 /// `protocol` it was asked in, holding `charter`, `error` and only the `keys` this kind of
 /// answer has. An `error` is the refusal, quoted.
-fn answered(
+fn reply_of(
     extension: &str,
     line: &[u8],
     protocol: u32,

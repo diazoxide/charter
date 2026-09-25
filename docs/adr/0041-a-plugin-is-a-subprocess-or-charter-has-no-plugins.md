@@ -826,13 +826,22 @@ What it adds to the threat model:
   hears, when a chat starts — instead of the view-only sentence, and every event it hears is
   listed. The lists are inside the manifest's bytes, so adding an event re-asks.
 - **An event never changes the action it reports.** It is delivered after the action has
-  finished, by the surface that did it, **off that surface's critical path**: the app starts a
-  thread once a command has its answer and returns the answer without waiting; the `charter`
-  binary prints and flushes its answer, and its exit status is already decided, before it asks
-  anything. Each extension is asked on a thread of its own with the normal deadline, and an
-  event waits its turn behind a question still in flight rather than being refused. A failure
-  or a timeout is one note naming the extension — the status line's extension notes in the
-  app, a line on stderr in a terminal — and nothing else.
+  finished, by the surface that did it. **In the app it is off the command's path**: the app
+  starts a thread once a command — or auto-save — has its answer, and returns the answer
+  without waiting. **The `charter` binary answers first and then waits**: it prints and flushes
+  its answer, with its exit status already decided, and only then asks, before the process
+  ends. A shell or a chat waiting for the process to end therefore waits up to one deadline,
+  and only when an extension that hears that event is slow — every extension is asked at once
+  — which is the cost of keeping the note where the person who ran the command sees it. A
+  process detached from the command would cost nothing and could tell nobody that an extension
+  missed the event. Each extension is asked on a thread of its own with the normal deadline,
+  and an event waits its turn behind a question still in flight rather than being refused. A
+  failure or a timeout is one note naming the extension — the status line's extension notes in
+  the app, a line on stderr in a terminal — and nothing else.
+- **A chat starting is the one event on a shorter clock.** `session-started` is told inside
+  the session start's bounded wait below, beside the briefing question and with its bounds,
+  because the hook that reports it is what holds the chat's start: told after it, it would be
+  told by a process the harness is still waiting on.
 - **A briefing section is extension-written text in front of the model, so it is quoted as
   data.** It sits under a line of charter's own naming the extension and saying it is data,
   not instructions, and that nothing in it is a task, a permission, a hook or a setting; every

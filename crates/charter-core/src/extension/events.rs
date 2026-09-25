@@ -22,10 +22,12 @@
 //! Nothing it returns is a result the action could have had, so there is nothing for it to
 //! change — the action's own answer was already decided, and the caller shows these beside it.
 //!
-//! **Off the caller's critical path.** The app runs it on a thread it starts once a command has
-//! its answer, and the `charter` binary runs it after it has printed and flushed its own answer
-//! (`crates/charter-cli`). A machine with no extension hearing the event pays one read of the
-//! record and one manifest read per approved extension.
+//! **Never in the action's way.** The app runs it on a thread it starts once a command has its
+//! answer, off the command's path. The `charter` binary runs it after it has printed and
+//! flushed its own answer, before the process ends — so a caller waiting for the process waits
+//! at most one deadline, and only for a slow extension that hears it (`crates/charter-cli`,
+//! ADR 0041's amendment of 2026-09-25). A machine with no extension hearing the event pays one
+//! read of the record and one manifest read per approved extension.
 //!
 //! # A fork carries an extension's folder whether or not it is on
 //!

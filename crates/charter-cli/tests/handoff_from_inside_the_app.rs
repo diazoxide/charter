@@ -72,6 +72,9 @@ fn charter(root: &Path, app: Option<&Path>, args: &[&str]) -> Output {
         // stamp name the chat the app knows.
         .env("CHARTER_SESSION_ID", ASKING.to_string())
         .env("CHARTER_HARNESS", "claude-code")
+        // The machine store it reads for the extensions a handoff tells (charter-app#343): this
+        // run's own, which holds none, never the operator's.
+        .env("CHARTER_CONFIG_HOME", root.join("no-config-home"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
