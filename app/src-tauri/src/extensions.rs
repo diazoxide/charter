@@ -659,7 +659,7 @@ fn facts_in(
     use extension::facts;
     let read = facts::gather(
         config,
-        &extension::project::Choices::read_in(root, workspace),
+        || extension::project::Choices::read_in(root, workspace),
         now,
         facts::Reading::Window,
     );

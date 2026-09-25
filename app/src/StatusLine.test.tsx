@@ -287,6 +287,14 @@ describe("an extension's badges (charter-app#340)", () => {
     expect(drawn).toHaveTextContent("PRs 3 · 2h ago");
   });
 
+  it("says why an extension shows nothing, rather than letting its badge vanish", () => {
+    draw({ factNotes: ["Pull requests changed since you approved it"] });
+
+    const said = screen.getByTestId("status-fact-notes");
+    expect(said).toHaveTextContent("1 extension note");
+    expect(said.getAttribute("title")).toBe("Pull requests changed since you approved it");
+  });
+
   it("draws no badge when no extension has one", () => {
     draw({ badges: [] });
 

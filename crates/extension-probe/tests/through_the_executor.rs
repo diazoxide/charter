@@ -204,7 +204,7 @@ impl Probe {
     }
 
     fn facts_as(&self, reading: Reading, choices: &extension::project::Choices) -> facts::Facts {
-        facts::gather(&self.config(), choices, now(), reading)
+        facts::gather(&self.config(), || choices.clone(), now(), reading)
     }
 
     fn facts_file(&self) -> PathBuf {
@@ -455,4 +455,39 @@ fn a_capability_that_declares_nothing_is_refused_by_name() {
         .expect_err("a capability declaring nothing was installed")
         .to_string();
     assert!(refused.contains("\"repo-columns\""), "{refused}");
+}
+
+#[test]
+fn a_facts_file_full_of_undeclared_fields_costs_a_surface_a_few_sentences() {
+    let probe = Probe::approved();
+    let junk: Vec<String> = (0..500)
+        .map(|n| format!(r#""junk{n}": {{"value": "1", "at": {}}}"#, seconds_ago(0)))
+        .collect();
+    probe.facts_are(&format!(r#"{{"badges": {{{}}}}}"#, junk.join(",")));
+
+    let read = probe.facts();
+    assert!(read.notes.len() <= 3, "{:#?}", read.notes);
+    assert!(
+        read.notes
+            .last()
+            .is_some_and(|it| it.contains("more problems")),
+        "{:#?}",
+        read.notes
+    );
+}
+
+#[test]
+fn a_badges_section_charter_cannot_read_leaves_the_columns_filled() {
+    let probe = Probe::approved();
+    probe.facts_are(&format!(
+        r#"{{"badges": [], "repo-columns": {{"asked": {{"svc": {{"value": "5", "at": {}}}}}}}}}"#,
+        seconds_ago(0)
+    ));
+
+    let read = probe.facts();
+    assert!(read.badges.is_empty());
+    assert_eq!(
+        read.columns[0].cells.get("svc").map(|it| it.value.as_str()),
+        Some("5")
+    );
 }

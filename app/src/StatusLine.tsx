@@ -99,6 +99,7 @@ export function StatusLine({
   pin,
   regions,
   badges,
+  factNotes,
 }: {
   /** The project's root directory — the path that used to sit in the top-right corner. */
   plane: string;
@@ -160,6 +161,13 @@ export function StatusLine({
    * program. Absent or empty draws none.
    */
   badges?: readonly FactBadge[];
+  /**
+   * Why an extension that should show something here shows nothing — a facts file too big or
+   * not JSON, a field its manifest did not declare, an extension that changed since it was
+   * approved — in the core's words. Drawn as one quiet count with the sentences as its title,
+   * so a badge never just vanishes.
+   */
+  factNotes?: readonly string[];
 }) {
   const todos = todoCount(state);
   const pieces = pieceCount(state);
@@ -241,6 +249,18 @@ export function StatusLine({
           {badge.stale && <span className="status-age"> · {ago(badge.age_seconds)}</span>}
         </span>
       ))}
+
+      {factNotes !== undefined && factNotes.length > 0 && (
+        <span
+          className="status-cell status-fact-notes"
+          data-testid="status-fact-notes"
+          title={factNotes.join("\n")}
+        >
+          <span className="status-label">
+            {factNotes.length} extension {factNotes.length === 1 ? "note" : "notes"}
+          </span>
+        </span>
+      )}
 
       <AlertsButton alerts={alerts} />
 

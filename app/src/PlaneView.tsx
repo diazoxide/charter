@@ -2473,6 +2473,7 @@ export function PlaneView({
         pin={pin}
         alerts={alerts}
         badges={facts.badges}
+        factNotes={facts.notes}
         /* Which regions are drawn (ADR 0038), handed over as the arrangement already reads
            them. **The slots are flattened here and not there**: the arrangement is this
            project's, `inSlots` is the module that knows what order a side's regions come in,

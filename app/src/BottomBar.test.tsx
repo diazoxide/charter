@@ -784,7 +784,7 @@ describe("an extension's repo columns (charter-app#340)", () => {
     expect(screen.getByRole("columnheader", { name: "PRs" })).toBeInTheDocument();
     expect(screen.getByTestId("fact-prs-open-svc")).toHaveTextContent("2");
     // A repo the file did not name has an empty cell, never a borrowed value.
-    expect(screen.getByTestId("fact-prs-open-tool")).toHaveTextContent("");
+    expect(screen.getByTestId("fact-prs-open-tool")).toBeEmptyDOMElement();
   });
 
   it("dims a stale cell and says how old it is", () => {

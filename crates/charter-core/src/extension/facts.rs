@@ -34,7 +34,7 @@
 //!
 //! **What it costs on the footer's hot path.** A machine with no extension record pays one
 //! failed open. An approved extension pays one manifest read, and only one that declares a
-//! footer badge and is on in this project pays the tree hash — the same gate the executor takes
+//! footer badge reads the project's settings and, if it is on there, pays the tree hash — the same gate the executor takes
 //! before it starts anything, because "changed on disk contributes nothing" is only true if the
 //! bytes are looked at.
 //!
@@ -71,6 +71,12 @@ const MOST_FRESH_SECONDS: u64 = 7 * 24 * 3600;
 /// The most cells one column may fill. More repos than this in one plane is not a table.
 const MOST_CELLS: usize = 256;
 
+/// How far ahead of charter's clock an extension's may be before its `at` is refused.
+const MOST_SKEW_SECONDS: i64 = 300;
+
+/// The most notes one extension's facts file may cost a surface.
+const MOST_NOTES: usize = 3;
+
 /// How much of a word out of the file a note repeats.
 const MOST_WORD_SHOWN: usize = 64;
 
@@ -81,6 +87,16 @@ pub enum Surface {
     StatusBar,
     /// `charter statusline`'s terminal footer.
     Footer,
+}
+
+impl Reading {
+    /// The surface a badge has to name to be drawn for this reader.
+    fn surface(self) -> Surface {
+        match self {
+            Self::Footer => Surface::Footer,
+            Self::Window => Surface::StatusBar,
+        }
+    }
 }
 
 impl Surface {
@@ -312,9 +328,9 @@ fn fresh(
 pub fn age(seconds: u64) -> String {
     match seconds {
         s if s < 90 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", (s + 30) / 60),
-        s if s < 48 * 3600 => format!("{}h", (s + 1800) / 3600),
-        s => format!("{}d", (s + 43_200) / 86_400),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 48 * 3600 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
     }
 }
 
@@ -404,12 +420,17 @@ pub struct Facts {
 /// workspace, when `choices` were read in one) contributes to `reading`'s surface, at `now`.
 ///
 /// Never raises and never starts a program. See the module docstring for what it costs.
+///
+/// `choices` is asked for only when an approved extension has something for this surface, so a
+/// machine with no extension reads no project file for it.
 pub fn gather(
     config_root: &Path,
-    choices: &super::project::Choices,
+    choices: impl FnOnce() -> super::project::Choices,
     now: DateTime<Utc>,
     reading: Reading,
 ) -> Facts {
+    let mut choices = Some(choices);
+    let mut read_choices: Option<super::project::Choices> = None;
     let mut facts = Facts::default();
     let loaded = super::read(config_root);
     // An unreadable record approves nothing; the Extensions list is where it is said.
@@ -425,7 +446,12 @@ pub fn gather(
         let Ok(declared) = super::manifest_at(&entry.path) else {
             continue;
         };
-        if !wanted(&declared, reading) || !on_here(id, &declared, choices) {
+        if !wanted(&declared, reading) {
+            continue;
+        }
+        let here =
+            read_choices.get_or_insert_with(|| choices.take().map(|it| it()).unwrap_or_default());
+        if !on_here(id, &declared, here) {
             continue;
         }
         // **The gate the executor takes**, re-taken now: these bytes, at this path.
@@ -452,26 +478,29 @@ pub fn gather(
             ));
             continue;
         }
+        let before = facts.notes.len();
         read_one(&found, now, reading, &mut facts);
+        // **At most a few sentences per extension.** A facts file full of undeclared keys is
+        // one broken extension, and the footer draws a line per note on every turn.
+        if facts.notes.len() - before > MOST_NOTES {
+            let more = facts.notes.len() - before - (MOST_NOTES - 1);
+            facts.notes.truncate(before + MOST_NOTES - 1);
+            facts.notes.push(format!(
+                "{} has {more} more problems with its facts file",
+                found.manifest.name
+            ));
+        }
     }
     facts
 }
 
 /// Whether `manifest` declares anything `reading`'s surface draws.
 fn wanted(manifest: &super::Manifest, reading: Reading) -> bool {
-    match reading {
-        Reading::Footer => manifest
+    (reading == Reading::Window && !manifest.repo_columns.is_empty())
+        || manifest
             .badges
             .iter()
-            .any(|it| it.surfaces.contains(&Surface::Footer)),
-        Reading::Window => {
-            !manifest.repo_columns.is_empty()
-                || manifest
-                    .badges
-                    .iter()
-                    .any(|it| it.surfaces.contains(&Surface::StatusBar))
-        }
-    }
+            .any(|it| it.surfaces.contains(&reading.surface()))
 }
 
 /// Whether the project (and workspace) has it on — `project::resolve`, the one answer.
@@ -495,10 +524,7 @@ fn read_one(found: &Extension, now: DateTime<Utc>, reading: Reading, facts: &mut
     let badges: Vec<&DeclaredBadge> = manifest
         .badges
         .iter()
-        .filter(|badge| match reading {
-            Reading::Footer => badge.surfaces.contains(&Surface::Footer),
-            Reading::Window => badge.surfaces.contains(&Surface::StatusBar),
-        })
+        .filter(|badge| badge.surfaces.contains(&reading.surface()))
         .collect();
     let columns: &[DeclaredColumn] = match reading {
         Reading::Footer => &[],
@@ -557,14 +583,14 @@ fn read_one(found: &Extension, now: DateTime<Utc>, reading: Reading, facts: &mut
         }
     }
 
-    if let Some(said) = doc.get(badge_word) {
-        let Some(said) = said.as_object() else {
-            facts.notes.push(format!(
-                "{name}'s facts file has '{badge_word}' that is not an object, so no badge of \
-                 its shows"
-            ));
-            return;
-        };
+    let said_badges = doc.get(badge_word).map(serde_json::Value::as_object);
+    if let Some(None) = said_badges {
+        facts.notes.push(format!(
+            "{name}'s facts file has '{badge_word}' that is not an object, so no badge of its \
+             shows"
+        ));
+    }
+    if let Some(Some(said)) = said_badges {
         for (id, field) in said {
             let declared = manifest.badges.iter().find(|it| &it.id == id);
             let Some(declared) = declared else {
@@ -681,7 +707,11 @@ fn cell(field: &serde_json::Value, fresh_seconds: u64, now: DateTime<Utc>) -> Re
         .get("at")
         .and_then(serde_json::Value::as_i64)
         .ok_or("does not say when it was true ('at', in Unix seconds)")?;
-    // A clock a little ahead of charter's is an age of nothing, not a negative one.
+    // A clock a little ahead of charter's is an age of nothing, not a negative one. Further
+    // ahead than that is a value that would never go stale, which is not a status.
+    if at > now.timestamp().saturating_add(MOST_SKEW_SECONDS) {
+        return Err("says it was true in the future".into());
+    }
     let age_seconds = u64::try_from(now.timestamp().saturating_sub(at)).unwrap_or(0);
     Ok(Cell {
         value,
@@ -700,6 +730,8 @@ mod tests {
         assert_eq!(age(3600), "1h");
         assert_eq!(age(15 * 60), "15m");
         assert_eq!(age(3 * 86_400), "3d");
+        // Down, never up: just under an hour is not an hour.
+        assert_eq!(age(3599), "59m");
     }
 
     #[test]
@@ -711,6 +743,13 @@ mod tests {
             (cell.value.as_str(), cell.age_seconds, cell.stale),
             ("3", 0, false)
         );
+    }
+
+    #[test]
+    fn a_value_from_far_in_the_future_is_refused_rather_than_fresh_forever() {
+        let now = DateTime::from_timestamp(1_000, 0).expect("a time");
+        let field = serde_json::json!({"value": 3, "at": 1_000 + 86_400});
+        assert!(cell(&field, 10, now).is_err());
     }
 
     #[test]

@@ -165,7 +165,7 @@ fn a_footer_badge_older_than_its_freshness_is_dimmed_with_its_age() {
         &[("COLUMNS", "80"), ("CHARTER_CONFIG_HOME", config)],
     );
     assert!(
-        ran.out.contains("\u{1b}[2mPRs 4 · 2h old\u{1b}[0m"),
+        ran.out.contains("\u{1b}[2mPRs 4 · 2h ago\u{1b}[0m"),
         "{:?}",
         ran.out
     );

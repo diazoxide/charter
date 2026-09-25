@@ -276,7 +276,7 @@ fn badge_rows(plane: &Path, config: &Path, workspace: &str, now: DateTime<Utc>) 
     use crate::extension::{facts, project::Choices};
     let read = facts::gather(
         config,
-        &Choices::read_in(plane, Some(workspace)),
+        || Choices::read_in(plane, Some(workspace)),
         now,
         facts::Reading::Footer,
     );
@@ -288,7 +288,7 @@ fn badge_rows(plane: &Path, config: &Path, workspace: &str, now: DateTime<Utc>) 
             .map(|badge| {
                 if badge.stale {
                     format!(
-                        "{DIM}{} {} · {} old{R}",
+                        "{DIM}{} {} · {} ago{R}",
                         badge.label,
                         badge.value,
                         facts::age(badge.age_seconds)

@@ -93,6 +93,10 @@ import { useArrived } from "./lib/arrived";
  * push the region's horizontal scroll out past every column it has. `regions.e2e.ts` holds
  * both halves, in a real WebView, because jsdom lays nothing out.
  */
+/** charter's own columns — Repo, Branch, Changes, Worktrees, Pipeline — before any an
+ *  extension adds. */
+const BUILT_IN_COLUMNS = 5;
+
 export function BottomBar({
   workspace,
   state,
@@ -175,7 +179,7 @@ export function BottomBar({
                 </th>
                 {/* Membership without a clone. Said, because a repo the workspace means to
                     hold and nobody has cloned is not the same as one that is not listed. */}
-                <td className="branch none" colSpan={4 + columns.length}>
+                <td className="branch none" colSpan={BUILT_IN_COLUMNS - 1 + columns.length}>
                   not cloned here
                 </td>
               </tr>
@@ -299,7 +303,7 @@ function RepoRows({
         <tr className="worktree-tree-row">
           {/* The whole width, because a tree indented inside one column of five would be
               three characters wide at the window sizes this region is given. */}
-          <td colSpan={5 + columns.length}>
+          <td colSpan={BUILT_IN_COLUMNS + columns.length}>
             <ul className="worktree-tree" data-testid={`worktree-tree-${name}`}>
               {pieces.map((piece) => (
                 <li key={piece.piece}>

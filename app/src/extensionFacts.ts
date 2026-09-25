@@ -46,6 +46,8 @@ export function useExtensionFacts(plane: PlaneId, workspace: string | undefined)
     void commands
       .extensionFacts(plane, workspace ?? null)
       .then((said) => {
+        // An `ok` with no body reads as nothing to show, as `workspaceState.ts` treats one:
+        // the window must not throw inside a promise nothing is holding.
         if (!gone && said.status === "ok") setHeld({ key, facts: said.data ?? NONE });
       })
       .catch(() => undefined);
