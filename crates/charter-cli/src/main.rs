@@ -97,7 +97,7 @@ enum Command {
     #[command(subcommand)]
     Harness(HarnessCommand),
 
-    /// Refresh inventory/repos.json from the plane's forges, then regenerate docs.
+    /// Add what the plane's forges list to inventory/repos.json, then regenerate docs.
     Discover {
         /// Skip per-repo stack detection (faster).
         #[arg(long)]

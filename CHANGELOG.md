@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Pick a workspace's repos when you make it, and change them later.** The new-workspace
+  dialog lists the repos your own `gh` or `glab` login can reach under the plane's forges,
+  private ones included, and clones the ones you tick into the workspace after it is made. Each
+  repo clones on its own, so you can start a chat while they land; one that fails says why and
+  can be tried again. A workspace's settings have a Repos section with the same list: tick to
+  clone, untick to remove. A repo with uncommitted or unpushed work, or a worktree, is never
+  removed from there. If you're not logged in to a forge, the dialog says so and you can still
+  make the workspace. (ADR 0055)
 - **Extensions can add commands to `charter`.** An extension that asks for the `cli`
   capability runs as `charter <its id> <command> …`, from a terminal, a script or a chat. What
   its program prints and its exit status come back unchanged. Each command says whether it
@@ -171,6 +179,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Personas, Vaults and every panel an extension adds. Each heading is a smaller, bolder title
   in brighter text, so it no longer looks like the first row of its list. The left sidebar's
   "Not cloned here" heading matches.
+- **`charter discover` adds to the inventory instead of replacing it.** Engineers on one plane
+  reach different repos, and each run used to drop every repo the last person's login could see
+  and theirs could not. A repo now leaves `inventory/repos.json` only when `[[forge]].exclude`
+  names it. (ADR 0055)
 - The alerts drawer no longer repeats what the title bar's save indicator already says about
   the plane: a plane-root alert there now names only a detached HEAD or a branch other than
   the default. Its remedy, in the drawer and on the terminal status line, now reads "save the
@@ -191,6 +203,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#293](https://github.com/diazoxide/charter-app/issues/293))
 
 ### Fixed
+
+- **A plane with no workspace offers to make one.** The window drew no way to create the first
+  workspace; only the command palette could. The middle of the window now offers "Create a
+  workspace", and the workspace strip with its `+` is always drawn.
+- **A chat outside every workspace starts in the plane, not in `/`.** With no workspace to start
+  in, a chat took the app's own working directory, which is `/` for an app opened from the
+  Finder or the Dock, and so also ran without the plane's vault variables stripped.
 
 - A save that deletes a memory file is no longer refused. The secret check asked for the
   deleted file's staged contents, found none, and stopped the save, so making a workspace LOCAL

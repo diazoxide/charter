@@ -389,6 +389,17 @@ pub fn find<'a>(repos: &'a [Value], wanted: &str) -> Option<&'a Value> {
     })
 }
 
+/// Write `records` into the inventory beside what it already lists, and take nothing out
+/// (ADR 0055). A repo already listed takes its fresher record.
+///
+/// Each operator's forge login reaches different repos, and the file is tracked: a writer that
+/// replaced the list with what ITS login saw would drop every repo only somebody else can
+/// reach. Removing a repo is `[[forge]].exclude`'s job, never the absence of a listing.
+pub fn add(root: &Path, group: &str, records: &[Value]) -> Result<Value, String> {
+    let already = listed(&load(root, group)?);
+    save(root, group, &merge(&[already, records.to_vec()])?)
+}
+
 /// Write the inventory, sorted, with no timestamp: the file is tracked, and a volatile field
 /// would churn history on every run. A derived record is never written. Python's `save`.
 pub fn save(root: &Path, group: &str, records: &[Value]) -> Result<Value, String> {
@@ -428,6 +439,40 @@ mod tests {
 
     fn rec(name: &str, forge: &str, pwn: &str) -> Value {
         json!({"name": name, "forge": forge, "path_with_namespace": pwn})
+    }
+
+    #[test]
+    fn adding_to_the_inventory_keeps_every_repo_it_already_listed() {
+        // Two operators, two logins: the second one's list must not drop the first one's repo.
+        let plane = tempfile::tempdir().unwrap();
+        let root = plane.path();
+        add(root, "acme", &[rec("theirs", "github", "acme/theirs")]).unwrap();
+
+        let doc = add(
+            root,
+            "acme",
+            &[json!({"name": "mine", "forge": "github", "path_with_namespace": "acme/mine"})],
+        )
+        .unwrap();
+
+        let names: Vec<Value> = listed(&doc).iter().map(|r| r["name"].clone()).collect();
+        assert_eq!(names, [json!("mine"), json!("theirs")]);
+        assert_eq!(doc["count"], 2);
+    }
+
+    #[test]
+    fn a_repo_added_again_takes_its_fresher_record() {
+        let plane = tempfile::tempdir().unwrap();
+        let mut old = rec("widget", "github", "acme/widget");
+        old["stack"] = json!("unknown");
+        add(plane.path(), "acme", &[old]).unwrap();
+        let mut fresh = rec("widget", "github", "acme/widget");
+        fresh["stack"] = json!("rust");
+
+        let doc = add(plane.path(), "acme", &[fresh]).unwrap();
+
+        assert_eq!(listed(&doc).len(), 1);
+        assert_eq!(listed(&doc)[0]["stack"], "rust");
     }
 
     #[test]

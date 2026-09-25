@@ -62,6 +62,7 @@ import { LiveDialog, LiveMark } from "./LiveDialog";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { Menued } from "./Menus";
 import { NewWorkspace } from "./NewWorkspace";
+import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
@@ -825,8 +826,8 @@ export function PlaneView({
   // Where a chat starts: **the spot the explorer picked**, and the focused workspace's own
   // directory when nothing is picked — so the sidebar can file it under that workspace.
   // Nothing on the plane records a chat, so where it works is the only thing relating the
-  // two, and a piece of a workspace is still in that workspace. Null — the operator's
-  // home — until a plane is read.
+  // two, and a piece of a workspace is still in that workspace. Null when there is neither,
+  // and the core starts that chat in the plane's own directory.
   const startIn = spot?.path ?? sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
 
   /** What the explorer picks, remembered against the workspace it was picked in. */
@@ -1476,7 +1477,7 @@ export function PlaneView({
    * where the operator is still standing.
    */
   const makeWorkspace = useCallback(
-    async (name: string, vision: string, live: boolean) => {
+    async (name: string, vision: string, live: boolean, repos: string[]) => {
       setBusyMaking(true);
       const answer = await commands
         .workspaceCreate(plane, name, vision.trim() === "" ? null : vision, live)
@@ -1499,6 +1500,25 @@ export function PlaneView({
       // copy of the sidebar, and the strip lands on what was just made: it holds no chats, so
       // `picked` is the only thing that can put the window in it.
       setPicked(name);
+      setReplan((asked) => asked + 1);
+      if (repos.length === 0) return;
+      // The repos land after the workspace, one at a time and each on its own (ADR 0055):
+      // the dialog is closed and the operator can start a chat while they clone.
+      setReport({
+        from: "workspace.create",
+        refused: false,
+        words: `Cloning ${repos.length} repo(s) into ${name}…`,
+      });
+      const failed = await cloneRepos(plane, name, repos);
+      setReport({
+        from: "workspace.create",
+        refused: failed.length > 0,
+        words:
+          failed.length === 0
+            ? `Cloned ${repos.join(", ")} into ${name}.`
+            : `Could not clone ${failed.map((f) => f.repo).join(", ")} into ${name} — ` +
+              `${failed[0].said} Retry from the workspace's settings.`,
+      });
       setReplan((asked) => asked + 1);
     },
     [pinWorkspace, plane],
@@ -2249,7 +2269,9 @@ export function PlaneView({
           `nav[aria-label="Workspaces"]`, and a second landmark by that name is two answers
           to one query — for a screen reader and for every scenario spec that reaches the
           sidebar by it. The tablist is what this is. */}
-      {strips.length > 0 && (
+      {/* Drawn once the plane is read, workspaces or none: its `+` is how the first one is
+          made, so a strip that waited for a workspace hid the way to make one. */}
+      {sidebar !== undefined && (
         <div className="workspaces">
           <RovingFocusGroup.Root asChild orientation="horizontal" {...workspaceStop}>
             <div
@@ -2609,8 +2631,7 @@ export function PlaneView({
                   action={<Doer offer={by("chat.new")} onPress={press} words="Open a chat here" />}
                   testid="empty-workspace"
                 />
-              ) : (
-                /* **The empty window, centred, with a way out** — the operator's own
+              ) : /* **The empty window, centred, with a way out** — the operator's own
                    instruction: *"when opening empty workspace lets make open new tab button on
                    empty page center"*. It was one sentence in the top-left corner of a box the
                    size of the screen, and the thing to do about it was a menu item away.
@@ -2620,6 +2641,31 @@ export function PlaneView({
                    existing if the catalogue stops offering it. A second button with its own
                    label would be the second answer to "how do I start a chat" that
                    `actions.ts` exists to prevent. */
+              sidebar !== undefined && sidebar.workspaces.length === 0 ? (
+                /* **A plane with no workspace yet**: making one is the first thing to do,
+                     and it was reachable only from the palette. Both buttons are catalogue
+                     rows, as the one below is; a chat here starts in the plane itself. */
+                <EmptyState
+                  mark={FolderPlus}
+                  headline="No workspaces yet"
+                  body="A workspace holds the repos you work on and the chats about them."
+                  action={
+                    <>
+                      <Doer
+                        offer={by("workspace.create")}
+                        onPress={press}
+                        words="Create a workspace"
+                      />
+                      <Doer
+                        offer={by("chat.new")}
+                        onPress={press}
+                        words="Open a chat in the plane"
+                      />
+                    </>
+                  }
+                  testid="empty-plane"
+                />
+              ) : (
                 <EmptyState
                   mark={MessageSquarePlus}
                   headline="No chats yet"
@@ -2673,7 +2719,8 @@ export function PlaneView({
           plane={plane}
           trouble={workspaceTrouble}
           making={busyMaking}
-          onCreate={(name, vision, live) => void makeWorkspace(name, vision, live)}
+          planeId={plane}
+          onCreate={(name, vision, live, repos) => void makeWorkspace(name, vision, live, repos)}
           onCancel={() => {
             setMakingWorkspace(false);
             setWorkspaceTrouble(undefined);

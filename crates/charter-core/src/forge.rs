@@ -760,11 +760,47 @@ impl Forge {
         Ok(raw.iter().map(|r| self.normalize(r)).collect())
     }
 
+    /// Every repo under `owner` that the operator logged in to this forge's CLI can reach,
+    /// private ones included — what the workspace repo picker lists (ADR 0055).
+    ///
+    /// Not [`Self::list_repos`]: that asks what `owner` exposes, and GitHub answers that for a
+    /// personal account with its public repos only. This asks as the operator, so two
+    /// operators on one plane are each shown their own list, and nothing is saved.
+    pub fn list_accessible(&self, owner: &str) -> Result<Vec<Value>, ForgeError> {
+        let raw = match self.kind {
+            Kind::GitHub => match self.paged_github(
+                "user/repos?affiliation=owner,collaborator,organization_member",
+                owner,
+                false,
+            ) {
+                Ok(items) => items,
+                Err(Paged::Failed(e)) => return Err(e),
+                Err(Paged::NotAnOrg) => unreachable!("only the org probe says this"),
+            },
+            Kind::GitLab => self.paged_gitlab_at(owner, |page| {
+                format!("projects?membership=true&archived=false&per_page=100&page={page}")
+            })?,
+        };
+        // The forge answers for every owner the operator belongs to; the plane declared one.
+        // A subgroup's repos are under its group's path, so they are kept.
+        let under = format!("{}/", owner.to_lowercase());
+        Ok(raw
+            .iter()
+            .map(|r| self.normalize(r))
+            .filter(|r| {
+                r.get("path_with_namespace")
+                    .and_then(Value::as_str)
+                    .is_some_and(|pwn| pwn.to_lowercase().starts_with(&under))
+            })
+            .collect())
+    }
+
     fn paged_github(&self, base: &str, owner: &str, org_probe: bool) -> Result<Vec<Value>, Paged> {
         let mut out = Vec::new();
         let mut page = 1;
+        let joint = if base.contains('?') { '&' } else { '?' };
         loop {
-            let path = format!("{base}?per_page=100&page={page}");
+            let path = format!("{base}{joint}per_page=100&page={page}");
             let answer = match call(self.kind, &self.api_args(&path), LIST_TIMEOUT) {
                 Ok(answer) => answer,
                 Err(NoAnswer::Timeout(why)) => {
@@ -804,12 +840,23 @@ impl Forge {
 
     fn paged_gitlab(&self, owner: &str) -> Result<Vec<Value>, ForgeError> {
         let enc = quote(owner);
+        self.paged_gitlab_at(owner, |page| {
+            format!(
+                "groups/{enc}/projects?per_page=100&page={page}&include_subgroups=true&archived=false"
+            )
+        })
+    }
+
+    /// Every page of a GitLab listing, `path_of` naming each page's path.
+    fn paged_gitlab_at(
+        &self,
+        owner: &str,
+        path_of: impl Fn(usize) -> String,
+    ) -> Result<Vec<Value>, ForgeError> {
         let mut out = Vec::new();
         let mut page = 1;
         loop {
-            let path = format!(
-                "groups/{enc}/projects?per_page=100&page={page}&include_subgroups=true&archived=false"
-            );
+            let path = path_of(page);
             let batch = self.api_strict(&path, "GitLab API call").map_err(|e| {
                 ForgeError(format!(
                     "listing repos for GitLab group '{owner}' failed: {e}"

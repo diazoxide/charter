@@ -6,6 +6,7 @@ import { extensionsChanged } from "./extensionsOn";
 import { projectThemeChanged, useProjectThemeAnswers } from "./projectTheme";
 import { BUILT_IN, DEFAULT_THEME, inForce, SYSTEM } from "./theme/theme";
 import { hueOf, PALETTE } from "./theme/tint";
+import { WorkspaceRepos } from "./WorkspaceRepos";
 import {
   commands,
   type HarnessPlugin,
@@ -220,7 +221,8 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
  * (charter-app#281): the workspace's pick, read by the same resolver as the project's
  * (`project_theme` for this workspace), and its **colour**. Each extension, each plugin and the
  * theme says which layer decided it — and, when Local was left out, each group says why, once
- * (charter-app#319), as Project settings' do. A form only: the manifest holds more than settings,
+ * (charter-app#319), as Project settings' do. And its **Repos** (ADR 0055): what is cloned in
+ * it, added to and taken from with the new-workspace dialog's picker. A form only: the manifest holds more than settings,
  * and charter keeps the rest.
  */
 export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; workspace: string }) {
@@ -335,6 +337,7 @@ export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; worksp
           </button>
         </div>
       </fieldset>
+      <WorkspaceRepos plane={plane} workspace={workspace} />
       {switching && (
         <LiveDialog
           plane={plane}

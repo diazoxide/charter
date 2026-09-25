@@ -649,7 +649,11 @@ key refuses.
 - **Status:** **stable** — tracked in git, shared across machines, and read by commands,
   `doctor` and the status line.
 - **Written by:** `charter/inventory.py:292` `save` (only writer), called from
-  `charter/commands.py:172` (`charter discover`).
+  `charter/commands.py:172` (`charter discover`). **The Rust charter only adds to it**
+  (ADR 0055): `inventory::add` merges records into what the file lists, `discover` keeps every
+  listed repo its run did not see unless an `exclude` names it, and the app's repo picker adds
+  the repos it clones that the file does not list yet, leaving listed records as they are. The
+  Python replaced the whole list on every `discover`.
 - **Read by:** `charter/inventory.py:71` `load` → `charter/inventory.py:173` `repos`
   (`charter/commands.py:218`, `:366`, `:641`, `:880`; `charter/statusline.py:792`;
   `charter/doctor.py:3674`), and `charter/inventory.py:265` `find`.

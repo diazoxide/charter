@@ -2997,6 +2997,26 @@ h2.sidebar-title .node-icon {
   opacity: 0.6;
 }
 
+/* The repo picker (ADR 0055): a filter and a refresh on one line, and a list that scrolls
+   inside the dialog rather than pushing its buttons off the bottom of the window. */
+.repo-picker-head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.repo-picker-head input {
+  flex: 1;
+}
+
+.repo-picks {
+  max-height: 14rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 /* `.choice`'s own label is a row's name and not a section heading, so it keeps `.choice`'s
    shape rather than taking the one above. */
 .asks .choice label {

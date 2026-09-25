@@ -54,6 +54,7 @@ use std::path::{Path, PathBuf};
 use crate::repocmd::{Say, Sink};
 
 pub mod create;
+pub mod drop;
 pub mod ensure;
 pub mod fork;
 pub mod live;
