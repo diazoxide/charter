@@ -1770,6 +1770,10 @@ export type PlaneSaving = {
 	pushFailed: string | null,
 	/**  The LIVE workspaces, whose charter, memory and todos a save publishes (charter-app#301). */
 	live: string[],
+	/**  The files the last rebase conflicted in, when that is why the save is blocked. */
+	conflicts: string[],
+	/**  What a save cannot do here that is not a block (a PR mode with no forge to open it on). */
+	notice: string | null,
 	/**  `[plane] mode`, or `null` when the plane names none. */
 	mode: string | null,
 	/**

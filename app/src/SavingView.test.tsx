@@ -24,6 +24,8 @@ function standing(over: Partial<PlaneSaving> = {}): PlaneSaving {
     behind: 0,
     pushFailed: null,
     live: [],
+    conflicts: [],
+    notice: null,
     mode: "push",
     modeFrom: "charter.toml",
     journal: [],
@@ -224,5 +226,34 @@ describe("SavingView", () => {
       await screen.findByText("The last push did not land: Could not resolve host: github.com"),
     ).toBeTruthy();
     expect(screen.getByText("1 committed, not pushed")).toBeTruthy();
+  });
+
+  it("offers a blocked save's two ways out, and names where it conflicts", async () => {
+    core([
+      standing({
+        stage: "blocked",
+        blocked: "the remote changed the same lines in: notes.md",
+        conflicts: ["notes.md"],
+      }),
+    ]);
+    const asked: { plane: string; way: string }[] = [];
+    const listen = (event: Event) => asked.push((event as CustomEvent).detail);
+    window.addEventListener("charter-saving-way-out", listen);
+    render(<SavingView plane={PLANE} />);
+
+    const ways = await screen.findByRole("group", { name: "Ways out" });
+    expect(
+      within(within(ways).getByRole("list", { name: "Where it conflicts" }))
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["notes.md"]);
+    await userEvent.click(within(ways).getByRole("button", { name: "Resolve in a chat" }));
+    await userEvent.click(within(ways).getByRole("button", { name: "Open terminal here" }));
+    window.removeEventListener("charter-saving-way-out", listen);
+
+    expect(asked).toEqual([
+      { plane: PLANE, way: "chat" },
+      { plane: PLANE, way: "terminal" },
+    ]);
   });
 });

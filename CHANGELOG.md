@@ -53,6 +53,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   workspace LOCAL stops publishing its files and keeps them on disk; what was already pushed
   stays in history, and the confirmation says so. The new-workspace dialog has a *Live* box,
   unticked by default. ([#301](https://github.com/diazoxide/charter-app/issues/301))
+- **A blocked save shows its way out.** When a save can't go further (a conflict with the
+  remote, a secret the scan caught, a pull request mode on a remote charter can't open pull
+  requests on), the Saving tab says why, names the files a conflict is in, and offers
+  *Resolve in a chat* (the chat picker, starting in the project) or *Open terminal here* (a plain
+  shell in the project). The alerts drawer says so too: at once for a secret, and after ten
+  minutes for anything else.
+- **Fewer conflicts in the first place.** `charter init` and `charter reinit` write a
+  `.gitattributes` block that merges the logs and memory indexes which only ever grow line by
+  line, so two machines adding to the same one no longer conflict.
+  ([#295](https://github.com/diazoxide/charter-app/issues/295))
 - **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,
   on by default) saves by itself: 30 seconds after the last change (`autosave_after`), as soon
   as a chat in it ends, and when you quit. At quit it commits at once and gives the push a few

@@ -6,6 +6,18 @@ import { usePlaneChanged } from "./planeChanged";
  *  the title bar after the Saving tab's button, and the tab after the title bar's. */
 export const PLANE_SAVED = "charter-plane-saved";
 
+/** The window event the Saving tab sends to leave a blocked save (charter-app#295): a chat, or a
+ *  terminal, opened in the plane by the project that holds it. */
+export const WAY_OUT = "charter-saving-way-out";
+
+/** What a way out asks for, and of which project. */
+export type WayOut = { plane: string; way: "chat" | "terminal" };
+
+/** Ask the project `plane` to open a chat or a terminal in its plane. */
+export function askWayOut(plane: string, way: WayOut["way"]): void {
+  window.dispatchEvent(new CustomEvent<WayOut>(WAY_OUT, { detail: { plane, way } }));
+}
+
 /** Say that a save of some project finished. */
 export function tellSaved(): void {
   window.dispatchEvent(new Event(PLANE_SAVED));
