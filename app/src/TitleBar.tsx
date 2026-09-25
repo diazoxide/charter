@@ -88,7 +88,7 @@ export function TitleBar({
 }: {
   /**
    * The project strip (ADR 0054), drawn after the room the window controls take. `App` builds
-   * it, because the strip's rows, its pins and its show-more are the window's. Absent — a
+   * it, because the projects, their pins and the strip's show-more are the window's. Absent — a
    * window holding no project — draws none, and the right-hand end stays at the right.
    */
   projects?: ReactNode;
@@ -149,9 +149,9 @@ export function TitleBar({
     >
       {projects}
       {/* The right-hand end, and the part of the bar that never gives way: the strip before it
-          gives way first. Both controls
-          are about the app rather than the project, which is why they are up here and not on
-          the status line: this bar is the window's. */}
+          gives way first. What is here is about the window rather than one project — the save
+          indicator aside, which is the project in front's — which is why it is up here and not
+          on the status line: this bar is the window's. */}
       <span className="title-bar-doing">
         {/* First, because it is the one of the three that is about the operator's chats and
             not about the app — and it is nothing at all when nothing needs you. */}

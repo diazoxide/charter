@@ -3108,7 +3108,9 @@ button.show-more:focus-visible {
    title bar height whatever this element does, so a bar shorter than that would have them
    overlapping the workspace strip below. No padding above or below, so a project tab's cell
    is the whole height of the bar. `surface.deep` is the theme's colour for the top of the
-   window, which is what the project strip in it uses too — the two read as one frame.
+   window; the project strip in it draws `layer.project`, which both built-in themes set to the
+   same value, so the two read as one frame. A theme that parts them gets a strip a shade apart
+   from the bar around it, which is the depth signal `layer.*` exists to give.
 
    **`--title-bar-drag` is the stretch of bar that is always left to grab.** Width the project
    tabs cannot use is drag region already; this is the least of it, so a window full of

@@ -37,9 +37,9 @@ import { ago } from "./BottomBar";
  *   which is what makes it the frame rather than a tenant. `FourRegions.test.tsx`'s *"cannot be
  *   put away, because it is not a region"* is the guard.
  * - **It is the frame, not a tenant of it.** `nav.projects`, in the title bar, sits above the
- *   regions and is not in the arrangement either. The window is chrome, four regions, chrome; this is the bottom
- *   half of the chrome, and `RegionFrame` is untouched by it — which is also why this change
- *   moved no JSX inside the frame and added no fourth `Panel` to a live group
+ *   regions and is not in the arrangement either. The window is chrome, four regions, chrome;
+ *   this is the bottom half of the chrome, and `RegionFrame` is untouched by it — which is also
+ *   why this change moved no JSX inside the frame and added no fourth `Panel` to a live group
  *   (charter-app#141's throw is a thing to stay away from, not a thing to test against).
  *
  * **What that costs, said rather than hidden:** the line cannot be resized, put away, or moved

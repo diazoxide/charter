@@ -96,11 +96,15 @@ describe("the title bar", () => {
 
   it("names the project the app really opened, on the selected tab of the strip in it", async () => {
     await untilTheStripIsRead();
-    const name = basename(await planeRoot());
+    const root = await planeRoot();
+    const name = basename(root);
 
-    const selected = await $(`${PROJECTS} [role="tab"][aria-selected="true"] .project-name`);
+    // The selected tab carries the project's whole path as its title, and its name is the
+    // directory's.
+    const selected = await $(`${PROJECTS} [aria-selected="true"]`);
     await selected.waitForExist({ timeout: 20_000 });
-    expect(await selected.getText()).toBe(name);
+    expect(await selected.getAttribute("title")).toBe(root);
+    expect(await selected.getText()).toContain(name);
   });
 
   it("leaves a stretch to grab between the project strip and its right-hand end", async () => {
