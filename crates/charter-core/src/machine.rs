@@ -952,8 +952,8 @@ impl Store {
     /// opened before that rule, or opened here for the first time, would draw almost nothing.
     /// This is its one-time arrangement: the workspaces most recently worked in, ranked by
     /// `briefing`'s `last_active` so "most recently active" means what the session-start
-    /// briefing means by it. They are added to whatever the operator pinned already, never in
-    /// place of it.
+    /// briefing means by it. **Only in a plane the operator has pinned nothing in**: one they
+    /// have arranged already is theirs, and it is marked done without a pin added.
     ///
     /// **Once, and recorded** ([`Recent::most_active_pinned`]). An operator who then unpins
     /// everything is not pinned again: a strip that pins and unpins on its own is the moving
@@ -966,6 +966,12 @@ impl Store {
             return false;
         };
         if entry.most_active_pinned {
+            return false;
+        }
+        // The operator has arranged this plane already, and adding to it would be the strip
+        // arranging itself. Spent, so unpinning everything later does not set it off either.
+        if !entry.pinned_workspaces.is_empty() {
+            entry.most_active_pinned = true;
             return false;
         }
         let Ok(names) = crate::workspaces::Plane::open(plane).workspaces() else {
@@ -3366,6 +3372,30 @@ mod tests {
         assert!(!back.pin_the_most_active(&plane));
 
         let (kept, _) = back.pinned_workspaces(&plane, &["alpha", "beta"]);
+        assert!(kept.is_empty(), "{kept:?}");
+    }
+
+    #[test]
+    fn a_plane_the_operator_already_pinned_in_is_left_as_they_arranged_it() {
+        // Their pins are their arrangement. Adding three they did not choose would be the
+        // strip rearranging itself, so the one-time pinning is spent without pinning anything,
+        // and unpinning later does not set it off either.
+        let planes = tempfile::tempdir().unwrap();
+        let plane = a_plane_with_workspaces(
+            &planes.path().join("p"),
+            &[("alpha", 1_000), ("beta", 2_000), ("gamma", 3_000)],
+        );
+        let mut store = Store::default();
+        store.remember(&plane, 1);
+        store.pin_workspace(&plane, "alpha", true).unwrap();
+
+        assert!(!store.pin_the_most_active(&plane));
+        let (kept, _) = store.pinned_workspaces(&plane, &["alpha", "beta", "gamma"]);
+        assert_eq!(kept, ["alpha"]);
+
+        store.pin_workspace(&plane, "alpha", false).unwrap();
+        assert!(!store.pin_the_most_active(&plane));
+        let (kept, _) = store.pinned_workspaces(&plane, &["alpha", "beta", "gamma"]);
         assert!(kept.is_empty(), "{kept:?}");
     }
 
