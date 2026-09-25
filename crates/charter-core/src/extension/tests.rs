@@ -2028,16 +2028,16 @@ fn an_unknown_capability_is_named_in_the_refusal_even_beside_a_known_one() {
     let made = Made::new();
     made.ordinary();
     made.manifest(
-        r#"{"version":1,"id":"solarized","capabilities":["probe","badges"],
+        r#"{"version":1,"id":"solarized","capabilities":["probe","teleport"],
             "contributes":{"themes":[{"name":"Solarized Dark","file":"dark.json"}]}}"#,
     );
     let why = read_at(&made.at()).expect_err("no extension");
     assert!(
-        why.contains("asks for the capability \"badges\", which this charter does not know"),
+        why.contains("asks for the capability \"teleport\", which this charter does not know"),
         "{why}"
     );
     assert!(
-        why.contains("This charter knows probe, palette, actions, writes."),
+        why.contains("This charter knows probe, badges, repo-columns, palette, actions, writes."),
         "{why}"
     );
 }
@@ -2095,14 +2095,12 @@ fn a_capability_s_shape_is_there_exactly_when_the_capability_is_asked_for() {
 
     let why = acting(&made, r#"["writes"]"#, "").expect_err("a capability that does nothing");
     assert!(
-        why.contains(
-            "asks for the capability \"writes\" and declares nothing under 'contributes.writes'"
-        ),
+        why.contains("asks for the capability \"writes\" and declares no 'contributes.writes'"),
         "{why}"
     );
     let why = acting(&made, r#"["palette"]"#, r#","palette":[]"#).expect_err("an empty shape");
     assert!(
-        why.contains("declares nothing under 'contributes.palette'"),
+        why.contains("declares no commands under 'contributes.palette'"),
         "{why}"
     );
 }

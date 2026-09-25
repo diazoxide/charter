@@ -28,6 +28,7 @@ import {
 import { SavingView } from "./SavingView";
 import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
+import { factsChanged } from "./extensionFacts";
 
 /** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
 const WORKSPACE_SETTINGS = "workspace-settings";
@@ -124,9 +125,13 @@ function ask(
   if (out) return out;
   const asking = commands
     .openView(plane, view.from, view.view, view.key, workspace ?? null)
-    .then((said): ViewAnswerOrRefusal =>
-      said.status === "error" ? { refused: said.error } : { answer: said.data },
-    )
+    .then((said): ViewAnswerOrRefusal => {
+      if (said.status === "error") return { refused: said.error };
+      // An extension rewrites its facts file whenever it answers (charter-app#340), so its
+      // badges and repo cells are read again now.
+      if (view.from !== null) factsChanged(plane);
+      return { answer: said.data };
+    })
     .catch((err: unknown): ViewAnswerOrRefusal => ({ refused: String(err) }))
     .finally(() => inFlight.delete(key));
   inFlight.set(key, asking);

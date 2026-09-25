@@ -94,7 +94,9 @@
 //!
 //! A manifest's `version` is the protocol its program speaks, and its `capabilities` list is
 //! what it asks charter to do for it beyond what follows ([`capability`], ADR 0053). A word in
-//! that list this charter does not know refuses the whole manifest, by name.
+//! that list this charter does not know refuses the whole manifest, by name. Badges and repo
+//! columns ([`facts`]) are declared data too: charter draws them from a facts file in the
+//! state directory and never starts the program to do it.
 //!
 //! Themes, panels (`crate::panel`, ADR 0043), and **views**. A theme and a panel are
 //! declarative data against a closed vocabulary charter owns, charter chooses the consumer, and
@@ -164,6 +166,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub mod acting;
 pub mod capability;
+pub mod facts;
 pub mod project;
 pub mod writes;
 
@@ -359,6 +362,11 @@ pub struct Manifest {
     /// The plane paths it declares it writes, as plane-relative globs ([`writes`], the `writes`
     /// capability) — handed resolved with each request, and watched, never enforced.
     pub writes: Vec<String>,
+    /// The status badges it declares (the `badges` capability, [`facts`]): drawn from its facts
+    /// file, never by starting its program.
+    pub badges: Vec<facts::DeclaredBadge>,
+    /// The repo-table columns it declares (the `repo-columns` capability, [`facts`]).
+    pub repo_columns: Vec<facts::DeclaredColumn>,
 }
 
 /// One setting an extension declares: a key a project sets in `[extensions.<id>.settings]`.
@@ -989,7 +997,49 @@ fn parse(text: &str) -> Result<Manifest, String> {
         Some(value) => views_of(value, program.as_deref())?,
     };
 
-    if themes.is_empty() && panels.is_empty() && views.is_empty() && program.is_none() {
+    // **A capability's shape is in `contributes` under its own word, and the two come as a
+    // pair** (ADR 0053): a shape whose capability is not listed would be a contribution the
+    // prompt never named, and a listed capability that declares nothing is a yes to nothing.
+    for capability in Capability::known() {
+        if !capability.has_shape() {
+            continue;
+        }
+        let word = capability.as_str();
+        match (
+            capabilities.contains(&capability),
+            contributes.contains_key(word),
+        ) {
+            (false, true) => {
+                return Err(format!(
+                    "declares 'contributes.{word}' without asking for the capability \"{word}\" \
+                     in 'capabilities', so you would be approving it without being told"
+                ));
+            }
+            (true, false) => {
+                return Err(format!(
+                    "asks for the capability \"{word}\" and declares no 'contributes.{word}', \
+                     so there is nothing it would do"
+                ));
+            }
+            _ => {}
+        }
+    }
+    let badges = match contributes.get(Capability::Badges.as_str()) {
+        None => Vec::new(),
+        Some(value) => facts::badges_of(value)?,
+    };
+    let repo_columns = match contributes.get(Capability::RepoColumns.as_str()) {
+        None => Vec::new(),
+        Some(value) => facts::columns_of(value)?,
+    };
+
+    if themes.is_empty()
+        && panels.is_empty()
+        && views.is_empty()
+        && program.is_none()
+        && badges.is_empty()
+        && repo_columns.is_empty()
+    {
         return Err("declares no contributions, so there is nothing to consent to".into());
     }
     if themes.len() + usize::from(program.is_some()) > MOST_DECLARED_FILES {
@@ -1045,35 +1095,21 @@ fn parse(text: &str) -> Result<Manifest, String> {
         }
     };
 
+    // The facts file lives in the state directory, so a badge or a column with none has
+    // nowhere to be filled from.
+    if (!badges.is_empty() || !repo_columns.is_empty()) && state.is_none() {
+        return Err(format!(
+            "declares badges or repo columns and names no state directory ('state'), which is \
+             where its facts file ({}) is",
+            facts::FILE
+        ));
+    }
+
     let settings = match doc.get("settings") {
         None => Vec::new(),
         Some(value) => settings_of(value, program.as_deref())?,
     };
 
-    // **A capability's shape is under its own word, and is there exactly when the word is asked
-    // for** (ADR 0053). A shape with no word asks charter for something the operator is never
-    // told it asks for; a word with no shape asks for a capability that does nothing.
-    for capability in Capability::known().into_iter().filter(|it| it.shaped()) {
-        let word = capability.as_str();
-        let declares = contributes
-            .get(word)
-            .is_some_and(|value| value.as_array().is_none_or(|list| !list.is_empty()));
-        match (capabilities.contains(&capability), declares) {
-            (true, false) => {
-                return Err(format!(
-                    "asks for the capability \"{word}\" and declares nothing under \
-                     'contributes.{word}'"
-                ));
-            }
-            (false, true) => {
-                return Err(format!(
-                    "declares 'contributes.{word}' without asking for the capability \"{word}\" \
-                     in its 'capabilities', so the operator would never be told it asks for it"
-                ));
-            }
-            _ => {}
-        }
-    }
     let actions = match contributes.get("actions") {
         None => Vec::new(),
         Some(value) => acting::actions_of(value, program.as_deref())?,
@@ -1101,6 +1137,8 @@ fn parse(text: &str) -> Result<Manifest, String> {
         actions,
         palette,
         writes,
+        badges,
+        repo_columns,
     })
 }
 
@@ -2307,6 +2345,8 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         .iter()
         .map(|capability| capability.asks())
         .collect();
+    // What each capability with a shape declares, right after the capabilities themselves.
+    declares.extend(facts::declares(&found.manifest));
     declares.extend(
         found
             .manifest

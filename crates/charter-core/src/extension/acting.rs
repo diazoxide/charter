@@ -83,6 +83,13 @@ pub(super) fn actions_of(
     let list = value
         .as_array()
         .ok_or("has a 'contributes.actions' that is not an array")?;
+    if list.is_empty() {
+        return Err(
+            "declares no actions under 'contributes.actions', so there is nothing it \
+                    would do"
+                .into(),
+        );
+    }
     if program.is_none() {
         return Err(
             "declares actions and no program ('runs') to run them, so charter would draw \
@@ -146,6 +153,13 @@ pub(super) fn palette_of(
     let list = value
         .as_array()
         .ok_or("has a 'contributes.palette' that is not an array")?;
+    if list.is_empty() {
+        return Err(
+            "declares no commands under 'contributes.palette', so there is nothing it \
+                    would add"
+                .into(),
+        );
+    }
     if list.len() > MOST_COMMANDS {
         return Err(format!(
             "declares {} palette commands, and charter adds at most {MOST_COMMANDS} from one \

@@ -23,6 +23,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   extension. That is a report, not a fence: an extension still runs as you. The protocol is now
   2; an extension written for protocol 1 is asked exactly as before and keeps its approval.
   ([#341](https://github.com/diazoxide/charter-app/issues/341))
+- **Extensions can show badges and repo columns.** An extension that asks for the `badges`
+  capability can show values in the status bar and in `charter statusline`'s footer, and one
+  that asks for `repo-columns` can add columns to the repo table in the bottom bar. It declares
+  each one in its manifest, with how long a value stays fresh, and the approval dialog lists
+  them. The values come from a facts file the extension keeps in its state directory, and
+  charter never starts the extension's program to draw them. A value older than its freshness
+  is dimmed and shows its age. A facts file that is too big, isn't JSON, or fills something the
+  manifest didn't declare shows nothing and says why. So does an extension that changed since
+  you approved it. Turning an extension off for a project or a workspace hides its badges and
+  columns there. ([#340](https://github.com/diazoxide/charter-app/issues/340))
 - **Every open project says whether it has unsaved work.** A dot on a project's tab marks work
   a save would take, or a save that is blocked (red), so a project behind the one in front is
   not where work is forgotten. Each project keeps its own save state and its own auto-save,
@@ -31,8 +41,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **An extension says which capabilities it asks for.** An extension's `charter-extension.json`
   can list them in `capabilities`. The approval dialog and the Extensions list name each one,
   and changing the list asks you again. An extension that asks for a capability this charter
-  doesn't know is refused as a whole, with a sentence naming it. Each capability arrives in a
-  change of its own. An extension with no `capabilities` loads exactly as
+  doesn't know is refused as a whole, with a sentence naming it. Each capability arrives in
+  its own change. An extension with no `capabilities` loads exactly as
   before and keeps its approval. `version` in the manifest is now the protocol its program
   speaks. ([#338](https://github.com/diazoxide/charter-app/issues/338))
 - **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,

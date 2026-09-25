@@ -59,6 +59,9 @@ pub(super) fn writes_of(value: &serde_json::Value) -> Result<Vec<String>, String
     let list = value
         .as_array()
         .ok_or("has a 'contributes.writes' that is not an array of plane paths")?;
+    if list.is_empty() {
+        return Err("declares no plane paths under 'contributes.writes'".into());
+    }
     if list.len() > MOST_WRITES {
         return Err(format!(
             "declares {} write paths, and charter lists at most {MOST_WRITES} from one extension",

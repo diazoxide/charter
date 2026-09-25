@@ -37,6 +37,14 @@ pub enum Capability {
     /// any change outside them reported after it (charter-app#341, protocol 2). Declared under
     /// `contributes.writes`.
     Writes,
+    /// Status badges: values from the extension's facts file, drawn in the app's status bar
+    /// and in `charter statusline`'s terminal footer without starting its program
+    /// ([`super::facts`], charter-app#340). Its shape is `contributes.badges`.
+    Badges,
+    /// Extra columns in the bottom bar's repo table, filled per repo from the same facts file,
+    /// shown only while the extension is on for that project or workspace (ADR 0048). Its shape
+    /// is `contributes.repo-columns`.
+    RepoColumns,
 }
 
 impl Capability {
@@ -62,6 +70,15 @@ impl Capability {
                  question and tells you when anything outside them changed while it answered — \
                  it reports, it does not stop it",
             ),
+            Self::Badges => (
+                "badges",
+                "charter draws values from its facts file as badges in the status bar and the \
+                 terminal footer",
+            ),
+            Self::RepoColumns => (
+                "repo-columns",
+                "charter draws values from its facts file as columns in the repo table",
+            ),
         }
     }
 
@@ -69,15 +86,9 @@ impl Capability {
     /// `version` is refused rather than asked a question it was not written to read (ADR 0053).
     pub fn since(self) -> u32 {
         match self {
-            Self::Probe | Self::Palette => 1,
+            Self::Probe | Self::Badges | Self::RepoColumns | Self::Palette => 1,
             Self::Actions | Self::Writes => 2,
         }
-    }
-
-    /// Whether it declares a shape under `contributes.<word>` — and so must, and whether a
-    /// `contributes.<word>` in a manifest that does not ask for it is refused (ADR 0053).
-    pub fn shaped(self) -> bool {
-        !matches!(self, Self::Probe)
     }
 
     /// The word a manifest writes.
@@ -91,13 +102,28 @@ impl Capability {
         if crate::fence::FENCED {
             known.push(Self::Probe);
         }
-        known.extend([Self::Palette, Self::Actions, Self::Writes]);
+        known.extend([
+            Self::Badges,
+            Self::RepoColumns,
+            Self::Palette,
+            Self::Actions,
+            Self::Writes,
+        ]);
         known
     }
 
     /// The capability `word` names, if this build knows it.
     pub fn parse(word: &str) -> Option<Self> {
         Self::known().into_iter().find(|it| it.as_str() == word)
+    }
+
+    /// Whether it declares a shape in `contributes`, under its own word (ADR 0053). One that
+    /// does must declare one, and a shape under its word is refused without it.
+    pub fn has_shape(self) -> bool {
+        match self {
+            Self::Probe => false,
+            Self::Badges | Self::RepoColumns | Self::Palette | Self::Actions | Self::Writes => true,
+        }
     }
 
     /// What the approval prompt says about it, in charter's words.
@@ -137,19 +163,15 @@ pub(super) fn declared(value: &serde_json::Value) -> Result<Vec<Capability>, Str
 }
 
 /// The refusal of `word`, saying what this build knows instead. `known` is a parameter so that
-/// the sentence a release build says — which knows no capability, and which no fenced test
+/// the sentence a release build says — which does not know `probe`, and which no fenced test
 /// build can be — is tested too.
 fn unknown(word: &str, known: &[Capability]) -> String {
     let known: Vec<&str> = known.iter().map(|it| it.as_str()).collect();
     format!(
         "asks for the capability \"{}\", which this charter does not know, so it loads none of \
-         this extension. {} A newer charter may know it.",
+         this extension. This charter knows {}. A newer charter may know it.",
         crate::shown::readable(word, MOST_WORD_SHOWN),
-        if known.is_empty() {
-            "This charter grants no capabilities yet.".to_owned()
-        } else {
-            format!("This charter knows {}.", known.join(", "))
-        }
+        known.join(", ")
     )
 }
 
@@ -158,12 +180,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_release_build_refuses_every_word_and_says_it_grants_none_yet() {
+    fn a_release_build_names_the_words_it_knows_and_not_the_test_one() {
         assert_eq!(
-            unknown("badges", &[]),
-            "asks for the capability \"badges\", which this charter does not know, so it loads \
-             none of this extension. This charter grants no capabilities yet. A newer charter \
-             may know it."
+            unknown("teleport", &[Capability::Badges, Capability::RepoColumns]),
+            "asks for the capability \"teleport\", which this charter does not know, so it \
+             loads none of this extension. This charter knows badges, repo-columns. A newer \
+             charter may know it."
         );
     }
 
@@ -172,5 +194,14 @@ mod tests {
         let said = unknown(&"x".repeat(10_000), &[Capability::Probe]);
         assert!(said.len() < 300, "{said}");
         assert!(said.contains("This charter knows probe."), "{said}");
+    }
+
+    #[test]
+    fn a_release_build_knows_badges_and_repo_columns() {
+        assert_eq!(Capability::parse("badges"), Some(Capability::Badges));
+        assert_eq!(
+            Capability::parse("repo-columns"),
+            Some(Capability::RepoColumns)
+        );
     }
 }

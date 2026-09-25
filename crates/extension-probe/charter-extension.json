@@ -2,7 +2,8 @@
   "version": 2,
   "id": "extension-probe",
   "name": "Extension probe",
-  "capabilities": ["probe", "palette", "actions", "writes"],
+  "capabilities": ["probe", "badges", "repo-columns", "palette", "actions", "writes"],
+  "state": "state",
   "contributes": {
     "runs": "bin/extension-probe",
     "views": [
@@ -10,6 +11,21 @@
         "id": "probe",
         "title": "Probe",
         "about": "personas"
+      }
+    ],
+    "badges": [
+      {
+        "id": "asked",
+        "label": "asked",
+        "surfaces": ["status-bar", "footer"],
+        "fresh_seconds": 3600
+      }
+    ],
+    "repo-columns": [
+      {
+        "id": "asked",
+        "title": "Asked",
+        "fresh_seconds": 3600
       }
     ],
     "actions": [
