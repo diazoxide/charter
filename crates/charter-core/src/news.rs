@@ -672,7 +672,7 @@ pub fn unreadable() -> Vec<String> {
 /// A staged entry was never released, so it has no tag, and it is linked at that repository's
 /// branch exactly as the Python charter links it — the render is a preview nobody publishes, and
 /// the differential compares it byte for byte with the oracle's.
-pub const HISTORY_REPO: &str = "diazoxide/charter";
+pub const HISTORY_REPO: &str = "diazoxide/charter-plane";
 /// See [`HISTORY_REPO`].
 pub const HISTORY_BRANCH: &str = "main";
 
@@ -1840,7 +1840,7 @@ mod tests {
         let released = entry("0.60.0-x.md", "---\nversion: 0.60.0\nheadline: h\n---\nb\n");
         assert_eq!(
             entry_url(&released),
-            "https://github.com/diazoxide/charter/blob/v0.60.0/docs/news/0.60.0-x.md"
+            "https://github.com/diazoxide/charter-plane/blob/v0.60.0/docs/news/0.60.0-x.md"
         );
         let staged = entry(
             "unreleased-x.md",
@@ -1848,7 +1848,7 @@ mod tests {
         );
         assert_eq!(
             entry_url(&staged),
-            "https://github.com/diazoxide/charter/blob/main/docs/news/unreleased-x.md"
+            "https://github.com/diazoxide/charter-plane/blob/main/docs/news/unreleased-x.md"
         );
         // A filename that would forge a link in charter's own sentence is percent-encoded.
         let nasty = entry(

@@ -46,7 +46,7 @@ rather than a nice-to-have.
 Each of the four this decision rests on was re-read for this document. Three say what the brief
 for this work said they say. One does not, and the difference matters.
 
-**[ADR 0022](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md) — a harness profile is
+**[ADR 0022](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md) — a harness profile is
 machine-local so that a committed file cannot decide how a chat launches.** Correct, and the
 reason is worth quoting because it transfers wholesale: *"Between pressing `+` and `os.execvpe`
 there is no harness permission prompt, no tool call a guard could deny, nothing that shows a

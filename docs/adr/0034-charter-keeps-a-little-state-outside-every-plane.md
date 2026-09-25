@@ -14,7 +14,7 @@ record exists to bend it on purpose, with a stated limit, rather than to have it
 Two places in charter already answer this question, and they answer it in opposite directions.
 Both were right, and the difference between them is the rule.
 
-[ADR 0022](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md) considered **"a per-user
+[ADR 0022](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md) considered **"a per-user
 `~/.config/charter` file"** for harness profiles and rejected it in one line, as the operator's
 call: *"profiles are per plane and per machine, and a plane's own directory is where its other
 configuration is."* Machine-local there means `charter.local.toml`, beside `charter.toml`, inside
@@ -25,7 +25,7 @@ left the plane.
 under `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, as
 `charter/reporting-consent` — **"Not STATE_DIR: that is per control plane, so a Reporter with
 several planes would be asked repeatedly until the safeguard became a reflex."**
-[ADR 0003](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0003-no-unattended-publish.md) records the same sentence as a consequence: filing
+[ADR 0003](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0003-no-unattended-publish.md) records the same sentence as a consequence: filing
 consent is "asked once per human and stored in user-level config".
 
 **So this is the second such file, not the first**, and the claim that charter has never stored

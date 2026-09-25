@@ -25,7 +25,7 @@
 //! Nothing here runs a subprocess except [`ignore_check`], which runs one `git status` and
 //! only where a person asked.
 //!
-//! [ADR 0022]: https://github.com/diazoxide/charter/blob/main/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md
+//! [ADR 0022]: https://github.com/diazoxide/charter-plane/blob/main/docs/adr/0022-a-harness-profile-belongs-to-one-machine.md
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

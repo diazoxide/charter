@@ -79,7 +79,7 @@ operator gave for this whole product is **Zed**, by name —
 [ADR 0033](0033-a-plane-is-a-project-and-a-window-may-hold-several.md) records the same reference
 deciding the project tab. charter-app is a terminal emulator with fifty sessions in it, a
 three-deep tablist stack, a repo strip and a footer whose own ADR budgets it in *columns* —
-[ADR 0019](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0019-the-frame-owns-the-surface.md)'s `slots._bottom` drops whole fields when it runs out of
+[ADR 0019](https://github.com/diazoxide/charter-plane/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0019-the-frame-owns-the-surface.md)'s `slots._bottom` drops whole fields when it runs out of
 width. Material's density, its touch targets, its elevation and its type scale are all correct for
 the product it was designed for and all wrong for this one. Adopting it means fighting it on every
 surface, which is the failure mode priority 2 exists to prevent: a standard tool used the way it

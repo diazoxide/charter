@@ -48,7 +48,7 @@
 //! One `charter workspace use` closes it for that chat, permanently, by writing the rung
 //! above. The whole of it — the ruling, the cost and the alternative not taken — is
 //! `docs/adr/0032-the-rust-charter-does-not-read-the-frames-launch-record.md` in
-//! `diazoxide/charter`, where every ADR from 0025 lives (charter-app#74).
+//! `diazoxide/charter-plane`, where every ADR from 0025 lives (charter-app#74).
 //!
 //! # The persona ladder
 //!

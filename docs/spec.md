@@ -1,10 +1,10 @@
 # charter-app — one desktop app for running tons of harness sessions in parallel
 
-> Moved here from diazoxide/charter's `docs/superpowers/specs/2026-09-17-charter-app.md` (at commit `0ae0961d`) by
+> Moved here from diazoxide/charter-plane's `docs/superpowers/specs/2026-09-17-charter-app.md` (at commit `0ae0961d`) by
 > [ADR 0044](adr/0044-charter-apps-design-record-lives-in-charter-app.md). The text is unchanged.
 > A path it names that is not in this repository — `docs/research/…`, `docs/superpowers/…`,
 > `charter/*.py`, an ADR numbered below 0025 — is in
-> [diazoxide/charter](https://github.com/diazoxide/charter/tree/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7).
+> [diazoxide/charter-plane](https://github.com/diazoxide/charter-plane/tree/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7).
 
 **Status:** agreed 2026-09-17, amended 2026-09-18 (decisions 14-17 and the milestones: no Python in the app at any milestone) in a grill between the operator and the `steward` persona
 (workspace `ide`), and amended the same day when the operator reordered the priorities (below).

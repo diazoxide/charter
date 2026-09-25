@@ -4,10 +4,10 @@
 //! **The app depends on no charter it did not ship** (operator ruling, 2026-09-23: "charter-app
 //! should be standalone application without any dependency from old charter"). Until this, a
 //! Claude chat was refused unless the Python charter's `charter@charter` plugin was installed
-//! from the `diazoxide/charter` marketplace — a git clone over the network at the first launch,
-//! and a refusal of every chat on a machine that was offline. Now the bundle carries its own
-//! plugin, named [`NAME`], and every chat the app starts loads it for that session alone with
-//! `claude --plugin-dir`. Nothing is installed, nothing is written into a config folder, and a
+//! from the `diazoxide/charter-plane` marketplace — a git clone over the network at the first
+//! launch, and a refusal of every chat on a machine that was offline. Now the bundle carries its
+//! own plugin, named [`NAME`], and every chat the app starts loads it for that session alone
+//! with `claude --plugin-dir`. Nothing is installed, nothing is written into a config folder, and a
 //! `claude` the operator runs in a terminal is untouched.
 //!
 //! # Measured on claude 2.1.280, with a throwaway `CLAUDE_CONFIG_DIR` and a stand-in API

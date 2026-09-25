@@ -3,13 +3,16 @@
 charter as one cross-platform desktop app: run tons of harness sessions (Claude Code, Codex) in
 parallel, across workspaces and repos, and always know which one needs you.
 
+Before 2026-09, `diazoxide/charter` meant the plane repo, now
+[`diazoxide/charter-plane`](https://github.com/diazoxide/charter-plane).
+
 This is the rebuild decided in [ADR 0025](docs/adr/0025-charter-is-rebuilt-as-a-desktop-app-on-a-rust-core.md),
 and it stands alone: nothing it ships needs the Python charter it replaces. The spec, with its
 milestones and acceptance limits, is [`docs/spec.md`](docs/spec.md); the decisions since are in
 [`docs/adr/`](docs/adr/), and the plane's on-disk format is
 [`docs/plane-format.md`](docs/plane-format.md). All three moved here from
-[diazoxide/charter](https://github.com/diazoxide/charter), where ADRs 0001 to 0024 stay as
-history ([ADR 0044](docs/adr/0044-charter-apps-design-record-lives-in-charter-app.md)).
+[diazoxide/charter-plane](https://github.com/diazoxide/charter-plane), where ADRs 0001 to 0024
+stay as history ([ADR 0044](docs/adr/0044-charter-apps-design-record-lives-in-charter-app.md)).
 `charter version` is the app's version ([ADR 0045](docs/adr/0045-charters-version-is-the-apps-version.md)).
 
 **Status:** M0, walking skeleton. Not usable yet.
