@@ -2144,6 +2144,8 @@ fn reading_where_unsaved_work_sits_never_writes_the_index_a_save_needs() {
     assert_eq!(
         std::fs::metadata(&index).unwrap().modified().unwrap(),
         before
+    );
+}
 
 // --------------------------------------------------------------------------------------- //
 // the blocked state and its ways out (charter-app#295)                                      //
