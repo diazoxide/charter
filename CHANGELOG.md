@@ -44,6 +44,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the project tab's menu and in the palette, as *Saving…*. The button runs the same save as
   `charter save`, so both follow `[plane] mode`.
   ([#294](https://github.com/diazoxide/charter-app/issues/294))
+- **Project settings has Plane and Repos sections.** Both files, Shared (`charter.toml`) and
+  Local (`charter.local.toml`), now have a **Plane** group — mode, target branch, save branch,
+  signing, auto-save and how long auto-save waits — and a **Repos** group with the same keys
+  (bar the save branch) for every repo in `inventory/repos.json`. Beside each control is what
+  the project actually uses and which file decided it, and a Shared value that Local overrides
+  says so. A value charter would not read is refused on save, in the words `charter doctor`
+  uses. The old `[memory] share` choice moved into the Shared Plane group, marked as the
+  deprecated stand-in for Mode, and it says whether it is in force or a Mode set in either
+  file wins. The rest of the old Plane group, `[plane] worktrees` included, is now called
+  General.
+  ([#300](https://github.com/diazoxide/charter-app/issues/300))
 
 ### Changed
 
