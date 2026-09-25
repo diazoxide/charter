@@ -59,7 +59,7 @@ impl Tokens {
 
     /// A stream: the run's directories as tokens and the app's version as `<app-version>`.
     pub fn stream(&self, text: &str) -> String {
-        self.paths(text).replace(self.version, VERSION)
+        version_as_token(&self.paths(text), self.version)
     }
 
     /// The inverse of [`Tokens::paths`], for what the fixture says to lay down or run.
@@ -81,6 +81,63 @@ impl Tokens {
         let data = replace_bytes(data, SIDE.as_bytes(), self.side.as_bytes());
         replace_bytes(&data, SCRATCH.as_bytes(), self.scratch.as_bytes())
     }
+}
+
+/// `text` with each standalone `version` as `<app-version>`. Standalone means not inside
+/// another version or identifier: a fixture's own `gsc-mcp==0.3.0` is a different package's
+/// pin, and on the release that shares its number it must stay as recorded.
+fn version_as_token(text: &str, version: &str) -> String {
+    let joined = |c: char| c.is_ascii_alphanumeric() || "=.-+@".contains(c);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(version) {
+        let before = rest[..at].chars().next_back().or(out.chars().next_back());
+        let after = &rest[at + version.len()..];
+        let mut next = after.chars();
+        let continues = match next.next() {
+            Some('.') => next.next().is_some_and(|c| c.is_ascii_digit()),
+            Some(c) => c.is_ascii_alphanumeric(),
+            None => false,
+        };
+        out.push_str(&rest[..at]);
+        if before.is_some_and(joined) || continues {
+            out.push_str(version);
+        } else {
+            out.push_str(VERSION);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Checked before any scenario runs: this runner is not libtest's, so a `#[test]` here would never run.
+pub fn only_the_apps_own_version_becomes_the_token() {
+    let v = "0.3.0";
+    assert_eq!(
+        version_as_token("charter    0.3.0\n", v),
+        "charter    <app-version>\n"
+    );
+    assert_eq!(
+        version_as_token("version = \"0.3.0\"", v),
+        "version = \"<app-version>\""
+    );
+    assert_eq!(
+        version_as_token("charter 0.3.0.", v),
+        "charter <app-version>."
+    );
+    assert_eq!(
+        version_as_token("uvx gsc-mcp==0.3.0  type", v),
+        "uvx gsc-mcp==0.3.0  type"
+    );
+    assert_eq!(
+        version_as_token("10.3.0 0.3.0.1 v0.3.0", v),
+        "10.3.0 0.3.0.1 v0.3.0"
+    );
+    assert_eq!(
+        version_as_token("charter 0.3.0-dev.4", v),
+        "charter <app-version>-dev.4"
+    );
 }
 
 fn replace_bytes(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {

@@ -11,6 +11,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-25
+
+0.3.0 is about extensions you can act through and workspaces that carry their repos. An
+extension can now add commands to `charter`, palette entries and row actions, hear what happens
+and add to a chat's briefing, and show badges and repo columns, each capability named in the
+approval dialog; persona statistics ships built in. A workspace picks its repos when you make it
+and saves each one by its own mode, and a project says what is not saved yet and carries its
+commits on. It is also the first release from the repository's new name, `diazoxide/charter`,
+and charter's own plugin is now called `charter`.
+
 ### Added
 
 - **Pick a workspace's repos when you make it, and change them later.** The new-workspace
@@ -175,6 +185,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **charter lives at `diazoxide/charter`.** The repository that was `diazoxide/charter-app` took
+  the name, and the plane that held it before is `diazoxide/charter-plane`. Updates, releases and
+  issues come from the new name; a build from before reaches them through GitHub's redirect.
+  (ADR 0056)
 - **charter's own plugin is called `charter`.** Its skills are `charter:handoff`,
   `charter:update` and `charter:working-in-a-clone`, and a chat loads it as `charter@inline`.
   It was `charter-app`. A persona whose `skills:` lists a `charter-app:` skill needs it
@@ -663,7 +677,8 @@ and every settings group that it would have changed says so.
 - No program charter starts can hold a chat's terminal open after the chat ends.
   ([#105](https://github.com/diazoxide/charter/pull/105))
 
-[Unreleased]: https://github.com/diazoxide/charter/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/diazoxide/charter/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/diazoxide/charter/releases/tag/v0.3.0
 [0.2.0]: https://github.com/diazoxide/charter/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/diazoxide/charter/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/diazoxide/charter/releases/tag/v0.1.0
