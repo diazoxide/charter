@@ -1,3 +1,4 @@
+import { LiveDialog } from "./LiveDialog";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { LoaderCircle } from "lucide-react";
@@ -224,6 +225,8 @@ export function ProjectSettings({ plane }: { plane: PlaneId }) {
  */
 export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; workspace: string }) {
   const [file, setFile] = useState<OneWorkspace | { trouble: string }>();
+  /** Whether the LIVE/LOCAL confirmation is open (charter-app#301). */
+  const [switching, setSwitching] = useState(false);
   const [extensions, setExtensions] = useState<ProjectExtensions>(NO_EXTENSIONS);
   const [theme, setTheme] = useState<ProjectTheme>();
   const [harnesses, setHarnesses] = useState<HarnessPlugins[]>([]);
@@ -313,6 +316,36 @@ export function WorkspaceSettings({ plane, workspace }: { plane: PlaneId; worksp
         workspace refines its project for the team, and this machine has the last word. Never put a
         secret here: keep it in a vault and name it as <code>vault:&lt;vault&gt;/&lt;key&gt;</code>.
       </p>
+      {/* LIVE or LOCAL (charter-app#301): the same confirmation as the workspace's menu row. */}
+      <fieldset className="settings-group" aria-label="Live">
+        <legend>Live</legend>
+        <p className="settings-who">
+          {file.live
+            ? "LIVE: its charter, memory and todos are published with the plane."
+            : "LOCAL: its charter, memory and todos stay on this machine."}
+        </p>
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="panel-view"
+            tabIndex={0}
+            onClick={() => setSwitching(true)}
+          >
+            {file.live ? "Make local…" : "Make live…"}
+          </button>
+        </div>
+      </fieldset>
+      {switching && (
+        <LiveDialog
+          plane={plane}
+          workspace={workspace}
+          onClose={() => setSwitching(false)}
+          onDone={() => {
+            setSwitching(false);
+            saved();
+          }}
+        />
+      )}
       <Section
         file={file}
         testid="settings-workspace"

@@ -217,6 +217,9 @@ export type Does =
   /** Opens that workspace's Workspace settings tab (charter-app#280), on that workspace's strip.
    *  It writes nothing by itself: a save is the tab's, through the core's own checks. */
   | { verb: "openWorkspaceSettings"; workspace: string }
+  /** Asks whether to make that workspace LIVE or LOCAL (charter-app#301): a confirmation that
+   *  says what it publishes and where. Nothing changes until it is answered. */
+  | { verb: "switchLive"; workspace: string }
   /** Opens the Preferences tab (charter-app#283) — this machine's text sizes — on the project
    *  in front. It writes nothing by itself: a size is changed on the tab, or by its keys. */
   | { verb: "openPreferences" }
@@ -270,6 +273,8 @@ export type Now = {
   tabs: Tabs;
   /** The plane's workspaces, in the order the sidebar lists them. */
   workspaces: readonly string[];
+  /** The ones that are LIVE (charter-app#301): published with the plane. */
+  live?: readonly string[];
   /** The workspace the panels are showing. */
   focused?: string;
   /** Where the chat in front is working, when it is working in a charter worktree. */
@@ -418,6 +423,8 @@ export type Doing = {
   openSaving: (plane: string) => void;
   /** Opens that workspace's settings tab on its strip, or brings forward the one already open. */
   openWorkspaceSettings: (workspace: string) => void;
+  /** Asks whether to make that workspace LIVE or LOCAL, in a confirmation. */
+  switchLive: (workspace: string) => void;
   /** Opens the Preferences tab, or brings forward the one already open. */
   openPreferences: () => void;
   quit: () => void;
@@ -763,6 +770,19 @@ export function catalogue(now: Now): Offer[] {
         workspace,
       }),
       note: `${workspace}: its workspace.json, between charter.toml and charter.local.toml.`,
+    });
+    // LIVE or LOCAL (charter-app#301): the row says which way it goes, and asks before it does.
+    const live = now.live?.includes(workspace) ?? false;
+    offers.push({
+      ...can(
+        `workspace.live:${workspace}`,
+        live ? `Make ${workspace} local…` : `Make ${workspace} live…`,
+        { verb: "switchLive", workspace },
+        workspace,
+      ),
+      note: live
+        ? "Stop publishing its charter, memory and todos with the plane."
+        : "Publish its charter, memory and todos with the plane.",
     });
   }
 
@@ -1175,6 +1195,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openWorkspaceSettings":
       doing.openWorkspaceSettings(does.workspace);
       return DID;
+    case "switchLive":
+      doing.switchLive(does.workspace);
+      return DID;
     case "openPreferences":
       doing.openPreferences();
       return DID;
@@ -1450,6 +1473,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `workspace.focus:${what.workspace}`,
           `workspace.pin:${what.workspace}`,
           `workspace.settings:${what.workspace}`,
+          `workspace.live:${what.workspace}`,
           "workspace.create",
         ],
         below: [`workspace.remove:${what.workspace}`],

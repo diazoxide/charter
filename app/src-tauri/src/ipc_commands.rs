@@ -68,6 +68,8 @@ macro_rules! app_commands {
                 saving::choose_plane_mode,
                 saving::save_plane,
                 workspaces::workspace_create,
+                live::workspace_live_preview,
+                live::workspace_live,
                 workspaces::workspace_at_risk,
                 workspaces::workspace_remove,
                 workspaces::workspace_focused,

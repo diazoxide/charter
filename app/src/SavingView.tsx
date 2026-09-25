@@ -55,6 +55,11 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
         <>
           <p className={`saving-stage saving-${saving.stage}`}>{stageText(saving)}</p>
           <p className="settings-who">{modeText(saving)}</p>
+          {saving.live.length > 0 && (
+            <p className="settings-hint">
+              {`Live workspaces, published by every save: ${saving.live.join(", ")}`}
+            </p>
+          )}
           {saving.pushFailed !== null && (
             <p className="settings-hint">{`The last push did not land: ${saving.pushFailed}`}</p>
           )}

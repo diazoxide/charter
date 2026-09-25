@@ -282,7 +282,9 @@ const PIN_BESIDE_DEV_BRIEF: &str = "pin + dev channel: two different charters ·
 pub const PIN_REMEDY: &str = "charter version";
 const FRONT_DOOR_REMEDY: &str = "charter persona default <name>";
 const REINIT_REMEDY: &str = "charter ws reinit --all";
-const PLANE_ROOT_REMEDY: &str = "work belongs in a workspace clone";
+/// Where the plane-root row sends the operator (charter-app#332). The plane is the project's
+/// database (ADR 0051): work on it is saved, and code belongs in a workspace clone.
+const PLANE_ROOT_REMEDY: &str = "save the plane, or move the work to a workspace clone";
 
 /// What one reading of a plane's alerts found — and whether it finished.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

@@ -96,7 +96,7 @@ fn push_record(root: &Path, record: serde_json::Value) {
     std::fs::write(root.join(".charter/plane-push.json"), record.to_string()).unwrap();
 }
 
-const ROOT_REMEDY: &str = "\x1b[2m · work belongs in a workspace clone\x1b[0m";
+const ROOT_REMEDY: &str = "\x1b[2m · save the plane, or move the work to a workspace clone\x1b[0m";
 
 #[test]
 fn a_healthy_plane_has_no_alerts_and_can_say_so_with_a_number() {

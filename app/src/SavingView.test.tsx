@@ -23,6 +23,7 @@ function standing(over: Partial<PlaneSaving> = {}): PlaneSaving {
     pushes: true,
     behind: 0,
     pushFailed: null,
+    live: [],
     mode: "push",
     modeFrom: "charter.toml",
     journal: [],

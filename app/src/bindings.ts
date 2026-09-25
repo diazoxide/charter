@@ -357,12 +357,18 @@ export const commands = {
 	 *  the dialog would be a second answer to what a workspace may be called, and the two would
 	 *  drift the first time either moved.
 	 * 
-	 *  LOCAL, never LIVE, and it selects nothing: `--live` commits a workspace's manifest and
-	 *  memory into the plane's own git, and `--use` writes a session lock that belongs to a
-	 *  terminal. Neither is a default the window may take on the operator's behalf; both are
-	 *  `charter workspace live` and `charter workspace use`, which still exist.
+	 *  LOCAL unless the dialog's Live box was ticked (charter-app#301): a LIVE workspace's manifest
+	 *  and memory are published with the plane, so that is the operator's choice, never a default,
+	 *  and a workspace born LIVE is saved at once, as switching one to LIVE is. It selects nothing:
+	 *  `--use` writes a session lock that belongs to a terminal.
 	 */
-	workspaceCreate: (plane: PlaneId, name: string, vision: string | null) => typedError<string[], string>(__TAURI_INVOKE("workspace_create", { plane, name, vision })),
+	workspaceCreate: (plane: PlaneId, name: string, vision: string | null, live: boolean) => typedError<string[], string>(__TAURI_INVOKE("workspace_create", { plane, name, vision, live })),
+	workspaceLivePreview: (plane: PlaneId, name: string) => typedError<LivePreview, string>(__TAURI_INVOKE("workspace_live_preview", { plane, name })),
+	/**
+	 *  Make the workspace `name` LIVE (`live`) or LOCAL, then save the plane. Answers every line
+	 *  both said, or the refusal.
+	 */
+	workspaceLive: (plane: PlaneId, name: string, live: boolean) => typedError<LiveSwitched, string>(__TAURI_INVOKE("workspace_live", { plane, name, live })),
 	/**
 	 *  What deleting this workspace would discard, for the dialog to show **before** anything is
 	 *  pressed.
@@ -1242,6 +1248,31 @@ export type Launch = {
 	why: string | null,
 };
 
+/**  What switching a workspace would do, for the confirmation that asks first. */
+export type LivePreview = {
+	/**  Whether it is LIVE now. */
+	live: boolean,
+	/**  The workspace's files the block publishes (or stops publishing), plane-relative. */
+	files: string[],
+	/**
+	 *  Where the plane is pushed: `origin` as git has it, or `null` when the plane has none.
+	 *  Any remote, not only a forge charter knows — a save pushes to it all the same.
+	 */
+	remote: string | null,
+	/**  `[plane] mode`, so the confirmation can say whether a save will push at all. */
+	mode: string | null,
+};
+
+/**
+ *  What a switch did: every line it and the save said, and — kept apart, because the switch
+ *  has already happened — why the save did not.
+ */
+export type LiveSwitched = {
+	said: string[],
+	/**  Why the plane was not saved after the switch: refused, or not asked yet how it saves. */
+	notSaved: string | null,
+};
+
 /**  What a merge did, for the window to report. */
 export type Merged = {
 	branch: string,
@@ -1735,6 +1766,8 @@ export type PlaneSaving = {
 	behind: number | null,
 	/**  Why the last push did not land, when it failed rather than conflicted. */
 	pushFailed: string | null,
+	/**  The LIVE workspaces, whose charter, memory and todos a save publishes (charter-app#301). */
+	live: string[],
 	/**  `[plane] mode`, or `null` when the plane names none. */
 	mode: string | null,
 	/**
@@ -2165,6 +2198,11 @@ export type SidebarWorkspace = {
 	 *  in front, and the sidebar is already the one read of every workspace.
 	 */
 	colour: string | null,
+	/**
+	 *  Whether it is LIVE: its charter, memory and todos published with the plane
+	 *  (charter-app#301). Every place a workspace is drawn marks it.
+	 */
+	live: boolean,
 };
 
 /**  Everything the picker draws, read from the plane when it is opened. */
