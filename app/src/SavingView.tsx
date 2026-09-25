@@ -289,3 +289,24 @@ function entryText(one: SaveEntry): string {
   const files = one.files === 1 ? "1 file" : `${one.files} files`;
   return `${when} · ${one.trigger} · ${one.outcome} · ${files}${commit}${detail}`;
 }
+
+/**
+ * **A project's unsaved mark** (charter-app#302), on its tab in the project strip: a dot when
+ * it has work a save would take — files, a blocked save, commits a push would carry — and
+ * nothing when a save has nothing left to do. Named for a screen reader; the Saving tab says
+ * what exactly.
+ */
+export function UnsavedMark({ saving, name }: { saving: PlaneSaving | undefined; name: string }) {
+  if (saving === undefined) return null;
+  const blocked = saving.stage === "blocked";
+  if (!blocked && !savable(saving)) return null;
+  return (
+    <span
+      className="project-unsaved"
+      data-stage={saving.stage}
+      role="img"
+      aria-label={blocked ? `saving is blocked in ${name}` : `unsaved work in ${name}`}
+      title={stageText(saving)}
+    />
+  );
+}

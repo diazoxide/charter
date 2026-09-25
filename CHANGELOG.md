@@ -13,6 +13,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Every open project says whether it has unsaved work.** A dot on a project's tab marks work
+  a save would take, or a save that is blocked (red), so a project behind the one in front is
+  not where work is forgotten. Each project keeps its own save state and its own auto-save,
+  and quitting saves every one of them.
+  ([#302](https://github.com/diazoxide/charter-app/issues/302))
 - **An extension says which capabilities it asks for.** An extension's `charter-extension.json`
   can list them in `capabilities`. The approval dialog and the Extensions list name each one,
   and changing the list asks you again. An extension that asks for a capability this charter
