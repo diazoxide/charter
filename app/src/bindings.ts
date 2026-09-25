@@ -349,6 +349,21 @@ export const commands = {
 	 */
 	savePlane: (plane: PlaneId, message: string | null) => typedError<string[], string>(__TAURI_INVOKE("save_plane", { plane, message })),
 	/**
+	 *  Every clone in `workspace`, as the Saving view draws them. Read from git and the journal,
+	 *  never the network.
+	 * 
+	 *  On a blocking thread: it asks git once or twice per clone.
+	 */
+	workspaceSaving: (plane: PlaneId, workspace: string) => typedError<RepoSaving[], string>(__TAURI_INVOKE("workspace_saving", { plane, workspace })),
+	/**
+	 *  Save one repo of `workspace`, as its row's button does. Refused, with whom it waits for,
+	 *  while any chat in the workspace is mid-turn: a save the operator asked for does not queue
+	 *  itself to run later, unwatched.
+	 * 
+	 *  On a blocking thread: it commits, and may push and open a pull request.
+	 */
+	saveRepo: (plane: PlaneId, workspace: string, name: string, message: string | null) => typedError<string[], string>(__TAURI_INVOKE("save_repo", { plane, workspace, name, message })),
+	/**
 	 *  Make a workspace: `charter workspace create <name>`, with the vision when one was typed.
 	 * 
 	 *  **The name is checked by the core and by nothing in the window.** `wscmd::create` runs
@@ -2078,6 +2093,32 @@ export type RepoInForce = {
 	autosave_after: InForce,
 };
 
+/**  One workspace repo's save standing, for its row in the Saving view (charter-app#299). */
+export type RepoSaving = {
+	name: string,
+	/**  `[repos.<name>] mode`: `pr` when neither file says. */
+	mode: string,
+	/**  The file that decided the mode, or `default`. */
+	modeFrom: string,
+	/**  Whether it is saved by itself — off unless its table turns it on. */
+	autosave: boolean,
+	/**
+	 *  `off` for a repo charter never saves; else `blocked`, `changed`, `committed`,
+	 *  `pr-open` or `saved`.
+	 */
+	stage: string,
+	/**  The branch the clone is on; `null` on none. */
+	branch: string | null,
+	/**  Files a save would take. */
+	changed: number,
+	/**  Commits the remote's copy of the branch lacks; `null` for a branch never pushed. */
+	ahead: number | null,
+	pr: string | null,
+	blocked: string | null,
+	/**  Whether a save would push. */
+	pushes: boolean,
+};
+
 /**  One clone's git state, and what the forge cache last recorded for its branch. */
 export type RepoState = {
 	name: string,
@@ -2159,6 +2200,8 @@ export type RowAction = {
 export type SaveEntry = {
 	/**  Seconds since the epoch. */
 	at: number | null,
+	/**  `plane`, or `repo:<workspace>/<name>`. */
+	target: string,
 	trigger: string,
 	mode: string,
 	files: number,

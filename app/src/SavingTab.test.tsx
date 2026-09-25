@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { PlaneSaving } from "./bindings";
+import type { PlaneSaving, RepoSaving } from "./bindings";
 
 /**
  * The save indicator and the Saving tab, from the window (charter-app#294): the title bar says
@@ -160,5 +160,84 @@ describe("a blocked save's ways out, in the window (charter-app#295)", () => {
         }),
       ]),
     );
+  });
+});
+
+describe("the save indicator, with the workspace's repos (charter-app#299)", () => {
+  function repo(over: Partial<RepoSaving> = {}): RepoSaving {
+    return {
+      name: "widget",
+      mode: "pr",
+      modeFrom: "default",
+      autosave: false,
+      stage: "changed",
+      branch: "feature/x",
+      changed: 2,
+      ahead: null,
+      pr: null,
+      blocked: null,
+      pushes: true,
+      ...over,
+    };
+  }
+
+  /** A saved plane on workspace `alpha`, whose one repo has two files unsaved until
+   *  `save_repo` is asked. */
+  function coreWithARepo(): { asked: string[] } {
+    const asked: string[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+      if (cmd === "opened_chats") return [];
+      if (cmd === "chats_that_would_not_start") return [];
+      if (cmd === "running_sessions") return [];
+      if (cmd === "chat_states") return [];
+      if (cmd === "plane_sidebar")
+        return {
+          root: PLANE,
+          personas: [],
+          persona: null,
+          unfiled: [],
+          workspaces: [
+            {
+              name: "alpha",
+              path: `${PLANE}/workspaces/alpha`,
+              vision: "",
+              todos: [],
+              chats: [],
+              colour: null,
+            },
+          ],
+        };
+      if (cmd === "plane_saving") return standing({ stage: "saved", changed: [] });
+      if (cmd === "workspace_saving") {
+        expect((args as { workspace: string }).workspace).toBe("alpha");
+        return asked.includes("save_repo")
+          ? [repo({ stage: "pr-open", changed: 0, pr: "https://x.test/pull/1" })]
+          : [repo()];
+      }
+      if (cmd === "save_repo" || cmd === "save_plane") {
+        asked.push(cmd);
+        return ["✓ Committed"];
+      }
+      return null;
+    });
+    return { asked };
+  }
+
+  it("shows the furthest-back stage across the plane and the repos, and saves what is behind", async () => {
+    const { asked } = coreWithARepo();
+    render(<App />);
+
+    const bar = screen.getByTestId("title-bar");
+    expect(await within(bar).findByRole("button", { name: "Saving: 1 repo changed" })).toBeTruthy();
+
+    await userEvent.click(within(bar).getByRole("button", { name: "Save all" }));
+
+    await waitFor(() => expect(asked).toEqual(["save_repo"]));
+    expect(
+      await within(bar).findByRole("button", {
+        name: "Saving: 1 repo waiting on its pull request",
+      }),
+    ).toBeTruthy();
   });
 });

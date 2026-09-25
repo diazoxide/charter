@@ -368,6 +368,9 @@ describe("deleting a workspace", () => {
       "plane_pins",
       "workspace_panels",
       "workspace_repos",
+      // The title bar's save indicator counts the workspace in front's repos in
+      // (charter-app#299): a read of git and the save journal.
+      "workspace_saving",
       "alerts_everywhere",
       "window_holds_planes",
     ];

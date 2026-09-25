@@ -1,7 +1,22 @@
 import { useId, useState } from "react";
 import { CircleAlert, CircleCheck, CircleDot, LoaderCircle, Save } from "lucide-react";
-import { commands, type PlaneId, type PlaneSaving, type SaveEntry } from "./bindings";
-import { askWayOut, tellSaved, usePlaneSaving } from "./saving";
+import {
+  commands,
+  type PlaneId,
+  type PlaneSaving,
+  type RepoSaving,
+  type SaveEntry,
+} from "./bindings";
+import {
+  askWayOut,
+  behindness,
+  repoSavable,
+  repoStageText,
+  saveAll,
+  tellSaved,
+  usePlaneSaving,
+  useRepoSaving,
+} from "./saving";
 
 /**
  * **The Saving view** (charter-app#294, ADR 0051): where this plane's unsaved work sits, what
@@ -12,9 +27,19 @@ import { askWayOut, tellSaved, usePlaneSaving } from "./saving";
  * and the command cannot disagree about what a save does. After a save the view reads the plane
  * again rather than guessing what changed.
  */
-export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () => void }) {
+export function SavingView({
+  plane,
+  workspace,
+  onSaved,
+}: {
+  plane: PlaneId;
+  /** The workspace whose repos get a row each (charter-app#299); none outside every one. */
+  workspace?: string;
+  onSaved?: () => void;
+}) {
   // The title bar's reader: fresh on focus, on plane changes, on a timer and after any save.
   const { saving } = usePlaneSaving(plane);
+  const repos = useRepoSaving(plane, workspace);
   /** Why the last save was refused — kept across the reads that follow it. */
   const [refused, setRefused] = useState<string | null>(null);
   const [said, setSaid] = useState<string[] | null>(null);
@@ -43,6 +68,53 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
       tellSaved();
     }
   };
+
+  /** Save all: the plane and every repo with something to take, one after another. */
+  const saveEverything = async () => {
+    if (saving === undefined) return;
+    setBusy(true);
+    setSaid(null);
+    setRefused(null);
+    const typed = message.trim();
+    try {
+      const got = await saveAll(
+        plane,
+        savable(saving),
+        typed === "" ? null : typed,
+        workspace,
+        repos ?? [],
+      );
+      if (got.said.length > 0) setSaid(got.said);
+      if (got.refused.length > 0) setRefused(got.refused.join("\n"));
+      else {
+        setMessage("");
+        onSaved?.();
+      }
+    } finally {
+      setBusy(false);
+      tellSaved();
+    }
+  };
+
+  /** One repo's own Save. The message box is the plane's; a repo's commit says its files. */
+  const saveOne = async (name: string) => {
+    if (workspace === undefined) return;
+    setBusy(true);
+    setSaid(null);
+    setRefused(null);
+    try {
+      const got = await commands.saveRepo(plane, workspace, name, null);
+      if (got.status === "ok") setSaid(got.data);
+      else setRefused(got.error);
+    } catch (err: unknown) {
+      setRefused(String(err));
+    } finally {
+      setBusy(false);
+      tellSaved();
+    }
+  };
+
+  const anyToSave = saving !== undefined && (savable(saving) || (repos ?? []).some(repoSavable));
 
   return (
     <div className="saving" data-testid="saving-view">
@@ -135,7 +207,27 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
               )}
               Save
             </button>
+            {workspace !== undefined && (
+              <button
+                type="button"
+                className="panel-view"
+                tabIndex={0}
+                onClick={() => void saveEverything()}
+                disabled={busy || !anyToSave}
+              >
+                <Save className="node-icon" aria-hidden="true" />
+                Save all
+              </button>
+            )}
           </div>
+          {workspace !== undefined && repos !== undefined && repos.length > 0 && (
+            <RepoRows
+              workspace={workspace}
+              repos={repos}
+              busy={busy}
+              onSave={(name) => void saveOne(name)}
+            />
+          )}
           {refused !== null && (
             <p className="trouble" role="alert">
               {refused}
@@ -159,6 +251,72 @@ export function SavingView({ plane, onSaved }: { plane: PlaneId; onSaved?: () =>
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * **One row per repo in the workspace** (charter-app#299): its stage, the branch it is on, the
+ * pull request it waits on, and its own Save. A table for the reason the bottom bar's is one:
+ * "which of these is unsaved" is a column question.
+ */
+function RepoRows({
+  workspace,
+  repos,
+  busy,
+  onSave,
+}: {
+  workspace: string;
+  repos: readonly RepoSaving[];
+  busy: boolean;
+  onSave: (name: string) => void;
+}) {
+  return (
+    <table className="saving-repos" aria-label={`Repos in ${workspace}`}>
+      <thead>
+        <tr>
+          <th scope="col">Repo</th>
+          <th scope="col">Branch</th>
+          <th scope="col">Stage</th>
+          <th scope="col">Pull request</th>
+          <th scope="col">Mode</th>
+          <th scope="col">
+            <span className="sr-only">Save</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {repos.map((repo) => (
+          <tr key={repo.name} data-repo={repo.name} data-stage={repo.stage}>
+            <td>{repo.name}</td>
+            <td>{repo.branch ?? "no branch"}</td>
+            <td>{repoStageText(repo)}</td>
+            <td>
+              {repo.pr === null ? (
+                "—"
+              ) : (
+                <a href={repo.pr} target="_blank" rel="noreferrer">
+                  {repo.pr}
+                </a>
+              )}
+            </td>
+            <td>{`${repo.mode} (${repo.modeFrom})${repo.autosave ? " · auto-save" : ""}`}</td>
+            <td>
+              <button
+                type="button"
+                className="panel-view"
+                tabIndex={0}
+                aria-label={`Save ${repo.name}`}
+                title={`Save ${repo.name}`}
+                disabled={busy || !repoSavable(repo)}
+                onClick={() => onSave(repo.name)}
+              >
+                <Save className="node-icon" aria-hidden="true" />
+              </button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -229,20 +387,25 @@ function ModeQuestion({ plane, branch }: { plane: PlaneId; branch: string }) {
  */
 export function SaveIndicator({
   saving,
+  repos,
   busy,
   onOpen,
   onSave,
 }: {
   saving: PlaneSaving;
+  /** The active workspace's repos (charter-app#299): the indicator shows the furthest-back
+   *  stage across them and the plane, and its save saves them too. */
+  repos?: readonly RepoSaving[];
   busy: boolean;
   onOpen: () => void;
   onSave: () => void;
 }) {
-  const said = stageText(saving);
-  const Mark =
-    saving.stage === "blocked" ? CircleAlert : saving.stage === "saved" ? CircleCheck : CircleDot;
+  const { stage, said } = furthestBack(saving, repos ?? []);
+  const withRepos = (repos ?? []).some(repoSavable);
+  const saveLabel = withRepos ? "Save all" : "Save the project";
+  const Mark = stage === "blocked" ? CircleAlert : stage === "saved" ? CircleCheck : CircleDot;
   return (
-    <span className="save-indicator" data-stage={saving.stage}>
+    <span className="save-indicator" data-stage={stage}>
       <button
         type="button"
         className="save-indicator-where"
@@ -254,13 +417,13 @@ export function SaveIndicator({
         <Mark aria-hidden="true" />
         <span className="save-indicator-words">{said}</span>
       </button>
-      {savable(saving) && (
+      {(savable(saving) || withRepos) && (
         <button
           type="button"
           className="save-indicator-save"
           tabIndex={0}
-          aria-label="Save the project"
-          title="Save the project"
+          aria-label={saveLabel}
+          title={saveLabel}
           disabled={busy}
           onClick={onSave}
         >
@@ -275,10 +438,39 @@ export function SaveIndicator({
   );
 }
 
+/**
+ * The furthest-back stage across the plane and its repos (ADR 0051), and how the title bar
+ * says it: the plane's own words when the plane is that far back, else how many repos are.
+ * A repo charter never saves (`off`) is not counted.
+ */
+export function furthestBack(
+  saving: PlaneSaving,
+  repos: readonly RepoSaving[],
+): { stage: string; said: string } {
+  const counted = repos.filter((repo) => repo.stage !== "off");
+  const stage = counted.reduce(
+    (far, repo) => (behindness(repo.stage) < behindness(far) ? repo.stage : far),
+    saving.stage,
+  );
+  if (behindness(saving.stage) <= behindness(stage)) return { stage, said: stageText(saving) };
+  const n = counted.filter((repo) => repo.stage === stage).length;
+  const words: Record<string, [string, string]> = {
+    blocked: ["blocked", "blocked"],
+    changed: ["changed", "changed"],
+    committed: ["committed, not pushed", "committed, not pushed"],
+    "pr-open": ["waiting on its pull request", "waiting on their pull requests"],
+  };
+  const [one, many] = words[stage] ?? [stage, stage];
+  const said = n === 1 ? `1 repo ${one}` : `${n} repos ${many}`;
+  const incoming =
+    saving.behind !== null && saving.behind > 0 ? ` · ${saving.behind} incoming` : "";
+  return { stage, said: `${said}${incoming}` };
+}
+
 /** Whether pressing Save could do anything: files to commit, a blocked save to try again, or
  *  commits a push would carry. Commits on a plane whose save stops at the commit are as far as
  *  a save goes, and a button that could only say "nothing to save" is not offered. */
-function savable(saving: PlaneSaving): boolean {
+export function savable(saving: PlaneSaving): boolean {
   return (
     saving.changed.length > 0 ||
     saving.stage === "blocked" ||

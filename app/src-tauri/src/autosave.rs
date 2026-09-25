@@ -14,7 +14,13 @@
 //!
 //! Saving at quit is not the worker's: the app is exiting, so [`at_quit`] runs it bounded,
 //! for every held plane at once.
+//!
+//! **Workspace repos too, but only those that ask** (charter-app#299): a repo whose
+//! `[repos.<name>] autosave` is on is saved the same three ways, after its own quiet period,
+//! when a chat ends and at quit. Its save waits while any chat in its workspace is mid-turn
+//! ([`MidTurn`]): that cycle is skipped, and its quiet period starts again once the turn ends.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +30,7 @@ use std::time::{Duration, Instant};
 use charter_core::autosave::{self, Decision, Quiet};
 use charter_core::planegit::{self, Stage, Trigger};
 use charter_core::planesave;
+use charter_core::reposave;
 
 use crate::planes::PlaneId;
 
@@ -45,12 +52,21 @@ pub enum Poke {
     Fetch,
 }
 
+/// The chats working in a workspace that are mid-turn, by name — [`crate::planes::Held::mid_turn_in`].
+pub type MidTurn = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
+
+/// Where the worker asks [`MidTurn`], once the plane it belongs to is built — the same slot
+/// shape as the handoff answer's, and for the same reason: the plane holds the worker, so the
+/// worker can only hold the plane weakly, and only after it exists.
+type MidTurnSlot = Arc<std::sync::Mutex<Option<MidTurn>>>;
+
 /// A plane's auto-save worker. Dropping it stops the loop at its next look: the flag is
 /// what stops it, because a chat's end still holds a sender, and a channel alone would keep a
 /// let-go plane's worker looking until the last of those was gone.
 pub struct Worker {
     poke: Sender<Poke>,
     stop: Arc<AtomicBool>,
+    mid_turn: MidTurnSlot,
     /// Never joined: a worker mid-save is left to finish rather than holding a plane's close
     /// open. Kept so a test can see the loop end.
     #[cfg_attr(not(test), expect(dead_code, reason = "read only by the stop test"))]
@@ -81,16 +97,46 @@ impl Worker {
         let (poke, poked) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = Arc::clone(&stop);
+        let mid_turn: MidTurnSlot = Arc::default();
+        let asking = Arc::clone(&mid_turn);
         let spawned = std::thread::Builder::new()
             .name("charter-autosave".into())
             .spawn(move || {
                 let told = || saved(plane.clone(), root.clone());
-                run(&root, &poked, &stopping, &|| changed(plane.clone()), &told);
+                let mid_turn = |workspace: &str| {
+                    let asked = asking
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    asked.map(|ask| ask(workspace)).unwrap_or_default()
+                };
+                run(
+                    &root,
+                    &poked,
+                    &stopping,
+                    &mid_turn,
+                    &|| changed(plane.clone()),
+                    &told,
+                );
             });
         let thread = spawned
             .map_err(|why| eprintln!("charter: auto-save did not start ({why}); save by hand"))
             .ok();
-        Self { poke, stop, thread }
+        Self {
+            poke,
+            stop,
+            mid_turn,
+            thread,
+        }
+    }
+
+    /// Who the worker asks which chats are mid-turn. Until this is said, it says none are —
+    /// which is true: no chat of the plane has started before the plane is built.
+    pub fn asks_mid_turn_of(&self, ask: MidTurn) {
+        *self
+            .mid_turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ask);
     }
 
     /// Something for the worker to act on at its next look.
@@ -100,14 +146,24 @@ impl Worker {
 }
 
 /// The loop: a look every [`LOOK_EVERY`] or at a poke, until the worker is dropped.
-fn run(root: &Path, poked: &Receiver<Poke>, stop: &AtomicBool, tell: &dyn Fn(), saved: &dyn Fn()) {
+fn run(
+    root: &Path,
+    poked: &Receiver<Poke>,
+    stop: &AtomicBool,
+    mid_turn: &dyn Fn(&str) -> Vec<String>,
+    tell: &dyn Fn(),
+    saved: &dyn Fn(),
+) {
     let mut state = State::default();
     let mut poke = None;
     loop {
         if stop.load(Ordering::SeqCst) {
             return;
         }
-        if state.look(root, Instant::now(), poke) {
+        let now = Instant::now();
+        let plane = state.look(root, now, poke);
+        let repos = state.look_at_repos(root, now, poke, mid_turn);
+        if plane || repos {
             tell();
         }
         if std::mem::take(&mut state.saved) {
@@ -129,6 +185,9 @@ struct State {
     fetched: Option<Instant>,
     /// The last look saved the plane, and nobody has been told yet.
     saved: bool,
+    /// Each auto-saved repo's quiet period, by its clone's path.
+    repos: HashMap<PathBuf, Quiet>,
+    repos_launched: bool,
 }
 
 impl State {
@@ -182,6 +241,112 @@ impl State {
     }
 }
 
+impl State {
+    /// One look at the workspace repos whose `[repos.<name>] autosave` is on — none, unless a
+    /// table says so, and then nothing here costs a git process. Answers whether any was saved.
+    fn look_at_repos(
+        &mut self,
+        root: &Path,
+        now: Instant,
+        poke: Option<Poke>,
+        mid_turn: &dyn Fn(&str) -> Vec<String>,
+    ) -> bool {
+        let launched = std::mem::replace(&mut self.repos_launched, true);
+        let settings = planesave::Settings::read(root);
+        let saved: Vec<String> = settings
+            .repo_tables()
+            .into_iter()
+            .filter(|name| autosave::repo_on(&settings.repo(name)))
+            .collect();
+        if saved.is_empty() {
+            self.repos.clear();
+            return false;
+        }
+        let Ok(workspaces) = charter_core::workspaces::Plane::open(root).workspaces() else {
+            return false;
+        };
+        let mut did = false;
+        for workspace in workspaces {
+            let Ok(found) = charter_core::repos::clones(root, &workspace) else {
+                continue;
+            };
+            let mut busy: Option<Vec<String>> = None;
+            for repo in found.repos.iter().filter(|r| saved.contains(&r.name)) {
+                let quiet = self.repos.entry(repo.path.clone()).or_default();
+                let busy = busy.get_or_insert_with(|| mid_turn(&workspace));
+                if !busy.is_empty() {
+                    // This cycle is skipped, and the quiet period starts again once the turn
+                    // is over: the turn was the change.
+                    *quiet = Quiet::default();
+                    continue;
+                }
+                let standing = reposave::standing(root, &workspace, repo);
+                let settled = standing.stage != Stage::Blocked && standing.worth_saving();
+                let trigger = if !launched {
+                    (standing.stage == Stage::Committed && standing.pushes)
+                        .then_some(Trigger::Launch)
+                } else if poke == Some(Poke::SessionEnded) {
+                    settled.then_some(Trigger::SessionEnd)
+                } else {
+                    None
+                };
+                let trigger = trigger.or_else(|| {
+                    (quiet.tick_repo(now, &settings.repo(&repo.name), &standing) == Decision::Save)
+                        .then_some(Trigger::Quiet)
+                });
+                if let Some(trigger) = trigger {
+                    // A refusal is in the journal, in its own words; the row says blocked.
+                    let _ = reposave::save_as(
+                        &reposave::Request {
+                            plane: root,
+                            workspace: &workspace,
+                            name: &repo.name,
+                            clone: &repo.path,
+                            message: None,
+                            no_push: false,
+                            mid_turn: busy,
+                        },
+                        trigger,
+                        &mut |_| {},
+                    );
+                    did = true;
+                }
+            }
+        }
+        did
+    }
+}
+
+/// Every clone whose `[repos.<name>] autosave` is on, in every workspace of the plane at
+/// `root`, as `(workspace, clone)`.
+fn auto_saved_repos(root: &Path) -> Vec<(String, charter_core::repos::Repo)> {
+    let settings = planesave::Settings::read(root);
+    let saved: Vec<String> = settings
+        .repo_tables()
+        .into_iter()
+        .filter(|name| autosave::repo_on(&settings.repo(name)))
+        .collect();
+    if saved.is_empty() {
+        return Vec::new();
+    }
+    let workspaces = charter_core::workspaces::Plane::open(root)
+        .workspaces()
+        .unwrap_or_default();
+    workspaces
+        .into_iter()
+        .flat_map(|workspace| {
+            let found = charter_core::repos::clones(root, &workspace)
+                .map(|found| found.repos)
+                .unwrap_or_default();
+            found
+                .into_iter()
+                .filter(|repo| saved.contains(&repo.name))
+                .map(move |repo| (workspace.clone(), repo))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// The window came back into focus: fetch the plane's target branch, unless it was fetched a
 /// moment ago. Answers at once; what the fetch finds reaches the window as a plane change.
 #[tauri::command]
@@ -197,11 +362,23 @@ pub fn plane_fetch(
 /// Save every plane in `roots` as the app quits, all at once (ADR 0051), and return within
 /// [`QUIT_BOUND`] and a moment more whatever happens: a commit that waits on a signer or a
 /// slow hook is left to finish on its own rather than holding the app open.
+///
+/// Each plane's repos are saved beside it — only those whose `[repos.<name>] autosave` is on.
 pub fn at_quit(roots: Vec<PathBuf>) {
     let (done, finished) = mpsc::channel();
-    let started = roots.len();
+    let mut started = 0;
     for root in roots {
+        for (workspace, repo) in auto_saved_repos(&root) {
+            let done = done.clone();
+            let plane = root.clone();
+            started += 1;
+            std::thread::spawn(move || {
+                autosave::repo_at_quit(&plane, &workspace, &repo, QUIT_BOUND);
+                let _ = done.send(());
+            });
+        }
         let done = done.clone();
+        started += 1;
         std::thread::spawn(move || {
             autosave::at_quit(&root, QUIT_BOUND);
             let _ = done.send(());
@@ -333,6 +510,82 @@ mod tests {
             Some(Poke::SessionEnded),
         );
         assert!(planegit::journal(dir.path()).is_empty());
+    }
+
+    /// A plane saying `toml`, with a workspace `alpha` holding a clone `widget`.
+    fn plane_with_a_repo(toml: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = plane(toml);
+        let clone = dir.path().join("workspaces/alpha/widget");
+        std::fs::create_dir_all(&clone).unwrap();
+        git(&clone, &["init", "-q", "-b", "main"]);
+        git(&clone, &["config", "user.name", "t"]);
+        git(&clone, &["config", "user.email", "t@example.invalid"]);
+        std::fs::write(clone.join("README.md"), "one").unwrap();
+        git(&clone, &["add", "-A"]);
+        git(&clone, &["commit", "-q", "-m", "one"]);
+        (dir, clone)
+    }
+
+    fn repo_commits(root: &Path) -> usize {
+        planegit::journal(root)
+            .iter()
+            .filter(|l| l["target"] == "repo:alpha/widget" && l["outcome"] == "committed")
+            .count()
+    }
+
+    #[test]
+    fn a_repo_with_auto_save_on_is_saved_after_its_quiet_period_but_never_mid_turn() {
+        let (dir, clone) = plane_with_a_repo(
+            "[repos.widget]\nmode = \"commit\"\nautosave = true\nautosave_after = \"30s\"\n",
+        );
+        let root = dir.path();
+        let mut state = State::default();
+        let at = Instant::now();
+        let working = |_: &str| vec!["alpha.1".to_owned()];
+        let idle = |_: &str| Vec::new();
+        state.look_at_repos(root, at, None, &idle);
+        std::fs::write(clone.join("a.md"), "a").unwrap();
+
+        // A chat in alpha is mid-turn: every cycle is skipped, however long it runs.
+        for s in [1, 31, 90, 300] {
+            assert!(!state.look_at_repos(root, at + Duration::from_secs(s), None, &working));
+        }
+        assert!(
+            !state.look_at_repos(
+                root,
+                at + Duration::from_secs(301),
+                Some(Poke::SessionEnded),
+                &working
+            ),
+            "a chat ending elsewhere while one here still works is not a reason"
+        );
+        assert_eq!(repo_commits(root), 0);
+
+        // The turn ends; the quiet period starts then.
+        assert!(!state.look_at_repos(root, at + Duration::from_secs(302), None, &idle));
+        assert!(!state.look_at_repos(root, at + Duration::from_secs(331), None, &idle));
+        assert!(state.look_at_repos(root, at + Duration::from_secs(332), None, &idle));
+        assert_eq!(repo_commits(root), 1);
+    }
+
+    #[test]
+    fn a_repo_whose_table_leaves_auto_save_off_is_never_saved_by_itself() {
+        let (dir, clone) = plane_with_a_repo("[repos.widget]\nmode = \"commit\"\n");
+        let root = dir.path();
+        let mut state = State::default();
+        let at = Instant::now();
+        let idle = |_: &str| Vec::new();
+        std::fs::write(clone.join("a.md"), "a").unwrap();
+        for s in [0, 31, 62, 400] {
+            state.look_at_repos(root, at + Duration::from_secs(s), None, &idle);
+        }
+        state.look_at_repos(
+            root,
+            at + Duration::from_secs(401),
+            Some(Poke::SessionEnded),
+            &idle,
+        );
+        assert_eq!(repo_commits(root), 0);
     }
 
     #[test]

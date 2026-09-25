@@ -350,6 +350,32 @@ impl Held {
         );
     }
 
+    /// The chats working in `workspace` that are mid-turn, by the names the window shows —
+    /// what a save of that workspace's repos waits for (charter-app#299, ADR 0051).
+    ///
+    /// **Mid-turn is the hook state `running`**, and nothing else: charter never reads a
+    /// harness's output to decide (ADR 0018). A chat is in a workspace when it works there,
+    /// which is how the sidebar files it (`plane_sidebar`).
+    pub fn mid_turn_in(&self, workspace: &str) -> Vec<String> {
+        let on_disk = charter_core::workspaces::Plane::open(&self.root);
+        let board = self.hooks.shared_board();
+        self.chats
+            .open_now()
+            .into_iter()
+            .filter(|open| {
+                open.cwd
+                    .as_deref()
+                    .and_then(|cwd| on_disk.workspace_of(cwd))
+                    .as_deref()
+                    == Some(workspace)
+            })
+            .filter(|open| {
+                hooks::held_board(&board).state(open.session) == charter_core::state::State::Running
+            })
+            .map(|open| open.label.clone().unwrap_or(open.name))
+            .collect()
+    }
+
     /// Tell the plane's auto-save worker something, if it has one.
     pub fn poke_autosave(&self, poke: crate::autosave::Poke) {
         if let Some(worker) = self
@@ -522,6 +548,21 @@ impl Planes {
                 },
             })
         });
+        // Auto-save of a workspace's repos waits for its chats' turns, which only the plane
+        // knows. Weak for the handoff's reason: the plane holds the worker.
+        if let Some(worker) = held
+            .autosave
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            let held = Arc::downgrade(&held);
+            worker.asks_mid_turn_of(Arc::new(move |workspace| {
+                held.upgrade()
+                    .map(|held| held.mid_turn_in(workspace))
+                    .unwrap_or_default()
+            }));
+        }
         open.insert(id.clone(), Arc::clone(&held));
         id
     }
@@ -3209,6 +3250,59 @@ mod tests {
             },
         )
         .expect("the hook reaches the plane");
+    }
+
+    /// The hook a harness sends when the operator's prompt starts a turn.
+    fn a_prompt_to(held: &Held, session: u32) {
+        charter_core::hookwire::send(
+            held.hooks().socket().expect("the plane is listening"),
+            &charter_core::hookwire::Report {
+                chat: session,
+                event: charter_core::state::Event::UserPromptSubmit,
+                conversation: charter_core::hookwire::Conversation::Unknown,
+                pid: None,
+                detail: charter_core::state::Detail::default(),
+            },
+        )
+        .expect("the hook reaches the plane");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_is_mid_turn_in_the_workspace_it_works_in_from_its_prompt_to_its_stop() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let alpha = root.join("workspaces/alpha");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(root.join("workspaces/beta")).unwrap();
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let mut chat = one_chat_on("/bin/cat").chats.remove(0);
+        chat.cwd = Some(alpha.clone());
+        chat.name = "alpha.1".to_owned();
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+        let becomes = |wanted: &[&str]| {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let now = held.mid_turn_in("alpha");
+                if now == wanted || std::time::Instant::now() > until {
+                    return now;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        assert_eq!(becomes(&[]), Vec::<String>::new(), "no turn has started");
+
+        a_prompt_to(&held, session);
+        assert_eq!(becomes(&["alpha.1"]), ["alpha.1"]);
+        assert_eq!(held.mid_turn_in("beta"), Vec::<String>::new());
+
+        a_stop_from(&held, session);
+        assert_eq!(becomes(&[]), Vec::<String>::new(), "the turn ended");
     }
 
     #[cfg(unix)]

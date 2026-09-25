@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SavingView } from "./SavingView";
-import type { PlaneSaving, SaveEntry } from "./bindings";
+import type { PlaneSaving, RepoSaving, SaveEntry } from "./bindings";
 
 afterEach(() => {
   cleanup();
@@ -36,6 +36,7 @@ function standing(over: Partial<PlaneSaving> = {}): PlaneSaving {
 function entry(over: Partial<SaveEntry> = {}): SaveEntry {
   return {
     at: 1_790_000_000,
+    target: "plane",
     trigger: "manual",
     mode: "push",
     files: 1,
@@ -287,5 +288,119 @@ describe("SavingView", () => {
       { plane: PLANE, way: "chat" },
       { plane: PLANE, way: "terminal" },
     ]);
+  });
+});
+
+function repo(over: Partial<RepoSaving> = {}): RepoSaving {
+  return {
+    name: "widget",
+    mode: "pr",
+    modeFrom: "default",
+    autosave: false,
+    stage: "saved",
+    branch: "main",
+    changed: 0,
+    ahead: 0,
+    pr: null,
+    blocked: null,
+    pushes: true,
+    ...over,
+  };
+}
+
+/** The core with a workspace `alpha`: `workspace_saving` answers each of `reads` in turn, and
+ *  `save_repo` answers from `saved` by repo name — lines, or an `Error` for a refusal. */
+function coreWithRepos(
+  plane: PlaneSaving,
+  reads: RepoSaving[][],
+  saved: Record<string, string[] | Error> = {},
+): Asked[] {
+  const asked: Asked[] = [];
+  let read = 0;
+  mockIPC((cmd, args) => {
+    asked.push({ cmd, args: args as Record<string, unknown> });
+    if (cmd === "plane_saving") return plane;
+    if (cmd === "workspace_saving") return reads[Math.min(read++, reads.length - 1)];
+    if (cmd === "save_plane") return ["✓ Committed the plane"];
+    if (cmd === "save_repo") {
+      const said = saved[(args as { name: string }).name] ?? ["✓ Committed"];
+      if (said instanceof Error) throw said.message;
+      return said;
+    }
+    return null;
+  });
+  return asked;
+}
+
+describe("SavingView, with the workspace's repos (charter-app#299)", () => {
+  it("draws one row per repo, each with its stage, branch and pull request", async () => {
+    coreWithRepos(standing(), [
+      [
+        repo({ name: "api", stage: "changed", changed: 3, branch: "feature/x" }),
+        repo({
+          name: "web",
+          stage: "pr-open",
+          branch: "main",
+          pr: "https://github.com/acme/web/pull/7",
+        }),
+        repo({ name: "docs", stage: "off", mode: "off", modeFrom: "charter.toml", changed: 2 }),
+      ],
+    ]);
+    render(<SavingView plane={PLANE} workspace="alpha" />);
+
+    const table = await screen.findByRole("table", { name: "Repos in alpha" });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows.map((row) => row.getAttribute("data-repo"))).toEqual(["api", "web", "docs"]);
+    expect(rows[0].textContent).toContain("feature/x");
+    expect(rows[0].textContent).toContain("3 changed");
+    expect(
+      within(rows[1]).getByRole("link", { name: "https://github.com/acme/web/pull/7" }),
+    ).toBeTruthy();
+    expect(rows[1].textContent).toContain("waiting on its pull request");
+    expect(rows[2].textContent).toContain("Off — charter does not save this repo");
+    expect(
+      (within(rows[2]).getByRole("button", { name: "Save docs" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("saves one repo from its row, and says in the core's words whom a held-back save waits for", async () => {
+    const asked = coreWithRepos(standing(), [[repo({ stage: "changed", changed: 1 })]], {
+      widget: new Error("Not saved: alpha.2 is mid-turn in alpha."),
+    });
+    render(<SavingView plane={PLANE} workspace="alpha" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save widget" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Not saved: alpha.2 is mid-turn in alpha.",
+    );
+    expect(asked.find((a) => a.cmd === "save_repo")?.args).toEqual({
+      plane: PLANE,
+      workspace: "alpha",
+      name: "widget",
+      message: null,
+    });
+  });
+
+  it("saves the plane and every repo with something to save, from Save all", async () => {
+    const asked = coreWithRepos(standing({ stage: "changed", changed: ["a.md"] }), [
+      [
+        repo({ name: "api", stage: "changed", changed: 1 }),
+        repo({ name: "web", stage: "saved" }),
+        repo({ name: "cli", stage: "committed", ahead: 1 }),
+      ],
+    ]);
+    render(<SavingView plane={PLANE} workspace="alpha" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save all" }));
+
+    await waitFor(() =>
+      expect(
+        asked
+          .filter((a) => a.cmd === "save_plane" || a.cmd === "save_repo")
+          .map((a) => (a.cmd === "save_plane" ? "plane" : a.args.name)),
+      ).toEqual(["plane", "api", "cli"]),
+    );
+    expect((await screen.findByRole("status")).textContent).toContain("✓ Committed the plane");
   });
 });

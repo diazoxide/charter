@@ -11,6 +11,7 @@ use std::path::Path;
 use charter_core::planegit::{self, Trigger};
 use charter_core::planesave;
 use charter_core::repocmd::Say;
+use charter_core::reposave;
 
 use crate::planes::{PlaneId, Planes};
 
@@ -23,6 +24,8 @@ const JOURNAL_SHOWN: usize = 50;
 pub struct SaveEntry {
     /// Seconds since the epoch.
     pub at: f64,
+    /// `plane`, or `repo:<workspace>/<name>`.
+    pub target: String,
     pub trigger: String,
     pub mode: String,
     pub files: u32,
@@ -221,6 +224,134 @@ pub fn save_as(
     crate::workspaces::ran(code, said)
 }
 
+/// One workspace repo's save standing, for its row in the Saving view (charter-app#299).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoSaving {
+    pub name: String,
+    /// `[repos.<name>] mode`: `pr` when neither file says.
+    pub mode: String,
+    /// The file that decided the mode, or `default`.
+    pub mode_from: String,
+    /// Whether it is saved by itself — off unless its table turns it on.
+    pub autosave: bool,
+    /// `off` for a repo charter never saves; else `blocked`, `changed`, `committed`,
+    /// `pr-open` or `saved`.
+    pub stage: String,
+    /// The branch the clone is on; `null` on none.
+    pub branch: Option<String>,
+    /// Files a save would take.
+    pub changed: u32,
+    /// Commits the remote's copy of the branch lacks; `null` for a branch never pushed.
+    pub ahead: Option<u32>,
+    pub pr: Option<String>,
+    pub blocked: Option<String>,
+    /// Whether a save would push.
+    pub pushes: bool,
+}
+
+/// Every clone in `workspace`, as the Saving view draws them. Read from git and the journal,
+/// never the network.
+///
+/// On a blocking thread: it asks git once or twice per clone.
+#[tauri::command]
+#[specta::specta]
+pub async fn workspace_saving(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+) -> Result<Vec<RepoSaving>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || repos_saving(&root, &workspace))
+        .await
+        .map_err(|err| format!("reading the repos' save state did not finish: {err}"))?
+}
+
+/// Save one repo of `workspace`, as its row's button does. Refused, with whom it waits for,
+/// while any chat in the workspace is mid-turn: a save the operator asked for does not queue
+/// itself to run later, unwatched.
+///
+/// On a blocking thread: it commits, and may push and open a pull request.
+#[tauri::command]
+#[specta::specta]
+pub async fn save_repo(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    name: String,
+    message: Option<String>,
+) -> Result<Vec<String>, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    let mid_turn = held.mid_turn_in(&workspace);
+    tauri::async_runtime::spawn_blocking(move || {
+        save_repo_in(&root, &workspace, &name, message.as_deref(), &mid_turn)
+    })
+    .await
+    .map_err(|err| format!("the save did not finish: {err}"))?
+}
+
+/// [`workspace_saving`], without a runtime.
+pub fn repos_saving(root: &Path, workspace: &str) -> Result<Vec<RepoSaving>, String> {
+    let found = charter_core::repos::clones(root, workspace).map_err(|why| why.to_string())?;
+    Ok(found
+        .repos
+        .iter()
+        .map(|repo| {
+            let standing = reposave::standing(root, workspace, repo);
+            RepoSaving {
+                stage: if standing.mode == planesave::Mode::Off {
+                    "off".to_owned()
+                } else {
+                    standing.stage.word().to_owned()
+                },
+                name: standing.name,
+                mode: standing.mode.as_str().to_owned(),
+                mode_from: standing.mode_from.to_owned(),
+                autosave: standing.autosave,
+                branch: standing.branch,
+                changed: standing.changed,
+                ahead: standing.ahead,
+                pr: standing.pr,
+                blocked: standing.blocked,
+                pushes: standing.pushes,
+            }
+        })
+        .collect())
+}
+
+/// [`save_repo`], without a runtime.
+pub fn save_repo_in(
+    root: &Path,
+    workspace: &str,
+    name: &str,
+    message: Option<&str>,
+    mid_turn: &[String],
+) -> Result<Vec<String>, String> {
+    let found = charter_core::repos::clones(root, workspace).map_err(|why| why.to_string())?;
+    let repo = found
+        .repos
+        .iter()
+        .find(|repo| repo.name == name)
+        .ok_or_else(|| format!("{workspace} holds no clone called {name}"))?;
+    let message = message.map(str::trim).filter(|m| !m.is_empty());
+    let mut said: Vec<Say> = Vec::new();
+    let code = reposave::save_as(
+        &reposave::Request {
+            plane: root,
+            workspace,
+            name,
+            clone: &repo.path,
+            message,
+            no_push: false,
+            mid_turn,
+        },
+        Trigger::Manual,
+        &mut |line| said.push(line),
+    );
+    crate::workspaces::ran(code, said)
+}
+
 /// One journal line, with what it lacks read as empty rather than refused: the journal is
 /// charter's own note, and a line an older charter wrote is still worth showing.
 fn entry_of(line: &serde_json::Value) -> SaveEntry {
@@ -230,6 +361,7 @@ fn entry_of(line: &serde_json::Value) -> SaveEntry {
             .get("at")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0),
+        target: text("target").unwrap_or("plane").to_owned(),
         trigger: text("trigger").unwrap_or("").to_owned(),
         mode: text("mode").unwrap_or("").to_owned(),
         files: line
@@ -379,6 +511,84 @@ mod tests {
             saving_of(dir.path()).behind,
             None,
             "nothing to count against"
+        );
+    }
+
+    /// A plane saying `toml`, with a workspace `alpha` holding a clone `widget` of one commit.
+    fn plane_with_a_repo(toml: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = plane(toml);
+        let clone = dir.path().join("workspaces/alpha/widget");
+        std::fs::create_dir_all(&clone).unwrap();
+        git(&clone, &["init", "-q", "-b", "main"]);
+        git(&clone, &["config", "user.name", "t"]);
+        git(&clone, &["config", "user.email", "t@example.invalid"]);
+        std::fs::write(clone.join("README.md"), "one").unwrap();
+        git(&clone, &["add", "-A"]);
+        git(&clone, &["commit", "-q", "-m", "one"]);
+        (dir, clone)
+    }
+
+    #[test]
+    fn each_repo_in_the_workspace_is_a_row_with_its_mode_and_stage() {
+        let (dir, clone) = plane_with_a_repo("[repos.widget]\nmode = \"commit\"\n");
+        std::fs::write(clone.join("a.md"), "a").unwrap();
+
+        let rows = repos_saving(dir.path(), "alpha").expect("the workspace reads");
+
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(
+            (row.name.as_str(), row.mode.as_str(), row.mode_from.as_str()),
+            ("widget", "commit", "charter.toml")
+        );
+        assert_eq!((row.stage.as_str(), row.changed), ("changed", 1));
+        assert_eq!(row.branch.as_deref(), Some("main"));
+        assert!(!row.autosave, "a repo's auto-save is off by default");
+    }
+
+    #[test]
+    fn a_repo_charter_never_saves_says_off_rather_than_a_stage() {
+        let (dir, clone) = plane_with_a_repo("[repos.widget]\nmode = \"off\"\n");
+        std::fs::write(clone.join("a.md"), "a").unwrap();
+
+        assert_eq!(repos_saving(dir.path(), "alpha").unwrap()[0].stage, "off");
+    }
+
+    #[test]
+    fn a_repo_save_waits_for_a_chat_mid_turn_and_names_it() {
+        let (dir, clone) = plane_with_a_repo("[repos.widget]\nmode = \"commit\"\n");
+        std::fs::write(clone.join("a.md"), "a").unwrap();
+
+        let err = save_repo_in(dir.path(), "alpha", "widget", None, &["alpha.2".to_owned()])
+            .expect_err("held back");
+
+        assert_eq!(
+            err,
+            "Not saved: alpha.2 is mid-turn in alpha. A repo is saved between turns — save \
+             again when the turn ends."
+        );
+        assert_eq!(
+            repos_saving(dir.path(), "alpha").unwrap()[0].stage,
+            "changed"
+        );
+
+        let said = save_repo_in(dir.path(), "alpha", "widget", Some(" from the row "), &[])
+            .expect("saved once the turn ended");
+        assert!(said.iter().any(|l| l.contains("from the row")), "{said:?}");
+        assert_eq!(repos_saving(dir.path(), "alpha").unwrap()[0].stage, "saved");
+        let last = &saving_of(dir.path()).journal[0];
+        assert_eq!(
+            (last.target.as_str(), last.outcome.as_str()),
+            ("repo:alpha/widget", "committed")
+        );
+    }
+
+    #[test]
+    fn a_repo_the_workspace_does_not_hold_is_refused_by_name() {
+        let (dir, _clone) = plane_with_a_repo("");
+        assert_eq!(
+            save_repo_in(dir.path(), "alpha", "gadget", None, &[]).unwrap_err(),
+            "alpha holds no clone called gadget"
         );
     }
 

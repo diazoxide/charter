@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { commands, type PlaneId, type PlaneSaving } from "./bindings";
+import { commands, type PlaneId, type PlaneSaving, type RepoSaving } from "./bindings";
 import { usePlaneChanged } from "./planeChanged";
 
 /** The window event a finished save sends, so every reader of the save standing reads again —
@@ -69,6 +69,15 @@ export function usePlaneSaving(plane: PlaneId | undefined): {
     return () => window.removeEventListener("focus", fetch);
   }, [plane]);
 
+  useRereads(setAsked);
+
+  const reread = useCallback(() => setAsked((n) => n + 1), []);
+  // Another project's answer is not this one's: drawn only for the project it was read for.
+  return { saving: saving?.plane === plane ? saving?.standing : undefined, reread };
+}
+
+/** Ask again on focus, after any save, and every {@link SAVING_REREAD_MS}. */
+function useRereads(setAsked: (next: (n: number) => number) => void): void {
   useEffect(() => {
     const again = () => setAsked((n) => n + 1);
     window.addEventListener("focus", again);
@@ -79,9 +88,110 @@ export function usePlaneSaving(plane: PlaneId | undefined): {
       window.removeEventListener(PLANE_SAVED, again);
       clearInterval(timer);
     };
-  }, []);
+  }, [setAsked]);
+}
 
-  const reread = useCallback(() => setAsked((n) => n + 1), []);
-  // Another project's answer is not this one's: drawn only for the project it was read for.
-  return { saving: saving?.plane === plane ? saving?.standing : undefined, reread };
+/**
+ * **The workspace's repos' save standing, kept fresh** (charter-app#299): one row per clone,
+ * read as {@link usePlaneSaving} reads the plane and at the same moments. `undefined` until
+ * the first answer, and for no workspace at all — the strip of chats outside every workspace
+ * has no repos.
+ */
+export function useRepoSaving(
+  plane: PlaneId | undefined,
+  workspace: string | undefined,
+): RepoSaving[] | undefined {
+  const [repos, setRepos] = useState<{ key: string; rows: RepoSaving[] }>();
+  const [asked, setAsked] = useState(0);
+  const changed = usePlaneChanged(plane === undefined ? [] : [plane]);
+  const key =
+    plane === undefined || workspace === undefined ? undefined : `${plane}\u0000${workspace}`;
+
+  useEffect(() => {
+    if (plane === undefined || workspace === undefined || key === undefined) return;
+    let gone = false;
+    void commands
+      .workspaceSaving(plane, workspace)
+      .then((answer) => {
+        if (!gone && answer.status === "ok" && Array.isArray(answer.data))
+          setRepos({ key, rows: answer.data });
+      })
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+    };
+  }, [plane, workspace, key, asked, changed]);
+
+  useRereads(setAsked);
+  return repos?.key === key ? repos?.rows : undefined;
+}
+
+/** The stages, furthest back first. */
+const STAGES = ["blocked", "changed", "committed", "pr-open", "saved"];
+
+/** How far back a stage is: smaller is further back. A stage charter does not know is saved. */
+export function behindness(stage: string): number {
+  const at = STAGES.indexOf(stage);
+  return at === -1 ? STAGES.length : at;
+}
+
+/** Whether pressing a repo's Save could do anything: it is saved at all, and it has files to
+ *  commit, a blocked save to try again, or commits a push would carry. */
+export function repoSavable(repo: RepoSaving): boolean {
+  return (
+    repo.stage !== "off" &&
+    (repo.changed > 0 || repo.stage === "blocked" || (repo.stage === "committed" && repo.pushes))
+  );
+}
+
+/** A repo's stage, as its row and the title bar say it. */
+export function repoStageText(repo: RepoSaving): string {
+  switch (repo.stage) {
+    case "off":
+      return "Off — charter does not save this repo";
+    case "blocked":
+      return `Blocked: ${repo.blocked ?? "the last save could not finish"}`;
+    case "changed":
+      return `${repo.changed} changed`;
+    case "committed":
+      return repo.ahead === null ? "Committed, not pushed" : `${repo.ahead} committed, not pushed`;
+    case "pr-open":
+      return "Pushed — waiting on its pull request";
+    default:
+      return "Saved";
+  }
+}
+
+/** What saving everything said: every line, and every refusal in the core's words. */
+export type SavedAll = { said: string[]; refused: string[] };
+
+/**
+ * **Save all** (charter-app#299): the plane, when `plane` is true, then each repo in `repos`,
+ * one after another — a repo's save may push and open a pull request, and the core runs one
+ * save per tree at a time anyway. A refusal does not stop the rest: each is its own tree.
+ */
+export async function saveAll(
+  planeId: PlaneId,
+  plane: boolean,
+  message: string | null,
+  workspace: string | undefined,
+  repos: readonly RepoSaving[],
+): Promise<SavedAll> {
+  const out: SavedAll = { said: [], refused: [] };
+  const take = (got: { status: "ok"; data: string[] } | { status: "error"; error: string }) => {
+    if (got.status === "ok") out.said.push(...got.data);
+    else out.refused.push(got.error);
+  };
+  const guarded = async (run: () => Promise<Parameters<typeof take>[0]>) => {
+    try {
+      take(await run());
+    } catch (err: unknown) {
+      out.refused.push(String(err));
+    }
+  };
+  if (plane) await guarded(() => commands.savePlane(planeId, message));
+  if (workspace !== undefined)
+    for (const repo of repos.filter(repoSavable))
+      await guarded(() => commands.saveRepo(planeId, workspace, repo.name, null));
+  return out;
 }

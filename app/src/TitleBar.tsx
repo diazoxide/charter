@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { commands, type PlaneSaving, type TitleBarRoom } from "./bindings";
+import { commands, type PlaneSaving, type RepoSaving, type TitleBarRoom } from "./bindings";
 import { SaveIndicator } from "./SavingView";
 import { LiveMark } from "./LiveDialog";
 import { AboutCharter } from "./About";
@@ -112,6 +112,8 @@ export function TitleBar({
    */
   save?: {
     saving: PlaneSaving;
+    /** The active workspace's repos, counted into the indicator (charter-app#299). */
+    repos?: readonly RepoSaving[];
     busy: boolean;
     onOpen: () => void;
     onSave: () => void;
