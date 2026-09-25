@@ -1350,11 +1350,27 @@ button.show-more:focus-visible {
   opacity: 0.6;
 }
 
-.explorer h2 {
-  font-size: 0.8rem;
+/* **A sidebar section's title, on either side of the window** — the Attention region's
+   panels and the Explorer's own sections. Smaller, heavier and brighter than a row, and never
+   dimmed, so it reads as where a section starts and not as the first thing in it. The mark
+   takes the title's colour for the same reason: a muted glyph is what a row carries. */
+.sidebar-title {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  opacity: 0.7;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+/* `h2.`, so this outweighs each region's own `.panels .node-icon` wherever it sits in the file. */
+h2.sidebar-title .node-icon {
+  color: inherit;
+}
+
+.explorer h2 {
   margin: 0.75rem 0 0.25rem;
 }
 
@@ -2064,15 +2080,15 @@ button.show-more:focus-visible {
   padding: 0.5rem;
   font-size: 0.85rem;
 }
-.panels h2 {
-  display: flex;
-  gap: 0.35rem;
-  align-items: center;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  opacity: 0.7;
-  margin: 0.75rem 0 0.25rem;
+/* **One section per panel, and a line between them** (`PanelSection.tsx`). The divider runs
+   the region's full width, through its padding, so it reads as the edge of a section and not
+   as a rule inside one; the first section has none, the region's own edge being its top. */
+.panels > section {
+  margin-inline: -0.5rem;
+  padding: 0.5rem 0.5rem 0.75rem;
+}
+.panels > section + section {
+  border-top: 1px solid var(--layer-divider);
 }
 .panels ul {
   list-style: none;
@@ -3842,7 +3858,9 @@ button.show-more:focus-visible {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  margin: 0.75rem 0 0.25rem;
+  /* As tall as a heading with a view's button, so a heading without one lines up the same. */
+  min-height: 1.4rem;
+  margin: 0 0 0.35rem;
 }
 
 .panels .panel-head h2 {
