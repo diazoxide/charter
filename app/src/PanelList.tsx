@@ -154,10 +154,14 @@ export function PanelList({
   // The rows are ONE Tab stop, and Up and Down move along them (charter-app#189, `roving.ts`):
   // the row whose card is open, or the first that does anything. A read-only row is a `<span>`
   // and is no stop at all.
-  const stop = useTabStop(
-    open,
-    drawn.filter((row) => row.detail !== null || row.runs !== null).map((row) => row.key),
-  );
+  // An extension's row actions are items of the same group (charter-app#341): Down walks from a
+  // row to its actions and on to the next row, and the list stays one Tab stop.
+  const stop = useTabStop(open, [
+    ...drawn.filter((row) => row.detail !== null || row.runs !== null).map((row) => row.key),
+    ...(onAct === undefined
+      ? []
+      : drawn.flatMap((row) => row.actions.map((action) => actionStop(row, action)))),
+  ]);
 
   if (rows.length === 0) {
     return (
@@ -227,6 +231,12 @@ export function PanelList({
       )}
     </div>
   );
+}
+
+/** The roving-focus id of one of a row's actions: its row's key and its id, which a row's key
+ *  alone can never equal. */
+function actionStop(row: PanelRow, action: RowAction): string {
+  return `${row.key}\u0000${action.id}`;
 }
 
 /** The card a row opens when the panel does not supply a richer one: the row's own words. */
@@ -336,16 +346,11 @@ function Row({
     onAct !== undefined && row.actions.length > 0 ? (
       <span className="row-actions">
         {row.actions.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            className="row-action"
-            // #190: WebKit leaves a button out of the tab sequence without this.
-            tabIndex={0}
-            onClick={() => onAct(row, action)}
-          >
-            {action.title}
-          </button>
+          <RovingFocusGroup.Item key={action.id} asChild tabStopId={actionStop(row, action)}>
+            <button type="button" className="row-action" onClick={() => onAct(row, action)}>
+              {action.title}
+            </button>
+          </RovingFocusGroup.Item>
         ))}
       </span>
     ) : null;

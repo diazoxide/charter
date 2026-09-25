@@ -11,7 +11,14 @@
 //!
 //! - a path git ignores — the plane's `.charter/` state among them;
 //! - a write that leaves a file's size and modification time as they were;
-//! - anything in a plane that is not a git repository, where it looks at nothing.
+//! - anything in a plane with no `.git` of its own at its root — one that is not a repository,
+//!   or one that sits inside a larger repository — where it looks at nothing;
+//! - anything at all when `git status` itself fails, which reads as a plane with nothing
+//!   changed (`planegit::changed_paths` answers an empty list), so nothing is reported.
+//!
+//! **And it runs for every question**, a view's as much as an action's, since a view that
+//! writes outside what it declared is the same overreach. In a plane where chats are writing,
+//! that makes a report about a chat's write possible whenever one lands while a program answers.
 //!
 //! **And it cannot say who wrote.** A chat working in the same plane while the program answered
 //! writes too; the report says what changed while the extension was answering, and says that

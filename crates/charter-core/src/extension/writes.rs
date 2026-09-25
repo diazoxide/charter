@@ -151,15 +151,23 @@ fn glob_segment(segment: &str) -> glob::Pattern {
 
 /// The declared paths resolved against `plane`, absolute, as a request hands them.
 ///
-/// **A pattern segment is matched against what is on disk now; a named one is taken as it is,
-/// there or not.** So `workspaces/*/todos/` in a plane with workspaces `a` and `b` is
-/// `<plane>/workspaces/a/todos/` and `<plane>/workspaces/b/todos/`, whether or not either `todos`
-/// exists yet — an extension may be the first to write there. A directory path keeps its `/`.
+/// **A pattern segment on the way is matched against the directories on disk now; a named one
+/// is taken as it is, there or not.** So `workspaces/*/todos/` in a plane with workspaces `a` and
+/// `b` is `<plane>/workspaces/a/todos/` and `<plane>/workspaces/b/todos/`, whether or not either
+/// `todos` exists yet — an extension may be the first to write there. Only a real directory
+/// matches on the way: a file, and a link, which could lead out of the plane, never do.
+///
+/// **The last segment is handed as it is declared**, pattern and all: `notes/*.md` is
+/// `<plane>/notes/*.md`, because what it covers includes files the extension has not created
+/// yet, and a list of the ones that exist would tell it it may write only those. A directory path
+/// keeps its `/`.
 pub fn resolve(plane: &Path, writes: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for path in writes {
         let mut reached: Vec<PathBuf> = vec![plane.to_path_buf()];
-        for segment in segments(path) {
+        let all = segments(path);
+        let (last, on_the_way) = all.split_last().unwrap_or((&"", &[]));
+        for segment in on_the_way {
             reached = if wild(segment) {
                 let pattern = glob_segment(segment);
                 let mut next = Vec::new();
@@ -169,6 +177,8 @@ pub fn resolve(plane: &Path, writes: &[String]) -> Vec<String> {
                     };
                     let mut names: Vec<String> = entries
                         .filter_map(Result::ok)
+                        // `file_type` does not follow a link, so a link is never a directory here.
+                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
                         .filter_map(|entry| entry.file_name().into_string().ok())
                         .filter(|name| pattern.matches_with(name, MATCHING))
                         .collect();
@@ -180,12 +190,9 @@ pub fn resolve(plane: &Path, writes: &[String]) -> Vec<String> {
                 reached.iter().map(|dir| dir.join(segment)).collect()
             };
         }
+        let reached = reached.into_iter().map(|dir| dir.join(last));
         let slash = if path.ends_with('/') { "/" } else { "" };
-        out.extend(
-            reached
-                .into_iter()
-                .map(|at| format!("{}{slash}", at.display())),
-        );
+        out.extend(reached.map(|at| format!("{}{slash}", at.display())));
     }
     out
 }
@@ -271,13 +278,23 @@ mod tests {
         for dir in ["workspaces/a", "workspaces/b", "workspaces/.hidden"] {
             std::fs::create_dir_all(plane.path().join(dir)).expect("a workspace");
         }
-        let resolved = resolve(plane.path(), &declared(&["workspaces/*/todos/"]));
+        // A file and a link beside the workspaces are not workspaces a path can go through.
+        std::fs::write(plane.path().join("workspaces/README.md"), "").expect("a file");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/", plane.path().join("workspaces/out")).expect("a link");
+
+        let resolved = resolve(
+            plane.path(),
+            &declared(&["workspaces/*/todos/", "notes/*.md"]),
+        );
         let root = plane.path().display();
         assert_eq!(
             resolved,
             [
                 format!("{root}/workspaces/a/todos/"),
                 format!("{root}/workspaces/b/todos/"),
+                // The last segment as declared: it covers files not written yet.
+                format!("{root}/notes/*.md"),
             ]
         );
     }

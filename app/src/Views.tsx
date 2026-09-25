@@ -338,7 +338,9 @@ function Answer({
   // refreshed, when it answered them; and a sentence — its refusal, or what changed outside the
   // extension's declared paths — to say above the answer.
   const [refreshed, setRefreshed] = useState<readonly PanelBlock[]>();
-  const [acted, setActed] = useState<string>();
+  // `undefined` until an action has run; then what that action came to — which replaces the
+  // question's own sentence, so the red line is always about the last thing the operator did.
+  const [acted, setActed] = useState<{ said: string | null }>();
   const [asking, setAsking] = useState<{ row: PanelRow; action: RowAction }>();
 
   useEffect(() => {
@@ -386,7 +388,7 @@ function Answer({
     );
     if ("refused" in outcome) return outcome.refused;
     if (outcome.answer.blocks !== null) setRefreshed(outcome.answer.blocks);
-    setActed(outcome.answer.overreach ?? undefined);
+    setActed({ said: outcome.answer.overreach });
     return undefined;
   };
   if (answer.kind === "gone") {
@@ -397,7 +399,7 @@ function Answer({
       <EmptyState headline={`${title} is not here any more`} body={answer.why} testid="view-gone" />
     );
   }
-  const seen = acted ?? answer.overreach;
+  const seen = acted === undefined ? answer.overreach : acted.said;
   return (
     <>
       {seen !== undefined && seen !== null && (
@@ -419,7 +421,7 @@ function Answer({
                   return;
                 }
                 void act(row, action, false).then((refused) => {
-                  if (refused !== undefined) setActed(refused);
+                  if (refused !== undefined) setActed({ said: refused });
                 });
               }
         }

@@ -438,6 +438,27 @@ describe("an action on an extension's row (charter-app#341)", () => {
     expect(ran).toEqual([]);
   });
 
+  it("says only what the last action came to, not what the view's own question saw before it", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "open_view")
+        return {
+          kind: "answered",
+          blocks: counted(0, [JOT]),
+          took_ms: 1,
+          overreach: "While 'extension-probe' was answering, charter saw these change: old.md.",
+        };
+      if (cmd === "run_action") return { blocks: counted(1, [JOT]), took_ms: 1, overreach: null };
+      return undefined;
+    });
+    draw(PROBE, { title: "Probe" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("old.md");
+
+    await userEvent.click(screen.getByRole("button", { name: "Jot a note" }));
+
+    await screen.findByText("1 notes");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("says what the action changed outside the extension's declared paths", async () => {
     acting([JOT], () => ({
       blocks: null,

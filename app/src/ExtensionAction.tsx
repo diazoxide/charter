@@ -52,7 +52,7 @@ export async function runExtensionAction(
 /** What pressing Run came to, for the dialog: a refusal to show and let the operator try
  *  again or cancel, a sentence about what it ran to show before it closes, or nothing — the
  *  caller closes it. */
-export type Ran = { refused: string } | { seen: string } | undefined;
+export type Answered = { refused: string } | { seen: string } | undefined;
 
 /**
  * The question charter asks before an action that asks first. **Cancel has the focus**, as in
@@ -70,7 +70,7 @@ export function AskFirst({
 }: {
   extension: string;
   action: RowAction;
-  onRun: () => Promise<Ran>;
+  onRun: () => Promise<Answered>;
   onCancel: () => void;
 }) {
   const [trouble, setTrouble] = useState<string>();

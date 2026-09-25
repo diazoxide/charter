@@ -317,6 +317,9 @@ export function PlaneView({
   const [makingVault, setMakingVault] = useState(false);
   const [vaultTrouble, setVaultTrouble] = useState<string>();
   const [busyVault, setBusyVault] = useState(false);
+  /** A palette command's action that asks first, waiting on the operator's answer
+   *  (charter-app#341). */
+  const [askingAction, setAskingAction] = useState<{ extension: string; action: RowAction }>();
   /**
    * The workspace the operator is being asked about deleting, if any.
    *
@@ -330,13 +333,6 @@ export function PlaneView({
    * the older reading taken when this dialog opened — is what the force button is drawn from
    * once there is one.
    */
-  /** A palette command's action that asks first, waiting on the operator's answer
-   *  (charter-app#341). */
-  const [askingAction, setAskingAction] = useState<{
-    extension: string;
-    action: RowAction;
-    name: string;
-  }>();
   const [removing, setRemoving] = useState<{
     workspace: string;
     atRisk?: AtRisk[];
@@ -1662,7 +1658,7 @@ export function PlaneView({
   const runAction = useCallback(
     async (extension: string, action: RowAction, name: string): Promise<Ran> => {
       if (action.asks_first) {
-        setAskingAction({ extension, action, name });
+        setAskingAction({ extension, action });
         return { ok: true };
       }
       const outcome = await runExtensionAction(
