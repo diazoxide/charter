@@ -11,5 +11,8 @@ __pycache__/
 # The charter binary the release workflow stages as a Tauri sidecar before bundling.
 /app/src-tauri/binaries/
 
+# The built-in extensions the release workflow assembles into the bundle's resources.
+/app/src-tauri/extensions/
+
 # Where the release workflow gathers the bundles it uploads.
 /dist/

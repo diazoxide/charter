@@ -55,8 +55,12 @@ impl Installed {
         assert!(status.success(), "assemble failed: {status}");
 
         let installed = Self { dir };
-        let found = extension::install(&installed.config(), &installed.dir.path().join("ext"))
-            .expect("installed");
+        let found = extension::install(
+            &installed.config(),
+            &extension::BuiltIn::none(),
+            &installed.dir.path().join("ext"),
+        )
+        .expect("installed");
         extension::approve(
             &installed.config(),
             found.id(),

@@ -1,6 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "externalBin": ["binaries/charter"]
+    "externalBin": ["binaries/charter"],
+    "resources": {
+      "plugin/": "plugin/",
+      "extensions/": "extensions/"
+    }
   }
 }

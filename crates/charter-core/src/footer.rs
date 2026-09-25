@@ -276,6 +276,7 @@ fn badge_rows(plane: &Path, config: &Path, workspace: &str, now: DateTime<Utc>) 
     use crate::extension::{facts, project::Choices};
     let read = facts::gather(
         config,
+        &crate::extension::BuiltIn::none(),
         || Choices::read_in(plane, Some(workspace)),
         now,
         facts::Reading::Footer,

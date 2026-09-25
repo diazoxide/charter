@@ -42,25 +42,50 @@ fn verify_re() -> regex::Regex {
         .expect("the verification pattern compiles")
 }
 
+/// How many days back the RECENT column looks unless it is told otherwise — `charter persona
+/// stats --recent-days`'s default, and the window the persona statistics view counts "recent"
+/// in, so that the two say the same number.
+pub const RECENT_DAYS: i64 = 14;
+
+/// `name`'s committed memories as `charter persona stats` reads them: one date each, or `None`
+/// for a memory with no date `memstore.memory_date` can find.
+///
+/// **The one reading both the CLI and the persona statistics view count from**
+/// (charter-app#339). [`crate::handed::personas`] hands these dates to the view and [`row`]
+/// counts them, so a memory the table counts is a memory the view counts, on the same day.
+pub fn written(root: &Path, name: &str) -> Vec<Option<NaiveDate>> {
+    entries(root, name).iter().map(dated).collect()
+}
+
+/// How many of `days` fall in the last `recent_days` days before `today`: the RECENT column.
+///
+/// Public so that the persona statistics view links it rather than repeating it. A second
+/// spelling of "recent" is how the two would come to disagree by a day.
+pub fn recent(days: &[Option<NaiveDate>], recent_days: i64, today: NaiveDate) -> usize {
+    days.iter()
+        .flatten()
+        .filter(|day| (today - **day).num_days() <= recent_days)
+        .count()
+}
+
+fn entries(root: &Path, name: &str) -> Vec<crate::memstore::Found> {
+    let dir = root.join("personas").join(name).join("memory");
+    crate::memstore::read_entries(root, &dir).0
+}
+
+fn dated(entry: &crate::memstore::Found) -> Option<NaiveDate> {
+    let file = entry.path.file_name().unwrap_or_default().to_string_lossy();
+    crate::memstore::memory_date(&entry.text, &file)
+}
+
 /// `persona.stats`: one row from `name`'s committed memory.
 pub fn row(root: &Path, name: &str, recent_days: i64, today: NaiveDate) -> Row {
-    let dir = root.join("personas").join(name).join("memory");
-    let (entries, _) = crate::memstore::read_entries(root, &dir);
+    let entries = entries(root, name);
     let total = entries.len();
     let re = verify_re();
-    let mut recent = 0;
-    let mut verified = 0;
-    for e in &entries {
-        if re.is_match(&e.text) {
-            verified += 1;
-        }
-        let file = e.path.file_name().unwrap_or_default().to_string_lossy();
-        if let Some(day) = crate::memstore::memory_date(&e.text, &file)
-            && (today - day).num_days() <= recent_days
-        {
-            recent += 1;
-        }
-    }
+    let verified = entries.iter().filter(|e| re.is_match(&e.text)).count();
+    let days: Vec<Option<NaiveDate>> = entries.iter().map(dated).collect();
+    let recent = recent(&days, recent_days, today);
     let mut dup: BTreeSet<usize> = BTreeSet::new();
     for (_, a, b) in crate::memstore::duplicates(&entries, 0.5) {
         dup.insert(a);
