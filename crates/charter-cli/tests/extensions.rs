@@ -6,7 +6,6 @@
 
 #![cfg(unix)]
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -126,12 +125,7 @@ impl Rig {
             },
         );
         let mut child = command.spawn().expect("charter runs");
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(stdin.as_bytes())
-            .expect("written");
+        stand_in::feed(&mut child, stdin.as_bytes());
         let out = child.wait_with_output().expect("charter finishes");
         Ran {
             code: out.status.code().unwrap_or(-1),
