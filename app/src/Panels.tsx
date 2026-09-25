@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
+import { PanelSection } from "./PanelSection";
 import { Vaults, type VaultsSaid } from "./Vaults";
 import { Chart, Facts } from "./Views";
 import { commands, type ExtensionView, type PanelView } from "./bindings";
@@ -216,25 +217,20 @@ function Contributed({
     : undefined;
 
   return (
-    <section data-testid={`panel-${named(panel)}`} data-panel-from={panel.from ?? "charter"}>
-      <div className="panel-head">
-        <h2>
-          <Mark className="node-icon" />
-          {panel.title}
-          {/* **What is in force, after approval and not only at it** — ADR 0041 item
-              5. An operator has to be able to tell a panel his own charter draws from one a
-              stranger's extension contributed, without opening a dialog to find out. */}
-          {panel.from !== null && <span className="panel-from">{` · ${panel.from}`}</span>}
-        </h2>
-        {views.map((view) => (
-          <ViewButton
-            key={`${view.extension}/${view.id}`}
-            offer={offers.get(`view.open:${view.extension}/${view.id}`)}
-            onPress={onPress}
-          />
-        ))}
-      </div>
-
+    <PanelSection
+      testid={`panel-${named(panel)}`}
+      from={panel.from ?? "charter"}
+      mark={Mark}
+      title={panel.title}
+      provenance={panel.from ?? undefined}
+      actions={views.map((view) => (
+        <ViewButton
+          key={`${view.extension}/${view.id}`}
+          offer={offers.get(`view.open:${view.extension}/${view.id}`)}
+          onPress={onPress}
+        />
+      ))}
+    >
       {panel.blocks.map((block, at) =>
         block.kind === "chart" ? (
           <Chart key={at} chart={block} />
@@ -288,7 +284,7 @@ function Contributed({
           />
         ),
       )}
-    </section>
+    </PanelSection>
   );
 }
 

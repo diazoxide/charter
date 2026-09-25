@@ -173,6 +173,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   button and the ✋ menu do, and a stretch of the bar is always left free to drag the window
   by. How many chats are running is now on the status line.
   ([#394](https://github.com/diazoxide/charter-app/issues/394))
+- **The right sidebar's sections are easier to tell apart.** A line now separates Todos,
+  Personas, Vaults and every panel an extension adds. Each heading is a smaller, bolder title
+  in brighter text, so it no longer looks like the first row of its list. The left sidebar's
+  "Not cloned here" heading matches.
 - The alerts drawer no longer repeats what the title bar's save indicator already says about
   the plane: a plane-root alert there now names only a detached HEAD or a branch other than
   the default. Its remedy, in the drawer and on the terminal status line, now reads "save the

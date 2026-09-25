@@ -287,6 +287,23 @@ describe("a panel", () => {
     expect(within(screen.getByTestId("panel-ext-acme-reviews")).getByText(/acme/)).toBeVisible();
   });
 
+  it("heads every section with the same title, charter's, a stranger's and the vaults' alike", () => {
+    // A title that reads as a row is what made the region one long list; the fix holds only if
+    // no section, however it is contributed, is drawn outside `PanelSection`.
+    draw({
+      contributed: [contributedPanel()],
+      vaults: [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }],
+    });
+
+    const sections = screen.getByTestId("panels").querySelectorAll(":scope > section");
+    expect(sections).toHaveLength(4);
+    for (const section of sections) {
+      expect(within(section as HTMLElement).getByRole("heading", { level: 2 })).toHaveClass(
+        "sidebar-title",
+      );
+    }
+  });
+
   it("gives a contributed panel the list primitive, which is the test of the contract", async () => {
     // **The whole claim, in one test.** An extension declared rows in a manifest and got the
     // shortening, the card, the bound, the load-more and the search — none of which it asked
