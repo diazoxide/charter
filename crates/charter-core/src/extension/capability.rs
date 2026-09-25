@@ -45,6 +45,11 @@ pub enum Capability {
     /// shown only while the extension is on for that project or workspace (ADR 0048). Its shape
     /// is `contributes.repo-columns`.
     RepoColumns,
+    /// Commands on the `charter` command line under the extension's own id — `charter <id>
+    /// <command> …` — each a request of its own to its program, whose output and exit status
+    /// charter passes back unchanged (charter-app#342, protocol 3). Declared under
+    /// `contributes.cli`.
+    Cli,
 }
 
 impl Capability {
@@ -79,6 +84,12 @@ impl Capability {
                 "repo-columns",
                 "charter draws values from its facts file as columns in the repo table",
             ),
+            Self::Cli => (
+                "cli",
+                "adds commands to the charter command line, run as `charter <its id> <command>`; \
+                 each one starts its program, and charter passes back what it prints and its \
+                 exit status. The ones that write are listed here",
+            ),
         }
     }
 
@@ -88,6 +99,7 @@ impl Capability {
         match self {
             Self::Probe | Self::Badges | Self::RepoColumns | Self::Palette => 1,
             Self::Actions | Self::Writes => 2,
+            Self::Cli => 3,
         }
     }
 
@@ -108,6 +120,7 @@ impl Capability {
             Self::Palette,
             Self::Actions,
             Self::Writes,
+            Self::Cli,
         ]);
         known
     }
@@ -122,7 +135,12 @@ impl Capability {
     pub fn has_shape(self) -> bool {
         match self {
             Self::Probe => false,
-            Self::Badges | Self::RepoColumns | Self::Palette | Self::Actions | Self::Writes => true,
+            Self::Badges
+            | Self::RepoColumns
+            | Self::Palette
+            | Self::Actions
+            | Self::Writes
+            | Self::Cli => true,
         }
     }
 

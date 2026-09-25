@@ -177,12 +177,14 @@ use std::path::{Component, Path, PathBuf};
 
 pub mod acting;
 pub mod capability;
+pub mod cli;
 pub mod facts;
 pub mod project;
 pub mod writes;
 
 pub use acting::{Action, Command, Does};
 pub use capability::Capability;
+pub use cli::CliCommand;
 
 /// The registry, inside [`crate::machine::DIR`] and beside [`crate::machine::FILE`].
 pub const RECORD: &str = "extensions.json";
@@ -378,6 +380,9 @@ pub struct Manifest {
     pub badges: Vec<facts::DeclaredBadge>,
     /// The repo-table columns it declares (the `repo-columns` capability, [`facts`]).
     pub repo_columns: Vec<facts::DeclaredColumn>,
+    /// The commands it adds to the `charter` command line under its id ([`cli`], the `cli`
+    /// capability): each one a request of its own to [`Self::program`].
+    pub cli: Vec<CliCommand>,
 }
 
 /// One setting an extension declares: a key a project sets in `[extensions.<id>.settings]`.
@@ -1039,6 +1044,11 @@ fn parse(text: &str) -> Result<Manifest, String> {
             "has the id {id:?}, which does not start with a letter or a digit"
         ));
     }
+    // An id is what a command line reaches an extension by, so it is never a core word — for
+    // every extension, whether or not it adds commands today (charter-app#342).
+    if let Some(why) = cli::takes_a_core_word(id) {
+        return Err(why);
+    }
     let name = doc
         .get("name")
         .and_then(serde_json::Value::as_str)
@@ -1250,6 +1260,10 @@ fn parse(text: &str) -> Result<Manifest, String> {
         None => Vec::new(),
         Some(value) => writes::writes_of(value)?,
     };
+    let cli = match contributes.get(Capability::Cli.as_str()) {
+        None => Vec::new(),
+        Some(value) => cli::commands_of(value, program.as_deref(), !writes.is_empty())?,
+    };
 
     Ok(Manifest {
         protocol,
@@ -1267,6 +1281,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
         writes,
         badges,
         repo_columns,
+        cli,
     })
 }
 
@@ -2630,6 +2645,14 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
     declares.extend(found.manifest.palette.iter().map(|command| {
         acting::declares_command(command, &found.manifest.name, &found.manifest.actions)
     }));
+    declares.extend(
+        found
+            .manifest
+            .cli
+            .iter()
+            .filter(|command| command.writes)
+            .map(|command| cli::declares(command, found.id())),
+    );
     if !found.manifest.writes.is_empty() {
         declares.push(format!(
             "plane paths it writes: {}",

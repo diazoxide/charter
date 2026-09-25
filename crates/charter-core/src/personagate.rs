@@ -245,6 +245,23 @@ pub fn dangerous(binary: &str, args: &[String]) -> bool {
         .any(|tok| word().find_iter(tok).any(|w| bad.contains(&w.as_str())))
 }
 
+/// Whether `charter <args…>` runs an extension's command that charter cannot say only reads
+/// (charter-app#342) — **a write, as far as a persona's grant is concerned**, so the operator's
+/// prompt stays in front of it. `charter <id> <command>`, or a core-owned alias onto one, is a
+/// write unless the installed extension's manifest declares that command `"writes": false`; an
+/// extension that is not installed, a command it does not declare and a config home charter
+/// cannot find all read as writes. A core command is not decided here ([`dangerous`] is).
+pub fn writes_through_an_extension(binary: &str, args: &[String]) -> bool {
+    if binary != "charter" {
+        return false;
+    }
+    let Some((id, command)) = crate::extension::cli::extension_command(args) else {
+        return false;
+    };
+    crate::machine::config_root_if_there()
+        .is_none_or(|root| !crate::extension::cli::only_reads(&root, id, command))
+}
+
 /// `_path_candidates`: the token, and what is left after a leading `@` or after the first `=`,
 /// repeatedly — `--file=@x` is three spellings of one path.
 fn path_candidates(token: &str) -> Vec<String> {
@@ -673,7 +690,10 @@ pub fn decide(ask: &Ask) -> Option<(String, String)> {
     if !tools.contains(&binary) || is_interpreter(&binary) {
         return None;
     }
-    if names_another_program(&tokens, ask.cwd) || dangerous(&binary, &args) {
+    if names_another_program(&tokens, ask.cwd)
+        || dangerous(&binary, &args)
+        || writes_through_an_extension(&binary, &args)
+    {
         return None;
     }
     let surface = Surface::of(ask.plane, &State::of(ask.plane))?;

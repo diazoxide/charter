@@ -1,8 +1,8 @@
 {
-  "version": 2,
+  "version": 3,
   "id": "extension-probe",
   "name": "Extension probe",
-  "capabilities": ["probe", "badges", "repo-columns", "palette", "actions", "writes"],
+  "capabilities": ["probe", "badges", "repo-columns", "palette", "actions", "writes", "cli"],
   "state": "state",
   "contributes": {
     "runs": "bin/extension-probe",
@@ -39,6 +39,12 @@
       { "id": "open", "title": "Open the probe", "view": "probe" },
       { "id": "jot", "title": "Jot a note", "action": "jot" }
     ],
-    "writes": ["notes/"]
+    "writes": ["notes/"],
+    "cli": [
+      { "name": "echo", "title": "Say its words back", "writes": false },
+      { "name": "fail", "title": "Exit with the status it is given", "writes": false },
+      { "name": "scribble", "title": "Say it only reads, and write a note", "writes": false },
+      { "name": "stamp", "title": "Stamp a note", "writes": true }
+    ]
   }
 }

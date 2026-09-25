@@ -34,6 +34,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
+    // A command (protocol 3) answers as a command-line program does: what it prints, and its
+    // exit status, which charter passes on unchanged.
+    if let Ok(request) = serde_json::from_str::<serde_json::Value>(&line)
+        && extension_probe::command_of(&request).is_some()
+    {
+        let printed = extension_probe::run_command(&request);
+        print!("{}", printed.stdout);
+        eprint!("{}", printed.stderr);
+        let _ = std::io::stdout().flush();
+        return ExitCode::from(printed.status);
+    }
     let said = match serde_json::from_str(&line) {
         Ok(request) => extension_probe::answer(&request),
         Err(why) => serde_json::json!({
