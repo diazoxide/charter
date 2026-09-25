@@ -183,7 +183,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where its Save goes, too. A repo nobody has configured is now `off` instead of `pr`: charter
   saves no repo until `[repos.<name>] mode` says how. To keep saving a repo as before, set its
   mode to `pr`.
-
 - **The project tabs are in the title bar**, after the window controls, and the breadcrumb
   is gone: the project tab says which project and the workspace strip says which workspace.
   That is one tab row fewer above the panes. The tabs give way before About, the update
