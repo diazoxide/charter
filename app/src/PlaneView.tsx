@@ -837,8 +837,9 @@ export function PlaneView({
     [ofWorkspace],
   );
 
-  /** The workspaces the strip shows: this project's, plus the one for chats outside them all
-   *  when there are any. In the plane's own order, which is the sidebar's. */
+  /** Every workspace the window can bring forward: this project's, plus the one for chats
+   *  outside them all when there are any. In the plane's own order, which is the sidebar's.
+   *  The palette lists all of them; the strip draws fewer (`onWorkspaceStrip`, below). */
   const strips = useMemo(() => {
     if (sidebar === undefined) return [];
     const names = sidebar.workspaces.map((ws) => ws.name);
@@ -855,18 +856,35 @@ export function PlaneView({
     ];
   }, [filedIn, pinnedWorkspaces, sidebar, tabs]);
 
-  /** And which of them the workspace strip has room to draw. The same rule as the chats'
-   *  one level up, because the operator's complaint was about all of them: a strip that
-   *  scrolls says nothing about what is past its edge. */
-  const { strip: workspaceStrip, width: workspaceRoom } = useRoom(strips.length);
+  /**
+   * What the workspace strip draws: **the pinned workspaces, and the one you are in** (ADR
+   * 0054). Everything else is behind its show-more button.
+   *
+   * An operator with many workspaces works in about three, and filling the width with whatever
+   * fits put the workspaces nobody was working in beside the three that mattered. So the pins
+   * are the strip, in the order `strips` holds them, and the workspace in front is drawn after
+   * them when it is not one of them — ADR 0039's "the selected tab is always drawn", which is
+   * what says where you are — and goes back behind show-more when you leave it. Nothing else
+   * earns a tab: a workspace that needs you is counted on the show-more button, never moved
+   * onto the strip under the operator's hand.
+   */
+  const onWorkspaceStrip = useMemo(
+    () => strips.filter((name) => pinnedWorkspaces.includes(name) || name === focused),
+    [focused, pinnedWorkspaces, strips],
+  );
+
+  /** And which of those the strip has room to draw. The same rule as the chats' one level
+   *  down: when the pins alone do not fit, what does not fit goes behind show-more too, so the
+   *  strip never scrolls and never loses its `+`. */
+  const { strip: workspaceStrip, width: workspaceRoom } = useRoom(onWorkspaceStrip.length);
   // The floors grow with the window's text (charter-app#283, `fits.leastAt`).
   const windowText = useTextSizes().window;
   const workspaceLeast = leastAt(LEAST.workspace, windowText);
   const chatLeast = leastAt(LEAST.chat, windowText);
-  const workspacesShown = useMemo(
-    () => fitting(strips, focused, workspaceRoom, workspaceLeast),
-    [focused, strips, workspaceRoom, workspaceLeast],
-  );
+  const workspacesShown = useMemo(() => {
+    const { shown } = fitting(onWorkspaceStrip, focused, workspaceRoom, workspaceLeast);
+    return { shown, hidden: strips.filter((name) => !shown.includes(name)) };
+  }, [focused, onWorkspaceStrip, strips, workspaceRoom, workspaceLeast]);
 
   /**
    * **Each workspace's colour** (charter-app#281), as the core read it out of its

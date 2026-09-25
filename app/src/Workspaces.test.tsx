@@ -104,6 +104,9 @@ function core(opened: ReturnType<typeof chat>[] = [], waiting: number[] = []) {
       if (at >= 0) chats.splice(at, 1);
       return null;
     }
+    // The operator has pinned every workspace, so every one is on the strip and can be
+    // clicked there: the strip draws what is pinned and the one you are in (ADR 0054).
+    if (cmd === "plane_pins") return { project: false, workspaces: ["alpha", "beta"], missing: [] };
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,
@@ -517,6 +520,10 @@ describe("the strip that is drawn", () => {
       if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd === "running_sessions") return [];
+      // alpha and beta are pinned and gamma, when it arrives, is not: it is drawn because it
+      // is the workspace you are in (ADR 0054).
+      if (cmd === "plane_pins")
+        return { project: false, workspaces: ["alpha", "beta"], missing: [] };
       if (cmd === "close_session") {
         const at = chats.findIndex((one) => one.session === given.session);
         if (at >= 0) chats.splice(at, 1);

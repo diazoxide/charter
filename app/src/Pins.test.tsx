@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -117,6 +117,11 @@ const namesIn = (name: string, inside: string) =>
     .map((tab) => tab.querySelector(inside)?.textContent);
 const chatNames = () => namesIn("Tabs", ".tab-name");
 const workspaceNames = () => namesIn("Workspaces", ".workspace-name");
+/** What the open show-more menu lists, top to bottom. */
+const menuNames = () =>
+  within(screen.getByRole("menu"))
+    .getAllByRole("menuitem")
+    .map((row) => row.querySelector(".workspace-name")?.textContent);
 const pinned = () => screen.queryAllByRole("img", { name: /^pinned / }).map((one) => one.ariaLabel);
 const asked = (asks: Asked[], cmd: string) => asks.filter((one) => one.cmd === cmd);
 
@@ -204,7 +209,7 @@ describe("a pinned workspace", () => {
   it("is pinned by the palette, and the machine store is asked again", async () => {
     const { asked: asks } = core([chat(1, "one", "alpha")]);
     render(<App />);
-    await vi.waitFor(() => expect(workspaceNames()).toEqual(["alpha", "beta", "gamma"]));
+    await vi.waitFor(() => expect(workspaceNames()).toEqual(["alpha"]));
     const before = asked(asks, "plane_pins").length;
 
     await runFromPalette("Pin workspace beta");
@@ -239,7 +244,43 @@ describe("a pinned workspace", () => {
     render(<App />);
 
     expect(await screen.findByText(/was-here is not on this plane any more/)).toBeInTheDocument();
-    await vi.waitFor(() => expect(workspaceNames()).toEqual(["alpha", "beta", "gamma"]));
+    // Only the workspace you are in: nothing that IS on the plane is pinned (ADR 0054).
+    await vi.waitFor(() => expect(workspaceNames()).toEqual(["alpha"]));
+  });
+});
+
+describe("the workspace strip", () => {
+  // ADR 0054: the strip draws the pinned workspaces and the one you are in, and nothing else.
+  // Nobody has measured the strip here (jsdom lays nothing out), which draws everything that
+  // is ON the strip — so what is missing below is missing because it is not pinned, never
+  // because there was no room for it.
+
+  it("puts an unpinned workspace you are not in behind show-more", async () => {
+    core([chat(1, "one", "alpha")]);
+    render(<App />);
+
+    await waitFor(() => expect(workspaceNames()).toEqual(["alpha"]));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show 2 workspaces the strip is not showing" }),
+    );
+    expect(menuNames()).toEqual(["beta", "gamma"]);
+  });
+
+  it("draws the workspace you are in after the pins, and lets it go when you leave", async () => {
+    core([chat(1, "one", "alpha")], { project: false, workspaces: ["beta"], missing: [] });
+    render(<App />);
+    await waitFor(() => expect(workspaceNames()).toEqual(["beta", "alpha"]));
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show 1 workspace the strip is not showing" }),
+    );
+    await userEvent.click(screen.getByRole("menuitem", { name: /gamma/ }));
+
+    await waitFor(() => expect(workspaceNames()).toEqual(["beta", "gamma"]));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show 1 workspace the strip is not showing" }),
+    );
+    expect(menuNames()).toEqual(["alpha"]);
   });
 });
 

@@ -89,6 +89,9 @@ function core(
       chats.push(chat(++next, String(a.name), a.cwd as string | null));
       return { session: next };
     }
+    // The operator has pinned every workspace, so every one is on the strip and can be
+    // clicked there: the strip draws what is pinned and the one you are in (ADR 0054).
+    if (cmd === "plane_pins") return { project: false, workspaces: ["alpha", "beta"], missing: [] };
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,

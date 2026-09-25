@@ -59,6 +59,10 @@ function core() {
     const given = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: given });
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+    // The operator has pinned every workspace, so every one is on the strip and can be
+    // clicked there: the strip draws what is pinned and the one you are in (ADR 0054).
+    if (cmd === "plane_pins")
+      return { project: false, workspaces: ["alpha", "beta", "gamma"], missing: [] };
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,
