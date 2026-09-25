@@ -41,7 +41,7 @@ const BOTH: Both = {
 };
 
 const OWN_WHY =
-  "charter-app@inline is always on: it is charter's own plugin, and it carries charter's hooks and the Bash guard";
+  "charter@inline is always on: it is charter's own plugin, and it carries charter's hooks and the Bash guard";
 const OLD_WHY =
   "charter@charter is always off: it is the Python charter's plugin, and a chat the app starts carrying it too would have two sets of hooks and two handoff skills";
 
@@ -70,8 +70,8 @@ const HARNESSES: HarnessPlugins[] = [
         ignored: [],
       },
       {
-        id: "charter-app@inline",
-        name: "charter-app",
+        id: "charter@inline",
+        name: "charter",
         origin: "",
         state: "on",
         source: "default",
@@ -80,7 +80,7 @@ const HARNESSES: HarnessPlugins[] = [
         ignored: [
           {
             file: "charter.toml",
-            why: `charter.toml sets harness_plugins.claude."charter-app@inline" to false, and ${OWN_WHY}`,
+            why: `charter.toml sets harness_plugins.claude."charter@inline" to false, and ${OWN_WHY}`,
           },
         ],
       },
@@ -221,12 +221,12 @@ describe("the Harness plugins groups (charter-app#274)", () => {
     const { shared } = await drawn();
     const group = within(shared).getByRole("group", { name: "Harness plugins: Claude Code" });
 
-    expect(within(group).queryByLabelText("Claude Code: charter-app@inline")).toBeNull();
+    expect(within(group).queryByLabelText("Claude Code: charter@inline")).toBeNull();
     expect(within(group).queryByLabelText("Claude Code: charter@charter")).toBeNull();
     expect(group).toHaveTextContent(OWN_WHY);
     expect(group).toHaveTextContent(OLD_WHY);
     // The value a file tried to set, said in the section of the file that set it.
-    expect(group).toHaveTextContent('sets harness_plugins.claude."charter-app@inline" to false');
+    expect(group).toHaveTextContent('sets harness_plugins.claude."charter@inline" to false');
   });
 
   it("says a harness that cannot apply is not supported yet, and offers no control for it", async () => {

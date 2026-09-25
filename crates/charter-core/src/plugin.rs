@@ -12,8 +12,8 @@
 //!
 //! # Measured on claude 2.1.280, with a throwaway `CLAUDE_CONFIG_DIR` and a stand-in API
 //!
-//! - `--plugin-dir <dir>` loads the plugin as `charter-app@inline` for that session: its skills
-//!   reach the model as `charter-app:<skill>`, and its `SessionStart`, `UserPromptSubmit`,
+//! - `--plugin-dir <dir>` loads the plugin as `charter@inline` for that session: its skills
+//!   reach the model as `charter:<skill>`, and its `SessionStart`, `UserPromptSubmit`,
 //!   `PreToolUse` (matcher `Bash`), `Stop` and `SessionEnd` hooks each fired once in a one-turn
 //!   `-p` run that called Bash. `${CLAUDE_PLUGIN_ROOT}` is the directory as given.
 //! - A plane whose `.claude/settings.json` enables `charter@charter`, with that plugin
@@ -24,10 +24,30 @@
 //!   for every other session. It wins over `.claude/settings.local.json` too. That is the
 //!   operator's ruling ("App chats disable it"), and [`SUPERSEDED`] is what it names.
 //! - **A project file can turn the bundled plugin off**: `{"enabledPlugins":
-//!   {"charter-app@inline": false}}` in the chat's `.claude/settings.json` loaded none of its
+//!   {"charter@inline": false}}` in the chat's `.claude/settings.json` loaded none of its
 //!   hooks and none of its skills. That is a file a chat can write, and the plugin carries the
-//!   Bash guard, so the session settings pin it on — `"charter-app@inline": true` beside the
+//!   Bash guard, so the session settings pin it on — `"charter@inline": true` beside the
 //!   `--plugin-dir` — and, measured, that wins over the project's `false`: every hook fired.
+//!   (Measured as `charter-app@inline` on 2.1.280, and again as `charter@inline` on 2.1.282.)
+//!
+//! # Measured on claude 2.1.282: two plugins named `charter` (#406)
+//!
+//! The Python charter's plugin is named `charter` too, so since the rename both plugins
+//! namespace their skills `charter:`. Claude Code loads one plugin per name. In a throwaway
+//! config with `charter@charter` installed at project scope from a local marketplace and
+//! enabled by the project file, reading which plugins and skills `claude -p --output-format
+//! stream-json` reports at start:
+//!
+//! - with `--plugin-dir` and no session settings, only `charter@inline` loaded — the
+//!   `--plugin-dir` copy wins the name;
+//! - `"charter@charter": false` in `--settings` left `charter@inline` loaded: turning the old
+//!   one off by its id does not turn the bundled one off;
+//! - `"charter@inline": false` (in `--settings`, or in the project file with no session pin)
+//!   unloaded the bundled one **and loaded `charter@charter` in its place**, its skills as
+//!   `charter:<skill>`. So the pin on [`LOADED_AS`] now also keeps the Python plugin out, and
+//!   the pin off on [`SUPERSEDED`] stays as the second lock;
+//! - with the project file saying `"charter@inline": false` and the session pinning
+//!   `charter@inline` on and `charter@charter` off, only `charter@inline` loaded.
 //! - Through the real `charter` and this very plugin: every hook it then wired ran and exited 0,
 //!   and a Bash call reading `.charter/vaults/db.json` in a plane was refused by the guard
 //!   before it ran — the model got the refusal and never the file.
@@ -47,19 +67,28 @@
 
 use crate::hookreg::Handler;
 
-/// The plugin's name, which is also how its skills are namespaced (`charter-app:handoff`).
+/// The plugin's name, which is also how its skills are namespaced (`charter:handoff`).
 ///
-/// Not `charter`, so a skill of this plugin never collides with one of the Python charter's in
-/// a session that somehow has both.
-pub const NAME: &str = "charter-app";
+/// The product is charter, so its plugin is (#406, ADR 0056). Until then it was `charter-app`
+/// ([`FORMERLY`]), to keep its skills apart from the Python charter's, whose plugin is named
+/// `charter` too. They are kept apart by the pins instead: see the module header.
+pub const NAME: &str = "charter";
 
 /// The id Claude Code gives a plugin loaded with `--plugin-dir`, and the one `enabledPlugins`
 /// names it by.
-pub const LOADED_AS: &str = "charter-app@inline";
+pub const LOADED_AS: &str = "charter@inline";
 
 /// The plugin a chat the app starts turns off for itself — the Python charter's, installed
 /// from its marketplace. Only for that session: `--settings` is the whole of how.
+///
+/// Its *name* is `charter`, the same as [`NAME`]; only the marketplace after the `@` tells it
+/// from [`LOADED_AS`], and every pin matches on the whole id.
 pub const SUPERSEDED: &str = "charter@charter";
+
+/// The id [`LOADED_AS`] had before the plugin was renamed `charter` (#406). No chat loads a
+/// plugin by it any more; a chat the app starts turns it off, so a file that still turns it on
+/// is told the new id rather than trusted to mean it.
+pub const FORMERLY: &str = "charter-app@inline";
 
 /// The variable a hook command reads the app's own `charter` from.
 pub const BINARY_ENV: &str = "CHARTER_HOOK_BINARY";
@@ -249,6 +278,25 @@ mod tests {
         );
         assert_eq!(guard["hooks"][0]["timeout"], 10);
         assert!(doc["hooks"]["Stop"][0].get("matcher").is_none());
+    }
+
+    #[test]
+    fn the_plugin_is_called_charter_and_loads_as_charter_at_inline() {
+        // #406: the product is charter, so its plugin is, and its skills are `charter:<skill>`.
+        assert_eq!(NAME, "charter");
+        assert_eq!(LOADED_AS, "charter@inline");
+        assert_eq!(LOADED_AS, format!("{NAME}@inline"));
+    }
+
+    #[test]
+    fn the_three_ids_charter_names_are_three_different_ids() {
+        // The Python charter's plugin is also *named* `charter`; only the marketplace tells
+        // `charter@charter` from `charter@inline`. Every pin matches on the whole id.
+        assert_eq!(FORMERLY, "charter-app@inline");
+        assert_eq!(SUPERSEDED, "charter@charter");
+        assert_ne!(LOADED_AS, SUPERSEDED);
+        assert_ne!(LOADED_AS, FORMERLY);
+        assert_ne!(SUPERSEDED, FORMERLY);
     }
 
     #[test]

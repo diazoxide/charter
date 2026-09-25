@@ -548,7 +548,7 @@ profile this machine has.
 Moving a profile to another config folder moves nothing of charter's: **its guard does not
 live in that folder.** The app arms every chat it starts on the command line, for that session
 alone, and installs nothing into any folder — a Claude Code chat gets the app's own plugin,
-`charter-app`, with `--plugin-dir`, and `--settings` turning a plugin named
+`charter`, with `--plugin-dir`, and `--settings` turning a plugin named
 `charter@charter` off for that chat only; a Codex chat gets charter's hooks as
 `-c hooks.<Event>=…` flags, which Codex asks once to trust. So a new `claude-alt` needs no
 wiring step: once you have approved its command, it starts armed.

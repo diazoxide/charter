@@ -175,6 +175,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **charter's own plugin is called `charter`.** Its skills are `charter:handoff`,
+  `charter:update` and `charter:working-in-a-clone`, and a chat loads it as `charter@inline`.
+  It was `charter-app`. A persona whose `skills:` lists a `charter-app:` skill needs it
+  renamed, and `charter persona sync-agents` carries that into `.claude/agents/`. A project or
+  workspace setting that still turns `charter-app@inline` on is refused with the new id, and
+  the Python charter's `charter@charter` is still turned off in every chat. Turning that one off
+  never turns charter's own off. (#406, ADR 0056)
 - **Save in the title bar now saves only the project.** Before, when the workspace in front had
   repos with changes, the title bar's Save became Save all. It committed every changed file in
   those repos and pushed their branches, without asking. Now the title bar counts the repos but

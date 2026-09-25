@@ -713,7 +713,11 @@ mod tests {
 
         assert_eq!(
             settings["enabledPlugins"],
-            serde_json::json!({"charter@charter": false, "charter-app@inline": true})
+            serde_json::json!({
+                "charter@charter": false,
+                "charter@inline": true,
+                "charter-app@inline": false,
+            })
         );
     }
 
@@ -726,8 +730,9 @@ mod tests {
         let chosen = BTreeMap::from([
             ("figma@claude-plugins-official".to_owned(), false),
             ("serena@claude-plugins-official".to_owned(), true),
-            ("charter-app@inline".to_owned(), false),
+            ("charter@inline".to_owned(), false),
             ("charter@charter".to_owned(), true),
+            ("charter-app@inline".to_owned(), true),
         ]);
         let (args, _) = claude_with("/bin/charter", empty.path(), &chosen);
         let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
@@ -735,8 +740,9 @@ mod tests {
         assert_eq!(
             settings["enabledPlugins"],
             serde_json::json!({
-                "charter-app@inline": true,
+                "charter@inline": true,
                 "charter@charter": false,
+                "charter-app@inline": false,
                 "figma@claude-plugins-official": false,
                 "serena@claude-plugins-official": true,
             })

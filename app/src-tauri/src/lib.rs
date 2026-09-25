@@ -1529,6 +1529,32 @@ mod tests {
     }
 
     #[test]
+    fn nothing_the_plugin_ships_names_a_skill_by_the_plugins_old_name() {
+        // #406: the plugin was `charter-app` until it was renamed `charter`, and a skill named
+        // `charter-app:<skill>` is one no chat the app starts has any more.
+        fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("a directory") {
+                let path = entry.expect("an entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(PLUGIN_DIR),
+            &mut files,
+        );
+        assert!(!files.is_empty());
+        for file in files {
+            let text = std::fs::read_to_string(&file).expect("text");
+            assert!(!text.contains("charter-app:"), "{}", file.display());
+        }
+    }
+
+    #[test]
     fn the_bundle_carries_the_plugin_as_a_resource() {
         // `bundled_plugin` looks for it in the resource directory, so a build that did not
         // copy it there would start every chat unarmed.

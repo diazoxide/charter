@@ -71,9 +71,10 @@ with `claude --plugin-dir`. There is nothing to install into Claude Code, no mar
 add and no per-project install to keep in step: the plugin and the binary its hooks call come
 from the same build, so they cannot drift apart.
 
-The plugin is called `charter-app`. It carries every hook charter answers — the ones that
+The plugin is called `charter`. It carries every hook charter answers — the ones that
 report a chat's state and the Bash guard, described in [hooks.md](hooks.md) — and the
 `handoff`, `working-in-a-clone` and `update` skills, which reach the model as
+`charter:<skill>`. Up to 0.2.0 it was called `charter-app`, and its skills were
 `charter-app:<skill>`. It lives in `Contents/Resources/plugin` on macOS and
 `/usr/lib/charter/plugin` on Linux. A chat the app starts also turns a plugin named
 `charter@charter` off for itself, so a plane whose settings enable an older charter plugin for

@@ -85,7 +85,7 @@ offer:**
 
 | | how charter reaches a chat | how it updates | what it cannot carry |
 | --- | --- | --- | --- |
-| Claude Code | the app's own plugin, `charter-app`, loaded into each chat it starts with `--plugin-dir` — nothing installed | with the app | — |
+| Claude Code | the app's own plugin, `charter`, loaded into each chat it starts with `--plugin-dir` — nothing installed | with the app | — |
 | Codex | charter's hooks, armed on each chat's command line as `-c hooks.<Event>=…` — nothing installed; Codex asks once to trust them | with the app | no status bar; no command-pattern permissions, so `guard ask` rules stay in charter's own hook; no project-level config *file*, so no per-workspace config (a project `.codex/skills/` **is** read — a skills surface, not config); no prompt in front of `charter handoff` — charter's hook still refuses a handoff from a sub-agent or from a run reporting `permission_mode: bypassPermissions`, and an attended chat's handoff runs without asking; no word when it stops mid-turn for your approval |
 
 Claude Code's row is empty because nothing charter offers is out of reach there, not
@@ -203,13 +203,17 @@ that folder**, so moving it moves nothing of charter's. The app arms every chat 
 the command line, for that session alone, and writes nothing into any config folder:
 
 - **Claude Code** gets `--plugin-dir <the bundled plugin>`: the app's own plugin,
-  `charter-app`, with every hook charter answers — the state hooks and the Bash guard — and
+  `charter`, with every hook charter answers — the state hooks and the Bash guard — and
   the `handoff`, `working-in-a-clone` and `update` skills, which reach the model as
-  `charter-app:<skill>`. Beside it, `--settings` carries `enabledPlugins` with
-  `charter-app@inline` pinned on — a project file a chat can write could otherwise turn it
+  `charter:<skill>`. Beside it, `--settings` carries `enabledPlugins` with
+  `charter@inline` pinned on — a project file a chat can write could otherwise turn it
   off — and a plugin named `charter@charter` turned off, so a plane whose settings enable an
   older charter plugin for your terminal sessions does not give an app chat two sets of hooks
-  and two `handoff` skills. `--settings` merges with the settings in force and wins where it
+  and two `handoff` skills. The Python charter's plugin is *named* `charter` too, and Claude
+  Code loads one plugin per name: turned off, it cannot take the bundled one's place, and the
+  bundled one pinned on cannot be swapped for it (measured on claude 2.1.282). The plugin's
+  old id, `charter-app@inline`, is turned off as well, so a file that still names it is told
+  the new one. `--settings` merges with the settings in force and wins where it
   names a key (measured on claude 2.1.276 and 2.1.280), and it is for that session only.
 - **Codex** gets `-c hooks.<Event>=[…]` for the four state events Codex fires
   (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) and the Bash guard on
@@ -230,7 +234,7 @@ profile is called), `$CHARTER_HARNESS_PROFILE` and `$CHARTER_ROOT` in its enviro
   `charter.local.toml` git would commit. Nothing is run and nothing is written.
 
 **`charter doctor` shows a row per profile and runs nothing to fill it.** A profile it may
-ask about reads OK — *the app arms each chat with its own plugin, charter-app*, or for Codex
+ask about reads OK — *the app arms each chat with its own plugin, charter@inline*, or for Codex
 *the app arms each Codex chat with charter's hooks; Codex asks once to trust them* — with the
 program it found. What can still be wrong is whether the harness can be found at all, and
 that is a warning naming the directories searched and the fix: an absolute command in

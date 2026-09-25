@@ -159,8 +159,12 @@ pub fn detect(p: &Profile, root: &Path) -> Wiring {
                 "{} — {}",
                 match p.kind.as_str() {
                     "codex" =>
-                        "the app arms each Codex chat with charter's hooks; Codex asks once to trust them",
-                    _ => "the app arms each chat with its own plugin, charter-app",
+                        "the app arms each Codex chat with charter's hooks; Codex asks once to trust them"
+                            .to_owned(),
+                    _ => format!(
+                        "the app arms each chat with its own plugin, {}",
+                        crate::plugin::LOADED_AS
+                    ),
                 },
                 whole(found.first().map(String::as_str).unwrap_or_default()),
             ),
@@ -238,7 +242,13 @@ mod tests {
         let root = tempfile::tempdir().expect("a plane");
         let w = detect(&built_in("claude", "/bin/sh"), root.path());
         assert_eq!(w.state, State::Wired, "{w:?}");
-        assert!(w.detail.contains("charter-app"), "{}", w.detail);
+        assert!(
+            w.detail
+                .starts_with("the app arms each chat with its own plugin, charter@inline — "),
+            "{}",
+            w.detail
+        );
+        assert!(!w.detail.contains("charter-app"), "{}", w.detail);
         assert!(!w.detail.contains("charter@charter"), "{}", w.detail);
     }
 

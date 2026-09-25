@@ -663,8 +663,9 @@ fn a_claude_code_chat_is_started_with_exactly_the_plugins_its_project_chose() {
     assert_eq!(
         settings["enabledPlugins"],
         serde_json::json!({
-            "charter-app@inline": true,
+            "charter@inline": true,
             "charter@charter": false,
+            "charter-app@inline": false,
             "figma@official": false,
             "serena@official": true,
         })
@@ -767,8 +768,9 @@ fn a_chat_started_in_a_workspace_is_handed_that_workspaces_plugin_choices_betwee
     assert_eq!(
         enabled(alpha.clone()),
         serde_json::json!({
-            "charter-app@inline": true,
+            "charter@inline": true,
             "charter@charter": false,
+            "charter-app@inline": false,
             "figma@official": false,
             "humanizer@h": false,
             "serena@official": true,
@@ -778,8 +780,9 @@ fn a_chat_started_in_a_workspace_is_handed_that_workspaces_plugin_choices_betwee
     assert_eq!(
         enabled(plane.root().to_path_buf()),
         serde_json::json!({
-            "charter-app@inline": true,
+            "charter@inline": true,
             "charter@charter": false,
+            "charter-app@inline": false,
             "figma@official": true,
             "serena@official": true,
         }),

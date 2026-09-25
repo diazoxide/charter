@@ -184,7 +184,9 @@ _Avoid_: sandbox, allowed paths, scope (as if enforced)
 
 **Harness plugin**:
 A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own always means
-this, never a charter extension.
+this, never a charter extension. charter's own is one too: the Claude Code plugin the app
+bundles, named `charter` (`charter@inline`, skills `charter:<skill>`), always on in the chats
+the app starts. It is not the Python charter's `charter@charter`, which is always off there.
 _Avoid_: extension (for this), charter plugin
 
 **Vault**:

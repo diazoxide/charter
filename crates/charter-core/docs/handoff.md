@@ -225,7 +225,7 @@ the two numbers are both on screen. Name long material by its path instead of pa
 A command nobody is told about is a command nobody runs, and the three failures at the top of
 this page are what happens instead.
 
-**`charter-app:handoff`** is the procedure, shipped as a skill with the app's plugin: apply the
+**`charter:handoff`** is the procedure, shipped as a skill with the app's plugin: apply the
 two tests, find the workspace, write the brief from a template, quiz with the brief shown **in
 full**, and run the command only on a yes. A per-prompt "where this could run" hint is not in
 this version yet.
