@@ -70,5 +70,9 @@
     "typescript-eslint": "^8.70.1",
     "vite": "^8.0.16",
     "vitest": "^5.0.1"
+  },
+  "overrides": {
+    "@puppeteer/browsers": "^3.2.3",
+    "serialize-javascript": "^7.1.2"
   }
 }
