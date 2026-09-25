@@ -637,6 +637,129 @@ fn on_ids(loaded: &extension::Loaded, choices: &extension::project::Choices) -> 
 }
 
 // ---------------------------------------------------------------------------------------
+// Badges and repo cells from facts files (charter-app#340)
+// ---------------------------------------------------------------------------------------
+
+/// One status-bar badge, as the window draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct FactBadge {
+    pub extension: String,
+    /// What a person calls the extension, for the badge's title.
+    pub name: String,
+    pub id: String,
+    pub label: String,
+    pub value: String,
+    /// How long ago the extension said it was true.
+    pub age_seconds: u32,
+    /// Older than it declared fresh: dimmed, with its age.
+    pub stale: bool,
+}
+
+/// One repo-table cell.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct FactCell {
+    pub repo: String,
+    pub value: String,
+    pub age_seconds: u32,
+    pub stale: bool,
+}
+
+/// One extra column in the repo table.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct FactColumn {
+    pub extension: String,
+    pub id: String,
+    pub title: String,
+    /// One per repo the facts file filled, by repo name. A repo it did not name has none.
+    pub cells: Vec<FactCell>,
+}
+
+/// What the extensions on in a project (and workspace) show in the window.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ExtensionFacts {
+    pub badges: Vec<FactBadge>,
+    pub columns: Vec<FactColumn>,
+    /// What contributed nothing and should have, in the core's words.
+    pub notes: Vec<String>,
+}
+
+/// The status bar's badges and the repo table's extra columns for `plane`, in `workspace` when
+/// one is named — read from each extension's facts file by the core's one reader
+/// (`extension::facts::gather`), **which never starts a program**.
+///
+/// Asked when a workspace is focused and after an extension answers a view, which is when its
+/// facts file is refreshed. It re-takes each contributing extension's fingerprint, so it runs
+/// off the thread that draws.
+#[tauri::command]
+#[specta::specta]
+pub async fn extension_facts(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    workspace: Option<String>,
+) -> Result<ExtensionFacts, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        facts_in(&config, &root, workspace.as_deref(), chrono::Utc::now())
+    })
+    .await
+    .map_err(|err| format!("reading this project's extension facts did not finish: {err}"))
+}
+
+/// [`extension_facts`] without a runtime.
+fn facts_in(
+    config: &std::path::Path,
+    root: &std::path::Path,
+    workspace: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> ExtensionFacts {
+    use extension::facts;
+    let read = facts::gather(
+        config,
+        &built_in(),
+        || extension::project::Choices::read_in(root, workspace),
+        now,
+        facts::Reading::Window,
+    );
+    let seconds = |age: u64| u32::try_from(age).unwrap_or(u32::MAX);
+    ExtensionFacts {
+        badges: read
+            .badges
+            .into_iter()
+            .map(|badge| FactBadge {
+                extension: badge.extension,
+                name: badge.name,
+                id: badge.id,
+                label: badge.label,
+                value: badge.value,
+                age_seconds: seconds(badge.age_seconds),
+                stale: badge.stale,
+            })
+            .collect(),
+        columns: read
+            .columns
+            .into_iter()
+            .map(|column| FactColumn {
+                extension: column.extension,
+                id: column.id,
+                title: column.title,
+                cells: column
+                    .cells
+                    .into_iter()
+                    .map(|(repo, cell)| FactCell {
+                        repo,
+                        value: cell.value,
+                        age_seconds: seconds(cell.age_seconds),
+                        stale: cell.stale,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        notes: read.notes,
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // A project's theme (charter-app#273, ADR 0048)
 // ---------------------------------------------------------------------------------------
 
@@ -827,6 +950,84 @@ mod tests {
         std::fs::write(at.join("dark.json"), "{}").expect("a theme");
         let config = dir.path().join("config");
         (dir, at, config)
+    }
+
+    /// An approved extension with a status-bar badge and a repo column, and its facts file
+    /// filled for the repo `svc` — no program, so nothing could be started to draw either.
+    fn facts_made() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = dir.path().join("ext");
+        std::fs::create_dir_all(at.join("state")).expect("the state directory");
+        std::fs::write(
+            at.join(extension::MANIFEST),
+            r#"{"version":1,"id":"prs","name":"Pull requests","state":"state",
+                "capabilities":["badges","repo-columns"],
+                "contributes":{
+                  "badges":[{"id":"open","label":"PRs","surfaces":["status-bar"],"fresh_seconds":600}],
+                  "repo-columns":[{"id":"open","title":"PRs","fresh_seconds":600}]}}"#,
+        )
+        .expect("a manifest");
+        let now = chrono::Utc::now().timestamp();
+        std::fs::write(
+            at.join("state").join(extension::facts::FILE),
+            format!(
+                r#"{{"badges":{{"open":{{"value":"3","at":{now}}}}},
+                    "repo-columns":{{"open":{{"svc":{{"value":"2","at":{}}}}}}}}}"#,
+                now - 3600
+            ),
+        )
+        .expect("a facts file");
+        let config = dir.path().join("config");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
+        extension::approve(&config, found.id(), &found.path, &found.fingerprint).expect("approved");
+        (dir, config)
+    }
+
+    #[test]
+    fn the_window_is_handed_badges_and_repo_cells_with_their_age_and_staleness() {
+        let (_dir, config) = facts_made();
+        let plane = test_plane("", "", true);
+
+        let said = facts_in(&config, plane.path(), Some("alpha"), chrono::Utc::now());
+        assert_eq!(said.badges.len(), 1);
+        let badge = &said.badges[0];
+        assert_eq!(
+            (badge.label.as_str(), badge.value.as_str(), badge.stale),
+            ("PRs", "3", false)
+        );
+        let column = &said.columns[0];
+        assert_eq!(
+            (column.extension.as_str(), column.title.as_str()),
+            ("prs", "PRs")
+        );
+        let cell = &column.cells[0];
+        assert_eq!((cell.repo.as_str(), cell.value.as_str()), ("svc", "2"));
+        assert!(
+            cell.stale,
+            "an hour-old value declared fresh for ten minutes"
+        );
+        assert!(
+            (3600..3660).contains(&cell.age_seconds),
+            "{}",
+            cell.age_seconds
+        );
+    }
+
+    #[test]
+    fn a_workspace_that_turned_the_extension_off_gets_no_column_and_no_badge() {
+        let (_dir, config) = facts_made();
+        let plane = test_plane("", "", true);
+        std::fs::write(
+            plane.path().join("workspaces/alpha/workspace.json"),
+            r#"{"settings": {"extensions": {"prs": {"enabled": false}}}}"#,
+        )
+        .expect("a workspace manifest");
+
+        let off = facts_in(&config, plane.path(), Some("alpha"), chrono::Utc::now());
+        assert!(off.columns.is_empty() && off.badges.is_empty(), "{off:?}");
+        let project = facts_in(&config, plane.path(), None, chrono::Utc::now());
+        assert_eq!(project.columns.len(), 1, "the project has it on");
     }
 
     #[test]

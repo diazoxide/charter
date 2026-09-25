@@ -98,3 +98,23 @@ describe("the save indicator, in the window", () => {
     expect(await within(bar).findByRole("button", { name: "Saving: Saved" })).toBeTruthy();
   });
 });
+
+describe("the project strip (charter-app#302)", () => {
+  it("marks a project with unsaved work, and not one with nothing left to save", async () => {
+    core();
+    render(<App />);
+    const strip = await screen.findByRole("tablist", { name: "Projects" });
+
+    expect(await within(strip).findByRole("img", { name: /^unsaved work in / })).toBeTruthy();
+
+    // Saved from the bar: the dot goes with the work.
+    await userEvent.click(
+      await within(screen.getByTestId("title-bar")).findByRole("button", {
+        name: "Save the project",
+      }),
+    );
+    await waitFor(() =>
+      expect(within(strip).queryByRole("img", { name: /^unsaved work in / })).toBeNull(),
+    );
+  });
+});

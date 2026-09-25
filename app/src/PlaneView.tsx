@@ -29,6 +29,7 @@ import {
 import {
   commands,
   type AtRisk,
+  type PlaneSaving,
   type ChatWorktree,
   type OpenChat,
   type PlaneId,
@@ -56,6 +57,7 @@ import {
   type Project,
   type Ran,
 } from "./actions";
+import { usePlaneSaving } from "./saving";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { Menued } from "./Menus";
 import { NewWorkspace } from "./NewWorkspace";
@@ -64,6 +66,7 @@ import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
+import { useExtensionFacts } from "./extensionFacts";
 import { usePlaneChanged } from "./planeChanged";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
@@ -225,6 +228,9 @@ export function PlaneView({
   const states = useChatStates(plane);
   const [trouble, setTrouble] = useState<string>();
   const [sidebar, setSidebar] = useState<SidebarModel>();
+  /** This project's save standing (charter-app#302): every project reads its own, so the project
+   *  strip can mark the ones with unsaved work and the title bar can show the one in front. */
+  const { saving } = usePlaneSaving(plane);
   /**
    * The workspace the operator last PICKED, which is not always the one drawn.
    *
@@ -755,6 +761,8 @@ export function PlaneView({
     [on, surveyedViews],
   );
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
+  /** The badges and repo columns the extensions on here show (charter-app#340). */
+  const facts = useExtensionFacts(plane, ofWorkspace);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
   const doctor = useDoctor(plane);
@@ -2027,8 +2035,9 @@ export function PlaneView({
       // tints its accent with that colour while this project is in front (charter-app#281).
       workspace: ofWorkspace,
       colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
+      saving,
     }),
-    [asking, ending, focused, ofWorkspace, offers, quiet, report, run, settled, sidebar],
+    [asking, ending, focused, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2386,6 +2395,7 @@ export function PlaneView({
               state={workspaceState}
               offers={found}
               onPress={press}
+              columns={facts.columns}
             />
           ),
         }}
@@ -2468,6 +2478,8 @@ export function PlaneView({
         doctor={doctor}
         pin={pin}
         alerts={alerts}
+        badges={facts.badges}
+        factNotes={facts.notes}
         /* Which regions are drawn (ADR 0038), handed over as the arrangement already reads
            them. **The slots are flattened here and not there**: the arrangement is this
            project's, `inSlots` is the module that knows what order a side's regions come in,
@@ -2604,6 +2616,8 @@ export type PlaneReport = {
   /** That workspace's colour, a palette name or `#rrggbb`, or `null`: what the window's accent
    *  and focus ring are tinted with while it is in front (charter-app#281). */
   colour?: string | null;
+  /** Where this project's unsaved work sits (charter-app#302), once read. */
+  saving?: PlaneSaving;
 };
 
 /** What a project asks the WINDOW to do, because the window is what holds projects. */

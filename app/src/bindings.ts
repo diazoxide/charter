@@ -633,6 +633,16 @@ export const commands = {
 	 */
 	extensionsOn: (plane: PlaneId, workspace: string | null) => typedError<string[], string>(__TAURI_INVOKE("extensions_on", { plane, workspace })),
 	/**
+	 *  The status bar's badges and the repo table's extra columns for `plane`, in `workspace` when
+	 *  one is named — read from each extension's facts file by the core's one reader
+	 *  (`extension::facts::gather`), **which never starts a program**.
+	 * 
+	 *  Asked when a workspace is focused and after an extension answers a view, which is when its
+	 *  facts file is refreshed. It re-takes each contributing extension's fingerprint, so it runs
+	 *  off the thread that draws.
+	 */
+	extensionFacts: (plane: PlaneId, workspace: string | null) => typedError<ExtensionFacts, string>(__TAURI_INVOKE("extension_facts", { plane, workspace })),
+	/**
 	 *  Every harness charter knows, with what it has installed on this machine and what this
 	 *  project has each plugin at — in `workspace`, when one is named, with that workspace's
 	 *  settings as the layer between Shared and Local (charter-app#282): what the Workspace settings
@@ -709,6 +719,13 @@ export const commands = {
 	 *  disk since is refused rather than overwritten.
 	 */
 	saveProjectSettings: (plane: PlaneId, which: SettingsWhich, base: string | null, change: SettingsChange) => typedError<SettingsSaved, string>(__TAURI_INVOKE("save_project_settings", { plane, which, base, change })),
+	/**
+	 *  The plane's and each repo's save settings in force — `planesave::Settings`, the one
+	 *  resolver every save asks, shaped for the wire.
+	 * 
+	 *  On a blocking thread: the Local file's check asks git whether it is ignored.
+	 */
+	projectSavingInForce: (plane: PlaneId) => typedError<SavingInForce, string>(__TAURI_INVOKE("project_saving_in_force", { plane })),
 	/**  One workspace's settings, and what charter says about them. */
 	workspaceSettings: (plane: PlaneId, workspace: string) => typedError<WorkspaceSettings, string>(__TAURI_INVOKE("workspace_settings", { plane, workspace })),
 	/**
@@ -989,6 +1006,14 @@ export type ExtensionAsk = {
 	state_note: string | null,
 };
 
+/**  What the extensions on in a project (and workspace) show in the window. */
+export type ExtensionFacts = {
+	badges: FactBadge[],
+	columns: FactColumn[],
+	/**  What contributed nothing and should have, in the core's words. */
+	notes: string[],
+};
+
 /**  One row of "what has contributed what to this window". */
 export type ExtensionRow = {
 	id: string,
@@ -1055,6 +1080,37 @@ export type ExtensionView = {
 	title: string,
 	/**  What it is about (`panel::Subject`) — which decides where the window offers it. */
 	about: string,
+};
+
+/**  One status-bar badge, as the window draws it. */
+export type FactBadge = {
+	extension: string,
+	/**  What a person calls the extension, for the badge's title. */
+	name: string,
+	id: string,
+	label: string,
+	value: string,
+	/**  How long ago the extension said it was true. */
+	age_seconds: number,
+	/**  Older than it declared fresh: dimmed, with its age. */
+	stale: boolean,
+};
+
+/**  One repo-table cell. */
+export type FactCell = {
+	repo: string,
+	value: string,
+	age_seconds: number,
+	stale: boolean,
+};
+
+/**  One extra column in the repo table. */
+export type FactColumn = {
+	extension: string,
+	id: string,
+	title: string,
+	/**  One per repo the facts file filled, by repo name. A repo it did not name has none. */
+	cells: FactCell[],
 };
 
 /**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
@@ -1129,6 +1185,18 @@ export type IdentityHeld =
 "environment" | 
 /**  Nowhere: the vault cannot be read. */
 "unset";
+
+/**  One save setting as the project has it: its value, and the file that decided it. */
+export type InForce = {
+	/**
+	 *  As the files write it — a mode's word, a branch, `on` or `off`, a quiet period as `30s`
+	 *  or `2m` — or `null` where no value is the answer: a mode the Saving view asks for, a
+	 *  branch the plane or repo already has.
+	 */
+	value: string | null,
+	/**  `default`, `shared` or `local`. */
+	source: string,
+};
 
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
@@ -1636,6 +1704,18 @@ export type PlaneContribution = {
  */
 export type PlaneId = string;
 
+/**  `[plane]`, as `planesave::Settings` resolves it. */
+export type PlaneInForce = {
+	mode: InForce,
+	/**  Whether the mode is `charter.toml`'s `[memory] share`, the deprecated alias. */
+	from_share: boolean,
+	branch: InForce,
+	save_branch: InForce,
+	sign: InForce,
+	autosave: InForce,
+	autosave_after: InForce,
+};
+
 /**  Where the plane's unsaved work sits, how far a save goes, and what the last saves did. */
 export type PlaneSaving = {
 	/**  `blocked`, `changed`, `committed`, `pr-open` or `saved`. */
@@ -1883,6 +1963,17 @@ export type RelaunchQuestion = {
 	after_update: boolean,
 };
 
+/**  `[repos.<name>]` for one repo, as `planesave::Settings::repo` resolves it. */
+export type RepoInForce = {
+	/**  Its name in `inventory/repos.json`, or in a file's `[repos]`. */
+	name: string,
+	mode: InForce,
+	branch: InForce,
+	sign: InForce,
+	autosave: InForce,
+	autosave_after: InForce,
+};
+
 /**  One clone's git state, and what the forge cache last recorded for its branch. */
 export type RepoState = {
 	name: string,
@@ -1958,6 +2049,26 @@ export type SaveEntry = {
 	pr: string | null,
 	outcome: string,
 	detail: string,
+};
+
+/**
+ *  How far a save of the plane and of each repo goes in this project, and which file decided
+ *  each key: what the Project settings tab's Plane and Repos groups say beside each control.
+ */
+export type SavingInForce = {
+	plane: PlaneInForce,
+	/**
+	 *  One per repo `inventory/repos.json` catalogues, in its order, then one per repo only a
+	 *  file's `[repos]` names.
+	 */
+	repos: RepoInForce[],
+	/**
+	 *  Why `charter.local.toml` had no say in `[plane]`, when git would carry it and it set a
+	 *  save key there (charter-app#319): what the Plane group says.
+	 */
+	plane_left_out: string | null,
+	/**  The same for `[repos]`: what the Repos group says. */
+	repos_left_out: string | null,
 };
 
 /**

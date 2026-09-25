@@ -2413,6 +2413,13 @@ button.show-more:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* An extension's value older than it declared fresh (charter-app#340), here and in the repo
+   table: dimmed whole, with its age beside it, so an old count never reads as a current one. */
+.status-badge.stale,
+.state-bar .fact.stale {
+  color: var(--text-muted);
+}
+
 /* The alerts button, and the auto margin that divides the line: what is true of where you are
    on the left, what you can open and which project it is on the right. */
 .status-alerts {
@@ -4404,4 +4411,16 @@ button.show-more:focus-visible {
   padding: 0.6rem 0.75rem;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
+}
+
+/* A project with unsaved work, on its tab (charter-app#302). */
+.project-unsaved {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--state-waiting);
+  flex: none;
+}
+.project-unsaved[data-stage="blocked"] {
+  background: var(--state-failed);
 }

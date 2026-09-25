@@ -7,7 +7,7 @@ import { userEvent } from "@testing-library/user-event";
 import { BottomBar } from "./BottomBar";
 import { catalogue, catalogued, type Catalogued } from "./actions";
 import { noTabs } from "./tabs";
-import type { Panels as PanelsModel, Piece, RepoState } from "./bindings";
+import type { FactColumn, Panels as PanelsModel, Piece, RepoState } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
 afterEach(cleanup);
@@ -758,5 +758,54 @@ describe("a repo row's menu", () => {
     expect(
       screen.getByTestId("bottom-bar").querySelectorAll("button, input, textarea, select, a[href]"),
     ).toHaveLength(0);
+  });
+});
+
+describe("an extension's repo columns (charter-app#340)", () => {
+  const column = (over: Partial<FactColumn> = {}): FactColumn => ({
+    extension: "prs",
+    id: "open",
+    title: "PRs",
+    cells: [{ repo: "svc", value: "2", age_seconds: 30, stale: false }],
+    ...over,
+  });
+
+  it("adds a heading for each column and a cell for each repo its facts file filled", () => {
+    render(
+      <BottomBar
+        offers={NO_MENUS}
+        onPress={() => {}}
+        workspace="alpha"
+        state={state()}
+        columns={[column()]}
+      />,
+    );
+
+    expect(screen.getByRole("columnheader", { name: "PRs" })).toBeInTheDocument();
+    expect(screen.getByTestId("fact-prs-open-svc")).toHaveTextContent("2");
+    // A repo the file did not name has an empty cell, never a borrowed value.
+    expect(screen.getByTestId("fact-prs-open-tool")).toBeEmptyDOMElement();
+  });
+
+  it("dims a stale cell and says how old it is", () => {
+    render(
+      <BottomBar
+        offers={NO_MENUS}
+        onPress={() => {}}
+        workspace="alpha"
+        state={state()}
+        columns={[column({ cells: [{ repo: "svc", value: "2", age_seconds: 7200, stale: true }] })]}
+      />,
+    );
+
+    const cell = screen.getByTestId("fact-prs-open-svc");
+    expect(cell).toHaveClass("stale");
+    expect(cell).toHaveTextContent("2 · 2h ago");
+  });
+
+  it("draws the five columns it always drew when no extension adds one", () => {
+    render(<BottomBar offers={NO_MENUS} onPress={() => {}} workspace="alpha" state={state()} />);
+
+    expect(screen.getAllByRole("columnheader")).toHaveLength(5);
   });
 });

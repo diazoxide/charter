@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { commands, type PlaneId } from "./bindings";
+import { factsChanged } from "./extensionFacts";
 
 /**
  * **Which extensions are on in each project this window holds** (charter-app#253, ADR 0048) —
@@ -71,6 +72,8 @@ export function extensionsChanged(plane?: PlaneId) {
     }
   }
   if (!asked && plane !== undefined) ask(plane, undefined);
+  // Which extensions show badges and repo columns here moved with it (charter-app#340).
+  factsChanged(plane);
 }
 
 /** What `plane` has on in `workspace`, or `undefined` until it has said. */

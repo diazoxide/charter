@@ -223,6 +223,9 @@ pub struct Ambient<'a> {
     pub cwd: &'a Path,
     /// The instant ages are measured from.
     pub now: DateTime<Utc>,
+    /// charter's config home, where the extension record is — `None` draws no extension's
+    /// badges (charter-app#340).
+    pub config: Option<&'a Path>,
 }
 
 /// The whole footer, frame included, with the trailing newline `charter/statusline.py:render`
@@ -254,10 +257,52 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
         identity_row(plane, &active, &look, ambient),
         format!("{DIM}{NOT_DRAWN_YET}{R}"),
     ];
+    if let Some(config) = ambient.config {
+        rows.extend(badge_rows(plane, config, &active.name, ambient.now));
+    }
     rows.extend(alerts.alerts.iter().map(|alert| alert.line(&look)));
     let body = Node::stack(rows).render(width);
     let body = zone_rules(&body);
     format!("{}\n", boxed(&body, frame_w))
+}
+
+/// Extensions' footer badges, as one row, and a dim line for each that contributed nothing and
+/// should have — or no row at all, which is every machine without one (charter-app#340).
+///
+/// **Read through the one reader** ([`crate::extension::facts::gather`]), which starts no
+/// program. A stale value is dimmed whole and carries its age, so an old count never reads as
+/// a current one.
+fn badge_rows(plane: &Path, config: &Path, workspace: &str, now: DateTime<Utc>) -> Vec<String> {
+    use crate::extension::{facts, project::Choices};
+    let read = facts::gather(
+        config,
+        &crate::extension::BuiltIn::none(),
+        || Choices::read_in(plane, Some(workspace)),
+        now,
+        facts::Reading::Footer,
+    );
+    let mut rows = Vec::new();
+    if !read.badges.is_empty() {
+        let drawn: Vec<String> = read
+            .badges
+            .iter()
+            .map(|badge| {
+                if badge.stale {
+                    format!(
+                        "{DIM}{} {} · {} ago{R}",
+                        badge.label,
+                        badge.value,
+                        facts::age(badge.age_seconds)
+                    )
+                } else {
+                    format!("{DIM}{}{R} {}", badge.label, badge.value)
+                }
+            })
+            .collect();
+        rows.push(drawn.join(&format!("{DIM} · {R}")));
+    }
+    rows.extend(read.notes.iter().map(|note| format!("{DIM}{note}{R}")));
+    rows
 }
 
 /// `(workspace, which rung said so)` for the SESSION, not for this process.
