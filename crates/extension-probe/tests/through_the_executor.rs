@@ -45,7 +45,7 @@ impl Probe {
     /// Assembled, installed and approved: the two clicks.
     fn approved() -> Self {
         let probe = Self::assembled();
-        let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+        let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext()).expect("installed");
         extension::approve(&probe.config(), found.id(), &found.path, &found.fingerprint)
             .expect("approved");
         probe
@@ -115,7 +115,7 @@ fn the_probe_is_asked_through_the_executor_and_answers_what_it_was_handed() {
 #[test]
 fn the_approval_prompt_names_every_capability_the_probe_asks_for() {
     let probe = Probe::assembled();
-    let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext()).expect("installed");
     assert_eq!(
         found.manifest.capabilities,
         [extension::Capability::Probe],
@@ -143,7 +143,7 @@ fn changing_the_capabilities_after_approval_is_asked_about_again_and_runs_nothin
         refused.contains("changed since you approved it"),
         "{refused}"
     );
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     assert_eq!(survey.installed[0].standing, extension::Standing::Changed);
 }
 
@@ -152,7 +152,7 @@ fn a_capability_this_charter_does_not_know_is_refused_by_name_and_nothing_is_loa
     let probe = Probe::assembled();
     probe.manifest_sets("capabilities", serde_json::json!(["teleport"]));
 
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("an unknown capability was installed");
     let said = refused.to_string();
     assert!(
@@ -160,7 +160,7 @@ fn a_capability_this_charter_does_not_know_is_refused_by_name_and_nothing_is_loa
         "{said}"
     );
     // Never partly loaded: nothing was recorded, so there is nothing to approve and nothing runs.
-    assert!(extension::read(&probe.config()).registry.entries.is_empty());
+    assert!(extension::read(&probe.config(), &extension::BuiltIn::none()).registry.entries.is_empty());
     let not_run = probe
         .ask()
         .expect_err("an extension nobody installed answered");
@@ -172,7 +172,7 @@ fn an_installed_extension_that_later_asks_for_an_unknown_capability_contributes_
     let probe = Probe::approved();
     probe.manifest_sets("capabilities", serde_json::json!(["probe", "teleport"]));
 
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     let row = &survey.installed[0];
     assert!(row.views_in_force().is_empty());
     let why = row.refused.as_deref().expect("a sentence");

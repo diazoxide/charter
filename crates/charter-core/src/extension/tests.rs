@@ -722,7 +722,7 @@ fn the_state_directory_is_the_one_place_that_does_not_ask_again() {
     // through is worse than no dialog at all.
     let made = Made::new();
     let at = made.with_state("state");
-    let found = install(&made.config(), &at).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &at).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
 
     std::fs::create_dir_all(made.at().join("state/deep")).expect("the state directory");
@@ -731,7 +731,7 @@ fn the_state_directory_is_the_one_place_that_does_not_ask_again() {
 
     let now = read_at(&made.at()).expect("an extension");
     assert_eq!(
-        read(&made.config()).standing(&now),
+        read(&made.config(), &BuiltIn::none()).standing(&now),
         Standing::Approved,
         "an extension that wrote its own state re-prompted the operator"
     );
@@ -744,14 +744,14 @@ fn a_state_directory_that_is_not_there_yet_is_not_itself_a_change() {
     // fatigue with one more step in front of it.
     let made = Made::new();
     let at = made.with_state("state");
-    let found = install(&made.config(), &at).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &at).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
 
     std::fs::create_dir(made.at().join("state")).expect("the state directory");
     std::fs::write(made.at().join("state/first"), "").expect("its first file");
 
     let now = read_at(&made.at()).expect("an extension");
-    assert_eq!(read(&made.config()).standing(&now), Standing::Approved);
+    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&now), Standing::Approved);
 }
 
 #[cfg(unix)]
@@ -960,7 +960,7 @@ fn what_the_re_hash_costs_at_launch() {
 #[test]
 fn no_record_is_a_machine_with_no_extensions_rather_than_an_error() {
     let made = Made::new();
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
 
     assert!(loaded.unreadable.is_none(), "{:?}", loaded.unreadable);
     assert!(loaded.registry.entries.is_empty());
@@ -972,9 +972,9 @@ fn installing_writes_a_row_with_no_approval_on_it() {
     // consent step for ADR 0022's reason, and the same sentence makes `install` here a thing
     // that records a path and asks nothing.
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
 
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
     let entry = loaded.entry("solarized").expect("a row");
     assert_eq!(entry.path, made.at());
     assert_eq!(entry.approved, None, "installing must not approve");
@@ -984,11 +984,11 @@ fn installing_writes_a_row_with_no_approval_on_it() {
 #[test]
 fn an_approval_is_of_the_bytes_that_were_shown() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     let asked = prompt(&found, Standing::New);
     approve(&made.config(), &asked.id, &found.path, &asked.fingerprint).expect("approved");
 
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
     assert_eq!(loaded.standing(&found), Standing::Approved);
     assert!(loaded.standing(&found).may_contribute());
 }
@@ -996,7 +996,7 @@ fn an_approval_is_of_the_bytes_that_were_shown() {
 #[test]
 fn an_extension_that_changed_after_approval_asks_again() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     made.file(
         "dark.json",
@@ -1004,7 +1004,7 @@ fn an_extension_that_changed_after_approval_asks_again() {
     );
     let now = read_at(&made.at()).expect("an extension");
 
-    assert_eq!(read(&made.config()).standing(&now), Standing::Changed);
+    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&now), Standing::Changed);
 }
 
 #[test]
@@ -1012,14 +1012,14 @@ fn an_extension_approved_at_one_path_is_not_approved_at_another() {
     // The operator approved a thing at a place. The same bytes in another directory are
     // another extension that kept a name — `machine::still_a_plane`'s reasoning, one level in.
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
 
     let moved = Extension {
         path: made.dir.path().join("somewhere-else"),
         ..found
     };
-    assert_eq!(read(&made.config()).standing(&moved), Standing::Changed);
+    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&moved), Standing::Changed);
 }
 
 #[test]
@@ -1037,7 +1037,7 @@ fn an_approval_that_is_not_a_fingerprint_in_the_file_reads_as_no_approval() {
     // approval. The state this keeps out is a record whose `"approved": true` grants
     // everything.
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     for forged in ["true", "\"yes\"", "1", "{}", "\"abc\""] {
         std::fs::write(
             file(&made.config()),
@@ -1048,7 +1048,7 @@ fn an_approval_that_is_not_a_fingerprint_in_the_file_reads_as_no_approval() {
         )
         .expect("the record");
 
-        let loaded = read(&made.config());
+        let loaded = read(&made.config(), &BuiltIn::none());
         assert!(
             loaded.unreadable.is_none(),
             "{forged}: {:?}",
@@ -1065,11 +1065,11 @@ fn an_approval_that_is_not_a_fingerprint_in_the_file_reads_as_no_approval() {
 #[test]
 fn a_record_that_is_not_json_approves_nothing_and_says_why() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     std::fs::write(file(&made.config()), "}{ not json").expect("the record");
 
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
     assert!(loaded.unreadable.is_some());
     assert_eq!(
         loaded.standing(&found),
@@ -1081,11 +1081,11 @@ fn a_record_that_is_not_json_approves_nothing_and_says_why() {
 #[test]
 fn a_record_of_another_version_approves_nothing() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     std::fs::write(file(&made.config()), r#"{"version":99,"extensions":{}}"#).expect("the record");
 
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
     assert!(
         loaded.unreadable.is_some(),
         "another version is not this one"
@@ -1096,14 +1096,14 @@ fn a_record_of_another_version_approves_nothing() {
 #[test]
 fn a_record_bigger_than_charter_reads_approves_nothing() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     std::fs::write(
         file(&made.config()),
         "x".repeat(MOST_RECORD_BYTES as usize + 1),
     )
     .expect("a giant");
 
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
     assert!(loaded.unreadable.is_some());
     assert_eq!(loaded.standing(&found), Standing::New);
 }
@@ -1112,7 +1112,7 @@ fn a_record_bigger_than_charter_reads_approves_nothing() {
 #[test]
 fn a_record_reached_through_a_symlink_approves_nothing() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     let elsewhere = made.dir.path().join("elsewhere.json");
     std::fs::write(
         &elsewhere,
@@ -1127,7 +1127,7 @@ fn a_record_reached_through_a_symlink_approves_nothing() {
     std::fs::remove_file(&at).expect("the real record");
     std::os::unix::fs::symlink(&elsewhere, &at).expect("a link");
 
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
     assert!(loaded.unreadable.is_some(), "a link was followed");
     assert_eq!(
         loaded.standing(&found),
@@ -1142,7 +1142,7 @@ fn a_record_charter_could_not_read_is_never_overwritten() {
     // "approved", and it must not become "your list is gone" either.
     let made = Made::new();
     let at = made.ordinary();
-    install(&made.config(), &at).expect("installed");
+    install(&made.config(), &BuiltIn::none(), &at).expect("installed");
     std::fs::write(file(&made.config()), "}{ not json").expect("the record");
 
     let why = approve(&made.config(), "solarized", &at, &"a".repeat(64)).expect_err("refused");
@@ -1164,7 +1164,7 @@ fn a_row_with_a_relative_path_is_dropped_with_a_reason_rather_than_read() {
     )
     .expect("the record");
 
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
     assert!(loaded.registry.entries.is_empty());
     assert_eq!(loaded.dropped.len(), 1, "{:?}", loaded.dropped);
     assert!(
@@ -1189,7 +1189,7 @@ fn one_bad_row_does_not_take_the_others_with_it() {
     )
     .expect("the record");
 
-    let loaded = read(&made.config());
+    let loaded = read(&made.config(), &BuiltIn::none());
     assert!(loaded.entry("good").is_some(), "{:?}", loaded.registry);
     assert!(loaded.entry("bad").is_none());
 }
@@ -1197,11 +1197,11 @@ fn one_bad_row_does_not_take_the_others_with_it() {
 #[test]
 fn forgetting_takes_the_path_and_the_approval_and_leaves_the_rest() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     forget(&made.config(), "solarized").expect("forgotten");
 
-    assert!(read(&made.config()).entry("solarized").is_none());
+    assert!(read(&made.config(), &BuiltIn::none()).entry("solarized").is_none());
     assert!(
         made.at().join(MANIFEST).exists(),
         "charter deleted an extension's own files, which are not charter's"
@@ -1213,25 +1213,25 @@ fn re_installing_something_that_did_not_change_keeps_its_approval() {
     // Otherwise the operator is asked again for pressing the button that was already answered,
     // which is how a prompt becomes a reflex.
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
-    install(&made.config(), &made.at()).expect("installed again");
+    install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed again");
 
-    assert_eq!(read(&made.config()).standing(&found), Standing::Approved);
+    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&found), Standing::Approved);
 }
 
 #[test]
 fn re_installing_something_that_changed_drops_its_approval() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     made.file(
         "dark.json",
         r#"{"name":"Other","appearance":"light","tokens":{}}"#,
     );
-    let now = install(&made.config(), &made.at()).expect("installed again");
+    let now = install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed again");
 
-    assert_eq!(read(&made.config()).standing(&now), Standing::New);
+    assert_eq!(read(&made.config(), &BuiltIn::none()).standing(&now), Standing::New);
 }
 
 // -------------------------------------------------------------------------------------
@@ -1244,7 +1244,7 @@ fn the_record_is_a_file_beside_the_machine_store_and_not_a_key_inside_it() {
     // key appended without an argument would spend the limit; a separate file in the same
     // directory leaves `machine.json` holding exactly what those records say it holds.
     let made = Made::new();
-    install(&made.config(), &made.ordinary()).expect("installed");
+    install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
 
     let store = crate::machine::file(&made.config());
     assert_eq!(
@@ -1264,7 +1264,7 @@ fn the_record_is_a_file_beside_the_machine_store_and_not_a_key_inside_it() {
 fn the_record_is_0600_in_a_0700_directory() {
     use std::os::unix::fs::PermissionsExt;
     let made = Made::new();
-    install(&made.config(), &made.ordinary()).expect("installed");
+    install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
 
     let mode = |at: &Path| std::fs::metadata(at).expect("there").permissions().mode() & 0o777;
     assert_eq!(mode(&file(&made.config())), 0o600);
@@ -1370,8 +1370,8 @@ fn a_link_at_charters_own_directory_is_refused_rather_than_written_through() {
 #[test]
 fn the_survey_names_charters_own_themes_as_well_as_the_installed_ones() {
     let made = Made::new();
-    install(&made.config(), &made.ordinary()).expect("installed");
-    let seen = survey(&made.config());
+    install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
+    let seen = survey(&made.config(), &BuiltIn::none());
 
     assert_eq!(seen.built_in_themes, BUILT_IN_THEMES.to_vec());
     assert_eq!(seen.installed.len(), 1);
@@ -1381,9 +1381,9 @@ fn the_survey_names_charters_own_themes_as_well_as_the_installed_ones() {
 #[test]
 fn nothing_is_in_force_until_it_is_approved() {
     let made = Made::new();
-    install(&made.config(), &made.ordinary()).expect("installed");
+    install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
 
-    let seen = survey(&made.config());
+    let seen = survey(&made.config(), &BuiltIn::none());
     assert!(
         seen.installed[0].themes_in_force().is_empty(),
         "an unapproved extension contributed a theme"
@@ -1391,7 +1391,7 @@ fn nothing_is_in_force_until_it_is_approved() {
 
     let found = read_at(&made.at()).expect("an extension");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
-    let seen = survey(&made.config());
+    let seen = survey(&made.config(), &BuiltIn::none());
     assert_eq!(seen.installed[0].themes_in_force().len(), 1);
 }
 
@@ -1407,9 +1407,9 @@ fn a_panel_is_the_second_word_in_the_vocabulary_and_travels_on_the_theme_s_terms
             "contributes":{"panels":[{"id":"reviews","title":"Reviews","order":30,
               "rows":[{"key":"a","text":"Land the contract"}]}]}}"#,
     );
-    install(&made.config(), &made.at()).expect("installed");
+    install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed");
 
-    let seen = survey(&made.config());
+    let seen = survey(&made.config(), &BuiltIn::none());
     assert!(
         seen.installed[0].panels_in_force().is_empty(),
         "an unapproved extension contributed a panel"
@@ -1423,7 +1423,7 @@ fn a_panel_is_the_second_word_in_the_vocabulary_and_travels_on_the_theme_s_terms
     );
 
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
-    let seen = survey(&made.config());
+    let seen = survey(&made.config(), &BuiltIn::none());
     let [panel] = seen.installed[0].panels_in_force() else {
         panic!("one panel in force")
     };
@@ -1470,14 +1470,14 @@ fn a_panel_charter_will_not_read_refuses_the_whole_extension_rather_than_going_q
 #[test]
 fn an_extension_that_changed_contributes_nothing_until_it_is_asked_about_again() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     made.file(
         "dark.json",
         r#"{"name":"Other","appearance":"light","tokens":{}}"#,
     );
 
-    let seen = survey(&made.config());
+    let seen = survey(&made.config(), &BuiltIn::none());
     assert_eq!(seen.installed[0].standing, Standing::Changed);
     assert!(seen.installed[0].themes_in_force().is_empty());
 }
@@ -1485,10 +1485,10 @@ fn an_extension_that_changed_contributes_nothing_until_it_is_asked_about_again()
 #[test]
 fn an_extension_charter_cannot_read_is_a_row_that_says_why_rather_than_a_silence() {
     let made = Made::new();
-    install(&made.config(), &made.ordinary()).expect("installed");
+    install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     std::fs::remove_file(made.at().join(MANIFEST)).expect("the manifest");
 
-    let seen = survey(&made.config());
+    let seen = survey(&made.config(), &BuiltIn::none());
     assert_eq!(seen.installed.len(), 1);
     assert!(seen.installed[0].refused.is_some(), "it went quiet");
     assert!(seen.installed[0].themes_in_force().is_empty());
@@ -1498,14 +1498,14 @@ fn an_extension_charter_cannot_read_is_a_row_that_says_why_rather_than_a_silence
 fn a_directory_whose_manifest_now_declares_another_id_reads_as_changed() {
     // Otherwise a row's approval would carry to a directory holding a different extension.
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     made.manifest(
         r#"{"version":1,"id":"somebody-else","name":"Other",
             "contributes":{"themes":[{"name":"Solarized Dark","file":"dark.json"}]}}"#,
     );
 
-    let seen = survey(&made.config());
+    let seen = survey(&made.config(), &BuiltIn::none());
     assert_eq!(seen.installed[0].standing, Standing::Changed);
     assert!(seen.installed[0].themes_in_force().is_empty());
 }
@@ -1513,11 +1513,11 @@ fn a_directory_whose_manifest_now_declares_another_id_reads_as_changed() {
 #[test]
 fn an_unreadable_record_puts_nothing_in_force() {
     let made = Made::new();
-    let found = install(&made.config(), &made.ordinary()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     std::fs::write(file(&made.config()), "}{").expect("the record");
 
-    let seen = survey(&made.config());
+    let seen = survey(&made.config(), &BuiltIn::none());
     assert!(seen.unreadable.is_some());
     assert!(
         seen.installed.is_empty(),
@@ -1762,9 +1762,9 @@ fn a_yes_to_a_program_given_before_charter_started_programs_does_not_cover_runni
 fn only_an_approved_extension_offers_its_views() {
     let made = Made::new();
     with_a_view(&made);
-    let found = install(&made.config(), &made.at()).expect("installed");
+    let found = install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed");
     assert!(
-        survey(&made.config()).installed[0]
+        survey(&made.config(), &BuiltIn::none()).installed[0]
             .views_in_force()
             .is_empty(),
         "an unapproved extension offered a view"
@@ -1772,13 +1772,13 @@ fn only_an_approved_extension_offers_its_views() {
 
     approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
     assert_eq!(
-        survey(&made.config()).installed[0].views_in_force().len(),
+        survey(&made.config(), &BuiltIn::none()).installed[0].views_in_force().len(),
         1
     );
 
     made.file("bin/x", "#!/bin/sh\necho changed\n");
     assert!(
-        survey(&made.config()).installed[0]
+        survey(&made.config(), &BuiltIn::none()).installed[0]
             .views_in_force()
             .is_empty(),
         "a changed extension still offered its view"

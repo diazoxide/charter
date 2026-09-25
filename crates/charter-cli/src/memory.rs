@@ -158,7 +158,11 @@ pub enum PersonaCommand {
         /// Only this persona (default: all + _shared).
         name: Option<String>,
         /// Window for the RECENT column (default 14).
-        #[arg(long, default_value_t = 14, allow_negative_numbers = true)]
+        #[arg(
+            long,
+            default_value_t = charter_core::personaverbs::stats::RECENT_DAYS,
+            allow_negative_numbers = true
+        )]
         recent_days: i64,
     },
     /// Read/write the ACTIVE persona's vault (values stay out of the model).

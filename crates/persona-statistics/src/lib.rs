@@ -1,12 +1,12 @@
 //! Persona statistics: what an operator looks at when he asks how the plane's personas are
 //! doing, computed from what charter hands a view about personas.
 //!
-//! **This is an extension, and the executor's first consumer** (ADR 0041 stage 2). It
-//! is in charter-app's repository because the operator asked for statistics on the personas
-//! panel and because a contract with no consumer is a guess; it is built exactly as a
-//! stranger's would be. It does not link charter's core, it does not read the plane, and it
-//! knows one thing about charter: the protocol — one line of JSON on stdin, one line back on
-//! stdout. Run it in a terminal and paste a request in to see what it answers.
+//! **This is a built-in extension, and the executor's first consumer** (ADR 0041 stage 2,
+//! charter-app#339). The app ships it inside its bundle. It does not read the plane: it knows
+//! what the protocol hands it — one line of JSON on stdin, one line back on stdout — and it
+//! links charter's core for one thing, the stats code `charter persona stats` counts with
+//! ([`charter_core::personaverbs::stats`]), so that the view and the CLI give the same numbers.
+//! Run it in a terminal and paste a request in to see what it answers.
 //!
 //! # What it shows, and why these three
 //!
@@ -35,6 +35,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use charter_core::personaverbs::stats;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use serde_json::{Value, json};
 
@@ -170,8 +171,8 @@ fn read_personas(given: &Value) -> Result<Vec<Persona>, String> {
             .map(Vec::as_slice)
             .unwrap_or_default()
         {
-            // The stamp is `<date> <time>`, as the memory store writes it. Only the date is
-            // used: statistics by the day, and a time zone this program was never told.
+            // charter hands a memory's day, `YYYY-MM-DD` (and, before it did, `<date> <time>`):
+            // statistics are by the day, in a time zone this program was never told.
             match stamp
                 .as_str()
                 .and_then(|stamp| stamp.get(..10))
@@ -203,23 +204,22 @@ fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
+/// The memories `charter persona stats` counts as RECENT, counted by its own code.
 fn recent(persona: &Persona, now: NaiveDate) -> usize {
-    persona
-        .dated
-        .iter()
-        .filter(|day| **day > now - Duration::days(7) && **day <= now)
-        .count()
+    let days: Vec<Option<NaiveDate>> = persona.dated.iter().copied().map(Some).collect();
+    stats::recent(&days, stats::RECENT_DAYS, now)
 }
 
 fn about_all(personas: &[Persona], now: NaiveDate) -> String {
     let total: usize = personas.iter().map(Persona::count).sum();
-    let week: usize = personas.iter().map(|it| recent(it, now)).sum();
+    let lately: usize = personas.iter().map(|it| recent(it, now)).sum();
     let undated: usize = personas.iter().map(|it| it.undated).sum();
     let mut said = format!(
-        "{} across {} · {} in the last 7 days",
+        "{} across {} · {} in the last {} days",
         plural(total, "memory", "memories"),
         plural(personas.len(), "persona", "personas"),
-        week
+        lately,
+        stats::RECENT_DAYS
     );
     if undated > 0 {
         said.push_str(&format!(" · {undated} with no date"));
@@ -233,10 +233,11 @@ fn about_one(persona: &Persona, now: NaiveDate) -> String {
         |day| format!("last on {}", day.format("%Y-%m-%d")),
     );
     format!(
-        "{} remembers {} · {} in the last 7 days · {last}",
+        "{} remembers {} · {} in the last {} days · {last}",
         persona.name,
         plural(persona.count(), "thing", "things"),
-        recent(persona, now)
+        recent(persona, now),
+        stats::RECENT_DAYS
     )
 }
 
@@ -451,7 +452,7 @@ mod tests {
             blocks[0]["text"]
                 .as_str()
                 .expect("a sentence")
-                .starts_with("steward remembers 3 things · 2 in the last 7 days"),
+                .starts_with("steward remembers 3 things · 2 in the last 14 days"),
             "{said}"
         );
         chart(&said, "steward — written each week");
