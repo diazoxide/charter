@@ -93,6 +93,7 @@ function rowOf(vault: VaultSummary): PanelRow {
     tone: vault.health.ok ? "plain" : "trouble",
     detail: null,
     runs: `vault.open:${vault.name}`,
+    actions: [],
   };
 }
 

@@ -41,7 +41,7 @@ import { drawTint } from "./theme/theme";
 import { useContributedPanels } from "./Panels";
 import { useTabStop } from "./roving";
 import { closeOnDelete } from "./tabKeys";
-import { useExtensionViews } from "./Views";
+import { useExtensionCommands, useExtensionViews } from "./Views";
 import { Palette } from "./Palette";
 import { ClosingProject } from "./ClosingProject";
 import { QuitWarning, type Ending } from "./QuitWarning";
@@ -234,6 +234,7 @@ function App() {
   /** The views approved extensions offer — the persona statistics button is one — asked once
    *  per window for the same reason as the panels above. */
   const extensionViews = useExtensionViews();
+  const extensionCommands = useExtensionCommands();
 
   /** The projects, as the strip and the palette name them. */
   const projects = useMemo<Project[]>(
@@ -777,6 +778,9 @@ function App() {
       // A view is shown in a project's tab, and there is no project here. The rows that open one
       // do not exist without a plane, for the same reason the workspace rows above do not.
       openView: () => undefined,
+      // An extension's action runs in a project, and there is no project here: its rows are
+      // a project's catalogue's, and this one lists none.
+      runAction: async () => nowhere(),
       // No plane, no vaults: both rows are unavailable without one.
       pickVault: () => undefined,
       createVault: () => undefined,
@@ -1201,6 +1205,7 @@ function App() {
           alerts={alerts}
           contributed={contributedPanels}
           views={extensionViews}
+          commands={extensionCommands}
           settingsAsked={settingsAsk?.plane === plane ? settingsAsk.at : undefined}
           savingAsked={savingAsk?.plane === plane ? savingAsk.at : undefined}
           preferencesAsked={preferencesAsk?.plane === plane ? preferencesAsk.at : undefined}

@@ -11,7 +11,7 @@ import {
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { VaultContents, ViewTab } from "./bindings";
+import type { ExtensionCommand, VaultContents, ViewTab } from "./bindings";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce } from "./theme/theme";
 
 /**
@@ -159,6 +159,8 @@ function core(
     extensionsOn?: string[];
     /** What `project_theme_drawn` answers: the theme this project draws (charter-app#273). */
     projectTheme?: string | null;
+    /** What `extension_commands` answers: approved extensions' palette commands (#341). */
+    commands?: ExtensionCommand[];
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -173,6 +175,8 @@ function core(
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "extension_views") return on.offered ?? [];
+    if (cmd === "extension_commands") return on.commands ?? [];
+    if (cmd === "run_action") return { blocks: null, took_ms: 1, overreach: null };
     if (cmd === "extension_panels") return [];
     if (cmd === "extensions_on") return on.extensionsOn ?? ["persona-statistics"];
     if (cmd === "project_theme_drawn") return on.projectTheme ?? null;
@@ -206,8 +210,9 @@ function core(
             kind: "answered",
             blocks: [{ kind: "note", text: "It remembers 1 thing.", tone: "plain" }],
             took_ms: 1,
+            overreach: null,
           }
-        : { kind: "answered", blocks: [], took_ms: 1 };
+        : { kind: "answered", blocks: [], took_ms: 1, overreach: null };
     return null;
   });
   return { asked };
@@ -287,6 +292,76 @@ describe("a persona's own tab", () => {
 
     expect(within(strip()).getByRole("tab", { selected: true })).toHaveTextContent(/^steward$/);
     expect(screen.getByText("It remembers 1 thing.")).toBeInTheDocument();
+  });
+
+  describe("an extension's palette commands (charter-app#341)", () => {
+    const COMMANDS: ExtensionCommand[] = [
+      {
+        extension: "todo",
+        name: "Todos",
+        id: "open",
+        title: "Show todos",
+        does: { kind: "open", view: "list", title: "Todo list" },
+      },
+      {
+        extension: "todo",
+        name: "Todos",
+        id: "close",
+        title: "Close every todo",
+        does: {
+          kind: "run",
+          action: { id: "close", title: "Close all", asks_first: true, deletes: true },
+        },
+      },
+    ];
+
+    it("opens the extension's view in a tab of its own, named as the view is", async () => {
+      const { asked } = core({ commands: COMMANDS, extensionsOn: ["todo"] });
+      render(<App />);
+      (await screen.findByTestId("pane")).focus();
+
+      await userEvent.keyboard("{F2}");
+      await screen.findByRole("dialog", { name: "Command palette" });
+      await userEvent.keyboard("Todos: Show todos{Enter}");
+
+      await waitFor(() =>
+        expect(within(strip()).getByRole("tab", { selected: true })).toHaveTextContent("Todo list"),
+      );
+      await waitFor(() =>
+        expect(asked.filter((one) => one.cmd === "open_view").map((one) => one.args.from)).toEqual([
+          "todo",
+        ]),
+      );
+    });
+
+    it("asks before running an action that deletes, and runs it on nothing once said yes to", async () => {
+      const { asked } = core({ commands: COMMANDS, extensionsOn: ["todo"] });
+      render(<App />);
+      (await screen.findByTestId("pane")).focus();
+
+      await userEvent.keyboard("{F2}");
+      await screen.findByRole("dialog", { name: "Command palette" });
+      await userEvent.keyboard("Todos: Close every todo{Enter}");
+
+      const asking = await screen.findByRole("alertdialog");
+      expect(asking).toHaveTextContent("Run “Close all” from todo?");
+      expect(asked.some((one) => one.cmd === "run_action")).toBe(false);
+      await userEvent.click(within(asking).getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(asked.filter((one) => one.cmd === "run_action").map((one) => one.args)).toEqual([
+        {
+          plane: PLANE,
+          extension: "todo",
+          action: "close",
+          view: null,
+          key: "",
+          row: null,
+          workspace: "alpha",
+          confirmed: true,
+        },
+      ]);
+    });
   });
 
   it("closes without ending anything and without asking, because nothing runs in it", async () => {

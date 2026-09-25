@@ -3854,6 +3854,41 @@ button.show-more:focus-visible {
   outline-offset: 1px;
 }
 
+/* An extension's own actions on its row (charter-app#341): beside the row's words, drawn as the
+   view buttons on a heading are, so a row that can be acted on says so without a colour of its
+   own. */
+.panel-row:has(.row-actions) {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.panel-row .row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+}
+
+.panel-row .row-action {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  background: var(--control-base);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: default;
+}
+
+.panel-row .row-action:hover {
+  background: var(--control-hover);
+}
+
+.panel-row .row-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 /* ---- The chart ---------------------------------------------------------------------- */
 
 .chart {

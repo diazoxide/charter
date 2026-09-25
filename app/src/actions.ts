@@ -26,7 +26,7 @@
  * gave travels to the operator as the core's own sentence rather than as whatever a `catch`
  * decided to say about it.
  */
-import type { ChatWorktree, ExtensionView } from "./bindings";
+import type { ChatWorktree, ExtensionCommand, ExtensionView, RowAction } from "./bindings";
 import {
   chatOf,
   contentsOf,
@@ -158,6 +158,12 @@ export type Does =
    *  here rather than only a click on the panel because a menu is a third reader of this list
    *  (`Menus.tsx`) and the persona rows had nothing in it to read (charter-app#174). */
   | { verb: "openView"; view: ViewRef; title: string }
+  /** Runs an extension's action on nothing in particular — a palette command's (charter-app#341).
+   *
+   *  **It runs nothing by itself when the action asks first**: the window asks, and the core
+   *  refuses an action that asks first without the operator's yes, so a surface that forgot
+   *  is a refusal rather than a delete. `name` is the extension's, for the question's words. */
+  | { verb: "runAction"; extension: string; action: RowAction; name: string }
   /** Asks which of the plane's vaults to open (charter-app#235). It opens nothing by itself:
    *  what the picker's row runs is that vault's own `vault.open:<name>`. */
   | { verb: "pickVault" }
@@ -315,6 +321,11 @@ export type Now = {
    * palette is how a keyboard reaches them; the personas panel's heading is how a pointer does.
    */
   views?: readonly ExtensionView[];
+  /**
+   * The palette commands approved extensions add (`extension_commands`, charter-app#341), one
+   * row each, named `<extension's name>: <title>`.
+   */
+  commands?: readonly ExtensionCommand[];
   /** The plane's root. Every worktree command needs it, and there may not be one. */
   plane?: string;
   /**
@@ -391,6 +402,10 @@ export type Doing = {
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
+  /** Runs an extension's action — asking first when it says to, and always when it deletes. It
+   *  answers a `Ran`: the core can refuse, and what it saw change outside the extension's
+   *  declared paths is a sentence the operator is owed. */
+  runAction: (extension: string, action: RowAction, name: string) => Promise<Ran>;
   /** Opens the vault picker. Nothing is opened until a vault in it is. */
   pickVault: () => void;
   /** Opens the new-vault dialog. Nothing is made until it is answered. */
@@ -888,6 +903,38 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // **And every command an approved extension adds**, named with its name so where it came
+  // from is on the row (charter-app#341). One that opens a view is the verb every view is opened
+  // by; one that runs an action is the window's to ask about first.
+  for (const command of now.commands ?? []) {
+    const title = `${command.name}: ${command.title}`;
+    const id = `ext.command:${command.extension}/${command.id}`;
+    offers.push(
+      command.does.kind === "open"
+        ? can(
+            id,
+            title,
+            {
+              verb: "openView",
+              view: { from: command.extension, view: command.does.view, key: "" },
+              title: command.does.title,
+            },
+            command.title,
+          )
+        : can(
+            id,
+            title,
+            {
+              verb: "runAction",
+              extension: command.extension,
+              action: command.does.action,
+              name: command.name,
+            },
+            command.title,
+          ),
+    );
+  }
+
   // The worktree of the chat in front. Merging is not destructive — it is fast-forward only
   // and never pushes — so it sits above the line; removing is below it.
   const inFront = frontWorktree(now, chatInFocus);
@@ -1132,6 +1179,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
+    case "runAction":
+      return doing.runAction(does.extension, does.action, does.name);
     case "pickVault":
       doing.pickVault();
       return DID;

@@ -162,9 +162,12 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+pub mod acting;
 pub mod capability;
 pub mod project;
+pub mod writes;
 
+pub use acting::{Action, Command, Does};
 pub use capability::Capability;
 
 /// The registry, inside [`crate::machine::DIR`] and beside [`crate::machine::FILE`].
@@ -348,6 +351,14 @@ pub struct Manifest {
     /// [`Self::program`] with each question. Declaring one requires declaring the program: a
     /// setting nothing reads is a control that does nothing.
     pub settings: Vec<Setting>,
+    /// The actions its rows may carry ([`acting`], the `actions` capability): each one a request
+    /// of its own to [`Self::program`], asked only when the operator presses it.
+    pub actions: Vec<Action>,
+    /// The commands it adds to the palette ([`acting`], the `palette` capability).
+    pub palette: Vec<Command>,
+    /// The plane paths it declares it writes, as plane-relative globs ([`writes`], the `writes`
+    /// capability) — handed resolved with each request, and watched, never enforced.
+    pub writes: Vec<String>,
 }
 
 /// One setting an extension declares: a key a project sets in `[extensions.<id>.settings]`.
@@ -864,6 +875,17 @@ fn parse(text: &str) -> Result<Manifest, String> {
         None => Vec::new(),
         Some(value) => capability::declared(value)?,
     };
+    // And a capability whose request or answer this manifest's protocol does not carry is
+    // refused rather than asked in words the program was not written to read (ADR 0053).
+    if let Some(later) = capabilities.iter().find(|it| it.since() > protocol) {
+        return Err(format!(
+            "asks for the capability \"{}\", which needs protocol {}, and is version {protocol} \
+             — its 'version' has to be at least {}",
+            later.as_str(),
+            later.since(),
+            later.since()
+        ));
+    }
 
     let id = doc
         .get("id")
@@ -1028,6 +1050,43 @@ fn parse(text: &str) -> Result<Manifest, String> {
         Some(value) => settings_of(value, program.as_deref())?,
     };
 
+    // **A capability's shape is under its own word, and is there exactly when the word is asked
+    // for** (ADR 0053). A shape with no word asks charter for something the operator is never
+    // told it asks for; a word with no shape asks for a capability that does nothing.
+    for capability in Capability::known().into_iter().filter(|it| it.shaped()) {
+        let word = capability.as_str();
+        let declares = contributes
+            .get(word)
+            .is_some_and(|value| value.as_array().is_none_or(|list| !list.is_empty()));
+        match (capabilities.contains(&capability), declares) {
+            (true, false) => {
+                return Err(format!(
+                    "asks for the capability \"{word}\" and declares nothing under \
+                     'contributes.{word}'"
+                ));
+            }
+            (false, true) => {
+                return Err(format!(
+                    "declares 'contributes.{word}' without asking for the capability \"{word}\" \
+                     in its 'capabilities', so the operator would never be told it asks for it"
+                ));
+            }
+            _ => {}
+        }
+    }
+    let actions = match contributes.get("actions") {
+        None => Vec::new(),
+        Some(value) => acting::actions_of(value, program.as_deref())?,
+    };
+    let palette = match contributes.get("palette") {
+        None => Vec::new(),
+        Some(value) => acting::palette_of(value, &views, &actions)?,
+    };
+    let writes = match contributes.get("writes") {
+        None => Vec::new(),
+        Some(value) => writes::writes_of(value)?,
+    };
+
     Ok(Manifest {
         protocol,
         capabilities,
@@ -1039,6 +1098,9 @@ fn parse(text: &str) -> Result<Manifest, String> {
         program,
         state,
         settings,
+        actions,
+        palette,
+        writes,
     })
 }
 
@@ -1085,12 +1147,7 @@ fn views_of(value: &serde_json::Value, program: Option<&str>) -> Result<Vec<View
             .get("id")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| format!("declares a view at {at} with no id"))?;
-        if !crate::contain::segment_ok(id)
-            || !id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            || !id.starts_with(|c: char| c.is_ascii_alphanumeric())
-        {
+        if !ok_in_a_part_id(id) {
             return Err(format!(
                 "declares the view id {id:?}, and a view's id is letters, digits, '-' and '_', \
                  starting with a letter or a digit"
@@ -1101,20 +1158,7 @@ fn views_of(value: &serde_json::Value, program: Option<&str>) -> Result<Vec<View
                 "declares two views called {id:?}, and a view's id is how charter asks for it"
             ));
         }
-        let title = object
-            .get("title")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|title| !title.is_empty())
-            .ok_or_else(|| format!("declares the view {id:?} with no title"))?;
-        // `panel::undrawable`, not `is_control`: a title is drawn with ` · <extension id>`
-        // after it, and a bidirectional override in the title would draw that name backwards.
-        if title.len() > 200 || title.contains(crate::panel::undrawable) {
-            return Err(format!(
-                "declares the view {id:?} with a title charter will not draw on a button: it is \
-                 longer than 200 bytes or holds a control or invisible formatting character"
-            ));
-        }
+        let title = title_of(object.get("title"), "the view", id)?;
         let about = object
             .get("about")
             .and_then(serde_json::Value::as_str)
@@ -1132,11 +1176,40 @@ fn views_of(value: &serde_json::Value, program: Option<&str>) -> Result<Vec<View
         })?;
         views.push(View {
             id: id.to_owned(),
-            title: title.to_owned(),
+            title,
             about,
         });
     }
     Ok(views)
+}
+
+/// Whether `id` may name a part of an extension — a view, an action, a palette command: one
+/// segment of letters, digits, '-' and '_', starting with a letter or a digit.
+fn ok_in_a_part_id(id: &str) -> bool {
+    crate::contain::segment_ok(id)
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && id.starts_with(|c: char| c.is_ascii_alphanumeric())
+}
+
+/// The title a view, an action or a palette command declares, held to what charter draws on a
+/// button — or why not, naming `what` and its `id`.
+fn title_of(value: Option<&serde_json::Value>, what: &str, id: &str) -> Result<String, String> {
+    let title = value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .ok_or_else(|| format!("declares {what} {id:?} with no title"))?;
+    // `panel::undrawable`, not `is_control`: a title is drawn with ` · <extension id>` after it,
+    // and a bidirectional override in the title would draw that name backwards.
+    if title.len() > 200 || title.contains(crate::panel::undrawable) {
+        return Err(format!(
+            "declares {what} {id:?} with a title charter will not draw on a button: it is longer \
+             than 200 bytes or holds a control or invisible formatting character"
+        ));
+    }
+    Ok(title.to_owned())
 }
 
 fn ok_in_an_id(c: char) -> bool {
@@ -1305,13 +1378,16 @@ fn tree(
     // that are no longer true, so an extension that declares a program carries the executor's
     // protocol in its fingerprint: every one approved before this existed reads as changed and
     // is asked about again, with the prompt that says it will run. A theme-only extension is
-    // not touched — nothing about what its yes covered has moved. And the day the protocol
-    // changes what charter hands a program, the number moves and every such yes is re-asked.
+    // not touched — nothing about what its yes covered has moved.
+    //
+    // **The protocol hashed is the one the manifest names, not the newest charter speaks**
+    // (ADR 0053, charter-app#341). charter asks each program in the protocol its manifest
+    // declares, so what a yes covered moves only when the manifest does — and a manifest's
+    // bytes are hashed anyway. Hashing the executor's own number re-asked every operator who
+    // approved a protocol-1 extension the day charter learned protocol 2, about a question
+    // that had not changed.
     if manifest.program.is_some() {
-        framed.part(
-            "charter-starts-it",
-            &crate::executor::PROTOCOL.to_be_bytes(),
-        );
+        framed.part("charter-starts-it", &manifest.protocol.to_be_bytes());
     }
 
     let wanted: BTreeMap<&str, ()> = manifest
@@ -2093,6 +2169,24 @@ impl Surveyed {
             _ => &[],
         }
     }
+
+    /// The palette commands it is adding right now, on the same terms: none from an extension
+    /// that is new, changed or unreadable (charter-app#341). Like a view's button, a command is
+    /// a question the operator may ask; the executor re-takes the gate when he asks it.
+    pub fn palette_in_force(&self) -> &[Command] {
+        match (&self.found, self.standing.may_contribute()) {
+            (Some(found), true) => &found.manifest.palette,
+            _ => &[],
+        }
+    }
+
+    /// The actions its rows may carry right now, on the same terms.
+    pub fn actions_in_force(&self) -> &[Action] {
+        match (&self.found, self.standing.may_contribute()) {
+            (Some(found), true) => &found.manifest.actions,
+            _ => &[],
+        }
+    }
 }
 
 /// What has contributed what to this window.
@@ -2229,6 +2323,18 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
             crate::handed::what(view.about)
         )
     }));
+    // What it may do, and what it may write: the lines the capabilities above name, spelled out
+    // (charter-app#341).
+    declares.extend(found.manifest.actions.iter().map(acting::declares_action));
+    declares.extend(found.manifest.palette.iter().map(|command| {
+        acting::declares_command(command, &found.manifest.name, &found.manifest.actions)
+    }));
+    if !found.manifest.writes.is_empty() {
+        declares.push(format!(
+            "plane paths it writes: {}",
+            found.manifest.writes.join(", ")
+        ));
+    }
     if !found.manifest.settings.is_empty() {
         // What a project's files can hand the program is part of what the yes covers: a
         // committed file choosing a value the program then acts on is a channel the operator is

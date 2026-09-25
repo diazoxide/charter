@@ -62,6 +62,67 @@ pub(crate) struct PanelRow {
     /// charter's own contributions, below, and the window looks the id up in the catalogue: a
     /// row cannot invent a verb even here.
     pub runs: Option<String>,
+    /// The extension's own actions this row offers (charter-app#341), each as its manifest
+    /// declares it — the title and whether charter asks first are the manifest's, never the
+    /// answer's. Empty on every row of charter's own.
+    pub actions: Vec<RowAction>,
+}
+
+/// One action an extension's row offers, as the window draws its button (charter-app#341).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct RowAction {
+    pub id: String,
+    pub title: String,
+    /// Whether the window asks the operator before running it: the manifest's `confirm`, and
+    /// always for one that deletes (`charter_core::extension::Action::asks_first`).
+    pub asks_first: bool,
+    /// Whether it says it deletes, so the question the window asks can say so.
+    pub deletes: bool,
+}
+
+impl From<&charter_core::extension::Action> for RowAction {
+    fn from(it: &charter_core::extension::Action) -> Self {
+        Self {
+            id: it.id.clone(),
+            title: it.title.clone(),
+            asks_first: it.asks_first(),
+            deletes: it.deletes,
+        }
+    }
+}
+
+impl PanelBlock {
+    /// An extension's answered blocks, each row's action ids drawn as the actions `declared`
+    /// by its manifest. An id it does not declare cannot reach here — the executor refuses the
+    /// whole answer — and would be dropped rather than drawn as a button with no title.
+    pub(crate) fn answered(
+        blocks: &[panel::Block],
+        declared: &[charter_core::extension::Action],
+    ) -> Vec<Self> {
+        blocks
+            .iter()
+            .map(|block| {
+                let mut drawn = Self::from(block);
+                if let (
+                    Self::List {
+                        rows: drawn_rows, ..
+                    },
+                    panel::Block::List { rows, .. },
+                ) = (&mut drawn, block)
+                {
+                    for (drawn_row, row) in drawn_rows.iter_mut().zip(rows) {
+                        drawn_row.actions = row
+                            .actions
+                            .iter()
+                            .filter_map(|id| declared.iter().find(|it| &it.id == id))
+                            .map(RowAction::from)
+                            .collect();
+                    }
+                }
+                drawn
+            })
+            .collect()
+    }
 }
 
 /// What a list says when it has no rows.
@@ -211,6 +272,8 @@ impl From<&panel::Row> for PanelRow {
                 panel::Detail::Text(text) => PanelDetail::Text { text: text.clone() },
             }),
             runs: it.runs.clone(),
+            // Drawn only through `PanelBlock::answered`, which holds the manifest's actions.
+            actions: Vec::new(),
         }
     }
 }
@@ -469,6 +532,7 @@ fn charters_own(
                     todo.body.clone()
                 })),
                 runs: None,
+                actions: Vec::new(),
             })
             .collect(),
         empty: panel::Empty {
@@ -514,6 +578,7 @@ fn charters_own(
                     // palette and a context menu run too, so the three are one verb.
                     detail: None,
                     runs: Some(format!("persona.show:{name}")),
+                    actions: Vec::new(),
                 })
                 .collect(),
             empty: panel::Empty {
@@ -583,6 +648,7 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
                 memory.body.clone()
             })),
             runs: None,
+            actions: Vec::new(),
         })
         .collect())
 }

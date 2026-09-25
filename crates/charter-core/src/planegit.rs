@@ -618,7 +618,7 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
 
 /// `git status --porcelain=v1 -z`'s paths: what `git add -A` would take. `-z` for the same
 /// reason the save's secret guard uses it — no quoting, NUL the only separator.
-fn changed_paths(root: &Path) -> Vec<String> {
+pub(crate) fn changed_paths(root: &Path) -> Vec<String> {
     let Ok(run) = git::run(
         root,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],

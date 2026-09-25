@@ -13,11 +13,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **An extension can be acted on, not only read.** Three capabilities, each named in the
+  approval dialog: `palette` adds commands to the palette, named with the extension's name, that
+  open one of its views or run one of its actions; `actions` puts the extension's own actions on
+  the rows of its views, and the answer can refresh the view; `writes` declares the plane paths
+  it writes, such as `workspaces/*/todos/`. charter asks before an action when the extension
+  says to, and always before one that deletes. Each request tells the extension where it may
+  write, and after each one charter says what changed outside those paths, naming the
+  extension. That is a report, not a fence: an extension still runs as you. The protocol is now
+  2; an extension written for protocol 1 is asked exactly as before and keeps its approval.
+  ([#341](https://github.com/diazoxide/charter-app/issues/341))
 - **An extension says which capabilities it asks for.** An extension's `charter-extension.json`
   can list them in `capabilities`. The approval dialog and the Extensions list name each one,
   and changing the list asks you again. An extension that asks for a capability this charter
-  doesn't know is refused as a whole, with a sentence naming it. This version knows none yet;
-  each one arrives in its own release. An extension with no `capabilities` loads exactly as
+  doesn't know is refused as a whole, with a sentence naming it. Each capability arrives in a
+  change of its own. An extension with no `capabilities` loads exactly as
   before and keeps its approval. `version` in the manifest is now the protocol its program
   speaks. ([#338](https://github.com/diazoxide/charter-app/issues/338))
 - **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,

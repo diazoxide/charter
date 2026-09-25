@@ -14,7 +14,7 @@ import {
   TriangleAlert,
   UserRound,
 } from "lucide-react";
-import type { PanelEmpty, PanelRow } from "./bindings";
+import type { PanelEmpty, PanelRow, RowAction } from "./bindings";
 import { EmptyState } from "./EmptyState";
 import { useTabStop } from "./roving";
 
@@ -104,6 +104,7 @@ export function PanelList({
   onOpen,
   detailOf,
   onRun,
+  onAct,
   wrap,
   page = PAGE,
   testid,
@@ -121,6 +122,9 @@ export function PanelList({
   detailOf?: (row: PanelRow) => ReactNode;
   /** Run the catalogue row this row names, if the catalogue still offers it. */
   onRun?: (id: string) => void;
+  /** Run one of the extension's own actions this row offers (charter-app#341). A list with no
+   *  handler draws no action buttons: a button that does nothing is not drawn. */
+  onAct?: (row: PanelRow, action: RowAction) => void;
   /** A context menu around each row, where the panel can name what the row is about. */
   wrap?: RowMenu;
   page?: number;
@@ -201,6 +205,7 @@ export function PanelList({
                 onOpen={(opening) => onOpen(opening ? row.key : undefined)}
                 detail={detailOf?.(row) ?? defaultDetail(row)}
                 onRun={onRun}
+                onAct={onAct}
                 wrap={wrap}
               />
             ))}
@@ -243,6 +248,7 @@ function Row({
   onOpen,
   detail,
   onRun,
+  onAct,
   wrap,
 }: {
   row: PanelRow;
@@ -250,6 +256,7 @@ function Row({
   onOpen: (opening: boolean) => void;
   detail: ReactNode;
   onRun?: (id: string) => void;
+  onAct?: (row: PanelRow, action: RowAction) => void;
   wrap?: RowMenu;
 }) {
   const Mark = MARKS[row.mark] ?? Circle;
@@ -321,8 +328,33 @@ function Row({
       </Popover.Root>
     );
 
+  // **The extension's own actions, beside the row and never inside its button** (charter-app#341):
+  // pressing the row opens its card, and pressing an action asks the extension's program — two
+  // different things a click could mean, so they are two different controls. The titles and the
+  // asking are the manifest's, which the core put on the row.
+  const acts =
+    onAct !== undefined && row.actions.length > 0 ? (
+      <span className="row-actions">
+        {row.actions.map((action) => (
+          <button
+            key={action.id}
+            type="button"
+            className="row-action"
+            // #190: WebKit leaves a button out of the tab sequence without this.
+            tabIndex={0}
+            onClick={() => onAct(row, action)}
+          >
+            {action.title}
+          </button>
+        ))}
+      </span>
+    ) : null;
+
   const item = (
-    <li className={clsx("panel-row", row.tone !== "plain" && `is-${row.tone}`)}>{inner}</li>
+    <li className={clsx("panel-row", row.tone !== "plain" && `is-${row.tone}`)}>
+      {inner}
+      {acts}
+    </li>
   );
   return <>{wrap ? wrap(row, item) : item}</>;
 }

@@ -32,6 +32,7 @@ function row(key: string, text: string, over: Partial<PanelRow> = {}): PanelRow 
     tone: "plain",
     detail: { kind: "text", text: `the whole of ${text}` },
     runs: null,
+    actions: [],
     ...over,
   };
 }
