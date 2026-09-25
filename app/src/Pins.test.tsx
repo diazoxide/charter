@@ -53,10 +53,10 @@ function chat(session: number, name: string, workspace: string, pinned = false) 
 }
 
 /** A plane with three workspaces, so an order is something a pin can change. */
-function sidebar(open: ReturnType<typeof chat>[]) {
+function sidebar(open: ReturnType<typeof chat>[], names = ["alpha", "beta", "gamma"]) {
   return {
     root: PLANE,
-    workspaces: ["alpha", "beta", "gamma"].map((name) => ({
+    workspaces: names.map((name) => ({
       name,
       path: `${PLANE}/workspaces/${name}`,
       vision: "",
@@ -82,19 +82,43 @@ function core(
   refuse?: string,
 ): { asked: Asked[] } {
   const asked: Asked[] = [];
+  // What is on the plane and what the store has pinned, kept the way the core keeps them: a
+  // workspace made from the window is on the plane afterwards, and a pin written is there
+  // when the store is asked again.
+  const names = ["alpha", "beta", "gamma"];
+  const pinnedNow = new Set(pins.workspaces);
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
+    const given = (args ?? {}) as Record<string, unknown>;
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
-    if (cmd === "plane_sidebar") return sidebar(open);
+    if (cmd === "plane_sidebar") return sidebar(open, names);
     if (cmd === "opened_chats") return open;
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
-    if (cmd === "plane_pins") return pins;
+    // In the plane's own order whatever order they were pinned in, as the store answers.
+    if (cmd === "plane_pins") {
+      const kept = [...pinnedNow];
+      return {
+        ...pins,
+        workspaces: [
+          ...names.filter((name) => kept.includes(name)),
+          ...kept.filter((name) => !names.includes(name)),
+        ],
+      };
+    }
+    if (cmd === "workspace_create") {
+      names.push(given.name as string);
+      return [`✓ workspace ${String(given.name)} created`];
+    }
     if (cmd === "pin_chat" || cmd === "pin_workspace" || cmd === "pin_project") {
       // A refusal is a THROWN value and not an `Error`, which is what `typedError` turns
       // into `{ status: "error" }` — the same shape the core's own refusals arrive in.
       if (refuse !== undefined) throw refuse;
+      if (cmd === "pin_workspace") {
+        if (given.pinned) pinnedNow.add(given.workspace as string);
+        else pinnedNow.delete(given.workspace as string);
+      }
       return null;
     }
     return null;
@@ -281,6 +305,25 @@ describe("the workspace strip", () => {
       screen.getByRole("button", { name: "Show 1 workspace the strip is not showing" }),
     );
     expect(menuNames()).toEqual(["alpha"]);
+  });
+
+  it("pins a workspace made from the window, so it is on the strip", async () => {
+    // You just made it in order to work in it (ADR 0054). The chat in front keeps you in
+    // alpha, so the new workspace is on the strip only because it is pinned.
+    core([chat(1, "one", "alpha")]);
+    render(<App />);
+    await waitFor(() => expect(workspaceNames()).toEqual(["alpha"]));
+
+    const row = strip("Workspaces").parentElement as HTMLElement;
+    await userEvent.click(within(row).getByRole("button", { name: "New workspace…" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "delta");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+
+    await waitFor(() => expect(workspaceNames()).toEqual(["delta", "alpha"]));
+    expect(
+      within(strip("Workspaces")).getByRole("img", { name: "pinned workspace" }),
+    ).toBeInTheDocument();
   });
 });
 

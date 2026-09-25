@@ -1451,6 +1451,20 @@ export function PlaneView({
     setMakingWorkspace(true);
   }, []);
 
+  /** Pins or unpins one workspace. It goes in the machine store, so what the store now says
+   *  is asked again rather than assumed — `pinning` is what asks. */
+  const pinWorkspace = useCallback(
+    async (workspace: string, pinned: boolean): Promise<Ran> => {
+      const said = await commands
+        .pinWorkspace(plane, workspace, pinned)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return { ok: false, refused: said.error };
+      setPinning((asked) => asked + 1);
+      return { ok: true };
+    },
+    [plane],
+  );
+
   /**
    * Makes it, through `charter workspace create`.
    *
@@ -1472,15 +1486,20 @@ export function PlaneView({
       }
       setMakingWorkspace(false);
       setWorkspaceTrouble(undefined);
+      // **Made here, so pinned** (ADR 0054): the operator made it in order to work in it, and
+      // the workspace strip draws what is pinned. A pin the store refused leaves the
+      // workspace made and says why, beside what charter said about making it.
+      const pinned = await pinWorkspace(name, true);
+      const words = pinned.ok ? answer.data : [...answer.data, pinned.refused];
       // charter's own lines, which say where it landed and whether it is LOCAL or LIVE.
-      setReport({ from: "workspace.create", refused: false, words: answer.data.join(" ") });
+      setReport({ from: "workspace.create", refused: false, words: words.join(" ") });
       // The plane is read again rather than this window writing the workspace into its own
       // copy of the sidebar, and the strip lands on what was just made: it holds no chats, so
       // `picked` is the only thing that can put the window in it.
       setPicked(name);
       setReplan((asked) => asked + 1);
     },
-    [plane],
+    [pinWorkspace, plane],
   );
 
   /** Asks for a new vault. It makes nothing: the dialog asks, and `vault_create` makes one. */
@@ -1743,20 +1762,6 @@ export function PlaneView({
     backToTheTab.current = false;
     chatStrip.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
   }, [renaming]);
-
-  /** Pins or unpins one workspace. It goes in the machine store, so what the store now says
-   *  is asked again rather than assumed — `pinning` is what asks. */
-  const pinWorkspace = useCallback(
-    async (workspace: string, pinned: boolean): Promise<Ran> => {
-      const said = await commands
-        .pinWorkspace(plane, workspace, pinned)
-        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (said.status === "error") return { ok: false, refused: said.error };
-      setPinning((asked) => asked + 1);
-      return { ok: true };
-    },
-    [plane],
-  );
 
   /**
    * Runs an extension's action from the palette (charter-app#341): on nothing in particular, in
