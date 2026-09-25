@@ -178,13 +178,13 @@ mod tests {
         let own = got[0]
             .plugins
             .iter()
-            .find(|it| it.id == "charter-app@inline")
+            .find(|it| it.id == "charter@inline")
             .expect("the pin is listed");
         assert_eq!(own.state, "on");
         assert!(
             own.pinned
                 .as_deref()
-                .is_some_and(|why| why.starts_with("charter-app@inline is always on")),
+                .is_some_and(|why| why.starts_with("charter@inline is always on")),
             "{:?}",
             own.pinned
         );
@@ -208,7 +208,7 @@ mod tests {
         std::fs::create_dir_all(&ws).expect("the workspace");
         std::fs::write(
             ws.join("workspace.json"),
-            r#"{"settings": {"harness_plugins": {"claude": {"figma@official": false, "charter-app@inline": false}}}}"#,
+            r#"{"settings": {"harness_plugins": {"claude": {"figma@official": false, "charter@inline": false}}}}"#,
         )
         .expect("workspace.json");
         let empty = tempfile::tempdir().expect("an empty home");
@@ -232,7 +232,7 @@ mod tests {
         );
         let own = claude
             .iter()
-            .find(|it| it.id == "charter-app@inline")
+            .find(|it| it.id == "charter@inline")
             .expect("the pin is listed");
         assert_eq!(own.ignored.len(), 1, "{:?}", own.ignored);
         assert_eq!(own.ignored[0].file, "workspaces/alpha/workspace.json");

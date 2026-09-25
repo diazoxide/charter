@@ -154,12 +154,13 @@ describe("a chat's context gauge", () => {
     const manifest = JSON.parse(
       readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"),
     ) as { name: string };
-    expect(manifest.name).toBe("charter-app");
+    expect(manifest.name).toBe("charter");
     expect(existsSync(join(pluginDir, "hooks", "hooks.json"))).toBe(true);
     expect(realpathSync(now[`hookbinary-${chat}`])).toBe(realpathSync(built("charter")));
     expect(settings.enabledPlugins).toEqual({
       "charter@charter": false,
-      "charter-app@inline": true,
+      "charter@inline": true,
+      "charter-app@inline": false,
     });
 
     // 1. The feed: charter armed its own statusline as this session's statusLine — which it

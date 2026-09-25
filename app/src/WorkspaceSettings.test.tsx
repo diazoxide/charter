@@ -92,7 +92,7 @@ const NO_THEME: ProjectTheme = {
 };
 
 const OWN_WHY =
-  "charter-app@inline is always on: it is charter's own plugin, and it carries charter's hooks and the Bash guard";
+  "charter@inline is always on: it is charter's own plugin, and it carries charter's hooks and the Bash guard";
 
 /** What the core says is in force for each harness in this workspace (charter-app#282). */
 const HARNESSES: HarnessPlugins[] = [
@@ -105,8 +105,8 @@ const HARNESSES: HarnessPlugins[] = [
     local_left_out: null,
     plugins: [
       {
-        id: "charter-app@inline",
-        name: "charter-app",
+        id: "charter@inline",
+        name: "charter",
         origin: "",
         state: "on",
         source: "default",
@@ -115,7 +115,7 @@ const HARNESSES: HarnessPlugins[] = [
         ignored: [
           {
             file: "workspaces/alpha/workspace.json",
-            why: `workspaces/alpha/workspace.json sets settings.harness_plugins.claude."charter-app@inline" to false, and ${OWN_WHY}`,
+            why: `workspaces/alpha/workspace.json sets settings.harness_plugins.claude."charter@inline" to false, and ${OWN_WHY}`,
           },
           { file: "charter.toml", why: "a Shared sentence that is not this section's" },
         ],
@@ -516,10 +516,10 @@ describe("the Harness plugins groups in a workspace (charter-app#282)", () => {
     expect(within(section).getByLabelText("Claude Code: figma@official")).toHaveValue("");
     // charter's own plugin is a line, never a control.
     expect(claude).toHaveTextContent(OWN_WHY);
-    expect(within(section).queryByLabelText("Claude Code: charter-app@inline")).toBeNull();
+    expect(within(section).queryByLabelText("Claude Code: charter@inline")).toBeNull();
     // Only this section's sentences.
     expect(claude).toHaveTextContent(
-      'workspaces/alpha/workspace.json sets settings.harness_plugins.claude."charter-app@inline" to false',
+      'workspaces/alpha/workspace.json sets settings.harness_plugins.claude."charter@inline" to false',
     );
     expect(claude).not.toHaveTextContent("a Shared sentence");
     for (const title of ["opencode", "Codex"]) {

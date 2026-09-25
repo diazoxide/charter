@@ -21,10 +21,12 @@
 //! for an extension. A file that names a plugin this machine does not have is listed as such and
 //! handed to nothing. A file can choose among installed plugins; it cannot install one.
 //!
-//! **Pins come before everything** ([`Adapter::pinned`]). Claude Code's are the two the app has
-//! always written into every chat's `--settings`. `charter-app@inline` is always on, because it
-//! carries the hooks and the Bash guard, and a file a chat can write must not be able to switch
-//! the guard off. `charter@charter` is always off, by the operator's ruling of 2026-09-23. A file
+//! **Pins come before everything** ([`Adapter::pinned`]). Claude Code's are written into every
+//! chat's `--settings`. `charter@inline` is always on, because it carries the hooks and the
+//! Bash guard, and a file a chat can write must not be able to switch the guard off.
+//! `charter@charter` is always off, by the operator's ruling of 2026-09-23. `charter-app@inline`,
+//! the bundled plugin's id before it was renamed (#406), is always off too, so a file that still
+//! names it is told the new id. A file
 //! that says otherwise is refused by the settings tab's save ([`refusals`]) and, if it gets there
 //! another way, ignored with a sentence ([`Effective::ignored`]).
 //!
@@ -166,12 +168,14 @@ pub struct ClaudeCode;
 
 pub static CLAUDE_CODE: ClaudeCode = ClaudeCode;
 
-/// Claude Code's pins: the two values every chat the app starts has always carried.
-static CLAUDE_PINS: [Pin; 2] = [
+/// Claude Code's pins: charter's own plugin on, and off the two it replaced — the Python
+/// charter's, and its own under the id it had before it was renamed (#406). Each matches on
+/// the whole id: `charter@inline` and `charter@charter` are both *named* `charter`.
+static CLAUDE_PINS: [Pin; 3] = [
     Pin {
         id: crate::plugin::LOADED_AS,
         on: true,
-        why: "charter-app@inline is always on: it is charter's own plugin, and it carries \
+        why: "charter@inline is always on: it is charter's own plugin, and it carries \
               charter's hooks and the Bash guard",
     },
     Pin {
@@ -179,6 +183,12 @@ static CLAUDE_PINS: [Pin; 2] = [
         on: false,
         why: "charter@charter is always off: it is the Python charter's plugin, and a chat \
               the app starts carrying it too would have two sets of hooks and two handoff skills",
+    },
+    Pin {
+        id: crate::plugin::FORMERLY,
+        on: false,
+        why: "charter-app@inline is always off: it is the id charter's own plugin had before \
+              it was renamed, and charter's own plugin is charter@inline",
     },
 ];
 

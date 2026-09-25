@@ -409,14 +409,14 @@ fn a_workspace_cannot_turn_charters_own_plugin_off_and_is_told_so_at_its_own_key
         dir.path(),
         "alpha",
         Some(&old()),
-        &[plugin_off("charter-app@inline")],
+        &[plugin_off("charter@inline")],
     )
     .unwrap_err();
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(
         refused[0].starts_with(
-            "settings.harness_plugins.claude.\"charter-app@inline\" in \
-             workspaces/alpha/workspace.json cannot be false: charter-app@inline is always on"
+            "settings.harness_plugins.claude.\"charter@inline\" in \
+             workspaces/alpha/workspace.json cannot be false: charter@inline is always on"
         ),
         "{}",
         refused[0]

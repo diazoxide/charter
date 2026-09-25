@@ -122,7 +122,10 @@ fn a_harness_in_the_operators_own_bin_directory_is_found_with_no_path_to_find_it
         "the harness was found, so a chat on it is armed by the app: {profile}"
     );
     let detail = profile["detail"].as_str().unwrap();
-    assert!(detail.contains("charter-app"), "{profile}");
+    assert!(
+        detail.contains("its own plugin, charter@inline"),
+        "{profile}"
+    );
     assert!(
         detail.contains(&claude.display().to_string()),
         "the row names the harness it found: {profile}"

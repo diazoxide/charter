@@ -2402,8 +2402,9 @@ mod tests {
         assert_eq!(
             settings["enabledPlugins"],
             serde_json::json!({
-                "charter-app@inline": true,
+                "charter@inline": true,
                 "charter@charter": false,
+                "charter-app@inline": false,
                 "figma@official": false,
             }),
             "{argv:?}"
