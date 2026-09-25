@@ -94,6 +94,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
 
       - name: Channel, version, and whether anything is published
         id: plan
@@ -277,6 +278,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
 
       - name: Tauri's Linux build dependencies
         if: runner.os == 'Linux'
@@ -285,7 +287,11 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - uses: dtolnay/rust-toolchain@stable
+      # A job that holds the signing secrets reads the cache `ci` wrote on main and never writes
+      # one: whatever it saved, the next signing run would restore and run.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -774,8 +780,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # No cache here: this job can write the release, so it builds from nothing but main's
+      # own tree.
 
       - uses: actions/download-artifact@v8
         with:
