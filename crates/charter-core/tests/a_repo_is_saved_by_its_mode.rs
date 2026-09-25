@@ -201,7 +201,7 @@ mod repo_saves {
         }
         let host = "repo-feature.test";
         let scene = Scene::new(host);
-        let r = repo(host, "");
+        let r = repo(host, "[repos.widget]\nmode = \"pr\"\n");
         let main_before = r.remote("main");
         support::git(&r.clone, &["checkout", "-q", "-b", "feature/x"]);
         std::fs::write(r.clone.join("src.rs"), "fn main() {}\n").unwrap();

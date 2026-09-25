@@ -697,7 +697,7 @@ mod tests {
             [
                 RepoInForce {
                     name: "web".into(),
-                    mode: in_force(Some("pr"), "default"),
+                    mode: in_force(Some("off"), "default"),
                     branch: in_force(None, "default"),
                     sign: in_force(Some("off"), "default"),
                     autosave: in_force(Some("off"), "default"),

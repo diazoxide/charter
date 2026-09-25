@@ -149,10 +149,28 @@ fn a_feature_branch_in_push_mode_is_committed_on_and_pushed_to_that_branch_only(
 }
 
 #[test]
-fn the_default_mode_is_pr_so_a_clone_with_no_forge_it_can_open_one_on_stays_committed() {
+fn a_repo_nobody_configured_is_left_exactly_as_it_is() {
+    // The default is `off` (ADR 0051, amended 2026-09-25): no commit, no push, no PR, whoever
+    // presses what.
+    let f = Fixture::new("");
+    std::fs::write(f.clone.join("a.md"), "a").unwrap();
+    let before = f.head();
+    let remote_before = f.remote_has("main");
+    assert_eq!(f.standing().mode, Mode::Off);
+
+    let (code, said) = f.save_with(Trigger::Manual, &[]);
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(f.head(), before, "a commit was made: {said}");
+    assert!(f.clone.join("a.md").is_file());
+    assert_eq!(f.remote_has("main"), remote_before, "something was pushed");
+}
+
+#[test]
+fn a_pr_mode_on_a_clone_with_no_known_default_branch_stays_committed() {
     // The fixture's origin is on github.com, a known forge, but nothing answers for it here
     // — so this stops at the question of where the PR goes, which the inventory answers.
-    let f = Fixture::new("");
+    let f = Fixture::new("[repos.widget]\nmode = \"pr\"\n");
     std::fs::write(f.clone.join("a.md"), "a").unwrap();
     assert_eq!(f.standing().mode, Mode::Pr);
 

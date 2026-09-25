@@ -162,6 +162,42 @@ export function repoStageText(repo: RepoSaving): string {
   }
 }
 
+/**
+ * **Where a repo's Save goes**, said before anyone presses it (ADR 0051, amended 2026-09-25):
+ * the steps `reposave::save_as` takes, by mode, including where it stops short. A save always
+ * commits every changed file on the branch the clone is on; in a PR mode on the pull
+ * request's base or the default branch, that commit is then pushed as a branch of charter's
+ * own, never to the branch itself.
+ */
+export function repoSaveGoesTo(repo: RepoSaving, workspace: string): string {
+  if (repo.mode === "off") return "Nowhere — charter does not save it";
+  const on = repo.branch;
+  if (on === null) return "Nowhere — the clone is not on a branch; check one out first";
+  const noForge = "its origin is not on a forge charter knows";
+  switch (repo.mode) {
+    case "commit":
+      return `Commits on ${on} — nothing is pushed`;
+    case "push":
+      return repo.pushes
+        ? `Commits on ${on} and pushes ${on}`
+        : `Commits on ${on} — nothing is pushed: ${noForge}`;
+    case "pr":
+    case "pr-merge": {
+      if (!repo.pushes) return `Commits on ${on}, then stops: ${noForge}`;
+      if (repo.target === null)
+        return `Commits on ${on}, then stops: charter does not know where a pull request goes — set [repos.${repo.name}] branch`;
+      const pushed = repo.ownBranch
+        ? `pushes that commit as charter/${workspace}/… (never to ${on})`
+        : `pushes ${on}`;
+      const merge =
+        repo.mode === "pr-merge" ? ", and asks it to merge itself once its checks pass" : "";
+      return `Commits on ${on}, ${pushed}, and opens a pull request into ${repo.target}${merge}`;
+    }
+    default:
+      return `Saved by mode ${repo.mode}`;
+  }
+}
+
 /** What saving everything said: every line, and every refusal in the core's words. */
 export type SavedAll = { said: string[]; refused: string[] };
 

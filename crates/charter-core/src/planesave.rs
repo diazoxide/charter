@@ -71,7 +71,7 @@ impl Plane {
 /// `inventory/repos.json`, so one table governs every workspace's clone of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repo {
-    /// `pr` when neither file says.
+    /// `off` when neither file says: charter never saves a repo nobody told it how to.
     pub mode: Resolved<Mode>,
     /// The branch a PR goes into. `None`: the repo's default branch.
     pub branch: Resolved<Option<String>>,
@@ -199,7 +199,10 @@ impl Settings {
                 &path,
                 "mode",
                 |v| v.as_str().and_then(Mode::parse),
-                Mode::Pr,
+                // Off until somebody says how: a repo is a developer's, and a save that commits
+                // or pushes it is an action on their branch nobody asked for (ADR 0051,
+                // amended 2026-09-25).
+                Mode::Off,
             ),
             branch: files.branch(&path, "branch"),
             sign: files.or(&path, "sign", toml::Value::as_bool, false),

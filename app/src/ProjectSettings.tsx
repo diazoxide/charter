@@ -982,7 +982,7 @@ function shareMarker(file: Shown, saving: SavingInForce | undefined): string {
 function reposGroup(section: Which): Group {
   return {
     title: "Repos",
-    note: "How each workspace repo is saved, by its name in inventory/repos.json. A repo's defaults are mode pr and auto-save off.",
+    note: "How each workspace repo is saved, by its name in inventory/repos.json. A repo's defaults are mode off and auto-save off: charter saves no repo until its mode says how.",
     empty: (saving) =>
       saving !== undefined && "trouble" in saving
         ? `The repos and how each is saved could not be read: ${saving.trouble}`

@@ -175,6 +175,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Save in the title bar now saves only the project.** Before, when the workspace in front had
+  repos with changes, the title bar's Save became Save all. It committed every changed file in
+  those repos and pushed their branches, without asking. Now the title bar counts the repos but
+  never saves them. Save all lives only in the Saving tab, and it first asks you to confirm a
+  list of each repo, its branch, what it would take and where its save goes. Each repo row says
+  where its Save goes, too. A repo nobody has configured is now `off` instead of `pr`: charter
+  saves no repo until `[repos.<name>] mode` says how. To keep saving a repo as before, set its
+  mode to `pr`.
 - **The project tabs are in the title bar**, after the window controls, and the breadcrumb
   is gone: the project tab says which project and the workspace strip says which workspace.
   That is one tab row fewer above the panes. The tabs give way before About, the update

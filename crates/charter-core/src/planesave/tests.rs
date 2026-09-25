@@ -215,14 +215,15 @@ fn a_quiet_period_or_branch_charter_cannot_read_is_passed_over() {
 // -------------------------------------------------------------------------------------
 
 #[test]
-fn a_repo_nobody_configured_saves_through_a_pr_and_never_by_itself() {
-    // Code is not a database: pushing someone's half-finished change to main by default is
-    // the one irreversible mistake the design could make (ADR 0051).
+fn a_repo_nobody_configured_is_never_saved_until_somebody_says_how() {
+    // Code is not a database, and a developer's branch is theirs: a repo charter was never told
+    // how to save is not committed, pushed or opened a PR for, by any button (ADR 0051, amended
+    // 2026-09-25 — it was `pr`, and one press of the title bar pushed feature branches).
     let got = settings("[plane]\nmode = \"push\"\nautosave = true\n", "").repo("charter-app");
     assert_eq!(
         got.mode,
         Resolved {
-            value: Mode::Pr,
+            value: Mode::Off,
             source: Source::Default
         }
     );

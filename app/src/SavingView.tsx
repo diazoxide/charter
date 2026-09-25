@@ -1,4 +1,5 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { CircleAlert, CircleCheck, CircleDot, LoaderCircle, Save } from "lucide-react";
 import {
   commands,
@@ -11,6 +12,7 @@ import {
   askWayOut,
   behindness,
   repoSavable,
+  repoSaveGoesTo,
   repoStageText,
   saveAll,
   tellSaved,
@@ -69,9 +71,18 @@ export function SavingView({
     }
   };
 
-  /** Save all: the plane and every repo with something to take, one after another. */
-  const saveEverything = async () => {
-    if (saving === undefined) return;
+  /** Save all's confirmation, while it is open: every tree it would save, as read when Save all
+   *  was pressed. Held still, so what is saved is exactly what the operator read — the rereads
+   *  that keep the view fresh never add a repo to a list already on screen. */
+  const [confirming, setConfirming] = useState<{
+    plane: PlaneSaving | null;
+    repos: RepoSaving[];
+  }>();
+
+  /** Save all: the plane and every repo with something to take, one after another. Only ever
+   *  run from its confirmation (ADR 0051, amended 2026-09-25). */
+  const saveEverything = async (what: { plane: PlaneSaving | null; repos: RepoSaving[] }) => {
+    setConfirming(undefined);
     setBusy(true);
     setSaid(null);
     setRefused(null);
@@ -79,10 +90,10 @@ export function SavingView({
     try {
       const got = await saveAll(
         plane,
-        savable(saving),
+        what.plane !== null,
         typed === "" ? null : typed,
         workspace,
-        repos ?? [],
+        what.repos,
       );
       if (got.said.length > 0) setSaid(got.said);
       if (got.refused.length > 0) setRefused(got.refused.join("\n"));
@@ -212,7 +223,12 @@ export function SavingView({
                 type="button"
                 className="panel-view"
                 tabIndex={0}
-                onClick={() => void saveEverything()}
+                onClick={() =>
+                  setConfirming({
+                    plane: savable(saving) ? saving : null,
+                    repos: (repos ?? []).filter(repoSavable),
+                  })
+                }
                 disabled={busy || !anyToSave}
               >
                 <Save className="node-icon" aria-hidden="true" />
@@ -220,6 +236,15 @@ export function SavingView({
               </button>
             )}
           </div>
+          {confirming !== undefined && workspace !== undefined && (
+            <ConfirmSaveAll
+              plane={confirming.plane}
+              workspace={workspace}
+              repos={confirming.repos}
+              onSave={() => void saveEverything(confirming)}
+              onCancel={() => setConfirming(undefined)}
+            />
+          )}
           {workspace !== undefined && repos !== undefined && repos.length > 0 && (
             <RepoRows
               workspace={workspace}
@@ -279,6 +304,7 @@ function RepoRows({
           <th scope="col">Stage</th>
           <th scope="col">Pull request</th>
           <th scope="col">Mode</th>
+          <th scope="col">Save goes to</th>
           <th scope="col">
             <span className="sr-only">Save</span>
           </th>
@@ -300,13 +326,14 @@ function RepoRows({
               )}
             </td>
             <td>{`${repo.mode} (${repo.modeFrom})${repo.autosave ? " · auto-save" : ""}`}</td>
+            <td data-testid="save-goes-to">{repoSaveGoesTo(repo, workspace)}</td>
             <td>
               <button
                 type="button"
                 className="panel-view"
                 tabIndex={0}
                 aria-label={`Save ${repo.name}`}
-                title={`Save ${repo.name}`}
+                title={`Save ${repo.name}: ${repoSaveGoesTo(repo, workspace)}`}
                 disabled={busy || !repoSavable(repo)}
                 onClick={() => onSave(repo.name)}
               >
@@ -318,6 +345,105 @@ function RepoRows({
       </tbody>
     </table>
   );
+}
+
+/**
+ * **Save all's confirmation** (ADR 0051, amended 2026-09-25): every tree it would save, each
+ * repo with the branch it is on, what it would take, and where its save goes — because a repo
+ * is a developer's, and a save commits every file changed in it and may push it. Nothing is
+ * saved until the operator says so here.
+ *
+ * Radix's `AlertDialog`, as `DeleteWorkspace` is: an action that reaches past this machine is
+ * one the operator confirms, and focus starts on Cancel.
+ */
+function ConfirmSaveAll({
+  plane,
+  workspace,
+  repos,
+  onSave,
+  onCancel,
+}: {
+  /** The project's standing, when it has something to save; else `null`. */
+  plane: PlaneSaving | null;
+  workspace: string;
+  repos: readonly RepoSaving[];
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const cancel = useRef<HTMLButtonElement>(null);
+  const count = (plane === null ? 0 : 1) + repos.length;
+  const reposSaid = `${repos.length} ${repos.length === 1 ? "repo" : "repos"}`;
+  const title =
+    plane === null
+      ? `Save ${reposSaid}?`
+      : repos.length === 0
+        ? "Save the project?"
+        : `Save the project and ${reposSaid}?`;
+  return (
+    <AlertDialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay className="asking" />
+        <AlertDialog.Content
+          className="warning"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            cancel.current?.focus();
+          }}
+        >
+          <AlertDialog.Title>{title}</AlertDialog.Title>
+          <AlertDialog.Description className="came-back">
+            A repo&apos;s save commits every file changed in it on the branch it is on, then goes as
+            far as its mode says.
+          </AlertDialog.Description>
+          <ul className="saving-files" aria-label="What Save all saves">
+            {plane !== null && <li>{`The project — ${planeTakes(plane)}`}</li>}
+            {repos.map((repo) => (
+              <li key={repo.name}>
+                {`${repo.name} on ${repo.branch ?? "no branch"} — ${repoTakes(repo)} — ${repoSaveGoesTo(repo, workspace)}`}
+              </li>
+            ))}
+          </ul>
+          <div className="doing">
+            <button type="button" className="ends-it" tabIndex={0} onClick={onSave}>
+              {`Save all ${count}`}
+            </button>
+            <AlertDialog.Cancel asChild>
+              <button type="button" tabIndex={0} ref={cancel}>
+                Cancel
+              </button>
+            </AlertDialog.Cancel>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  );
+}
+
+/** "1 file changed", "3 files changed". */
+function filesSaid(n: number): string {
+  return `${n} ${n === 1 ? "file" : "files"} changed`;
+}
+
+/** What the project's save would take: its changed files, else the commits a push would carry,
+ *  else the blocked save it tries again. */
+function planeTakes(plane: PlaneSaving): string {
+  if (plane.changed.length > 0) return filesSaid(plane.changed.length);
+  if (plane.stage === "blocked") return "trying its blocked save again";
+  if (plane.ahead === null) return "a branch never pushed";
+  return `${plane.ahead} ${plane.ahead === 1 ? "commit" : "commits"} not pushed`;
+}
+
+/** What a repo's save would take: its changed files, else the commits a push would carry. */
+function repoTakes(repo: RepoSaving): string {
+  if (repo.changed > 0) return filesSaid(repo.changed);
+  if (repo.stage === "blocked") return "trying its blocked save again";
+  if (repo.ahead === null) return "a branch never pushed";
+  return `${repo.ahead} ${repo.ahead === 1 ? "commit" : "commits"} not pushed`;
 }
 
 /**
@@ -394,15 +520,14 @@ export function SaveIndicator({
 }: {
   saving: PlaneSaving;
   /** The active workspace's repos (charter-app#299): the indicator shows the furthest-back
-   *  stage across them and the plane, and its save saves them too. */
+   *  stage across them and the plane. Its save is the project's only — a repo is saved from
+   *  the Saving tab, where it says where the save goes (ADR 0051, amended 2026-09-25). */
   repos?: readonly RepoSaving[];
   busy: boolean;
   onOpen: () => void;
   onSave: () => void;
 }) {
   const { stage, said } = furthestBack(saving, repos ?? []);
-  const withRepos = (repos ?? []).some(repoSavable);
-  const saveLabel = withRepos ? "Save all" : "Save the project";
   const Mark = stage === "blocked" ? CircleAlert : stage === "saved" ? CircleCheck : CircleDot;
   return (
     <span className="save-indicator" data-stage={stage}>
@@ -417,13 +542,13 @@ export function SaveIndicator({
         <Mark aria-hidden="true" />
         <span className="save-indicator-words">{said}</span>
       </button>
-      {(savable(saving) || withRepos) && (
+      {savable(saving) && (
         <button
           type="button"
           className="save-indicator-save"
           tabIndex={0}
-          aria-label={saveLabel}
-          title={saveLabel}
+          aria-label="Save the project"
+          title="Save the project"
           disabled={busy}
           onClick={onSave}
         >
