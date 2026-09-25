@@ -32,6 +32,29 @@ Whether a workspace's charter, memory and todos are published with the plane (LI
 this machine (LOCAL, the default).
 _Avoid_: shared/private, public
 
+### The window
+
+**Strip**:
+One row of tabs: projects (in the title bar), a project's workspaces, or a workspace's chats.
+A strip's order never changes on its own, and it never scrolls.
+_Avoid_: tab bar, scroller
+
+**Pin**:
+One operator's mark that a project, workspace or chat matters to them. It is kept on this
+machine and never in the plane. A pinned item is drawn first, and the workspace strip draws
+only pinned workspaces plus the one you are in.
+_Avoid_: favourite, star, bookmark
+
+**Show-more**:
+The button at the end of a strip that lists what the strip is not drawing, sorted by activity,
+with the needs-you count of everything it hides.
+_Avoid_: overflow (in UI text), more tabs
+
+**Needs you**:
+A chat that is waiting on the operator. Every project's are listed in the title bar's ✋ menu,
+and each is counted in red on its tab and on any show-more hiding it.
+_Avoid_: notification, alert (alerts are a separate drawer)
+
 ### Saving
 
 **Save**:
