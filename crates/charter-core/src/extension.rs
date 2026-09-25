@@ -37,6 +37,17 @@
 //! That also settles the collision above by construction: the two uses of the word can never
 //! appear in one list, because only one of them can come out of a plane.
 //!
+//! # A built-in extension is the app's, and is where the app is
+//!
+//! charter ships extensions of its own inside its bundle (charter-app#339). The app hands
+//! [`read`] and [`survey`] where they are ([`BuiltIn`]), and each one is listed as
+//! [`Source::App`] and approved without a prompt, **at that path and nowhere else**: the same
+//! directory copied anywhere else reads as new, a record row claiming the app as its source grants
+//! nothing, and [`install`] refuses another extension with a built-in's id. Its bytes are not held
+//! to a fingerprint, because an update brings new ones and the app's signature is what covers
+//! them. The record keeps only the operator's choice to turn one off on this machine
+//! ([`set_on`]). ADR 0041's amendment of 2026-09-25 is the threat model.
+//!
 //! # Where the record lives, and why ADR 0034 needs no amendment
 //!
 //! Beside [`crate::machine::FILE`], not inside it: `$CHARTER_CONFIG_HOME/charter/` (else
@@ -160,7 +171,7 @@
 //! programs. An extension developer working inside a clone will be asked again after a fetch;
 //! an operator running an installed extension will not, because nothing in it moves.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -665,14 +676,115 @@ impl Standing {
     }
 }
 
-/// One entry in the record: where an extension is, and the fingerprint the operator approved.
+/// One entry in the registry: where an extension is, where it came from, and the fingerprint
+/// the operator approved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// The directory, as the operator gave it.
+    /// The directory. For an installed extension, as the operator gave it; for a built-in, where
+    /// the running app's [`BuiltIn`] has it, and never what a file says.
     pub path: PathBuf,
     /// The fingerprint they approved, or `None` for an extension charter knows about and has
-    /// never been told to trust.
+    /// never been told to trust. Always `None` for a built-in, which is not approved by a
+    /// fingerprint ([`Loaded::standing`]).
     pub approved: Option<String>,
+    /// Where it came from.
+    pub source: Source,
+    /// Whether it is on, on this machine. Only a built-in is ever off: an installed extension
+    /// the operator does not want is removed instead.
+    pub on: bool,
+}
+
+impl Entry {
+    /// An extension the operator installed from `path`, and the fingerprint he approved.
+    pub fn installed(path: PathBuf, approved: Option<String>) -> Self {
+        Self {
+            path,
+            approved,
+            source: Source::Installed,
+            on: true,
+        }
+    }
+}
+
+/// Where an extension came from (charter-app#339).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The operator installed it from a directory, and approves it by its fingerprint.
+    Installed,
+    /// It ships inside the running app's bundle, whose signature covers its bytes (ADR 0041's
+    /// amendment of 2026-09-25).
+    App,
+}
+
+impl Source {
+    /// The word the record and the window use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::App => "app",
+        }
+    }
+}
+
+/// The running app's built-in extensions: the directory inside its bundle that holds one
+/// directory per extension — `Contents/Resources/extensions` on macOS,
+/// `/usr/lib/charter/extensions` in a `.deb` and an AppImage.
+///
+/// **The app builds this from its own resource path and from nothing else**: never from the
+/// record, a plane, a setting or an environment variable. That is the whole of what makes a
+/// built-in trusted. An extension is the app's only when it is *here*, and a file that says an
+/// extension is the app's says nothing ([`Loaded::standing`]). The `charter` CLI, and every test
+/// that is not about built-ins, pass [`BuiltIn::none`]. Forgetting to pass the app's costs a
+/// built-in that is missing, never one that is trusted somewhere else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BuiltIn {
+    root: Option<PathBuf>,
+}
+
+impl BuiltIn {
+    /// No built-in extensions: the CLI, and a build whose bundle has none.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// The built-in extensions in `root`, which the app found in its own bundle.
+    pub fn at(root: PathBuf) -> Self {
+        Self { root: Some(root) }
+    }
+
+    /// The directory, when there is one.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
+    /// Each built-in extension by its manifest's id, and where it is.
+    ///
+    /// A directory directly below the root, and never a link: a link in the bundle pointing out
+    /// of it would make "inside the bundle" a claim about a name rather than about bytes. One
+    /// whose manifest cannot be read is listed by its directory's name, so the survey says why
+    /// rather than the built-in going quiet.
+    fn found(&self) -> BTreeMap<String, PathBuf> {
+        let mut found = BTreeMap::new();
+        let Some(listing) = self
+            .root
+            .as_ref()
+            .and_then(|root| std::fs::read_dir(root).ok())
+        else {
+            return found;
+        };
+        for entry in listing.flatten() {
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let dir = entry.path();
+            let id = manifest_at(&dir).map_or_else(
+                |_| entry.file_name().to_string_lossy().into_owned(),
+                |manifest| manifest.id,
+            );
+            found.entry(id).or_insert(dir);
+        }
+        found
+    }
 }
 
 /// Every extension this machine knows about, keyed by id.
@@ -680,6 +792,9 @@ pub struct Entry {
 pub struct Registry {
     /// Sorted by id, so the record charter writes does not depend on the order it read.
     pub entries: BTreeMap<String, Entry>,
+    /// The built-in extensions the operator turned off on this machine, by id. Kept whether or
+    /// not this app ships them, so that a charter which does not know one keeps the choice.
+    pub off: BTreeSet<String>,
 }
 
 /// The record, and what reading it cost.
@@ -707,9 +822,22 @@ impl Loaded {
     /// from a different directory is a different extension that kept a name, and the operator
     /// approved a thing at a place. This is [`crate::machine::still_a_plane`]'s reasoning about
     /// a remembered path, one level in.
+    ///
+    /// **A built-in is approved at its place, not by its bytes.** Its entry's path is where the
+    /// running app has it ([`BuiltIn`]), so the same directory copied anywhere else, with the
+    /// same id and the same bytes, is not at that path and reads as new. Inside the bundle any
+    /// bytes are trusted: an update brings new ones, and what covers them is the app's
+    /// signature, not a fingerprint in a file the operator's own user can write.
     pub fn standing(&self, found: &Extension) -> Standing {
         match self.entry(found.id()) {
             None => Standing::New,
+            Some(entry) if entry.source == Source::App => {
+                if entry.path == found.path {
+                    Standing::Approved
+                } else {
+                    Standing::New
+                }
+            }
             Some(entry) => match &entry.approved {
                 None => Standing::New,
                 Some(_) if entry.path != found.path => Standing::Changed,
@@ -1877,12 +2005,52 @@ fn supported() -> io::Result<()> {
     ))
 }
 
-/// Read the record. **Never raises**, because this is on the path that draws the window.
+/// Read the record, and add the running app's built-in extensions to it. **Never raises**,
+/// because this is on the path that draws the window.
 ///
 /// Everything that is not a record charter can read comes back as
-/// [`Loaded::unreadable`] with an empty registry — so nothing is approved and everything asks
-/// — and [`approve`] then refuses to write over it.
-pub fn read(config_root: &Path) -> Loaded {
+/// [`Loaded::unreadable`] with no installed extension in it — so nothing installed is approved
+/// and everything asks — and [`approve`] then refuses to write over it.
+///
+/// **The built-ins are added whatever the record says**, because they are not in it: they are
+/// the app's, found where `built_in` says the app has them, and trusted through the app. What the
+/// record adds is only the operator's choice to turn one off on this machine. A record charter
+/// cannot read leaves every built-in listed and **off**: it cannot say whether the operator turned
+/// one off, and "every unreadable state means ask" leans to the side that contributes nothing.
+///
+/// A row for an installed extension with a built-in's id is set aside, and said in
+/// [`Loaded::dropped`]: charter ships that extension itself now, and the one id can be one
+/// extension. That is the operator's hand-assembled copy of persona statistics on the day the
+/// app first ships it.
+pub fn read(config_root: &Path, built_in: &BuiltIn) -> Loaded {
+    let mut loaded = read_record(config_root);
+    for (id, path) in built_in.found() {
+        if let Some(copy) = loaded.registry.entries.remove(&id) {
+            loaded.dropped.push(format!(
+                "{id}: charter ships this extension itself now, so the copy recorded at '{}' is \
+                 not used",
+                copy.path.display()
+            ));
+        }
+        // Off when the record says so, and off when charter could not read whether it does:
+        // an unreadable record cannot make a built-in less trusted, but it must not quietly
+        // undo the operator's "off" either.
+        let on = loaded.unreadable.is_none() && !loaded.registry.off.contains(&id);
+        loaded.registry.entries.insert(
+            id,
+            Entry {
+                path,
+                approved: None,
+                source: Source::App,
+                on,
+            },
+        );
+    }
+    loaded
+}
+
+/// The record alone: [`read`] without the built-ins.
+fn read_record(config_root: &Path) -> Loaded {
     let refused = |why: String| Loaded {
         registry: Registry::default(),
         unreadable: Some(why),
@@ -1932,9 +2100,13 @@ pub fn read(config_root: &Path) -> Loaded {
         .unwrap_or_default();
     for (id, raw) in listed {
         match usable(&id, &raw) {
-            Ok(entry) => {
+            Ok(Row::Installed(entry)) => {
                 registry.entries.insert(id, entry);
             }
+            Ok(Row::BuiltIn { on: false }) => {
+                registry.off.insert(id);
+            }
+            Ok(Row::BuiltIn { on: true }) => {}
             // Dropped and reported, never raised: a record with one bad row still holds the
             // operator's other extensions, and a launch that refuses them all because of one
             // is a launch that punishes the wrong thing.
@@ -1955,11 +2127,20 @@ pub fn read(config_root: &Path) -> Loaded {
 /// loses its yes, so charter asks about it again. That is `profiletrust`'s "an entry that is
 /// not a fingerprint reads as no record", and the state it keeps out is a record whose
 /// `"approved": true` grants everything.
-fn usable(id: &str, raw: &serde_json::Value) -> Result<Entry, String> {
+///
+/// A row with `"source": "app"` is about a built-in, and holds one thing: whether the operator
+/// turned it off on this machine. **Nothing else in it is read** — not a path, not an approval
+/// — so a row that says an extension is the app's cannot make it the app's (charter-app#339).
+fn usable(id: &str, raw: &serde_json::Value) -> Result<Row, String> {
     if !crate::contain::segment_ok(id) || !id.chars().all(ok_in_an_id) {
         return Err("is not an extension id".into());
     }
     let row = raw.as_object().ok_or("is not an object")?;
+    if row.get("source").and_then(serde_json::Value::as_str) == Some(Source::App.as_str()) {
+        return Ok(Row::BuiltIn {
+            on: row.get("on").and_then(serde_json::Value::as_bool) != Some(false),
+        });
+    }
     let path = row
         .get("path")
         .and_then(serde_json::Value::as_str)
@@ -1976,13 +2157,27 @@ fn usable(id: &str, raw: &serde_json::Value) -> Result<Entry, String> {
         .and_then(serde_json::Value::as_str)
         .filter(|hash| hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()))
         .map(str::to_owned);
-    Ok(Entry { path, approved })
+    Ok(Row::Installed(Entry::installed(path, approved)))
+}
+
+/// What one row of the record is.
+enum Row {
+    /// An extension the operator installed.
+    Installed(Entry),
+    /// The operator's choice about a built-in on this machine.
+    BuiltIn { on: bool },
 }
 
 /// The record as charter writes it.
 fn as_json(registry: &Registry) -> serde_json::Value {
     let mut rows = serde_json::Map::new();
-    for (id, entry) in &registry.entries {
+    // A built-in's own entry is never written: where it is and that it is trusted are the app's
+    // to say at every read, and a record holding either would be a record claiming them.
+    for (id, entry) in registry
+        .entries
+        .iter()
+        .filter(|(_, entry)| entry.source == Source::Installed)
+    {
         let mut row = serde_json::Map::new();
         row.insert(
             "path".into(),
@@ -1996,6 +2191,12 @@ fn as_json(registry: &Registry) -> serde_json::Value {
             },
         );
         rows.insert(id.clone(), serde_json::Value::Object(row));
+    }
+    for id in &registry.off {
+        rows.insert(
+            id.clone(),
+            serde_json::json!({ "source": Source::App.as_str(), "on": false }),
+        );
     }
     let mut doc = serde_json::Map::new();
     doc.insert("version".into(), serde_json::Value::from(VERSION));
@@ -2012,7 +2213,7 @@ fn as_json(registry: &Registry) -> serde_json::Value {
 /// extension the operator installed to fix nothing.
 fn update(config_root: &Path, change: impl FnOnce(&mut Registry)) -> io::Result<()> {
     supported()?;
-    let mut loaded = read(config_root);
+    let mut loaded = read_record(config_root);
     if let Some(why) = &loaded.unreadable {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -2095,10 +2296,31 @@ fn write_through(config_root: &Path, target: &Path, temp: &Path, bytes: &[u8]) -
 /// By path, by the operator, from nowhere. There is no fetch by name here and there is no
 /// registry service to fetch from: the moment charter resolves an extension name over the
 /// network it owns a supply chain.
-pub fn install(config_root: &Path, dir: &Path) -> io::Result<Extension> {
+///
+/// **An extension with a built-in's id is refused** while the app ships that built-in
+/// (charter-app#339). One id is one extension, and the copy would either be set aside at every
+/// read or be mistaken for the app's; a copy of a built-in is a different extension, and takes
+/// its own id.
+pub fn install(config_root: &Path, built_in: &BuiltIn, dir: &Path) -> io::Result<Extension> {
     supported()?;
     let found = read_at(dir).map_err(|why| io::Error::new(io::ErrorKind::InvalidData, why))?;
-    let loaded = read(config_root);
+    let loaded = read(config_root, built_in);
+    if let Some(shipped) = loaded
+        .entry(found.id())
+        .filter(|entry| entry.source == Source::App)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "charter ships '{}' itself, at '{}', so it will not install another extension \
+                 with that id from '{}'. A copy of a built-in extension is a different extension: \
+                 give it its own id.",
+                found.id(),
+                shipped.path.display(),
+                found.path.display()
+            ),
+        ));
+    }
     let keep = matches!(loaded.standing(&found), Standing::Approved);
     let approved = keep
         .then(|| loaded.entry(found.id()).and_then(|e| e.approved.clone()))
@@ -2106,7 +2328,9 @@ pub fn install(config_root: &Path, dir: &Path) -> io::Result<Extension> {
     let id = found.id().to_owned();
     let path = found.path.clone();
     update(config_root, |registry| {
-        registry.entries.insert(id, Entry { path, approved });
+        registry
+            .entries
+            .insert(id, Entry::installed(path, approved));
     })?;
     Ok(found)
 }
@@ -2133,12 +2357,42 @@ pub fn approve(config_root: &Path, id: &str, at: &Path, fingerprint: &str) -> io
             format!("{id:?} is not an extension id"),
         ));
     }
-    let entry = Entry {
-        path: at.to_path_buf(),
-        approved: Some(fingerprint.to_owned()),
-    };
+    let entry = Entry::installed(at.to_path_buf(), Some(fingerprint.to_owned()));
     update(config_root, |registry| {
         registry.entries.insert(id.to_owned(), entry);
+    })
+}
+
+/// Turn a built-in extension on or off on this machine.
+///
+/// **Off is the operator's choice, written to the record; on is the absence of it.** A built-in
+/// is never removed — the app would bring it back at the next read — so this is what the
+/// Extensions list offers in the place of Remove. It grants nothing: a row this writes says
+/// only `"on": false`, and [`usable`] reads nothing else from a built-in's row.
+///
+/// **Only a built-in the running app ships**: an installed extension is removed, not turned off,
+/// and an off row written under its id would take the place of its row and its yes.
+pub fn set_on(config_root: &Path, built_in: &BuiltIn, id: &str, on: bool) -> io::Result<()> {
+    supported()?;
+    if !built_in.found().contains_key(id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "'{id}' is not built in to this charter, so it is not turned on or off here. An \
+                 extension you installed is removed instead."
+            ),
+        ));
+    }
+    update(config_root, |registry| {
+        // A copy the operator installed under this id before the app shipped it is already set
+        // aside at every read ([`read`]); the record has room for one row per id, and from here
+        // it is the built-in's.
+        registry.entries.remove(id);
+        if on {
+            registry.off.remove(id);
+        } else {
+            registry.off.insert(id.to_owned());
+        }
     })
 }
 
@@ -2173,25 +2427,31 @@ pub struct Surveyed {
     /// Whether it may contribute without asking. An extension charter could not read is
     /// [`Standing::New`] — there is nothing to compare, so there is nothing approved.
     pub standing: Standing,
+    /// Where it came from: installed by the operator, or built into the app.
+    pub source: Source,
+    /// Whether it is on, on this machine ([`set_on`]). Off, it contributes nothing.
+    pub on: bool,
 }
 
 impl Surveyed {
+    /// Whether what it declares is in force: it is approved, and on on this machine.
+    fn in_force(&self) -> Option<&Manifest> {
+        match (&self.found, self.standing.may_contribute() && self.on) {
+            (Some(found), true) => Some(&found.manifest),
+            _ => None,
+        }
+    }
+
     /// The themes it is contributing to this window right now: none unless it is approved.
     pub fn themes_in_force(&self) -> &[Theme] {
-        match (&self.found, self.standing.may_contribute()) {
-            (Some(found), true) => &found.manifest.themes,
-            _ => &[],
-        }
+        self.in_force().map_or(&[], |manifest| &manifest.themes)
     }
 
     /// The panels it is contributing right now, on the same terms and for the same reason: an
     /// extension that is new, changed or unreadable contributes nothing, and the registry doing
     /// that one job is what a panel contribution rests on entirely.
     pub fn panels_in_force(&self) -> &[crate::panel::Panel] {
-        match (&self.found, self.standing.may_contribute()) {
-            (Some(found), true) => &found.manifest.panels,
-            _ => &[],
-        }
+        self.in_force().map_or(&[], |manifest| &manifest.panels)
     }
 
     /// The views it is offering right now, on the same terms.
@@ -2202,10 +2462,7 @@ impl Surveyed {
     /// record and re-takes the fingerprint when he asks it — a view that was in force at the
     /// survey and changed since is refused at the press, not run on the survey's word.
     pub fn views_in_force(&self) -> &[View] {
-        match (&self.found, self.standing.may_contribute()) {
-            (Some(found), true) => &found.manifest.views,
-            _ => &[],
-        }
+        self.in_force().map_or(&[], |manifest| &manifest.views)
     }
 
     /// The palette commands it is adding right now, on the same terms: none from an extension
@@ -2232,10 +2489,10 @@ impl Surveyed {
 pub struct Survey {
     /// charter's own themes, which are compiled into the window and are never asked about.
     pub built_in_themes: Vec<String>,
-    /// Every extension the record names, in id order.
+    /// Every extension the record names and every built-in the app ships, in id order.
     pub installed: Vec<Surveyed>,
-    /// Why the record could not be read, when it could not — in which case `installed` is
-    /// empty and nothing an extension declares is in force.
+    /// Why the record could not be read, when it could not — in which case `installed` holds
+    /// only the built-ins, and nothing an installed extension declares is in force.
     pub unreadable: Option<String>,
     /// Rows the record held and charter dropped, with the reason for each.
     pub dropped: Vec<String>,
@@ -2249,8 +2506,8 @@ pub struct Survey {
 /// 0041's named cost of fingerprinting code rather than configuration, widened by
 /// charter-app#152 from the declared list to the tree, and it is bounded by
 /// [`MOST_TREE_ENTRIES`] and [`MOST_TREE_BYTES`] per extension.
-pub fn survey(config_root: &Path) -> Survey {
-    let loaded = read(config_root);
+pub fn survey(config_root: &Path, built_in: &BuiltIn) -> Survey {
+    let loaded = read(config_root, built_in);
     let mut installed = Vec::new();
     for (id, entry) in &loaded.registry.entries {
         match read_at(&entry.path) {
@@ -2270,6 +2527,8 @@ pub fn survey(config_root: &Path) -> Survey {
                     found: Some(found),
                     refused: None,
                     standing,
+                    source: entry.source,
+                    on: entry.on,
                 });
             }
             Err(why) => installed.push(Surveyed {
@@ -2278,6 +2537,8 @@ pub fn survey(config_root: &Path) -> Survey {
                 found: None,
                 refused: Some(why),
                 standing: Standing::New,
+                source: entry.source,
+                on: entry.on,
             }),
         }
     }

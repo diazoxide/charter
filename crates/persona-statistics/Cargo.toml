@@ -8,16 +8,17 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-# **No dependency on charter-core, deliberately.** This is an extension, written the way a
-# stranger would write one: it knows the protocol (a line of JSON in, a line of JSON out) and
-# nothing of charter's insides. If it needed charter-core to work, the contract would not be
-# one a stranger could meet.
+# **It links charter-core, because it is built in** (charter-app#339, ADR 0041's amendment of
+# 2026-09-25). The app ships it, and it links the core's stats code so that the view and
+# `charter persona stats` give the same numbers. It still speaks only the protocol — a line of
+# JSON in, a line of JSON out — and is handed only what any extension is; what proves a
+# stranger can meet that contract without the core is `extension-probe`, which links nothing.
 [dependencies]
+charter-core.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde_json.workspace = true
 
-# The end-to-end test drives this program through charter's real executor, so the test —
-# and only the test — depends on the core.
+# The end-to-end tests drive this program through charter's real executor, with the fence.
 [dev-dependencies]
 charter-core = { workspace = true, features = ["fenced"] }
 tempfile.workspace = true

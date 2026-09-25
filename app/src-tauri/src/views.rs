@@ -58,6 +58,15 @@ pub(crate) struct Views {
 }
 
 impl Views {
+    /// The views of an app whose built-in extensions are `built_in` (charter-app#339): its
+    /// executor starts them with no approval, and only where the app has them.
+    pub(crate) fn with_built_in(built_in: extension::BuiltIn) -> Self {
+        Self {
+            executor: Arc::new(Executor::with_built_in(built_in)),
+            ..Self::default()
+        }
+    }
+
     /// Kill every extension program still answering. The app's `Exit`, so that nothing an
     /// extension was asked to run outlives the window that asked.
     pub(crate) fn stop_all(&self) {
@@ -134,9 +143,11 @@ pub(crate) async fn extension_views() -> Result<Vec<ExtensionView>, String> {
     let root = charter_core::machine::config_root().ok_or_else(|| {
         "this machine has no config home, so charter keeps no extensions".to_owned()
     })?;
-    tauri::async_runtime::spawn_blocking(move || offered(&extension::survey(&root)))
-        .await
-        .map_err(|err| format!("reading this machine's views did not finish: {err}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        offered(&extension::survey(&root, &crate::extensions::built_in()))
+    })
+    .await
+    .map_err(|err| format!("reading this machine's views did not finish: {err}"))
 }
 
 /// Whether this platform runs extension programs at all
@@ -214,7 +225,10 @@ pub(crate) async fn open_view(
         // and a tab that came back naming it says so and nothing else. The record is a small
         // file and this reads it without fingerprinting anything; the gate proper is the
         // executor's, below.
-        if extension::read(&config).entry(&extension).is_none() {
+        if extension::read(&config, &crate::extensions::built_in())
+            .entry(&extension)
+            .is_none()
+        {
             return Ok(ViewAnswer::Gone {
                 why: format!(
                     "The extension '{extension}' is not installed on this machine any more, so \
@@ -366,9 +380,11 @@ pub(crate) async fn extension_commands() -> Result<Vec<ExtensionCommand>, String
     let root = charter_core::machine::config_root().ok_or_else(|| {
         "this machine has no config home, so charter keeps no extensions".to_owned()
     })?;
-    tauri::async_runtime::spawn_blocking(move || commanded(&extension::survey(&root)))
-        .await
-        .map_err(|err| format!("reading this machine's palette commands did not finish: {err}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        commanded(&extension::survey(&root, &crate::extensions::built_in()))
+    })
+    .await
+    .map_err(|err| format!("reading this machine's palette commands did not finish: {err}"))
 }
 
 /// [`extension_commands`] with the survey already taken.
@@ -551,7 +567,8 @@ mod tests {
         .expect("a manifest");
         std::fs::write(at.join("bin/run"), "#!/bin/sh\n").expect("a program");
         let config = dir.path().join("config");
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         if approve {
             extension::approve(&config, found.id(), &found.path, &found.fingerprint)
                 .expect("approved");
@@ -562,7 +579,7 @@ mod tests {
     #[test]
     fn an_approved_extension_s_view_is_offered_with_what_it_is_about() {
         let (_dir, config) = made(true);
-        let offered = offered(&extension::survey(&config));
+        let offered = offered(&extension::survey(&config, &extension::BuiltIn::none()));
         if !charter_core::executor::RUNS_PROGRAMS {
             assert!(
                 offered.is_empty(),
@@ -784,7 +801,8 @@ mod tests {
         )
         .expect("a program");
         let config = dir.path().join("config");
-        let found = extension::install(&config, &at).expect("installed");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
         if approve {
             extension::approve(&config, found.id(), &found.path, &found.fingerprint)
                 .expect("approved");
@@ -795,7 +813,7 @@ mod tests {
     #[test]
     fn an_approved_extension_s_palette_commands_carry_its_name_and_what_each_does() {
         let (_dir, config) = commanding(true);
-        let commands = commanded(&extension::survey(&config));
+        let commands = commanded(&extension::survey(&config, &extension::BuiltIn::none()));
         if !charter_core::executor::RUNS_PROGRAMS {
             assert!(commands.is_empty());
             return;
@@ -835,7 +853,7 @@ mod tests {
     #[test]
     fn an_unapproved_or_changed_extension_adds_no_palette_command() {
         let (_dir, config) = commanding(false);
-        assert!(commanded(&extension::survey(&config)).is_empty());
+        assert!(commanded(&extension::survey(&config, &extension::BuiltIn::none())).is_empty());
 
         let (dir, config) = commanding(true);
         std::fs::write(
@@ -845,7 +863,7 @@ echo changed
 ",
         )
         .expect("changed");
-        assert!(commanded(&extension::survey(&config)).is_empty());
+        assert!(commanded(&extension::survey(&config, &extension::BuiltIn::none())).is_empty());
     }
 
     #[test]
@@ -881,6 +899,6 @@ echo changed
     #[test]
     fn an_unapproved_extension_offers_no_view() {
         let (_dir, config) = made(false);
-        assert!(offered(&extension::survey(&config)).is_empty());
+        assert!(offered(&extension::survey(&config, &extension::BuiltIn::none())).is_empty());
     }
 }

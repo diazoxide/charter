@@ -91,6 +91,7 @@ macro_rules! app_commands {
                 extensions::install_extension,
                 extensions::approve_extension,
                 extensions::forget_extension,
+                extensions::set_extension_on,
                 extensions::extension_themes,
                 extensions::extension_panels,
                 vaults::vault_list,

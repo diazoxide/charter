@@ -61,7 +61,8 @@ impl Rig {
     /// Install it and approve exactly what is on disk, as the dialog's two clicks do.
     fn approved(&self, script: &str) -> &Self {
         self.write(VIEW_MANIFEST, script);
-        let found = extension::install(&self.config(), &self.at()).expect("installed");
+        let found = extension::install(&self.config(), &extension::BuiltIn::none(), &self.at())
+            .expect("installed");
         extension::approve(&self.config(), found.id(), &found.path, &found.fingerprint)
             .expect("approved");
         self
@@ -169,7 +170,7 @@ fn an_installed_program_the_operator_has_not_approved_never_starts() {
     let rig = Rig::new();
     let marker = rig.marker("ran");
     rig.write(VIEW_MANIFEST, &marking(&marker));
-    extension::install(&rig.config(), &rig.at()).expect("installed");
+    extension::install(&rig.config(), &extension::BuiltIn::none(), &rig.at()).expect("installed");
 
     let refused = rig.ask(&patient()).expect_err("it ran unapproved");
 
@@ -244,7 +245,8 @@ fn a_write_into_the_state_directory_does_not_stop_it_running() {
     let manifest =
         VIEW_MANIFEST.replace(r#""name":"Probe","#, r#""name":"Probe","state":"cache","#);
     rig.write(&manifest, &marking(&marker));
-    let found = extension::install(&rig.config(), &rig.at()).expect("installed");
+    let found = extension::install(&rig.config(), &extension::BuiltIn::none(), &rig.at())
+        .expect("installed");
     extension::approve(&rig.config(), found.id(), &found.path, &found.fingerprint)
         .expect("approved");
     std::fs::create_dir_all(rig.at().join("cache")).expect("the state directory");
@@ -284,7 +286,8 @@ fn an_extension_is_started_under_its_own_approval_and_never_under_another_s() {
         VIEW_MANIFEST.replace(r#""id":"probe""#, r#""id":"other""#),
     )
     .expect("the manifest renamed");
-    let other = extension::install(&rig.config(), &rig.at()).expect("installed as other");
+    let other = extension::install(&rig.config(), &extension::BuiltIn::none(), &rig.at())
+        .expect("installed as other");
     extension::approve(&rig.config(), other.id(), &other.path, &other.fingerprint)
         .expect("other approved");
 
@@ -327,7 +330,8 @@ fn a_program_that_is_not_executable_is_refused_with_what_to_do() {
         )
         .expect("the mode");
     }
-    let found = extension::install(&rig.config(), &rig.at()).expect("installed");
+    let found = extension::install(&rig.config(), &extension::BuiltIn::none(), &rig.at())
+        .expect("installed");
     extension::approve(&rig.config(), found.id(), &found.path, &found.fingerprint)
         .expect("approved");
 
@@ -699,7 +703,8 @@ fn a_busy_extension_does_not_hold_up_a_different_one() {
         "run",
         &format!("#!/bin/sh\nread line\nprintf '%s\\n' '{ANSWER}'\n"),
     );
-    let found = extension::install(&slow.config(), &quick_at).expect("installed");
+    let found = extension::install(&slow.config(), &extension::BuiltIn::none(), &quick_at)
+        .expect("installed");
     extension::approve(&slow.config(), found.id(), &found.path, &found.fingerprint)
         .expect("approved");
 
@@ -854,7 +859,7 @@ fn a_project_cannot_start_a_program_this_machine_has_not_approved() {
     let rig = Rig::new();
     let marker = rig.marker("ran");
     rig.write(VIEW_MANIFEST, &marking(&marker));
-    extension::install(&rig.config(), &rig.at()).expect("installed");
+    extension::install(&rig.config(), &extension::BuiltIn::none(), &rig.at()).expect("installed");
     let on = project::Choices::from_text(Some("[extensions.probe]\nenabled = true\n"), None);
 
     let refused = patient()
@@ -882,7 +887,8 @@ fn the_settings_a_project_chose_are_handed_with_the_question() {
             asked.display()
         ),
     );
-    let found = extension::install(&rig.config(), &rig.at()).expect("installed");
+    let found = extension::install(&rig.config(), &extension::BuiltIn::none(), &rig.at())
+        .expect("installed");
     extension::approve(&rig.config(), found.id(), &found.path, &found.fingerprint)
         .expect("approved");
     let chose = project::Choices::from_text(
@@ -957,7 +963,7 @@ fn nothing_is_handed_to_a_program_the_gate_refused() {
     // `hand` reads the plane. A refused extension must cost no plane read at all.
     let rig = Rig::new();
     rig.write(VIEW_MANIFEST, "#!/bin/sh\n");
-    extension::install(&rig.config(), &rig.at()).expect("installed");
+    extension::install(&rig.config(), &extension::BuiltIn::none(), &rig.at()).expect("installed");
 
     let mut handed = false;
     let _ = patient().ask(
@@ -1535,7 +1541,8 @@ const ACTING_MANIFEST: &str = r#"{"version":2,"id":"probe","name":"Probe",
 impl Rig {
     fn acting(&self, script: &str) -> &Self {
         self.write(ACTING_MANIFEST, script);
-        let found = extension::install(&self.config(), &self.at()).expect("installed");
+        let found = extension::install(&self.config(), &extension::BuiltIn::none(), &self.at())
+            .expect("installed");
         extension::approve(&self.config(), found.id(), &found.path, &found.fingerprint)
             .expect("approved");
         self

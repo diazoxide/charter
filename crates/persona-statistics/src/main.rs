@@ -1,7 +1,7 @@
 //! `persona-statistics` — read one request line on stdin, print one answer line on stdout.
 //!
 //! `persona-statistics assemble <dir>` puts this program and its manifest in `<dir>`, which is
-//! the folder to point charter's Extensions dialog at. See `lib.rs` for what it answers.
+//! how the release build puts it in the app's bundle. See `lib.rs` for what it answers.
 
 use std::io::{BufRead, Write};
 use std::process::ExitCode;
@@ -13,10 +13,7 @@ fn main() -> ExitCode {
     {
         return match persona_statistics::assemble(std::path::Path::new(dir)) {
             Ok(program) => {
-                println!(
-                    "assembled {} — point charter's Extensions dialog at {dir}",
-                    program.display()
-                );
+                println!("assembled {}", program.display());
                 ExitCode::SUCCESS
             }
             Err(why) => {

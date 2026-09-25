@@ -53,7 +53,8 @@ impl Probe {
     /// Assembled, installed and approved: the two clicks.
     fn approved() -> Self {
         let probe = Self::assembled();
-        let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+        let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+            .expect("installed");
         extension::approve(&probe.config(), found.id(), &found.path, &found.fingerprint)
             .expect("approved");
         probe
@@ -179,7 +180,7 @@ fn the_probe_is_asked_through_the_executor_and_answers_what_it_was_handed() {
 #[test]
 fn a_palette_command_opens_its_view_and_another_runs_its_action() {
     let probe = Probe::approved();
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     let commands = survey.installed[0].palette_in_force();
     assert_eq!(
         commands
@@ -341,7 +342,7 @@ fn an_extension_changed_on_disk_offers_no_commands_or_actions_and_runs_none() {
     let probe = Probe::approved();
     probe.manifest_sets("name", serde_json::json!("Extension probe, edited"));
 
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     let row = &survey.installed[0];
     assert!(row.palette_in_force().is_empty());
     assert!(row.actions_in_force().is_empty());
@@ -358,7 +359,8 @@ fn an_extension_changed_on_disk_offers_no_commands_or_actions_and_runs_none() {
 #[test]
 fn the_approval_prompt_shows_its_actions_commands_and_write_paths() {
     let probe = Probe::assembled();
-    let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
     let asked = extension::prompt(&found, extension::Standing::New).declares;
     for line in [
         "an action on its rows, “Forget the notes” — it deletes, so charter always asks you first",
@@ -382,14 +384,15 @@ fn changing_its_write_paths_after_approval_is_asked_about_again() {
     contributes["writes"] = serde_json::json!(["notes/", "workspaces/*/todos/"]);
     probe.manifest_sets("contributes", contributes);
 
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     assert_eq!(survey.installed[0].standing, extension::Standing::Changed);
 }
 
 #[test]
 fn the_approval_prompt_names_every_capability_the_probe_asks_for() {
     let probe = Probe::assembled();
-    let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
     assert_eq!(
         found.manifest.capabilities,
         [
@@ -441,7 +444,7 @@ fn changing_the_capabilities_after_approval_is_asked_about_again_and_runs_nothin
         refused.contains("changed since you approved it"),
         "{refused}"
     );
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     assert_eq!(survey.installed[0].standing, extension::Standing::Changed);
 }
 
@@ -450,7 +453,7 @@ fn a_capability_this_charter_does_not_know_is_refused_by_name_and_nothing_is_loa
     let probe = Probe::assembled();
     probe.manifest_sets("capabilities", serde_json::json!(["teleport"]));
 
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("an unknown capability was installed");
     let said = refused.to_string();
     assert!(
@@ -458,7 +461,12 @@ fn a_capability_this_charter_does_not_know_is_refused_by_name_and_nothing_is_loa
         "{said}"
     );
     // Never partly loaded: nothing was recorded, so there is nothing to approve and nothing runs.
-    assert!(extension::read(&probe.config()).registry.entries.is_empty());
+    assert!(
+        extension::read(&probe.config(), &extension::BuiltIn::none())
+            .registry
+            .entries
+            .is_empty()
+    );
     let not_run = probe
         .ask()
         .expect_err("an extension nobody installed answered");
@@ -470,7 +478,7 @@ fn an_installed_extension_that_later_asks_for_an_unknown_capability_contributes_
     let probe = Probe::approved();
     probe.manifest_sets("capabilities", serde_json::json!(["probe", "teleport"]));
 
-    let survey = extension::survey(&probe.config());
+    let survey = extension::survey(&probe.config(), &extension::BuiltIn::none());
     let row = &survey.installed[0];
     assert!(row.views_in_force().is_empty());
     let why = row.refused.as_deref().expect("a sentence");
@@ -495,7 +503,13 @@ impl Probe {
     }
 
     fn facts_as(&self, reading: Reading, choices: &extension::project::Choices) -> facts::Facts {
-        facts::gather(&self.config(), || choices.clone(), now(), reading)
+        facts::gather(
+            &self.config(),
+            &extension::BuiltIn::none(),
+            || choices.clone(),
+            now(),
+            reading,
+        )
     }
 
     fn facts_file(&self) -> PathBuf {
@@ -521,7 +535,8 @@ fn seconds_ago(seconds: i64) -> i64 {
 #[test]
 fn the_probe_declares_a_badge_and_a_repo_column_and_the_prompt_lists_both() {
     let probe = Probe::assembled();
-    let found = extension::install(&probe.config(), &probe.ext()).expect("installed");
+    let found = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
+        .expect("installed");
     let asked = extension::prompt(&found, extension::Standing::New);
     assert!(
         asked.declares.iter().any(|line| line
@@ -725,7 +740,7 @@ fn repo_columns_and_badges_follow_the_project_and_the_workspace_turning_it_off()
 fn a_contribution_without_its_capability_is_refused_by_name() {
     let probe = Probe::assembled();
     probe.manifest_sets("capabilities", serde_json::json!(["probe", "repo-columns"]));
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("a contribution without its capability was installed")
         .to_string();
     assert!(refused.contains("\"badges\""), "{refused}");
@@ -742,7 +757,7 @@ fn a_capability_that_declares_nothing_is_refused_by_name() {
         .expect("contributes")
         .remove("repo-columns");
     std::fs::write(&at, doc.to_string()).expect("written");
-    let refused = extension::install(&probe.config(), &probe.ext())
+    let refused = extension::install(&probe.config(), &extension::BuiltIn::none(), &probe.ext())
         .expect_err("a capability declaring nothing was installed")
         .to_string();
     assert!(refused.contains("\"repo-columns\""), "{refused}");

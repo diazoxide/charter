@@ -55,8 +55,12 @@ impl Installed {
         assert!(status.success(), "assemble failed: {status}");
 
         let installed = Self { dir };
-        let found = extension::install(&installed.config(), &installed.dir.path().join("ext"))
-            .expect("installed");
+        let found = extension::install(
+            &installed.config(),
+            &extension::BuiltIn::none(),
+            &installed.dir.path().join("ext"),
+        )
+        .expect("installed");
         extension::approve(
             &installed.config(),
             found.id(),
@@ -118,7 +122,7 @@ fn a_charter_that_speaks_a_later_protocol_asks_it_in_protocol_1_and_it_stays_app
     let installed = Installed::new();
     const { assert!(charter_core::executor::PROTOCOL > 1) };
 
-    let survey = charter_core::extension::survey(&installed.config());
+    let survey = charter_core::extension::survey(&installed.config(), &extension::BuiltIn::none());
     let row = &survey.installed[0];
     assert_eq!(row.found.as_ref().expect("read").manifest.protocol, 1);
     assert_eq!(row.standing, charter_core::extension::Standing::Approved);

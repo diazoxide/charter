@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ApproveExtension } from "./ApproveExtension";
 import {
@@ -33,6 +34,11 @@ import { forgetTheirTheme, theirThemeOnce } from "./windowprefs";
  * program is started by the core's executor when the operator opens one of its views, and
  * never from here: this dialog only reads, asks and records the answer. A manifest asking for a
  * capability this charter does not know is listed as refused, in the core's sentence naming it.
+ *
+ * **A built-in extension ships inside charter** (charter-app#339) and is trusted through the
+ * app, so it has nothing to review. It is marked "built-in", and it is turned off on this
+ * machine rather than removed — the app would bring a removed one back at the next read. A
+ * project or a workspace turns it off as it turns off any extension (Project settings).
  *
  * **It is called an extension and not a plugin, everywhere, deliberately.** `enabledPlugins` in
  * the first-open dialog is Claude Code's plugin list, travelling in a project's committed
@@ -112,6 +118,12 @@ export function Extensions({ onClose }: { onClose: () => void }) {
     await reread();
   };
 
+  const turn = async (id: string, on: boolean) => {
+    const said = await commands.setExtensionOn(id, on);
+    if (said.status === "error") return setWent(said.error);
+    await reread();
+  };
+
   return (
     <Dialog.Root
       open
@@ -158,10 +170,15 @@ export function Extensions({ onClose }: { onClose: () => void }) {
           )}
           <ul className="extension-rows">
             {(listed?.extensions ?? []).map((row) => (
-              <li key={row.id} data-standing={row.standing}>
+              <li key={row.id} data-standing={row.standing} data-source={row.source}>
                 <span className="name">{row.name}</span>
+                {row.source === "app" && <span className="built-in">built-in</span>}
                 <code className="where">{row.path}</code>
-                <span className="standing">{standingReads(row.standing)}</span>
+                <span className="standing">
+                  {row.on
+                    ? standingReads(row.standing)
+                    : "off on this machine — contributing nothing"}
+                </span>
                 {row.refused && <span className="came-back">{row.refused}</span>}
                 {row.themes_in_force.length > 0 && (
                   <span className="in-force">Drawing: {row.themes_in_force.join(", ")}</span>
@@ -171,9 +188,26 @@ export function Extensions({ onClose }: { onClose: () => void }) {
                     Review
                   </button>
                 )}
-                <button type="button" tabIndex={0} onClick={() => void forget(row.id)}>
-                  Remove
-                </button>
+                {row.source === "app" ? (
+                  <div className="choice">
+                    <Checkbox.Root
+                      id={`on-${row.id}`}
+                      className="box"
+                      checked={row.on}
+                      onCheckedChange={(next) => void turn(row.id, next === true)}
+                      tabIndex={0}
+                    >
+                      <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
+                    </Checkbox.Root>
+                    <label className="who" htmlFor={`on-${row.id}`}>
+                      On, on this machine
+                    </label>
+                  </div>
+                ) : (
+                  <button type="button" tabIndex={0} onClick={() => void forget(row.id)}>
+                    Remove
+                  </button>
+                )}
               </li>
             ))}
           </ul>

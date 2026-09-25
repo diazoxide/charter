@@ -40,6 +40,14 @@ disallowed_methods = "deny"
 # The one `unsafe` block says why it is sound, and so would any other.
 undocumented_unsafe_blocks = "deny"
 
+# persona-statistics is an extension's program, and charter hashes an extension's whole directory
+# and refuses one past 64 MiB (`extension::MOST_TREE_BYTES`). It links charter-core, and on Linux a
+# debug build carries every crate's debug info inside the binary, which is past that. Its tests
+# run the debug build through the real registry, so the debug build is stripped of debug info,
+# as the release build is.
+[profile.dev.package.persona-statistics]
+strip = "debuginfo"
+
 [profile.release]
 codegen-units = 1
 lto = true
