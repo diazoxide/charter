@@ -2058,7 +2058,10 @@ fn an_unknown_capability_is_named_in_the_refusal_even_beside_a_known_one() {
         "{why}"
     );
     assert!(
-        why.contains("This charter knows probe, badges, repo-columns, palette, actions, writes."),
+        why.contains(
+            "This charter knows probe, badges, repo-columns, palette, actions, writes, events, \
+             briefing."
+        ),
         "{why}"
     );
 }

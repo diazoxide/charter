@@ -380,6 +380,8 @@ pub struct Planes {
     arrivals: crate::handoff::Arrivals,
     /// Told when any plane changes on disk (charter-app#264).
     changes: crate::planewatch::Changed,
+    /// Told when auto-save saved a plane (charter-app#343).
+    saves: crate::autosave::Saved,
     /// The launch's question and its answer — see [`Relaunching`].
     relaunching: Mutex<Relaunching>,
 }
@@ -439,6 +441,7 @@ impl Planes {
             // it simply has no strip to put it on until one asks what is open.
             arrivals: Arc::new(|_| {}),
             changes: Arc::new(|_| {}),
+            saves: Arc::new(|_, _| {}),
             relaunching: Mutex::new(Relaunching::default()),
         }
     }
@@ -453,6 +456,13 @@ impl Planes {
     /// it again (`crate::planewatch`).
     pub fn telling_changes(mut self, changes: crate::planewatch::Changed) -> Self {
         self.changes = changes;
+        self
+    }
+
+    /// Tells `saves` whenever auto-save saves a plane this registry holds, so the extensions
+    /// that hear a plane being saved are told (charter-app#343).
+    pub fn telling_saves(mut self, saves: crate::autosave::Saved) -> Self {
+        self.saves = saves;
         self
     }
 
@@ -1009,8 +1019,12 @@ impl Planes {
             }));
         }
         // Before a chat can end, so its end is one the worker hears.
-        let autosave =
-            crate::autosave::Worker::start(id.clone(), root.clone(), Arc::clone(&self.changes));
+        let autosave = crate::autosave::Worker::start(
+            id.clone(),
+            root.clone(),
+            Arc::clone(&self.changes),
+            Arc::clone(&self.saves),
+        );
         // No hook can report a program dying (the process is gone), so the operating system
         // does. That is not charter reading a harness's output (ADR 0018) — it is the
         // process's own exit status, and the only honest source for `failed`.

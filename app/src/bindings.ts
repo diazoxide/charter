@@ -388,6 +388,12 @@ export const commands = {
 	 */
 	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], Refused>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
 	/**
+	 *  The operator brought a workspace to the front: tell the extensions that hear it
+	 *  (charter-app#343). It does nothing else and answers nothing — focusing is the window's own
+	 *  state, and this is only the report of it.
+	 */
+	workspaceFocused: (plane: PlaneId, workspace: string) => typedError<null, string>(__TAURI_INVOKE("workspace_focused", { plane, workspace })),
+	/**
 	 *  What git says about each of the focused workspace's clones, and what the forge cache
 	 *  last recorded for the branch each is on.
 	 * 
@@ -1068,6 +1074,11 @@ export type ExtensionFacts = {
 	columns: FactColumn[],
 	/**  What contributed nothing and should have, in the core's words. */
 	notes: string[],
+};
+
+/**  What `extension-heard` carries: the project whose extensions were just told something. */
+export type ExtensionHeard = {
+	plane: PlaneId,
 };
 
 /**  One row of "what has contributed what to this window". */

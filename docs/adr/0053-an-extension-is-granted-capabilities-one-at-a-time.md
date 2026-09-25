@@ -41,6 +41,13 @@ makes the executor ask in the declared version, and hashes the declared version 
 fingerprint in place of the executor's own. charter-app#341 did both (see its amendment below).
 A capability that needs a later protocol is refused in a manifest that names an earlier one.
 
+**Protocol 2 holds three request kinds.** charter-app#341 made it with *run action*.
+charter-app#343 added two more while it was still unreleased, rather than bumping to 3: an event
+request carries `event` (and `workspace`, `from` where the event has them) and is answered
+`{"charter": 2}` or an `error`; a briefing request carries `briefing` (`workspace`, `persona`)
+and is answered with `section`, a string. Both carry `writes` like every protocol-2 request, and
+charter watches the plane while each is answered. `events` and `briefing` need protocol 2.
+
 **The vocabulary grows one capability per change.** Each change adds the capability to
 `crates/charter-core/src/extension/capability.rs`. The same change adds it to the
 `extension-probe` crate's manifest and proves it through the real registry and executor:
@@ -62,6 +69,8 @@ the second would be a yes to nothing.
 | `probe` | nothing (test builds only) | none | charter-app#338 |
 | `badges` | draws values from the facts file as badges in the status bar and the terminal footer | `badges`: `id`, `label`, `surfaces` (`status-bar`, `footer`), `fresh_seconds` | charter-app#340 |
 | `repo-columns` | draws values from the facts file as extra columns in the repo table | `repo-columns`: `id`, `title`, `fresh_seconds` | charter-app#340 |
+| `events` | asks the program one question after each core action it hears has finished; a fork carries the folder it keeps in each workspace (protocol 2) | `events`: `hears` (`workspace-focused`, `workspace-created`, `workspace-forked`, `workspace-removed`, `handoff-created`, `session-started`, `plane-saved`), `workspace_folder` | charter-app#343 |
+| `briefing` | adds text to every chat's first message, quoted as data under the extension's name (protocol 2) | `briefing`: `title` | charter-app#343 |
 
 ### Process life
 

@@ -26,6 +26,7 @@ use std::process::ExitCode;
 
 use std::time::Duration;
 
+use charter_core::extension::events::Event as ExtensionEvent;
 use charter_core::hookwire::{self, Report, SOCKET_ENV};
 use charter_core::profiles::{self, ProfileSet, Source};
 use charter_core::shown;
@@ -33,6 +34,7 @@ use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
+mod extensions;
 mod guard;
 mod handoff;
 mod hooks;
@@ -1428,6 +1430,9 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
         Command::GitPolicy { apply } => charter_core::gitpolicy::policy(&root, *apply, &mut say),
         _ => return None,
     };
+    if code == 0 && matches!(command, Command::Save { .. }) {
+        extensions::tell(&root, &ExtensionEvent::PlaneSaved);
+    }
     Some(ExitCode::from(code))
 }
 
@@ -1625,6 +1630,9 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
     let root = here.plane.root().to_path_buf();
     let mut sink = speak;
     let say: &mut dyn FnMut(charter_core::repocmd::Say) = &mut sink;
+    // What the extensions that hear it are told once the verb is done and has said everything
+    // it says (charter-app#343).
+    let mut heard: Vec<ExtensionEvent> = Vec::new();
     let code = match verb {
         WorkspaceCommand::Remove { name, force } => {
             // The list it refused on is the window's (charter-app#182): a terminal has already
@@ -1637,6 +1645,9 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             // which are `session`/`active-file` in charter's own vocabulary.
             if code == 0 {
                 reset_active_after_removal(&here, name, say);
+                heard.push(ExtensionEvent::WorkspaceRemoved {
+                    workspace: name.clone(),
+                });
             }
             code
         }
@@ -1650,7 +1661,23 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             let Some(now) = pinned(now) else {
                 return Some(ExitCode::FAILURE);
             };
-            wscmd::select::use_workspace(&root, name, &here.ids, *create, *force, now, say)
+            // `--create` makes one that is not there, which is a workspace being created too.
+            let there_before = Plane::open(&root)
+                .workspace(name)
+                .is_ok_and(|ws| ws.dir().exists());
+            let code =
+                wscmd::select::use_workspace(&root, name, &here.ids, *create, *force, now, say);
+            if code == 0 {
+                if !there_before {
+                    heard.push(ExtensionEvent::WorkspaceCreated {
+                        workspace: name.clone(),
+                    });
+                }
+                heard.push(ExtensionEvent::WorkspaceFocused {
+                    workspace: name.clone(),
+                });
+            }
+            code
         }
         WorkspaceCommand::Create {
             name,
@@ -1664,7 +1691,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             let Some(now) = pinned(now) else {
                 return Some(ExitCode::FAILURE);
             };
-            wscmd::create::create(
+            let code = wscmd::create::create(
                 &wscmd::create::Request {
                     root: &root,
                     name,
@@ -1677,7 +1704,13 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
                     ids: &here.ids,
                 },
                 say,
-            )
+            );
+            if code == 0 {
+                heard.push(ExtensionEvent::WorkspaceCreated {
+                    workspace: name.clone(),
+                });
+            }
+            code
         }
         WorkspaceCommand::Restore {
             name,
@@ -1707,7 +1740,16 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             let Some(now) = pinned(now) else {
                 return Some(ExitCode::FAILURE);
             };
-            wscmd::fork::fork(
+            // A fork that could not read every piece still exists and exits 1 (charter#1084),
+            // so whether one was made is asked of the disk: there before, it is not this one.
+            let made_here = || {
+                charter_core::workspaces::Plane::open(&root)
+                    .workspace(new)
+                    .is_ok_and(|ws| ws.dir().exists())
+            };
+            let there_before = made_here();
+            let extension_folders = extensions::carried();
+            let code = wscmd::fork::fork(
                 &wscmd::fork::Request {
                     root: &root,
                     src,
@@ -1715,9 +1757,17 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
                     live: *live,
                     restore: *restore,
                     now,
+                    extension_folders: &extension_folders,
                 },
                 say,
-            )
+            );
+            if !there_before && made_here() {
+                heard.push(ExtensionEvent::WorkspaceForked {
+                    workspace: new.clone(),
+                    from: src.clone(),
+                });
+            }
+            code
         }
         WorkspaceCommand::Reinit { name, all, now } => {
             let Some(now) = pinned(now) else {
@@ -1774,6 +1824,9 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
         }
         _ => unreachable!("filtered above"),
     };
+    for event in &heard {
+        extensions::tell(&root, event);
+    }
     Some(ExitCode::from(code))
 }
 
@@ -2378,7 +2431,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        return handoff::handoff(
+        let code = handoff::handoff(
             &here,
             &handoff::Args {
                 workspace: workspace.clone(),
@@ -2390,6 +2443,15 @@ fn main() -> ExitCode {
                 summary: summary.clone(),
             },
         );
+        if code == ExitCode::SUCCESS {
+            extensions::tell(
+                here.plane.root(),
+                &ExtensionEvent::HandoffCreated {
+                    workspace: workspace.clone(),
+                },
+            );
+        }
+        return code;
     }
     // The secrets commands: each chooses its own exit status (2 for a refusal, the child's for
     // `exec`), and `exec` takes the command the argv split set aside.

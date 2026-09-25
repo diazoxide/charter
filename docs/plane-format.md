@@ -1318,6 +1318,23 @@ excepted), and for a secret-shaped value, named by its kind.
   the recorded digest (`charter/workspace.py:2642`), and empty parent directories are pruned
   (`_prune_empty`, `charter/workspace.py:4123`).
 
+### `workspaces/<ws>/<folder>/` — a folder an extension keeps in a workspace
+
+- **Format:** whatever the extension writes there. charter reads none of it.
+- **Status:** **charter-app only** (charter-app#343, ADR 0053). `<folder>` is the one name an
+  approved extension declares as `contributes.events.workspace_folder`: letters, digits, `-`
+  and `_`, and never one of charter's own names in a workspace (`workspace.md`,
+  `workspace.json`, `memory`, `todos`, `refs`, `pieces`, `worktrees`, `README.md`,
+  `CLAUDE.md`, `AGENTS.md`, `manifest.json`).
+- **Written by:** the extension's own program, which runs as the operator. charter does not
+  create it.
+- **Read by:** `charter workspace fork`, which copies it into the fork after the charter, the
+  memory and the todos — whether or not the extension is on in the project, and only for an
+  extension this machine approved whose bytes are unchanged
+  (`crates/charter-core/src/extension/events.rs` `carried`,
+  `crates/charter-core/src/wscmd/fork.rs`). A folder of that name that is a clone (it holds
+  `.git`) is never copied.
+
 ### `<clone>/.git/info/exclude` — charter's managed block
 
 - **Format:** plain text; a delimited block inside a file the operator also owns.

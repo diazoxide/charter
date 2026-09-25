@@ -105,6 +105,16 @@ A file an extension keeps in its own state directory, holding the values charter
 (badges, repo cells) without starting its program.
 _Avoid_: cache, status file
 
+**Event**:
+One question charter asks an extension after a core action it hears about has finished, such as
+a workspace being created or the plane being saved. What it answers never changes the action.
+_Avoid_: hook (for this), notification, subscription
+
+**Briefing section**:
+Text an extension adds to a chat's session-start briefing, quoted as data under the
+extension's name. It is never an instruction, and never a permission, a hook or a setting.
+_Avoid_: prompt, context injection
+
 **Action** (of an extension):
 A verb an extension declares and offers on the rows of its views: pressing one asks its program
 to *run action `<id>` on `<subject>`*. Never one of charter's own verbs. charter asks first when

@@ -107,7 +107,9 @@
 //! what it asks charter to do for it beyond what follows ([`capability`], ADR 0053). A word in
 //! that list this charter does not know refuses the whole manifest, by name. Badges and repo
 //! columns ([`facts`]) are declared data too: charter draws them from a facts file in the
-//! state directory and never starts the program to do it.
+//! state directory and never starts the program to do it. Events ([`events`]) and a briefing
+//! section ([`briefing`]) are the two that start the program without the operator opening
+//! anything — after a core action it hears, and when a chat starts — and the prompt says so.
 //!
 //! Themes, panels (`crate::panel`, ADR 0043), and **views**. A theme and a panel are
 //! declarative data against a closed vocabulary charter owns, charter chooses the consumer, and
@@ -176,7 +178,9 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 pub mod acting;
+pub mod briefing;
 pub mod capability;
+pub mod events;
 pub mod facts;
 pub mod project;
 pub mod writes;
@@ -378,6 +382,20 @@ pub struct Manifest {
     pub badges: Vec<facts::DeclaredBadge>,
     /// The repo-table columns it declares (the `repo-columns` capability, [`facts`]).
     pub repo_columns: Vec<facts::DeclaredColumn>,
+    /// The events it hears, and the folder it keeps in each workspace (the `events`
+    /// capability, [`events`]). `None` for an extension that hears nothing.
+    pub events: Option<events::Declared>,
+    /// Its section of the session-start briefing (the `briefing` capability, [`briefing`]).
+    pub briefing: Option<briefing::Declared>,
+}
+
+impl Manifest {
+    /// Whether it hears `kind` ([`events`]).
+    pub fn hears(&self, kind: events::Kind) -> bool {
+        self.events
+            .as_ref()
+            .is_some_and(|declared| declared.hears.contains(&kind))
+    }
 }
 
 /// One setting an extension declares: a key a project sets in `[extensions.<id>.settings]`.
@@ -695,6 +713,13 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Whether it is approved to contribute and on on this machine: an installed one the
+    /// operator approved, or one of the app's own — which the gate still holds to its bundle
+    /// path and its bytes ([`Loaded::standing`]).
+    pub fn in_force(&self) -> bool {
+        (self.approved.is_some() || self.source == Source::App) && self.on
+    }
+
     /// An extension the operator installed from `path`, and the fingerprint he approved.
     pub fn installed(path: PathBuf, approved: Option<String>) -> Self {
         Self {
@@ -1160,6 +1185,23 @@ fn parse(text: &str) -> Result<Manifest, String> {
         None => Vec::new(),
         Some(value) => facts::columns_of(value)?,
     };
+    let events = match contributes.get(Capability::Events.as_str()) {
+        None => None,
+        Some(value) => Some(events::declared_of(value)?),
+    };
+    let briefing = match contributes.get(Capability::Briefing.as_str()) {
+        None => None,
+        Some(value) => Some(briefing::declared_of(value)?),
+    };
+    // Both are questions to the program, so each needs one to ask — for the reason a view
+    // does: a contribution that can never do anything is one the operator consented to and
+    // did not get.
+    if (events.is_some() || briefing.is_some()) && program.is_none() {
+        return Err(
+            "hears events or adds a briefing section, and declares no program ('runs') to ask"
+                .into(),
+        );
+    }
 
     if themes.is_empty()
         && panels.is_empty()
@@ -1267,6 +1309,8 @@ fn parse(text: &str) -> Result<Manifest, String> {
         writes,
         badges,
         repo_columns,
+        events,
+        briefing,
     })
 }
 
@@ -2608,6 +2652,8 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         .collect();
     // What each capability with a shape declares, right after the capabilities themselves.
     declares.extend(facts::declares(&found.manifest));
+    declares.extend(events::declares(&found.manifest));
+    declares.extend(briefing::declares(&found.manifest));
     declares.extend(
         found
             .manifest
@@ -2655,14 +2701,26 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         // **Named as a program charter starts, with what bounds charter puts on it and what it
         // does not.** ADR 0041's amendment: the prompt says what charter will do, and says that
         // it is conduct and not a cage — [`RUNS_AS_YOU`] carries the second half, below.
-        declares.push(if found.manifest.views.is_empty() {
-            format!(
-                "a program, {program} — it declares no view, so nothing ever asks charter to \
-                 start it"
-            )
-        } else {
-            format!("a program, {program} — {}", crate::executor::HOW_IT_RUNS)
-        });
+        let manifest = &found.manifest;
+        declares.push(
+            if manifest.views.is_empty()
+                && manifest.actions.is_empty()
+                && manifest.events.is_none()
+                && manifest.briefing.is_none()
+            {
+                format!(
+                    "a program, {program} — it declares no view or action, hears no event and \
+                     adds no briefing section, so nothing ever asks charter to start it"
+                )
+            } else if manifest.events.is_none() && manifest.briefing.is_none() {
+                format!("a program, {program} — {}", crate::executor::HOW_IT_RUNS)
+            } else {
+                format!(
+                    "a program, {program} — {}",
+                    crate::executor::how_it_runs(manifest)
+                )
+            },
+        );
     }
     Prompt {
         id: found.id().to_owned(),

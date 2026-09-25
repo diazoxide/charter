@@ -2,7 +2,16 @@
   "version": 2,
   "id": "extension-probe",
   "name": "Extension probe",
-  "capabilities": ["probe", "badges", "repo-columns", "palette", "actions", "writes"],
+  "capabilities": [
+    "probe",
+    "badges",
+    "repo-columns",
+    "palette",
+    "actions",
+    "writes",
+    "events",
+    "briefing"
+  ],
   "state": "state",
   "contributes": {
     "runs": "bin/extension-probe",
@@ -39,6 +48,21 @@
       { "id": "open", "title": "Open the probe", "view": "probe" },
       { "id": "jot", "title": "Jot a note", "action": "jot" }
     ],
-    "writes": ["notes/"]
+    "writes": ["notes/"],
+    "events": {
+      "hears": [
+        "workspace-focused",
+        "workspace-created",
+        "workspace-forked",
+        "workspace-removed",
+        "handoff-created",
+        "session-started",
+        "plane-saved"
+      ],
+      "workspace_folder": "probe"
+    },
+    "briefing": {
+      "title": "Probe"
+    }
   }
 }

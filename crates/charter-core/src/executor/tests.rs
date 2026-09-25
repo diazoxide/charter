@@ -92,7 +92,7 @@ const PATIENT: Duration = Duration::from_secs(30);
 
 /// An executor that gives its programs [`PATIENT`].
 fn patient() -> Executor {
-    Executor::with_deadline(PATIENT)
+    Executor::default().with_deadline(PATIENT)
 }
 
 /// A script that leaves a marker, then answers.
@@ -374,7 +374,7 @@ fn a_program_that_never_answers_is_refused_as_too_late_never_as_a_lost_connectio
     rig.approved("#!/bin/sh\nexec sleep 60\n");
 
     let refused = rig
-        .ask(&Executor::with_deadline(Duration::from_secs(1)))
+        .ask(&Executor::default().with_deadline(Duration::from_secs(1)))
         .expect_err("an answer from nothing");
 
     assert!(

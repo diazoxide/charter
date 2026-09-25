@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { commands, type ExtensionFacts, type PlaneId } from "./bindings";
+import { listen } from "@tauri-apps/api/event";
+import { commands, type ExtensionFacts, type ExtensionHeard, type PlaneId } from "./bindings";
 
 /**
  * **What the extensions on in a project show in the window**: the status bar's badges and the
@@ -38,6 +39,30 @@ export function useExtensionFacts(plane: PlaneId, workspace: string | undefined)
     listeners.add(listener);
     return () => {
       listeners.delete(listener);
+    };
+  }, [plane]);
+
+  // The core told the extensions that hear an event in this project (charter-app#343,
+  // `heard.rs`): a facts file refreshed from it, or a note about one that missed it, is there
+  // to read. Filtered on the plane, as `plane-changed` is. A window that cannot listen (a unit
+  // test without the event plugin) simply reads when it is focused.
+  useEffect(() => {
+    let gone = false;
+    let stop: (() => void) | undefined;
+    void (async () => {
+      try {
+        const unlisten = await listen<ExtensionHeard>("extension-heard", (event) => {
+          if (!gone && event.payload.plane === plane) setAsked((n) => n + 1);
+        });
+        if (gone) unlisten();
+        else stop = unlisten;
+      } catch {
+        // No window to listen in.
+      }
+    })();
+    return () => {
+      gone = true;
+      stop?.();
     };
   }, [plane]);
 

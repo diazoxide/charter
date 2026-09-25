@@ -18,6 +18,9 @@
 //!    process — ADR 0041's minimum capability is *"one round trip per deliberate human
 //!    action"*, and a process that lives only as long as the round trip has no state for a
 //!    later question to find and no time in which to be doing anything nobody asked for.
+//!    Since charter-app#343 an event an extension hears ([`Executor::tell`]) and a chat's
+//!    start ([`Executor::brief`]) are questions too — asked without a press, which the approval
+//!    prompt says ([`how_it_runs`]) — and each is still one process, gated and bounded alike.
 //! 3. **Bounded in every direction charter controls** — time ([`DEADLINE`]), the answer's size
 //!    ([`MOST_ANSWER_BYTES`]), what is kept of its stderr ([`MOST_STDERR_BYTES`]), and one
 //!    question in flight per extension. A stalled, looping, flooding or crashing program costs
@@ -102,7 +105,7 @@
 //! checks its stdin as it goes. `persona-statistics` does the first, and needs nothing more.
 //!
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::extension::{self, Extension, Standing};
@@ -120,7 +123,11 @@ use crate::panel::{self, Subject};
 ///   what charter hands it.
 /// - **2** (charter-app#341) — a second kind of request, *run action `<id>` on `<subject>`*,
 ///   whose answer may carry refreshed blocks; and `writes`, the resolved paths an extension that
-///   declares plane writes may write, on every request.
+///   declares plane writes may write, on every request. And (charter-app#343) two more kinds,
+///   each a request of its own: an event the extension hears ([`Executor::tell`], `event`,
+///   answered `{"charter": 2}` or an `error`), and its section of a chat's session-start
+///   briefing ([`Executor::brief`], `briefing`, answered with `section`). Protocol 2 was not yet
+///   released when they were added, so it holds all three.
 pub const PROTOCOL: u32 = 2;
 
 /// How long a program has, from being started to its answer's last byte.
@@ -185,6 +192,37 @@ pub const HOW_IT_RUNS: &str = "charter starts it only when you open one of this 
      background. It is asked one question, given 5 seconds to answer, and then stopped along \
      with anything it started. A program set on outliving that can, because it runs as you do.";
 
+/// [`HOW_IT_RUNS`] for a program that is also started without the operator opening or running
+/// anything — because it hears events or adds a briefing section (charter-app#343). **"Never on
+/// its own" would be false of it**, so it says when charter does start it instead, and keeps
+/// every bound.
+pub fn how_it_runs(manifest: &extension::Manifest) -> String {
+    let mut when: Vec<&str> = Vec::new();
+    if !manifest.views.is_empty() {
+        when.push("when you open one of this extension's views");
+    }
+    if !manifest.actions.is_empty() {
+        when.push("when you run one of its actions");
+    }
+    if manifest.events.is_some() {
+        when.push("after each thing it hears about has happened");
+    }
+    if manifest.briefing.is_some() {
+        when.push("when a chat starts, for its briefing section");
+    }
+    let when = match when.as_slice() {
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+        [] => String::new(),
+    };
+    format!(
+        "charter starts it {when} — never at launch and never on a timer. Each time it is \
+         asked one question, given at most {} seconds to answer, and then stopped along with \
+         anything it started. A program set on outliving that can, because it runs as you do.",
+        DEADLINE.as_secs()
+    )
+}
+
 /// What a program answered, drawn by charter, and what it cost.
 #[derive(Debug, Clone)]
 pub struct Answer {
@@ -233,9 +271,15 @@ pub struct On<'a> {
     pub row: Option<&'a str>,
 }
 
-/// Which of the two requests a program is asked.
+/// Which of the requests a program is asked.
 #[derive(Debug, Clone, Copy)]
 enum Asked<'a> {
+    /// An event it hears, after the action it reports has finished (protocol 2,
+    /// charter-app#343). Waits its turn behind a question in flight rather than being refused.
+    Event(&'a extension::events::Event),
+    /// Its section of a chat's session-start briefing (protocol 2, charter-app#343): `asked` is
+    /// the chat, handed as `briefing`.
+    Briefing(&'a serde_json::Value),
     /// A view's question (protocol 1).
     View {
         view: &'a str,
@@ -253,6 +297,8 @@ enum Asked<'a> {
 /// What [`Executor::put`] came back with, before it is shaped into an [`Answer`] or an [`Acted`].
 struct Put {
     blocks: Option<Vec<panel::Block>>,
+    /// A briefing's answer: its section, as the program wrote it.
+    section: Option<String>,
     gate: Duration,
     round_trip: Duration,
     overreach: Option<String>,
@@ -268,6 +314,9 @@ struct Put {
 #[derive(Debug)]
 pub struct Executor {
     table: Mutex<Table>,
+    /// Signalled whenever a slot is given back, and when charter starts closing, for an event
+    /// waiting its turn ([`Self::hold_within`]).
+    freed: Condvar,
     /// How long each program has. [`DEADLINE`] for every executor charter makes; only a test
     /// gives an executor another (charter-app#303), so that a test whose subject is not the
     /// deadline is not failed by a busy machine taking five seconds to start its program.
@@ -282,6 +331,7 @@ impl Default for Executor {
     fn default() -> Self {
         Self {
             table: Mutex::default(),
+            freed: Condvar::new(),
             deadline: DEADLINE,
             built_in: extension::BuiltIn::none(),
         }
@@ -310,13 +360,66 @@ impl Executor {
         }
     }
 
-    /// An executor whose programs have `deadline` instead of [`DEADLINE`] — for a test.
-    #[cfg(test)]
-    pub(crate) fn with_deadline(deadline: Duration) -> Self {
-        Self {
-            deadline,
-            ..Self::default()
-        }
+    /// This executor, with `deadline` instead of [`DEADLINE`] for its programs: for the
+    /// session-start briefing, which holds a chat's start and so gives each program less
+    /// ([`crate::extension::briefing::Bounds`]), and for a test whose subject is not the deadline.
+    pub fn with_deadline(self, deadline: Duration) -> Self {
+        Self { deadline, ..self }
+    }
+
+    /// The built-in extensions this executor starts (charter-app#339), for a caller that asks
+    /// the record which extensions to ask ([`crate::extension::events::deliver`]).
+    pub fn built_in(&self) -> &extension::BuiltIn {
+        &self.built_in
+    }
+
+    /// Tell `extension`'s program that `event` happened, or say why charter did not
+    /// (charter-app#343).
+    ///
+    /// **The same gate, bounds and watch on the plane a view's question takes**, in the same
+    /// order. Two differences, both because nobody pressed anything: an extension that does not
+    /// hear `event` is refused rather than asked, and a program still answering its last
+    /// question is **waited for**, up to this executor's deadline, rather than refused — two
+    /// events a moment apart are two things it was promised, not a double click.
+    ///
+    /// The caller has already finished the action the event reports; nothing answered here can
+    /// change it ([`crate::extension::events::deliver`]). `Ok` carries what charter saw it write
+    /// outside its declared paths while it heard (charter-app#341's report), when it did.
+    pub fn tell(
+        &self,
+        config_root: &Path,
+        project: &extension::project::Choices,
+        extension: &str,
+        event: &extension::events::Event,
+    ) -> Result<Option<String>, String> {
+        self.put(config_root, project, extension, Asked::Event(event), |_| {
+            serde_json::Value::Null
+        })
+        .map(|put| put.overreach)
+    }
+
+    /// Ask `extension`'s program for its section of a chat's session-start briefing, or say why
+    /// charter did not (charter-app#343). `asked` is what the chat is — its workspace and
+    /// persona — and is handed as `briefing`.
+    ///
+    /// The section comes back as the program wrote it, and empty when it answered none.
+    /// **Whether charter will quote it is [`crate::extension::briefing`]'s to decide**, not
+    /// this: this answers for the protocol and the gate, which are a view's.
+    pub fn brief(
+        &self,
+        config_root: &Path,
+        project: &extension::project::Choices,
+        extension: &str,
+        asked: serde_json::Value,
+    ) -> Result<String, String> {
+        self.put(
+            config_root,
+            project,
+            extension,
+            Asked::Briefing(&asked),
+            |_| serde_json::Value::Null,
+        )
+        .map(|put| put.section.unwrap_or_default())
     }
 
     /// Ask `extension`'s program about `view`, or say why charter will not.
@@ -461,6 +564,25 @@ impl Executor {
                     .transpose()?;
                 (view, on.focus)
             }
+            Asked::Event(event) => {
+                let kind = event.kind();
+                if !declared.hears(kind) {
+                    return Err(format!(
+                        "'{extension}' does not hear {}, so charter does not tell it",
+                        kind.said()
+                    ));
+                }
+                (None, None)
+            }
+            Asked::Briefing(_) => {
+                if declared.briefing.is_none() {
+                    return Err(format!(
+                        "'{extension}' adds no section to the briefing, so charter does not ask \
+                         it for one"
+                    ));
+                }
+                (None, None)
+            }
         };
         let before_hand = began.elapsed();
 
@@ -508,7 +630,10 @@ impl Executor {
         runnable(&at, extension)?;
         let gate = before_hand + began.elapsed().saturating_sub(before_hand + handed_in);
 
-        let _held = self.hold(extension)?;
+        let _held = match asked {
+            Asked::Event(_) => self.hold_within(extension, Instant::now() + self.deadline)?,
+            _ => self.hold(extension)?,
+        };
         let started = Instant::now();
         let line = self.converse(extension, &found, &at, &request);
         let round_trip = started.elapsed();
@@ -526,19 +651,45 @@ impl Executor {
         };
 
         let line = line.map_err(with_report)?;
-        let answered = read_answer(
-            extension,
-            found.manifest.protocol,
-            matches!(asked, Asked::View { .. }),
-            &line,
-        )
-        .and_then(|blocks| {
-            offered_only_declared(extension, &found.manifest.actions, blocks.as_deref())?;
-            Ok(blocks)
-        })
-        .map_err(with_report)?;
+        let protocol = found.manifest.protocol;
+        let (answered, section) = match asked {
+            // An event's answer is that it heard, or an `error`: nothing charter draws.
+            Asked::Event(_) => {
+                reply_of(extension, &line, protocol, &[]).map_err(with_report)?;
+                (None, None)
+            }
+            Asked::Briefing(_) => {
+                let doc =
+                    reply_of(extension, &line, protocol, &["section"]).map_err(with_report)?;
+                let section = match doc.get("section") {
+                    Some(serde_json::Value::String(text)) => text.clone(),
+                    Some(serde_json::Value::Null) | None => String::new(),
+                    Some(_) => {
+                        return Err(with_report(format!(
+                            "'{extension}' answered a 'section' that is not text"
+                        )));
+                    }
+                };
+                (None, Some(section))
+            }
+            _ => (
+                read_answer(
+                    extension,
+                    protocol,
+                    matches!(asked, Asked::View { .. }),
+                    &line,
+                )
+                .and_then(|blocks| {
+                    offered_only_declared(extension, &found.manifest.actions, blocks.as_deref())?;
+                    Ok(blocks)
+                })
+                .map_err(with_report)?,
+                None,
+            ),
+        };
         Ok(Put {
             blocks: answered,
+            section,
             gate,
             round_trip,
             overreach,
@@ -565,6 +716,8 @@ impl Executor {
         for group in table.running.values() {
             kill_group(*group);
         }
+        // An event waiting its turn ([`Self::hold_within`]) hears it now, and starts nothing.
+        self.freed.notify_all();
     }
 
     /// Which extensions have a program running right now. For a test, and for anything that
@@ -605,6 +758,40 @@ impl Executor {
             by: self,
             extension: extension.to_owned(),
         })
+    }
+
+    /// Claim `extension`'s one slot, waiting for it until `until` if its program is answering
+    /// something else — for an event, which nobody pressed twice ([`Self::tell`]). Still one
+    /// question in flight per extension; this only queues behind it rather than refusing.
+    fn hold_within(&self, extension: &str, until: Instant) -> Result<Held<'_>, String> {
+        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if table.closing {
+                return Err(format!(
+                    "charter is closing, so it starts nothing more — '{extension}' was not asked."
+                ));
+            }
+            if !table.running.contains_key(extension) {
+                table.running.insert(extension.to_owned(), 0);
+                return Ok(Held {
+                    by: self,
+                    extension: extension.to_owned(),
+                });
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(format!(
+                    "'{extension}' was still answering the last thing it was asked after {} \
+                     seconds, so charter did not ask it this.",
+                    self.deadline.as_secs()
+                ));
+            }
+            table = self
+                .freed
+                .wait_timeout(table, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
     }
 
     /// Record the process group a running program is in, so [`Self::stop_all`] can reach it —
@@ -838,6 +1025,7 @@ impl Drop for Held<'_> {
             .unwrap_or_else(PoisonError::into_inner)
             .running
             .remove(&self.extension);
+        self.by.freed.notify_all();
     }
 }
 
@@ -1459,19 +1647,37 @@ fn request_line(
     let mut doc = serde_json::Map::new();
     doc.insert("charter".into(), protocol.into());
     doc.insert("extension".into(), extension.into());
-    if let Asked::Action { action, .. } = asked {
-        doc.insert("action".into(), action.into());
+    match asked {
+        // An event is its word, and the workspace (and a fork's source) it happened in — nothing
+        // of the plane: an extension that wants more reads it, as it runs as the operator.
+        Asked::Event(event) => {
+            doc.insert("event".into(), event.kind().as_str().into());
+            if let Some(workspace) = event.workspace() {
+                doc.insert("workspace".into(), workspace.into());
+            }
+            if let Some(from) = event.from() {
+                doc.insert("from".into(), from.into());
+            }
+        }
+        Asked::Briefing(chat) => {
+            doc.insert("briefing".into(), chat.clone());
+        }
+        Asked::View { .. } | Asked::Action { .. } => {
+            if let Asked::Action { action, .. } = asked {
+                doc.insert("action".into(), action.into());
+            }
+            doc.insert("view".into(), or_null(view.map(|view| view.id.as_str())));
+            doc.insert(
+                "about".into(),
+                or_null(view.map(|view| view.about.as_str())),
+            );
+            doc.insert("focus".into(), or_null(focus));
+            if let Asked::Action { on, .. } = asked {
+                doc.insert("row".into(), or_null(on.row));
+            }
+            doc.insert("given".into(), given.unwrap_or(serde_json::Value::Null));
+        }
     }
-    doc.insert("view".into(), or_null(view.map(|view| view.id.as_str())));
-    doc.insert(
-        "about".into(),
-        or_null(view.map(|view| view.about.as_str())),
-    );
-    doc.insert("focus".into(), or_null(focus));
-    if let Asked::Action { on, .. } = asked {
-        doc.insert("row".into(), or_null(on.row));
-    }
-    doc.insert("given".into(), given.unwrap_or(serde_json::Value::Null));
     // Only for an extension that declares settings, so the question every other program is
     // asked is the one it was approved under, byte for byte.
     if let Some(settings) = settings {
@@ -1655,6 +1861,61 @@ fn read_answer(
         )),
         None => Ok(None),
     }
+}
+
+/// An answer line read as far as every kind of question shares: one JSON object, in the
+/// `protocol` it was asked in, holding `charter`, `error` and only the `keys` this kind of
+/// answer has (charter-app#343: an event's has none, a briefing's `section`). An `error` is the
+/// refusal, quoted.
+fn reply_of(
+    extension: &str,
+    line: &[u8],
+    protocol: u32,
+    keys: &[&str],
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let doc: serde_json::Value = serde_json::from_slice(line).map_err(|why| {
+        format!("'{extension}' answered something that is not one line of JSON: {why}")
+    })?;
+    let serde_json::Value::Object(doc) = doc else {
+        return Err(format!("'{extension}' answered JSON that is not an object"));
+    };
+    for key in doc.keys() {
+        if !["charter", "error"].contains(&key.as_str()) && !keys.contains(&key.as_str()) {
+            let allowed: Vec<String> = keys.iter().map(|it| format!("'{it}'")).collect();
+            return Err(format!(
+                "'{extension}' answered {key:?}, which is not part of charter's protocol \
+                 {protocol} — this answer is 'charter', and {}'error'",
+                if allowed.is_empty() {
+                    String::new()
+                } else {
+                    format!("either {} or ", allowed.join(" or "))
+                }
+            ));
+        }
+    }
+    match doc.get("charter").and_then(serde_json::Value::as_u64) {
+        Some(found) if found == u64::from(protocol) => {}
+        Some(found) => {
+            return Err(format!(
+                "'{extension}' answered in protocol {found}, and charter asked it in protocol \
+                 {protocol}, the one its manifest names"
+            ));
+        }
+        None => {
+            return Err(format!(
+                "'{extension}' answered without saying which protocol it speaks ('charter': \
+                 {protocol}), so charter cannot say what its answer means"
+            ));
+        }
+    }
+    if let Some(said) = doc.get("error") {
+        let said = said.as_str().unwrap_or("(an error that was not text)");
+        return Err(format!(
+            "'{extension}' answered that it could not: {}",
+            crate::shown::readable(said, 1 << 10)
+        ));
+    }
+    Ok(doc)
 }
 
 pub(crate) mod watch;

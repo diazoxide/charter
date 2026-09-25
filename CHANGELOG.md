@@ -13,6 +13,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Extensions can hear what happens, and add to a chat's briefing.** An extension that asks
+  for the `events` capability is told when a workspace is focused, created, forked or removed,
+  when a handoff is made, when a chat starts and when the plane is saved. It is told after the
+  thing is done, so a slow or broken extension never holds it up or changes how it went. It
+  shows as a note naming the extension instead. A fork copies the folder an extension keeps in
+  each workspace, even while the extension is off. One that asks for `briefing` adds a section
+  to every chat's first message. The section is quoted under its name as data, not
+  instructions, is cut at 1,500 characters, and is left out if it holds text that can't be
+  drawn. The approval dialog says it "adds text to every chat's first message". A chat's start
+  waits at most three seconds for all extensions together. Both need protocol 2.
+  ([#343](https://github.com/diazoxide/charter-app/issues/343))
 - **An extension can be acted on, not only read.** Three capabilities, each named in the
   approval dialog: `palette` adds commands to the palette, named with the extension's name, that
   open one of its views or run one of its actions; `actions` puts the extension's own actions on
