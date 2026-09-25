@@ -381,7 +381,7 @@ export function Explorer({
 
         {(panels?.absent.length ?? 0) > 0 && (
           <section className="absent" data-testid="absent">
-            <h2>Not cloned here</h2>
+            <h2 className="sidebar-title">Not cloned here</h2>
             <ul>
               {panels?.absent.map((name) => (
                 // Membership without a clone. There is nothing to explore in it and nothing

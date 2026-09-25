@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { KeyRound } from "lucide-react";
 import { PanelList } from "./PanelList";
+import { PanelSection } from "./PanelSection";
 import type { Catalogued, Offer } from "./actions";
 import { commands, type PanelRow, type VaultSummary } from "./bindings";
 
@@ -32,13 +33,7 @@ export function Vaults({
 }) {
   const { vaults, trouble } = said;
   return (
-    <section data-testid="panel-vaults">
-      <div className="panel-head">
-        <h2>
-          <KeyRound className="node-icon" />
-          Vaults
-        </h2>
-      </div>
+    <PanelSection testid="panel-vaults" mark={KeyRound} title="Vaults">
       {trouble !== undefined ? (
         <p className="trouble" role="alert">
           {trouble}
@@ -62,7 +57,7 @@ export function Vaults({
           />
         )
       )}
-    </section>
+    </PanelSection>
   );
 }
 
