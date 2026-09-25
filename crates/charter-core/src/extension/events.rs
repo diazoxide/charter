@@ -323,9 +323,12 @@ pub fn deliver(
             .collect();
         asked
             .into_iter()
-            .filter_map(|(name, told)| {
+            .filter_map(|(name, told)| -> Option<String> {
                 let why = match told.join() {
-                    Ok(Ok(())) => return None,
+                    Ok(Ok(None)) => return None,
+                    // It heard, and wrote outside what it declares: the watch's own sentence,
+                    // which names it.
+                    Ok(Ok(Some(overreach))) => return Some(overreach),
                     Ok(Err(why)) => why,
                     Err(_) => "charter's own thread asking it stopped".to_owned(),
                 };

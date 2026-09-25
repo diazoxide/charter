@@ -1,3 +1,4 @@
+import type { RowAction } from "./bindings";
 import { describe, expect, it, vi } from "vitest";
 import {
   aim,
@@ -62,6 +63,10 @@ function doing(): Doing & { calls: string[] } {
     }),
     pinProject: vi.fn(async (plane: string, pinned: boolean) => {
       calls.push(`pinProject:${plane},${pinned}`);
+      return { ok: true as const };
+    }),
+    runAction: vi.fn(async (extension: string, action: RowAction, name: string) => {
+      calls.push(`runAction:${extension},${action.id},${name}`);
       return { ok: true as const };
     }),
     openView: vi.fn((view: ViewRef, title: string) => {
@@ -606,6 +611,51 @@ describe("the one list of actions", () => {
       verb: "openView",
       view: { from: "persona-statistics", view: "statistics", key: "" },
       title: "Statistics",
+    });
+  });
+
+  describe("an extension's palette commands (charter-app#341)", () => {
+    const CLOSE: RowAction = { id: "close", title: "Close all", asks_first: true, deletes: true };
+    const commanded = () =>
+      catalogue(
+        now({
+          commands: [
+            {
+              extension: "todo",
+              name: "Todos",
+              id: "open",
+              title: "Show todos",
+              does: { kind: "open", view: "list", title: "Todo list" },
+            },
+            {
+              extension: "todo",
+              name: "Todos",
+              id: "close",
+              title: "Close every todo",
+              does: { kind: "run", action: CLOSE },
+            },
+          ],
+        }),
+      );
+
+    it("names each with the extension's name, so where it came from is on the row", () => {
+      const offers = commanded();
+      expect(by(offers, "ext.command:todo/open")?.title).toBe("Todos: Show todos");
+      expect(by(offers, "ext.command:todo/close")?.title).toBe("Todos: Close every todo");
+    });
+
+    it("opens its view by the verb every view is opened by", () => {
+      expect(by(commanded(), "ext.command:todo/open")?.does).toEqual({
+        verb: "openView",
+        view: { from: "todo", view: "list", key: "" },
+        title: "Todo list",
+      });
+    });
+
+    it("runs its action through the window, which asks first when the action does", async () => {
+      const hands = doing();
+      await run(commanded(), "ext.command:todo/close", hands);
+      expect(hands.calls).toEqual(["runAction:todo,close,Todos"]);
     });
   });
 

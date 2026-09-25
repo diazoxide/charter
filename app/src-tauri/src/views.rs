@@ -31,6 +31,11 @@
 //!   otherwise. For an extension's view it re-takes the gate itself, so a view that was offered
 //!   at the survey and has changed since is refused at the press rather than run on the
 //!   survey's word.
+//!
+//! And the same split for what an extension may be asked to DO (charter-app#341):
+//! [`extension_commands`] is its palette commands, taken with the same survey's terms, and
+//! [`run_action`] runs one of its actions — from a row of its view or from the palette — through
+//! the executor's gate, with the operator's yes when the action asks first.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -39,7 +44,7 @@ use charter_core::executor::Executor;
 use charter_core::extension;
 use charter_core::panel::Subject;
 
-use crate::panels::PanelBlock;
+use crate::panels::{PanelBlock, RowAction};
 
 /// The executor, held for as long as the app runs, so that its table of running programs is
 /// one table and [`Views::stop_all`] reaches every one of them at exit — and the turns this
@@ -115,6 +120,10 @@ pub(crate) enum ViewAnswer {
         /// under the answer, because a producer that has become slow is worth noticing before
         /// it becomes one that times out.
         took_ms: u32,
+        /// What changed in the plane while the extension answered, outside the paths it
+        /// declares it writes — the core's sentence, naming it (charter-app#341). Drawn above
+        /// the answer as trouble; never a reason not to draw it.
+        overreach: Option<String>,
     },
     /// What the view was about is not there any more, and why, in one sentence.
     Gone { why: String },
@@ -246,12 +255,179 @@ pub(crate) async fn open_view(
                 },
             )
             .map(|answer| ViewAnswer::Answered {
-                blocks: answer.blocks.iter().map(PanelBlock::from).collect(),
+                blocks: PanelBlock::answered(&answer.blocks, &answer.actions),
                 took_ms: millis(answer.gate + answer.round_trip),
+                overreach: answer.overreach,
             })
     })
     .await
     .map_err(|err| format!("asking that view did not finish: {err}"))?
+}
+
+/// What running an action answered (charter-app#341).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct ActionAnswer {
+    /// The view's blocks, refreshed, when the extension answered them; `null` when it answered
+    /// only that it was done, and the view stands as it was.
+    pub blocks: Option<Vec<PanelBlock>>,
+    /// Gate and round trip together, in milliseconds.
+    pub took_ms: u32,
+    /// As [`ViewAnswer::Answered`]'s: what changed outside its declared paths, named.
+    pub overreach: Option<String>,
+}
+
+/// Run `extension`'s action `action`, or say why charter will not.
+///
+/// `view` and `key` are the view it was pressed in and the persona that view was opened from,
+/// and `row` the row it was pressed on — all three `null` or empty for an action a palette
+/// command runs. `confirmed` is the operator's yes: **the core refuses an action that asks first
+/// without it**, so a surface that forgot to ask is a refusal and not a delete.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a Tauri command's arguments are its wire; each is one thing the window says"
+)]
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn run_action(
+    views: tauri::State<'_, Views>,
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    extension: String,
+    action: String,
+    view: Option<String>,
+    key: String,
+    row: Option<String>,
+    workspace: Option<String>,
+    confirmed: bool,
+) -> Result<ActionAnswer, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    let config = charter_core::machine::config_root().ok_or_else(|| {
+        "this machine has no config home, so charter keeps no extensions".to_owned()
+    })?;
+    if !key.is_empty() && !charter_core::personas::valid_name(&key) {
+        return Err(format!(
+            "{key:?} is not a persona name charter would hand anybody"
+        ));
+    }
+    let executor = Arc::clone(&views.executor);
+    let turn = views.turn_of(&extension);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+        let project = extension::project::Choices::read_in(&root, workspace.as_deref());
+        executor
+            .act(
+                &config,
+                &project,
+                &extension,
+                &action,
+                charter_core::executor::On {
+                    view: view.as_deref(),
+                    focus: Some(key.as_str()).filter(|key| !key.is_empty()),
+                    row: row.as_deref(),
+                },
+                confirmed,
+                |about| match about {
+                    Subject::Personas => {
+                        charter_core::handed::personas(&root, chrono::Local::now().naive_local())
+                    }
+                },
+            )
+            .map(|acted| ActionAnswer {
+                blocks: acted
+                    .blocks
+                    .map(|blocks| PanelBlock::answered(&blocks, &acted.actions)),
+                took_ms: millis(acted.gate + acted.round_trip),
+                overreach: acted.overreach,
+            })
+    })
+    .await
+    .map_err(|err| format!("running that action did not finish: {err}"))?
+}
+
+/// One command an approved extension adds to the palette (charter-app#341).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct ExtensionCommand {
+    /// The extension's id, which is what it is asked through.
+    pub extension: String,
+    /// The extension's name, which the palette puts before the command's title: where a
+    /// command came from is on its row.
+    pub name: String,
+    pub id: String,
+    pub title: String,
+    pub does: CommandDoes,
+}
+
+/// What a palette command does.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum CommandDoes {
+    /// Opens one of its views, as the view's own button does.
+    Open { view: String, title: String },
+    /// Runs one of its actions, on nothing in particular.
+    Run { action: RowAction },
+}
+
+/// Every palette command an approved extension adds to this window: none from one that is new,
+/// changed or unreadable, and none on a platform that runs no programs — on the survey's terms,
+/// as [`extension_views`]. **A list of rows, not of permissions**: [`open_view`] and
+/// [`run_action`] take the gate again when one is run.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn extension_commands() -> Result<Vec<ExtensionCommand>, String> {
+    if !RUNS_PROGRAMS {
+        return Ok(Vec::new());
+    }
+    let root = charter_core::machine::config_root().ok_or_else(|| {
+        "this machine has no config home, so charter keeps no extensions".to_owned()
+    })?;
+    tauri::async_runtime::spawn_blocking(move || {
+        commanded(&extension::survey(&root, &crate::extensions::built_in()))
+    })
+    .await
+    .map_err(|err| format!("reading this machine's palette commands did not finish: {err}"))
+}
+
+/// [`extension_commands`] with the survey already taken.
+fn commanded(seen: &extension::Survey) -> Vec<ExtensionCommand> {
+    if !charter_core::executor::RUNS_PROGRAMS {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for row in &seen.installed {
+        let Some(found) = &row.found else { continue };
+        for command in row.palette_in_force() {
+            let does = match &command.does {
+                extension::Does::Open(view) => row
+                    .views_in_force()
+                    .iter()
+                    .find(|it| &it.id == view)
+                    .map(|it| CommandDoes::Open {
+                        view: it.id.clone(),
+                        title: it.title.clone(),
+                    }),
+                extension::Does::Run(action) => row
+                    .actions_in_force()
+                    .iter()
+                    .find(|it| &it.id == action)
+                    .map(|it| CommandDoes::Run {
+                        action: RowAction::from(it),
+                    }),
+            };
+            // The manifest holds a command to its own views and actions at parse, so this is
+            // never `None` for a manifest that parsed; a command that cannot say what it does
+            // is left off the palette rather than drawn as a row that does nothing.
+            if let Some(does) = does {
+                out.push(ExtensionCommand {
+                    extension: row.id.clone(),
+                    name: found.manifest.name.clone(),
+                    id: command.id.clone(),
+                    title: command.title.clone(),
+                    does,
+                });
+            }
+        }
+    }
+    out
 }
 
 /// charter's own views that answer in panel blocks, by id. **One today**, the persona view, and
@@ -275,6 +451,7 @@ fn built_in(
             Some(blocks) => ViewAnswer::Answered {
                 blocks: blocks.iter().map(PanelBlock::from).collect(),
                 took_ms: millis(began.elapsed()),
+                overreach: None,
             },
             None => ViewAnswer::Gone {
                 why: format!("This plane has no persona called {key} any more."),
@@ -599,6 +776,123 @@ mod tests {
                 "../etc"
             )
             .is_err()
+        );
+    }
+
+    /// An extension with a view, two actions and two palette commands, approved or not.
+    fn commanding(approve: bool) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = dir.path().join("ext");
+        std::fs::create_dir_all(at.join("bin")).expect("the extension's directory");
+        std::fs::write(
+            at.join(extension::MANIFEST),
+            r#"{"version":2,"id":"todo","name":"Todos","capabilities":["palette","actions"],
+                "contributes":{"runs":"bin/run",
+                "views":[{"id":"list","title":"Todo list","about":"personas"}],
+                "actions":[{"id":"close","title":"Close all","confirm":false,"deletes":true}],
+                "palette":[{"id":"open","title":"Show todos","view":"list"},
+                           {"id":"close","title":"Close every todo","action":"close"}]}}"#,
+        )
+        .expect("a manifest");
+        std::fs::write(
+            at.join("bin/run"),
+            "#!/bin/sh
+",
+        )
+        .expect("a program");
+        let config = dir.path().join("config");
+        let found =
+            extension::install(&config, &extension::BuiltIn::none(), &at).expect("installed");
+        if approve {
+            extension::approve(&config, found.id(), &found.path, &found.fingerprint)
+                .expect("approved");
+        }
+        (dir, config)
+    }
+
+    #[test]
+    fn an_approved_extension_s_palette_commands_carry_its_name_and_what_each_does() {
+        let (_dir, config) = commanding(true);
+        let commands = commanded(&extension::survey(&config, &extension::BuiltIn::none()));
+        if !charter_core::executor::RUNS_PROGRAMS {
+            assert!(commands.is_empty());
+            return;
+        }
+        assert_eq!(
+            commands,
+            vec![
+                ExtensionCommand {
+                    extension: "todo".into(),
+                    name: "Todos".into(),
+                    id: "open".into(),
+                    title: "Show todos".into(),
+                    does: CommandDoes::Open {
+                        view: "list".into(),
+                        title: "Todo list".into(),
+                    },
+                },
+                ExtensionCommand {
+                    extension: "todo".into(),
+                    name: "Todos".into(),
+                    id: "close".into(),
+                    title: "Close every todo".into(),
+                    does: CommandDoes::Run {
+                        action: RowAction {
+                            id: "close".into(),
+                            title: "Close all".into(),
+                            // `confirm: false`, and it deletes: asked first anyway.
+                            asks_first: true,
+                            deletes: true,
+                        },
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unapproved_or_changed_extension_adds_no_palette_command() {
+        let (_dir, config) = commanding(false);
+        assert!(commanded(&extension::survey(&config, &extension::BuiltIn::none())).is_empty());
+
+        let (dir, config) = commanding(true);
+        std::fs::write(
+            dir.path().join("ext/bin/run"),
+            "#!/bin/sh
+echo changed
+",
+        )
+        .expect("changed");
+        assert!(commanded(&extension::survey(&config, &extension::BuiltIn::none())).is_empty());
+    }
+
+    #[test]
+    fn an_answered_row_s_actions_are_drawn_from_the_manifest_never_from_the_answer() {
+        let declared = [extension::Action {
+            id: "close".into(),
+            title: "Close".into(),
+            confirm: true,
+            deletes: false,
+        }];
+        let blocks = charter_core::panel::answered(&serde_json::json!([{
+            "kind": "list",
+            "rows": [{ "key": "a", "text": "A", "actions": ["close"] }]
+        }]))
+        .expect("blocks");
+
+        let drawn = PanelBlock::answered(&blocks, &declared);
+
+        let PanelBlock::List { rows, .. } = &drawn[0] else {
+            panic!("not a list");
+        };
+        assert_eq!(
+            rows[0].actions,
+            vec![RowAction {
+                id: "close".into(),
+                title: "Close".into(),
+                asks_first: true,
+                deletes: false,
+            }]
         );
     }
 

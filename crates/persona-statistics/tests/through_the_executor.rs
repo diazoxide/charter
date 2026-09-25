@@ -113,6 +113,25 @@ fn charts(blocks: &[Block]) -> Vec<&charter_core::panel::Chart> {
         .collect()
 }
 
+/// charter-app#341: charter learned protocol 2, and persona statistics — written for protocol 1,
+/// and answering an error to any other — is asked in protocol 1, its manifest's, and stays
+/// approved. `extension::tests` pins the fingerprint of a protocol-1 program across the bump;
+/// this is the real extension, asked through the real executor.
+#[test]
+fn a_charter_that_speaks_a_later_protocol_asks_it_in_protocol_1_and_it_stays_approved() {
+    let installed = Installed::new();
+    const { assert!(charter_core::executor::PROTOCOL > 1) };
+
+    let survey = charter_core::extension::survey(&installed.config(), &extension::BuiltIn::none());
+    let row = &survey.installed[0];
+    assert_eq!(row.found.as_ref().expect("read").manifest.protocol, 1);
+    assert_eq!(row.standing, charter_core::extension::Standing::Approved);
+
+    installed
+        .ask(&Executor::default(), None)
+        .expect("asked in the protocol it speaks");
+}
+
 #[test]
 fn the_statistics_are_drawn_from_the_plane_as_it_is_now() {
     let installed = Installed::new();

@@ -158,7 +158,7 @@ struct Came {
     /// line saying a section is missing — and is a note for the operator.
     refused: Option<String>,
     section: Option<Result<String, String>>,
-    told: Option<Result<(), String>>,
+    told: Option<Result<Option<String>, String>>,
 }
 
 /// Ask every approved extension that is on in `choices`' project for its section, and tell each
@@ -285,11 +285,13 @@ pub fn at_session_start(
                 one.hears_start.then(|| Err(late())),
             ),
         };
-        if let Some(Err(why)) = told {
-            out.notes.push(format!(
+        match told {
+            Some(Err(why)) => out.notes.push(format!(
                 "{} missed a chat starting in workspace '{}': {why}",
                 one.name, asked.workspace
-            ));
+            )),
+            Some(Ok(Some(overreach))) => out.notes.push(overreach),
+            _ => {}
         }
         let (Some(title), Some(section)) = (&one.title, section) else {
             continue;

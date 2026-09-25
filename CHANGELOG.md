@@ -22,9 +22,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to every chat's first message. The section is quoted under its name as data, not
   instructions, is cut at 1,500 characters, and is left out if it holds text that can't be
   drawn. The approval dialog says it "adds text to every chat's first message". A chat's start
-  waits at most three seconds for all extensions together. Extensions now speak protocol 2,
-  and one written for protocol 1 is asked exactly as before.
+  waits at most three seconds for all extensions together. Both need protocol 2.
   ([#343](https://github.com/diazoxide/charter-app/issues/343))
+- **An extension can be acted on, not only read.** Three capabilities, each named in the
+  approval dialog: `palette` adds commands to the palette, named with the extension's name, that
+  open one of its views or run one of its actions; `actions` puts the extension's own actions on
+  the rows of its views, and the answer can refresh the view; `writes` declares the plane paths
+  it writes, such as `workspaces/*/todos/`. charter asks before an action when the extension
+  says to, and always before one that deletes. Each request tells the extension where it may
+  write, and after each one charter says what changed outside those paths, naming the
+  extension. That is a report, not a fence: an extension still runs as you. The protocol is now
+  2; an extension written for protocol 1 is asked exactly as before and keeps its approval.
+  ([#341](https://github.com/diazoxide/charter-app/issues/341))
 - **Persona statistics comes with the app.** charter now ships its own extensions, and persona
   statistics is the first: there is no folder to assemble and add by hand, and no approval to
   give, because the app's signature covers it. The Extensions list marks it "built-in" and
@@ -65,6 +74,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   workspace LOCAL stops publishing its files and keeps them on disk; what was already pushed
   stays in history, and the confirmation says so. The new-workspace dialog has a *Live* box,
   unticked by default. ([#301](https://github.com/diazoxide/charter-app/issues/301))
+- **A blocked save shows its way out.** When a save can't go further (a conflict with the
+  remote, a secret the scan caught, a pull request mode on a remote charter can't open pull
+  requests on), the Saving tab says why, names the files a conflict is in, and offers
+  *Resolve in a chat* (the chat picker, starting in the project) or *Open terminal here* (a plain
+  shell in the project). The alerts drawer says so too: at once for a secret, and after ten
+  minutes for anything else.
+- **Fewer conflicts in the first place.** `charter init` and `charter reinit` write a
+  `.gitattributes` block that merges the logs and memory indexes which only ever grow line by
+  line, so two machines adding to the same one no longer conflict.
+  ([#295](https://github.com/diazoxide/charter-app/issues/295))
 - **Auto-save.** While charter is open, a project with auto-save on (`[plane] autosave`,
   on by default) saves by itself: 30 seconds after the last change (`autosave_after`), as soon
   as a chat in it ends, and when you quit. At quit it commits at once and gives the push a few

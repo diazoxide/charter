@@ -115,6 +115,22 @@ Text an extension adds to a chat's session-start briefing, quoted as data under 
 extension's name. It is never an instruction, and never a permission, a hook or a setting.
 _Avoid_: prompt, context injection
 
+**Action** (of an extension):
+A verb an extension declares and offers on the rows of its views: pressing one asks its program
+to *run action `<id>` on `<subject>`*. Never one of charter's own verbs. charter asks first when
+the manifest says so, and always before one that deletes.
+_Avoid_: command (for this), verb (unqualified), button
+
+**Palette command** (of an extension):
+A row an extension adds to the palette, named with the extension's name, that opens one of its
+views or runs one of its actions.
+_Avoid_: shortcut, menu item
+
+**Write paths**:
+The plane-relative paths an extension declares it writes. charter hands them resolved with
+each request and reports a change outside them; it does not stop one.
+_Avoid_: sandbox, allowed paths, scope (as if enforced)
+
 **Harness plugin**:
 A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own always means
 this, never a charter extension.

@@ -11,17 +11,31 @@
 //! **Written as a stranger's extension would be**, as persona statistics is: it does not link
 //! charter's core, and it knows one thing about charter, the protocol — one line of JSON on
 //! stdin, one line back on stdout.
+//!
+//! What it does, by capability:
+//!
+//! - **a view** (`probe`) says which protocol it was asked in, how many personas it was handed
+//!   and which paths it may write, and lists one row — how many notes it keeps — offering its
+//!   actions;
+//! - **its actions** (`actions`, `writes`, charter-app#341) keep those notes in the one plane
+//!   path it declares, `notes/`: `jot` writes one, `forget` deletes them and says it deletes,
+//!   `sweep` deletes them and does NOT say so, `careful` asks first and writes nothing, and
+//!   `stray` writes outside `notes/` — each the case a test proves charter reports or refuses.
+//!   Run from a view's row, an action answers the view refreshed.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-/// The protocol this program speaks: 2, which added events and the briefing section
-/// (charter-app#343).
+/// The protocol this program speaks: 2, which has actions and plane writes (charter-app#341)
+/// and events and the briefing section (charter-app#343).
 pub const PROTOCOL: u64 = 2;
 
 /// The manifest this program is installed with, so `assemble` writes the one that is tested.
 pub const MANIFEST: &str = include_str!("../charter-extension.json");
+
+/// The file `stray` writes, in the plane and outside every path the probe declares.
+pub const STRAY: &str = "stray.txt";
 
 /// The file in the state directory a test writes to make the probe misbehave on purpose —
 /// `{"sleep_ms": 3000}`, `{"fail": true}`, `{"section": "…"}`. The state directory is outside
@@ -77,10 +91,8 @@ pub fn answer(request: &Value, state: Option<&Path>) -> Value {
         return json!({ "charter": PROTOCOL, "error": "the probe was told to fail" });
     }
     match said(request, state, &behave) {
-        Ok(Said::View(text)) => {
-            json!({ "charter": PROTOCOL, "blocks": [{ "kind": "note", "text": text }] })
-        }
-        Ok(Said::Heard) => json!({ "charter": PROTOCOL }),
+        Ok(Said::View(blocks)) => json!({ "charter": PROTOCOL, "blocks": blocks }),
+        Ok(Said::Done | Said::Heard) => json!({ "charter": PROTOCOL }),
         Ok(Said::Section(text)) => json!({ "charter": PROTOCOL, "section": text }),
         Err(why) => json!({ "charter": PROTOCOL, "error": why }),
     }
@@ -88,14 +100,16 @@ pub fn answer(request: &Value, state: Option<&Path>) -> Value {
 
 /// What the probe answers, by the kind of question.
 enum Said {
-    View(String),
+    /// A view's blocks, or an action's refreshed ones.
+    View(Value),
+    /// An action done, the view standing as it was.
+    Done,
     Heard,
     Section(String),
 }
 
-/// What the probe says back: which view it was asked, in which protocol, and how much it was
-/// handed — so a test reads off the answer that charter asked what it meant to ask. An event is
-/// written down in [`HEARD`]; a briefing is a line naming the workspace it was asked about.
+/// What the probe does with one request: an event is written down in [`HEARD`], a briefing is
+/// a line naming the workspace it was asked about, and a view or an action is [`acted`]'s.
 fn said(request: &Value, state: Option<&Path>, behave: &Behave) -> Result<Said, String> {
     let protocol = request
         .get("charter")
@@ -128,6 +142,62 @@ fn said(request: &Value, state: Option<&Path>, behave: &Behave) -> Result<Said, 
             format!("extension-probe briefs a chat in workspace {workspace}")
         })));
     }
+    acted(request).map(|blocks| blocks.map_or(Said::Done, Said::View))
+}
+
+/// A view's blocks, an action's refreshed blocks or nothing, or why it could not (#341).
+fn acted(request: &Value) -> Result<Option<Value>, String> {
+    let writes: Vec<&str> = request
+        .get("writes")
+        .and_then(Value::as_array)
+        .ok_or("the request does not say where this extension may write")?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let Some(action) = request.get("action").and_then(Value::as_str) else {
+        return view(request, &writes).map(Some);
+    };
+    let notes = notes(&writes)?;
+    let done = |refreshed: Result<Value, String>| -> Result<Option<Value>, String> {
+        // Run from a view's row, the view is answered again; from the palette, nothing is.
+        if request.get("view").is_some_and(Value::is_string) {
+            refreshed.map(Some)
+        } else {
+            Ok(None)
+        }
+    };
+    match action {
+        "jot" => {
+            std::fs::create_dir_all(&notes).map_err(|why| format!("no notes directory: {why}"))?;
+            let next = count(&notes) + 1;
+            std::fs::write(notes.join(format!("note-{next}.md")), "a note\n")
+                .map_err(|why| format!("could not jot: {why}"))?;
+            done(view(request, &writes))
+        }
+        "forget" | "sweep" => {
+            for entry in std::fs::read_dir(&notes).into_iter().flatten().flatten() {
+                std::fs::remove_file(entry.path())
+                    .map_err(|why| format!("could not forget: {why}"))?;
+            }
+            done(view(request, &writes))
+        }
+        "stray" => {
+            let plane = notes
+                .parent()
+                .ok_or("the notes directory has no plane above it")?;
+            std::fs::write(plane.join(STRAY), "outside\n")
+                .map_err(|why| format!("could not stray: {why}"))?;
+            Ok(None)
+        }
+        "careful" => Ok(Some(
+            json!([{ "kind": "note", "text": "careful ran, having been said yes to" }]),
+        )),
+        other => Err(format!("the probe has no action {other:?}")),
+    }
+}
+
+/// The view's blocks: what it was asked and handed, and its one row offering its actions.
+fn view(request: &Value, writes: &[&str]) -> Result<Value, String> {
     let view = request
         .get("view")
         .and_then(Value::as_str)
@@ -137,10 +207,38 @@ fn said(request: &Value, state: Option<&Path>, behave: &Behave) -> Result<Said, 
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
     let noun = if personas == 1 { "persona" } else { "personas" };
-    Ok(Said::View(format!(
-        "extension-probe answered the view '{view}' in protocol {protocol}, handed {personas} \
-         {noun}"
-    )))
+    let kept = count(&notes(writes)?);
+    Ok(json!([
+        {
+            "kind": "note",
+            "text": format!(
+                "extension-probe answered the view '{view}' in protocol {PROTOCOL}, handed \
+                 {personas} {noun}, and may write {}",
+                writes.join(", ")
+            ),
+        },
+        {
+            "kind": "list",
+            "rows": [{
+                "key": "notes",
+                "text": format!("{kept} notes"),
+                "actions": ["jot", "sweep", "careful", "forget"],
+            }],
+        },
+    ]))
+}
+
+/// The one path the probe declares, as charter resolved it.
+fn notes(writes: &[&str]) -> Result<PathBuf, String> {
+    writes
+        .iter()
+        .find(|path| path.ends_with("/notes/"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "charter handed no notes directory to write".to_owned())
+}
+
+fn count(notes: &Path) -> usize {
+    std::fs::read_dir(notes).map_or(0, |entries| entries.flatten().count())
 }
 
 /// Append one heard event to [`HEARD`] in `state`.

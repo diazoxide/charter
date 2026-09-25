@@ -2058,7 +2058,10 @@ fn an_unknown_capability_is_named_in_the_refusal_even_beside_a_known_one() {
         "{why}"
     );
     assert!(
-        why.contains("This charter knows probe, badges, repo-columns, events, briefing."),
+        why.contains(
+            "This charter knows probe, badges, repo-columns, palette, actions, writes, events, \
+             briefing."
+        ),
         "{why}"
     );
 }
@@ -2070,6 +2073,146 @@ fn a_version_below_the_first_protocol_is_refused() {
     made.manifest(r#"{"version":0,"id":"x","contributes":{"runs":"p"}}"#);
     let why = read_at(&made.at()).expect_err("no extension");
     assert!(why.contains("is version 0"), "{why}");
+}
+
+/// A protocol-2 manifest whose `capabilities` and `contributes` are the given JSON fragments,
+/// beside a view and a program.
+fn acting(made: &Made, capabilities: &str, contributes: &str) -> Result<Extension, String> {
+    made.manifest(&format!(
+        r#"{{"version":2,"id":"x","capabilities":{capabilities},"contributes":{{"runs":"bin/run",
+            "views":[{{"id":"v","title":"V","about":"personas"}}]{contributes}}}}}"#
+    ));
+    made.file("bin/run", "#!/bin/sh\n");
+    read_at(&made.at())
+}
+
+#[test]
+fn a_capability_its_manifest_s_protocol_does_not_carry_is_refused() {
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"x","capabilities":["actions"],"contributes":{"runs":"bin/run",
+            "actions":[{"id":"a","title":"A","confirm":false}]}}"#,
+    );
+    made.file("bin/run", "#!/bin/sh\n");
+    let why = read_at(&made.at()).expect_err("an action asked in protocol 1");
+    assert!(
+        why.contains("\"actions\", which needs protocol 2, and is version 1"),
+        "{why}"
+    );
+}
+
+#[test]
+fn a_capability_s_shape_is_there_exactly_when_the_capability_is_asked_for() {
+    let made = Made::new();
+    let why = acting(
+        &made,
+        "[]",
+        r#","actions":[{"id":"a","title":"A","confirm":false}]"#,
+    )
+    .expect_err("actions nobody was told about");
+    assert!(
+        why.contains(
+            "declares 'contributes.actions' without asking for the capability \"actions\""
+        ),
+        "{why}"
+    );
+
+    let why = acting(&made, r#"["writes"]"#, "").expect_err("a capability that does nothing");
+    assert!(
+        why.contains("asks for the capability \"writes\" and declares no 'contributes.writes'"),
+        "{why}"
+    );
+    let why = acting(&made, r#"["palette"]"#, r#","palette":[]"#).expect_err("an empty shape");
+    assert!(
+        why.contains("declares no commands under 'contributes.palette'"),
+        "{why}"
+    );
+}
+
+#[test]
+fn an_action_says_whether_charter_asks_first_and_one_that_deletes_always_asks() {
+    let made = Made::new();
+    let why = acting(
+        &made,
+        r#"["actions"]"#,
+        r#","actions":[{"id":"a","title":"A"}]"#,
+    )
+    .expect_err("an action that did not say");
+    assert!(why.contains("without 'confirm'"), "{why}");
+
+    let found = acting(
+        &made,
+        r#"["actions"]"#,
+        r#","actions":[{"id":"a","title":"A","confirm":false},
+                       {"id":"b","title":"B","confirm":true},
+                       {"id":"c","title":"C","confirm":false,"deletes":true}]"#,
+    )
+    .expect("an extension");
+    let asks: Vec<bool> = found
+        .manifest
+        .actions
+        .iter()
+        .map(Action::asks_first)
+        .collect();
+    assert_eq!(asks, [false, true, true]);
+}
+
+#[test]
+fn a_palette_command_opens_a_declared_view_or_runs_a_declared_action_and_nothing_else() {
+    let made = Made::new();
+    for (palette, said) in [
+        (
+            r#"[{"id":"p","title":"P","view":"nope"}]"#,
+            "opening the view \"nope\"",
+        ),
+        (
+            r#"[{"id":"p","title":"P","action":"nope"}]"#,
+            "running the action \"nope\"",
+        ),
+        (
+            r#"[{"id":"p","title":"P"}]"#,
+            "without exactly one of 'view' or 'action'",
+        ),
+        (
+            r#"[{"id":"p","title":"P","view":"v","action":"a"}]"#,
+            "without exactly one of 'view' or 'action'",
+        ),
+        (
+            r#"[{"id":"p","title":"P","view":"v","runs":"x"}]"#,
+            "carrying \"runs\"",
+        ),
+    ] {
+        let why = acting(
+            &made,
+            r#"["palette","actions"]"#,
+            &format!(
+                r#","actions":[{{"id":"a","title":"A","confirm":false}}],"palette":{palette}"#
+            ),
+        )
+        .expect_err(palette);
+        assert!(why.contains(said), "{palette}: {why}");
+    }
+}
+
+#[test]
+fn an_extension_with_a_program_approved_in_protocol_1_keeps_its_fingerprint() {
+    // Pinned from the charter that spoke only protocol 1 (charter-app#341). The fingerprint of
+    // an extension that declares a program carries the protocol its yes was given under — the
+    // protocol its manifest names, never the newest this charter speaks — so a charter that
+    // learns protocol 2 asks nobody who approved a protocol-1 extension again.
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"stats","name":"Stats","contributes":{"runs":"bin/run",
+            "views":[{"id":"statistics","title":"Statistics","about":"personas"}]}}"#,
+    );
+    made.file("bin/run", "#!/bin/sh\n");
+    let found = read_at(&made.at()).expect("an extension");
+
+    assert_eq!(found.manifest.protocol, 1);
+    assert_eq!(
+        found.fingerprint, "cb1dce3b8a25ba950c52debb53d1d8a0480d46e058469437e14ba172fd9a5316",
+        "the fingerprint of an approved protocol-1 program moved, which re-asks every operator"
+    );
 }
 
 // ---------------------------------------------------------------------------------------

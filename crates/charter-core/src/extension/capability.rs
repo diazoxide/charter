@@ -26,6 +26,17 @@ pub enum Capability {
     /// never a release (`crate::fence`) — so the vocabulary's machinery is proven through the
     /// real executor while a release build refuses the word like any other it does not know.
     Probe,
+    /// Commands in the palette, named with the extension's name, that open one of its views or
+    /// run one of its actions (charter-app#341). Declared under `contributes.palette`.
+    Palette,
+    /// Actions on the rows of its views, each a request of its own to its program — *run action
+    /// `<id>` on `<subject>`* (charter-app#341, protocol 2). Declared under
+    /// `contributes.actions`.
+    Actions,
+    /// Plane paths it writes, as plane-relative globs: handed resolved with each request, and
+    /// any change outside them reported after it (charter-app#341, protocol 2). Declared under
+    /// `contributes.writes`.
+    Writes,
     /// Status badges: values from the extension's facts file, drawn in the app's status bar
     /// and in `charter statusline`'s terminal footer without starting its program
     /// ([`super::facts`], charter-app#340). Its shape is `contributes.badges`.
@@ -50,6 +61,23 @@ impl Capability {
     fn spelled(self) -> (&'static str, &'static str) {
         match self {
             Self::Probe => ("probe", "charter's test capability, which grants nothing"),
+            Self::Palette => (
+                "palette",
+                "adds commands to the palette, named with this extension's name, that open one \
+                 of its views or run one of its actions",
+            ),
+            Self::Actions => (
+                "actions",
+                "puts actions on the rows of its views; running one starts its program, and \
+                 charter asks you first when the action says so, and always before one that \
+                 deletes",
+            ),
+            Self::Writes => (
+                "writes",
+                "writes to the plane paths listed below; charter hands it those paths with each \
+                 question and tells you when anything outside them changed while it answered — \
+                 it reports, it does not stop it",
+            ),
             Self::Badges => (
                 "badges",
                 "charter draws values from its facts file as badges in the status bar and the \
@@ -71,6 +99,17 @@ impl Capability {
         }
     }
 
+    /// The first protocol that carries what this capability needs. A manifest naming an earlier
+    /// `version` is refused rather than asked a question it was not written to read (ADR 0053).
+    pub fn since(self) -> u32 {
+        match self {
+            Self::Probe | Self::Badges | Self::RepoColumns | Self::Palette => 1,
+            // Events and the briefing are request kinds protocol 2 grew in charter-app#343,
+            // beside #341's run-action request: 2 was not yet released, so it holds all three.
+            Self::Actions | Self::Writes | Self::Events | Self::Briefing => 2,
+        }
+    }
+
     /// The word a manifest writes.
     pub fn as_str(self) -> &'static str {
         self.spelled().0
@@ -85,6 +124,9 @@ impl Capability {
         known.extend([
             Self::Badges,
             Self::RepoColumns,
+            Self::Palette,
+            Self::Actions,
+            Self::Writes,
             Self::Events,
             Self::Briefing,
         ]);
@@ -101,17 +143,13 @@ impl Capability {
     pub fn has_shape(self) -> bool {
         match self {
             Self::Probe => false,
-            Self::Badges | Self::RepoColumns | Self::Events | Self::Briefing => true,
-        }
-    }
-
-    /// The first protocol that has it (ADR 0053): a manifest naming an earlier `version` is
-    /// refused rather than asked questions its program was not written to answer. Events and
-    /// the briefing are request kinds of their own, which protocol 2 added.
-    pub fn since_protocol(self) -> u32 {
-        match self {
-            Self::Probe | Self::Badges | Self::RepoColumns => 1,
-            Self::Events | Self::Briefing => 2,
+            Self::Badges
+            | Self::RepoColumns
+            | Self::Palette
+            | Self::Actions
+            | Self::Writes
+            | Self::Events
+            | Self::Briefing => true,
         }
     }
 

@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ViewPane } from "./Views";
-import type { ExtensionView, ViewAnswer } from "./bindings";
+import type { ActionAnswer, ExtensionView, PanelBlock, RowAction, ViewAnswer } from "./bindings";
 import type { ViewRef } from "./tabs";
 
 /**
@@ -61,6 +61,7 @@ const PERSONA: ViewAnswer = {
           tone: "plain",
           detail: { kind: "text", text: "File the issue." },
           runs: null,
+          actions: [],
         },
         {
           key: "b",
@@ -70,12 +71,14 @@ const PERSONA: ViewAnswer = {
           tone: "plain",
           detail: { kind: "text", text: "Recommend, don't offer menus." },
           runs: null,
+          actions: [],
         },
       ],
       empty: { headline: "Nothing remembered yet", body: null, offer: null },
     },
   ],
   took_ms: 2,
+  overreach: null,
 };
 
 /** What persona statistics' program answers: a sentence and a chart. */
@@ -95,6 +98,7 @@ const CHARTED: ViewAnswer = {
     },
   ],
   took_ms: 6,
+  overreach: null,
 };
 
 /** The core, answering `open_view` and recording what it was asked. */
@@ -321,5 +325,152 @@ describe("an extension's view", () => {
       await waitFor(() => expect(opened).toHaveLength(1));
       expect(screen.queryByTestId("view-waits")).toBeNull();
     });
+  });
+
+  it("says what changed outside the paths it declares, above its answer, and still draws it", async () => {
+    core(() => ({
+      ...CHARTED,
+      overreach: "While 'persona-statistics' was answering, charter saw these change: a.md.",
+    }));
+    draw(THE_PLANE_S_STATISTICS, { title: "Statistics" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "While 'persona-statistics' was answering",
+    );
+    expect(screen.getByTestId("chart")).toBeInTheDocument();
+  });
+});
+
+describe("an action on an extension's row (charter-app#341)", () => {
+  const JOT: RowAction = { id: "jot", title: "Jot a note", asks_first: false, deletes: false };
+  const CAREFUL: RowAction = { id: "careful", title: "Careful", asks_first: true, deletes: false };
+  const FORGET: RowAction = { id: "forget", title: "Forget", asks_first: true, deletes: true };
+
+  /** The probe's view: one row counting its notes, offering `actions`. */
+  const counted = (notes: number, actions: RowAction[]): PanelBlock[] => [
+    {
+      kind: "list",
+      rows: [
+        {
+          key: "notes",
+          text: `${notes} notes`,
+          note: null,
+          mark: "note",
+          tone: "plain",
+          detail: null,
+          runs: null,
+          actions,
+        },
+      ],
+      empty: { headline: "Nothing", body: null, offer: null },
+    },
+  ];
+
+  const PROBE: ViewRef = { from: "extension-probe", view: "probe", key: "" };
+
+  /** The core, answering the view with `actions` on its row and each action with `acted`. */
+  function acting(actions: RowAction[], acted: (asked: Record<string, unknown>) => ActionAnswer) {
+    const ran: Record<string, unknown>[] = [];
+    mockIPC((cmd, args) => {
+      const given = (args ?? {}) as Record<string, unknown>;
+      if (cmd === "open_view") {
+        return { kind: "answered", blocks: counted(0, actions), took_ms: 1, overreach: null };
+      }
+      if (cmd === "run_action") {
+        ran.push(given);
+        return acted(given);
+      }
+      return undefined;
+    });
+    return { ran };
+  }
+
+  it("runs on the row it was pressed on, and the view draws what it answered", async () => {
+    const { ran } = acting([JOT], () => ({
+      blocks: counted(1, [JOT]),
+      took_ms: 3,
+      overreach: null,
+    }));
+    draw(PROBE, { title: "Probe", workspace: "alpha" });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Jot a note" }));
+
+    expect(await screen.findByText("1 notes")).toBeInTheDocument();
+    expect(ran).toEqual([
+      {
+        plane: PLANE,
+        extension: "extension-probe",
+        action: "jot",
+        view: "probe",
+        key: "",
+        row: "notes",
+        workspace: "alpha",
+        confirmed: false,
+      },
+    ]);
+  });
+
+  it("asks first when the action says so, and runs only once said yes to", async () => {
+    const { ran } = acting([CAREFUL], () => ({ blocks: null, took_ms: 1, overreach: null }));
+    draw(PROBE, { title: "Probe" });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Careful" }));
+
+    const asking = await screen.findByRole("alertdialog");
+    expect(asking).toHaveTextContent("Run “Careful” from extension-probe?");
+    expect(ran).toEqual([]);
+    await userEvent.click(within(asking).getByRole("button", { name: "Run" }));
+    await waitFor(() => expect(ran).toHaveLength(1));
+    expect(ran[0].confirmed).toBe(true);
+  });
+
+  it("asks before an action that deletes, in words that say it deletes, and Cancel runs nothing", async () => {
+    const { ran } = acting([FORGET], () => ({ blocks: null, took_ms: 1, overreach: null }));
+    draw(PROBE, { title: "Probe" });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Forget" }));
+
+    const asking = await screen.findByRole("alertdialog");
+    expect(asking).toHaveTextContent("It deletes");
+    expect(within(asking).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(ran).toEqual([]);
+  });
+
+  it("says only what the last action came to, not what the view's own question saw before it", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "open_view")
+        return {
+          kind: "answered",
+          blocks: counted(0, [JOT]),
+          took_ms: 1,
+          overreach: "While 'extension-probe' was answering, charter saw these change: old.md.",
+        };
+      if (cmd === "run_action") return { blocks: counted(1, [JOT]), took_ms: 1, overreach: null };
+      return undefined;
+    });
+    draw(PROBE, { title: "Probe" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("old.md");
+
+    await userEvent.click(screen.getByRole("button", { name: "Jot a note" }));
+
+    await screen.findByText("1 notes");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says what the action changed outside the extension's declared paths", async () => {
+    acting([JOT], () => ({
+      blocks: null,
+      took_ms: 1,
+      overreach: "While 'extension-probe' was answering, charter saw these change: stray.txt.",
+    }));
+    draw(PROBE, { title: "Probe" });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Jot a note" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("stray.txt");
+    // Done with no blocks: the view stands as it was.
+    expect(screen.getByText("0 notes")).toBeInTheDocument();
   });
 });

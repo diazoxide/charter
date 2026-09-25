@@ -18,6 +18,8 @@ fn standing(stage: Stage, changed: &[&str], pushes: bool) -> Standing {
         pushes,
         behind: Some(0),
         push_failed: None,
+        conflicts: Vec::new(),
+        notice: None,
     }
 }
 

@@ -17,6 +17,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 dirs = "7"
 # The same searcher vte uses to find these sequences in the same bytes.
 memchr = "2"
+# An extension's declared plane-write paths (charter-app#341): one segment matched as a shell
+# matches it, `*` and `?`, never a leading dot. The rust-lang crate, already in this workspace's
+# lockfile, so it adds no crate to the tree.
+glob = "0.3"
 portable-pty = "0.9"
 # The secret-shape rules are `charter/hooks.py`'s regexes, ported character for character.
 regex = "1"

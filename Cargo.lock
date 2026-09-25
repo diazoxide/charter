@@ -752,6 +752,7 @@ dependencies = [
  "dirs 7.0.0",
  "flate2",
  "getrandom 0.4.3",
+ "glob",
  "hmac 0.13.0",
  "keyring",
  "libc",

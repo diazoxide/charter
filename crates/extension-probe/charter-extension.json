@@ -2,7 +2,16 @@
   "version": 2,
   "id": "extension-probe",
   "name": "Extension probe",
-  "capabilities": ["probe", "badges", "repo-columns", "events", "briefing"],
+  "capabilities": [
+    "probe",
+    "badges",
+    "repo-columns",
+    "palette",
+    "actions",
+    "writes",
+    "events",
+    "briefing"
+  ],
   "state": "state",
   "contributes": {
     "runs": "bin/extension-probe",
@@ -28,6 +37,18 @@
         "fresh_seconds": 3600
       }
     ],
+    "actions": [
+      { "id": "jot", "title": "Jot a note", "confirm": false },
+      { "id": "stray", "title": "Write outside", "confirm": false },
+      { "id": "sweep", "title": "Sweep quietly", "confirm": false },
+      { "id": "careful", "title": "Careful", "confirm": true },
+      { "id": "forget", "title": "Forget the notes", "confirm": false, "deletes": true }
+    ],
+    "palette": [
+      { "id": "open", "title": "Open the probe", "view": "probe" },
+      { "id": "jot", "title": "Jot a note", "action": "jot" }
+    ],
+    "writes": ["notes/"],
     "events": {
       "hears": [
         "workspace-focused",

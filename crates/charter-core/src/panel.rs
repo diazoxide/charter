@@ -40,6 +40,12 @@
 //! row*, consented per extension, per row, and nobody has asked for it yet: ADR 0041's rule is
 //! that a capability is written down for a plugin that wants it, never ahead of one.
 //!
+//! **What a row an extension answers MAY carry is that extension's own actions**
+//! ([`Row::actions`], charter-app#341, ADR 0043's amendment of 2026-09-25): ids of verbs its
+//! manifest declares, each of which asks its own program again, through the executor's gate,
+//! when the operator presses it. That is not a charter verb and gives it no charter authority,
+//! so `runs` stays refused beside it.
+//!
 //! So the asymmetry is real and is written down rather than smoothed over: **charter's own
 //! panels can put a charter verb on a row and a stranger's cannot.** It is not a property of
 //! being charter; it is a property of being code that is already in the process.
@@ -338,6 +344,11 @@ pub struct Row {
     /// row cannot invent a verb even here, and an id the catalogue has stopped offering draws
     /// as no button at all rather than as a dead one.
     pub runs: Option<String>,
+    /// The extension's own actions this row offers, by id (charter-app#341) — **only ever in an
+    /// answer**, and only ids the answering extension's manifest declares
+    /// (`crate::executor` refuses any other). Never a charter verb: pressing one asks the
+    /// extension's program, through the gate, and charter's own rows leave it empty.
+    pub actions: Vec<String>,
 }
 
 /// What a list says when it has no rows.
@@ -509,6 +520,14 @@ const PANEL_KEYS: [&str; 6] = ["id", "title", "order", "mark", "rows", "empty"];
 /// The keys a declared row may carry.
 const ROW_KEYS: [&str; 6] = ["key", "text", "note", "mark", "tone", "detail"];
 
+/// The keys an answered row may carry: a declared row's, and the extension's own actions
+/// (charter-app#341). A manifest's panel has no program to run one, so it has no such key.
+const ANSWERED_ROW_KEYS: [&str; 7] = ["key", "text", "note", "mark", "tone", "detail", "actions"];
+
+/// The most actions one row may offer. A row is one line; more buttons than fit on it are
+/// buttons nobody reads before pressing.
+pub const MOST_ROW_ACTIONS: usize = 4;
+
 /// The keys a declared empty state may carry.
 const EMPTY_KEYS: [&str; 2] = ["headline", "body"];
 
@@ -549,7 +568,7 @@ fn one(raw: &serde_json::Value, by: &str) -> Result<Panel, String> {
 
     let mark = mark_of(object.get("mark"))?;
 
-    let rows = rows_of(object.get("rows"))?;
+    let rows = rows_of(object.get("rows"), &ROW_KEYS)?;
     let empty = empty_of(object.get("empty"))?;
 
     Ok(Panel {
@@ -578,7 +597,7 @@ pub const NO_VERB: &str = "names a charter action, and an extension may not put 
 ///
 /// One function for a declared panel and an answered list, so the two cannot drift: a row an
 /// extension's program answers is held to exactly the rules a row its manifest declares is.
-fn rows_of(value: Option<&serde_json::Value>) -> Result<Vec<Row>, String> {
+fn rows_of(value: Option<&serde_json::Value>, allowed: &[&str]) -> Result<Vec<Row>, String> {
     let listed = match value {
         None => return Ok(Vec::new()),
         Some(value) => value
@@ -594,7 +613,7 @@ fn rows_of(value: Option<&serde_json::Value>) -> Result<Vec<Row>, String> {
     let mut keys = BTreeSet::new();
     let mut rows = Vec::with_capacity(listed.len());
     for (at, raw) in listed.iter().enumerate() {
-        let row = row_of(raw).map_err(|why| format!("has a row at {at} that {why}"))?;
+        let row = row_of(raw, allowed).map_err(|why| format!("has a row at {at} that {why}"))?;
         if !keys.insert(row.key.clone()) {
             return Err(format!(
                 "has two rows called {:?}, and a row's key is what the window remembers it by",
@@ -636,12 +655,12 @@ fn empty_of(value: Option<&serde_json::Value>) -> Result<Empty, String> {
     })
 }
 
-fn row_of(raw: &serde_json::Value) -> Result<Row, String> {
+fn row_of(raw: &serde_json::Value, keys: &[&str]) -> Result<Row, String> {
     let object = raw.as_object().ok_or("is not an object")?;
     if object.contains_key("runs") {
         return Err(NO_VERB.to_owned());
     }
-    only(object.keys().map(String::as_str), &ROW_KEYS, "a row")?;
+    only(object.keys().map(String::as_str), keys, "a row")?;
     let key = object
         .get("key")
         .and_then(serde_json::Value::as_str)
@@ -663,7 +682,36 @@ fn row_of(raw: &serde_json::Value) -> Result<Row, String> {
         detail: words(object.get("detail"), MOST_DETAIL, "detail")?.map(Detail::Text),
         // Refused by name in `ROW_KEYS`, never silently dropped. See this module's header.
         runs: None,
+        actions: actions_of(object.get("actions"))?,
     })
+}
+
+/// A row's action ids: distinct words, at most [`MOST_ROW_ACTIONS`]. Whether each is one the
+/// extension declared is the executor's to check, since only it holds the manifest.
+fn actions_of(value: Option<&serde_json::Value>) -> Result<Vec<String>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let listed = value
+        .as_array()
+        .ok_or("has 'actions' that are not a list of action ids")?;
+    if listed.len() > MOST_ROW_ACTIONS {
+        return Err(format!(
+            "offers {} actions, and charter draws at most {MOST_ROW_ACTIONS} on one row",
+            listed.len()
+        ));
+    }
+    let mut ids: Vec<String> = Vec::with_capacity(listed.len());
+    for raw in listed {
+        let id = raw
+            .as_str()
+            .ok_or("has an action that is not an action's id")?;
+        if ids.iter().any(|seen| seen == id) {
+            return Err(format!("offers the action {id:?} twice"));
+        }
+        ids.push(id.to_owned());
+    }
+    Ok(ids)
 }
 
 fn tone_of(value: Option<&serde_json::Value>) -> Result<Tone, String> {
@@ -839,7 +887,7 @@ fn block_of(raw: &serde_json::Value) -> Result<Block, String> {
         "list" => {
             only(object.keys().map(String::as_str), &LIST_KEYS, "a list")?;
             Ok(Block::List {
-                rows: rows_of(object.get("rows"))?,
+                rows: rows_of(object.get("rows"), &ANSWERED_ROW_KEYS)?,
                 empty: empty_of(object.get("empty"))?,
             })
         }

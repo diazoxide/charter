@@ -114,6 +114,8 @@ macro_rules! app_commands {
                 views::extension_views,
                 views::extension_programs_run,
                 views::open_view,
+                views::run_action,
+                views::extension_commands,
                 views::reopened_views,
                 views::window_views,
                 doctor::plane_doctor,

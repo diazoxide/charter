@@ -36,7 +36,7 @@
 //! refuses its profiles. The workspace, then Shared, decide instead.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{Setting, SettingValue};
 use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
@@ -90,7 +90,7 @@ struct Said {
 
 /// What a project's two files say about extensions, by id — and, in a workspace, what that
 /// workspace's `workspace.json` says (charter-app#280).
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct Choices {
     shared: BTreeMap<String, Said>,
     /// Empty outside a workspace, and for a workspace whose manifest says nothing.
@@ -101,6 +101,23 @@ pub struct Choices {
     /// Why `charter.local.toml` is not among these layers, when it is there and git would carry
     /// it (charter-app#319).
     local_left_out: Option<String>,
+    /// The plane these were read from, when they were read from one: what an extension's
+    /// declared plane writes resolve against and what charter watches while it answers
+    /// (charter-app#341). `None` for choices made from text alone, which have no plane.
+    plane: Option<PathBuf>,
+}
+
+/// **Equal when they choose the same things.** Where they were read from is not a choice: two
+/// planes whose files say the same are two sets of equal choices, and one read from text is
+/// equal to one read from a plane whose files hold that text.
+impl PartialEq for Choices {
+    fn eq(&self, other: &Self) -> bool {
+        self.shared == other.shared
+            && self.workspace == other.workspace
+            && self.local == other.local
+            && self.workspace_name == other.workspace_name
+            && self.local_left_out == other.local_left_out
+    }
 }
 
 impl Choices {
@@ -139,10 +156,18 @@ impl Choices {
     /// (charter-app#308).
     pub fn read(root: &Path) -> Self {
         use crate::settings::{Which, layer_text};
-        Self::from_layers(
-            &layer_text(root, Which::Shared),
-            &layer_text(root, Which::Local),
-        )
+        Self {
+            plane: Some(root.to_path_buf()),
+            ..Self::from_layers(
+                &layer_text(root, Which::Shared),
+                &layer_text(root, Which::Local),
+            )
+        }
+    }
+
+    /// The plane these were read from, when they were ([`Self::read`]).
+    pub fn plane(&self) -> Option<&Path> {
+        self.plane.as_deref()
     }
 
     /// The two files as [`crate::settings::layer_text`] hands them — [`Self::from_text`], and,
