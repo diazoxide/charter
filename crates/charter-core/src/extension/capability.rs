@@ -34,6 +34,14 @@ pub enum Capability {
     /// shown only while the extension is on for that project or workspace (ADR 0048). Its shape
     /// is `contributes.repo-columns`.
     RepoColumns,
+    /// Events: charter asks its program one question after each core action the manifest says
+    /// it hears — a workspace focused, created, forked or removed, a handoff, a session start, a
+    /// plane save ([`super::events`], charter-app#343). Its shape is `contributes.events`.
+    Events,
+    /// A briefing section: `charter hook sessionstart` asks its program for a section and quotes
+    /// it, as data under the extension's name, in every chat's first message
+    /// ([`super::briefing`], charter-app#343). Its shape is `contributes.briefing`.
+    Briefing,
 }
 
 impl Capability {
@@ -51,6 +59,15 @@ impl Capability {
                 "repo-columns",
                 "charter draws values from its facts file as columns in the repo table",
             ),
+            Self::Events => (
+                "events",
+                "charter starts its program once after each thing it hears about, when that \
+                 thing is already done",
+            ),
+            Self::Briefing => (
+                "briefing",
+                "adds text to every chat's first message, quoted as data under its name",
+            ),
         }
     }
 
@@ -65,7 +82,12 @@ impl Capability {
         if crate::fence::FENCED {
             known.push(Self::Probe);
         }
-        known.extend([Self::Badges, Self::RepoColumns]);
+        known.extend([
+            Self::Badges,
+            Self::RepoColumns,
+            Self::Events,
+            Self::Briefing,
+        ]);
         known
     }
 
@@ -79,7 +101,17 @@ impl Capability {
     pub fn has_shape(self) -> bool {
         match self {
             Self::Probe => false,
-            Self::Badges | Self::RepoColumns => true,
+            Self::Badges | Self::RepoColumns | Self::Events | Self::Briefing => true,
+        }
+    }
+
+    /// The first protocol that has it (ADR 0053): a manifest naming an earlier `version` is
+    /// refused rather than asked questions its program was not written to answer. Events and
+    /// the briefing are request kinds of their own, which protocol 2 added.
+    pub fn since_protocol(self) -> u32 {
+        match self {
+            Self::Probe | Self::Badges | Self::RepoColumns => 1,
+            Self::Events | Self::Briefing => 2,
         }
     }
 

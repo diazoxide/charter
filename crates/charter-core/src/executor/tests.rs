@@ -789,7 +789,7 @@ fn the_program_is_asked_one_line_holding_what_was_handed_and_nothing_else() {
     assert_eq!(
         asked,
         serde_json::json!({
-            "charter": PROTOCOL, "extension": "probe", "view": "stats", "about": "personas",
+            "charter": 1, "extension": "probe", "view": "stats", "about": "personas",
             "focus": "steward", "given": { "handed": [1, 2] }
         })
     );

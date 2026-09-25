@@ -16,24 +16,87 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-/// The protocol this program speaks.
-pub const PROTOCOL: u64 = 1;
+/// The protocol this program speaks: 2, which added events and the briefing section
+/// (charter-app#343).
+pub const PROTOCOL: u64 = 2;
 
 /// The manifest this program is installed with, so `assemble` writes the one that is tested.
 pub const MANIFEST: &str = include_str!("../charter-extension.json");
 
+/// The file in the state directory a test writes to make the probe misbehave on purpose —
+/// `{"sleep_ms": 3000}`, `{"fail": true}`, `{"section": "…"}`. The state directory is outside
+/// the fingerprint, so this changes nothing the operator approved.
+pub const BEHAVE: &str = "behave.json";
+
+/// The file in the state directory the probe appends one line to for every event it hears, so a
+/// test reads off what it was told.
+pub const HEARD: &str = "heard.txt";
+
+/// What the probe was told to do by [`BEHAVE`], read fresh for each question.
+#[derive(Debug, Default)]
+pub struct Behave {
+    /// Sleep this long before answering, to be the slow extension.
+    pub sleep_ms: u64,
+    /// Answer an `error`, to be the failing one.
+    pub fail: bool,
+    /// The briefing section to answer, in place of the probe's own.
+    pub section: Option<String>,
+}
+
+impl Behave {
+    /// Read from `state`, or the ordinary probe when there is nothing to read.
+    pub fn read(state: Option<&Path>) -> Self {
+        let Some(doc) = state
+            .and_then(|state| std::fs::read_to_string(state.join(BEHAVE)).ok())
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        else {
+            return Self::default();
+        };
+        Self {
+            sleep_ms: doc.get("sleep_ms").and_then(Value::as_u64).unwrap_or(0),
+            fail: doc.get("fail").and_then(Value::as_bool).unwrap_or(false),
+            section: doc
+                .get("section")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }
+    }
+}
+
 /// The answer to one request line, as the JSON value to print. Never panics on what it is
 /// given: a request it cannot read is an `error` answer.
-pub fn answer(request: &Value) -> Value {
-    match said(request) {
-        Ok(text) => json!({ "charter": PROTOCOL, "blocks": [{ "kind": "note", "text": text }] }),
+///
+/// `state` is the state directory charter named, when it named one: an event is recorded there
+/// ([`HEARD`]), and what [`BEHAVE`] says there is done.
+pub fn answer(request: &Value, state: Option<&Path>) -> Value {
+    let behave = Behave::read(state);
+    if behave.sleep_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(behave.sleep_ms));
+    }
+    if behave.fail {
+        return json!({ "charter": PROTOCOL, "error": "the probe was told to fail" });
+    }
+    match said(request, state, &behave) {
+        Ok(Said::View(text)) => {
+            json!({ "charter": PROTOCOL, "blocks": [{ "kind": "note", "text": text }] })
+        }
+        Ok(Said::Heard) => json!({ "charter": PROTOCOL }),
+        Ok(Said::Section(text)) => json!({ "charter": PROTOCOL, "section": text }),
         Err(why) => json!({ "charter": PROTOCOL, "error": why }),
     }
 }
 
+/// What the probe answers, by the kind of question.
+enum Said {
+    View(String),
+    Heard,
+    Section(String),
+}
+
 /// What the probe says back: which view it was asked, in which protocol, and how much it was
-/// handed — so a test reads off the answer that charter asked what it meant to ask.
-fn said(request: &Value) -> Result<String, String> {
+/// handed — so a test reads off the answer that charter asked what it meant to ask. An event is
+/// written down in [`HEARD`]; a briefing is a line naming the workspace it was asked about.
+fn said(request: &Value, state: Option<&Path>, behave: &Behave) -> Result<Said, String> {
     let protocol = request
         .get("charter")
         .and_then(Value::as_u64)
@@ -43,19 +106,52 @@ fn said(request: &Value) -> Result<String, String> {
             "this program speaks protocol {PROTOCOL} and was asked in protocol {protocol}"
         ));
     }
+    if let Some(event) = request.get("event").and_then(Value::as_str) {
+        let mut line = event.to_owned();
+        for key in ["workspace", "from"] {
+            if let Some(value) = request.get(key).and_then(Value::as_str) {
+                line.push(' ');
+                line.push_str(value);
+            }
+        }
+        if let Some(state) = state {
+            write_heard(state, &line).map_err(|why| why.to_string())?;
+        }
+        return Ok(Said::Heard);
+    }
+    if let Some(briefing) = request.get("briefing") {
+        let workspace = briefing
+            .get("workspace")
+            .and_then(Value::as_str)
+            .unwrap_or("none");
+        return Ok(Said::Section(behave.section.clone().unwrap_or_else(|| {
+            format!("extension-probe briefs a chat in workspace {workspace}")
+        })));
+    }
     let view = request
         .get("view")
         .and_then(Value::as_str)
-        .ok_or("the request names no view")?;
+        .ok_or("the request names no view, no event and no briefing")?;
     let personas = request
         .pointer("/given/personas")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
     let noun = if personas == 1 { "persona" } else { "personas" };
-    Ok(format!(
+    Ok(Said::View(format!(
         "extension-probe answered the view '{view}' in protocol {protocol}, handed {personas} \
          {noun}"
-    ))
+    )))
+}
+
+/// Append one heard event to [`HEARD`] in `state`.
+fn write_heard(state: &Path, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(state)?;
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(state.join(HEARD))?;
+    writeln!(log, "{line}")
 }
 
 /// The repo the probe fills its column for. It knows nothing of the plane — a program is handed

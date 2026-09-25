@@ -164,7 +164,9 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+pub mod briefing;
 pub mod capability;
+pub mod events;
 pub mod facts;
 pub mod project;
 
@@ -356,6 +358,20 @@ pub struct Manifest {
     pub badges: Vec<facts::DeclaredBadge>,
     /// The repo-table columns it declares (the `repo-columns` capability, [`facts`]).
     pub repo_columns: Vec<facts::DeclaredColumn>,
+    /// The events it hears, and the folder it keeps in each workspace (the `events`
+    /// capability, [`events`]). `None` for an extension that hears nothing.
+    pub events: Option<events::Declared>,
+    /// Its section of the session-start briefing (the `briefing` capability, [`briefing`]).
+    pub briefing: Option<briefing::Declared>,
+}
+
+impl Manifest {
+    /// Whether it hears `kind` ([`events`]).
+    pub fn hears(&self, kind: events::Kind) -> bool {
+        self.events
+            .as_ref()
+            .is_some_and(|declared| declared.hears.contains(&kind))
+    }
 }
 
 /// One setting an extension declares: a key a project sets in `[extensions.<id>.settings]`.
@@ -1010,6 +1026,36 @@ fn parse(text: &str) -> Result<Manifest, String> {
         None => Vec::new(),
         Some(value) => facts::columns_of(value)?,
     };
+    // A capability that is a request kind of its own is refused in a manifest that speaks a
+    // protocol without it (ADR 0053): its program would be asked a question it was not written
+    // to read.
+    for capability in &capabilities {
+        let since = capability.since_protocol();
+        if protocol < since {
+            return Err(format!(
+                "asks for the capability \"{}\" and speaks protocol {protocol}, which does not \
+                 have it — a manifest that asks for it says \"version\": {since} or later",
+                capability.as_str()
+            ));
+        }
+    }
+    let events = match contributes.get(Capability::Events.as_str()) {
+        None => None,
+        Some(value) => Some(events::declared_of(value)?),
+    };
+    let briefing = match contributes.get(Capability::Briefing.as_str()) {
+        None => None,
+        Some(value) => Some(briefing::declared_of(value)?),
+    };
+    // Both are questions to the program, so each needs one to ask — for the reason a view
+    // does: a contribution that can never do anything is one the operator consented to and
+    // did not get.
+    if (events.is_some() || briefing.is_some()) && program.is_none() {
+        return Err(
+            "hears events or adds a briefing section, and declares no program ('runs') to ask"
+                .into(),
+        );
+    }
 
     if themes.is_empty()
         && panels.is_empty()
@@ -1101,6 +1147,8 @@ fn parse(text: &str) -> Result<Manifest, String> {
         settings,
         badges,
         repo_columns,
+        events,
+        briefing,
     })
 }
 
@@ -1367,13 +1415,15 @@ fn tree(
     // that are no longer true, so an extension that declares a program carries the executor's
     // protocol in its fingerprint: every one approved before this existed reads as changed and
     // is asked about again, with the prompt that says it will run. A theme-only extension is
-    // not touched — nothing about what its yes covered has moved. And the day the protocol
-    // changes what charter hands a program, the number moves and every such yes is re-asked.
+    // not touched — nothing about what its yes covered has moved.
+    //
+    // **The protocol the manifest declares, not the executor's newest** (ADR 0053, from
+    // charter-app#343): charter asks a program in the protocol it declared, so what a yes to it
+    // covered moves only when the extension moves it — and a charter that learns protocol 3
+    // re-asks nobody about an extension still speaking 1. For protocol 1 these are the bytes
+    // the executor's own number was hashed as, so no extension approved before is asked again.
     if manifest.program.is_some() {
-        framed.part(
-            "charter-starts-it",
-            &crate::executor::PROTOCOL.to_be_bytes(),
-        );
+        framed.part("charter-starts-it", &manifest.protocol.to_be_bytes());
     }
 
     let wanted: BTreeMap<&str, ()> = manifest
@@ -2277,6 +2327,8 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         .collect();
     // What each capability with a shape declares, right after the capabilities themselves.
     declares.extend(facts::declares(&found.manifest));
+    declares.extend(events::declares(&found.manifest));
+    declares.extend(briefing::declares(&found.manifest));
     declares.extend(
         found
             .manifest
@@ -2312,14 +2364,23 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         // **Named as a program charter starts, with what bounds charter puts on it and what it
         // does not.** ADR 0041's amendment: the prompt says what charter will do, and says that
         // it is conduct and not a cage — [`RUNS_AS_YOU`] carries the second half, below.
-        declares.push(if found.manifest.views.is_empty() {
-            format!(
-                "a program, {program} — it declares no view, so nothing ever asks charter to \
-                 start it"
-            )
-        } else {
-            format!("a program, {program} — {}", crate::executor::HOW_IT_RUNS)
-        });
+        let manifest = &found.manifest;
+        declares.push(
+            if manifest.views.is_empty() && manifest.events.is_none() && manifest.briefing.is_none()
+            {
+                format!(
+                    "a program, {program} — it declares no view, hears no event and adds no \
+                     briefing section, so nothing ever asks charter to start it"
+                )
+            } else if manifest.events.is_none() && manifest.briefing.is_none() {
+                format!("a program, {program} — {}", crate::executor::HOW_IT_RUNS)
+            } else {
+                format!(
+                    "a program, {program} — {}",
+                    crate::executor::how_it_runs(manifest)
+                )
+            },
+        );
     }
     Prompt {
         id: found.id().to_owned(),

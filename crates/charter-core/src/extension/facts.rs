@@ -504,7 +504,11 @@ fn wanted(manifest: &super::Manifest, reading: Reading) -> bool {
 }
 
 /// Whether the project (and workspace) has it on — `project::resolve`, the one answer.
-fn on_here(id: &str, manifest: &super::Manifest, choices: &super::project::Choices) -> bool {
+pub(super) fn on_here(
+    id: &str,
+    manifest: &super::Manifest,
+    choices: &super::project::Choices,
+) -> bool {
     use super::project::{Installed, resolve};
     let here = Installed {
         id: id.to_owned(),

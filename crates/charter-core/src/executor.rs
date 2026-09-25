@@ -98,18 +98,26 @@
 //! checks its stdin as it goes. `persona-statistics` does the first, and needs nothing more.
 //!
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::extension::{self, Extension, Standing};
 use crate::panel::{self, Subject};
 
-/// The protocol a request and an answer are written in.
+/// The newest protocol a request and an answer are written in. charter answers every protocol
+/// from 1 to this one, and **asks each extension in the protocol its manifest declares**
+/// (`version`, ADR 0053) — so a program written for protocol 1 is asked exactly the question it
+/// was written for, whatever this number is.
 ///
-/// **It is inside the fingerprint of every extension that declares a program**
-/// ([`crate::extension`]'s tree hash), so changing what charter hands a program re-asks every
-/// operator who approved one under the old terms. Bump it when a request gains a fact.
-pub const PROTOCOL: u32 = 1;
+/// - **1**: a view's question, answered with blocks.
+/// - **2** (charter-app#343): an event's question ([`Executor::tell`]) and the briefing's
+///   ([`Executor::brief`]), each a request kind of its own. A view is asked as in 1.
+///
+/// **The declared protocol is inside the fingerprint of every extension that declares a
+/// program** ([`crate::extension`]'s tree hash), so an extension that changes the protocol it
+/// speaks is asked about again — and raising this number re-asks nobody, because no extension's
+/// declared protocol moved. Bump it when a request or an answer gains a fact.
+pub const PROTOCOL: u32 = 2;
 
 /// How long a program has, from being started to its answer's last byte.
 ///
@@ -173,6 +181,33 @@ pub const HOW_IT_RUNS: &str = "charter starts it only when you open one of this 
      question, given 5 seconds to answer, and then stopped along with anything it started. \
      A program set on outliving that can, because it runs as you do.";
 
+/// [`HOW_IT_RUNS`] for a program that is also started without the operator opening anything —
+/// because it hears events or adds a briefing section (charter-app#343). **"Never on its own"
+/// would be false of it**, so it says when charter does start it instead, and keeps every bound.
+pub fn how_it_runs(manifest: &extension::Manifest) -> String {
+    let mut when: Vec<&str> = Vec::new();
+    if !manifest.views.is_empty() {
+        when.push("when you open one of this extension's views");
+    }
+    if manifest.events.is_some() {
+        when.push("after each thing it hears about has happened");
+    }
+    if manifest.briefing.is_some() {
+        when.push("when a chat starts, for its briefing section");
+    }
+    let when = match when.as_slice() {
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+        [] => String::new(),
+    };
+    format!(
+        "charter starts it {when} — never at launch and never on a timer. Each time it is \
+         asked one question, given at most {} seconds to answer, and then stopped along with \
+         anything it started. A program set on outliving that can, because it runs as you do.",
+        DEADLINE.as_secs()
+    )
+}
+
 /// What a program answered, drawn by charter, and what it cost.
 #[derive(Debug, Clone)]
 pub struct Answer {
@@ -193,6 +228,9 @@ pub struct Answer {
 #[derive(Debug)]
 pub struct Executor {
     table: Mutex<Table>,
+    /// Signalled whenever a slot is given back, for an event waiting its turn
+    /// ([`Self::hold_within`]).
+    freed: Condvar,
     /// How long each program has. [`DEADLINE`] for every executor charter makes; only a test
     /// gives an executor another (charter-app#303), so that a test whose subject is not the
     /// deadline is not failed by a busy machine taking five seconds to start its program.
@@ -203,6 +241,7 @@ impl Default for Executor {
     fn default() -> Self {
         Self {
             table: Mutex::default(),
+            freed: Condvar::new(),
             deadline: DEADLINE,
         }
     }
@@ -222,9 +261,10 @@ struct Table {
 }
 
 impl Executor {
-    /// An executor whose programs have `deadline` instead of [`DEADLINE`] — for a test.
-    #[cfg(test)]
-    pub(crate) fn with_deadline(deadline: Duration) -> Self {
+    /// An executor whose programs have `deadline` instead of [`DEADLINE`]: for the session-start
+    /// briefing, which holds a chat's start and so gives each program less
+    /// ([`crate::extension::briefing::Bounds`]), and for a test whose subject is not the deadline.
+    pub fn with_deadline(deadline: Duration) -> Self {
         Self {
             deadline,
             ..Self::default()
@@ -280,37 +320,164 @@ impl Executor {
         // The question, built before the fingerprint rather than after it: `hand` reads the
         // plane, which is the slow part, and every moment between the fingerprint and the start
         // is a moment in which a write is run without having been hashed.
-        let handing = Instant::now();
-        let request = request_line(extension, &asked, focus, hand(asked.about), settings)?;
-        let handed_in = handing.elapsed();
+        let request = request_line(
+            extension,
+            declared.protocol,
+            &asked,
+            focus,
+            hand(asked.about),
+            settings,
+        )?;
 
         // **The gate, re-taken now over the whole tree**, and held to the view the question was
         // built for: a manifest that changed between the two reads is refused, never run on the
         // question it was not asked.
-        let found = fingerprinted(&loaded, extension, &entry)?;
-        if declared_view(extension, &found.manifest, view)? != asked {
+        let heard = self.gated_and_asked(
+            &loaded,
+            &entry,
+            extension,
+            &request,
+            |found| {
+                found.protocol == declared.protocol
+                    && declared_view(extension, found, view).ok().as_ref() == Some(&asked)
+            },
+            Waits::No,
+        )?;
+
+        let blocks = read_answer(extension, &heard.line, declared.protocol)?;
+        Ok(Answer {
+            blocks,
+            gate: before_hand + heard.gate,
+            round_trip: heard.round_trip,
+        })
+    }
+
+    /// Tell `extension`'s program that `event` happened, or say why charter did not
+    /// (charter-app#343).
+    ///
+    /// **The same gate a view's question takes, in the same order** — the record, the manifest,
+    /// the project, the fingerprint re-taken last — and the same bounds. Two differences, both
+    /// because nobody pressed anything: an extension that does not hear `event` is refused
+    /// rather than asked, and a program still answering its last question is **waited for**,
+    /// up to this executor's deadline, rather than refused — two events a moment apart are two
+    /// things it was promised, not a double click.
+    ///
+    /// The caller has already finished the action the event reports; nothing answered here can
+    /// change it ([`crate::extension::events::deliver`]).
+    pub fn tell(
+        &self,
+        config_root: &Path,
+        project: &extension::project::Choices,
+        extension: &str,
+        event: &extension::events::Event,
+    ) -> Result<(), String> {
+        supported()?;
+        let loaded = extension::read(config_root);
+        let entry = approved(&loaded, extension)?;
+        let declared =
+            extension::manifest_at(&entry.path).map_err(|why| could_not_reread(extension, &why))?;
+        in_this_project(project, extension, &declared)?;
+        let kind = event.kind();
+        if !declared.hears(kind) {
+            return Err(format!(
+                "'{extension}' does not hear {}, so charter does not tell it",
+                kind.said()
+            ));
+        }
+        let request = event_line(extension, declared.protocol, event)?;
+        let heard = self.gated_and_asked(
+            &loaded,
+            &entry,
+            extension,
+            &request,
+            |found| found.protocol == declared.protocol && found.hears(kind),
+            Waits::Yes,
+        )?;
+        answered(extension, &heard.line, declared.protocol, &[]).map(|_| ())
+    }
+
+    /// Ask `extension`'s program for its section of a chat's session-start briefing, or say why
+    /// charter did not (charter-app#343). `asked` is what the chat is — its workspace and
+    /// persona — and is handed as `briefing`.
+    ///
+    /// The section comes back as the program wrote it. **Whether charter will quote it is
+    /// [`crate::extension::briefing`]'s to decide**, not this: this answers for the protocol
+    /// and the gate, which are the same as a view's.
+    pub fn brief(
+        &self,
+        config_root: &Path,
+        project: &extension::project::Choices,
+        extension: &str,
+        asked: serde_json::Value,
+    ) -> Result<String, String> {
+        supported()?;
+        let loaded = extension::read(config_root);
+        let entry = approved(&loaded, extension)?;
+        let declared =
+            extension::manifest_at(&entry.path).map_err(|why| could_not_reread(extension, &why))?;
+        in_this_project(project, extension, &declared)?;
+        if declared.briefing.is_none() {
+            return Err(format!(
+                "'{extension}' adds no section to the briefing, so charter does not ask it for one"
+            ));
+        }
+        let request = briefing_line(extension, declared.protocol, asked)?;
+        let heard = self.gated_and_asked(
+            &loaded,
+            &entry,
+            extension,
+            &request,
+            |found| found.protocol == declared.protocol && found.briefing == declared.briefing,
+            Waits::No,
+        )?;
+        let doc = answered(extension, &heard.line, declared.protocol, &["section"])?;
+        match doc.get("section") {
+            Some(serde_json::Value::String(text)) => Ok(text.clone()),
+            Some(serde_json::Value::Null) | None => Ok(String::new()),
+            Some(_) => Err(format!(
+                "'{extension}' answered a 'section' that is not text"
+            )),
+        }
+    }
+
+    /// **The gate, re-taken now over the whole tree**, then one question asked and its one line
+    /// read. `same` says whether the manifest the fingerprint was taken over still declares what
+    /// the question was built for: one that changed between the two reads is refused, never run
+    /// on a question it was not asked.
+    fn gated_and_asked(
+        &self,
+        loaded: &extension::Loaded,
+        entry: &extension::Entry,
+        extension: &str,
+        request: &[u8],
+        same: impl FnOnce(&extension::Manifest) -> bool,
+        waits: Waits,
+    ) -> Result<Replied, String> {
+        let began = Instant::now();
+        let found = fingerprinted(loaded, extension, entry)?;
+        if !same(&found.manifest) {
             return Err(changed(extension));
         }
         let program = found.manifest.program.as_deref().ok_or_else(|| {
-            // `views_of` refuses a view with no program at parse, so this is a manifest that
-            // changed shape between two reads of the same bytes — which cannot happen, and is
-            // answered rather than unwrapped because this is the path the window waits on.
-            format!("'{extension}' declares no program to answer its view '{view}'")
+            // The parse refuses a view, an event or a briefing with no program, so this is a
+            // manifest that changed shape between two reads of the same bytes — which cannot
+            // happen, and is answered rather than unwrapped because a window waits on this.
+            format!("'{extension}' declares no program to ask")
         })?;
         let at = found.path.join(program);
         runnable(&at, extension)?;
-        let gate = before_hand + began.elapsed().saturating_sub(before_hand + handed_in);
+        let gate = began.elapsed();
 
-        let _held = self.hold(extension)?;
+        let _held = match waits {
+            Waits::No => self.hold(extension)?,
+            Waits::Yes => self.hold_within(extension, Instant::now() + self.deadline)?,
+        };
         let started = Instant::now();
-        let line = self.converse(extension, &found, &at, &request)?;
-        let round_trip = started.elapsed();
-
-        let blocks = read_answer(extension, &line)?;
-        Ok(Answer {
-            blocks,
+        let line = self.converse(extension, &found, &at, request)?;
+        Ok(Replied {
+            line,
             gate,
-            round_trip,
+            round_trip: started.elapsed(),
         })
     }
 
@@ -373,6 +540,40 @@ impl Executor {
             by: self,
             extension: extension.to_owned(),
         })
+    }
+
+    /// Claim `extension`'s one slot, waiting for it until `until` if its program is answering
+    /// something else — for an event, which nobody pressed twice ([`Self::tell`]). Still one
+    /// question in flight per extension; this only queues behind it rather than refusing.
+    fn hold_within(&self, extension: &str, until: Instant) -> Result<Held<'_>, String> {
+        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if table.closing {
+                return Err(format!(
+                    "charter is closing, so it starts nothing more — '{extension}' was not asked."
+                ));
+            }
+            if !table.running.contains_key(extension) {
+                table.running.insert(extension.to_owned(), 0);
+                return Ok(Held {
+                    by: self,
+                    extension: extension.to_owned(),
+                });
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(format!(
+                    "'{extension}' was still answering the last thing it was asked after {} \
+                     seconds, so charter did not ask it this.",
+                    self.deadline.as_secs()
+                ));
+            }
+            table = self
+                .freed
+                .wait_timeout(table, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
     }
 
     /// Record the process group a running program is in, so [`Self::stop_all`] can reach it —
@@ -606,7 +807,26 @@ impl Drop for Held<'_> {
             .unwrap_or_else(PoisonError::into_inner)
             .running
             .remove(&self.extension);
+        self.by.freed.notify_all();
     }
+}
+
+/// Whether a question waits for a slot its extension is using, or is refused.
+#[derive(Debug, Clone, Copy)]
+enum Waits {
+    /// A view: the operator pressed a button twice, and the second press is refused.
+    No,
+    /// An event: waits its turn, up to the deadline ([`Executor::hold_within`]).
+    Yes,
+}
+
+/// One answer line, and what it cost.
+struct Replied {
+    line: Vec<u8>,
+    /// Re-taking the fingerprint, and checking the program is runnable.
+    gate: Duration,
+    /// From the program being started to its answer being read.
+    round_trip: Duration,
 }
 
 /// A started program, stopped when this goes — however it goes.
@@ -1113,7 +1333,10 @@ fn environment(found: &Extension) -> Vec<(String, String)> {
         })
         .collect();
     env.push(("CHARTER_EXTENSION".into(), found.id().to_owned()));
-    env.push(("CHARTER_PROTOCOL".into(), PROTOCOL.to_string()));
+    env.push((
+        "CHARTER_PROTOCOL".into(),
+        found.manifest.protocol.to_string(),
+    ));
     if let Some(state) = &found.manifest.state {
         env.push((
             "CHARTER_EXTENSION_STATE".into(),
@@ -1123,16 +1346,17 @@ fn environment(found: &Extension) -> Vec<(String, String)> {
     env
 }
 
-/// The one line a program is asked.
+/// The one line a program is asked about a view, in `protocol` — the one its manifest declares.
 fn request_line(
     extension: &str,
+    protocol: u32,
     view: &extension::View,
     focus: Option<&str>,
     given: serde_json::Value,
     settings: Option<serde_json::Value>,
 ) -> Result<Vec<u8>, String> {
     let mut doc = serde_json::Map::new();
-    doc.insert("charter".into(), PROTOCOL.into());
+    doc.insert("charter".into(), protocol.into());
     doc.insert("extension".into(), extension.into());
     doc.insert("view".into(), view.id.clone().into());
     doc.insert("about".into(), view.about.as_str().into());
@@ -1146,6 +1370,44 @@ fn request_line(
     if let Some(settings) = settings {
         doc.insert("settings".into(), settings);
     }
+    one_line(extension, doc)
+}
+
+/// The one line a program is told an event in (protocol 2): `event` is the word its manifest
+/// hears it by, and `workspace` and `from` are there when the event has them. Nothing of the
+/// plane is handed with it: an extension that wants more reads it, as it runs as the operator.
+fn event_line(
+    extension: &str,
+    protocol: u32,
+    event: &extension::events::Event,
+) -> Result<Vec<u8>, String> {
+    let mut doc = serde_json::Map::new();
+    doc.insert("charter".into(), protocol.into());
+    doc.insert("extension".into(), extension.into());
+    doc.insert("event".into(), event.kind().as_str().into());
+    if let Some(workspace) = event.workspace() {
+        doc.insert("workspace".into(), workspace.into());
+    }
+    if let Some(from) = event.from() {
+        doc.insert("from".into(), from.into());
+    }
+    one_line(extension, doc)
+}
+
+/// The one line a program is asked for its briefing section in (protocol 2).
+fn briefing_line(
+    extension: &str,
+    protocol: u32,
+    asked: serde_json::Value,
+) -> Result<Vec<u8>, String> {
+    let mut doc = serde_json::Map::new();
+    doc.insert("charter".into(), protocol.into());
+    doc.insert("extension".into(), extension.into());
+    doc.insert("briefing".into(), asked);
+    one_line(extension, doc)
+}
+
+fn one_line(extension: &str, doc: serde_json::Map<String, serde_json::Value>) -> Result<Vec<u8>, String> {
     let mut line = serde_json::to_vec(&serde_json::Value::Object(doc))
         .map_err(|why| format!("charter could not write the question for '{extension}': {why}"))?;
     line.push(b'\n');
@@ -1264,33 +1526,59 @@ fn kill_group(_group: i32) {}
 ///
 /// **An answer says which protocol it is in.** A program written against a different one is
 /// refused with the number named, rather than half-read under rules it was not written to.
-fn read_answer(extension: &str, line: &[u8]) -> Result<Vec<panel::Block>, String> {
+fn read_answer(
+    extension: &str,
+    line: &[u8],
+    protocol: u32,
+) -> Result<Vec<panel::Block>, String> {
+    let doc = answered(extension, line, protocol, &["blocks"])?;
+    let blocks = doc.get("blocks").ok_or_else(|| {
+        format!("'{extension}' answered neither 'blocks' nor 'error', so there is nothing to draw")
+    })?;
+    panel::answered(blocks).map_err(|why| format!("'{extension}' {why}"))
+}
+
+/// An answer line read as far as every kind of question shares: one JSON object, in the
+/// `protocol` it was asked in, holding `charter`, `error` and only the `keys` this kind of
+/// answer has. An `error` is the refusal, quoted.
+fn answered(
+    extension: &str,
+    line: &[u8],
+    protocol: u32,
+    keys: &[&str],
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let doc: serde_json::Value = serde_json::from_slice(line).map_err(|why| {
         format!("'{extension}' answered something that is not one line of JSON: {why}")
     })?;
-    let doc = doc
-        .as_object()
-        .ok_or_else(|| format!("'{extension}' answered JSON that is not an object"))?;
+    let serde_json::Value::Object(doc) = doc else {
+        return Err(format!("'{extension}' answered JSON that is not an object"));
+    };
     for key in doc.keys() {
-        if !["charter", "blocks", "error"].contains(&key.as_str()) {
+        if !["charter", "error"].contains(&key.as_str()) && !keys.contains(&key.as_str()) {
+            let allowed: Vec<String> = keys.iter().map(|it| format!("'{it}'")).collect();
             return Err(format!(
-                "'{extension}' answered {key:?}, which is not part of charter's protocol {PROTOCOL} \
-                 — an answer is 'charter', and either 'blocks' or 'error'"
+                "'{extension}' answered {key:?}, which is not part of charter's protocol \
+                 {protocol} — this answer is 'charter', and {}'error'",
+                if allowed.is_empty() {
+                    String::new()
+                } else {
+                    format!("either {} or ", allowed.join(" or "))
+                }
             ));
         }
     }
     match doc.get("charter").and_then(serde_json::Value::as_u64) {
-        Some(found) if found == u64::from(PROTOCOL) => {}
+        Some(found) if found == u64::from(protocol) => {}
         Some(found) => {
             return Err(format!(
-                "'{extension}' answered in protocol {found}, and this charter speaks protocol \
-                 {PROTOCOL}"
+                "'{extension}' answered in protocol {found}, and charter asked it in protocol \
+                 {protocol}, the one its manifest declares"
             ));
         }
         None => {
             return Err(format!(
                 "'{extension}' answered without saying which protocol it speaks ('charter': \
-                 {PROTOCOL}), so charter cannot say what its answer means"
+                 {protocol}), so charter cannot say what its answer means"
             ));
         }
     }
@@ -1301,10 +1589,7 @@ fn read_answer(extension: &str, line: &[u8]) -> Result<Vec<panel::Block>, String
             crate::shown::readable(said, 1 << 10)
         ));
     }
-    let blocks = doc.get("blocks").ok_or_else(|| {
-        format!("'{extension}' answered neither 'blocks' nor 'error', so there is nothing to draw")
-    })?;
-    panel::answered(blocks).map_err(|why| format!("'{extension}' {why}"))
+    Ok(doc)
 }
 
 #[cfg(test)]

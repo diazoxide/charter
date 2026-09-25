@@ -1,8 +1,8 @@
 {
-  "version": 1,
+  "version": 2,
   "id": "extension-probe",
   "name": "Extension probe",
-  "capabilities": ["probe", "badges", "repo-columns"],
+  "capabilities": ["probe", "badges", "repo-columns", "events", "briefing"],
   "state": "state",
   "contributes": {
     "runs": "bin/extension-probe",
@@ -27,6 +27,21 @@
         "title": "Asked",
         "fresh_seconds": 3600
       }
-    ]
+    ],
+    "events": {
+      "hears": [
+        "workspace-focused",
+        "workspace-created",
+        "workspace-forked",
+        "workspace-removed",
+        "handoff-created",
+        "session-started",
+        "plane-saved"
+      ],
+      "workspace_folder": "probe"
+    },
+    "briefing": {
+      "title": "Probe"
+    }
   }
 }
