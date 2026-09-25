@@ -48,7 +48,7 @@
 //! empty string, or the untrusted-comment line pasted in instead of the key.
 
 /// The repository the app updates itself from.
-pub const REPO: &str = "https://github.com/diazoxide/charter-app";
+pub const REPO: &str = "https://github.com/diazoxide/charter";
 
 /// The one tag that is not a version, and the whole of the dev channel's address.
 ///

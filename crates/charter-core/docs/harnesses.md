@@ -95,7 +95,7 @@ stays theirs. That is a choice, not a ceiling.
 
 The plugin, the hooks it declares and the `charter` they call ship inside the app's bundle,
 and the app's updater moves all of them together
-([updating.md](https://github.com/diazoxide/charter-app/blob/main/docs/updating.md)).
+([updating.md](https://github.com/diazoxide/charter/blob/main/docs/updating.md)).
 Nothing is installed into Claude Code or Codex, so there is nothing there to keep in step,
 and nothing is written into the repos you work in beyond charter's generated layer (below).
 

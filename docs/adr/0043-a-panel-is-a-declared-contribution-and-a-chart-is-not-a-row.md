@@ -19,7 +19,7 @@ The work is charter-app's. The record is here because `0001`–`0042` are here, 
 extends [ADR 0041](0041-a-plugin-is-a-subprocess-or-charter-has-no-plugins.md)'s vocabulary —
 splitting the two would leave 0041's four properties in one repository and the second thing they
 govern in another. ADR 0031 and ADR 0041 both made the same move for the same reason. Every path
-below (`crates/charter-core/…`, `app/src-tauri/…`, `app/src/…`) is in `diazoxide/charter-app`.
+below (`crates/charter-core/…`, `app/src-tauri/…`, `app/src/…`) is in `diazoxide/charter`.
 
 ## Where this extends ADR 0041, and where it does not contradict it
 

@@ -46,4 +46,4 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 ## Known quirks here
 
-- **`gh pr edit` fails** on this repo with "Projects (classic) is being deprecated". Edit a PR body with REST instead: `gh api -X PATCH repos/diazoxide/charter-app/pulls/<n> -F body=@<file>`.
+- **`gh pr edit` fails** on this repo with "Projects (classic) is being deprecated". Edit a PR body with REST instead: `gh api -X PATCH repos/diazoxide/charter/pulls/<n> -F body=@<file>`.

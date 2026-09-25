@@ -255,7 +255,7 @@ the *same* repo without re-cloning it:
 Each is a **piece**. Git is the only registry of them: every listing is
 `git worktree list --porcelain`, so a worktree made with plain git at that path is a piece,
 and one removed by hand is gone
-([ADR 0027](https://github.com/diazoxide/charter-app/blob/main/docs/adr/0027-git-is-the-only-registry-for-a-chats-worktree.md)).
+([ADR 0027](https://github.com/diazoxide/charter/blob/main/docs/adr/0027-git-is-the-only-registry-for-a-chats-worktree.md)).
 The app lists a workspace's pieces, merges one back into the branch it was cut from, and
 removes one. Cutting a piece from the app or the CLI is not in this version yet.
 

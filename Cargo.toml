@@ -10,7 +10,7 @@ version = "0.2.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
-repository = "https://github.com/diazoxide/charter-app"
+repository = "https://github.com/diazoxide/charter"
 
 [workspace.dependencies]
 charter-core = { path = "crates/charter-core" }

@@ -17,7 +17,7 @@ afterEach(() => {
 
 const SECTION = `### Added
 
-- The **first** thing, with \`code\`. ([#7](https://github.com/diazoxide/charter-app/pull/7))
+- The **first** thing, with \`code\`. ([#7](https://github.com/diazoxide/charter/pull/7))
 - The second thing.
 
 ### Fixed
@@ -56,9 +56,7 @@ describe("ReleaseNotes", () => {
     expect(link).toHaveAttribute("tabindex", "0");
     await userEvent.click(link);
 
-    await vi.waitFor(() =>
-      expect(opened).toEqual(["https://github.com/diazoxide/charter-app/pull/7"]),
-    );
+    await vi.waitFor(() => expect(opened).toEqual(["https://github.com/diazoxide/charter/pull/7"]));
   });
 
   it("draws a link to anything but the web as its words, and no raw HTML at all", () => {

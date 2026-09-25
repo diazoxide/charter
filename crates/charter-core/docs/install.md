@@ -5,7 +5,7 @@ app; there is no separate package to install for the command, and no package man
 involved at any point.
 
 Builds are published on the releases page of
-[diazoxide/charter-app](https://github.com/diazoxide/charter-app/releases): a macOS `.app` in
+[diazoxide/charter](https://github.com/diazoxide/charter/releases): a macOS `.app` in
 a `.dmg`, and a Linux `.deb` and AppImage. There is no Windows build yet.
 
 ## 1. Pick a channel
