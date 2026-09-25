@@ -329,6 +329,39 @@ fn an_answered_row_may_not_carry_a_verb_either() {
 }
 
 #[test]
+fn an_answered_row_may_offer_its_extension_s_own_actions_and_a_declared_row_may_not() {
+    // charter-app#341: a row an answer draws may name the extension's own actions — which the
+    // executor holds to what its manifest declares — and never a charter verb. A declared panel
+    // has no program to run one, so the key is refused there by name.
+    let answered =
+        answering(r#"[{"kind":"list","rows":[{"key":"a","text":"a","actions":["close"]}]}]"#)
+            .expect("an answer");
+    let Block::List { rows, .. } = &answered[0] else {
+        panic!("not a list");
+    };
+    assert_eq!(rows[0].actions, ["close"]);
+    assert_eq!(rows[0].runs, None);
+
+    let refused = declaring(
+        r#"[{"id":"p","title":"P","rows":[{"key":"a","text":"a","actions":["close"]}]}]"#,
+    )
+    .expect_err("an action in a manifest's panel");
+    assert!(refused.contains("\"actions\""), "{refused}");
+
+    for (actions, said) in [
+        (r#"["a","a"]"#, "offers the action \"a\" twice"),
+        (r#"["a","b","c","d","e"]"#, "at most 4 on one row"),
+        (r#""a""#, "not a list of action ids"),
+    ] {
+        let refused = answering(&format!(
+            r#"[{{"kind":"list","rows":[{{"key":"a","text":"a","actions":{actions}}}]}}]"#
+        ))
+        .expect_err(actions);
+        assert!(refused.contains(said), "{actions}: {refused}");
+    }
+}
+
+#[test]
 fn an_answered_empty_state_may_not_offer_a_verb() {
     let refused =
         answering(r#"[{"kind":"list","rows":[],"empty":{"headline":"x","offer":"chat.new"}}]"#)

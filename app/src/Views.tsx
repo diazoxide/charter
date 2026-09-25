@@ -10,15 +10,19 @@ import {
   UserRound,
 } from "lucide-react";
 import { EmptyState } from "./EmptyState";
+import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { PanelList } from "./PanelList";
 import { Preferences } from "./Preferences";
 import { ProjectSettings, WorkspaceSettings } from "./ProjectSettings";
 import {
   commands,
+  type ExtensionCommand,
   type ExtensionView,
   type PanelBlock,
   type PanelPoint,
+  type PanelRow,
   type PlaneId,
+  type RowAction,
   type ViewAnswer,
 } from "./bindings";
 import { SavingView } from "./SavingView";
@@ -71,6 +75,30 @@ export function useExtensionViews(): ExtensionView[] {
     };
   }, []);
   return views;
+}
+
+/**
+ * The palette commands approved extensions add to this window (charter-app#341), asked once for
+ * the window after its first frame on `useExtensionViews`'s terms: a refusal means none are
+ * offered rather than that the palette fails.
+ */
+export function useExtensionCommands(): ExtensionCommand[] {
+  const [offered, setOffered] = useState<ExtensionCommand[]>([]);
+  useEffect(() => {
+    let gone = false;
+    void commands
+      .extensionCommands()
+      .then((said) => {
+        if (!gone && said.status !== "error") setOffered(said.data ?? []);
+      })
+      .catch(() => {
+        // Nothing: no command is offered, and `Extensions.tsx` is where the reason is read.
+      });
+    return () => {
+      gone = true;
+    };
+  }, []);
+  return offered;
 }
 
 /**
@@ -311,6 +339,14 @@ function Answer({
 }) {
   const [said, setSaid] = useState<ViewAnswerOrRefusal>();
   const { from, view: id, key } = view;
+  // **What an action on one of its rows answered** (charter-app#341): the view's blocks,
+  // refreshed, when it answered them; and a sentence — its refusal, or what changed outside the
+  // extension's declared paths — to say above the answer.
+  const [refreshed, setRefreshed] = useState<readonly PanelBlock[]>();
+  // `undefined` until an action has run; then what that action came to — which replaces the
+  // question's own sentence, so the red line is always about the last thing the operator did.
+  const [acted, setActed] = useState<{ said: string | null }>();
+  const [asking, setAsking] = useState<{ row: PanelRow; action: RowAction }>();
 
   useEffect(() => {
     let gone = false;
@@ -340,6 +376,26 @@ function Answer({
     );
   }
   const answer = said.answer;
+  /** Run `action` on `row`, and say the refusal, or draw what it answered. */
+  const act = async (
+    row: PanelRow,
+    action: RowAction,
+    confirmed: boolean,
+  ): Promise<string | undefined> => {
+    if (from === null) return "charter's own views offer no extension's actions.";
+    const outcome = await runExtensionAction(
+      plane,
+      from,
+      action,
+      { view: id, key, row: row.key },
+      workspace,
+      confirmed,
+    );
+    if ("refused" in outcome) return outcome.refused;
+    if (outcome.answer.blocks !== null) setRefreshed(outcome.answer.blocks);
+    setActed({ said: outcome.answer.overreach });
+    return undefined;
+  };
   if (answer.kind === "gone") {
     // **Not an error.** A tab the last launch left open can name a persona since deleted or an
     // extension since uninstalled; there is nothing to repair, so it is a sentence in the middle
@@ -348,9 +404,50 @@ function Answer({
       <EmptyState headline={`${title} is not here any more`} body={answer.why} testid="view-gone" />
     );
   }
+  const seen = acted === undefined ? answer.overreach : acted.said;
   return (
     <>
-      <AnsweredBlocks blocks={answer.blocks} label={title} />
+      {seen !== undefined && seen !== null && (
+        /* What the core saw change outside the extension's declared paths, or an action's
+           refusal: the core's sentence, naming the extension, above what it answered. */
+        <p className="trouble" role="alert">
+          {seen}
+        </p>
+      )}
+      <AnsweredBlocks
+        blocks={refreshed ?? answer.blocks}
+        label={title}
+        onAct={
+          from === null
+            ? undefined
+            : (row, action) => {
+                if (action.asks_first) {
+                  setAsking({ row, action });
+                  return;
+                }
+                void act(row, action, false).then((refused) => {
+                  if (refused !== undefined) setActed({ said: refused });
+                });
+              }
+        }
+      />
+      {asking !== undefined && from !== null && (
+        <AskFirst
+          extension={from}
+          action={asking.action}
+          onRun={() =>
+            act(asking.row, asking.action, true).then((refused) => {
+              // Ran: the dialog closes, and what it saw is said above the answer.
+              if (refused === undefined) {
+                setAsking(undefined);
+                return undefined;
+              }
+              return { refused };
+            })
+          }
+          onCancel={() => setAsking(undefined)}
+        />
+      )}
       <p className="view-took">
         {from === null ? `read in ${answer.took_ms} ms` : `answered in ${answer.took_ms} ms`}
       </p>
@@ -359,7 +456,16 @@ function Answer({
 }
 
 /** An answer's blocks, each drawn with what a panel's is drawn with. */
-function AnsweredBlocks({ blocks, label }: { blocks: readonly PanelBlock[]; label: string }) {
+function AnsweredBlocks({
+  blocks,
+  label,
+  onAct,
+}: {
+  blocks: readonly PanelBlock[];
+  label: string;
+  /** Run one of the extension's actions a row offers; `undefined` for charter's own views. */
+  onAct?: (row: PanelRow, action: RowAction) => void;
+}) {
   const [open, setOpen] = useState<string>();
   return (
     <>
@@ -386,6 +492,7 @@ function AnsweredBlocks({ blocks, label }: { blocks: readonly PanelBlock[]; labe
             label={label}
             open={open}
             onOpen={setOpen}
+            onAct={onAct}
             // A tab has the room a side region does not, so a page is twenty rather than twelve.
             page={20}
           />

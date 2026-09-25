@@ -791,10 +791,11 @@ fn the_program_is_asked_one_line_holding_what_was_handed_and_nothing_else() {
         "{text:?}"
     );
     let asked: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+    // In protocol 1, the one its manifest names — not the newest this charter speaks.
     assert_eq!(
         asked,
         serde_json::json!({
-            "charter": PROTOCOL, "extension": "probe", "view": "stats", "about": "personas",
+            "charter": 1, "extension": "probe", "view": "stats", "about": "personas",
             "focus": "steward", "given": { "handed": [1, 2] }
         })
     );
@@ -1524,4 +1525,146 @@ fn the_highest_descriptor_is_at_least_every_one_this_process_holds_and_at_most_t
     if let Some(soft) = limit.current.filter(|soft| *soft <= MOST_DESCRIPTORS) {
         assert_eq!(u64::try_from(highest).unwrap(), soft);
     }
+}
+
+// -------------------------------------------------------------------------------------
+// ...when a row offers an action its manifest does not declare? (charter-app#341)
+// -------------------------------------------------------------------------------------
+
+/// A protocol-2 extension with one view and one action, `close`.
+const ACTING_MANIFEST: &str = r#"{"version":2,"id":"probe","name":"Probe",
+    "capabilities":["actions"],
+    "contributes":{"runs":"bin/run",
+                   "views":[{"id":"stats","title":"Probe statistics","about":"personas"}],
+                   "actions":[{"id":"close","title":"Close","confirm":false}]}}"#;
+
+impl Rig {
+    fn acting(&self, script: &str) -> &Self {
+        self.write(ACTING_MANIFEST, script);
+        let found = extension::install(&self.config(), &extension::BuiltIn::none(), &self.at())
+            .expect("installed");
+        extension::approve(&self.config(), found.id(), &found.path, &found.fingerprint)
+            .expect("approved");
+        self
+    }
+}
+
+/// A script that answers `line` whatever it is asked.
+fn answering_with(line: &str) -> String {
+    format!("#!/bin/sh\nread line\nprintf '%s\\n' '{line}'\n")
+}
+
+#[test]
+fn a_row_offering_an_action_its_manifest_does_not_declare_is_refused_whole() {
+    let rig = Rig::new();
+    rig.acting(&answering_with(
+        r#"{"charter":2,"blocks":[{"kind":"list","rows":[{"key":"a","text":"A","actions":["close","delete-everything"]}]}]}"#,
+    ));
+
+    let refused = rig
+        .ask(&patient())
+        .expect_err("an unapproved verb was drawn");
+
+    assert!(
+        refused.contains(
+            "offering the action \"delete-everything\", which its manifest does not declare"
+        ),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_row_offering_only_declared_actions_is_drawn_with_the_manifest_s_actions_beside_it() {
+    let rig = Rig::new();
+    rig.acting(&answering_with(
+        r#"{"charter":2,"blocks":[{"kind":"list","rows":[{"key":"a","text":"A","actions":["close"]}]}]}"#,
+    ));
+
+    let answer = rig.ask(&patient()).expect("an answer");
+
+    let panel::Block::List { rows, .. } = &answer.blocks[0] else {
+        panic!("not a list: {:?}", answer.blocks);
+    };
+    assert_eq!(rows[0].actions, ["close"]);
+    assert_eq!(answer.actions[0].title, "Close");
+}
+
+#[test]
+fn an_action_is_asked_as_run_action_on_its_subject_in_protocol_2() {
+    let rig = Rig::new();
+    let asked = rig.marker("asked");
+    rig.acting(&format!(
+        "#!/bin/sh\ncat > '{}'\nprintf '%s\\n' '{{\"charter\":2}}'\n",
+        asked.display()
+    ));
+
+    let acted = patient()
+        .act(
+            &rig.config(),
+            &project::Choices::default(),
+            "probe",
+            "close",
+            On {
+                view: Some("stats"),
+                focus: Some("steward"),
+                row: Some("a"),
+            },
+            false,
+            |_| serde_json::json!({ "handed": true }),
+        )
+        .expect("it ran");
+
+    // Done, with no blocks: the view stands as it was.
+    assert_eq!(acted.blocks, None);
+    let asked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&asked).expect("the question"))
+            .expect("JSON");
+    assert_eq!(
+        asked,
+        serde_json::json!({
+            "charter": 2, "extension": "probe", "action": "close", "view": "stats",
+            "about": "personas", "focus": "steward", "row": "a",
+            "given": { "handed": true }, "writes": []
+        })
+    );
+}
+
+#[test]
+fn a_view_s_answer_still_owes_blocks_where_an_action_s_may_owe_none() {
+    let rig = Rig::new();
+    rig.acting(&answering_with(r#"{"charter":2}"#));
+
+    let refused = rig
+        .ask(&patient())
+        .expect_err("nothing was drawn as an answer");
+
+    assert!(
+        refused.contains("neither 'blocks' nor 'error'"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn an_action_this_extension_does_not_declare_starts_nothing() {
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.acting(&marking(&marker));
+
+    let refused = patient()
+        .act(
+            &rig.config(),
+            &project::Choices::default(),
+            "probe",
+            "rm-rf",
+            On::default(),
+            true,
+            |_| serde_json::Value::Null,
+        )
+        .expect_err("an undeclared action ran");
+
+    assert!(
+        refused.contains("has no action called 'rm-rf'"),
+        "{refused}"
+    );
+    assert!(!marker.exists(), "the program was started");
 }

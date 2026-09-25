@@ -50,6 +50,7 @@ function row(key: string, text: string, over: Partial<PanelRow> = {}): PanelRow 
     tone: "plain",
     detail: null,
     runs: null,
+    actions: [],
     ...over,
   };
 }

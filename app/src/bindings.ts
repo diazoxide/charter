@@ -698,6 +698,22 @@ export const commands = {
 	 */
 	openView: (plane: PlaneId, from: string | null, view: string, key: string, workspace: string | null) => typedError<ViewAnswer, string>(__TAURI_INVOKE("open_view", { plane, from, view, key, workspace })),
 	/**
+	 *  Run `extension`'s action `action`, or say why charter will not.
+	 * 
+	 *  `view` and `key` are the view it was pressed in and the persona that view was opened from,
+	 *  and `row` the row it was pressed on — all three `null` or empty for an action a palette
+	 *  command runs. `confirmed` is the operator's yes: **the core refuses an action that asks first
+	 *  without it**, so a surface that forgot to ask is a refusal and not a delete.
+	 */
+	runAction: (plane: PlaneId, extension: string, action: string, view: string | null, key: string, row: string | null, workspace: string | null, confirmed: boolean) => typedError<ActionAnswer, string>(__TAURI_INVOKE("run_action", { plane, extension, action, view, key, row, workspace, confirmed })),
+	/**
+	 *  Every palette command an approved extension adds to this window: none from one that is new,
+	 *  changed or unreadable, and none on a platform that runs no programs — on the survey's terms,
+	 *  as [`extension_views`]. **A list of rows, not of permissions**: [`open_view`] and
+	 *  [`run_action`] take the gate again when one is run.
+	 */
+	extensionCommands: () => typedError<ExtensionCommand[], string>(__TAURI_INVOKE("extension_commands")),
+	/**
 	 *  The view tabs this plane had open when it was last recorded — at a launch, the ones the
 	 *  record put back. The window opens a tab for each; nothing in one is asked until it is drawn.
 	 */
@@ -816,6 +832,19 @@ export type About = {
 	notes: Notes | null,
 };
 
+/**  What running an action answered (charter-app#341). */
+export type ActionAnswer = {
+	/**
+	 *  The view's blocks, refreshed, when the extension answered them; `null` when it answered
+	 *  only that it was done, and the view stands as it was.
+	 */
+	blocks: PanelBlock[] | null,
+	/**  Gate and round trip together, in milliseconds. */
+	took_ms: number,
+	/**  As [`ViewAnswer::Answered`]'s: what changed outside its declared paths, named. */
+	overreach: string | null,
+};
+
 /**  One alert, as the drawer draws it. */
 export type AlertRow = {
 	/**
@@ -916,6 +945,13 @@ export type ChatWorktree = {
 	stale: boolean,
 };
 
+/**  What a palette command does. */
+export type CommandDoes = 
+/**  Opens one of its views, as the view's own button does. */
+{ kind: "open"; view: string; title: string } | 
+/**  Runs one of its actions, on nothing in particular. */
+{ kind: "run"; action: RowAction };
+
 /**  What the doctor said, and what it was asked with. */
 export type DoctorReport = {
 	/**  Every row, in the order `charter doctor` prints them. */
@@ -1010,6 +1046,20 @@ export type ExtensionAsk = {
 	 *  one carve-out later.
 	 */
 	state_note: string | null,
+};
+
+/**  One command an approved extension adds to the palette (charter-app#341). */
+export type ExtensionCommand = {
+	/**  The extension's id, which is what it is asked through. */
+	extension: string,
+	/**
+	 *  The extension's name, which the palette puts before the command's title: where a
+	 *  command came from is on its row.
+	 */
+	name: string,
+	id: string,
+	title: string,
+	does: CommandDoes,
 };
 
 /**  What the extensions on in a project (and workspace) show in the window. */
@@ -1496,6 +1546,12 @@ export type PanelRow = {
 	 *  row cannot invent a verb even here.
 	 */
 	runs: string | null,
+	/**
+	 *  The extension's own actions this row offers (charter-app#341), each as its manifest
+	 *  declares it — the title and whether charter asks first are the manifest's, never the
+	 *  answer's. Empty on every row of charter's own.
+	 */
+	actions: RowAction[],
 };
 
 /**  One open todo. There is no state field: a closed todo is a deleted file (ADR 0004). */
@@ -2075,6 +2131,19 @@ export type Restore = {
 	dropped: string[],
 };
 
+/**  One action an extension's row offers, as the window draws its button (charter-app#341). */
+export type RowAction = {
+	id: string,
+	title: string,
+	/**
+	 *  Whether the window asks the operator before running it: the manifest's `confirm`, and
+	 *  always for one that deletes (`charter_core::extension::Action::asks_first`).
+	 */
+	asks_first: boolean,
+	/**  Whether it says it deletes, so the question the window asks can say so. */
+	deletes: boolean,
+};
+
 /**  One save attempt, as the journal holds it. */
 export type SaveEntry = {
 	/**  Seconds since the epoch. */
@@ -2345,7 +2414,13 @@ blocks: PanelBlock[];
  *  under the answer, because a producer that has become slow is worth noticing before
  *  it becomes one that times out.
  */
-took_ms: number } | 
+took_ms: number; 
+/**
+ *  What changed in the plane while the extension answered, outside the paths it
+ *  declares it writes — the core's sentence, naming it (charter-app#341). Drawn above
+ *  the answer as trouble; never a reason not to draw it.
+ */
+overreach: string | null } | 
 /**  What the view was about is not there any more, and why, in one sentence. */
 { kind: "gone"; why: string };
 

@@ -13,6 +13,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **An extension can be acted on, not only read.** Three capabilities, each named in the
+  approval dialog: `palette` adds commands to the palette, named with the extension's name, that
+  open one of its views or run one of its actions; `actions` puts the extension's own actions on
+  the rows of its views, and the answer can refresh the view; `writes` declares the plane paths
+  it writes, such as `workspaces/*/todos/`. charter asks before an action when the extension
+  says to, and always before one that deletes. Each request tells the extension where it may
+  write, and after each one charter says what changed outside those paths, naming the
+  extension. That is a report, not a fence: an extension still runs as you. The protocol is now
+  2; an extension written for protocol 1 is asked exactly as before and keeps its approval.
+  ([#341](https://github.com/diazoxide/charter-app/issues/341))
 - **Persona statistics comes with the app.** charter now ships its own extensions, and persona
   statistics is the first: there is no folder to assemble and add by hand, and no approval to
   give, because the app's signature covers it. The Extensions list marks it "built-in" and

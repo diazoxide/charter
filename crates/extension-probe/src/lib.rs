@@ -11,29 +11,44 @@
 //! **Written as a stranger's extension would be**, as persona statistics is: it does not link
 //! charter's core, and it knows one thing about charter, the protocol — one line of JSON on
 //! stdin, one line back on stdout.
+//!
+//! What it does, by capability:
+//!
+//! - **a view** (`probe`) says which protocol it was asked in, how many personas it was handed
+//!   and which paths it may write, and lists one row — how many notes it keeps — offering its
+//!   actions;
+//! - **its actions** (`actions`, `writes`, charter-app#341) keep those notes in the one plane
+//!   path it declares, `notes/`: `jot` writes one, `forget` deletes them and says it deletes,
+//!   `sweep` deletes them and does NOT say so, `careful` asks first and writes nothing, and
+//!   `stray` writes outside `notes/` — each the case a test proves charter reports or refuses.
+//!   Run from a view's row, an action answers the view refreshed.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 /// The protocol this program speaks.
-pub const PROTOCOL: u64 = 1;
+pub const PROTOCOL: u64 = 2;
 
 /// The manifest this program is installed with, so `assemble` writes the one that is tested.
 pub const MANIFEST: &str = include_str!("../charter-extension.json");
+
+/// The file `stray` writes, in the plane and outside every path the probe declares.
+pub const STRAY: &str = "stray.txt";
 
 /// The answer to one request line, as the JSON value to print. Never panics on what it is
 /// given: a request it cannot read is an `error` answer.
 pub fn answer(request: &Value) -> Value {
     match said(request) {
-        Ok(text) => json!({ "charter": PROTOCOL, "blocks": [{ "kind": "note", "text": text }] }),
+        Ok(Some(blocks)) => json!({ "charter": PROTOCOL, "blocks": blocks }),
+        Ok(None) => json!({ "charter": PROTOCOL }),
         Err(why) => json!({ "charter": PROTOCOL, "error": why }),
     }
 }
 
-/// What the probe says back: which view it was asked, in which protocol, and how much it was
-/// handed — so a test reads off the answer that charter asked what it meant to ask.
-fn said(request: &Value) -> Result<String, String> {
+/// What the probe does with one request: a view's blocks, an action's refreshed blocks or
+/// nothing, or why it could not.
+fn said(request: &Value) -> Result<Option<Value>, String> {
     let protocol = request
         .get("charter")
         .and_then(Value::as_u64)
@@ -43,6 +58,57 @@ fn said(request: &Value) -> Result<String, String> {
             "this program speaks protocol {PROTOCOL} and was asked in protocol {protocol}"
         ));
     }
+    let writes: Vec<&str> = request
+        .get("writes")
+        .and_then(Value::as_array)
+        .ok_or("the request does not say where this extension may write")?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let Some(action) = request.get("action").and_then(Value::as_str) else {
+        return view(request, &writes).map(Some);
+    };
+    let notes = notes(&writes)?;
+    let done = |refreshed: Result<Value, String>| -> Result<Option<Value>, String> {
+        // Run from a view's row, the view is answered again; from the palette, nothing is.
+        if request.get("view").is_some_and(Value::is_string) {
+            refreshed.map(Some)
+        } else {
+            Ok(None)
+        }
+    };
+    match action {
+        "jot" => {
+            std::fs::create_dir_all(&notes).map_err(|why| format!("no notes directory: {why}"))?;
+            let next = count(&notes) + 1;
+            std::fs::write(notes.join(format!("note-{next}.md")), "a note\n")
+                .map_err(|why| format!("could not jot: {why}"))?;
+            done(view(request, &writes))
+        }
+        "forget" | "sweep" => {
+            for entry in std::fs::read_dir(&notes).into_iter().flatten().flatten() {
+                std::fs::remove_file(entry.path())
+                    .map_err(|why| format!("could not forget: {why}"))?;
+            }
+            done(view(request, &writes))
+        }
+        "stray" => {
+            let plane = notes
+                .parent()
+                .ok_or("the notes directory has no plane above it")?;
+            std::fs::write(plane.join(STRAY), "outside\n")
+                .map_err(|why| format!("could not stray: {why}"))?;
+            Ok(None)
+        }
+        "careful" => Ok(Some(
+            json!([{ "kind": "note", "text": "careful ran, having been said yes to" }]),
+        )),
+        other => Err(format!("the probe has no action {other:?}")),
+    }
+}
+
+/// The view's blocks: what it was asked and handed, and its one row offering its actions.
+fn view(request: &Value, writes: &[&str]) -> Result<Value, String> {
     let view = request
         .get("view")
         .and_then(Value::as_str)
@@ -52,10 +118,38 @@ fn said(request: &Value) -> Result<String, String> {
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
     let noun = if personas == 1 { "persona" } else { "personas" };
-    Ok(format!(
-        "extension-probe answered the view '{view}' in protocol {protocol}, handed {personas} \
-         {noun}"
-    ))
+    let kept = count(&notes(writes)?);
+    Ok(json!([
+        {
+            "kind": "note",
+            "text": format!(
+                "extension-probe answered the view '{view}' in protocol {PROTOCOL}, handed \
+                 {personas} {noun}, and may write {}",
+                writes.join(", ")
+            ),
+        },
+        {
+            "kind": "list",
+            "rows": [{
+                "key": "notes",
+                "text": format!("{kept} notes"),
+                "actions": ["jot", "sweep", "careful", "forget"],
+            }],
+        },
+    ]))
+}
+
+/// The one path the probe declares, as charter resolved it.
+fn notes(writes: &[&str]) -> Result<PathBuf, String> {
+    writes
+        .iter()
+        .find(|path| path.ends_with("/notes/"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "charter handed no notes directory to write".to_owned())
+}
+
+fn count(notes: &Path) -> usize {
+    std::fs::read_dir(notes).map_or(0, |entries| entries.flatten().count())
 }
 
 /// The repo the probe fills its column for. It knows nothing of the plane — a program is handed

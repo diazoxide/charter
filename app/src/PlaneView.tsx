@@ -124,7 +124,8 @@ import { useTabStop } from "./roving";
 import { closeOnDelete, renameOnF2 } from "./tabKeys";
 import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
-import type { ExtensionView, PanelView } from "./bindings";
+import type { ExtensionCommand, ExtensionView, PanelView, RowAction } from "./bindings";
+import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
 import { projectThemeChanged } from "./projectTheme";
 import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
@@ -184,6 +185,7 @@ export function PlaneView({
   alerts,
   contributed: surveyedPanels = NONE,
   views: surveyedViews = NONE,
+  commands: surveyedCommands = NONE,
   settingsAsked,
   savingAsked,
   preferencesAsked,
@@ -213,6 +215,9 @@ export function PlaneView({
   /** The views approved extensions offer (ADR 0041 stage 2), the window's for the
    *  same reason: one survey per window, not one per project. */
   views?: readonly ExtensionView[];
+  /** The palette commands approved extensions add (charter-app#341), the window's for the same
+   *  reason, and filtered here by what this project has on, as the views are. */
+  commands?: readonly ExtensionCommand[];
   /** A count that goes up each time the window is asked for THIS project's settings tab
    *  (`WindowDoing.openSettings`); `undefined` until it is. */
   settingsAsked?: number;
@@ -316,6 +321,9 @@ export function PlaneView({
   const [makingVault, setMakingVault] = useState(false);
   const [vaultTrouble, setVaultTrouble] = useState<string>();
   const [busyVault, setBusyVault] = useState(false);
+  /** A palette command's action that asks first, waiting on the operator's answer
+   *  (charter-app#341). */
+  const [askingAction, setAskingAction] = useState<{ extension: string; action: RowAction }>();
   /**
    * The workspace the operator is being asked about deleting, if any.
    *
@@ -762,6 +770,10 @@ export function PlaneView({
   const views = useMemo(
     () => surveyedViews.filter((view) => on?.has(view.extension) ?? false),
     [on, surveyedViews],
+  );
+  const extensionCommands = useMemo(
+    () => surveyedCommands.filter((command) => on?.has(command.extension) ?? false),
+    [on, surveyedCommands],
   );
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, changesOnDisk);
   /** The badges and repo columns the extensions on here show (charter-app#340). */
@@ -1696,9 +1708,38 @@ export function PlaneView({
     [plane],
   );
 
+  /**
+   * Runs an extension's action from the palette (charter-app#341): on nothing in particular, in
+   * the workspace in front. **One that asks first is asked about**, and run from the dialog;
+   * the core refuses it without the yes whatever this does.
+   */
+  const runAction = useCallback(
+    async (extension: string, action: RowAction, name: string): Promise<Ran> => {
+      if (action.asks_first) {
+        setAskingAction({ extension, action });
+        return { ok: true };
+      }
+      const outcome = await runExtensionAction(
+        plane,
+        extension,
+        action,
+        { view: null, key: "", row: null },
+        ofWorkspace,
+        false,
+      );
+      if ("refused" in outcome) return { ok: false, refused: outcome.refused };
+      return {
+        ok: true,
+        said: outcome.answer.overreach ?? `${name}: “${action.title}” ran.`,
+      };
+    },
+    [ofWorkspace, plane],
+  );
+
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
+      runAction,
       split,
       closePane,
       closeTab: close,
@@ -1758,6 +1799,7 @@ export function PlaneView({
       pinWorkspace,
       removeWorkspace,
       removeWorktree,
+      runAction,
       sendKey,
       showChat,
       showView,
@@ -1891,6 +1933,7 @@ export function PlaneView({
               projects: pinnedProjects,
             },
             views,
+            commands: extensionCommands,
           }),
     [
       clones,
@@ -1914,6 +1957,7 @@ export function PlaneView({
       tabs,
       vaultNames,
       views,
+      extensionCommands,
       worktree,
       liveNames,
     ],
@@ -2597,6 +2641,29 @@ export function PlaneView({
           offers={found}
           onPress={press}
           onCancel={() => setPickingVault(false)}
+        />
+      )}
+
+      {askingAction && (
+        <AskFirst
+          extension={askingAction.extension}
+          action={askingAction.action}
+          onRun={async () => {
+            const outcome = await runExtensionAction(
+              plane,
+              askingAction.extension,
+              askingAction.action,
+              { view: null, key: "", row: null },
+              ofWorkspace,
+              true,
+            );
+            if ("refused" in outcome) return { refused: outcome.refused };
+            // From the palette there is no view to say it above, so the dialog says it.
+            if (outcome.answer.overreach !== null) return { seen: outcome.answer.overreach };
+            setAskingAction(undefined);
+            return undefined;
+          }}
+          onCancel={() => setAskingAction(undefined)}
         />
       )}
 
