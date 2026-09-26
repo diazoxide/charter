@@ -84,6 +84,20 @@ export function workspaceSettingsView(workspace: string): ViewRef {
   return { from: null, view: "workspace-settings", key: workspace };
 }
 
+/**
+ * **A workspace's cross-repo changes** (charter#470, ADR 0060): charter's own view, answered in
+ * panel blocks by `change::view`. Keyed by the workspace, like its settings, so there is one tab
+ * per workspace and it is filed on that workspace's strip.
+ */
+export function changesView(workspace: string): ViewRef {
+  return { from: null, view: "changes", key: workspace };
+}
+
+/** What a workspace's changes tab is called. */
+export function changesTitle(workspace: string): string {
+  return `Changes · ${workspace}`;
+}
+
 /** What a workspace's settings tab is called. */
 export function workspaceSettingsTitle(workspace: string): string {
   return `Workspace settings · ${workspace}`;

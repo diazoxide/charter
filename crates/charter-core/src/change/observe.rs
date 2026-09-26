@@ -109,3 +109,17 @@ pub fn observe(plane: &Path, ws: &str, record: &Record, now: DateTime<Utc>) -> O
     }
     Observation { at: now, members }
 }
+
+/// Where a member's request stands, as a row says it: `open`, `merged as <sha7>`, or `REJECTED`
+/// — the spec's word for a request closed unmerged, whose dependents cannot land.
+pub fn standing(state: &State) -> String {
+    match state {
+        State::Open => "open".to_string(),
+        State::Merged { commit: Some(c) } => format!(
+            "merged as {}",
+            crate::shown::line(c).chars().take(7).collect::<String>()
+        ),
+        State::Merged { commit: None } => "merged".to_string(),
+        State::Closed => "REJECTED".to_string(),
+    }
+}

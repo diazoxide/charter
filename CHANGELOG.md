@@ -32,6 +32,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   It says which members still wait on a blocker, and when the reading was taken. If the forge
   cannot be asked, the record still prints and each member says why. Nothing it reads is
   written back.
+- **A workspace's cross-repo changes open in a tab.** "Open changes" in the palette (`F2`)
+  opens a tab for the focused workspace. It shows each change, each member's branch, its pull
+  request and its checks at the head commit, which members are blocked, and when that was read.
+  It asks the forge when the tab opens and when you press Refresh, and never when you switch
+  workspaces. A workspace with no changes says how to create one.
 - **Renaming a workspace names the chats that will start a fresh conversation.** Claude Code
   keeps a conversation under the folder it ran in, and charter does not move that folder. So
   `charter workspace rename`, and the Rename dialog before you confirm, list by name each

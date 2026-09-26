@@ -29,6 +29,8 @@
 import type { ChatWorktree, ExtensionCommand, ExtensionView, RowAction } from "./bindings";
 import { MAIN } from "./here";
 import {
+  changesTitle,
+  changesView,
   chatOf,
   contentsOf,
   focusedContent,
@@ -846,6 +848,19 @@ export function catalogue(now: Now): Offer[] {
       }),
       note: `${workspace}: its workspace.json, between charter.toml and charter.local.toml.`,
     });
+    // Its cross-repo changes (charter#470), for the workspace in front of the operator: a view
+    // tab keyed by the workspace and filed on its strip, which asks the forge when it opens and
+    // when its Refresh is pressed, never on a switch.
+    if (workspace === now.focused) {
+      offers.push({
+        ...can(`workspace.changes:${workspace}`, "Open changes", {
+          verb: "openView",
+          view: changesView(workspace),
+          title: changesTitle(workspace),
+        }),
+        note: `${workspace}: each cross-repo change, each member's pull request and its checks.`,
+      });
+    }
     // LIVE or LOCAL (charter-app#301): the row says which way it goes, and asks before it does.
     const live = now.live?.includes(workspace) ?? false;
     offers.push({

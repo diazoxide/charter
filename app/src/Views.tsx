@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import {
   ChartColumn,
+  GitPullRequest,
   KeyRound,
   LoaderCircle,
   Puzzle,
+  RefreshCw,
   Save,
   Settings2,
   SlidersHorizontal,
@@ -115,6 +117,19 @@ const inFlight = new Map<string, Promise<ViewAnswerOrRefusal>>();
 
 type ViewAnswerOrRefusal = { answer: ViewAnswer } | { refused: string };
 
+/**
+ * **The last reading of each workspace's changes, kept until Refresh is pressed** (charter#470).
+ * That view asks a forge, and its tab's pane is drawn again every time the operator switches back
+ * to its workspace; asking again then would be a forge call on a switch, which the view promises
+ * not to make. So its answer is kept here, by plane and view, and only Refresh replaces it.
+ */
+const kept = new Map<string, ViewAnswerOrRefusal>();
+
+/** Whether `view` is a workspace's changes, the one built-in view that reads a forge. */
+function isChanges(view: ViewRef): boolean {
+  return view.from === null && view.view === "changes";
+}
+
 function ask(
   plane: PlaneId,
   view: ViewRef,
@@ -154,6 +169,7 @@ const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   vault: KeyRound,
   settings: Settings2,
   saving: Save,
+  changes: GitPullRequest,
   [WORKSPACE_SETTINGS]: Settings2,
   preferences: SlidersHorizontal,
 };
@@ -337,8 +353,14 @@ function Answer({
   title: string;
   workspace: string | undefined;
 }) {
-  const [said, setSaid] = useState<ViewAnswerOrRefusal>();
   const { from, view: id, key } = view;
+  const keeps = isChanges(view);
+  const keptAs = `${plane}\u0000${viewKey(view)}`;
+  const [said, setSaid] = useState<ViewAnswerOrRefusal | undefined>(() =>
+    keeps ? kept.get(keptAs) : undefined,
+  );
+  // Bumped by Refresh: the one thing that asks a kept view again.
+  const [round, setRound] = useState(0);
   // **What an action on one of its rows answered** (charter-app#341): the view's blocks,
   // refreshed, when it answered them; and a sentence — its refusal, or what changed outside the
   // extension's declared paths — to say above the answer.
@@ -349,20 +371,40 @@ function Answer({
   const [asking, setAsking] = useState<{ row: PanelRow; action: RowAction }>();
 
   useEffect(() => {
+    if (keeps && round === 0 && kept.has(keptAs)) return;
     let gone = false;
     void ask(plane, { from, view: id, key }, workspace).then((answered) => {
+      if (keeps) kept.set(keptAs, answered);
       if (!gone) setSaid(answered);
     });
     return () => {
       gone = true;
     };
-  }, [plane, from, id, key, workspace]);
+  }, [plane, from, id, key, workspace, keeps, keptAs, round]);
+
+  /** Refresh, for a kept view: its only way to be asked again. */
+  const refresh = keeps ? (
+    <button
+      type="button"
+      className="panel-view view-refresh"
+      // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+      tabIndex={0}
+      onClick={() => {
+        kept.delete(keptAs);
+        setSaid(undefined);
+        setRound((n) => n + 1);
+      }}
+    >
+      <RefreshCw className="node-icon" aria-hidden="true" />
+      Refresh
+    </button>
+  ) : null;
 
   if (said === undefined) {
     return (
       <p className="pending" aria-busy="true">
         <LoaderCircle className="node-icon spinning" />
-        {from === null ? "Reading the plane…" : `Asking ${from}…`}
+        {keeps ? "Asking the forge…" : from === null ? "Reading the plane…" : `Asking ${from}…`}
       </p>
     );
   }
@@ -370,9 +412,12 @@ function Answer({
     // The core's sentence, which names what refused and says what to do. A view that came up
     // empty would read as a plane with nothing in it.
     return (
-      <p className="trouble" role="alert">
-        {said.refused}
-      </p>
+      <>
+        {refresh}
+        <p className="trouble" role="alert">
+          {said.refused}
+        </p>
+      </>
     );
   }
   const answer = said.answer;
@@ -407,6 +452,7 @@ function Answer({
   const seen = acted === undefined ? answer.overreach : acted.said;
   return (
     <>
+      {refresh}
       {seen !== undefined && seen !== null && (
         /* What the core saw change outside the extension's declared paths, or an action's
            refusal: the core's sentence, naming the extension, above what it answered. */

@@ -474,3 +474,76 @@ describe("an action on an extension's row (charter-app#341)", () => {
     expect(screen.getByText("0 notes")).toBeInTheDocument();
   });
 });
+
+describe("a workspace's changes", () => {
+  const CHANGES: ViewRef = { from: null, view: "changes", key: "alpha" };
+
+  /** What `change::view::blocks` answers, read at `read`. */
+  function changes(read: string): ViewAnswer {
+    return {
+      kind: "answered",
+      blocks: [
+        {
+          kind: "facts",
+          facts: [
+            { label: "workspace", value: "alpha" },
+            { label: "read from the forge", value: read },
+          ],
+        },
+        { kind: "note", text: "api-2 · 0 of 1 merged · bump the API", tone: "default" },
+        {
+          kind: "list",
+          rows: [
+            {
+              key: "svc",
+              text: "svc · change/api-2",
+              note: "#7 open · head 9f3a1c2 · checks NOT RUN",
+              mark: "repo",
+              tone: "trouble",
+              detail: null,
+              runs: null,
+              actions: [],
+            },
+          ],
+          empty: { headline: "No members yet", body: null, offer: null },
+        },
+      ],
+      took_ms: 40,
+      overreach: null,
+    } as ViewAnswer;
+  }
+
+  it("draws each member with its request and checks, and when they were read", async () => {
+    core(() => changes("2026-09-26 10:00:00 UTC"));
+    draw(CHANGES, { title: "Changes · alpha", workspace: "alpha" });
+
+    expect(await screen.findByText("2026-09-26 10:00:00 UTC")).toBeInTheDocument();
+    expect(screen.getByText("· #7 open · head 9f3a1c2 · checks NOT RUN")).toBeInTheDocument();
+  });
+
+  it("is asked once, and not again when its tab is drawn again after a workspace switch", async () => {
+    const gamma: ViewRef = { ...CHANGES, key: "gamma" };
+    const { opened } = core(() => changes("2026-09-26 10:00:00 UTC"));
+    draw(gamma, { title: "Changes · gamma", workspace: "gamma" });
+    await screen.findByText("2026-09-26 10:00:00 UTC");
+    // Switching to another workspace takes this tab's pane away; switching back draws it again.
+    cleanup();
+    draw(gamma, { title: "Changes · gamma", workspace: "gamma" });
+    await screen.findByText("2026-09-26 10:00:00 UTC");
+
+    expect(opened).toHaveLength(1);
+  });
+
+  it("asks again only when Refresh is pressed", async () => {
+    let read = "2026-09-26 10:00:00 UTC";
+    const { opened } = core(() => changes(read));
+    draw({ ...CHANGES, key: "beta" }, { title: "Changes · beta", workspace: "beta" });
+    await screen.findByText(read);
+
+    read = "2026-09-26 10:05:00 UTC";
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText(read)).toBeInTheDocument();
+    expect(opened).toHaveLength(2);
+  });
+});
