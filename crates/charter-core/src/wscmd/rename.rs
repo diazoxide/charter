@@ -109,18 +109,15 @@ pub struct Move {
 impl Move {
     /// The move of `workspaces/<old>` to `workspaces/<new>` inside the plane at `root`.
     pub fn in_plane(root: &Path, old: &str, new: &str) -> Self {
-        let mut dirs = vec![(
-            root.join("workspaces").join(old),
-            root.join("workspaces").join(new),
-        )];
-        if let Ok(real) = std::fs::canonicalize(root)
-            && real != root
-        {
-            dirs.push((
-                real.join("workspaces").join(old),
-                real.join("workspaces").join(new),
-            ));
-        }
+        let dirs = spellings(root)
+            .into_iter()
+            .map(|plane| {
+                (
+                    plane.join("workspaces").join(old),
+                    plane.join("workspaces").join(new),
+                )
+            })
+            .collect();
         Self {
             old: old.to_string(),
             new: new.to_string(),
@@ -197,7 +194,8 @@ fn settings_title(workspace: &str) -> String {
     format!("Workspace settings · {workspace}")
 }
 
-/// The steps after the commit point, in order. Each one can run twice.
+/// The steps of a rename, in order, named for a test to stop one dead after: the journal, the
+/// commit point, then the steps after it — each of which can run twice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
     /// The journal is written; nothing else has changed.
@@ -315,20 +313,15 @@ pub fn rename(request: &Request, say: Sink) -> u8 {
     };
 
     if !request.running.is_empty() {
+        let (are, them) = if request.running.len() == 1 {
+            ("a chat is", "it")
+        } else {
+            ("chats are", "them")
+        };
         say(Say::Fail(format!(
-            "Refusing to rename '{old}' — {} running in it: {}. A running chat keeps the old \
-             path; close {} first.",
-            if request.running.len() == 1 {
-                "a chat is"
-            } else {
-                "chats are"
-            },
+            "Refusing to rename '{old}' — {are} running in it: {}. A running chat keeps the old \
+             path; close {them} first.",
             request.running.join(", "),
-            if request.running.len() == 1 {
-                "it"
-            } else {
-                "them"
-            },
         )));
         return 1;
     }
@@ -386,21 +379,35 @@ pub fn rename(request: &Request, say: Sink) -> u8 {
         }
         // Best effort: `Journal::committed` reads the disk as well, so a journal that still
         // says `moved: false` after a crash here is resumed all the same.
-        let _ = write_journal(
+        //
+        // **Not best effort.** Once the move is recorded, the journal alone says this rename is
+        // past its commit point, whatever recreates `workspaces/<old>` before a rerun. A journal
+        // that cannot say so is not trusted to: the move is put back and nothing is renamed.
+        if let Err(why) = write_journal(
             root,
             &Journal {
                 moved: true,
                 ..journal
             },
-        );
+        ) {
+            let back = std::fs::rename(&to, &from);
+            let _ = std::fs::remove_file(journal_path(root));
+            say(Say::Fail(match back {
+                Ok(()) => format!(
+                    "could not record that workspaces/{old} moved ({why}), so it was put back                      and nothing was renamed."
+                ),
+                Err(stuck) => format!(
+                    "could not record that workspaces/{old} moved ({why}), nor put it back                      ({stuck}). It is at workspaces/{new}: finish with charter workspace                      rename {old} {new}"
+                ),
+            }));
+            return 1;
+        }
     } else {
         say(Say::Info(format!(
             "Finishing the rename of '{old}' to '{new}' that was interrupted."
         )));
-        // A crash between the journal and the move leaves `moved: false` and both directories
-        // where they were; `committed` said otherwise only if the disk moved, so there is
-        // nothing to move here — but a directory under the old name that something created
-        // since is left alone and said.
+        // A directory under the old name that something created since the move is not this
+        // workspace, and is left alone and said.
         if wscmd::workspace_dir_exists(root, old) {
             say(Say::Warn(format!(
                 "workspaces/{old} exists again — something recreated it after the rename. It \
@@ -415,17 +422,25 @@ pub fn rename(request: &Request, say: Sink) -> u8 {
 }
 
 /// Whether two paths are one directory — a case-only rename on a case-insensitive disk.
-#[cfg(unix)]
 fn same_directory(one: &Path, other: &Path) -> bool {
+    same_entry(one, other)
+}
+
+/// Whether two paths name one file or directory, without following a link.
+#[cfg(unix)]
+fn same_entry(one: &Path, other: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    match (std::fs::metadata(one), std::fs::metadata(other)) {
+    match (
+        std::fs::symlink_metadata(one),
+        std::fs::symlink_metadata(other),
+    ) {
         (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
         _ => false,
     }
 }
 
 #[cfg(not(unix))]
-fn same_directory(one: &Path, other: &Path) -> bool {
+fn same_entry(one: &Path, other: &Path) -> bool {
     matches!(
         (std::fs::canonicalize(one), std::fs::canonicalize(other)),
         (Ok(a), Ok(b)) if a == b
@@ -472,8 +487,7 @@ fn finish(request: &Request, say: Sink) -> u8 {
     if crashed(Step::Live) {
         return 1;
     }
-    let (default_moved, pointers_left) = rename_pointers(root, old, new);
-    left.extend(pointers_left);
+    left.extend(rename_pointers(root, old, new));
     if crashed(Step::Pointers) {
         return 1;
     }
@@ -515,8 +529,11 @@ fn finish(request: &Request, say: Sink) -> u8 {
     }
     say(Say::Done(format!("Renamed workspace '{old}' to '{new}'.")));
 
-    // Something tracked moved only for a LIVE workspace or a committed default.
-    if live || default_moved {
+    // Something tracked moved only for a LIVE workspace or a committed default — asked of the
+    // disk, so a rename finished after a crash saves what the first run changed.
+    let default_is_new = std::fs::read_to_string(wscmd::select::default_file(root))
+        .is_ok_and(|text| crate::memstore::py_strip(&text) == new);
+    if live || default_is_new {
         save(root, old, new, say);
     }
     0
@@ -718,9 +735,8 @@ fn rename_headings(root: &Path, old: &str, new: &str) -> Vec<String> {
     left
 }
 
-/// Every pointer that selects `old`, pointed at `new`. Answers whether the committed
-/// `workspaces/.default` moved (a tracked change the save must take), and what could not be.
-fn rename_pointers(root: &Path, old: &str, new: &str) -> (bool, Vec<String>) {
+/// Every pointer that selects `old`, pointed at `new`. Answers what could not be.
+fn rename_pointers(root: &Path, old: &str, new: &str) -> Vec<String> {
     let state = root.join(".charter");
     let mut left = Vec::new();
     let mut files: Vec<(PathBuf, crate::rewrite::Mode)> = vec![
@@ -755,7 +771,6 @@ fn rename_pointers(root: &Path, old: &str, new: &str) -> (bool, Vec<String>) {
                 .map(|path| (path, crate::rewrite::Mode::Private)),
         );
     }
-    let mut default_moved = false;
     for (path, mode) in files {
         if crate::contain::no_link_on_the_way(root, &path).is_err()
             || !std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file())
@@ -768,9 +783,9 @@ fn rename_pointers(root: &Path, old: &str, new: &str) -> (bool, Vec<String>) {
         if crate::memstore::py_strip(&text) != old {
             continue;
         }
-        match crate::rewrite::replace(root, &path, format!("{new}\n").as_bytes(), mode) {
-            Ok(()) => default_moved |= path == wscmd::select::default_file(root),
-            Err(why) => left.push(format!("{} still selects '{old}' ({why})", path.display())),
+        if let Err(why) = crate::rewrite::replace(root, &path, format!("{new}\n").as_bytes(), mode)
+        {
+            left.push(format!("{} still selects '{old}' ({why})", path.display()));
         }
     }
     // The strip's order, one name per line.
@@ -790,7 +805,7 @@ fn rename_pointers(root: &Path, old: &str, new: &str) -> (bool, Vec<String>) {
             left.push(format!("{} still lists '{old}' ({why})", order.display()));
         }
     }
-    (default_moved, left)
+    left
 }
 
 /// The state charter keeps under the workspace's name in `.charter/`, moved to the new one.
@@ -833,6 +848,9 @@ fn move_over(root: &Path, from: &Path, to: &Path) -> std::io::Result<()> {
     crate::contain::no_link_on_the_way(root, to)?;
     match std::fs::symlink_metadata(to) {
         Err(_) => std::fs::rename(from, to),
+        // A case-only rename on a case-insensitive disk: `to` IS `from`, and renaming it is
+        // what changes its case. The merge below would delete it as a duplicate of itself.
+        Ok(_) if same_entry(from, to) => std::fs::rename(from, to),
         Ok(there) if found.is_dir() && there.is_dir() => {
             for entry in std::fs::read_dir(from)? {
                 let entry = entry?;

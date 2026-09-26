@@ -164,3 +164,18 @@ fn a_taken_name_is_refused() {
     );
     assert!(world.root.join("workspaces/alpha/svc").is_dir());
 }
+
+#[test]
+fn a_name_that_cannot_be_a_workspace_is_refused() {
+    let world = World::new();
+
+    let out = world.charter(&["workspace", "rename", "alpha", "../up"]);
+
+    assert!(!out.status.success());
+    assert!(
+        said(&out).contains("invalid workspace name '../up'"),
+        "{}",
+        said(&out)
+    );
+    assert!(world.root.join("workspaces/alpha/svc").is_dir());
+}

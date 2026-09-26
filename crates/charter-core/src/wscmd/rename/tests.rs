@@ -564,3 +564,46 @@ fn a_pin_moves_in_place_and_a_pin_on_both_names_becomes_one() {
         vec!["new", "z"]
     );
 }
+
+/// A case-only rename moves everything kept under the name — on a case-insensitive disk, where
+/// the old and new names are one directory entry, as on a case-sensitive one.
+#[test]
+fn a_rename_that_only_changes_case_keeps_everything_under_the_name() {
+    let plane = a_plane();
+    let state = plane.root.join(".charter");
+
+    let (code, said) = run(&plane, "alpha", "Alpha");
+
+    assert_eq!(code, 0, "{said:?}");
+    let names: Vec<String> = std::fs::read_dir(plane.root.join("workspaces"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(names.contains(&"Alpha".to_string()), "{names:?}");
+    assert!(!names.contains(&"alpha".to_string()), "{names:?}");
+    assert!(state.join("workspace-arrivals/Alpha").exists());
+    assert!(state.join("handbacks/workspace-Alpha/1.json").exists());
+    assert_eq!(read(&state.join("sessions/7.workspace")), "Alpha\n");
+}
+
+/// A journal that cannot record the move puts it back: a rename the journal does not vouch for
+/// is one a rerun could not tell from a stale note.
+#[test]
+fn a_move_the_journal_cannot_record_is_put_back() {
+    let plane = a_plane();
+    let _hook = crate::rewrite::hook::set(|target, _| {
+        let text = std::fs::read_to_string(target).unwrap_or_default();
+        if target.ends_with("workspace-rename.json") && text.contains("\"moved\":false") {
+            return Err(std::io::Error::other("the disk is full"));
+        }
+        Ok(())
+    });
+
+    let (code, said) = run(&plane, "alpha", "beta");
+
+    assert_eq!(code, 1);
+    assert!(said[0].contains("it was put back"), "{said:?}");
+    assert!(plane.root.join("workspaces/alpha/svc").is_dir());
+    assert!(!plane.root.join("workspaces/beta").exists());
+    assert!(!plane.root.join(JOURNAL).exists());
+}
