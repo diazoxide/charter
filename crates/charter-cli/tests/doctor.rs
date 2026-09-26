@@ -97,15 +97,28 @@ fn with_an_identity_and_nothing_wrong_the_exit_is_zero_and_the_warnings_are_coun
 }
 
 #[test]
-fn fix_is_refused_rather_than_run_as_a_report_of_a_repair_that_never_happened() {
+fn fix_installs_charters_plugin_says_what_it_did_and_then_reports() {
+    // #373: the one repair the Python `--fix` made was installing charter's plugin, and that
+    // is what it does again — through `charter plugin install`, whose steps it prints.
     let (_d, root) = plane();
-    let out = doctor(&root, &root.join("home"), &["--fix"]);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(out.stdout.is_empty());
+    let home = root.join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let vars = [("CHARTER_CONFIG_HOME", root.to_str().unwrap())];
+    let before = rows(&doctor_with(&root, &home, &["--json"], &vars));
+    assert_eq!(row(&before, "plugin install")["status"], "warn");
+    assert!(!home.join(".codex/config.toml").exists());
+
+    let out = doctor_with(&root, &home, &["--json", "--fix"], &vars);
     let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("codex:\n  done "), "{said}");
+    let after = rows(&out);
+    let install = row(&after, "plugin install");
+    assert_eq!(install["status"], "ok", "{install}");
+    assert_eq!(install["detail"], "installed for codex");
     assert!(
-        said.contains("nothing was installed and nothing was checked"),
-        "{said}"
+        std::fs::read_to_string(home.join(".codex/config.toml"))
+            .unwrap()
+            .contains("hook pretooluse")
     );
 }
 

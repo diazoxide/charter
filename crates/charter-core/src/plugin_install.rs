@@ -96,6 +96,22 @@ pub struct Machine {
 impl Machine {
     /// This machine, from the environment charter was started with.
     pub fn from_env(binary: PathBuf, bundle: Option<PathBuf>) -> Result<Self, String> {
+        let root = crate::machine::config_root();
+        Self::from_env_under(root, binary, bundle)
+    }
+
+    /// [`Self::from_env`], for a reader: `charter doctor` asks about the copy and writes
+    /// nothing, so it takes charter's directory without the fence a writer is held to.
+    pub fn from_env_to_read(binary: PathBuf, bundle: Option<PathBuf>) -> Result<Self, String> {
+        let root = crate::machine::config_root_to_read_the_plugin_copy();
+        Self::from_env_under(root, binary, bundle)
+    }
+
+    fn from_env_under(
+        config_root: Option<PathBuf>,
+        binary: PathBuf,
+        bundle: Option<PathBuf>,
+    ) -> Result<Self, String> {
         let home = crate::profiles::home();
         let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
         let claude_config = match std::env::var_os("CLAUDE_CONFIG_DIR") {
@@ -122,7 +138,7 @@ impl Machine {
                 .ok_or("HOME is not set, so charter cannot tell where Codex keeps its config")?
                 .join(".codex"),
         };
-        let charter_dir = crate::machine::config_root()
+        let charter_dir = config_root
             .map(|root| crate::machine::dir(&root))
             .ok_or("charter cannot tell where its own machine directory is (HOME is not set)")?;
         Ok(Self {
@@ -229,6 +245,44 @@ pub trait Adapter {
     fn install(&self, m: &Machine) -> Result<Plan, String>;
     /// What uninstalling would change.
     fn uninstall(&self, m: &Machine) -> Result<Plan, String>;
+    /// Whether charter's plugin is installed for this harness, whatever charter it names.
+    fn installed(&self, m: &Machine) -> Result<bool, String>;
+    /// The `charter` the installed hooks run, when they name one.
+    fn runs(&self, m: &Machine) -> Option<PathBuf>;
+    /// The files of this harness's own configuration that enable the retired plugin.
+    fn superseded(&self, m: &Machine) -> Vec<PathBuf>;
+}
+
+/// Every adapter charter has, in [`HARNESSES`] order.
+pub fn adapters() -> impl Iterator<Item = &'static dyn Adapter> {
+    HARNESSES.iter().filter_map(|h| adapter(h))
+}
+
+/// The binary a hook command `'<path>' hook <word>` runs — [`crate::plugin::command_at`]
+/// read back.
+fn quoted_binary(command: &str) -> Option<PathBuf> {
+    let quoted = command.strip_prefix('\'')?;
+    let end = quoted.rfind("' hook ")?;
+    Some(PathBuf::from(quoted[..end].replace(r"'\''", "'")))
+}
+
+/// Whether a Claude Code settings file enables `id`.
+fn enables(path: &Path, id: &str) -> bool {
+    json_object(path).is_ok_and(|(map, _)| {
+        map.get("enabledPlugins")
+            .and_then(|p| p.get(id))
+            .is_some_and(crate::scaffold::text::truthy)
+    })
+}
+
+/// A plane's own settings files that enable the retired plugin: the two a session in the plane
+/// reads. A plane's file is the operator's, and nothing here rewrites it.
+pub fn superseded_in_plane(plane: &Path) -> Vec<PathBuf> {
+    [".claude/settings.json", ".claude/settings.local.json"]
+        .iter()
+        .map(|rel| plane.join(rel))
+        .filter(|p| enables(p, crate::plugin::SUPERSEDED))
+        .collect()
 }
 
 /// The adapter for `harness`, if charter has one.
@@ -366,10 +420,7 @@ fn apply(plan: &Plan) -> (usize, Option<String>) {
             Write::File(path, bytes) => write_file(path, bytes),
             Write::Tree(path, files) => write_tree(path, files),
             Write::RemoveTree(path) => {
-                crate::fence::hold(
-                    crate::fence::Act::HarnessConfig,
-                    path.parent().unwrap_or(path),
-                );
+                hold(path);
                 match std::fs::remove_dir_all(path) {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
                     _ => Ok(()),
@@ -395,6 +446,19 @@ fn path_of(w: &Write) -> &Path {
     }
 }
 
+/// The fence, asked about `path` by its nearest existing ancestor: a folder not made yet has
+/// no resolved spelling, and the fence compares resolved paths.
+fn hold(path: &Path) {
+    let mut at = path;
+    while !at.exists() {
+        match at.parent() {
+            Some(up) => at = up,
+            None => break,
+        }
+    }
+    crate::fence::hold(crate::fence::Act::HarnessConfig, at);
+}
+
 /// Write `bytes` to `path` in one step: a temporary file beside it, synced, then renamed over
 /// it, keeping the mode the old file had. A reader sees the old file or the new one.
 ///
@@ -409,7 +473,7 @@ fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     };
     let path = target.as_path();
     let dir = path.parent().unwrap_or(Path::new("."));
-    crate::fence::hold(crate::fence::Act::HarnessConfig, dir);
+    hold(dir);
     std::fs::create_dir_all(dir)?;
     let mode = std::fs::metadata(path).ok().map(|m| m.permissions());
     let mut temp = tempfile::NamedTempFile::new_in(dir)?;
@@ -427,7 +491,7 @@ fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// but the instant between them. A staging directory that fails is removed.
 fn write_tree(path: &Path, files: &BTreeMap<PathBuf, Vec<u8>>) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
-    crate::fence::hold(crate::fence::Act::HarnessConfig, parent);
+    hold(parent);
     std::fs::create_dir_all(parent)?;
     let staged = tempfile::Builder::new()
         .prefix(".plugin-")
@@ -670,6 +734,28 @@ impl Adapter for ClaudeCode {
                 .to_owned(),
         );
         Ok(plan)
+    }
+
+    fn installed(&self, m: &Machine) -> Result<bool, String> {
+        let path = Self::settings(m);
+        json_object(&path)?;
+        Ok(enables(&path, INSTALLED_AS))
+    }
+
+    fn runs(&self, m: &Machine) -> Option<PathBuf> {
+        let hooks = std::fs::read(plugin_dir(m).join(crate::plugin::HOOKS_FILE)).ok()?;
+        let doc: Value = serde_json::from_slice(&hooks).ok()?;
+        let command = doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str()?;
+        quoted_binary(command)
+    }
+
+    fn superseded(&self, m: &Machine) -> Vec<PathBuf> {
+        let path = Self::settings(m);
+        if enables(&path, crate::plugin::SUPERSEDED) {
+            vec![path]
+        } else {
+            Vec::new()
+        }
     }
 
     fn uninstall(&self, m: &Machine) -> Result<Plan, String> {
@@ -936,6 +1022,32 @@ impl Adapter for Codex {
                 .to_owned(),
         );
         Ok(plan)
+    }
+
+    fn installed(&self, m: &Machine) -> Result<bool, String> {
+        Self::read(&Self::config(m))?;
+        Ok(self.runs(m).is_some())
+    }
+
+    fn runs(&self, m: &Machine) -> Option<PathBuf> {
+        let mut doc = Self::read(&Self::config(m)).ok()?;
+        let groups = Self::guard_groups(&mut doc, &Self::config(m), false).ok()??;
+        groups.iter().find(|g| is_charters_guard(g)).and_then(|g| {
+            let hooks = g.get("hooks")?.as_array_of_tables()?;
+            quoted_binary(hooks.get(0)?.get("command")?.as_str()?)
+        })
+    }
+
+    fn superseded(&self, m: &Machine) -> Vec<PathBuf> {
+        let path = Self::config(m);
+        let on = Self::read(&path).is_ok_and(|doc| {
+            doc.get("plugins")
+                .and_then(|p| p.get(crate::plugin::SUPERSEDED))
+                .and_then(|p| p.get("enabled"))
+                .and_then(toml_edit::Item::as_bool)
+                == Some(true)
+        });
+        if on { vec![path] } else { Vec::new() }
     }
 
     fn uninstall(&self, m: &Machine) -> Result<Plan, String> {

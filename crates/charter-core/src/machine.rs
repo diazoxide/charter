@@ -253,6 +253,19 @@ pub fn config_root() -> Option<PathBuf> {
     found
 }
 
+/// [`config_root`]'s answer with no fence asked — **only** for `charter doctor`'s plugin rows,
+/// which read the copy `charter plugin install` keeps under it and never the store. A doctor
+/// is run inside every recorded scenario and every test plane, whose homes are the fixture's,
+/// and a row that reads a file must not end the process that asked. Every writer goes
+/// through [`config_root`], which is fenced.
+pub fn config_root_to_read_the_plugin_copy() -> Option<PathBuf> {
+    rooted(
+        std::env::var_os(HOME_VAR),
+        std::env::var_os("XDG_CONFIG_HOME"),
+        dirs::home_dir(),
+    )
+}
+
 /// [`config_root`], for a reader that only reads: `None` as well when there is no directory
 /// there yet, since a store that does not exist holds nothing to read.
 ///

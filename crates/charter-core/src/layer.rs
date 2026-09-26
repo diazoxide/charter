@@ -395,9 +395,26 @@ pub fn settings_document(plane: &Path) -> Option<String> {
     let settings = plane_settings(plane, SETTINGS)?;
     let mut doc = serde_json::Map::new();
     for key in WORKSPACE_KEYS {
-        if let Some(value) = settings.get(key) {
-            doc.insert(key.to_owned(), value.clone());
+        let Some(value) = settings.get(key) else {
+            continue;
+        };
+        // The retired Python charter's plugin is left behind: no file charter writes enables
+        // it (#374). A plane that still enables it is its own file, which `charter doctor`
+        // names.
+        if key == "enabledPlugins"
+            && let serde_json::Value::Object(plugins) = value
+        {
+            let kept: serde_json::Map<String, serde_json::Value> = plugins
+                .iter()
+                .filter(|(id, _)| id.as_str() != crate::plugin::SUPERSEDED)
+                .map(|(id, on)| (id.clone(), on.clone()))
+                .collect();
+            if !kept.is_empty() {
+                doc.insert(key.to_owned(), serde_json::Value::Object(kept));
+            }
+            continue;
         }
+        doc.insert(key.to_owned(), value.clone());
     }
     let rules = restrictive(&settings);
     if !rules.is_empty() {

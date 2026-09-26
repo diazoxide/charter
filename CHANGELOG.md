@@ -113,6 +113,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     mode. A read-only shared vault registry, local registry or fingerprint key is refused.
   - A `.gitkeep` that is a symlink stops `charter init`'s front-door persona with an error.
   ([#434](https://github.com/diazoxide/charter/issues/434))
+- **`charter doctor` knows the Python charter is retired.** Its `python3` row no longer warns.
+  Its three plugin rows, which said "not checked", now check charter's plugin for chats started
+  outside the app: whether it is installed, whether it is current, and whether the `charter` its
+  hooks run still exists. A new `superseded plugin` row names every settings file that still
+  turns on the retired `charter@charter`. `charter doctor --fix` works again: it runs
+  `charter plugin install`, prints each change, then reports. A workspace or worktree layer no
+  longer copies `charter@charter` from the plane's settings.
+  ([#373](https://github.com/diazoxide/charter/issues/373))
 - **A guard that crashes now refuses the tool call instead of letting it run.** If charter hit
   an internal error while checking a tool call, the crash ended the process with a status
   Claude Code and Codex read as a non-blocking error, so the call went ahead unchecked. Any

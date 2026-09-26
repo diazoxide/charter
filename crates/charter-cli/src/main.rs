@@ -217,8 +217,8 @@ enum Command {
         /// one. Every other check runs.
         #[arg(long)]
         preflight: bool,
-        /// Install what charter can install for this plane before reporting. Not in this
-        /// charter yet: refused, so nobody reads the report as the state after a repair.
+        /// Install charter's plugin for chats started outside the app first — what
+        /// `charter plugin install` does, each change printed on stderr — then report.
         #[arg(long)]
         fix: bool,
     },
@@ -388,11 +388,12 @@ enum Command {
         #[arg(long, requires = "list")]
         json: bool,
 
-        /// The installed plugin's version. Taken and ignored.
+        /// The retired Python charter's plugin version. Taken and ignored, and removed with that
+        /// plugin.
         ///
-        /// The Python charter's plugin puts it on every one of its hook commands (`charter hook
+        /// The retired plugin puts it on every one of its hook commands (`charter hook
         /// sessionstart --plugin-version 0.62.1`); refusing the flag would mean refusing every
-        /// call such a plugin makes.
+        /// call such a plugin still makes. charter's own plugin never passes it.
         #[arg(long)]
         plugin_version: Option<String>,
 
@@ -2166,9 +2167,28 @@ fn todo(
     }
 }
 
+/// This machine, as `charter plugin` and `charter doctor --fix` act on it: this binary by its
+/// resolved path, and the plugin from `from` or else the one the app ships beside it.
+fn plugin_machine(
+    from: Option<&std::path::Path>,
+) -> Result<charter_core::plugin_install::Machine, String> {
+    use charter_core::plugin_install as install;
+    let binary = std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .map_err(|e| format!("cannot tell where this charter is, so no hook could name it: {e}"))?;
+    let bundle = match from {
+        Some(dir) => Some(
+            dir.canonicalize()
+                .map_err(|e| format!("--plugin-from {}: {e}", dir.display()))?,
+        ),
+        None => install::bundle_beside(&binary),
+    };
+    install::Machine::from_env(binary, bundle)
+}
+
 /// `charter plugin install|uninstall`: needs no plane, and acts on this machine's harnesses.
 fn plugin(verb: &PluginCommand) -> ExitCode {
-    use charter_core::plugin_install::{self as install, Machine, Verb};
+    use charter_core::plugin_install::{self as install, Verb};
     let (verb, harness, dry_run, from) = match verb {
         PluginCommand::Install {
             harness,
@@ -2177,24 +2197,7 @@ fn plugin(verb: &PluginCommand) -> ExitCode {
         } => (Verb::Install, harness, *dry_run, plugin_from.clone()),
         PluginCommand::Uninstall { harness, dry_run } => (Verb::Uninstall, harness, *dry_run, None),
     };
-    let binary = match std::env::current_exe().and_then(|p| p.canonicalize()) {
-        Ok(binary) => binary,
-        Err(e) => {
-            eprintln!("charter: cannot tell where this charter is, so no hook could name it: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let bundle = match from {
-        Some(dir) => match dir.canonicalize() {
-            Ok(dir) => Some(dir),
-            Err(e) => {
-                eprintln!("charter: --plugin-from {}: {e}", dir.display());
-                return ExitCode::FAILURE;
-            }
-        },
-        None => install::bundle_beside(&binary),
-    };
-    let machine = match Machine::from_env(binary, bundle) {
+    let machine = match plugin_machine(from.as_deref()) {
         Ok(machine) => machine,
         Err(why) => {
             eprintln!("charter: {why}");
@@ -2530,13 +2533,22 @@ fn with_here(f: impl FnOnce(&Here) -> u8) -> ExitCode {
 fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
     use std::io::IsTerminal;
 
+    // The one repair: charter's plugin, for the chats started outside the app (#373). Its
+    // steps go to stderr so a `--json` reader still gets JSON alone.
+    let mut fix_failed = false;
     if fix {
-        eprintln!(
-            "charter: `doctor --fix` installs the Claude Code plugin for this plane, which this \
-             version of charter does not do — nothing was installed and nothing was checked. \
-             `charter doctor` reports without it."
-        );
-        return ExitCode::FAILURE;
+        match plugin_machine(None) {
+            Ok(machine) => {
+                use charter_core::plugin_install as install;
+                let outcomes = install::run(&machine, install::Verb::Install, &[], false);
+                eprint!("{}", install::render(&outcomes, false));
+                fix_failed = install::failed(&outcomes);
+            }
+            Err(why) => {
+                eprintln!("charter: --fix installed nothing: {why}");
+                fix_failed = true;
+            }
+        }
     }
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
@@ -2554,7 +2566,7 @@ fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
             charter_core::doctor::table(&rows, std::io::stdout().is_terminal())
         );
     }
-    ExitCode::from(charter_core::doctor::exit_code(&rows))
+    ExitCode::from(charter_core::doctor::exit_code(&rows).max(u8::from(fix_failed)))
 }
 
 /// The profile listing, as `charter harness list` prints it on stderr.
