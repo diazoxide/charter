@@ -49,6 +49,9 @@ exclude_re = [
     # `extension::supported`, for the same reason and in the same shape: `Ok(())` on unix, a
     # refusal only in the `cfg(not(unix))` twin no unix build compiles. The site says so.
     'src/extension\.rs:\d+:\d+: replace supported -> io::Result<\(\)> with Ok\(\(\)\)$',
+    # `extension::BuiltIn::none` IS `Self::default()`, so its `Default::default()` mutant is the
+    # function itself, as `glrefresh::empty` above. The site says so.
+    'src/extension\.rs:\d+:\d+: replace BuiltIn::none -> Self with Default::default\(\)$',
     # `programs::host_pathext` is `None` on unix (`cfg!(unix)`), so its `None` mutant is the
     # function this platform runs and changes only the `PATHEXT` half no unix build takes. Its
     # `Some(Default::default())` mutant is NOT excluded: a unix test sees it. The site says so.
