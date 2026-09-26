@@ -535,9 +535,9 @@ enum PluginCommand {
     /// terminal runs charter's hooks and guard. Prints each change; running it again changes
     /// nothing that is already so.
     Install {
-        /// Only this harness (`claude` or `codex`); repeat for more. Default: each one whose
-        /// config folder exists.
-        #[arg(long, value_parser = ["claude", "codex"])]
+        /// Only this harness (`claude`, `codex` or `opencode`); repeat for more. Default: each
+        /// one whose config folder exists.
+        #[arg(long, value_parser = charter_core::plugin_install::HARNESSES)]
         harness: Vec<String>,
         /// Print what would change, and write nothing.
         #[arg(long)]
@@ -549,8 +549,8 @@ enum PluginCommand {
     },
     /// Take back what `install` wrote, and nothing else.
     Uninstall {
-        /// Only this harness (`claude` or `codex`); repeat for more.
-        #[arg(long, value_parser = ["claude", "codex"])]
+        /// Only this harness (`claude`, `codex` or `opencode`); repeat for more.
+        #[arg(long, value_parser = charter_core::plugin_install::HARNESSES)]
         harness: Vec<String>,
         /// Print what would change, and write nothing.
         #[arg(long)]

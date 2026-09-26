@@ -1476,6 +1476,7 @@ fn plugin_machine(dir: &Path) -> crate::plugin_install::Machine {
     crate::plugin_install::Machine {
         claude_config: dir.join("claude"),
         codex_home: dir.join("codex"),
+        opencode_config: dir.join("opencode"),
         charter_dir: dir.join("config/charter"),
         binary: dir.join("charter-bin"),
         bundle: Some(

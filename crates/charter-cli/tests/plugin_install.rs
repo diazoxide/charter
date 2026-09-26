@@ -137,3 +137,59 @@ fn a_file_it_cannot_read_fails_the_run_and_is_left_as_it_was() {
     assert!(said(&out).contains("nothing changed:"), "{}", said(&out));
     assert_eq!(m.read("home/.claude/settings.json"), "{broken");
 }
+
+#[test]
+fn install_puts_the_opencode_guard_where_opencode_reads_plugins_and_uninstall_takes_it_back() {
+    // #371. Named explicitly, so the folder is created; unnamed, a machine without opencode's
+    // config folder is skipped.
+    let m = Machine::new();
+    let out = m.charter(&["plugin", "install", "--harness", "opencode"]);
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    assert!(said(&out).contains("opencode:\n"), "{}", said(&out));
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_charter"))
+        .canonicalize()
+        .unwrap();
+    let shim = m.read("home/.config/opencode/plugin/charter.ts");
+    assert!(shim.starts_with(charter_core::opencode::MARK), "{shim}");
+    assert_eq!(
+        charter_core::opencode::binary_in(&shim),
+        Some(binary),
+        "the guard runs this charter by its path: {shim}"
+    );
+
+    let again = m.charter(&["plugin", "install", "--harness", "opencode"]);
+    assert!(!said(&again).contains("done "), "{}", said(&again));
+
+    let gone = m.charter(&["plugin", "uninstall", "--harness", "opencode"]);
+    assert_eq!(gone.status.code(), Some(0), "{}", said(&gone));
+    assert!(
+        !m.root
+            .join("home/.config/opencode/plugin/charter.ts")
+            .exists()
+    );
+}
+
+#[test]
+fn install_refuses_to_replace_an_opencode_plugin_charter_did_not_write() {
+    let m = Machine::new();
+    let dir = m.root.join("home/.config/opencode/plugin");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("charter.ts"),
+        "export const Theirs = async () => ({})\n",
+    )
+    .unwrap();
+
+    let out = m.charter(&["plugin", "install", "--harness", "opencode"]);
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    assert!(
+        said(&out).contains("charter did not write it"),
+        "{}",
+        said(&out)
+    );
+    assert_eq!(
+        m.read("home/.config/opencode/plugin/charter.ts"),
+        "export const Theirs = async () => ({})\n"
+    );
+}

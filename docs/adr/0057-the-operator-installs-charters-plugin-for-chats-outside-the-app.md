@@ -29,6 +29,8 @@ on a second run, and has `charter plugin uninstall` to take its writes back.
   `$CODEX_HOME/config.toml`. Codex runs config hooks beside the app's session flags, so a full
   install would run every state hook twice in an app chat. A doubled guard only refuses twice.
   Codex asks the operator to trust the hook, and it does not run until they do.
+- **opencode** gets only the guard, as a script in its global plugin directory, for Codex's
+  reason (added by [ADR 0058](0058-an-opencode-chat-loads-charters-shim-for-that-session-alone.md)).
 - **The retired plugin is never enabled.** Where a file the command writes enables
   `charter@charter`, the same write turns it off.
 

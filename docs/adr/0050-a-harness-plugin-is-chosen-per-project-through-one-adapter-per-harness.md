@@ -164,9 +164,11 @@ layer decided it: `charter.toml`, `workspace.json`, `charter.local.toml`, or not
   directories. opencode's docs name `plugins/`, and the operator's install has `plugin/`.
   `opencode.jsonc` is not read, because charter has no JSONC reader, so a plugin named only
   there is not listed.
-- **Cannot apply per chat**, for two reasons. charter does not start opencode chats yet (spec
-  decision 6). And opencode's plugin docs name no switch that turns one plugin off: it loads
-  every plugin from every config file and plugin directory, together.
+- **Cannot apply per chat**: opencode has no switch that turns one plugin off. It loads every
+  plugin from every config file and plugin directory, together. Measured on 1.18.23 when the
+  app began starting opencode chats ([ADR 0058](0058-an-opencode-chat-loads-charters-shim-for-that-session-alone.md)):
+  a project `opencode.json` holding `"plugin": []` did not remove a plugin another config
+  named.
 
 ## Why this shape
 

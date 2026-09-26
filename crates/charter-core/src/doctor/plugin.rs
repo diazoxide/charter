@@ -44,7 +44,7 @@ fn machine<'a>(d: &'a Doctor, name: &str) -> Result<&'a Machine, Row> {
     d.machine.as_ref().ok_or_else(|| {
         Row::not_checked(
             name,
-            "charter cannot tell where Claude Code and Codex keep their configuration",
+            "charter cannot tell where Claude Code, Codex and opencode keep their configuration",
         )
     })
 }
@@ -72,7 +72,7 @@ pub(super) fn plugin_install(d: &Doctor) -> Row {
     if here.is_empty() {
         return Row::ok(
             NAME,
-            "neither Claude Code nor Codex has a config folder on this machine",
+            "none of Claude Code, Codex and opencode has a config folder on this machine",
         );
     }
     let on = match installed(m, NAME) {
@@ -267,9 +267,11 @@ pub(super) fn superseded_plugin(d: &Doctor) -> Row {
         ),
         format!(
             "Delete its `{}` entry from each file named — `charter plugin install` turns it off \
-             in your user settings and Codex's config, and a plane's own file is yours to \
+             in your user settings and Codex's config and replaces the Python charter's opencode \
+             shim, and a plane's own file is yours to \
              edit.{} Chats outside the app get charter's own plugin from `charter plugin \
-             install`; the app's chats turn the old one off themselves.",
+             install`; the app's Claude Code chats turn the old one off themselves, and an \
+             opencode chat cannot, since opencode loads every plugin it finds.",
             crate::plugin::SUPERSEDED,
             if layers {
                 " A workspace's generated settings are rewritten without it by `charter \

@@ -342,18 +342,82 @@ fn a_chat_with_a_conversation_recorded_comes_back_resumed_on_the_same_profile() 
 }
 
 #[test]
-fn an_opencode_profile_refuses_here_too_because_this_is_where_a_chat_starts() {
+fn an_opencode_chat_starts_plain_and_resumes_by_its_session_flag() {
     charter_core::unsteered!();
+    // #371. opencode takes no id for a new session, so charter chooses none and adopts the
+    // one its shim reports; `-s <id>` brings one back.
     let plane = Plane::new();
     let bin = plane.harness();
     plane.profile("opencode", &bin, "");
 
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+    assert_eq!(ready.harness, Some(Harness::Opencode));
+    assert_eq!(ready.args, Vec::<String>::new());
+    assert_eq!(ready.session, None);
+    assert!(
+        ready
+            .env
+            .contains(&("CHARTER_HARNESS".to_owned(), "opencode".to_owned())),
+        "{:?}",
+        ready.env
+    );
+
+    let id = SessionId::new("ses_f232c39feffecxEyWLvftyLSYU").unwrap();
+    let mut again = plane.start("work");
+    again.resume = Some(id.clone());
+    let ready = start::ready(&again, plane.root()).expect("it resumes");
+    assert_eq!(ready.args, ["-s", id.as_str()]);
+    assert_eq!(ready.session, Some(id));
+}
+
+#[test]
+fn an_opencode_chat_is_armed_through_its_environment_and_nothing_on_its_line() {
+    charter_core::unsteered!();
+    // The shim rides in `OPENCODE_CONFIG_CONTENT`, so the command line is the profile's and
+    // charter's own words, exactly.
+    let plane = Plane::new();
+    a_wrapper_profile(&plane, "opencode", &["oc-work"]);
+    let shim = plane
+        .root()
+        .join("plugin")
+        .join(charter_core::opencode::SHIM);
+    fs::create_dir_all(shim.parent().unwrap()).unwrap();
+    fs::write(
+        &shim,
+        charter_core::opencode::shim(charter_core::opencode::Arming::Session),
+    )
+    .unwrap();
+
+    let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
+    let binary = plane.root().join("charter");
+    let plugin = plane.root().join("plugin");
+    let kit = charter_core::harness::Kit {
+        binary: &binary,
+        plugin: Some(&plugin),
+    };
+    let charter_core::harness::StateHooks::ThisSessionOnly { args, env, .. } =
+        Harness::Opencode.state_hooks(kit, Some(plane.root()), &ready.plugins)
+    else {
+        panic!("opencode is armed");
+    };
+    assert_eq!(ready.command_line(args), ["oc-work"]);
+    let config = env
+        .iter()
+        .find(|(name, _)| name == charter_core::opencode::CONFIG_ENV)
+        .map(|(_, value)| value.clone())
+        .expect("the shim is handed over");
+    assert!(config.contains("opencode/charter.ts"), "{config}");
+}
+
+#[test]
+fn an_opencode_profile_that_would_load_no_plugin_is_refused_where_the_chat_starts() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    a_wrapper_profile(&plane, "opencode", &["--pure"]);
+
     let why = start::ready(&plane.start("work"), plane.root()).expect_err("it refuses");
 
-    assert!(
-        why.contains("charter-app v1 starts Claude Code and Codex"),
-        "{why}"
-    );
+    assert!(why.contains("without charter's guard"), "{why}");
 }
 
 #[test]

@@ -47,6 +47,17 @@
 //! Twice in an app chat, the guard only refuses twice. Codex asks the operator to trust it the
 //! first time it starts, and until then it does not run — which the command says.
 //!
+//! # opencode
+//!
+//! opencode loads every script in its global plugin directory, so this adapter writes one: the
+//! opencode shim ([`crate::opencode`]) as `$XDG_CONFIG_HOME/opencode/plugin/charter.ts`, else
+//! `~/.config/opencode/plugin/charter.ts`, naming this binary by its absolute path. It carries
+//! only the guards before a tool runs, for Codex's reason: an app chat loads it beside the
+//! bundled shim, and a doubled guard only refuses twice where doubled state hooks would report
+//! and brief twice (ADR 0058). A file already at that name is replaced only when charter wrote
+//! it — this command, or the retired Python charter, whose shim guarded and briefed every chat
+//! by the `charter` on `PATH` — and any other file there is left alone with a sentence.
+//!
 //! # The retired plugin
 //!
 //! Nothing here ever enables `charter@charter`. Where a file this command writes anyway
@@ -76,7 +87,7 @@ pub const MARKETPLACE: &str = "charter-app";
 pub const INSTALLED_AS: &str = "charter@charter-app";
 
 /// What a person names a harness on the command line — a profile's `kind`.
-pub const HARNESSES: [&str; 2] = ["claude", "codex"];
+pub const HARNESSES: [&str; 3] = ["claude", "codex", "opencode"];
 
 /// Where things are on this machine, handed in so a test never reaches the operator's own.
 #[derive(Debug, Clone)]
@@ -85,6 +96,9 @@ pub struct Machine {
     pub claude_config: PathBuf,
     /// Codex's: `$CODEX_HOME`, else `~/.codex`.
     pub codex_home: PathBuf,
+    /// opencode's global config folder: `$XDG_CONFIG_HOME/opencode`, else
+    /// `~/.config/opencode`.
+    pub opencode_config: PathBuf,
     /// charter's own machine directory ([`crate::machine::dir`]), where the copy is kept.
     pub charter_dir: PathBuf,
     /// The `charter` a hook runs — this binary, by its resolved path.
@@ -138,12 +152,21 @@ impl Machine {
                 .ok_or("HOME is not set, so charter cannot tell where Codex keeps its config")?
                 .join(".codex"),
         };
+        let opencode_config = match var("XDG_CONFIG_HOME") {
+            Some(dir) => PathBuf::from(dir),
+            None => home
+                .clone()
+                .ok_or("HOME is not set, so charter cannot tell where opencode keeps its config")?
+                .join(".config"),
+        }
+        .join("opencode");
         let charter_dir = config_root
             .map(|root| crate::machine::dir(&root))
             .ok_or("charter cannot tell where its own machine directory is (HOME is not set)")?;
         Ok(Self {
             claude_config,
             codex_home,
+            opencode_config,
             charter_dir,
             binary,
             bundle,
@@ -190,6 +213,7 @@ enum Write {
     File(PathBuf, Vec<u8>),
     Tree(PathBuf, BTreeMap<PathBuf, Vec<u8>>),
     RemoveTree(PathBuf),
+    RemoveFile(PathBuf),
 }
 
 /// What one adapter would do, and the writes that do it.
@@ -295,6 +319,7 @@ pub fn adapter(harness: &str) -> Option<&'static dyn Adapter> {
     match harness {
         "claude" => Some(&ClaudeCode),
         "codex" => Some(&Codex),
+        "opencode" => Some(&Opencode),
         _ => None,
     }
 }
@@ -431,6 +456,13 @@ fn apply(plan: &Plan) -> (usize, Option<String>) {
                     _ => Ok(()),
                 }
             }
+            Write::RemoveFile(path) => {
+                hold(path);
+                match std::fs::remove_file(path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                    _ => Ok(()),
+                }
+            }
         };
         if let Err(e) = made {
             return (
@@ -447,7 +479,7 @@ fn apply(plan: &Plan) -> (usize, Option<String>) {
 
 fn path_of(w: &Write) -> &Path {
     match w {
-        Write::File(p, _) | Write::Tree(p, _) | Write::RemoveTree(p) => p,
+        Write::File(p, _) | Write::Tree(p, _) | Write::RemoveTree(p) | Write::RemoveFile(p) => p,
     }
 }
 
@@ -1080,6 +1112,125 @@ impl Adapter for Codex {
         plan.step(&path, "remove charter's Bash guard", removed);
         if removed {
             plan.settle(0, Write::File(path, doc.to_string().into_bytes()));
+        }
+        Ok(plan)
+    }
+}
+
+// ------------------------------------------------------------------------------------------
+// opencode
+// ------------------------------------------------------------------------------------------
+
+/// opencode: the guard shim, in its global plugin directory.
+pub struct Opencode;
+
+/// Who wrote a file at the shim's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Author {
+    Nobody,
+    /// `charter plugin install`, with the text it holds.
+    Charter(String),
+    /// The retired Python charter.
+    Python,
+    /// Somebody else, or a file charter cannot read.
+    Other,
+}
+
+impl Opencode {
+    /// `<opencode config>/plugin/charter.ts`.
+    fn shim(m: &Machine) -> PathBuf {
+        m.opencode_config.join("plugin").join("charter.ts")
+    }
+
+    fn author(path: &Path) -> Result<Author, String> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Author::Nobody),
+            Err(e) => return Err(format!("{} could not be read: {e}", path.display())),
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            return Ok(Author::Other);
+        };
+        Ok(if text.starts_with(crate::opencode::MARK) {
+            Author::Charter(text)
+        } else if text.starts_with(crate::opencode::PYTHON_MARK) {
+            Author::Python
+        } else {
+            Author::Other
+        })
+    }
+}
+
+impl Adapter for Opencode {
+    fn harness(&self) -> &'static str {
+        "opencode"
+    }
+
+    fn home(&self, m: &Machine) -> PathBuf {
+        m.opencode_config.clone()
+    }
+
+    fn install(&self, m: &Machine) -> Result<Plan, String> {
+        let mut plan = Plan::default();
+        let path = Self::shim(m);
+        let want = crate::opencode::shim(crate::opencode::Arming::GuardOnly(&m.binary));
+        let what = "charter's guard as an opencode plugin that runs this charter";
+        match Self::author(&path)? {
+            Author::Other => {
+                return Err(format!(
+                    "{} is there and charter did not write it, so it was left as it is; move it \
+                     aside and run this again",
+                    path.display()
+                ));
+            }
+            Author::Charter(text) if text == want => plan.step(&path, what, false),
+            Author::Python => plan.step(
+                &path,
+                "replace the retired Python charter's opencode shim with charter's guard",
+                true,
+            ),
+            Author::Charter(_) | Author::Nobody => plan.step(&path, what, true),
+        }
+        if plan.changes() {
+            plan.settle(0, Write::File(path, want.into_bytes()));
+        }
+        plan.notes.push(
+            "Only the guard is installed for opencode: the state hooks and the briefing reach an \
+             opencode chat only when the app starts it."
+                .to_owned(),
+        );
+        Ok(plan)
+    }
+
+    fn installed(&self, m: &Machine) -> Result<bool, String> {
+        Ok(matches!(Self::author(&Self::shim(m))?, Author::Charter(_)))
+    }
+
+    fn runs(&self, m: &Machine) -> Option<PathBuf> {
+        match Self::author(&Self::shim(m)).ok()? {
+            Author::Charter(text) => crate::opencode::binary_in(&text),
+            _ => None,
+        }
+    }
+
+    /// The Python charter's shim, which guards and briefs every opencode chat by whichever
+    /// `charter` is on `PATH`.
+    fn superseded(&self, m: &Machine) -> Vec<PathBuf> {
+        let path = Self::shim(m);
+        if Self::author(&path) == Ok(Author::Python) {
+            vec![path]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn uninstall(&self, m: &Machine) -> Result<Plan, String> {
+        let mut plan = Plan::default();
+        let path = Self::shim(m);
+        let ours = matches!(Self::author(&path)?, Author::Charter(_));
+        plan.step(&path, "remove charter's opencode guard", ours);
+        if ours {
+            plan.settle(0, Write::RemoveFile(path));
         }
         Ok(plan)
     }

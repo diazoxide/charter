@@ -9,8 +9,9 @@
 //!
 //! The app now ships its own plugin and arms every chat it starts with it, for that session
 //! alone ([`crate::plugin`], [`crate::harness::Harness::state_hooks`]): Claude Code loads the
-//! bundled plugin with `--plugin-dir`, and Codex is armed with `-c` flags from the same
-//! registry. So the guard runs in a chat because the app started it, whatever the profile's
+//! bundled plugin with `--plugin-dir`, Codex is armed with `-c` flags from the same
+//! registry, and opencode loads the bundle's opencode shim through `OPENCODE_CONFIG_CONTENT`
+//! ([`crate::opencode`]). So the guard runs in a chat because the app started it, whatever the profile's
 //! config folder holds, and there is no folder to ask about and nothing to put in one.
 //!
 //! What is left is the gate a launch still needs — the kind is one this app starts, the file
@@ -49,24 +50,36 @@ fn whole(value: &str) -> String {
 
 /// Why this app will not start `p` at all — `None` when it may.
 ///
-/// **Parsing is not launching.** [`crate::profiles`] reads all three kinds, `opencode`
-/// included, because the Python charter accepts one and both implementations read one plane:
-/// refusing it at the PARSE would give an operator two different answers about their own
-/// file. What this app will not do is start one, and that is the spec's decision (decision 6,
-/// "Harnesses in v1: Claude Code and Codex. opencode follows").
+/// **Parsing is not launching.** [`crate::profiles`] reads every kind the Python charter
+/// accepted, so both implementations give one answer about one file; what this app starts is
+/// asked here. Since #371 that is all three kinds.
 ///
 /// Decided from the DECLARED `kind`, which is a known value
 /// ([`crate::harness::Harness::of_kind`]), never from the program name, which is not.
+///
+/// **And a profile that would start its harness past charter's guard is not started.** An
+/// opencode profile that passes `--pure`, or sets the variables charter arms opencode through,
+/// would run a chat that looks guarded and loads no charter plugin at all (measured, opencode
+/// 1.18.23 — [`crate::opencode::disarmed_by`]).
 fn not_startable(p: &Profile) -> Option<String> {
-    if crate::harness::Harness::of_kind(&p.kind).is_some() {
-        return None;
-    }
-    Some(format!(
-        "profile '{}' runs {}, which this app does not start — charter-app v1 starts Claude \
-         Code and Codex, and opencode follows.",
-        shown::short(&p.name),
-        shown::short(&p.kind),
-    ))
+    let Some(harness) = crate::harness::Harness::of_kind(&p.kind) else {
+        return Some(format!(
+            "profile '{}' runs {}, which this app does not start.",
+            shown::short(&p.name),
+            shown::short(&p.kind),
+        ));
+    };
+    let disarmed = match harness {
+        crate::harness::Harness::Opencode => crate::opencode::disarmed_by(&p.command, &p.env),
+        crate::harness::Harness::ClaudeCode | crate::harness::Harness::Codex => None,
+    };
+    disarmed.map(|why| {
+        format!(
+            "profile '{}' would start opencode without charter's guard: {why}. Nothing was \
+             started — take it out of the profile in charter.local.toml.",
+            shown::short(&p.name),
+        )
+    })
 }
 
 /// Why charter may not run `p`'s command — `None` when it may.
@@ -161,6 +174,9 @@ pub fn detect(p: &Profile, root: &Path) -> Wiring {
                     "codex" =>
                         "the app arms each Codex chat with charter's hooks; Codex asks once to trust them"
                             .to_owned(),
+                    "opencode" =>
+                        "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
+                            .to_owned(),
                     _ => format!(
                         "the app arms each chat with its own plugin, {}",
                         crate::plugin::LOADED_AS
@@ -229,11 +245,36 @@ mod tests {
     }
 
     #[test]
-    fn an_opencode_profile_is_refused_by_what_this_app_starts() {
+    fn an_opencode_profile_may_start_with_nothing_installed() {
+        // #371: the app arms an opencode chat with its own shim, as it does the other two.
         let root = tempfile::tempdir().expect("a plane");
-        let why = refusal(&built_in("opencode", "opencode"), root.path())
-            .expect("opencode is not started");
-        assert!(why.contains("does not start"), "{why}");
+        assert_eq!(
+            refusal(&built_in("opencode", "opencode"), root.path()),
+            None
+        );
+    }
+
+    #[test]
+    fn an_opencode_profile_that_would_load_no_plugin_is_not_started() {
+        // Measured on 1.18.23: `--pure` and `OPENCODE_PURE=1` load no external plugin, and the
+        // vault's content then reached the model.
+        let root = tempfile::tempdir().expect("a plane");
+        let mut pure = built_in("opencode", "opencode");
+        pure.command.push("--pure".to_owned());
+        let why = refusal(&pure, root.path()).expect("refused");
+        assert!(
+            why.contains("without charter's guard") && why.contains("--pure"),
+            "{why}"
+        );
+
+        let mut env = built_in("opencode", "opencode");
+        env.env = vec![("OPENCODE_CONFIG_CONTENT".to_owned(), "{}".to_owned())];
+        assert!(refusal(&env, root.path()).is_some());
+
+        // The same flag on another harness is that harness's business.
+        let mut claude = built_in("claude", "claude");
+        claude.command.push("--pure".to_owned());
+        assert_eq!(refusal(&claude, root.path()), None);
     }
 
     #[cfg(unix)]

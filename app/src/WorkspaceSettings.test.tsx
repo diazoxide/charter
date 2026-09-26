@@ -131,7 +131,7 @@ const HARNESSES: HarnessPlugins[] = [
     title: "opencode",
     record: "/home/dev/.config/opencode",
     unsupported:
-      "plugins for opencode are not supported yet — charter does not start opencode chats yet",
+      "plugins for opencode are not supported yet — opencode has no switch that turns one plugin off",
     trouble: null,
     local_left_out: null,
     plugins: [],

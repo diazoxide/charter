@@ -24,6 +24,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   doctor`'s `personas` and `persona grant` rows now run it instead of saying "not checked".
   A refusal about a missing persona suggests `charter persona create` again.
   ([#365](https://github.com/diazoxide/charter/issues/365))
+- **The app starts opencode chats.** Pick an opencode profile in the new-chat picker and the
+  chat runs with charter's guard: a tool call the guard refuses does not run, and opencode is
+  told why. The chat shows when it is working, when opencode asks your permission, and when its
+  turn ends. It also gets the briefing and handed-back reports with your prompt. Nothing is
+  written into opencode's configuration for this. An opencode chat reports nothing before your
+  first prompt, and it reads waiting after you answer a permission prompt until its turn ends.
+  A profile that passes `--pure` would load no plugin, so it is refused with the reason.
+  `charter plugin install --harness opencode` installs the guard for opencode chats you start
+  in a terminal, and replaces the retired Python charter's opencode plugin if it is there.
+  ([#371](https://github.com/diazoxide/charter/issues/371))
 - **A project tab can move into a window of its own, and back.** Right-click a project tab, or
   use the palette, and choose *Move project … to a new window*. Its chats keep running. In that
   window, *Move project … to the main window* brings it back, and so does closing the window.
