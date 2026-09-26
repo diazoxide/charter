@@ -262,7 +262,12 @@ pub fn binary_in(text: &str) -> Option<PathBuf> {
 
 /// The config an app chat is started with in [`CONFIG_ENV`]: the shim at `shim`, and nothing
 /// else. A `file://` URL, percent-encoded, so no character of a path can end it early.
-pub fn session_config(shim: &Path) -> String {
+///
+/// With `skills`, the shim is named in opencode's `[spec, options]` form and handed that
+/// directory as its option, which it adds to the skills opencode discovers (ADR 0063). Not a
+/// `skills` key beside `plugin`: opencode merges its configs with arrays replaced, so one here
+/// would drop every skills path the operator's own config names (measured on 1.18.32).
+pub fn session_config(shim: &Path, skills: Option<&Path>) -> String {
     let mut url = String::from("file://");
     for byte in shim.display().to_string().bytes() {
         if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
@@ -271,8 +276,15 @@ pub fn session_config(shim: &Path) -> String {
             url.push_str(&format!("%{byte:02X}"));
         }
     }
-    serde_json::json!({ "plugin": [url] }).to_string()
+    let spec = match skills {
+        Some(dir) => serde_json::json!([url, { SKILLS_OPTION: dir.display().to_string() }]),
+        None => serde_json::Value::from(url),
+    };
+    serde_json::json!({ "plugin": [spec] }).to_string()
 }
+
+/// The shim's option that names charter's skills directory.
+const SKILLS_OPTION: &str = "skills";
 
 /// Seconds a hook the registry does not name is given — the Bash guard's own.
 const DEADLINE: u32 = 10;
@@ -314,7 +326,18 @@ pub fn disarmed_by(command: &[String], env: &[(String, String)]) -> Option<Strin
 }
 
 /// The hooks an app chat's shim registers.
-const SESSION_HOOKS: &str = r#"    // `$CHARTER_SESSION_ID` in every shell a tool opens, so a `charter` command run there
+const SESSION_HOOKS: &str = r#"    // charter's skills, beside every skills path the operator's configs name. opencode hands
+    // this hook its live merged config before it discovers any skill, and scans each path in
+    // `skills.paths` for `SKILL.md` (ADR 0063). Appended, never in their place.
+    config: async (cfg) => {
+      const skills = typeof options?.skills === "string" ? options.skills : ""
+      if (!skills || !cfg || typeof cfg !== "object") return
+      if (!cfg.skills || typeof cfg.skills !== "object") cfg.skills = {}
+      const paths = Array.isArray(cfg.skills.paths) ? cfg.skills.paths : []
+      if (!paths.includes(skills)) cfg.skills.paths = [...paths, skills]
+    },
+
+    // `$CHARTER_SESSION_ID` in every shell a tool opens, so a `charter` command run there
     // knows its conversation, as `$CLAUDE_CODE_SESSION_ID` tells it in a Claude Code chat.
     "shell.env": async (input, output) => {
       const sid = rootOf(input?.sessionID)
@@ -498,7 +521,8 @@ const refusal = (said) => {
 }
 
 // Everything below is per opencode instance: one server may host several directories.
-export const CharterPlugin = async (plugin) => {
+// `options` is what the config that named this file handed it, if anything.
+export const CharterPlugin = async (plugin, options) => {
   const directory = typeof plugin?.directory === "string" ? plugin.directory : process.cwd()
 
   // Sessions this process created, and each sub-agent session's parent: a sub-agent's events are

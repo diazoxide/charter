@@ -115,6 +115,30 @@ fn an_unattended_run_is_told_to_stop_rather_than_guess() {
 }
 
 #[test]
+fn a_chat_started_with_charters_skills_to_list_is_briefed_on_them_last() {
+    // ADR 0063: the neutral route, for a harness that cannot load a skills directory for one
+    // session. The variable is set by the app for such a chat alone.
+    let (_d, root) = plane();
+    let skills = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/src-tauri/plugin/skills");
+    let dir = skills.display().to_string();
+    let got = told(
+        &root,
+        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_SKILLS_DIR", &dir)],
+        serde_json::json!({}),
+    );
+    let last = got.last().expect("a briefing");
+    assert!(last.starts_with("⬢ **charter's skills**"), "{last}");
+    assert!(last.contains("`safe-remove`"), "{last}");
+
+    let without = told(
+        &root,
+        &[("CHARTER_SESSION_ID", "s1")],
+        serde_json::json!({}),
+    );
+    assert!(!without.iter().any(|p| p.contains("charter's skills")));
+}
+
+#[test]
 fn the_persona_the_app_pins_is_the_one_adopted() {
     let (_d, root) = plane();
     std::fs::create_dir_all(root.join("personas/web")).unwrap();

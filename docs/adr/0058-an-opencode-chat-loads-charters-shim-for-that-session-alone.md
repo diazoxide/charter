@@ -61,6 +61,7 @@ a Claude Code hook would get, and turns the answer into opencode's terms.
 | `session.idle` | `stop` | reported to the app |
 | `permission.asked` | `notification` | reported to the app: the chat needs you |
 | `shell.env` | none | `CHARTER_SESSION_ID` in every shell, as Claude Code's `CLAUDE_CODE_SESSION_ID` |
+| `config` | none | appends the skills directory the shim was handed as its option to `skills.paths` ([ADR 0063](0063-every-harness-a-chat-runs-on-is-handed-charters-skills-by-its-own-route.md)) |
 
 The routing table is the core's (`opencode::TOOLS`), and a test holds that every word a tool is
 sent to is wired to that tool's Claude Code name in `hookreg`. A bash call is judged in its
