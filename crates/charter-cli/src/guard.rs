@@ -137,6 +137,38 @@ pub fn pretooluse(payload: &str, now: Option<&str>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// From here on, a panic anywhere in this process is a refusal: exit 2, one line on stderr.
+///
+/// **A crashed guard is otherwise an allow** (#349). A panic exits 101, or under the release
+/// profile's `panic = "abort"` ends in SIGABRT, and a harness reads every non-zero status but
+/// 2 as a non-blocking error and runs the tool. `catch_unwind` cannot help where there is no
+/// unwinding, but a panic hook runs before the abort does, so the hook answers and exits
+/// itself — the abort is never reached. It covers every thread, which is right: under abort a
+/// panic on any thread ends the process, and it must end it as a refusal.
+///
+/// Exit 2 is what Claude Code and Codex both read as "block", handing stderr to the model; they
+/// ignore stdout on it, so no JSON is printed. The panic's own message is not said: it can
+/// carry what the guard was judging, and the model is owed only why the call did not run.
+///
+/// Only for a `PreToolUse` word. A crash on a reporting hook must never exit 2, which on `Stop`
+/// would keep a session from ending.
+pub(crate) fn refuse_on_a_crash() {
+    std::panic::set_hook(Box::new(|info| {
+        let at = info
+            .location()
+            .map(|at| format!(" (at {}:{})", at.file(), at.line()))
+            .unwrap_or_default();
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(
+            err,
+            "charter guard: this tool call is refused because the guard crashed{at} before it \
+             could answer, and a guard that could not answer does not allow."
+        );
+        let _ = err.flush();
+        std::process::exit(i32::from(DENY_EXIT));
+    }));
+}
+
 /// Print the verdict, or fall back to the one status a harness reads as "refused".
 ///
 /// `hooks.py:_deny`. The flush is inside the check on purpose: a `print` to a pipe lands in a
