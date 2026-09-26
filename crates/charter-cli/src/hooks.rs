@@ -182,27 +182,34 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
     });
 }
 
-/// `userpromptsubmit`'s own work: the heartbeat, and any report a chat this one handed work to
-/// has sent back (charter-app#259), handed to the turn that is starting as
-/// `additionalContext` — quoted as data, never typed into the chat. The rest of the Python
-/// handler — the roster, the commitment gate, the "control plane updated" note — is not
-/// ported (see the Hook help).
+/// `userpromptsubmit`'s own work, handed to the turn that is starting as one
+/// `additionalContext`: the heartbeat; the commitment gate
+/// ([`charter_core::commitgate`], charter#369), which tells a prompt asking for work with a real
+/// fork in it to scout and ask before building; and any report a chat this one handed work to
+/// has sent back (charter-app#259), quoted as data, never typed into the chat.
+///
+/// Of the rest of the Python handler, the persona roster went with `routing:`, which is
+/// retired, and "control plane updated" is the window's to say, as a mark on the chat's tab
+/// (charter#369's ruling).
 pub fn userpromptsubmit(payload: &str, now: Option<&str>) {
     with_hook(payload, now, |hook| {
         hook.touch_piece();
         if !hook.in_plane {
             return;
         }
+        let mut parts: Vec<String> = charter_core::commitgate::nudge(hook).into_iter().collect();
         // The app's number for this chat, which is what a report is left under. A chat the app
         // did not start has none, and nothing was left for it.
-        let Some(chat) = env(charter_core::hookwire::CHAT_ENV).and_then(|id| id.parse().ok())
-        else {
-            return;
-        };
-        let reports =
-            charter_core::handback::take(hook.root, charter_core::handback::For::Chat(chat));
-        if let Some(text) = charter_core::handback::context(&reports, false) {
-            say(&charter_core::handback::emitted("UserPromptSubmit", &text));
+        if let Some(chat) = env(charter_core::hookwire::CHAT_ENV).and_then(|id| id.parse().ok()) {
+            let reports =
+                charter_core::handback::take(hook.root, charter_core::handback::For::Chat(chat));
+            parts.extend(charter_core::handback::context(&reports, false));
+        }
+        if !parts.is_empty() {
+            say(&charter_core::handback::emitted(
+                "UserPromptSubmit",
+                &parts.join("\n\n"),
+            ));
         }
     });
 }

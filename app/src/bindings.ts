@@ -256,6 +256,12 @@ export const commands = {
 	 *  will be tried again at the next launch.
 	 */
 	chatsThatWouldNotStart: (plane: PlaneId) => typedError<([string, string])[], string>(__TAURI_INVOKE("chats_that_would_not_start", { plane })),
+	/**
+	 *  Every chat this plane has open that is running on instructions the plane has changed since
+	 *  it started (charter#369): its tab is marked, and the mark names the files. The window asks
+	 *  again whenever the plane changes on disk.
+	 */
+	chatsPlaneUpdated: (plane: PlaneId) => typedError<PlaneUpdated[], string>(__TAURI_INVOKE("chats_plane_updated", { plane })),
 	/**  Says which chat is in front, so the record brings that one back in front. */
 	chatInFront: (plane: PlaneId, session: number | null) => typedError<null, string>(__TAURI_INVOKE("chat_in_front", { plane, session })),
 	/**  What this operator has pinned in this project. */
@@ -1884,6 +1890,19 @@ export type PlaneSaving = {
 	modeFrom: string,
 	/**  The newest [`JOURNAL_SHOWN`] saves, newest first. */
 	journal: SaveEntry[],
+};
+
+/**
+ *  A chat running on instructions the plane has changed since it started (charter#369): the
+ *  "control plane updated" the Python said in the transcript, said on the chat's tab instead.
+ */
+export type PlaneUpdated = {
+	session: number,
+	/**
+	 *  The files that changed, by their path from the plane root: `CLAUDE.md`,
+	 *  `personas/steward/persona.md`, …
+	 */
+	files: string[],
 };
 
 /**

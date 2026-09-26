@@ -174,13 +174,41 @@ pub(super) fn front_door(d: &Doctor) -> Row {
             name: NAME.to_owned(),
             status: super::Status::Ok,
             detail: format!(
-                "none declared — {others} persona(s) exist, so routing advice is inert (no \
-                 acting persona means no `routing:` level)"
+                "none declared — {others} persona(s) exist, and a session started with none \
+                 of them has no identity"
             ),
             hint: "charter persona default <name>".to_owned(),
         };
     }
     Row::ok(NAME, "none declared")
+}
+
+/// `routing:` in a persona's frontmatter, which is retired (charter#369): read without error,
+/// acted on by nothing, and said so here. Personas reach the harness as sub-agents, which is
+/// where a request is routed now.
+///
+/// **No row where no persona declares it**, and green where one does: a plane the Python
+/// scaffolded carries `routing: advise` on its front door, and a yellow row on every such plane
+/// would be a warning about a line that does no harm. The row is there so the key is not
+/// silently meaningless.
+pub(super) fn routing(d: &Doctor) -> Option<Row> {
+    let declaring: Vec<String> = crate::personagrant::list_personas(&d.root)
+        .into_iter()
+        .filter(|name| {
+            crate::personas::load(&d.root, name)
+                .is_some_and(|pairs| pairs.iter().any(|(key, _)| key == "routing"))
+        })
+        .collect();
+    (!declaring.is_empty()).then(|| {
+        Row::ok(
+            "routing",
+            format!(
+                "ignored — `routing:` is retired; personas are offered to the harness as \
+                 sub-agents (declared by {})",
+                declaring.join(", ")
+            ),
+        )
+    })
 }
 
 /// `persona.def_path(name).exists()`: the directory layout or the legacy flat file.

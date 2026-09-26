@@ -2,7 +2,6 @@
 name: front-door.2
 role: Front Door.2
 vault: none
-routing: advise
 delegate-when: routing work to the right persona, and scoping a request before code is written
 ---
 

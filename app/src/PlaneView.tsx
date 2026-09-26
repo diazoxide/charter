@@ -70,6 +70,7 @@ import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
 import { useExtensionFacts } from "./extensionFacts";
 import { usePlaneChanged } from "./planeChanged";
+import { PlaneUpdatedMark, usePlaneUpdated, type PlaneUpdates } from "./PlaneUpdated";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
@@ -294,6 +295,9 @@ export function PlaneView({
    *  a terminal, a workspace another chat made. The sidebar and the focused workspace's panels
    *  are read again on it. */
   const changesOnDisk = usePlaneChanged([plane]);
+  /** The chats running on instructions the plane has changed since they started (charter#369),
+   *  each marked on its tab. */
+  const planeUpdates = usePlaneUpdated(plane, changesOnDisk);
   // The plane root is watched, so an edit to `charter.toml` or `charter.local.toml` — in an
   // editor, from a `git pull` — is one of these, and what this project has on may have moved
   // with it (charter-app#253). Not at the mount: `useExtensionsOn` asks then.
@@ -2420,6 +2424,7 @@ export function PlaneView({
                           tabs={tabs}
                           id={id}
                           states={states}
+                          updates={planeUpdates}
                           pin={
                             <Pin
                               held={isPinned(id)}
@@ -2452,7 +2457,7 @@ export function PlaneView({
               key: String(id),
               offer: by(`tab.select:${id}`),
               needs: waitingOn(id),
-              children: <TabMarks tabs={tabs} id={id} states={states} />,
+              children: <TabMarks tabs={tabs} id={id} states={states} updates={planeUpdates} />,
             }))}
             onPress={press}
           />
@@ -3367,15 +3372,19 @@ function TabMarks({
   tabs,
   id,
   states,
+  updates,
   pin,
 }: {
   tabs: Tabs;
   id: number;
   states: ChatStates;
+  /** The chats the plane's instructions changed under, by session (charter#369). */
+  updates: PlaneUpdates;
   /** The pin mark, on the strip; the menu of hidden tabs draws none. */
   pin?: ReactNode;
 }) {
   const lead = contentsOf(tabs, id)[0]?.content;
+  const chat = chatOf(tabs, id);
   if (lead?.kind === "view") {
     return (
       <>
@@ -3389,6 +3398,7 @@ function TabMarks({
     <>
       <span className="tab-name">{tabs.byId[id].name}</span>
       {pin}
+      <PlaneUpdatedMark files={chat === undefined ? undefined : updates[chat]} />
       {/* The first pane's session is the tab's own chat. Its own element, so what a tab IS
           stays separate from what it is DOING — a tab whose text changed every time a turn
           began would be unreadable, and untestable. */}

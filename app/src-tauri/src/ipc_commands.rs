@@ -50,6 +50,7 @@ macro_rules! app_commands {
                 chat_states,
                 opened_chats,
                 chats_that_would_not_start,
+                chats_plane_updated,
                 chat_in_front,
                 plane_pins,
                 pin_project,

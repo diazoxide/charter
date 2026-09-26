@@ -247,7 +247,8 @@ in a near-duplicate pair (`DUP`), and how often it was dispatched as a sub-agent
 persona with no memory is `dormant`, one with none recent `idle`, a draft `draft`, and one
 never dispatched while others were `never dispatched`. It also names skills a persona
 declares and never uses, or uses and never declared, and how often routing advice fired
-against the dispatches that followed it.
+against the dispatches that followed it — advice only the Python charter gave, read from the
+dispatch log it wrote; `routing:` is retired, and charter gives none now.
 
 The dispatch tally is written by a hook as sub-agents return, and can miss background
 dispatches, so `DISP` is a floor. Seeding it from past sessions' transcripts is not in this

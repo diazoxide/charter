@@ -20,6 +20,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   With unsaved work in the tree, what came in is left alone and the save still runs. If the
   tree has conflicts, or there is no remote to pull from, the command stops and saves nothing.
   ([#375](https://github.com/diazoxide/charter/issues/375))
+- **A chat's tab says when the plane's instructions changed after it started.** A running chat
+  keeps the `CLAUDE.md`, harness settings, sub-agents and persona charter it read when it
+  started. When one of them changes on disk, its tab gets a quiet mark naming the files, so you
+  know it will run on the old ones until you start it fresh. It is not a needs-you item.
+  ([#369](https://github.com/diazoxide/charter/issues/369))
+- **The commitment gate is back.** When a prompt asks for work and leaves a real choice open
+  (open-ended wording, a broad scope, something irreversible, a long many-part ask), the chat
+  is told to look first and then ask you at that choice before it builds. It stays quiet for
+  questions, for work with nothing to ask about, for slash commands and for unattended runs,
+  and for the three prompts after it fires.
+  ([#369](https://github.com/diazoxide/charter/issues/369))
 
 ### Changed
 
@@ -41,6 +52,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in the bar and read in full from its tooltip or the Saving view. The window can no longer be
   made narrower than 1024 px; at that width the title bar keeps room for two project tabs.
   ([#403](https://github.com/diazoxide/charter/issues/403))
+- **`routing:` in a persona is retired.** Personas are offered to the harness as sub-agents,
+  which is where work is routed. A persona that still declares `routing:` loads as before,
+  `charter doctor` says the key is ignored, and `charter init` no longer writes it.
+  ([#369](https://github.com/diazoxide/charter/issues/369))
 
 ### Fixed
 

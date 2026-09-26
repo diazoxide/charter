@@ -958,7 +958,6 @@ fn front_door_text(name: &str, role: &str) -> String {
 name: {name}
 role: {role}
 vault: none
-routing: advise
 delegate-when: routing work to the right persona, and scoping a request before code is written
 ---
 
@@ -2491,9 +2490,10 @@ mod tests {
 
     /// The persona file is `commands._FRONT_DOOR.format(name=..., role=...)` byte for byte.
     /// The fixture is that call's output from the Python charter, for `front-door.2`, whose
-    /// role `str.title()` makes `Front Door.2`.
+    /// role `str.title()` makes `Front Door.2` — less its `routing: advise` line, which is
+    /// retired (charter#369).
     #[test]
-    fn the_front_door_is_the_pythons_template_byte_for_byte_and_is_declared() {
+    fn the_front_door_is_the_pythons_template_less_routing_and_is_declared() {
         let (_dir, root) = empty_plane();
 
         let outcome = init(
@@ -2508,7 +2508,7 @@ mod tests {
         let dir = root.join("personas/front-door.2");
         assert_eq!(
             std::fs::read_to_string(dir.join("persona.md")).expect("persona.md"),
-            include_str!("testdata/front-door-as-python-renders-it.md")
+            include_str!("testdata/front-door.md")
         );
         assert!(dir.join("memory/.gitkeep").is_file());
         assert!(dir.join("refs/.gitkeep").is_file());

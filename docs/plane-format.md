@@ -1572,7 +1572,8 @@ starting with `_` (`charter/persona.py:234`).
     (`charter/commands_persona.py:36`, `:113`, `:118` — `extends` is spliced after `vault`,
     then `delegate-when` after `vault` too, so `extends` ends up above `delegate-when`;
     confirmed by running `persona create --extends`). Front door order:
-    `name, role, vault, routing, delegate-when` (`charter/commands.py:2597`).
+    `name, role, vault, routing, delegate-when` (`charter/commands.py:2597`); charter-app's
+    `init` writes `name, role, vault, delegate-when`, since `routing` is retired (charter#369).
   - Body: everything after the closing `---`, stripped.
 
 Full frontmatter vocabulary — `KNOWN_KEYS = AGENT_PASSTHROUGH_KEYS | CHARTER_OWN_KEYS`
@@ -1595,8 +1596,8 @@ is a string; "type" below is how charter interprets it.
 | `disallowed-tools` | CSV | absent | Emitted as the agent's `disallowedTools:` (denylist) | stable | `charter/commands_persona.py:923` |
 | `skills` | CSV of `[plugin:]skill` | absent | Preloaded into the sub-agent; emitted as `skills:`; linted against installed skills | stable | `charter/persona.py:1957`, `charter/commands_persona.py:908` |
 | `draft` | `true/yes/1/on` (case-insensitive) truthy set | absent = not a draft | While set, **no** sub-agent is generated and any generated one is removed | stable | `charter/persona.py:1843`, `:1846`, `charter/commands_persona.py:1150` |
-| `routing` | `off` \| `advise` \| `require` | absent/unknown → `off` | How insistently this persona hands work away; drives the UserPromptSubmit roster block | stable | `charter/persona.py:936`, `:939`, `charter/hooks.py:8518` |
-| `routes-to` | CSV of persona names | absent | Priority order for the roster (never restricts) | stable | `charter/persona.py:962`, `:1001` |
+| `routing` | `off` \| `advise` \| `require` | absent/unknown → `off` | Drove the Python's UserPromptSubmit roster block. **Retired** in charter-app (charter#369): read without error, acted on by nothing, and `charter doctor` names the personas that still declare it. Personas reach the harness as sub-agents, which is where routing happens | retired | `charter/persona.py:936`, `:939`, `charter/hooks.py:8518` |
+| `routes-to` | CSV of persona names | absent | Priority order for the roster (never restricts). **Retired** with `routing` — there is no roster | retired | `charter/persona.py:962`, `:1001` |
 | `activity` | `orchestrator` \| `standby` \| `advisory` | absent | Declares memory volume is not a usage signal; changes `persona stats` status | stable | `charter/persona.py:2408`, `:2444` |
 | `dispatch-isolation` | `worktree` | absent | Emits `isolation: worktree` into the agent and a sentence into its description | stable | `charter/commands_persona.py:802`, `:916` |
 | `model` | string | absent | Passed through verbatim into the agent frontmatter | stable | `charter/persona.py:305`, `charter/commands_persona.py:953` |
@@ -3012,8 +3013,12 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 
 ### `sessions/<sid>.configver`
 - **Format:** plain text, a 40-char git sha + `\n`
-- **Status:** **internal** — hooks-only baseline for the "control plane updated" nudge.
-  Deleted ⇒ the next UserPromptSubmit re-baselines silently and nudges once less.
+- **Status:** **internal**, Python only — hooks-only baseline for the "control plane updated"
+  nudge. Deleted ⇒ the next UserPromptSubmit re-baselines silently and nudges once less.
+  charter-app writes none: the window marks a chat's tab when `CLAUDE.md`, `AGENTS.md`,
+  `.claude/settings.json`, `.claude/agents/*.md` or a `personas/*/persona.md` changed after it
+  started, from what it read of them at the chat's start, and keeps that in memory
+  (charter#369).
 - **Written by:** `charter/hooks.py:7875` (`_write_configver`)
 - **Read by:** `charter/hooks.py:7891`
 - **Git:** gitignored
@@ -3037,8 +3042,9 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 
 ### `sessions/<sid>.route-pending`
 - **Format:** plain text, comma-separated persona names + `\n`
-- **Status:** **internal** — set by one hook event and taken by the next in the same
-  process family. Deleted ⇒ the routing suggestion is forgotten.
+- **Status:** **internal**, Python only — set by one hook event and taken by the next in the
+  same process family. Deleted ⇒ the routing suggestion is forgotten. charter-app neither
+  writes nor reads it: `routing:` is retired (charter#369).
 - **Written by:** `charter/hooks.py:8366` (`_route_mark_set`)
 - **Read by:** `charter/hooks.py:8377` (`_route_mark_take`), cleared `charter/hooks.py:8388`
 - **Git:** gitignored

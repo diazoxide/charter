@@ -38,6 +38,11 @@ const ALPHA = `${PLANE}/workspaces/alpha`;
  *  deletes a file. */
 let disk: Map<string, string>;
 
+/** The chats the core put back, and which of them it says are running on instructions the
+ *  plane has changed since they started (charter#369). */
+let chatsOpen: unknown[];
+let updated: { session: number; files: string[] }[];
+
 function todosPanel() {
   return {
     key: "charter/todos",
@@ -80,7 +85,8 @@ function core(): {
       return handler;
     }
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
-    if (cmd === "opened_chats") return [];
+    if (cmd === "opened_chats") return chatsOpen;
+    if (cmd === "chats_plane_updated") return updated;
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,
@@ -135,6 +141,8 @@ const todoRows = () =>
 beforeEach(() => {
   globalThis.localStorage.clear();
   forgetThisLaunch();
+  chatsOpen = [];
+  updated = [];
   disk = new Map([
     ["m8-1", "M8.1 Ship the watcher"],
     ["m8-2", "M8.2 Test the watcher"],
@@ -203,5 +211,49 @@ describe("what a project has on, when its settings change on disk (charter-app#2
     await waitFor(() =>
       expect(asked.filter((cmd) => cmd === "extensions_on").length).toBeGreaterThan(before),
     );
+  });
+});
+
+describe("a chat running on instructions the plane has changed since (charter#369)", () => {
+  const steward = {
+    session: 1,
+    name: "steward",
+    cwd: ALPHA,
+    harness: "claude-code",
+    in_front: true,
+    resumed: null,
+    fresh: null,
+    profile: null,
+    persona: "steward",
+    unreported: null,
+    pinned: false,
+    label: null,
+    from: null,
+  };
+  const mark = () => screen.queryByRole("img", { name: /plane updated/i });
+
+  it("has its tab marked once the plane says so, naming what changed", async () => {
+    chatsOpen = [steward];
+    const { changed } = core();
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByTestId("pane").length).toBeGreaterThan(0));
+    expect(mark()).toBeNull();
+
+    // `CLAUDE.md` edited in another chat, or arriving with a `git pull`.
+    updated = [{ session: 1, files: ["CLAUDE.md"] }];
+    changed(PLANE);
+
+    await waitFor(() => expect(mark()).not.toBeNull());
+    expect(mark()).toHaveAttribute("title", expect.stringContaining("CLAUDE.md"));
+  });
+
+  it("is not a needs-you item: the queue and its counts stay as they were", async () => {
+    chatsOpen = [steward];
+    updated = [{ session: 1, files: ["CLAUDE.md"] }];
+    core();
+    render(<App />);
+
+    await waitFor(() => expect(mark()).not.toBeNull());
+    expect(screen.queryByRole("button", { name: /need you/i })).toBeNull();
   });
 });
