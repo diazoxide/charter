@@ -1253,6 +1253,24 @@ fn send_input(
         .input(session, &text)
 }
 
+/// Sends a pane's bytes that are not text to the session's program, each as the one byte it
+/// is: a mouse report in the default encoding, which xterm hands over one character per byte
+/// (charter#493). Sent as text, a byte above 127 would reach the program as two.
+#[tauri::command]
+#[specta::specta]
+fn send_input_bytes(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    planes
+        .held(&plane)?
+        .chats()
+        .sessions()
+        .input(session, &bytes)
+}
+
 /// Tells a session how big the pane showing it now is.
 #[tauri::command]
 #[specta::specta]
