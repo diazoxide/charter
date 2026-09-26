@@ -149,6 +149,11 @@ impl Hook<'_> {
         .name
     }
 
+    /// Whether the launcher started this chat at the plane root, in no workspace (SI-1).
+    fn at_plane_root(&self) -> bool {
+        crate::active::at_plane_root_in(self.env)
+    }
+
     /// `_touch_piece`: the worker in the payload's `cwd` is alive.
     pub fn touch_piece(&self) {
         let cwd = self.text("cwd");
@@ -546,7 +551,8 @@ pub fn memory_share_note(root: &Path) -> &'static str {
 fn mem_cadence_nudge(hook: &Hook, count: u64) -> String {
     let session = hook.workspace_session();
     let ws = hook.workspace(session.as_deref());
-    let live = crate::workspaces::Plane::open(hook.root).is_live(&ws);
+    // A plane-root chat is in no workspace, so no workspace's memory is where its facts go.
+    let live = !hook.at_plane_root() && crate::workspaces::Plane::open(hook.root).is_live(&ws);
     let how = if live {
         format!("`charter workspace remember \"<fact>\"` (workspace **{ws}**)")
     } else if let Some(active) = hook.persona() {

@@ -500,6 +500,23 @@ fn the_cadence_nudge_names_the_live_workspace_of_the_apps_chat_id_first() {
 }
 
 #[test]
+fn a_plane_root_chat_is_never_nudged_toward_a_workspaces_memory() {
+    // SI-1: a chat the app started at the plane root is in no workspace, and a `workspace
+    // remember` there refuses. Its pointer would still name `alpha`; the root outranks it.
+    let p = Plane::new().with_env("CHARTER_PLANE_ROOT_SESSION", "1");
+    live_alpha_for(&p, "chat-1");
+    p.persona("ops", "role: ops");
+    std::fs::write(
+        p.root.join("charter.toml"),
+        "schema = 1\n\n[persona]\ndefault = \"ops\"\n",
+    )
+    .unwrap();
+    let said = twelfth(&p).unwrap();
+    assert!(!said.contains("workspace remember"), "{said}");
+    assert!(said.contains("`charter persona remember ops"), "{said}");
+}
+
+#[test]
 fn outside_the_app_the_cadence_nudge_keys_the_workspace_on_the_payloads_session() {
     let mut p = Plane::new();
     p.env.remove("CHARTER_SESSION_ID");

@@ -872,3 +872,78 @@ fn a_chat_started_in_no_directory_starts_in_the_plane_not_where_the_app_was_laun
 
     assert_eq!(ready.cwd.as_deref(), Some(plane.root()));
 }
+
+// ---- SI-1: a chat knows where it was started ------------------------------------------------
+
+/// What `name` is in a started chat's environment, or `None`.
+fn env_of<'a>(ready: &'a start::Ready, name: &str) -> Option<&'a str> {
+    ready
+        .env
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn a_chat_started_in_a_workspace_is_told_which_one() {
+    charter_core::unsteered!();
+    // The defect: the app filed this chat under `alpha` and set nothing, so the chat's own
+    // briefing asked the operator which workspace it was in.
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+    fs::create_dir_all(plane.root().join("workspaces/alpha/svc")).unwrap();
+
+    for cwd in ["workspaces/alpha", "workspaces/alpha/svc"] {
+        let start = Start {
+            cwd: Some(plane.root().join(cwd)),
+            ..plane.start("work")
+        };
+        let ready = start::ready(&start, plane.root()).expect("it starts");
+        assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), Some("alpha"), "{cwd}");
+        assert_eq!(env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"), None, "{cwd}");
+    }
+}
+
+#[test]
+fn a_chat_started_at_the_plane_root_is_told_it_is_in_no_workspace() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+    fs::create_dir_all(plane.root().join("workspaces/alpha")).unwrap();
+
+    for cwd in [Some(plane.root().to_path_buf()), None] {
+        let start = Start {
+            cwd: cwd.clone(),
+            ..plane.start("work")
+        };
+        let ready = start::ready(&start, plane.root()).expect("it starts");
+        assert_eq!(
+            env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"),
+            Some("1"),
+            "{cwd:?}"
+        );
+        assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), None, "{cwd:?}");
+    }
+}
+
+#[test]
+fn a_chat_started_elsewhere_in_the_plane_is_pinned_to_nothing() {
+    charter_core::unsteered!();
+    // Not a workspace and not the root: charter says nothing it does not know, and the chat's
+    // own ladder answers as it always has.
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+    fs::create_dir_all(plane.root().join("docs")).unwrap();
+    let start = Start {
+        cwd: Some(plane.root().join("docs")),
+        ..plane.start("work")
+    };
+
+    let ready = start::ready(&start, plane.root()).expect("it starts");
+
+    assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), None);
+    assert_eq!(env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"), None);
+}
