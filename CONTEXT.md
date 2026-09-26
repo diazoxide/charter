@@ -40,6 +40,27 @@ cannot: that charter cut it (`claimed`), and whether its worker declared it `don
 failure.
 _Avoid_: task, slot, branch (for the directory)
 
+**Change** (cross-repo):
+One piece of work across several of a workspace's repos, recorded as intent only in
+`workspaces/<ws>/changes/<slug>.json`: why, which repos, which branch in each, and which must
+land first. Whether each part is pushed, checked or landed is read from git and the forge, and
+never stored (ADR 0060).
+_Avoid_: change (for one pull request), changeset, epic
+
+**Member**:
+One repo's part of a change: the repo, its branch for this change, and the members it `needs`
+landed first.
+_Avoid_: part, sub-change
+
+**Request**:
+A member's pull request, or merge request on GitLab.
+_Avoid_: change (for a PR), MR/PR in UI text
+
+**Landed**:
+A member whose request the forge reports merged and whose merge commit, as charter's landing
+log recorded it, is still on the default branch.
+_Avoid_: merged (a browser merge is merged but not logged), done
+
 **Inventory**:
 The plane's list of repos it can clone (`inventory/repos.json`), committed and shared. It only
 grows: `discover` and the repo picker add to it, and a repo leaves it only through an exclude.
