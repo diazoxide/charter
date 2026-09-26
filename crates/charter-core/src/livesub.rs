@@ -51,8 +51,10 @@
 //! Reusing the outer walk there would apply single-quote protection where a shell offers none —
 //! the fail-OPEN direction, on the exact path the working rule steers agents onto.
 
+use std::collections::HashSet;
+
 use crate::heredoc::{self, Line};
-use crate::shellseg::{dollar_opens_quote, past_continuations, spliced_end};
+use crate::shellseg::{dollar_opens_quote, equals_ends_a_name, past_continuations, spliced_end};
 
 /// The two spellings of command substitution — `_SUBSTITUTIONS`.
 ///
@@ -85,21 +87,6 @@ pub const FUNSUB: &str = "${";
 /// 3.2.57 and zsh 5.9). So a `<(` in arithmetic reads as live, the direction [`SUBSTITUTIONS`]
 /// already reads `$((` in.
 pub const PROCSUB: [&str; 3] = ["<(", ">(", "=("];
-
-/// Whether zsh would NOT run a `=(` whose `=` is at `i`, because it ends a name being assigned
-/// (`a=(…)`, `a[1]=(…)`, `a+=(…)` are arrays) or follows a quote that is part of the same word
-/// (`""=(…)`). Everywhere else the `=(` reads as live: zsh runs it at the start of a word, as
-/// the value of an assignment (`v==(…)`) and as the operand of a `${…}` operator
-/// (`${v:-=(…)}`), and bash refuses the whole command, so reading more positions as live costs
-/// nothing where it does not run.
-pub(crate) fn equals_ends_a_name(chars: &[char], i: usize) -> bool {
-    let name_end = |c: char| c.is_alphanumeric() || c == '_' || c == ']';
-    match i.checked_sub(1).map(|k| chars[k]) {
-        Some(c) if name_end(c) || c == '"' || c == '\'' => true,
-        Some('+') => i >= 2 && name_end(chars[i - 2]),
-        _ => false,
-    }
-}
 
 /// Whether `cmd` may hold a live substitution at all — the cheap test a hot-path guard asks
 /// before [`live_substitution`].
@@ -309,9 +296,47 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
     // of a second one to keep in step — and this walk is already O(n) with a `Vec<char>` of its
     // own either way. A second copy of that reading is the #555 shape this file exists to avoid.
     let line = Line::of(cmd);
+    // A `<<` that may be a shift forks the reading: the walk goes on as if it were a shift,
+    // and the heredoc reading is walked again, whole, from the line after its bodies. Each fork
+    // starts a fresh walk at the start of a line, so its answer depends on that position alone
+    // and each position is walked once, however many forks reach it.
+    let mut todo: Vec<usize> = vec![0];
+    let mut walked: HashSet<usize> = HashSet::new();
+    while let Some(start) = todo.pop() {
+        if !walked.insert(start) {
+            continue;
+        }
+        if walked.len() > READINGS {
+            // More readings than anyone writes by hand: read every spelling, wherever it
+            // stands, which is what every reading together could find and more.
+            return anywhere(line.chars());
+        }
+        if let Some(hit) = walk(&line, start, &mut todo) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+/// How many readings [`live_substitution`] walks before it stops telling them apart and reads
+/// the whole text at once ([`anywhere`]). Each reading is a walk of the rest of the text, so an
+/// unbounded number of them is a cost the text's author chooses.
+const READINGS: usize = 16;
+
+/// The first spelling of any substitution anywhere in `chars`, quoted, escaped or not — the
+/// reading that no quoting, heredoc or shift can hide anything from.
+fn anywhere(chars: &[char]) -> Option<&'static str> {
+    (0..chars.len())
+        .find_map(|i| substitution_at(chars, i).or_else(|| process_substitution_at(chars, i)))
+}
+
+/// One reading of `line` from `start`, which is the start of a line: [`live_substitution`]'s
+/// walk. Where a `<<` may be a shift the walk reads it as one, and pushes onto `forks` where the
+/// heredoc reading of the same text goes on after its bodies.
+fn walk(line: &Line, start: usize, forks: &mut Vec<usize>) -> Option<&'static str> {
     let chars = line.chars();
     let n = chars.len();
-    let mut i = 0usize;
+    let mut i = start;
     let mut pending: Vec<Pending> = Vec::new();
     // Every `<<` of the line in order, those that may be shifts included: the heredoc reading
     // of the line, which is read as well as the one `pending` gives ([`heredoc::ShiftContext`]).
@@ -355,7 +380,7 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
             // substitution inside it as an inert body.
             i += 3;
         } else if c == '<' && starts_with(chars, i, "<<") {
-            match heredoc::heredoc_header(&line, i) {
+            match heredoc::heredoc_header(line, i) {
                 // **`i += 1` here changes no answer, and that is proved rather than measured.**
                 // The mutation sweep reported it INERT over 20,000 cases and over the whole
                 // recording, and the reason it is a no-op rather than an evidence gap is short:
@@ -368,7 +393,7 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
                 // A `<<` that may be a shift is read both ways. As a shift, its operand is
                 // text the walk goes on to read, and the lines after it are commands; as a
                 // heredoc, its body is scanned at the end of the line with the others.
-                Some(h) if ctx.inside() => {
+                Some(h) if ctx.may_shift() => {
                     i += 2;
                     as_heredocs.push((h.delim, h.expands, h.dash));
                 }
@@ -382,10 +407,13 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
                 }
             }
         } else if c == '\n' && !as_heredocs.is_empty() {
-            if as_heredocs.len() > pending.len()
-                && let (Some(hit), _) = heredoc_bodies(chars, i + 1, &as_heredocs)
-            {
-                return Some(hit);
+            if as_heredocs.len() > pending.len() {
+                // The heredoc reading: its bodies here, and the rest of the text as a fork.
+                let (hit, after) = heredoc_bodies(chars, i + 1, &as_heredocs);
+                if hit.is_some() {
+                    return hit;
+                }
+                forks.push(after);
             }
             as_heredocs.clear();
             let (hit, next) = heredoc_bodies(chars, i + 1, &pending);
@@ -716,6 +744,21 @@ mod tests {
         assert_eq!(live_substitution("x $((1<(y)))"), Some("$("));
     }
 
+    /// Each `<<` that may be a shift forks the reading. Every fork starts at a line and each
+    /// line is walked from once, and past [`READINGS`] forks the whole text is read at once, so
+    /// a text made of such shifts costs a bounded number of walks. The answer stays on the
+    /// side of reading more: a substitution anywhere is found.
+    #[test]
+    fn a_text_of_forks_costs_a_bounded_number_of_walks() {
+        let mut cmd = String::new();
+        for _ in 0..200 {
+            cmd.push_str("(( 1<<\"2\" ) )\n2\n");
+        }
+        assert_eq!(live_substitution(&cmd), None);
+        cmd.push_str("echo $(y)\n");
+        assert_eq!(live_substitution(&cmd), Some("$("));
+    }
+
     /// A `<<` inside arithmetic, `${…}` or an assignment's subscript is a shift or plain text to
     /// the shell, not a heredoc, so the lines after it are commands the shell runs. Each of these
     /// ran the substitution on the second line in GNU bash 3.2.57 and zsh 5.9, or in one of them.
@@ -732,6 +775,11 @@ mod tests {
             ("echo ${v:-1<<\"2\"}\necho $(y)\n2", "$("),
             ("echo ${v:-a;((1<<\"2\"))}\necho $(y)\n2", "$("),
             ("a[1<<\"2\"]=x\necho $(y)\n2", "$("),
+            ("(( 1 +\n1<<\"2\" ))\necho $(y)\n2", "$("),
+            // When the parentheses do not close as `))` the shells read a heredoc after all, and
+            // what follows its body is read as that reading gives it, not as the shift's.
+            ("(( 1<<\"2\" ) )\nit's\n2\necho $(y)", "$("),
+            ("(( 1<<\"2\" ) )\ncat <<'Z'\n2\necho $(y)\nZ", "$("),
             // The shift's operand is read too: the shell runs it.
             ("(( 1<<$(y) ))", "$("),
             ("echo $[1<<`y`]", "`"),
@@ -745,6 +793,10 @@ mod tests {
         for cmd in [
             "echo $[2] ${v} a[1]=b; cat <<\"2\"\necho $(y)\n2",
             "(( 1<<\"3\" )); cat <<\"2\"\necho $(y)\n2",
+            // A group, a test and a case pattern are not among those brackets.
+            "{ cat <<\"2\"; }\necho $(y)\n2",
+            "[[ -n x ]] && cat <<\"2\"\necho $(y)\n2",
+            "case x in x) cat <<\"2\";; esac\necho $(y)\n2",
         ] {
             assert_eq!(live_substitution(cmd), None, "{cmd:?}");
         }

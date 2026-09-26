@@ -1115,6 +1115,10 @@ fn a_shift_opens_no_body_a_guard_may_skip() {
         "cat ${v:-1<<\"2\"}",
         "a[1<<\"2\"]=x cat",
         "x=((1<<\"2\")); cat",
+        // A bracket may span lines, and the `<<` on its second line is a shift all the same.
+        "(( 1 +\n1<<\"2\" )) && cat",
+        "echo $[ 1 +\n1<<\"2\" ]",
+        "echo ${v:-\n1<<\"2\"}",
     ] {
         let cmd = format!("{first}\nsecret\n2\nls");
         assert_eq!(heredoc::strip_reader_heredocs(&cmd), cmd, "{cmd:?}");

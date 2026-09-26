@@ -550,6 +550,7 @@ mod tests {
             .is_some()
         );
         assert!(verdict_of("(( 1<<\"2\" ))\ncharter handoff beta\n2", &fix, true).is_some());
+        assert!(verdict_of("(( 1 +\n1<<\"2\" ))\ncharter handoff beta\n2", &fix, true).is_some());
         // A heredoc in a process substitution closed on its line opens no body either, in GNU
         // bash 3.2.57 and zsh 5.9.
         assert!(verdict_of("cat <(cat <<\"2\")\ncharter handoff beta\n2", &fix, true).is_some());

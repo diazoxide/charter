@@ -1327,6 +1327,9 @@ mod tests {
             "cat $[1<<\"2\"]\ncat .charter/vaults/x.json\n2",
             "cat $((1<<'2'))\ncat .charter/vaults/x.json\n2",
             "cat ${v:-1<<\"2\"}\ncat .charter/vaults/x.json\n2",
+            // Read as a shift, the next lines open heredocs of their own; read as a heredoc,
+            // they are a body. Neither structure may drop a line the other runs.
+            "(( 1<<\"2\" ))\ncat <<'X'\n2\ncat <<'Y'\nX\ncat .charter/vaults/x.json\nY",
         ] {
             assert!(reason(cmd).is_some(), "{cmd:?}");
         }

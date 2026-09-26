@@ -140,11 +140,30 @@ const GROUPING: [&str; 4] = ["(", ")", "{", "}"];
 /// `>(` process substitution. `$` is matched as a SUFFIX instead, because `x$(…)` lexes as `x$`.
 const PROCSUB_LEAD: [&str; 2] = ["<", ">"];
 
+/// Whether zsh would NOT run a `=(` whose `=` is at `i`, because it ends a name being assigned
+/// (`a=(…)`, `a[1]=(…)`, `a+=(…)` are arrays) or follows a quote that is part of the same word
+/// (`""=(…)`). Everywhere else the `=(` reads as live: zsh runs it at the start of a word, as
+/// the value of an assignment (`v==(…)`) and as the operand of a `${…}` operator
+/// (`${v:-=(…)}`), and bash refuses the whole command, so reading more positions as live costs
+/// nothing where it does not run.
+///
+/// Here, beside the reader, because three walks ask it: the live-substitution walk
+/// ([`crate::livesub::process_substitution_at`]), the segmenter's [`opens_equals_substitution`]
+/// and the heredoc layout's substitution spans.
+pub fn equals_ends_a_name(chars: &[char], i: usize) -> bool {
+    let name_end = |c: char| c.is_alphanumeric() || c == '_' || c == ']';
+    match i.checked_sub(1).map(|k| chars[k]) {
+        Some(c) if name_end(c) || c == '"' || c == '\'' => true,
+        Some('+') => i >= 2 && name_end(chars[i - 2]),
+        _ => false,
+    }
+}
+
 /// Whether `prev`, a bare word, and the `(` after it are zsh's `=(…)`, which runs its command
 /// and hands the program a temporary file holding the output — a substitution, as `<(…)` is.
 ///
 /// The positions are exactly the ones [`crate::livesub::process_substitution_at`] reads as
-/// live, by the same test ([`crate::livesub::equals_ends_a_name`]): the `=` begins the word
+/// live, by the same test ([`equals_ends_a_name`]): the `=` begins the word
 /// (`=(…)`), ends an assignment's `=` (`v==(…)`) or follows a `${…}` operator (`${v:-=(…)}`),
 /// and not a name (`a=(…)`, `a[1]=(…)` and `a+=(…)` are arrays). The word is bare, so a quoted
 /// part (`""=(…)`) or an escaped `=` opens nothing. The `(` must touch the `=`: `= (…)` is no
@@ -157,7 +176,7 @@ fn opens_equals_substitution(prev: &Tok, paren: &Tok) -> bool {
         return false;
     };
     let touching = prev.end < 0 || paren.start < 0 || prev.end == paren.start;
-    chars[at] == '=' && touching && !crate::livesub::equals_ends_a_name(&chars, at)
+    chars[at] == '=' && touching && !equals_ends_a_name(&chars, at)
 }
 
 /// The quoting contexts a position can sit in. `(` and a backtick are SUBSTITUTIONS — inside
