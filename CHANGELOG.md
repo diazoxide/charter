@@ -101,6 +101,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spellings.** The check that refuses a live `` `…` `` or `$(…)` in a forge body or a charter
   memory skipped a program name typed in capitals or split by quotes.
   ([#347](https://github.com/diazoxide/charter/issues/347))
+- **An unattended run can no longer publish just because it listed the tags first.** Listing
+  or deleting local tags in the same command as a release, a tag, a tag push or a merge no
+  longer lets that command past the release floor.
+  ([#348](https://github.com/diazoxide/charter/issues/348))
+- **The secret-leak guard reads search options the way the search tools do.** A `--glob` that
+  selects files is no longer taken for one that excludes them. A program or pattern read from a
+  file with `-f`/`--file` is checked like any other file the command opens. A search's pattern
+  and file options are read however they are spelled: with `=`, bundled together, shortened, or
+  after `--`. `rg`'s, `grep`'s and `ag`'s other options that take a value are read too.
+  ([#350](https://github.com/diazoxide/charter/issues/350),
+  [#351](https://github.com/diazoxide/charter/issues/351))
 
 ## [0.3.0] - 2026-09-25
 

@@ -512,15 +512,14 @@ fn the_recording_still_covers_the_rules() {
     assert!(floor("git tag v1.2.3"));
     has("git tag -l");
     assert!(!floor("git tag -l"));
-    // A harmless tag flag clears the WHOLE command line, not its segment — the Python `return`s
-    // out of its loop, and a port that narrowed that to a `continue` would deny where it allows.
-    // **Which SEGMENT it stands in decides**, because the walk is left to right and the first
-    // arm to answer wins: the same two commands the other way round are refused. Both rows are
-    // recorded, so the pair is what pins the control flow rather than one of them.
+    // A harmless tag flag clears its own SEGMENT, not the command line (#348). The Python
+    // `return`ed out of its loop, so a read standing first cleared the floor for the publish
+    // after it; the port `continue`s, and the corpus row for the read-first order was changed to
+    // say so (ADR 0046). Both orders are recorded, so the pair pins the control flow: each is refused.
     has("git tag -l && gh release create v1");
     assert!(
-        !floor("git tag -l && gh release create v1"),
-        "the tag arm returns for the command line, not for its segment",
+        floor("git tag -l && gh release create v1"),
+        "the tag arm clears its segment, not the command line",
     );
     has("gh release create v1 && git tag -l");
     assert!(

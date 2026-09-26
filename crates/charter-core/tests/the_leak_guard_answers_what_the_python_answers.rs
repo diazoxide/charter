@@ -469,11 +469,20 @@ fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
         leakguard::leak_reason(&format!("grep -e {vault} f"), "", &state).is_none(),
         "the pattern came from the flag",
     );
-    has(&format!("grep -f {vault} f"));
-    assert!(
-        leakguard::leak_reason(&format!("grep -f {vault} f"), "", &state).is_none(),
-        "`-f` supplies the pattern FILE, and the Python reads it as the script operand",
-    );
+    // `-f` supplies the pattern or program from a FILE, which the program opens (#351; the
+    // Python skipped the value as if it were an inline pattern).
+    for cmd in [
+        format!("grep -f {vault} f"),
+        format!("awk -f {vault} data.txt"),
+        format!("grep -f {vault} data.txt"),
+        format!("sed --file={vault} data.txt"),
+    ] {
+        has(&cmd);
+        assert!(
+            leakguard::leak_reason(&cmd, "", &state).is_some(),
+            "{cmd}: `-f` names a file the program opens",
+        );
+    }
 
     // The word a substitution splices back: neither operand names a vault and the join does.
     has("cat $(echo .charter)/vaults/x.json");
@@ -540,12 +549,24 @@ fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
         "grep -rn --exclude-dir=.charter TOKEN .",
         "grep -rn --exclude-dir='.char*' TOKEN .",
         "rg --glob '!.charter' TOKEN .",
-        "rg --glob '**/.charter/**' TOKEN .",
     ] {
         has(cmd);
         assert!(
             leakguard::leak_reason(cmd, &at, &state).is_none(),
             "{cmd}: a guard that refuses the command it recommends is one people route around",
+        );
+    }
+    // ...and a glob WITHOUT the `!` selects what it names, so a search aimed into the state
+    // directory is a walk into it (#350; the Python read every glob as an exclusion).
+    for cmd in [
+        "rg --glob '**/.charter/**' TOKEN .",
+        "rg --glob '.charter/**' TOKEN .",
+        "rg --iglob vaults TOKEN .",
+    ] {
+        has(cmd);
+        assert!(
+            leakguard::leak_reason(cmd, &at, &state).is_some(),
+            "{cmd}: an inclusion glob narrows the walk ONTO the state directory",
         );
     }
     // ...and the `.` that is not a walk at all, because `grep` was given no recursion.

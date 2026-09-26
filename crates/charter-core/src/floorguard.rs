@@ -30,17 +30,15 @@
 //! **Attended is untouched.** A guard that made releases harder for the operator is the cage the
 //! plane-root guard warns about, and the fix people reach for then is to switch it off for good.
 //!
-//! # Two shapes of the same trap, and why the port keeps both
+//! # Two decisions the port made about the Python it came from
 //!
-//! * **The `_TAG_HARMLESS` arm returns for the WHOLE command**, not for its segment. `git tag -l`
-//!   standing anywhere BEFORE a publish clears the floor for the publish — measured against the
-//!   oracle, `git tag -l && gh release create v1.0.0` is allowed unattended while
-//!   `gh release create v1.0.0` alone is denied, and so is the tag creation the arm exists to
-//!   stop. That is a live fail-open and it is filed as **charter#1172**; the fix there is
-//!   `continue` rather than `return None`. It is reproduced here exactly, because the frozen
-//!   Python is the differential's oracle and a port that is right where the oracle is wrong
-//!   fails its own test. The corpus carries both orders — a read first and a publish first —
-//!   so the upstream fix shows up as a divergence rather than silently.
+//! * **The `_TAG_HARMLESS` arm clears its SEGMENT, not the command line** (#348). The Python
+//!   `return None`d out of the whole walk, so `git tag -l` standing anywhere BEFORE a publish
+//!   cleared the floor for it: `git tag -l && gh release create v1.0.0` was allowed unattended
+//!   while `gh release create v1.0.0` alone was denied. That was a live fail-open (filed
+//!   upstream as charter#1172), and every sibling guard already `continue`s past a segment that
+//!   is not its business. This port `continue`s, which moved the recorded answer of the
+//!   read-first row in `fixtures/corpora/shellseg-oracle.jsonl` on purpose (ADR 0046).
 //! * **`is_charter` rather than `base == "charter"`**, so `edm change land` (the pre-rename
 //!   binary) and `python3 -m charter change land` are the same command here as they are to the
 //!   leak guard. Both put charter's own NAME in `words` instead of in `prog`, which is why the
@@ -160,10 +158,10 @@ pub fn release_floor_reason(cmd: &str, unattended: bool) -> Option<String> {
                 // `git tag` alone lists; a bare name is a CREATION — the choke point, since a tag
                 // that does not exist locally cannot be pushed.
                 //
-                // **This returns for the whole COMMAND LINE, not for this segment.** That is the
-                // Python's own control flow, reproduced rather than corrected.
+                // A harmless flag clears THIS segment and the walk carries on (#348): a read
+                // standing before a publish must not clear the floor for the publish.
                 if args.iter().any(|a| TAG_HARMLESS.contains(&a.as_str())) {
-                    return None;
+                    continue;
                 }
                 if words.len() > 1 {
                     return Some(format!(
@@ -251,14 +249,26 @@ mod tests {
         assert_eq!(deny("git tag -d v1"), None);
     }
 
-    /// **A harmless tag flag clears the WHOLE command line, not its segment.** The Python
-    /// `return None`s out of the loop, and a port that narrowed it to `continue` would deny a
-    /// command the oracle allows — the differential's job is to catch exactly that, so the
-    /// behaviour is pinned here too.
+    /// **A harmless tag flag clears only its own segment** (#348). Listing the tags to work out
+    /// the next version and then cutting the release on the same Bash call is the ordinary way
+    /// that script is written, and the read must not clear the floor for the publish after it.
     #[test]
-    fn a_harmless_tag_flag_clears_the_whole_command() {
-        assert!(deny("gh release create v1").is_some());
-        assert_eq!(deny("git tag -l && gh release create v1"), None);
+    fn a_harmless_tag_flag_clears_only_its_own_segment() {
+        for cmd in [
+            "git tag -l && gh release create v1.0.0",
+            "gh release create v1.0.0 && git tag -l",
+            "git tag -l && git tag v1.0.0",
+            "git tag -l >/dev/null && git push --tags",
+            "git tag -l && charter change land",
+            "git tag -d v0 ; gh pr merge 12",
+            "git tag --list 'v*' | tail -1 && git tag v2",
+        ] {
+            assert!(deny(cmd).is_some(), "{cmd}");
+        }
+        // The read alone is still a read.
+        assert_eq!(deny("git tag -l"), None);
+        assert_eq!(deny("git tag -l && git tag -d v1"), None);
+        assert_eq!(deny("git tag -l && git log --oneline"), None);
     }
 
     /// A push carrying tags, in each of its three spellings.
