@@ -927,8 +927,7 @@ impl Adapter for Codex {
             );
         }
         if !current || retired {
-            plan.writes
-                .push(Write::File(path, doc.to_string().into_bytes()));
+            plan.settle(0, Write::File(path, doc.to_string().into_bytes()));
         }
         plan.notes.push(
             "Codex asks you to review and trust this hook the next time it starts, and until you \
@@ -963,8 +962,7 @@ impl Adapter for Codex {
         }
         plan.step(&path, "remove charter's Bash guard", removed);
         if removed {
-            plan.writes
-                .push(Write::File(path, doc.to_string().into_bytes()));
+            plan.settle(0, Write::File(path, doc.to_string().into_bytes()));
         }
         Ok(plan)
     }

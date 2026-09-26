@@ -80,6 +80,9 @@ fn a_second_install_finds_everything_done_and_writes_nothing() {
     let second = run(&m, Verb::Install, &[], false);
     assert_eq!(needed(&second), 0, "{}", render(&second, false));
     assert!(render(&second, false).contains("already"));
+    let said = render(&first, false);
+    assert!(!said.contains("not done"), "every write was made: {said}");
+    assert_eq!(said.matches("\n  done ").count(), needed(&first), "{said}");
     assert_eq!(
         before,
         (
