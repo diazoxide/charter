@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "vault-values",
-  "description": "A vault's reveal and copy, the two commands that put a secret's value where the window can reach it, granted to the main window and to nothing else (ADR 0052). A capability of its own so that no window added to `default` later inherits them. `src/ipc.rs` fails if any other capability grants them, or if this one reaches past `main`.",
+  "description": "A vault's reveal and copy, the two commands that put a secret's value where the window can reach it, granted to charter's own windows — the main window and the split windows a project tab is moved into — and to nothing else (ADR 0052, amended 2026-09-26). A split window can have a vault's tab in front, so it is granted what the main window is and no more. A capability of its own so that no window added to `default` later inherits them. `src/ipc.rs` fails if any other capability grants them, or if this one reaches past charter's own windows.",
   "windows": [
-    "main"
+    "main",
+    "window-[0-9]*"
   ],
   "permissions": [
     "vault-values"

@@ -100,6 +100,10 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`closeProject:${plane}`);
       return { ok: true as const };
     }),
+    moveProject: vi.fn(async (plane: string, to: string | null) => {
+      calls.push(`moveProject:${plane},${to ?? "new"}`);
+      return { ok: true as const };
+    }),
     openSettings: vi.fn((plane: string) => {
       calls.push(`openSettings:${plane}`);
     }),
@@ -897,6 +901,8 @@ describe("carrying out a row", () => {
         vaults: ["ops"],
         needsYou: [8],
         nameOf: (s) => String(s),
+        // A split window, so the row that moves a project back is reached too (charter#126).
+        split: true,
       }),
     );
 
@@ -944,6 +950,10 @@ describe("carrying out a row", () => {
         "selectProject:/other",
         "closeProject:/plane",
         "closeProject:/other",
+        "moveProject:/plane,new",
+        "moveProject:/other,new",
+        "moveProject:/plane,main",
+        "moveProject:/other,main",
         "openSettings:/plane",
         "openSettings:/other",
         "openSaving:/plane",
@@ -955,6 +965,47 @@ describe("carrying out a row", () => {
         "quit",
       ]),
     );
+  });
+});
+
+describe("moving a project between windows (charter#126)", () => {
+  const two = [
+    { plane: "/one", name: "one" },
+    { plane: "/two", name: "two" },
+  ];
+  const find = (offers: Offer[], id: string) => offers.find((offer) => offer.id === id);
+
+  it("offers each project a window of its own, from the palette and the tab's menu", () => {
+    const offers = catalogue(now({ plane: "/one", projects: two }));
+
+    const move = find(offers, "project.window:/two");
+    expect(move?.title).toBe("Move project two to a new window");
+    expect(move?.available).toBe(true);
+    expect(move?.does).toEqual({ verb: "moveProject", plane: "/two", to: null });
+    expect(menuOn({ on: "project", plane: "/two" }).above).toContain("project.window:/two");
+  });
+
+  it("says why a window's only project cannot be split from it", () => {
+    const offers = catalogue(now({ plane: "/one", projects: [two[0]] }));
+
+    const move = find(offers, "project.window:/one");
+    expect(move?.available).toBe(false);
+    expect(move?.reason).toBe("It is the only project in this window.");
+  });
+
+  it("offers the way back to the main window only in a split window", () => {
+    expect(find(catalogue(now({ plane: "/one", projects: two })), "project.main:/one")).toBe(
+      undefined,
+    );
+
+    const back = find(
+      catalogue(now({ plane: "/one", projects: [two[0]], split: true })),
+      "project.main:/one",
+    );
+    expect(back?.title).toBe("Move project one to the main window");
+    expect(back?.available).toBe(true);
+    expect(back?.does).toEqual({ verb: "moveProject", plane: "/one", to: "main" });
+    expect(menuOn({ on: "project", plane: "/one" }).above).toContain("project.main:/one");
   });
 });
 

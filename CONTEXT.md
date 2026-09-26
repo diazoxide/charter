@@ -50,6 +50,11 @@ _Avoid_: shared/private, public
 
 ### The window
 
+**Split window**:
+An OS window a project tab was moved into, beside the main window. It holds its own projects,
+and closing it moves them back to the main window with every chat still running.
+_Avoid_: detached tab, pop-out, secondary window
+
 **Strip**:
 One row of tabs: projects (in the title bar), a project's workspaces, or a workspace's chats.
 A strip's order never changes on its own, and it never scrolls.

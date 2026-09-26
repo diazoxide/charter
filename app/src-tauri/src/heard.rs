@@ -25,7 +25,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use charter_core::executor::Executor;
 use charter_core::extension::events::{self, Event};
 use charter_core::extension::project::Choices;
-use tauri::Emitter;
 
 use crate::planes::PlaneId;
 
@@ -77,7 +76,12 @@ impl Heard {
             .name(format!("extension event {}", event.kind().as_str()))
             .spawn(move || {
                 deliver(&executor, &notes, &config, &root, &event);
-                let _ = app.emit(HEARD, ExtensionHeard { plane });
+                crate::windows::emit_for_plane(
+                    &app,
+                    &plane.clone(),
+                    HEARD,
+                    ExtensionHeard { plane },
+                );
             });
     }
 

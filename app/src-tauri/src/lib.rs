@@ -34,6 +34,7 @@ mod usage;
 mod vaults;
 mod views;
 mod windowprefs;
+mod windows;
 mod workspaces;
 mod worktrees;
 
@@ -112,7 +113,7 @@ pub(crate) const PLUGIN_DIR: &str = "plugin";
 /// `Stop` that lands on a chat already waiting from a `Notification` moves nothing and says
 /// nothing.
 fn told(app: &tauri::AppHandle, moved: Moved) {
-    let _ = app.emit("chat-moved", &moved);
+    windows::emit_for_plane(app, &moved.plane.clone(), "chat-moved", &moved);
     if moved.needs_you && !already_looking_at(app, &moved) {
         let name = chat_called(app, &moved).unwrap_or_else(|| format!("chat {}", moved.session));
         // Best effort, always. A desktop that refuses notifications, or an operator who
@@ -153,8 +154,16 @@ fn chat_called(app: &tauri::AppHandle, moved: &Moved) -> Option<String> {
 /// Every unanswered question reads as "not looking", so a notification is sent rather than
 /// suppressed. That is the cheap way round: one the operator did not need costs a glance, and
 /// one they needed and did not get costs a chat sitting unanswered.
+///
+/// **The window asked is the one holding the chat's plane** (charter#126). With a project split
+/// into a window of its own, "the window" is whichever one holds it, and asking the main window
+/// would suppress a notification because the operator was looking at a different window.
 fn already_looking_at(app: &tauri::AppHandle, moved: &Moved) -> bool {
-    let Some(window) = app.get_webview_window("main") else {
+    let Some(window) = app
+        .try_state::<Showing>()
+        .and_then(|showing| showing.holder(&moved.plane))
+        .and_then(|label| app.get_webview_window(&label))
+    else {
         return false;
     };
     if !window.is_visible().unwrap_or(false) || !window.is_focused().unwrap_or(false) {
@@ -195,7 +204,10 @@ fn second_launch(app: &tauri::AppHandle, cwd: &str) {
     if cwd.is_empty() {
         return;
     }
-    let _ = app.emit(SECOND_LAUNCH, cwd);
+    // To the main window alone: every window would otherwise open it as a tab of its own.
+    // If another window already holds that project, the main window's open finds so and
+    // raises that window instead (`show_window_holding`).
+    let _ = app.emit_to(windows::MAIN, SECOND_LAUNCH, cwd);
 }
 
 /// A view a pane has open, and what its terminal has to match to show the session as it is:
@@ -1311,9 +1323,15 @@ pub fn run() {
             // The close button hides the window. Every session is a child of this process
             // (ADR 0025), so a close that ended them would end the day's work; the way out
             // is Quit, which says what it is about to end.
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                lifecycle::hide_rather_than_close(window);
+            //
+            // A split window closes instead, and hands its projects back to the main window
+            // with every chat still running (ADR 0033, amended 2026-09-26).
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    windows::close_requested(window, api);
+                }
+                tauri::WindowEvent::Destroyed => windows::destroyed(window),
+                _ => {}
             }
         })
         .setup(|app| {
@@ -1398,7 +1416,12 @@ pub fn run() {
                 .telling_arrivals({
                     let window = app.handle().clone();
                     std::sync::Arc::new(move |arrived: handoff::Arrived| {
-                        let _ = window.emit(handoff::ARRIVED, &arrived);
+                        windows::emit_for_plane(
+                            &window,
+                            &arrived.plane.clone(),
+                            handoff::ARRIVED,
+                            &arrived,
+                        );
                     })
                 })
                 // The plane moved on disk — a todo closed in a terminal, a workspace another
@@ -1406,8 +1429,14 @@ pub fn run() {
                 .telling_changes({
                     let window = app.handle().clone();
                     std::sync::Arc::new(move |plane: PlaneId| {
-                        let _ =
-                            window.emit(planewatch::CHANGED, &planewatch::PlaneChanged { plane });
+                        windows::emit_for_plane(
+                            &window,
+                            &plane,
+                            planewatch::CHANGED,
+                            &planewatch::PlaneChanged {
+                                plane: plane.clone(),
+                            },
+                        );
                     })
                 })
                 // Auto-save saved a plane: the extensions that hear it are told, as after the

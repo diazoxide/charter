@@ -164,6 +164,46 @@ export const commands = {
 	 */
 	windowHoldsPlanes: (held: WindowTabs) => __TAURI_INVOKE<void>("window_holds_planes", { held }),
 	/**
+	 *  Moves projects into another window — **a new one when `to` is null** — and answers the
+	 *  label of the window they are now in.
+	 * 
+	 *  Nothing is closed and nothing is started: the chats go on running in the core, and the
+	 *  window they arrive in draws them from what the core already has open, as a window that
+	 *  reloaded would. The window they left takes their tabs out itself, because it asked.
+	 * 
+	 *  **Refused**, in charter's own words, for a project this process is not holding, for a
+	 *  project another window holds (a window cannot take a project out from under a different
+	 *  window), and for a window that is not one of charter's.
+	 * 
+	 *  Async, so Tauri runs it off the main thread: making a window from a synchronous command
+	 *  deadlocks on Windows.
+	 */
+	moveProjects: (projects: PlaneId[], front: string | null, to: string | null) => typedError<string, string>(__TAURI_INVOKE("move_projects", { projects, front, to })),
+	/**
+	 *  What this window was made to hold — for a split window, the projects moved into it; for any
+	 *  window, what it last said it holds. Null for a window that holds nothing.
+	 */
+	projectsHanded: () => __TAURI_INVOKE<{
+	/**  The projects this window holds, left to right as its tabs show them. */
+	planes: PlaneId[],
+	/**
+	 *  Which tab is in front. Null is the opener — the window is holding projects the
+	 *  operator is not looking at, or holding none at all.
+	 */
+	active: number | null,
+} | null>("projects_handed"),
+	/**
+	 *  Every charter window there is, by label, the main window first — as [`WINDOWS_CHANGED`]
+	 *  says it whenever that changes.
+	 */
+	charterWindows: () => __TAURI_INVOKE<string[]>("charter_windows"),
+	/**
+	 *  Brings the window holding `plane` to the front and answers its label — or null when no
+	 *  window holds it. A window that is asked to open a project another window holds, or pressed
+	 *  on a chat that is in another window, asks this rather than taking the project in twice.
+	 */
+	showWindowHolding: (plane: PlaneId) => __TAURI_INVOKE<string | null>("show_window_holding", { plane }),
+	/**
 	 *  Makes a NEW project — scaffolds a plane in a directory — **and opens it through the gate**.
 	 * 
 	 *  Two halves, in this order and never the other way round. What is written is
@@ -2240,15 +2280,22 @@ export type RepoStates = {
  *  the opener draws a recents row that went.
  */
 export type Restore = {
-	/**  The projects to open again, left to right as the tabs were. */
-	planes: string[],
 	/**
-	 *  Which of them was in front, as an index into `planes` after the drops. Null when there
-	 *  is nothing to put back.
+	 *  The windows to put back, the main window's first: each one's projects left to right
+	 *  as its tabs were, and which of them was in front. Empty when there is nothing to put
+	 *  back.
 	 */
-	active: number | null,
+	windows: RestoreWindow[],
 	/**  One line per project charter would not take back. */
 	dropped: string[],
+};
+
+/**  One window a cold launch puts back (ADR 0033, amended 2026-09-26). */
+export type RestoreWindow = {
+	/**  Its projects, left to right as its tabs were. */
+	planes: string[],
+	/**  Which of them was in front, as an index into `planes` after the drops. */
+	active: number | null,
 };
 
 /**  One action an extension's row offers, as the window draws its button (charter-app#341). */

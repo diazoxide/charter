@@ -24,9 +24,10 @@ pub const QUIT_ASKED: &str = "quit-asked";
 /// window opens its Preferences tab, which is the palette row's verb too.
 pub const PREFERENCES_ASKED: &str = "preferences-asked";
 
-/// The window the app has. There is one (spec decision 1), and it is the one every part of
-/// this module means.
-pub const WINDOW: &str = "main";
+/// The main window: the one the tray and the dock bring back, and the one a quit is asked in.
+/// A split window (`windows.rs`) is never hidden — its close hands its projects back here — so
+/// this is the only window this module ever has to bring back.
+pub const WINDOW: &str = crate::windows::MAIN;
 
 /// The ids of the things that can be clicked. Written once here so the handler and the menu
 /// cannot drift apart.
@@ -109,11 +110,6 @@ pub fn ask_to_quit<R: Runtime>(app: &AppHandle<R>) {
         }
         Ask::QuitAnyway => app.exit(0),
     }
-}
-
-/// Hides the window rather than closing it, so every session keeps running.
-pub fn hide_rather_than_close<R: Runtime>(window: &tauri::Window<R>) {
-    let _ = window.hide();
 }
 
 /// The menu-bar glyph: charter's mark redrawn as a macOS template image, and NOT the app
@@ -340,9 +336,26 @@ pub fn clicked<R: Runtime>(app: &AppHandle<R>, id: &str) {
         SHOW => show(app),
         // Shown first, for Quit's reason: the tab opens in the window, and a hidden window
         // would put it where nobody is looking.
+        //
+        // To the window the operator is in when there is one: with a project split into a
+        // window of its own, `⌘,` pressed there is about that window.
         PREFERENCES => {
-            show(app);
-            let _ = app.emit_to(WINDOW, PREFERENCES_ASKED, ());
+            let focused = app
+                .webview_windows()
+                .into_iter()
+                .find(|(label, window)| {
+                    crate::windows::is_charter_window(label) && window.is_focused().unwrap_or(false)
+                })
+                .map(|(label, _)| label);
+            match focused {
+                Some(label) => {
+                    let _ = app.emit_to(label.as_str(), PREFERENCES_ASKED, ());
+                }
+                None => {
+                    show(app);
+                    let _ = app.emit_to(WINDOW, PREFERENCES_ASKED, ());
+                }
+            }
         }
         _ => {}
     }

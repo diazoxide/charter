@@ -12,6 +12,7 @@ import {
 } from "react";
 import clsx from "clsx";
 import { listen } from "@tauri-apps/api/event";
+import { MAIN, thisWindow } from "./windows";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
@@ -1855,6 +1856,7 @@ export function PlaneView({
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
+      moveProject: windowDoes.moveProject,
       openSettings: windowDoes.openSettings,
       openSaving: windowDoes.openSaving,
       openWorkspaceSettings,
@@ -1997,6 +1999,8 @@ export function PlaneView({
             vaults: vaultNames,
             plane,
             projects,
+            // Which window this is, for the rows that move a project between windows (charter#126).
+            split: thisWindow() !== MAIN,
             // WHICH row was refused and is still on screen. The catalogue matches the ids it
             // wrote itself, so the discard row appears beside the removal that was refused and
             // beside no other — with one removal per piece that is the difference between one
@@ -2900,6 +2904,9 @@ export type WindowDoing = {
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
+  /** Moves a project into another window, or a new one (charter#126). The window's, because
+   *  the window is what holds projects. */
+  moveProject: (plane: string, to: string | null) => Promise<Ran>;
   /** Brings a project to the front and opens its Project settings tab (charter-app#252). The
    *  window's, because the project may not be the one in front, and only the window can bring
    *  it there. */

@@ -1425,20 +1425,35 @@ impl Holding {
 /// store is [`Self::arrangement`] and nothing else, so "what charter remembers about the
 /// window" and "what the window told charter" cannot disagree.
 ///
-/// Keyed by window label rather than held as one value, because a second window is the shape
-/// this app is going to (ADR 0033) and a singleton here would be the singleton `Plane` that
-/// ADR 0033 had to undo, one layer up.
+/// Keyed by window label rather than held as one value, because a window is what the operator
+/// arranges projects in, and there can be several (ADR 0033, amended 2026-09-26): a project tab
+/// split out into its own OS window is held by that window and by no other.
+///
+/// **One project is held by at most one window**, and this is the module that keeps that true.
+/// Moving a project takes it out of the window it was in and puts it in the other in one step,
+/// under one lock, so there is no moment at which two windows hold it or none does. Every
+/// question the rest of the app asks about window identity — which window a chat's event goes
+/// to, whether the operator is looking at a chat, what a closed window hands back, what a split
+/// window was given to draw — is answered here.
 #[derive(Default)]
-pub struct Showing(Mutex<HashMap<String, Holding>>);
+pub struct Showing {
+    held: Mutex<HashMap<String, Holding>>,
+    /// The last split window's number, so a label is never used twice in one process.
+    split: std::sync::atomic::AtomicU32,
+}
 
 impl Showing {
+    fn held(&self) -> MutexGuard<'_, HashMap<String, Holding>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// A window says what it is holding and which project it has in front.
     ///
     /// A window holding nothing is forgotten rather than recorded as empty: it is an opener
     /// with nothing open, and an empty window in the arrangement would restore as nothing at
     /// the next launch while still being a row charter had to write down.
     pub fn in_window(&self, window: &str, holding: Holding) {
-        let mut showing = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut showing = self.held();
         if holding.planes.is_empty() {
             showing.remove(window);
         } else {
@@ -1458,26 +1473,140 @@ impl Showing {
     /// behind the one on screen, and a notification about one of them is exactly the
     /// notification the operator needs.
     pub fn is_showing(&self, window: &str, plane: &PlaneId) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(window)
-            .and_then(Holding::front)
-            == Some(plane)
+        self.held().get(window).and_then(Holding::front) == Some(plane)
     }
 
-    /// Every window's arrangement, in a stable order.
-    ///
-    /// Ordered by window label rather than by whatever the map iterates, so that writing the
-    /// arrangement twice with nothing changed writes the same bytes twice.
-    pub fn arrangement(&self) -> Vec<Holding> {
-        let showing = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+    /// The window holding `plane`, in front or behind — or none, when no window has said it
+    /// holds it yet (it is being opened, or the window holding it has not drawn it).
+    pub fn holder(&self, plane: &PlaneId) -> Option<String> {
+        self.held()
+            .iter()
+            .find(|(_, holding)| holding.planes.contains(plane))
+            .map(|(label, _)| label.clone())
+    }
+
+    /// What `window` holds, as it was last said or handed to it. A split window asks this once
+    /// it is drawn, because it was made to hold what it was handed and nothing else.
+    pub fn holding(&self, window: &str) -> Option<Holding> {
+        self.held().get(window).cloned()
+    }
+
+    /// Every window holding something, by label, in [`Self::arrangement`]'s order.
+    pub fn windows(&self) -> Vec<(String, Holding)> {
+        let showing = self.held();
         let mut labels: Vec<&String> = showing.keys().collect();
-        labels.sort();
+        labels.sort_by_key(|label| crate::windows::order_key(label));
         labels
             .into_iter()
-            .filter_map(|label| showing.get(label).cloned())
+            .filter_map(|label| Some((label.clone(), showing.get(label)?.clone())))
             .collect()
+    }
+
+    /// Every window's arrangement, in a stable order: the main window first, then the split
+    /// windows in the order they were made.
+    ///
+    /// Ordered by window label rather than by whatever the map iterates, so that writing the
+    /// arrangement twice with nothing changed writes the same bytes twice — and the main window
+    /// first, because the first remembered window is the one a cold launch puts back into it.
+    pub fn arrangement(&self) -> Vec<Holding> {
+        self.windows()
+            .into_iter()
+            .map(|(_, holding)| holding)
+            .collect()
+    }
+
+    /// A label for a new split window, never one this process has used before.
+    pub fn fresh_label(&self) -> String {
+        let taken = self.held();
+        loop {
+            let next = self.split.fetch_add(1, Ordering::Relaxed) + 1;
+            let label = crate::windows::split_label(next);
+            if !taken.contains_key(&label) {
+                return label;
+            }
+        }
+    }
+
+    /// Moves `planes` into `to`, out of whichever windows held them, **in one step**.
+    ///
+    /// A window a project leaves keeps its other projects, and if the one it had in front was
+    /// the one that left, the tab beside it comes forward — `closeTab`'s rule one scope up, and
+    /// the same rule the window follows when a project is closed. A window left holding nothing
+    /// is forgotten. `front`, when it is one of `planes`, is what `to` has in front afterwards;
+    /// otherwise `to` keeps what it had in front.
+    ///
+    /// Answers the windows that lost a project, so the caller can tell each one.
+    pub fn move_into(&self, planes: &[PlaneId], front: Option<&PlaneId>, to: &str) -> Vec<String> {
+        let mut showing = self.held();
+        let mut lost = Vec::new();
+        for (label, holding) in showing.iter_mut() {
+            if label == to {
+                continue;
+            }
+            let before = holding.planes.len();
+            for plane in planes {
+                holding.take_out(plane);
+            }
+            if holding.planes.len() != before {
+                lost.push(label.clone());
+            }
+        }
+        showing.retain(|_, holding| !holding.planes.is_empty());
+        let target = showing.entry(to.to_owned()).or_default();
+        for plane in planes {
+            if !target.planes.contains(plane) {
+                target.planes.push(plane.clone());
+            }
+        }
+        if let Some(at) =
+            front.and_then(|front| target.planes.iter().position(|plane| plane == front))
+        {
+            target.active = Some(at);
+        }
+        if target.planes.is_empty() {
+            showing.remove(to);
+        }
+        lost.sort_by_key(|label| crate::windows::order_key(label));
+        lost
+    }
+
+    /// A window is closed: whatever it held goes to `into`, behind what `into` has in front,
+    /// and the window is forgotten. Answers what was handed over.
+    ///
+    /// Nothing is ended. A split window's chats are children of this process like every other
+    /// chat, and a close that ended them would end the day's work (ADR 0033, amended
+    /// 2026-09-26) — so its projects go back to the window they were split from.
+    pub fn close_into(&self, window: &str, into: &str) -> Vec<PlaneId> {
+        let mut showing = self.held();
+        let Some(gone) = showing.remove(window) else {
+            return Vec::new();
+        };
+        if window == into {
+            return Vec::new();
+        }
+        let target = showing.entry(into.to_owned()).or_default();
+        for plane in &gone.planes {
+            if !target.planes.contains(plane) {
+                target.planes.push(plane.clone());
+            }
+        }
+        gone.planes
+    }
+}
+
+impl Holding {
+    /// Takes one project out, bringing the tab beside it forward when it was the one in front.
+    fn take_out(&mut self, plane: &PlaneId) {
+        let Some(at) = self.planes.iter().position(|held| held == plane) else {
+            return;
+        };
+        self.planes.remove(at);
+        self.active = match self.active {
+            _ if self.planes.is_empty() => None,
+            Some(front) if front == at => Some(at.saturating_sub(1)),
+            Some(front) if front > at => Some(front - 1),
+            other => other,
+        };
     }
 }
 
@@ -1518,13 +1647,24 @@ impl Restoring {
 
 /// The window set a cold launch has to put back, and every project it would not take back.
 pub struct Restorable {
-    /// The projects to open again, left to right as the tabs were.
+    /// Every project to open again, window by window and left to right within each: what
+    /// the launch's question asks about, whichever window each goes back into.
+    pub planes: Vec<PathBuf>,
+    /// The windows, the main window's first. A window every one of whose projects was
+    /// dropped is not here: an empty window would restore as nothing.
+    pub windows: Vec<RestoredWindow>,
+    /// One line per project charter would not take back.
+    pub dropped: Vec<String>,
+}
+
+/// One remembered window, checked against this disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredWindow {
+    /// Its projects, left to right as its tabs were.
     pub planes: Vec<PathBuf>,
     /// Which of them was in front, as an index into `planes` **after** the drops — so a
     /// window whose front project has gone comes back on one that is still there.
     pub active: Option<usize>,
-    /// One line per project charter would not take back.
-    pub dropped: Vec<String>,
 }
 
 /// The arrangement charter remembered, checked against this disk.
@@ -1539,13 +1679,12 @@ pub struct Restorable {
 /// offer that gate. A restore that minted its own approval would be ADR 0035 turned off for
 /// every project the operator had ever had open at once.
 ///
-/// **Every remembered window merges into one.** charter draws one OS window today; splitting a
-/// tab back out needs multi-window Tauri and is not here yet. Merging is the answer that keeps
-/// the operator's projects — dropping the second window's tabs would lose work to a limitation
-/// they never asked for.
+/// **Each remembered window comes back as a window** (ADR 0033, amended 2026-09-26). The first
+/// is put back into the main window; the rest are split windows again. A project two windows
+/// both claimed is kept by the first, because one project is one tab in one window.
 pub fn restorable(loaded: machine::Loaded) -> Restorable {
     let mut planes: Vec<PathBuf> = Vec::new();
-    let mut active = None;
+    let mut windows = Vec::new();
     // What the store itself would not take back, already dropped with a reason by the read.
     // Only the window rows: a remembered RECENT charter would not take back is the opener's
     // news, and saying it twice on one launch is saying it twice.
@@ -1555,35 +1694,41 @@ pub fn restorable(loaded: machine::Loaded) -> Restorable {
         .filter(|why| matches!(why, machine::Dropped::Window { .. }))
         .map(ToString::to_string)
         .collect();
-    for (which, window) in loaded.store.windows.into_iter().enumerate() {
+    for window in loaded.store.windows {
         let was_active = window.active;
+        let mut these: Vec<PathBuf> = Vec::new();
+        let mut active = None;
         for (at, plane) in window.planes.into_iter().enumerate() {
             let shown = charter_core::shown::short(&plane.display().to_string());
             if let Err(why) = machine::still_a_plane(&plane) {
                 dropped.push(format!("{shown} {why}"));
                 continue;
             }
-            // One project is one tab. Two windows that both held it merge into one that
-            // holds it once, and a second tab on one plane would be a second `PlaneView`
-            // drawing one board.
+            // One project is one tab, in one window: a second tab on one plane would be a
+            // second `PlaneView` drawing one board.
             if planes.contains(&plane) {
                 continue;
             }
-            if which == 0 && at == was_active {
-                active = Some(planes.len());
+            if at == was_active {
+                active = Some(these.len());
             }
-            planes.push(plane);
+            planes.push(plane.clone());
+            these.push(plane);
         }
-    }
-    // A front tab that was dropped leaves the window on the first project that survived,
-    // rather than on none: the operator asked for these projects, and an opener in front of
-    // them is a screen they have to click past.
-    if active.is_none() && !planes.is_empty() {
-        active = Some(0);
+        if these.is_empty() {
+            continue;
+        }
+        // A front tab that was dropped leaves the window on the first project that survived,
+        // rather than on none: the operator asked for these projects, and an opener in front
+        // of them is a screen they have to click past.
+        windows.push(RestoredWindow {
+            active: active.or(Some(0)),
+            planes: these,
+        });
     }
     Restorable {
         planes,
-        active,
+        windows,
         dropped,
     }
 }
@@ -3102,7 +3247,11 @@ mod tests {
                 two.canonicalize().expect("two resolves")
             ]
         );
-        assert_eq!(back.active, Some(1), "the tab that was in front is not");
+        assert_eq!(
+            back.windows[0].active,
+            Some(1),
+            "the tab that was in front is not"
+        );
         assert!(back.dropped.is_empty(), "{:?}", back.dropped);
     }
 
@@ -3164,7 +3313,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            back.active,
+            back.windows[0].active,
             Some(0),
             "the window came back on the wrong project"
         );
@@ -3223,18 +3372,19 @@ mod tests {
         );
         // The tab that was in front is the one that went, so the window comes back on the
         // project that survived rather than on an opener in front of it.
-        assert_eq!(back.active, Some(0));
+        assert_eq!(back.windows[0].active, Some(0));
     }
 
     #[test]
-    fn every_remembered_window_merges_into_the_one_window_this_app_can_draw() {
-        // Splitting a tab back out into its own OS window needs multi-window Tauri and is not
-        // here yet. Dropping the second window's tabs would lose the operator projects to a
-        // limitation they never asked for, so they merge — and a project both windows held is
-        // one tab, because two tabs on one plane would be two views of one board.
+    fn restorable_keeps_each_remembered_window() {
+        // ADR 0033, amended 2026-09-26: a project split into its own window comes back in its
+        // own window. Merging them all into one, as this did while charter drew one window,
+        // would undo the operator's arrangement at every launch. A project both windows held
+        // is kept by the first, because one project is one tab in one window.
         let dir = tempfile::tempdir().expect("a directory");
         let one = a_plane(&dir.path().join("one"));
         let two = a_plane(&dir.path().join("two"));
+        let three = a_plane(&dir.path().join("three"));
         let store = machine::Store {
             windows: vec![
                 machine::Window {
@@ -3242,7 +3392,49 @@ mod tests {
                     active: 0,
                 },
                 machine::Window {
-                    planes: vec![two.clone(), one.clone()],
+                    planes: vec![two.clone(), one.clone(), three.clone()],
+                    active: 2,
+                },
+            ],
+            ..machine::Store::default()
+        };
+
+        let back = restorable(machine::Loaded {
+            store,
+            ..machine::Loaded::default()
+        });
+
+        assert_eq!(
+            back.windows,
+            vec![
+                RestoredWindow {
+                    planes: vec![one.clone()],
+                    active: Some(0),
+                },
+                RestoredWindow {
+                    planes: vec![two.clone(), three.clone()],
+                    // `three` was at 2 in the record and is at 1 once `one` is kept by the
+                    // first window: the index is found again, never carried over.
+                    active: Some(1),
+                },
+            ]
+        );
+        // What the launch's question asks about: every project, whichever window it is in.
+        assert_eq!(back.planes, vec![one, two, three]);
+    }
+
+    #[test]
+    fn a_remembered_window_whose_projects_have_all_gone_does_not_come_back_empty() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let one = a_plane(&dir.path().join("one"));
+        let store = machine::Store {
+            windows: vec![
+                machine::Window {
+                    planes: vec![dir.path().join("gone")],
+                    active: 0,
+                },
+                machine::Window {
+                    planes: vec![one.clone()],
                     active: 0,
                 },
             ],
@@ -3254,8 +3446,154 @@ mod tests {
             ..machine::Loaded::default()
         });
 
-        assert_eq!(back.planes, vec![one, two]);
-        assert_eq!(back.active, Some(0), "the first window's front tab is lost");
+        assert_eq!(
+            back.windows,
+            vec![RestoredWindow {
+                planes: vec![one],
+                active: Some(0),
+            }]
+        );
+        assert_eq!(back.dropped.len(), 1, "{:?}", back.dropped);
+    }
+
+    /// Three plane ids and a registry of windows, with nothing on disk behind them: what a
+    /// window holds is a list of ids, and nothing here opens anything.
+    fn three_ids() -> (PlaneId, PlaneId, PlaneId) {
+        (
+            PlaneId::for_tests(Path::new("/p/one")),
+            PlaneId::for_tests(Path::new("/p/two")),
+            PlaneId::for_tests(Path::new("/p/three")),
+        )
+    }
+
+    fn holding(planes: &[&PlaneId], active: Option<usize>) -> Holding {
+        Holding {
+            planes: planes.iter().map(|plane| (*plane).clone()).collect(),
+            active,
+        }
+    }
+
+    #[test]
+    fn a_project_moved_to_a_new_window_is_held_by_that_window_and_no_other() {
+        let (one, two, three) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("main", holding(&[&one, &two, &three], Some(1)));
+        let split = showing.fresh_label();
+
+        let lost = showing.move_into(std::slice::from_ref(&two), Some(&two), &split);
+
+        assert_eq!(lost, vec!["main".to_owned()]);
+        assert_eq!(showing.holder(&two), Some(split.clone()));
+        assert_eq!(showing.holder(&one), Some("main".to_owned()));
+        assert_eq!(showing.holding(&split), Some(holding(&[&two], Some(0))));
+        // The one in front left, so the tab beside it came forward: `closeTab`'s rule.
+        assert_eq!(
+            showing.holding("main"),
+            Some(holding(&[&one, &three], Some(0)))
+        );
+    }
+
+    #[test]
+    fn a_window_keeps_its_front_project_when_one_behind_it_moves_out() {
+        let (one, two, three) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("main", holding(&[&one, &two, &three], Some(2)));
+
+        showing.move_into(std::slice::from_ref(&one), None, "window-1");
+
+        assert_eq!(
+            showing.holding("main"),
+            Some(holding(&[&two, &three], Some(1)))
+        );
+    }
+
+    #[test]
+    fn each_window_is_asked_only_about_the_project_it_has_in_front() {
+        // Two windows, each with its own project in front: a chat in `two` is in front for
+        // the operator only in the window holding `two`, never in `main`.
+        let (one, two, _) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("main", holding(&[&one, &two], Some(1)));
+
+        showing.move_into(std::slice::from_ref(&two), Some(&two), "window-1");
+
+        assert!(showing.is_showing("main", &one));
+        assert!(!showing.is_showing("main", &two));
+        assert!(showing.is_showing("window-1", &two));
+        assert!(!showing.is_showing("window-1", &one));
+    }
+
+    #[test]
+    fn a_project_moved_back_goes_in_front_of_the_window_it_joins() {
+        let (one, two, _) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("main", holding(&[&one], Some(0)));
+        showing.in_window("window-1", holding(&[&two], Some(0)));
+
+        let lost = showing.move_into(std::slice::from_ref(&two), Some(&two), "main");
+
+        assert_eq!(lost, vec!["window-1".to_owned()]);
+        assert_eq!(
+            showing.holding("main"),
+            Some(holding(&[&one, &two], Some(1)))
+        );
+        // A window left holding nothing is forgotten, not remembered as empty.
+        assert_eq!(showing.holding("window-1"), None);
+        assert_eq!(showing.arrangement().len(), 1);
+    }
+
+    #[test]
+    fn a_closed_window_hands_its_projects_back_behind_the_one_in_front() {
+        // Closing a split window ends nothing (ADR 0033, amended 2026-09-26): its projects go
+        // back to the main window, which keeps what the operator was looking at.
+        let (one, two, three) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("main", holding(&[&one], Some(0)));
+        showing.in_window("window-3", holding(&[&two, &three], Some(1)));
+
+        let handed = showing.close_into("window-3", "main");
+
+        assert_eq!(handed, vec![two.clone(), three.clone()]);
+        assert_eq!(
+            showing.holding("main"),
+            Some(holding(&[&one, &two, &three], Some(0)))
+        );
+        assert_eq!(showing.holder(&three), Some("main".to_owned()));
+        assert_eq!(showing.holding("window-3"), None);
+    }
+
+    #[test]
+    fn the_arrangement_puts_the_main_window_first_and_split_windows_in_the_order_they_were_made() {
+        // The first remembered window is the one a cold launch puts back into the main window,
+        // and "window-10" sorts before "window-2" as text.
+        let (one, two, three) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("window-10", holding(&[&three], Some(0)));
+        showing.in_window("window-2", holding(&[&two], Some(0)));
+        showing.in_window("main", holding(&[&one], Some(0)));
+
+        let labels: Vec<String> = showing
+            .windows()
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
+
+        assert_eq!(labels, ["main", "window-2", "window-10"]);
+        assert_eq!(showing.arrangement()[0], holding(&[&one], Some(0)));
+    }
+
+    #[test]
+    fn a_split_windows_label_is_never_one_already_in_use() {
+        let (one, _, _) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("window-1", holding(&[&one], Some(0)));
+
+        let first = showing.fresh_label();
+        let second = showing.fresh_label();
+
+        assert_ne!(first, "window-1");
+        assert_ne!(first, second);
+        assert!(crate::windows::is_charter_window(&first), "{first}");
     }
 
     #[test]

@@ -14,7 +14,8 @@
           "identifier": "e2e",
           "description": "What WebdriverIO's plugins need, plus the window commands a scenario test drives the close-to-tray path with: `core:default` grants neither, and nothing the operator is given should be able to close or show the window from the page. Only a build made with this file and the `e2e` cargo feature has them.",
           "windows": [
-            "main"
+            "main",
+            "window-[0-9]*"
           ],
           "permissions": [
             "wdio:default",

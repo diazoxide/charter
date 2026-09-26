@@ -65,6 +65,7 @@ import type { Needing, Quiet } from "./NeedsYou";
 import { useUpdates } from "./Updates";
 import { noTabs, PREFERENCES_TITLE } from "./tabs";
 import { useTextSizes } from "./textSize";
+import { MAIN, runElsewhere, thisWindow, useOtherWindows, useRunHere } from "./windows";
 
 /**
  * Puts the app's own `charter` on a terminal's `PATH`, and answers what the core said — the
@@ -105,10 +106,19 @@ function App() {
   // own — a shipped app that answers a right-click with `Reload` and `Inspect Element` is
   // showing the operator the browser it is built on.
   useNoBrowserMenu();
+  /** Which window this is (charter#126): the main window, or a split window a project tab was
+   *  moved into. Tauri's label, read once — a window never becomes another. */
+  const own = useMemo(() => thisWindow(), []);
+  const split = own !== MAIN;
   /** What the launch resolved, asked once. `undefined` while the core has not answered. */
   const [launch, setLaunch] = useState<{ plane: PlaneId | null; here: boolean; reason: string }>();
   /** The projects this window holds, left to right as the strip shows them. */
   const [planes, setPlanes] = useState<PlaneId[]>([]);
+  /** The same, as of the last render, for a verb that is kept stable across renders. */
+  const planesNow = useRef(planes);
+  useLayoutEffect(() => {
+    planesNow.current = planes;
+  });
   /** What is on screen: one of the projects, or the opener. The opener is not only the state
    *  of an empty window — it is also how a window holding eight gets a ninth. */
   const [showing, setShowing] = useState<{ at: "opener" } | { at: "plane"; plane: PlaneId }>({
@@ -303,9 +313,14 @@ function App() {
    *
    * Answers with the project when one opened, so a restore can decide which of several ends
    * up in front rather than landing on whichever answered last.
+   *
+   * **A project another window holds is not taken in twice** (charter#126): one project is
+   * one tab in one window, so opening it here brings that window to the front instead. And
+   * `into: false` opens it without taking it into this window at all, for a restore that is
+   * about to move it into a window of its own.
    */
   const openInto = useCallback(
-    async (path: string, andShow: boolean): Promise<PlaneId | undefined> => {
+    async (path: string, andShow: boolean, into = true): Promise<PlaneId | undefined> => {
       setOpenTrouble(undefined);
       const answer = await commands
         .openPlane(path)
@@ -326,6 +341,11 @@ function App() {
         return undefined;
       }
       const plane = answer.data.plane;
+      if (!planesNow.current.includes(plane)) {
+        const holder = await commands.showWindowHolding(plane).catch(() => null);
+        if (holder !== null && holder !== own) return undefined;
+      }
+      if (!into) return plane;
       // A project already in the strip keeps its place: "open it" for one this window holds
       // means "show me that project", which is what a recents row and a second launch both
       // mean when they name one that is already a tab.
@@ -333,7 +353,7 @@ function App() {
       if (andShow) setShowing({ at: "plane", plane });
       return plane;
     },
-    [],
+    [own],
   );
 
   /**
@@ -363,11 +383,9 @@ function App() {
   /** Lets go of one project. Its chats end, its record is written into it, and its tab goes.
    *  Nothing of the project on disk goes. Reached through {@link closeProject}, which asks
    *  first when there is anything to end. */
-  const letGoOf = useCallback(async (plane: string): Promise<Ran> => {
-    const answer = await commands
-      .closePlane(plane)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    if (answer.status === "error") return { ok: false, refused: answer.error };
+  /** Takes one project's tab out of this window, and nothing else: closing it and moving it to
+   *  another window both end here. */
+  const takeOut = useCallback((plane: string) => {
     setPlanes((was) => {
       const at = was.indexOf(plane);
       const left = was.filter((held) => held !== plane);
@@ -383,14 +401,46 @@ function App() {
       return left;
     });
     // And the window forgets what that project had open: its report is about chats that have
-    // just been ended, and a quit warning listing them would be listing nothing.
+    // just been ended, or that another window now draws, and a quit warning listing them here
+    // would list them twice or list nothing.
     setReports((was) => {
       const { [plane]: gone, ...rest } = was;
       void gone;
       return rest;
     });
-    return { ok: true, said: `charter let go of ${plane}. Nothing in it was changed.` };
   }, []);
+
+  const letGoOf = useCallback(
+    async (plane: string): Promise<Ran> => {
+      const answer = await commands
+        .closePlane(plane)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (answer.status === "error") return { ok: false, refused: answer.error };
+      takeOut(plane);
+      return { ok: true, said: `charter let go of ${plane}. Nothing in it was changed.` };
+    },
+    [takeOut],
+  );
+
+  /**
+   * Moves one project into another window — a new one when `to` is null (charter#126).
+   *
+   * **Nothing is closed.** Its chats go on running in the core, and the window it arrives in
+   * draws them from what the core has open, as a window that reloaded would. This window only
+   * takes its tab out. A split window left holding nothing goes (`windows.rs`), and the main
+   * window left holding nothing shows the opener.
+   */
+  const moveProject = useCallback(
+    async (plane: string, to: string | null): Promise<Ran> => {
+      const answer = await commands
+        .moveProjects([plane], plane, to)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (answer.status === "error") return { ok: false, refused: answer.error };
+      takeOut(plane);
+      return { ok: true };
+    },
+    [takeOut],
+  );
 
   /** The project whose close is waiting on the operator's answer (`ClosingProject`). */
   const [closing, setClosing] = useState<string>();
@@ -471,6 +521,7 @@ function App() {
       installCli,
       selectProject: (plane: string) => setShowing({ at: "plane", plane }),
       closeProject,
+      moveProject,
       pinProject,
       openSettings: (plane: string) => {
         setShowing({ at: "plane", plane });
@@ -487,12 +538,18 @@ function App() {
       },
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
-    [closeProject, pinProject],
+    [closeProject, moveProject, pinProject],
   );
 
   // Which plane this launch opened — asked once, and the answer the first tab is built from.
   // The core resolved the working directory once to get it; nothing asks again.
   useEffect(() => {
+    // A split window is not a launch: it was made to hold what was moved into it, and the
+    // working directory was resolved once, for the main window (ADR 0034).
+    if (split) {
+      setLaunch({ plane: null, here: false, reason: "" });
+      return;
+    }
     void commands
       .planeAtLaunch()
       .then((it) =>
@@ -505,7 +562,7 @@ function App() {
       )
       // A command can also fail outright, with no answer of its own to give.
       .catch((err: unknown) => setLaunch({ plane: null, here: true, reason: String(err) }));
-  }, []);
+  }, [split]);
 
   /**
    * The window set the last quit left behind, put back (ADR 0033, spec decision 28).
@@ -532,6 +589,25 @@ function App() {
   useEffect(() => {
     if (launch === undefined || restored.current) return;
     restored.current = true;
+    // **A split window restores nothing and asks nothing.** It draws what was moved into it,
+    // which the core already holds for it (`projects_handed`) — and asks again after a reload,
+    // which is how a reloaded split window comes back with its tabs.
+    if (split) {
+      void (async () => {
+        try {
+          const held = await commands.projectsHanded().catch(() => null);
+          if (held) {
+            setPlanes(held.planes);
+            const front = held.active === null ? undefined : held.planes[held.active];
+            if (front !== undefined) setShowing({ at: "plane", plane: front });
+          }
+        } finally {
+          setRestoring(false);
+          restoreOver.settle();
+        }
+      })();
+      return;
+    }
     void (async () => {
       try {
         const asked = await commands
@@ -563,10 +639,27 @@ function App() {
           .catch(() => ({ status: "error" as const, error: "" }));
         const back = answer.status === "ok" ? answer.data : undefined;
         setNotRestored(back?.dropped ?? []);
+        const [first, ...splits] = back?.windows ?? [];
         let front: PlaneId | undefined;
-        for (const [at, path] of (back?.planes ?? []).entries()) {
+        for (const [at, path] of (first?.planes ?? []).entries()) {
           const plane = await openInto(path, false);
-          if (plane !== undefined && at === back?.active) front = plane;
+          if (plane !== undefined && at === first?.active) front = plane;
+        }
+        // **Every other remembered window comes back as a window of its own** (ADR 0033,
+        // amended 2026-09-26). Each project is still opened here, through the same gate — a
+        // project that raises the trust question asks it in this window, and lands here once
+        // approved — and only then moved into its window. The launch's own project stays here.
+        for (const window of splits) {
+          const opened: PlaneId[] = [];
+          let inFrontThere: PlaneId | null = null;
+          for (const [at, path] of window.planes.entries()) {
+            const plane = await openInto(path, false, false);
+            if (plane === undefined || plane === launch.plane) continue;
+            opened.push(plane);
+            if (at === window.active) inFrontThere = plane;
+          }
+          if (opened.length > 0)
+            await commands.moveProjects(opened, inFrontThere, null).catch(() => undefined);
         }
         // The remembered front tab, unless the launch already named one: a terminal launch
         // inside a project is the operator saying which project he means, and it outranks an
@@ -580,7 +673,7 @@ function App() {
         restoreOver.settle();
       }
     })();
-  }, [launch, openInto, restoreOver]);
+  }, [launch, openInto, restoreOver, split]);
 
   // Nothing is ever drawn on a project this window does not hold. `showing` is set from
   // several places — a close, a restore, an approval — and a plane that went in between
@@ -658,6 +751,20 @@ function App() {
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, [openInto, restoreOver]);
 
+  // Projects moved into this window from another, or handed back by a split window that was
+  // closed (charter#126). They are already open in the core; this window only draws them.
+  useEffect(() => {
+    const listening = listen<{ planes: PlaneId[]; front: PlaneId | null }>(
+      "projects-arrived",
+      (event) => {
+        const { planes: arrived, front } = event.payload;
+        setPlanes((was) => [...was, ...arrived.filter((plane) => !was.includes(plane))]);
+        if (front !== null) setShowing({ at: "plane", plane: front });
+      },
+    ).catch(() => undefined);
+    return () => void listening.then((stop) => stop?.()).catch(() => undefined);
+  }, []);
+
   // Cold start ends when a person can see the window, which is the frame after the one this
   // paints in. The core answers with why that took as long as it did, when it took longer
   // than the limit, and with nothing at all otherwise — so on an ordinary launch this is one
@@ -695,13 +802,9 @@ function App() {
     launch !== undefined && !restoring && planes.every((plane) => reports[plane]?.settled);
 
   // Read at the moment the event arrives rather than closed over, so the one listener below
-  // is registered once and never torn down and rebuilt mid-quit.
+  // is registered once and never torn down and rebuilt mid-quit. Every window's, not only this
+  // one's (charter#126): it is set below, once the other windows' share is known.
   const atQuit = useRef({ settled, ending });
-  // In the same flush as the report that changed it, for the reason `PlaneView` reports in
-  // one: a quit is not something the window gets to be a frame behind on.
-  useLayoutEffect(() => {
-    atQuit.current = { settled, ending };
-  });
 
   // Something asked the app to quit: the menu, the tray, or Cmd-Q. The answer is the
   // operator's, and it is given here because this is where what would be ended is known.
@@ -797,6 +900,7 @@ function App() {
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
+      moveProject: windowDoes.moveProject,
       openSettings: windowDoes.openSettings,
       openSaving: windowDoes.openSaving,
       // A workspace is a project's, and there is no project here to have one.
@@ -825,8 +929,8 @@ function App() {
   /** The rows the project strip draws. The same rows `catalogue` splices into the palette —
    *  one place the words and the availability are written down (`actions.projectRows`). */
   const strip = useMemo(
-    () => projectRows(drawn, inFront, pinnedProjects),
-    [drawn, inFront, pinnedProjects],
+    () => projectRows(drawn, inFront, pinnedProjects, split),
+    [drawn, inFront, pinnedProjects, split],
   );
 
   /**
@@ -846,6 +950,8 @@ function App() {
       ...strip.pin,
       ...strip.settings,
       ...strip.saving,
+      ...strip.window,
+      ...strip.back,
       ...strip.close,
     ],
     [strip],
@@ -936,8 +1042,9 @@ function App() {
         needsYou: [],
         pinned: { chats: [], workspaces: [], projects: pinnedProjects },
         nameOf: String,
+        split,
       }),
-    [drawn, pinnedProjects],
+    [drawn, pinnedProjects, split],
   );
 
   const run = useCallback(
@@ -998,6 +1105,29 @@ function App() {
   );
 
   /**
+   * **What the other windows have asking and open** (charter#126). The ✋ list is every chat,
+   * in every project, asking for the operator (ADR 0054) — and a project split into a window of
+   * its own reports to that window, not to this one. So each window tells the others its share,
+   * and draws theirs beside its own. A row a window has not caught up on — a project that has
+   * just moved in here — is drawn once, from this window's own report.
+   */
+  const others = useOtherWindows({ needing, quiet, ending, settled });
+  const everyNeeding = useMemo(
+    () => [...needing, ...others.needing.filter((one) => !planes.includes(one.plane))],
+    [needing, others.needing, planes],
+  );
+  const everyQuiet = useMemo(() => [...quiet, ...others.quiet], [quiet, others.quiet]);
+  /** What a quit would end in every window: the main window is the one asked (`lifecycle.rs`),
+   *  and a warning that left out a split window's chats would end them unannounced. */
+  const everyEnding = useMemo(() => [...ending, ...others.ending], [ending, others.ending]);
+  // In the same flush as the report that changed it, for the reason `PlaneView` reports in
+  // one: a quit is not something the window gets to be a frame behind on. Settled only once
+  // every other window has said it is: one that has said nothing yet is "not yet".
+  useLayoutEffect(() => {
+    atQuit.current = { settled: settled && others.settled, ending: everyEnding };
+  });
+
+  /**
    * A row off that list, carried out by the project it is about — through that project's own
    * `run`, so a Go and an Ignore are exactly the palette's rows.
    *
@@ -1035,10 +1165,20 @@ function App() {
       });
   }, [windowDoes]);
 
-  const pressNeeding = useCallback((plane: string, offer: Offer) => {
+  const pressHere = useCallback((plane: string, offer: Offer) => {
     if (offer.does.verb === "showChat") setShowing({ at: "plane", plane });
     void reportsNow.current[plane]?.run(offer);
   }, []);
+  /** A row for a chat in ANOTHER window is carried out there, and that window comes to the
+   *  front (charter#126): the chat is in front only in the window holding its project. */
+  const pressNeeding = useCallback(
+    (plane: string, offer: Offer) => {
+      if (planesNow.current.includes(plane)) pressHere(plane, offer);
+      else void runElsewhere(plane, offer);
+    },
+    [pressHere],
+  );
+  useRunHere(pressHere);
 
   return (
     <main className="window">
@@ -1148,7 +1288,7 @@ function App() {
         updates={updates}
         room={titleBarRoom}
         chats={ending}
-        needing={{ items: needing, quiet, onPress: pressNeeding }}
+        needing={{ items: everyNeeding, quiet: everyQuiet, onPress: pressNeeding }}
         save={
           inFront !== undefined && saving !== undefined
             ? {
@@ -1322,7 +1462,7 @@ function App() {
           fingerprint, and a launch does not pay for that unless somebody looked. */}
       {extensions && <Extensions onClose={() => setExtensions(false)} />}
 
-      {asking && <QuitWarning chats={ending} onQuit={quit} onCancel={dontQuit} />}
+      {asking && <QuitWarning chats={everyEnding} onQuit={quit} onCancel={dontQuit} />}
 
       {closing !== undefined && (
         <ClosingProject

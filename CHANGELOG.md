@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A project tab can move into a window of its own, and back.** Right-click a project tab, or
+  use the palette, and choose *Move project … to a new window*. Its chats keep running. In that
+  window, *Move project … to the main window* brings it back, and so does closing the window.
+  Each window has its own palette and project tabs. The ✋ list still shows every chat that needs
+  you, whichever window it is in, and pressing one takes you to that window. Quitting warns
+  about the chats in every window. The next launch opens each window again.
+  ([#126](https://github.com/diazoxide/charter/issues/126))
+
 - **`charter save --pull` brings in what the remote has before it saves.** A chat the app did
   not start, such as a `claude` or `codex` in a terminal, gets no auto-save and no incoming
   changes. Outside the app, the plane is saved only through `charter save`. `--pull` fetches

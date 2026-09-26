@@ -142,13 +142,21 @@ pub struct Recents {
 /// the opener draws a recents row that went.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct Restore {
-    /// The projects to open again, left to right as the tabs were.
-    pub planes: Vec<String>,
-    /// Which of them was in front, as an index into `planes` after the drops. Null when there
-    /// is nothing to put back.
-    pub active: Option<u32>,
+    /// The windows to put back, the main window's first: each one's projects left to right
+    /// as its tabs were, and which of them was in front. Empty when there is nothing to put
+    /// back.
+    pub windows: Vec<RestoreWindow>,
     /// One line per project charter would not take back.
     pub dropped: Vec<String>,
+}
+
+/// One window a cold launch puts back (ADR 0033, amended 2026-09-26).
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct RestoreWindow {
+    /// Its projects, left to right as its tabs were.
+    pub planes: Vec<String>,
+    /// Which of them was in front, as an index into `planes` after the drops.
+    pub active: Option<u32>,
 }
 
 /// What a window is holding, as it says so itself.
@@ -360,8 +368,7 @@ pub async fn planes_to_restore(
     // a reason: the operator asked for this, so there is no news in it.
     if !restoring.wanted() {
         return Ok(Restore {
-            planes: Vec::new(),
-            active: None,
+            windows: Vec::new(),
             dropped: Vec::new(),
         });
     }
@@ -370,12 +377,18 @@ pub async fn planes_to_restore(
     tauri::async_runtime::spawn_blocking(move || {
         let back = restorable(loaded);
         Restore {
-            planes: back
-                .planes
-                .iter()
-                .map(|plane| plane.display().to_string())
+            windows: back
+                .windows
+                .into_iter()
+                .map(|window| RestoreWindow {
+                    planes: window
+                        .planes
+                        .iter()
+                        .map(|plane| plane.display().to_string())
+                        .collect(),
+                    active: window.active.and_then(|at| u32::try_from(at).ok()),
+                })
                 .collect(),
-            active: back.active.and_then(|at| u32::try_from(at).ok()),
             dropped: back.dropped,
         }
     })
@@ -492,8 +505,9 @@ pub fn window_holds_planes(
     planes: tauri::State<'_, Planes>,
     held: WindowTabs,
 ) {
-    showing.in_window(
-        window.label(),
+    crate::windows::held(
+        &window,
+        &showing,
         Holding {
             planes: held.planes,
             active: held.active.map(|at| at as usize),
