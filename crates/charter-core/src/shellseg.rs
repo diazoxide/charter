@@ -140,6 +140,26 @@ const GROUPING: [&str; 4] = ["(", ")", "{", "}"];
 /// `>(` process substitution. `$` is matched as a SUFFIX instead, because `x$(…)` lexes as `x$`.
 const PROCSUB_LEAD: [&str; 2] = ["<", ">"];
 
+/// Whether `prev`, a bare word, and the `(` after it are zsh's `=(…)`, which runs its command
+/// and hands the program a temporary file holding the output — a substitution, as `<(…)` is.
+///
+/// The positions are exactly the ones [`crate::livesub::process_substitution_at`] reads as
+/// live, by the same test ([`crate::livesub::equals_ends_a_name`]): the `=` begins the word
+/// (`=(…)`), ends an assignment's `=` (`v==(…)`) or follows a `${…}` operator (`${v:-=(…)}`),
+/// and not a name (`a=(…)`, `a[1]=(…)` and `a+=(…)` are arrays). The word is bare, so a quoted
+/// part (`""=(…)`) or an escaped `=` opens nothing. The `(` must touch the `=`: `= (…)` is no
+/// substitution in zsh. A `(` whose offset nothing measured (the fallback path) counts as
+/// touching, which errs toward reading more segments. Checked against zsh 5.9; bash refuses
+/// every one of these lines.
+fn opens_equals_substitution(prev: &Tok, paren: &Tok) -> bool {
+    let chars: Vec<char> = prev.text.chars().collect();
+    let Some(at) = chars.len().checked_sub(1) else {
+        return false;
+    };
+    let touching = prev.end < 0 || paren.start < 0 || prev.end == paren.start;
+    chars[at] == '=' && touching && !crate::livesub::equals_ends_a_name(&chars, at)
+}
+
 /// The quoting contexts a position can sit in. `(` and a backtick are SUBSTITUTIONS — inside
 /// them quoting starts again from nothing — so they are on the stack but are not "quoted".
 /// `$"…"` is not here because it opens the same `"` context an ordinary double quote does.
@@ -1014,7 +1034,10 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
         if t.is_op(&["("]) {
             let prev = open_segs.last().and_then(|s| s.last());
             let substitution = prev.is_some_and(|p| {
-                p.bare && (p.text.ends_with('$') || PROCSUB_LEAD.contains(&p.text.as_str()))
+                p.bare
+                    && (p.text.ends_with('$')
+                        || PROCSUB_LEAD.contains(&p.text.as_str())
+                        || opens_equals_substitution(p, &t))
             });
             if substitution {
                 open_segs.push(Vec::new());

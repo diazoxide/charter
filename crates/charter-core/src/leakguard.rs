@@ -1319,6 +1319,56 @@ mod tests {
         }
     }
 
+    /// A `<<` in arithmetic or in `${…}` is a shift or plain text to the shell, which runs the
+    /// lines after it (GNU bash 3.2.57 and zsh 5.9). None of them is dropped as a body.
+    #[test]
+    fn a_shift_keeps_the_next_lines() {
+        for cmd in [
+            "cat $[1<<\"2\"]\ncat .charter/vaults/x.json\n2",
+            "cat $((1<<'2'))\ncat .charter/vaults/x.json\n2",
+            "cat ${v:-1<<\"2\"}\ncat .charter/vaults/x.json\n2",
+        ] {
+            assert!(reason(cmd).is_some(), "{cmd:?}");
+        }
+        // …and A7 reads them as lines a shell runs.
+        let rows = lines_a_command_could_run("(( 1<<\"2\" ))\ncharter handoff b\n2");
+        assert!(
+            rows.iter().any(|(l, _)| l == "charter handoff b"),
+            "{rows:?}"
+        );
+    }
+
+    /// A heredoc opened in a process substitution closed on its own line is the `$( … )` case:
+    /// GNU bash 3.2.57 and zsh 5.9 run the next lines as commands (zsh alone for `=(…)`), so A7
+    /// reads them as lines a shell runs.
+    #[test]
+    fn a_heredoc_in_a_process_substitution_closed_on_its_line_keeps_the_next_lines() {
+        for first in [
+            "cat <(cat <<\"2\")",
+            "cat >(cat <<\"2\")",
+            "cat =(cat <<\"2\")",
+        ] {
+            let rows = lines_a_command_could_run(&format!("{first}\ncharter handoff b\n2"));
+            assert!(
+                rows.iter().any(|(l, _)| l == "charter handoff b"),
+                "{first:?}: {rows:?}"
+            );
+        }
+    }
+
+    /// zsh's `=(…)` runs its command and hands the program a file holding the output, so a read
+    /// inside one is a read (zsh 5.9).
+    #[test]
+    fn a_read_inside_a_zsh_equals_substitution_is_a_read() {
+        for cmd in [
+            "echo =(cat .charter/vaults/x.json)",
+            "v==(cat .charter/vaults/x.json)",
+            "echo ${v:-=(cat .charter/vaults/x.json)}",
+        ] {
+            assert!(reason(cmd).is_some(), "{cmd:?}");
+        }
+    }
+
     #[test]
     fn the_vault_path_pattern_is_asked_as_written() {
         assert!(vault_path_matches(".charter/vaults/db.json"));

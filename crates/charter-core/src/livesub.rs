@@ -34,6 +34,9 @@
 //!
 //! * `$((…))` arithmetic reads as `$(` ([`SUBSTITUTIONS`]), and a `<(` or `>(` inside `((…))` or
 //!   `$[…]` arithmetic reads as live ([`PROCSUB`]);
+//! * a `<<` inside arithmetic, `${…}` or a subscript is read both as a shift and as a heredoc
+//!   ([`crate::heredoc::ShiftContext`]), so the lines after it are read as commands AND, when
+//!   its would-be delimiter is unquoted, as an expanding body;
 //! * a `#` comment is read as text, so a substitution inside one reads as live;
 //! * an unterminated quote or heredoc leaves the rest of the string literal, which is what a
 //!   shell does with the whole command — it refuses to run it;
@@ -89,7 +92,7 @@ pub const PROCSUB: [&str; 3] = ["<(", ">(", "=("];
 /// the value of an assignment (`v==(…)`) and as the operand of a `${…}` operator
 /// (`${v:-=(…)}`), and bash refuses the whole command, so reading more positions as live costs
 /// nothing where it does not run.
-fn equals_ends_a_name(chars: &[char], i: usize) -> bool {
+pub(crate) fn equals_ends_a_name(chars: &[char], i: usize) -> bool {
     let name_end = |c: char| c.is_alphanumeric() || c == '_' || c == ']';
     match i.checked_sub(1).map(|k| chars[k]) {
         Some(c) if name_end(c) || c == '"' || c == '\'' => true,
@@ -310,6 +313,10 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
     let n = chars.len();
     let mut i = 0usize;
     let mut pending: Vec<Pending> = Vec::new();
+    // Every `<<` of the line in order, those that may be shifts included: the heredoc reading
+    // of the line, which is read as well as the one `pending` gives ([`heredoc::ShiftContext`]).
+    let mut as_heredocs: Vec<Pending> = Vec::new();
+    let mut ctx = heredoc::ShiftContext::default();
     while i < n {
         let c = chars[i];
         if c == '\\' {
@@ -358,15 +365,29 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
                 // `i + 2` anyway. Written as `+= 2` because that is what the Python writes and
                 // what the construct means, not because the walk needs it.
                 None => i += 2,
+                // A `<<` that may be a shift is read both ways. As a shift, its operand is
+                // text the walk goes on to read, and the lines after it are commands; as a
+                // heredoc, its body is scanned at the end of the line with the others.
+                Some(h) if ctx.inside() => {
+                    i += 2;
+                    as_heredocs.push((h.delim, h.expands, h.dash));
+                }
                 // Where the shells end the body at different lines, it is read as commands:
                 // the body is literal, so that reading only finds more.
                 Some(h) if h.shells_disagree => i = h.end,
                 Some(h) => {
                     i = h.end;
+                    as_heredocs.push((h.delim.clone(), h.expands, h.dash));
                     pending.push((h.delim, h.expands, h.dash));
                 }
             }
-        } else if c == '\n' && !pending.is_empty() {
+        } else if c == '\n' && !as_heredocs.is_empty() {
+            if as_heredocs.len() > pending.len()
+                && let (Some(hit), _) = heredoc_bodies(chars, i + 1, &as_heredocs)
+            {
+                return Some(hit);
+            }
+            as_heredocs.clear();
             let (hit, next) = heredoc_bodies(chars, i + 1, &pending);
             i = next;
             pending.clear();
@@ -374,7 +395,7 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
                 return Some(hit);
             }
         } else {
-            i += 1;
+            i += ctx.step(chars, i);
         }
     }
     None
@@ -693,5 +714,39 @@ mod tests {
         assert_eq!(live_substitution("((1<(y)))"), Some("<("));
         assert_eq!(live_substitution("x $[1<(y)]"), Some("<("));
         assert_eq!(live_substitution("x $((1<(y)))"), Some("$("));
+    }
+
+    /// A `<<` inside arithmetic, `${…}` or an assignment's subscript is a shift or plain text to
+    /// the shell, not a heredoc, so the lines after it are commands the shell runs. Each of these
+    /// ran the substitution on the second line in GNU bash 3.2.57 and zsh 5.9, or in one of them.
+    #[test]
+    fn a_shift_does_not_hide_the_lines_after_it() {
+        for (cmd, want) in [
+            ("(( 1<<\"2\" ))\necho $(y)\n2", "$("),
+            ("(( 1<<\"2\" ))\ncat <(y)\n2", "<("),
+            ("true && (( 1<<'2' ))\necho `y`\n2", "`"),
+            ("if (( 1<<\"2\" )); then :; fi\necho $(y)\n2", "$("),
+            ("for ((i=0;i<1<<\"2\";i++)); do :; done\necho $(y)\n2", "$("),
+            ("echo $[ 1<<\"2\" ]\necho $(y)\n2", "$("),
+            ("x=((1<<\"2\"))\necho $(y)\n2", "$("),
+            ("echo ${v:-1<<\"2\"}\necho $(y)\n2", "$("),
+            ("echo ${v:-a;((1<<\"2\"))}\necho $(y)\n2", "$("),
+            ("a[1<<\"2\"]=x\necho $(y)\n2", "$("),
+            // The shift's operand is read too: the shell runs it.
+            ("(( 1<<$(y) ))", "$("),
+            ("echo $[1<<`y`]", "`"),
+            // Unquoted, the would-be body is read as an expanding body as well, where quotes
+            // protect nothing. Neither shell runs this one: the cost of not guessing.
+            ("(( 1<<x ))\necho '$(y)'\nx", "$("),
+        ] {
+            assert_eq!(live_substitution(cmd), Some(want), "{cmd:?}");
+        }
+        // Once the bracket closes, a quoted heredoc is a body nobody runs again.
+        for cmd in [
+            "echo $[2] ${v} a[1]=b; cat <<\"2\"\necho $(y)\n2",
+            "(( 1<<\"3\" )); cat <<\"2\"\necho $(y)\n2",
+        ] {
+            assert_eq!(live_substitution(cmd), None, "{cmd:?}");
+        }
     }
 }

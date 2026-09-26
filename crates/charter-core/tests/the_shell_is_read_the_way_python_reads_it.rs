@@ -1099,3 +1099,75 @@ fn a_brief_is_a_brief_in_any_case() {
     }
     assert!(heredoc::brief_heredocs(&Line::of("'charter' handoff b <<'B'")).is_empty());
 }
+
+/// A `<<` inside `(( … ))`, `$(( … ))`, `$[ … ]`, `${ … }` or an assignment's subscript can be a
+/// shift or plain text, and then the lines after it are commands the shell runs: GNU bash 3.2.57
+/// and zsh 5.9 ran them for each shape below, or one of the two did. Such a `<<` is read both
+/// ways, as the layout reads a heredoc the shells end at different lines: its would-be body is
+/// never dropped, and it is read as lines a shell runs.
+#[test]
+fn a_shift_opens_no_body_a_guard_may_skip() {
+    charter_core::unsteered!();
+    for first in [
+        "cat $[1<<\"2\"]",
+        "cat $((1<<\"2\"))",
+        "(( 1<<\"2\" )) && cat",
+        "cat ${v:-1<<\"2\"}",
+        "a[1<<\"2\"]=x cat",
+        "x=((1<<\"2\")); cat",
+    ] {
+        let cmd = format!("{first}\nsecret\n2\nls");
+        assert_eq!(heredoc::strip_reader_heredocs(&cmd), cmd, "{cmd:?}");
+        let layout = heredoc::heredoc_layout(&cmd);
+        assert!(
+            layout.iter().all(|l| !l.drop && (!l.body || l.executed)),
+            "{cmd:?}: {layout:?}"
+        );
+    }
+    // Once the bracket closes, a quoted reader body is data again.
+    assert_eq!(
+        heredoc::strip_reader_heredocs("echo $[2] ${v} a[1]=b; cat <<\"2\"\nsecret\n2\nls"),
+        "echo $[2] ${v} a[1]=b; cat <<\"2\"\nls"
+    );
+}
+
+/// zsh runs `=(…)` at the start of a word, as an assignment's value and as the operand of a
+/// `${…}` operator, and hands the program a temporary file holding the output. Its command is a
+/// segment of its own, as a `<(…)`'s is. After a name (`a=(…)`, an array) or a quoted part of
+/// the word it is no substitution. Checked against zsh 5.9; bash refuses every `=(` form.
+#[test]
+fn a_zsh_equals_substitution_is_a_segment_of_its_own() {
+    charter_core::unsteered!();
+    let vault = ".charter/vaults/x.json";
+    for cmd in [
+        format!("echo =(cat {vault})"),
+        format!("=(cat {vault})"),
+        format!("v==(cat {vault})"),
+        format!("echo ${{v:-=(cat {vault})}}"),
+        format!("echo x;=(cat {vault})"),
+        format!("echo >=(cat {vault})"),
+        format!("gh pr create --body-file =(cat {vault})"),
+    ] {
+        assert!(
+            words(&cmd).contains(&w(&["cat", vault])),
+            "{cmd:?}: {:?}",
+            words(&cmd)
+        );
+    }
+    for cmd in [
+        format!("a=(cat {vault})"),
+        format!("a+=(cat {vault})"),
+        format!("a[1]=(cat {vault})"),
+        format!("echo a=(cat {vault})"),
+        format!("echo \"\"=(cat {vault})"),
+        format!("echo '='(cat {vault})"),
+        format!("echo \\=(cat {vault})"),
+        format!("echo = (cat {vault})"),
+    ] {
+        assert!(
+            !words(&cmd).contains(&w(&["cat", vault])),
+            "{cmd:?}: {:?}",
+            words(&cmd)
+        );
+    }
+}
