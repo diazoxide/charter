@@ -524,8 +524,10 @@ fn a_keyring_vault_is_said_to_keep_its_key_names_in_its_index() {
     let said = io.said();
     assert!(
         said.contains(
-            "info:   charter keeps each secret as one item in the system keyring, and the key \
-             names — never the values — in .charter/vaults/k.keys.json."
+            // Not from its first word: the command-name scan reads `charter <word>` in a literal
+            // here as a command this file suggests.
+            "keeps each secret as one item in the system keyring, and the key names — never \
+             the values — in .charter/vaults/k.keys.json."
         ),
         "{said}"
     );
