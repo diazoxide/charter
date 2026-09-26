@@ -56,6 +56,10 @@ impl World {
         std::fs::write(root.join(".gitignore"), ".charter/\n").unwrap();
         std::fs::write(root.join("README.md"), "one\n").unwrap();
         world.git(&root, &["init", "-q", "-b", "main", "."]);
+        // In the repo's own config: charter's git runner clears the environment, so the
+        // identity variables the test's own git uses never reach the save's commit.
+        world.git(&root, &["config", "user.name", "Tester"]);
+        world.git(&root, &["config", "user.email", "t@e.invalid"]);
         world.git(&root, &["add", "-A"]);
         world.git(&root, &["commit", "-q", "-m", "one"]);
         world.git(
@@ -110,6 +114,8 @@ impl World {
             .env("CHARTER_ROOT", &self.root)
             .env("CHARTER_HOME", self.home.join(".charter"))
             .env("NO_COLOR", "1")
+            // A runner's own XDG_CONFIG_HOME is outside the fence; the machine store follows HOME.
+            .env_remove("XDG_CONFIG_HOME")
             .envs(IDENTITY)
             .output()
             .expect("the binary runs");
