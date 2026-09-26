@@ -25,8 +25,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a change record charter cannot read, naming the file and what is wrong with it, and on a
   change's branch sitting in a clone that is a member of no change. It reads only this disk and
   says which `changes/` directory it could not look at.
-
-
+- **`charter change show` says where each member's pull request stands.** Under the record it
+  prints each member's request number, whether it is open, merged or rejected, and its checks at
+  the request's exact head commit: PASSED, FAILED, RUNNING, NOT RUN or UNKNOWN. Zero checks is
+  NOT RUN and a check charter could not read is UNKNOWN, and neither is ever shown as passing.
+  It says which members still wait on a blocker, and when the reading was taken. If the forge
+  cannot be asked, the record still prints and each member says why. Nothing it reads is
+  written back.
 - **Renaming a workspace names the chats that will start a fresh conversation.** Claude Code
   keeps a conversation under the folder it ran in, and charter does not move that folder. So
   `charter workspace rename`, and the Rename dialog before you confirm, list by name each

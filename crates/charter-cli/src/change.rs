@@ -121,7 +121,7 @@ pub fn run(here: &Here, command: ChangeCommand) -> Result<u8, String> {
         ),
         ChangeCommand::List { workspace } => cmd::list(&root, &ws(workspace.as_deref()), &mut say),
         ChangeCommand::Show { change, workspace } => {
-            cmd::show(&root, &ws(workspace.as_deref()), &change, &mut say)
+            cmd::show(&root, &ws(workspace.as_deref()), &change, now, &mut say)
         }
         ChangeCommand::Forget { change, workspace } => {
             cmd::forget(&root, &ws(workspace.as_deref()), &change, &mut say)

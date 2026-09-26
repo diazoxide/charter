@@ -16,10 +16,12 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 
+use super::observe::Observation;
 use super::record::{
     Exclusion, Member, Record, TEXT_LIMIT, branch_refusal, default_branch, name_ok,
 };
 use super::store::{self, WriteError};
+use crate::forge::pr::State;
 use crate::repocmd::Say;
 use crate::shown;
 use crate::tui::{self, Align};
@@ -443,8 +445,19 @@ pub fn list(plane: &Path, ws: &str, say: &mut dyn FnMut(Say)) -> u8 {
 }
 
 /// `charter change show <slug>`: the record whole — why, members, branches, blockers,
-/// exclusions. Nothing here asks a forge; it is true without asking anybody.
-pub fn show(plane: &Path, ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> u8 {
+/// exclusions. The record half needs no forge and is true without asking anybody.
+///
+/// Beneath the record, what the forge says now of each member: its request, whether it
+/// merged, the checks at its head, and whether a blocker still stands. That half is a reading
+/// taken at `now` and never written back; when charter cannot ask, it says so and the record
+/// above it still stands.
+pub fn show(
+    plane: &Path,
+    ws: &str,
+    slug: &str,
+    now: DateTime<Utc>,
+    say: &mut dyn FnMut(Say),
+) -> u8 {
     if !workspace_ok(plane, ws, say) {
         return 1;
     }
@@ -472,6 +485,11 @@ pub fn show(plane: &Path, ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> u8 
         for m in &record.members {
             say(Say::Out(member_line(&record, m)));
         }
+        let observation = super::observe::observe(plane, ws, &record, now);
+        say(Say::Out(String::new()));
+        for line in observed_lines(&record, &observation) {
+            say(Say::Out(line));
+        }
     }
     if !record.excluded.is_empty() {
         say(Say::Out(String::new()));
@@ -488,4 +506,79 @@ pub fn show(plane: &Path, ws: &str, slug: &str, say: &mut dyn FnMut(Say)) -> u8 
         }
     }
     0
+}
+
+/// The forge half of `show`: one row per member, under the time it was read.
+///
+/// `NOT RUN` and `UNKNOWN` are printed as themselves and never as passing. A member charter
+/// could not ask about says why, in the forge CLI's own words.
+pub fn observed_lines(record: &Record, observation: &Observation) -> Vec<String> {
+    let (merged, of) = observation.landed();
+    let mut lines = vec![format!(
+        "  read from the forge at {} · {merged} of {of} merged · nothing here is stored",
+        now_iso(observation.at)
+    )];
+    let names: Vec<String> = observation.members.iter().map(|m| cell(&m.repo)).collect();
+    let w = tui::column("", names.iter().map(String::as_str), 0, None);
+    let merged_repos: Vec<&str> = observation
+        .members
+        .iter()
+        .filter(|m| m.merged())
+        .map(|m| m.repo.as_str())
+        .collect();
+    for (m, name) in observation.members.iter().zip(&names) {
+        let mut row = format!("  {}  ", tui::pad(name, w, Align::Left));
+        match &m.request {
+            Err(why) => row.push_str(&format!("could not ask: {}", shown::line(why))),
+            Ok(None) => row.push_str(&format!("no request from {}", cell(&m.branch))),
+            Ok(Some(req)) => {
+                let short = |sha: &str| -> String { cell(sha).chars().take(7).collect() };
+                let state = match &req.state {
+                    State::Open => "open".to_string(),
+                    State::Merged { commit: Some(c) } => format!("merged as {}", short(c)),
+                    State::Merged { commit: None } => "merged".to_string(),
+                    // The spec's word: a member whose request was closed unmerged was refused,
+                    // and its dependents cannot land.
+                    State::Closed => "REJECTED".to_string(),
+                };
+                row.push_str(&format!(
+                    "#{} {state}  head {}",
+                    req.number,
+                    short(&req.head)
+                ));
+                if let Some(checks) = &m.checks {
+                    row.push_str(&format!("  checks {}", checks.ci.word()));
+                    if let Some(why) = &checks.why {
+                        row.push_str(&format!(" ({})", shown::line(why)));
+                    }
+                }
+            }
+        }
+        if let Some(member) = record.member(&m.repo)
+            && !member.needs.is_empty()
+        {
+            let needs: Vec<String> = member
+                .needs
+                .iter()
+                .map(|n| {
+                    let mark = if merged_repos.contains(&n.as_str()) {
+                        "✓"
+                    } else {
+                        "✗"
+                    };
+                    format!("{} {mark}", cell(n))
+                })
+                .collect();
+            row.push_str(&format!("   needs: {}", needs.join(", ")));
+            if !m.waiting_on.is_empty() {
+                row.push_str(if m.merged() {
+                    " — merged ahead of its blocker"
+                } else {
+                    " — blocked"
+                });
+            }
+        }
+        lines.push(row);
+    }
+    lines
 }
