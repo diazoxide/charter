@@ -71,6 +71,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   flags on each chat's command line, and Codex reads a project's `.codex/config.toml` once you
   trust the project. The harness guide says the same.
   ([#354](https://github.com/diazoxide/charter/issues/354))
+- **The plane root's branch guards can no longer be walked past by spelling.** A branch switch
+  or a commit-destroying `git reset` in the plane root was let through when `git` was typed in
+  capitals (`GIT`, which runs git on macOS and Windows) or with quotes inside it (`g''it`), when
+  the root was named with different letter case or through `/System/Volumes/Data`, when the
+  command ran from a folder inside the root such as `docs/`, when `env -C` or `sudo --chdir`
+  moved it there, or when an alias was defined in one case and used in another. All of these
+  are refused now. ([#346](https://github.com/diazoxide/charter/issues/346))
+- **A `cd` that fails no longer hides the command after it.** `cd somewhere; git checkout x`
+  was judged as running in `somewhere` even when the `cd` failed and git ran in the plane root.
+  Now only `cd somewhere && …` counts as having moved, and only up to the end of that `&&`
+  chain. A `cd` in a pipeline or a subshell, `pushd`, `~`, and a destination charter can't read
+  (`cd "$DIR"`, `cd -`) are followed the way the shell follows them.
+  ([#345](https://github.com/diazoxide/charter/issues/345))
+- **`GH issue create` and `CHARTER persona remember` are checked like their lower-case
+  spellings.** The check that refuses a live `` `…` `` or `$(…)` in a forge body or a charter
+  memory skipped a program name typed in capitals or split by quotes.
+  ([#347](https://github.com/diazoxide/charter/issues/347))
 
 ## [0.3.0] - 2026-09-25
 

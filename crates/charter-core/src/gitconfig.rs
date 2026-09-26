@@ -98,7 +98,7 @@ pub fn configured_work_tree(cwd: &str, git_dir: Option<&str>) -> Option<String> 
 /// **The ascent is LEXICAL**, because the Python's is: `os.path.abspath` collapses `..` by
 /// string before `Path.parents` walks up, so `<dir>/link/..` ascends from `<dir>` whatever `link`
 /// points at. That is the oracle's answer and it is kept.
-fn git_dir_at(cwd: &str) -> Option<String> {
+pub fn git_dir_at(cwd: &str) -> Option<String> {
     // `Path(os.path.abspath(Path(cwd)))`.
     let pure = pure_path(cwd);
     let start = if is_abs(&pure) {

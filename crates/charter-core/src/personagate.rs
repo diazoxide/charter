@@ -304,17 +304,7 @@ fn norm(text: &str) -> String {
 
 /// `(st_dev, st_ino)`, following links, or `None`.
 fn ids(path: &Path) -> Option<(u64, u64)> {
-    let meta = std::fs::metadata(path).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some((meta.dev(), meta.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = meta;
-        None
-    }
+    pypath::file_identity(path)
 }
 
 fn dirname(path: &str) -> String {

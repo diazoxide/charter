@@ -57,6 +57,15 @@ purpose: edit the row (for a `.gz`, decompress, edit, and recompress with
 `gzip -9n`), and say in the pull request which row, what it said, what it says now, and why the
 app now disagrees with the Python it was ported from. Rows are never regenerated wholesale.
 
+**Answers changed on purpose so far.** #345, #346 and #347 fixed guard bypasses the frozen
+Python had, so the rows that recorded its allow now record the refusal. In the plane-root rows:
+a `cd` not joined by `&&` (after `;`, `||`, `&`, a newline, or in a pipeline or subshell), a `cd`
+whose destination the guard cannot name (`$VAR`, a glob, `cd -`) or reads as the shell does (`~`,
+a logical `..`), a wrapper's chdir flag, a `git` in capitals or split by quotes (`g''it`), an
+inline alias used in a different case, a re-cased root, and a working directory inside the root's
+repository. In the prose-guard rows: a `gh`, `glab` or `charter` in capitals. The keys that moved are the verdicts (`bra`,
+`rst`, `fsh`, `csh`) and what the walk found on the way (`prg`, `rga`, `cb`, `gt`).
+
 ## The session recording
 
 Re-record with:

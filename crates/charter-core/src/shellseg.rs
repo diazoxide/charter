@@ -740,15 +740,46 @@ pub fn split_punctuation(toks: Vec<Tok>) -> Vec<Tok> {
 /// and `cat ( x` is a syntax error rather than a boundary. Keeping the segment whole is the
 /// conservative direction: a reader holds on to its operand.
 pub fn segment_tokens(toks: Vec<Tok>) -> Vec<Vec<String>> {
+    joined_segments(toks).into_iter().map(|s| s.argv).collect()
+}
+
+/// One segment of [`segment_tokens`], with the operators on either side of it.
+///
+/// `before` is what ended the previous segment at the same nesting level (`None` at the start of
+/// the line or of a substitution, `"("` just inside a subshell), and `after` is the token that
+/// ended this one (`None` at the end of the line). A `)` that closes a subshell or a
+/// substitution is `after` for the segment it closes. The plane-root guards read these to tell a
+/// `cd` whose failure stops what follows (`cd x && …`) from one whose failure does not (#345).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinedSegment {
+    pub argv: Vec<String>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+/// [`segment_tokens`] with each segment's [`JoinedSegment::before`] and
+/// [`JoinedSegment::after`]. The argv are exactly [`segment_tokens`]' — that function is this
+/// one with the operators dropped.
+pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
     /// What is open at this point, innermost last.
     enum Open {
         Subst,
         Subshell,
     }
 
-    let mut out: Vec<Vec<Tok>> = Vec::new();
+    let mut out: Vec<JoinedSegment> = Vec::new();
     let mut open_segs: Vec<Vec<Tok>> = vec![Vec::new()]; // outermost first
+    // What ended the last segment at each open level, parallel to `open_segs`.
+    let mut befores: Vec<Option<String>> = vec![None];
     let mut stack: Vec<Open> = Vec::new();
+    let mut close = |seg: Vec<Tok>, before: &mut Option<String>, after: &str| {
+        out.push(JoinedSegment {
+            argv: seg.into_iter().map(|t| t.text).collect(),
+            before: before.clone(),
+            after: Some(after.to_string()),
+        });
+        *before = Some(after.to_string());
+    };
     for t in split_punctuation(toks) {
         if t.is_op(&["("]) {
             let prev = open_segs.last().and_then(|s| s.last());
@@ -757,12 +788,16 @@ pub fn segment_tokens(toks: Vec<Tok>) -> Vec<Vec<String>> {
             });
             if substitution {
                 open_segs.push(Vec::new());
+                befores.push(None);
                 stack.push(Open::Subst);
                 continue;
             }
             if open_segs.last().is_some_and(|s| s.is_empty()) {
                 // command position: a subshell opens
                 stack.push(Open::Subshell);
+                if let Some(b) = befores.last_mut() {
+                    *b = Some("(".to_string());
+                }
                 continue;
             }
             // `cat ( x` — a shell does not start a subshell mid-command; it fails to parse.
@@ -770,13 +805,15 @@ pub fn segment_tokens(toks: Vec<Tok>) -> Vec<Vec<String>> {
         } else if t.is_op(&[")"]) {
             match stack.last() {
                 Some(Open::Subst) => {
-                    out.push(open_segs.pop().unwrap_or_default());
+                    let seg = open_segs.pop().unwrap_or_default();
+                    let mut before = befores.pop().flatten();
+                    close(seg, &mut before, ")");
                     stack.pop();
                     continue;
                 }
                 Some(Open::Subshell) => {
-                    if let Some(seg) = open_segs.last_mut() {
-                        out.push(std::mem::take(seg));
+                    if let (Some(seg), Some(before)) = (open_segs.last_mut(), befores.last_mut()) {
+                        close(std::mem::take(seg), before, ")");
                     }
                     stack.pop();
                     continue;
@@ -790,8 +827,8 @@ pub fn segment_tokens(toks: Vec<Tok>) -> Vec<Vec<String>> {
             }
             // mid-command: an ordinary argument to the program already named.
         } else if t.is_any_op() {
-            if let Some(seg) = open_segs.last_mut() {
-                out.push(std::mem::take(seg));
+            if let (Some(seg), Some(before)) = (open_segs.last_mut(), befores.last_mut()) {
+                close(std::mem::take(seg), before, &t.text);
             }
             continue;
         }
@@ -800,11 +837,14 @@ pub fn segment_tokens(toks: Vec<Tok>) -> Vec<Vec<String>> {
             seg.push(t.clone());
         }
     }
-    out.extend(open_segs);
-    out.into_iter()
-        .filter(|c| !c.is_empty())
-        .map(|c| c.into_iter().map(|t| t.text).collect())
-        .collect()
+    for (seg, before) in open_segs.into_iter().zip(befores) {
+        out.push(JoinedSegment {
+            argv: seg.into_iter().map(|t| t.text).collect(),
+            before,
+            after: None,
+        });
+    }
+    out.into_iter().filter(|c| !c.argv.is_empty()).collect()
 }
 
 /// Split an already-whitespace-split token list on shell operators — the unparseable path only,
@@ -1045,6 +1085,13 @@ pub fn segment_argv_parsed(cmd: &str) -> (Vec<Vec<String>>, bool) {
         // alone: the flag is `false`, and the caller matches the raw string as well.
         Err(_) => (fallback_segments(&cmd), false),
     }
+}
+
+/// [`segment_argv_parsed`]'s segments with the operators around each ([`joined_segments`]), or
+/// `None` for a command that would not tokenize — the caller that needs the operators is one
+/// that fails open on a guess, as the plane-root guards do.
+pub fn joined_argv(cmd: &str) -> Option<Vec<JoinedSegment>> {
+    lex(&unbacktick(cmd)).ok().map(joined_segments)
 }
 
 /// [`segment_argv_parsed`] without the flag.
