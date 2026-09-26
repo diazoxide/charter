@@ -110,6 +110,20 @@ file that still enables `charter@charter` (`superseded plugin`). `charter doctor
 repair: it writes this machine's harness settings and never a file in the plane, so a plane
 file that still enables `charter@charter` stays yours to edit.
 
+### Rules that always ask, or stop asking
+
+`charter guard ask '<pattern>'` makes every harness prompt before a command, and
+`charter guard allow '<pattern>'` stops the prompt. Each writes the harness's own rule, in
+the file that harness reads: `permissions` in `.claude/settings.json` for Claude Code, and
+`permission.bash` in `opencode.json` for opencode. Codex has no command-pattern
+permissions, and the command says so. If one of those files cannot be read, nothing is
+written anywhere. `--local` writes `.claude/settings.local.json`, which is not committed,
+so the rule is yours alone. An allow rule reaches a chat at the plane root only: a
+workspace's and a clone's settings carry ask and deny rules and never allow.
+`charter guard handoff` puts back the handoff consent rule that `charter init` writes.
+`charter guard` on its own lists the rules, grouped by the file each one is in.
+`charter doctor`'s `handoff gate` row says whether that rule is in force where you are.
+
 ## What charter reaches on its own, and how to stop it
 
 charter refreshes forge state in the background, so that nothing you look at waits on the

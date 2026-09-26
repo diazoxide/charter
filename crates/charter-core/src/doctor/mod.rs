@@ -33,6 +33,7 @@ mod memory;
 mod plane;
 mod plugin;
 mod profiles;
+mod rules;
 pub(crate) mod session;
 
 /// Python's truthiness of a TOML value, for `crate::alerts`, which reads the same manifest
@@ -374,8 +375,8 @@ impl Doctor {
         rows.push(plane::front_door(self));
         rows.extend(plane::routing(self));
         rows.push(deferred::row("news", deferred::NEWS));
-        rows.push(deferred::row("ask rules", deferred::ASK_RULES));
-        rows.push(deferred::row("handoff gate", deferred::HANDOFF_GATE));
+        rows.push(rules::ask_rules(self));
+        rows.push(rules::handoff_gate(self));
         rows.push(deferred::row("shadowed docs", deferred::SHADOWED_DOCS));
         rows.push(deferred::row("credential paths", deferred::VAULTS));
         rows.push(deferred::row("mcp", deferred::VAULTS));

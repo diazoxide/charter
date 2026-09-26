@@ -20,6 +20,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   you, whichever window it is in, and pressing one takes you to that window. Quitting warns
   about the chats in every window. The next launch opens each window again.
   ([#126](https://github.com/diazoxide/charter/issues/126))
+- **`charter guard` is back: rules that always ask, or stop asking.** `charter guard ask
+  '<pattern>'` and `charter guard allow '<pattern>'` write the rule in each harness's own
+  file: Claude Code's `.claude/settings.json`, or `.claude/settings.local.json` with
+  `--local`, and opencode's `opencode.json`. They touch nothing else in either file, and if
+  one of those files cannot be read, they write nothing anywhere. `charter guard handoff` puts
+  back the handoff consent rule a plane lost, and `charter guard` on its own lists the rules
+  by file. `charter doctor` now checks its `handoff gate` and `ask rules` rows instead of
+  saying "not checked". ([#364](https://github.com/diazoxide/charter/issues/364))
 
 - **`charter save --pull` brings in what the remote has before it saves.** A chat the app did
   not start, such as a `claude` or `codex` in a terminal, gets no auto-save and no incoming
