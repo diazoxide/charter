@@ -447,3 +447,192 @@ fn a_handoff_into_a_workspace_called_report_is_still_a_handoff() {
         text(&out.stderr)
     );
 }
+
+// ----- what an opened handoff leaves behind (#372) ---------------------------------------
+
+/// `alpha`'s open todos, as `charter workspace todo` lists them.
+fn alphas_todos(root: &Path) -> Vec<charter_core::workspaces::Entry> {
+    charter_core::workspaces::Plane::open(root)
+        .workspace("alpha")
+        .expect("a workspace name")
+        .todos()
+        .expect("a readable todo store")
+}
+
+#[test]
+fn an_opened_handoff_leaves_its_todo_in_the_target_workspace_and_not_the_brief() {
+    let tmp = daily();
+    let root = root(&tmp);
+    let before = alphas_todos(&root).len();
+    let (socket, _reading, _asked) = an_app(&tmp, opens_as_nine);
+
+    let out = handoff(&root, Some(&socket));
+
+    assert_eq!(text(&out.stderr), "", "a recorded todo is not news");
+    assert_eq!(out.status.code(), Some(0));
+    let todos = alphas_todos(&root);
+    assert_eq!(todos.len(), before + 1, "{todos:?}");
+    let todo = todos
+        .iter()
+        // The brief's first line as the operator wrote it, heading mark and all
+        // (`handoff::title`).
+        .find(|t| t.title == "# Retry the failed webhook deliveries")
+        .unwrap_or_else(|| panic!("the brief's first line is the todo's title: {todos:?}"));
+    // Written out rather than derived from `todo_text`, so a change to a word of it is made
+    // here too, on purpose.
+    assert_eq!(
+        todo.body,
+        format!(
+            "# Retry the failed webhook deliveries\n\nHanded off from chat {ASKING} · workspace \
+             {}. The full brief is private to the chat it opened.",
+            source_workspace(&root)
+        )
+    );
+    assert!(
+        !todo.body.contains("The queue is in"),
+        "the brief never reaches a todo: {todo:?}"
+    );
+}
+
+/// The workspace `charter handoff` stamps as its source, asked of the binary itself.
+fn source_workspace(root: &Path) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_charter"))
+        .args(["workspace", "current"])
+        .current_dir(root)
+        .env("CHARTER_ROOT", root)
+        .env("CHARTER_SESSION_ID", ASKING.to_string())
+        .env_remove("CHARTER_WORKSPACE")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("TMUX_PANE")
+        .output()
+        .expect("the binary runs");
+    text(&out.stdout).trim_end().to_owned()
+}
+
+#[test]
+fn a_second_handoff_of_the_same_work_opens_its_chat_and_does_not_record_the_todo_twice() {
+    // Reported and continued, not refused: a second chat on the same brief may be exactly
+    // what the operator approved.
+    let tmp = daily();
+    let root = root(&tmp);
+    let before = alphas_todos(&root).len();
+    let (socket, _reading, _asked) = an_app(&tmp, opens_as_nine);
+
+    handoff(&root, Some(&socket));
+    let again = handoff(&root, Some(&socket));
+
+    assert_eq!(again.status.code(), Some(0));
+    assert_eq!(
+        text(&again.stdout),
+        "charter handoff: opened chat 9 in workspace 'alpha', started on the brief\n"
+    );
+    assert_eq!(
+        text(&again.stderr),
+        "• already on 'alpha's list: # Retry the failed webhook deliveries — not recorded \
+         twice\n"
+    );
+    assert_eq!(alphas_todos(&root).len(), before + 1);
+}
+
+/// The handoff rows in the plane's dispatch log.
+fn handoff_rows(root: &Path) -> Vec<serde_json::Value> {
+    charter_core::dispatch::rows(root)
+        .into_iter()
+        .filter(|row| row["event"] == "handoff")
+        .collect()
+}
+
+#[test]
+fn an_opened_handoff_is_one_row_in_the_dispatch_log_that_names_nothing() {
+    // Four fields, and what is missing is the design: no workspace name (a LOCAL
+    // workspace's name must not reach a committed file), no persona, no brief.
+    let tmp = daily();
+    let root = root(&tmp);
+    let (socket, _reading, _asked) = an_app(&tmp, opens_as_nine);
+
+    let out = charter(
+        &root,
+        Some(&socket),
+        &["handoff", "alpha", "--persona", "devops"],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let rows = handoff_rows(&root);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = rows[0].as_object().expect("a row is an object");
+    let mut keys: Vec<&str> = row.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["created", "event", "placement", "ts"]);
+    // The chat asks from `default`, and the work goes to `alpha`.
+    assert_eq!(row["placement"], "elsewhere");
+    assert_eq!(row["created"], false);
+    assert_eq!(charter_core::dispatch::tally(&root).get("devops"), Some(&1));
+}
+
+#[test]
+fn a_handoff_the_app_would_not_open_writes_neither_a_todo_nor_a_row() {
+    let tmp = daily();
+    let root = root(&tmp);
+    let before = alphas_todos(&root).len();
+    let (socket, _reading, _asked) = an_app(&tmp, |_, _, _| Answer::No {
+        why: "chat 3 is not on a harness profile".to_owned(),
+    });
+
+    let out = handoff(&root, Some(&socket));
+
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(alphas_todos(&root).len(), before);
+    assert!(handoff_rows(&root).is_empty());
+}
+
+#[test]
+fn a_todo_that_cannot_be_written_is_said_and_the_chat_stays_open() {
+    let tmp = daily();
+    let root = root(&tmp);
+    let todos = root.join("workspaces/alpha/todos");
+    std::fs::remove_dir_all(&todos).expect("the fixture's todos");
+    std::fs::write(&todos, "not a directory\n").expect("a file in its place");
+    let (socket, _reading, _asked) = an_app(&tmp, opens_as_nine);
+
+    let out = handoff(&root, Some(&socket));
+
+    assert_eq!(out.status.code(), Some(0), "the chat is open");
+    assert_eq!(
+        text(&out.stdout),
+        "charter handoff: opened chat 9 in workspace 'alpha', started on the brief\n"
+    );
+    let said = text(&out.stderr);
+    assert!(
+        said.starts_with(
+            "! charter handoff: chat 9 is open in 'alpha', but its todo could not be recorded \
+             there ("
+        ),
+        "{said:?}"
+    );
+    assert!(
+        said.ends_with(
+            "). Record it with: charter workspace todo -w alpha \"<the brief's first line>\"\n"
+        ),
+        "{said:?}"
+    );
+    assert_eq!(handoff_rows(&root).len(), 1, "the row is still written");
+}
+
+#[test]
+fn a_dispatch_row_that_cannot_be_written_is_said_and_the_chat_stays_open() {
+    let tmp = daily();
+    let root = root(&tmp);
+    let log = root.join("personas/_dispatch");
+    std::fs::remove_dir_all(&log).expect("the fixture's log");
+    std::fs::write(&log, "not a directory\n").expect("a file in its place");
+    let (socket, _reading, _asked) = an_app(&tmp, opens_as_nine);
+
+    let out = handoff(&root, Some(&socket));
+
+    assert_eq!(out.status.code(), Some(0), "the chat is open");
+    assert_eq!(
+        text(&out.stderr),
+        "! charter handoff: chat 9 is open in 'alpha', but its row could not be added to the \
+         dispatch log (personas/_dispatch).\n"
+    );
+}
