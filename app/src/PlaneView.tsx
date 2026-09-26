@@ -88,6 +88,7 @@ import {
   chatNameOf,
   chatOf,
   contentsOf,
+  findView,
   openTab,
   openTabBehind,
   openView,
@@ -124,6 +125,7 @@ import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
 import { OpenVault, useVaults } from "./Vaults";
+import { usePlaneEdits } from "./PlaneEdits";
 import { ViewMark, ViewPane } from "./Views";
 import { useTabStop } from "./roving";
 import { closeOnDelete, renameOnF2 } from "./tabKeys";
@@ -1321,6 +1323,30 @@ export function PlaneView({
   );
 
   /**
+   * Closes the tab showing `view` — a vault or a persona that was just deleted — **when that tab
+   * shows nothing else.** A tab holding a chat beside it is left as it is: closing it would end
+   * the chat, and a deletion is never a reason to end one.
+   */
+  const closeView = useCallback(
+    (view: ViewRef) => {
+      const found = findView(now.current, view);
+      if (found === undefined || panesOf(now.current, found.tab).length > 0) return;
+      change((tabs) => closeTab(tabs, found.tab, filedIn, isPinned));
+    },
+    [change, filedIn, isPinned],
+  );
+
+  /** Making and deleting personas, vaults and todos (SI-3): the verbs, the dialogs, the box. */
+  const rereadPanels = useCallback(() => setRereadWorkspace((asked) => asked + 1), []);
+  const edits = usePlaneEdits({
+    plane,
+    showView,
+    closeView,
+    reread: rereadPanels,
+    reloadVaults,
+  });
+
+  /**
    * The Project settings tab, opened when the window asks for it (charter-app#252). Asked
    * through the window even from this project's own palette, so there is one way in: the
    * window brings the project forward and this opens its tab. `handled` keeps a rebuilt
@@ -1932,6 +1958,7 @@ export function PlaneView({
       openView: showView,
       pickVault,
       createVault,
+      ...edits.doing,
       removeWorktree,
       mergeWorktree,
       declareWorktreeDone,
@@ -1962,6 +1989,7 @@ export function PlaneView({
       closePane,
       createVault,
       createWorkspace,
+      edits.doing,
       focusWorkspace,
       ignoreNeedsYou,
       mergeWorktree,
@@ -2060,6 +2088,8 @@ export function PlaneView({
   /** The plane's personas, straight off the plane's own answer — the array, not a copy of it,
    *  so the catalogue is rebuilt when the plane is read again and not per render. */
   const personas = workspaceState.panels?.personas;
+  /** The focused workspace's open todos, the same way: one close and one forget row each. */
+  const todos = workspaceState.panels?.todos;
 
   /**
    * Every action this project's window can do, in one list.
@@ -2090,6 +2120,7 @@ export function PlaneView({
             startsIn: spot?.path,
             personas,
             vaults: vaultNames,
+            todos,
             plane,
             projects,
             // Which window this is, for the rows that move a project between windows (charter#126).
@@ -2135,6 +2166,7 @@ export function PlaneView({
       strips,
       tabs,
       vaultNames,
+      todos,
       views,
       extensionCommands,
       worktree,
@@ -2684,6 +2716,7 @@ export function PlaneView({
               shownRow={shownRow}
               onShowRow={setShownRow}
               vaults={vaults}
+              onAddTodo={edits.addTodo}
             />
           ),
           bottom: (
@@ -2840,6 +2873,8 @@ export function PlaneView({
           }}
         />
       )}
+
+      {edits.dialogs}
 
       {pickingVault && (
         <OpenVault
@@ -3584,6 +3619,8 @@ function LayoutPanes({
               onOpenView={onOpenView}
               onAsk={() => onAsk(layout.pane)}
               onVaultChanged={onVaultChanged}
+              offerFor={offerFor}
+              onPress={(offer) => onPaneDoes(layout.pane, offer)}
             />
           </div>
         </div>

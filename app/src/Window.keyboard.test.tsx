@@ -300,8 +300,10 @@ describe("the window's tab order", () => {
       "button End this pane's chat",
       "textarea Terminal 2",
       "separator",
-      // Attention, on the right, has no stop of its own here: its panels are empty, and the
-      // needs-you queue went to the title bar (charter-app#249).
+      // Attention, on the right: its panels are empty and the needs-you queue went to the title
+      // bar (charter-app#249), so its one stop is the Vaults heading's `+` — New vault…, which
+      // needs a plane and not a vault (SI-3).
+      "button New vault…",
       // The handle above the bottom region, which has no controls of its own.
       "separator",
       // The status line: the region toggles at its left, then Alerts and the doctor.

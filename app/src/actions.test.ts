@@ -49,6 +49,21 @@ function doing(): Doing & { calls: string[] } {
     showChat: note("showChat"),
     pickVault: note("pickVault"),
     createVault: note("createVault"),
+    removeVault: note("removeVault"),
+    createPersona: note("createPersona"),
+    removePersona: note("removePersona"),
+    editPersona: vi.fn(async (persona: string) => {
+      calls.push(`editPersona:${persona}`);
+      return { ok: true as const };
+    }),
+    closeTodo: vi.fn(async (workspace: string, slug: string) => {
+      calls.push(`closeTodo:${workspace},${slug}`);
+      return { ok: true as const };
+    }),
+    forgetTodo: vi.fn(async (workspace: string, slug: string) => {
+      calls.push(`forgetTodo:${workspace},${slug}`);
+      return { ok: true as const };
+    }),
     ignoreNeedsYou: vi.fn(async (session: number) => {
       calls.push(`ignoreNeedsYou:${session}`);
       return { ok: true as const };
@@ -952,6 +967,7 @@ describe("carrying out a row", () => {
         pieces: [PIECE],
         personas: ["steward"],
         vaults: ["ops"],
+        todos: [{ slug: "20260302-091400-review", title: "Review the plan" }],
         needsYou: [8],
         nameOf: (s) => String(s),
         // A split window, so the row that moves a project back is reached too (charter#126).
@@ -986,6 +1002,13 @@ describe("carrying out a row", () => {
         "openView:charter/changes/alpha,Changes · alpha",
         "pickVault",
         "createVault",
+        // SI-3: a vault, a persona and a todo are made and deleted from the window too.
+        "removeVault:ops",
+        "createPersona",
+        "editPersona:steward",
+        "removePersona:steward",
+        "closeTodo:alpha,20260302-091400-review",
+        "forgetTodo:alpha,20260302-091400-review",
         "sendKey:F2",
         "openProject",
         "createProject",
@@ -1209,6 +1232,7 @@ describe("the palette at fifty chats", () => {
       // `vault.create` is charter's `create` too (charter-app#235), and `preferences` is
       // charter's word (charter-app#283); both join the rows that make things.
       "Preferences…",
+      "New persona…",
       "New vault…",
       // **Both of the chat in front's rows, then the pieces'.** `aboutWhatIsInFront` is the
       // second rule inside this group (charter-app#174): a row with no name in its id acts on
@@ -1224,7 +1248,6 @@ describe("the palette at fifty chats", () => {
       "Ignore chat 103 until it asks again",
       "Ignore chat 107 until it asks again",
       "Rename chat ide.1…",
-      "Rename chat charter.2…",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -1284,10 +1307,11 @@ describe("the palette at fifty chats", () => {
 
     it("is near the top of what was typed, and not fifty rows down it", () => {
       // The numbers themselves, so "unchanged" cannot be satisfied by both being bad.
-      // Two further down than #174 left it under `re` and `r`: `New vault…` (charter-app#235)
-      // and `Preferences…` (charter-app#283) are both rows that make/land near the creates.
-      expect(at("re", loaded())).toBe(6);
-      expect(at("r", loaded())).toBe(9);
+      // Three further down than #174 left it under `re` and `r`: `New vault…` (charter-app#235),
+      // `Preferences…` (charter-app#283) and `New persona…` (SI-3) are rows that make/land
+      // near the creates.
+      expect(at("re", loaded())).toBe(7);
+      expect(at("r", loaded())).toBe(10);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1349,6 +1373,9 @@ describe("the palette at fifty chats", () => {
     // And a third (charter#368): mark it done, so a finished piece stops reading as silent.
     expect(offers.filter((row) => row.id.startsWith("worktree.done:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
+    // And two more per persona (SI-3): edit its persona.md, and delete it.
+    expect(offers.filter((row) => row.id.startsWith("persona.edit:"))).toHaveLength(8);
+    expect(offers.filter((row) => row.id.startsWith("persona.remove:"))).toHaveLength(8);
     // Two rows per clone (charter-app#174, the second half): a new tab in it and the pick.
     // Ten clones is twenty rows, on the shape above; `narrow` is held to the same rank with
     // them and without them two tests up.
@@ -1372,7 +1399,10 @@ describe("the palette at fifty chats", () => {
     // the focused workspace's changes had a row (charter#470). What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(436);
+    //
+    // 453 since SI-3 (436 before it): New persona…, and an edit and a delete row for each of the 8 personas.
+    // This window has no todos loaded, so no `todo.` rows.
+    expect(offers).toHaveLength(453);
   });
 
   /**

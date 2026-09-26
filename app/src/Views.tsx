@@ -30,6 +30,7 @@ import {
 import { SavingView } from "./SavingView";
 import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
+import type { Offer } from "./actions";
 import { factsChanged } from "./extensionFacts";
 
 /** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
@@ -201,6 +202,8 @@ export function ViewPane({
   onOpenView,
   onAsk,
   onVaultChanged,
+  offerFor,
+  onPress,
 }: {
   plane: PlaneId;
   view: ViewRef;
@@ -218,7 +221,17 @@ export function ViewPane({
   onAsk: () => void;
   /** A vault's tab wrote to its vault. */
   onVaultChanged: () => void;
+  /** The catalogue, by row id: what the heading's own rows are looked up in (SI-3). */
+  offerFor?: (id: string) => Offer | undefined;
+  onPress?: (offer: Offer) => void;
 }) {
+  // **What charter can do to the thing this tab is about, on its heading** (SI-3): a persona's
+  // `persona.md` handed to the operator's editor and the persona deleted, a vault deleted. The
+  // catalogue's rows, so the heading, the palette and a row's menu cannot disagree, and each
+  // destructive one asks in its own dialog before anything goes.
+  const own = (view.from === null ? (OWN_ROWS[view.view]?.(view.key) ?? []) : []).map((id) => (
+    <OfferButton key={id} offer={offerFor?.(id)} onPress={onPress} />
+  ));
   // **A vault is charter's own view, and the one a panel answer cannot draw**: a table the
   // operator writes to (charter-app#235). Same tab, same path, same record — its own drawing.
   // Keyed by the vault, so a pane that comes to show another vault starts from "opening".
@@ -229,6 +242,7 @@ export function ViewPane({
         plane={plane}
         vault={view.key}
         onChanged={onVaultChanged}
+        actions={own}
       />
     );
   }
@@ -253,6 +267,7 @@ export function ViewPane({
           {title}
           {view.from !== null && <span className="panel-from">{` · ${view.from}`}</span>}
         </h2>
+        {own}
         {beside.map((one) => {
           // Opened about the same thing this view is about: statistics from steward's tab are
           // steward's statistics, and from the whole plane's view, the whole plane's.
@@ -318,6 +333,31 @@ export function ViewPane({
         )}
       </div>
     </section>
+  );
+}
+
+/** The catalogue rows a charter view's heading offers, by view, for the thing it shows. */
+const OWN_ROWS: Record<string, (key: string) => string[]> = {
+  persona: (key) => [`persona.edit:${key}`, `persona.remove:${key}`],
+  vault: (key) => [`vault.remove:${key}`],
+};
+
+/** One catalogue row as a heading's button, in its own words. A row the catalogue does not
+ *  offer draws nothing. */
+function OfferButton({ offer, onPress }: { offer?: Offer; onPress?: (offer: Offer) => void }) {
+  if (!offer || !onPress) return null;
+  return (
+    <button
+      type="button"
+      className="panel-view"
+      // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+      tabIndex={0}
+      disabled={!offer.available}
+      title={offer.available ? offer.note : offer.reason}
+      onClick={() => onPress(offer)}
+    >
+      {offer.title}
+    </button>
   );
 }
 

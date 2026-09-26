@@ -888,6 +888,13 @@ function App() {
       // No plane, no vaults: both rows are unavailable without one.
       pickVault: () => undefined,
       createVault: () => undefined,
+      removeVault: () => undefined,
+      // No plane, no personas and no workspace: every row these answer is unavailable.
+      createPersona: () => undefined,
+      removePersona: () => undefined,
+      editPersona: async () => nowhere(),
+      closeTodo: async () => nowhere(),
+      forgetTodo: async () => nowhere(),
       pinTab: async () => nowhere(),
       pinWorkspace: async () => nowhere(),
       pinProject: windowDoes.pinProject,

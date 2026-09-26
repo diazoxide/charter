@@ -173,6 +173,23 @@ export type Does =
   /** Asks for a new vault's name and provider. It makes nothing by itself: what may be called
    *  what is `charter vault add`'s to say, through `vault_create`. */
   | { verb: "createVault" }
+  /** Asks to delete one vault (SI-3). It deletes nothing by itself: the dialog lists what the
+   *  vault holds and takes the vault's name typed back before `vault_remove` runs. */
+  | { verb: "removeVault"; vault: string }
+  /** Asks for a new persona's name, role and routing line. It makes nothing by itself: what a
+   *  persona may be called and what it needs is `charter persona create`'s to say, through
+   *  `persona_create`. */
+  | { verb: "createPersona" }
+  /** Opens a persona's `persona.md` in whatever the system opens a `.md` file with. charter
+   *  has no editor of its own for one, and the core finds the file from the name. */
+  | { verb: "editPersona"; persona: string }
+  /** Asks to delete one persona. It deletes nothing by itself: the dialog says what goes, and
+   *  `persona_remove` refuses one another persona still extends or uses. */
+  | { verb: "removePersona"; persona: string }
+  /** Closes one of the focused workspace's todos as done: the journal records it first. */
+  | { verb: "closeTodo"; workspace: string; slug: string }
+  /** Drops one of the focused workspace's todos with nothing journalled. */
+  | { verb: "forgetTodo"; workspace: string; slug: string }
   /** **Names the worktree it acts on**, and never "whichever one is in front".
    *
    *  It used to carry only `force`, which made `worktree.remove` a row about the chat in
@@ -336,6 +353,12 @@ export type Now = {
    */
   vaults?: readonly string[];
   /**
+   * The focused workspace's open todos, by slug and title (`Panels.todos`), one close and one
+   * forget row each. Only the focused workspace's: the Todos panel is the one surface that
+   * draws them, and it is about that workspace.
+   */
+  todos?: readonly { slug: string; title: string }[];
+  /**
    * The views approved extensions offer this window (`extension_views`), one row each. The
    * palette is how a keyboard reaches them; the personas panel's heading is how a pointer does.
    */
@@ -432,6 +455,19 @@ export type Doing = {
   pickVault: () => void;
   /** Opens the new-vault dialog. Nothing is made until it is answered. */
   createVault: () => void;
+  /** Opens the delete dialog for one vault. Nothing is deleted until its name is typed back. */
+  removeVault: (vault: string) => void;
+  /** Opens the new-persona dialog. Nothing is made until it is answered. */
+  createPersona: () => void;
+  /** Hands the persona's definition to the system's editor. The core can refuse — a persona
+   *  deleted meanwhile — so it answers a `Ran`. */
+  editPersona: (persona: string) => Promise<Ran>;
+  /** Opens the delete dialog for one persona. Nothing is deleted until it is answered. */
+  removePersona: (persona: string) => void;
+  /** Each answers a `Ran`: the core can refuse, and what it did is a sentence the operator is
+   *  owed — which todo closed, and that the journal has it or does not. */
+  closeTodo: (workspace: string, slug: string) => Promise<Ran>;
+  forgetTodo: (workspace: string, slug: string) => Promise<Ran>;
   /** Each takes the piece it acts on. The window no longer decides which worktree a removal
    *  meant by looking at what happens to be in front (charter-app#174). */
   removeWorktree: (cut: Cut, force: boolean) => Promise<Ran>;
@@ -927,13 +963,25 @@ export function catalogue(now: Now): Offer[] {
   });
 
   // **The plane's personas, one row each** (charter-app#174). What the row opens is the
-  // persona's view — its own tab — and this is the whole of what charter can do to a persona today:
-  // a definition is a file an operator edits, and nothing in this window writes one. A row
-  // that only READS is still a row — it is how the persona rows get a menu without a second
-  // list being invented for them, and it is how a persona is reachable from the palette.
+  // persona's view — its own tab — which is how the persona rows get a menu without a second
+  // list being invented for them, and how a persona is reachable from the palette.
   //
   // **It opens the persona's own tab** — the operator's ruling of 2026-09-23, *"Its own tab"* —
   // which is charter's first built-in view, and the same verb an extension's view is opened by.
+  //
+  // **And a persona can be made, opened for editing and deleted from here (SI-3).** Making and
+  // deleting are `charter persona create` and `remove`, through the core, so the window refuses
+  // what a terminal refuses. Editing is the operator's own editor on the persona's `persona.md`:
+  // a charter is prose, and charter draws no editor for it.
+  const personaPlane = "charter found no plane, so there is nowhere to keep a persona.";
+  offers.push(
+    now.plane === undefined
+      ? cannot("persona.create", "New persona…", personaPlane)
+      : {
+          ...can("persona.create", "New persona…", { verb: "createPersona" }),
+          note: "Written as a draft in personas/<name>/persona.md, for you to finish in your editor.",
+        },
+  );
   for (const persona of now.personas ?? []) {
     offers.push(
       can(
@@ -942,6 +990,15 @@ export function catalogue(now: Now): Offer[] {
         { verb: "openView", view: { from: null, view: "persona", key: persona }, title: persona },
         persona,
       ),
+      {
+        ...can(
+          `persona.edit:${persona}`,
+          `Edit ${persona}'s persona.md`,
+          { verb: "editPersona", persona },
+          persona,
+        ),
+        note: "Opens it in your editor — whatever your system opens a .md file with.",
+      },
     );
   }
 
@@ -974,6 +1031,22 @@ export function catalogue(now: Now): Offer[] {
           note: "Kept in your system's credential store unless you choose another provider.",
         },
   );
+  // **The focused workspace's open todos: closing one is above the line** (SI-3). It keeps a
+  // trace — the journal records it before the todo goes — so it is not a loss. It names the
+  // workspace it writes to, because that is the question a row about a todo has to answer.
+  if (now.focused !== undefined && now.focused !== OUTSIDE) {
+    for (const todo of now.todos ?? []) {
+      offers.push({
+        ...can(
+          `todo.done:${todo.slug}`,
+          `Mark done: ${todo.title}`,
+          { verb: "closeTodo", workspace: now.focused, slug: todo.slug },
+          todo.title,
+        ),
+        note: `Closes it in ${now.focused}; the workspace's journal records it.`,
+      });
+    }
+  }
   // **The focused workspace's clones, two rows each** (charter-app#174). A clone is where a
   // chat can start, one level up from a piece, and that is the whole of what this window can
   // do to one: open a tab there, or pick it as where every new chat starts. The first is the
@@ -1214,6 +1287,49 @@ export function catalogue(now: Now): Offer[] {
     });
   }
 
+  // **A persona, a vault and a todo can be deleted from here too (SI-3)**, and each asks
+  // first where it cannot be undone. Deleting a persona removes its directory — definition,
+  // memory, refs — and the core refuses one another persona still extends or uses. Deleting a
+  // vault destroys a keyring vault's secrets, and the dialog takes its name typed back first.
+  // Forgetting a todo drops it with nothing journalled; `todo.done` is the row that keeps a
+  // trace, and it is above the line.
+  for (const persona of now.personas ?? []) {
+    offers.push({
+      ...can(
+        `persona.remove:${persona}`,
+        `Delete persona ${persona}…`,
+        { verb: "removePersona", persona },
+        persona,
+      ),
+      note: `Deletes personas/${persona}/ — its definition, memory and refs. Its vault is left alone.`,
+    });
+  }
+  for (const vault of vaults) {
+    offers.push({
+      ...can(
+        `vault.remove:${vault}`,
+        `Delete vault ${vault}…`,
+        { verb: "removeVault", vault },
+        vault,
+      ),
+      note: "A keychain vault's secrets are destroyed and cannot be recovered. It asks first.",
+    });
+  }
+  const todoIn = now.focused;
+  if (todoIn !== undefined && todoIn !== OUTSIDE) {
+    for (const todo of now.todos ?? []) {
+      offers.push({
+        ...can(
+          `todo.forget:${todo.slug}`,
+          `Forget todo ${todo.title}`,
+          { verb: "forgetTodo", workspace: todoIn, slug: todo.slug },
+          todo.title,
+        ),
+        note: `Drops it from ${todoIn} with nothing journalled. Mark it done to keep a trace.`,
+      });
+    }
+  }
+
   // Destructive, and therefore here: letting go of a project ends every chat in it. Nothing
   // of the project on disk goes — what is open is written into it first, and it opens again
   // with everything still in it (ADR 0033).
@@ -1303,6 +1419,21 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "createVault":
       doing.createVault();
       return DID;
+    case "removeVault":
+      doing.removeVault(does.vault);
+      return DID;
+    case "createPersona":
+      doing.createPersona();
+      return DID;
+    case "editPersona":
+      return doing.editPersona(does.persona);
+    case "removePersona":
+      doing.removePersona(does.persona);
+      return DID;
+    case "closeTodo":
+      return doing.closeTodo(does.workspace, does.slug);
+    case "forgetTodo":
+      return doing.forgetTodo(does.workspace, does.slug);
     case "removeWorktree":
       return doing.removeWorktree(does.cut, does.force);
     case "mergeWorktree":
@@ -1587,6 +1718,11 @@ export type MenuOn =
    *  these, so carrying it would be a third copy of an answer the window already has. */
   | { on: "worktree"; repo: string; piece: string }
   | { on: "persona"; persona: string }
+  /** One of the plane's vaults, by name — the Vaults panel's rows (SI-3). */
+  | { on: "vault"; vault: string }
+  /** One of the focused workspace's open todos, by slug — the Todos panel's rows (SI-3). The
+   *  workspace is the focused one on the one surface that draws them. */
+  | { on: "todo"; slug: string }
   /** One clone of the focused workspace, by name — the explorer's clone heading and the bottom
    *  bar's repo row. The path is the catalogue's, so the menu does not carry it. */
   | { on: "clone"; repo: string }
@@ -1656,11 +1792,24 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       };
     }
     case "persona":
-      // One row, because reading the definition is the only thing charter can do to a persona
-      // from this window: a persona is a file on disk that `charter persona create` writes and
-      // an operator edits. A menu with one honest row is the answer; a menu with three
-      // invented ones is the defect this module exists to prevent (charter-app#174).
-      return { above: [`persona.show:${what.persona}`], below: [] };
+      // What charter can do to a persona from this window (SI-3): show it, hand its
+      // definition to the operator's editor, make another, and delete it.
+      //
+      // **Curation goes here, as a group of its own** — a later change adds a "Curate ▸"
+      // submenu to persona and workspace rows. It is not drawn yet, and nothing here pretends
+      // it is: a menu row the catalogue does not offer is dropped (`menuRows`), so the ids it
+      // adds join `above` when the catalogue has them.
+      return {
+        above: [`persona.show:${what.persona}`, `persona.edit:${what.persona}`, "persona.create"],
+        below: [`persona.remove:${what.persona}`],
+      };
+    case "vault":
+      return {
+        above: [`vault.open:${what.vault}`, "vault.create"],
+        below: [`vault.remove:${what.vault}`],
+      };
+    case "todo":
+      return { above: [`todo.done:${what.slug}`], below: [`todo.forget:${what.slug}`] };
     case "clone":
       // Where a chat can start, and nothing else: a clone is the operator's own checkout, and
       // nothing in this window writes to one (charter-app#174).
