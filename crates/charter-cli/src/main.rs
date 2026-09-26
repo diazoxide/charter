@@ -102,6 +102,14 @@ enum Command {
     #[command(subcommand)]
     Plugin(PluginCommand),
 
+    /// Force-prompt and stop-prompting rules for this plane, written in each harness's own
+    /// syntax into the file each one reads — Claude Code, opencode and Codex, not only the one
+    /// you are running. charter keeps no list of its own (ADR 0014). Bare, it lists them.
+    Guard {
+        #[command(subcommand)]
+        verb: Option<GuardCommand>,
+    },
+
     /// Add what the plane's forges list to inventory/repos.json, then regenerate docs.
     Discover {
         /// Skip per-repo stack detection (faster).
@@ -493,6 +501,32 @@ fn place() -> Result<charter_core::plane::Place, String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
     Ok(charter_core::plane::place(&cwd))
+}
+
+#[derive(Subcommand)]
+enum GuardCommand {
+    /// Always prompt before this command runs.
+    Ask {
+        /// e.g. 'terraform apply *' — wrapped as Bash(...) unless it already names a tool.
+        pattern: String,
+        /// Write this machine's own file (`.claude/settings.local.json`, not committed)
+        /// instead of the plane's committed settings: the rule is yours alone.
+        #[arg(long)]
+        local: bool,
+    },
+    /// Stop the harness prompting for a command pattern (writes the harness's own allow rule).
+    /// It reaches a chat at the plane root only.
+    Allow {
+        /// e.g. 'git status *'. A bare command is wrapped as a Bash rule.
+        pattern: String,
+        /// Write this machine's own file instead of the plane's committed settings.
+        #[arg(long)]
+        local: bool,
+    },
+    /// Always prompt before a handoff runs: the rule `charter init` writes, put back.
+    Handoff,
+    /// Show this plane's ask and allow rules, by the file each lives in.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -1899,6 +1933,34 @@ fn run(command: Command) -> Result<u8, String> {
         }
         Command::Workspace(WorkspaceCommand::Current) => {
             println!("{}", here.active_workspace(None));
+        }
+        Command::Guard { verb } => {
+            use charter_core::guardcmd::{self, Bucket};
+            let root = here.plane.root().to_path_buf();
+            let (pattern, bucket, local) = match &verb {
+                None | Some(GuardCommand::List) => {
+                    let (listing, whole) = guardcmd::list(&root);
+                    print!("{listing}");
+                    return Ok(u8::from(!whole));
+                }
+                Some(GuardCommand::Ask { pattern, local }) => {
+                    (pattern.as_str(), Bucket::Ask, *local)
+                }
+                Some(GuardCommand::Allow { pattern, local }) => {
+                    (pattern.as_str(), Bucket::Allow, *local)
+                }
+                Some(GuardCommand::Handoff) => (guardcmd::HANDOFF_PATTERN, Bucket::Ask, false),
+            };
+            let rule = match guardcmd::as_rule(pattern) {
+                Ok(rule) => rule,
+                Err(why) => {
+                    eprintln!("charter: {why} Example: charter guard ask 'terraform apply *'");
+                    return Ok(2);
+                }
+            };
+            let (said, code) = guardcmd::report(&root, &rule, bucket, local);
+            print!("{said}");
+            return Ok(code);
         }
         Command::Harness(HarnessCommand::List) => {
             let root = here.plane.root().to_path_buf();

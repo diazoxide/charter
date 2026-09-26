@@ -165,7 +165,14 @@ pub fn ensure_env(root: &Path, key: &str, value: &str) -> Wrote {
 /// `dry_run` is the write path minus the write: every refusal is reached exactly as the write
 /// would reach it, which is what lets the handoff gate ask every file before writing any.
 pub fn ensure_ask_rule(root: &Path, rule: &str, dry_run: bool) -> Wrote {
-    let path = root.join(SETTINGS);
+    ensure_rule(&root.join(SETTINGS), "ask", rule, dry_run)
+}
+
+/// `commands.add_permission_rule(root, rule, bucket, local)`: append `rule` to
+/// `permissions.<bucket>` of the settings file at `path` — the plane's shared
+/// `.claude/settings.json`, or its machine-local `.claude/settings.local.json`.
+pub fn ensure_rule(path: &Path, bucket: &str, rule: &str, dry_run: bool) -> Wrote {
+    let path = path.to_path_buf();
     let doc = read(&path);
     let Some(mut map) = doc.map else {
         return Wrote::Malformed(path.display().to_string());
@@ -180,11 +187,11 @@ pub fn ensure_ask_rule(root: &Path, rule: &str, dry_run: bool) -> Wrote {
         }
         None => Map::new(),
     };
-    let mut entries = match perms.get("ask") {
+    let mut entries = match perms.get(bucket) {
         Some(Value::Array(entries)) => entries.clone(),
         Some(_) => {
             return Wrote::Malformed(format!(
-                "{} (`permissions.ask` is not a list)",
+                "{} (`permissions.{bucket}` is not a list)",
                 path.display()
             ));
         }
@@ -194,7 +201,7 @@ pub fn ensure_ask_rule(root: &Path, rule: &str, dry_run: bool) -> Wrote {
         return Wrote::Present;
     }
     entries.push(Value::String(rule.to_owned()));
-    perms.insert("ask".to_owned(), Value::Array(entries));
+    perms.insert(bucket.to_owned(), Value::Array(entries));
     map.insert("permissions".to_owned(), Value::Object(perms));
     let text = render(map, &doc.raw, Some("  "), true);
     if dry_run {
@@ -215,6 +222,12 @@ pub fn ensure_ask_rule(root: &Path, rule: &str, dry_run: bool) -> Wrote {
 /// **An existing `allow` for the pattern is turned into `ask`**, as Python does: the check
 /// is "is the decision already `ask`", not "is the pattern mentioned".
 pub fn ensure_opencode_ask(root: &Path, glob: &str, dry_run: bool) -> Wrote {
+    ensure_opencode_rule(root, glob, "ask", dry_run)
+}
+
+/// [`ensure_opencode_ask`] for either decision: `permission.bash[glob] = decision`, where the
+/// check is "is the decision already this one".
+pub fn ensure_opencode_rule(root: &Path, glob: &str, decision: &str, dry_run: bool) -> Wrote {
     let path = root.join(OPENCODE);
     let mut map = if path.exists() {
         let parsed = std::fs::read_to_string(&path)
@@ -247,10 +260,10 @@ pub fn ensure_opencode_ask(root: &Path, glob: &str, dry_run: bool) -> Wrote {
         }
         None => Map::new(),
     };
-    if block.get(glob).and_then(Value::as_str) == Some("ask") {
+    if block.get(glob).and_then(Value::as_str) == Some(decision) {
         return Wrote::Present;
     }
-    block.insert(glob.to_owned(), Value::String("ask".to_owned()));
+    block.insert(glob.to_owned(), Value::String(decision.to_owned()));
     perms.insert("bash".to_owned(), Value::Object(block));
     map.insert("permission".to_owned(), Value::Object(perms));
     let text = pyjson::dumps_indent2(&Value::Object(map));

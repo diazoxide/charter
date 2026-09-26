@@ -41,9 +41,5 @@ pub(crate) const VAULTS: &str = "this version of charter does not check vaults a
                                  credentials they hold yet";
 pub(crate) const PERSONA_LINT: &str = "this version of charter does not lint personas yet";
 pub(crate) const NEWS: &str = "this version of charter does not check release news";
-pub(crate) const ASK_RULES: &str = "this version of charter does not check whether an ask rule \
-                                    shadows a persona's tools yet";
-pub(crate) const HANDOFF_GATE: &str = "this version of charter does not check the handoff gate \
-                                       yet";
 pub(crate) const SHADOWED_DOCS: &str = "this version of charter does not check shadowed \
                                         knowledge docs yet";

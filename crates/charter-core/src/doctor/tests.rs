@@ -1648,3 +1648,96 @@ fn a_doctor_a_test_names_never_reads_this_machines_harness_config() {
         );
     }
 }
+
+// ---- ask rules and handoff gate (#364) -----------------------------------------------------
+
+#[test]
+fn a_plane_with_no_handoff_rule_is_told_the_command_that_puts_it_back() {
+    let (_d, root) = plane("schema = 1\n");
+    let r = one(&root, "handoff gate");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "no ask rule for `charter handoff` under claude-code, opencode"
+    );
+    assert!(r.hint.contains("`charter guard handoff` adds it"), "{r:?}");
+
+    let rule = crate::guardcmd::as_rule(crate::guardcmd::HANDOFF_PATTERN).unwrap();
+    let (said, code) = crate::guardcmd::report(&root, &rule, crate::guardcmd::Bucket::Ask, false);
+    assert_eq!(code, 0, "{said}");
+    let r = one(&root, "handoff gate");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert!(
+        r.detail
+            .starts_with("asks first under claude-code, opencode"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_handoff_gate_that_cannot_read_a_file_does_not_call_the_rule_missing() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::write(root.join("opencode.json"), "{broken").unwrap();
+    let r = one(&root, "handoff gate");
+    assert!(r.detail.starts_with("not checked ("), "{r:?}");
+}
+
+#[test]
+fn an_ask_rule_that_shadows_a_persona_tool_is_named_with_who_declares_it() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir_all(root.join("personas/ops")).unwrap();
+    std::fs::write(
+        root.join("personas/ops/persona.md"),
+        "---\nrole: x\ntools: kubectl, glab\n---\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    assert_eq!(one(&root, "ask rules").detail, "none");
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        r#"{"permissions": {"ask": ["Bash(kubectl apply *)", "Bash(terraform *)"]}}"#,
+    )
+    .unwrap();
+    let r = one(&root, "ask rules");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(r.detail, "kubectl prompt(s) despite being declared by ops");
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        r#"{"permissions": {"ask": ["Bash(terraform *)"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        one(&root, "ask rules").detail,
+        "1 rule(s), none shadow a persona tool"
+    );
+}
+
+#[test]
+fn a_handoff_gate_reads_a_file_the_writer_would_refuse_as_not_checked() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        r#"{"permissions": {"ask": "not a list"}}"#,
+    )
+    .unwrap();
+    let r = one(&root, "handoff gate");
+    assert!(r.detail.starts_with("not checked ("), "{r:?}");
+}
+
+#[test]
+fn outside_the_plane_root_and_its_workspaces_no_command_is_named() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    let rows = Doctor::at(&root, &root.join("docs"), true, true).run();
+    let r = row(&rows, "handoff gate");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(r.hint.contains("No charter command writes"), "{r:?}");
+    std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+    let rows = Doctor::at(&root, &root.join("workspaces/alpha"), true, true).run();
+    assert!(
+        row(&rows, "handoff gate")
+            .hint
+            .contains("charter workspace reinit --all")
+    );
+}

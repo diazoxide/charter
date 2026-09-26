@@ -28,6 +28,7 @@ pub mod gitpolicy;
 pub mod gitstate;
 pub mod glrefresh;
 pub mod glstate;
+pub mod guardcmd;
 pub mod guest;
 pub mod handback;
 pub mod handed;
