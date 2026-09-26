@@ -2,8 +2,8 @@
 
 charter-app updates itself with Tauri's updater, from GitHub Releases, on one of two channels.
 The reasons are ADR 0042. This page is the part a person has to do by hand: create one
-environment, generate one keypair, store two secrets, create one release. Until they are done, nothing is published
-and the app offers no updates. Every error the release workflow prints points back to one of
+environment, generate one keypair, store two secrets, create one release. Until they are done,
+nothing is published and the app offers no updates. Every error the release workflow prints points back to one of
 these steps.
 
 **Steps 0, 1, 2 and 4 are required. Step 3 is not** — it buys a smoother first install and costs
@@ -55,8 +55,25 @@ gh api -X POST repos/diazoxide/charter/environments/release/deployment-branch-po
   -f name='v*' -f type=tag
 ```
 
-A required reviewer is optional. It asks for an approval on every run that publishes, the dev
-build after each merge to `main` included.
+**The secrets have to be environment secrets only.** A repository secret of the same name is
+still readable by any job outside the environment, a hand-started build included, so once the
+environment holds them, delete the repository copies:
+
+```sh
+for s in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+         APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+  gh secret delete "$s" --repo diazoxide/charter 2>/dev/null || true
+done
+```
+
+**No required reviewer, on purpose.** The environment covers both channels, so a reviewer would
+also hold the dev build after every merge to `main`, and it asks once per job: `plan`, each
+platform's `build`, then `publish`. The ref policy is the guard. Add one in the environment's
+settings if you want every publish approved by hand anyway.
+
+**Who can push a `v*` tag** is a separate setting: a tag ruleset on `v*` restricted to the
+repository's admins (Settings → Rules → Rulesets). The environment admits any `v*` tag, so the
+ruleset is what keeps the stable channel yours.
 
 ## 1. The updater keypair (minisign): mandatory
 

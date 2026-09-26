@@ -428,6 +428,8 @@ publishes nowhere, so it names no environment, holds no key, and is built withou
 artifacts, on any branch, `main` included. A test in `crates/release-manifest` holds every job
 that reads `secrets.*` or publishes to the environment.
 
-The operator creates the environment and moves the secrets (`docs/updating.md`, step 0). A
-required reviewer is optional. It gates every publishing run, the dev build after each merge
-included.
+The operator creates the environment, moves the secrets and deletes the repository copies
+(`docs/updating.md`, step 0). A repository secret of the same name would still reach a job
+outside the environment. There is no required reviewer: one environment covers both channels,
+so a reviewer would hold the dev build after every merge, once per job. The ref policy is the
+guard, and a `v*` tag ruleset decides who can reach the stable half of it.
