@@ -167,6 +167,11 @@ pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
     if let Some(piece) = piece_note {
         parts.push(piece);
     }
+    // Last: charter's skills, for a chat whose harness cannot load them (ADR 0063). Only such a
+    // chat is started with the variable, so a harness that loads them is not told twice.
+    if let Some(skills) = crate::skills::listed_from(ask.env) {
+        parts.push(skills);
+    }
     parts
 }
 

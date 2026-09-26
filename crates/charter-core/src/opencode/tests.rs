@@ -101,7 +101,10 @@ fn the_shim_routes_by_its_own_keys_and_refuses_when_the_guard_cannot_answer() {
 
 #[test]
 fn a_session_config_names_the_shim_as_a_url_no_character_can_end() {
-    let config = session_config(Path::new("/Apps/my charter#1/plugin/opencode/charter.ts"));
+    let config = session_config(
+        Path::new("/Apps/my charter#1/plugin/opencode/charter.ts"),
+        None,
+    );
     let doc: serde_json::Value = serde_json::from_str(&config).expect("JSON");
     assert_eq!(
         doc,
@@ -109,6 +112,39 @@ fn a_session_config_names_the_shim_as_a_url_no_character_can_end() {
             "plugin": ["file:///Apps/my%20charter%231/plugin/opencode/charter.ts"]
         })
     );
+}
+
+#[test]
+fn a_session_config_hands_the_shim_the_skills_directory_as_its_option() {
+    // opencode's `[spec, options]` form: the options are the plugin factory's second argument
+    // (measured on 1.18.32). Not a top-level `skills` key: opencode merges configs with arrays
+    // replaced, so `skills.paths` here would drop every path the operator's own config names.
+    let config = session_config(
+        Path::new("/Apps/plugin/opencode/charter.ts"),
+        Some(Path::new("/Apps/my charter/plugin/skills")),
+    );
+    let doc: serde_json::Value = serde_json::from_str(&config).expect("JSON");
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "plugin": [[
+                "file:///Apps/plugin/opencode/charter.ts",
+                { "skills": "/Apps/my charter/plugin/skills" }
+            ]]
+        })
+    );
+}
+
+#[test]
+fn the_app_chats_shim_adds_charters_skills_beside_the_operators_own() {
+    let text = shim(Arming::Session);
+    assert!(text.contains("config: async (cfg) =>"), "{text}");
+    // Appended to what is there, never in its place, and never twice.
+    assert!(text.contains("if (!paths.includes(skills)) cfg.skills.paths = [...paths, skills]"));
+    assert!(text.contains("async (plugin, options) =>"), "{text}");
+    // The installed guard is for opencode outside the app: it hands no skills.
+    let guard = shim(Arming::GuardOnly(Path::new("/bin/charter")));
+    assert!(!guard.contains("cfg.skills"), "{guard}");
 }
 
 #[test]

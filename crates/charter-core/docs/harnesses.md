@@ -226,7 +226,12 @@ the command line, for that session alone, and writes nothing into any config fol
   "Session flags" and runs them beside any hooks of your own in `$CODEX_HOME/config.toml`
   (measured on codex-cli 0.147.0). They are inert until trusted: the Codex TUI asks at
   startup, and records the answer in its own `[hooks.state]`, so one binary path is asked
-  about once, not once a chat.
+  about once, not once a chat. Codex has no way to take a skills directory for one session,
+  so the chat is started with `CHARTER_SKILLS_DIR` naming the bundle's `skills/`, and its
+  `SessionStart` briefing lists charter's skills with the path to each `SKILL.md` (ADR 0063).
+- **opencode** gets charter's shim, named in `OPENCODE_CONFIG_CONTENT` with the bundle's
+  `skills/` as its option: the shim carries every hook, and adds that directory to the skills
+  opencode discovers, beside the operator's own `skills.paths` (ADR 0058, ADR 0063).
 
 Every chat also carries `$CHARTER_HARNESS` (the registry's name for its kind, whatever the
 profile is called), `$CHARTER_HARNESS_PROFILE` and `$CHARTER_ROOT` in its environment, and a
@@ -234,7 +239,8 @@ profile is called), `$CHARTER_HARNESS_PROFILE` and `$CHARTER_ROOT` in its enviro
 
 **What still stops a chat on a profile**, each said before anything opens:
 
-- **A kind this app does not start** — opencode, for now.
+- **An opencode profile that would load no plugin** — one passing `--pure`, or setting
+  `OPENCODE_PURE` or `OPENCODE_CONFIG_CONTENT` (ADR 0058).
 - **A profile charter may not run a command for** — not approved yet, or declared in a
   `charter.local.toml` git would commit. Nothing is run and nothing is written.
 

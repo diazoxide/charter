@@ -345,9 +345,24 @@ impl Harness {
             // And no plugin: Codex 0.147.0 takes a plugin's `enabled` from its `config.toml`
             // alone and ignores the same key given with `-c` (measured, charter-app#274), so
             // `plugins` is empty for it and nothing here would carry it.
+            //
+            // Its skills ride on the `SessionStart` hook above: Codex can take no skills
+            // directory for one session ([`Self::skills`]), so the chat is started with the
+            // bundle's in [`crate::skills::LISTED_ENV`], which a Codex hook inherits, and the
+            // briefing lists them.
             Self::Codex => StateHooks::ThisSessionOnly {
                 args: codex_session_flags(kit.binary),
-                env: Vec::new(),
+                env: kit
+                    .plugin
+                    .and_then(crate::skills::in_bundle)
+                    .map(|dir| {
+                        (
+                            crate::skills::LISTED_ENV.to_owned(),
+                            dir.display().to_string(),
+                        )
+                    })
+                    .into_iter()
+                    .collect(),
                 cannot_report: vec!["notification"],
             },
             // **The bundled shim, loaded for this session alone** ([`crate::opencode`] has the
@@ -360,6 +375,9 @@ impl Harness {
             // before the chat starts ([`crate::opencode::disarmed_by`]).
             //
             // No plugin choice: opencode has no switch that turns one plugin off.
+            //
+            // Its skills are the bundle's, handed to the shim as its option, which adds them to
+            // the skills opencode discovers for this process ([`Self::skills`]).
             //
             // It cannot report `SessionEnd`: quitting opencode fires no event and runs no exit
             // handler in a plugin (measured). The app sees the process end.
@@ -380,7 +398,10 @@ impl Harness {
                         ),
                         (
                             crate::opencode::CONFIG_ENV.to_owned(),
-                            crate::opencode::session_config(&shim),
+                            crate::opencode::session_config(
+                                &shim,
+                                kit.plugin.and_then(crate::skills::in_bundle).as_deref(),
+                            ),
                         ),
                         (crate::opencode::PURE_ENV.to_owned(), "0".to_owned()),
                     ],
@@ -416,6 +437,31 @@ impl Harness {
                 "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
                     .to_owned()
             }
+        }
+    }
+
+    /// How a chat on this harness comes to know charter's skills, for that chat alone and with
+    /// nothing written (ADR 0063). [`Self::state_hooks`] is where each route is taken.
+    ///
+    /// - **Claude Code** loads the bundled plugin with `--plugin-dir`, and a plugin's `skills/`
+    ///   comes with it.
+    /// - **opencode** discovers every `SKILL.md` under the paths in its config's `skills.paths`
+    ///   (`packages/opencode/src/skill/index.ts`, v1.18.32), and a plugin's `config` hook is
+    ///   handed "the live merged config" to change. The shim appends the bundle's directory
+    ///   there, measured on 1.18.32: `opencode debug skill` listed charter's skills beside a
+    ///   path the operator's own config named.
+    /// - **Codex** has no such switch. codex-cli 0.147.0 finds skills only under
+    ///   `$CODEX_HOME/skills`, `~/.agents/skills`, a trusted project's `.codex/skills`, the
+    ///   `.agents/skills` folders between the project root and the directory it runs in,
+    ///   `/etc/codex/skills`, and installed plugins (`codex-rs/ext/skills/src/host_roots.rs` at
+    ///   `rust-v0.147.0`). `skills.config` only turns a skill it found on or off. Each root is
+    ///   the operator's home, their tree or Codex's plugin cache, which ADR 0050 keeps charter
+    ///   from writing, so a Codex chat is briefed on the skills instead.
+    pub fn skills(self) -> crate::skills::Route {
+        match self {
+            Self::ClaudeCode => crate::skills::Route::Plugin,
+            Self::Opencode => crate::skills::Route::Config,
+            Self::Codex => crate::skills::Route::Briefing,
         }
     }
 
@@ -1021,7 +1067,11 @@ mod tests {
         else {
             panic!("Codex's hooks are armed per session");
         };
-        assert!(env.is_empty(), "Codex's commands carry the path: {env:?}");
+        assert!(
+            env.iter()
+                .all(|(name, _)| name != crate::plugin::BINARY_ENV),
+            "Codex's commands carry the path: {env:?}"
+        );
         args.chunks(2)
             .map(|pair| {
                 assert_eq!(pair[0], "-c", "not a -c pair: {pair:?}");
@@ -1190,6 +1240,83 @@ mod tests {
             "the shim, and no plugin choice: opencode cannot turn one plugin off"
         );
         assert_eq!(cannot_report, ["sessionend"]);
+    }
+
+    /// The plugin the app ships, in the repository: its skills, its shim, its hooks.
+    fn bundled_plugin() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/src-tauri/plugin")
+    }
+
+    fn env_of(hooks: StateHooks) -> BTreeMap<String, String> {
+        let StateHooks::ThisSessionOnly { env, .. } = hooks else {
+            panic!("armed per session");
+        };
+        env.into_iter().collect()
+    }
+
+    #[test]
+    fn each_harness_reaches_charters_skills_by_its_own_route() {
+        // ADR 0063: Claude Code loads the plugin's `skills/`, opencode is told the directory,
+        // and Codex, with no way to take a skills directory for one session, is briefed.
+        assert_eq!(Harness::ClaudeCode.skills(), crate::skills::Route::Plugin);
+        assert_eq!(Harness::Opencode.skills(), crate::skills::Route::Config);
+        assert_eq!(Harness::Codex.skills(), crate::skills::Route::Briefing);
+    }
+
+    #[test]
+    fn a_codex_chat_is_started_with_the_skills_its_briefing_lists() {
+        let plugin = bundled_plugin();
+        let env = env_of(Harness::Codex.state_hooks(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: Some(&plugin),
+            },
+            None,
+            &BTreeMap::new(),
+        ));
+        assert_eq!(
+            env.get(crate::skills::LISTED_ENV),
+            Some(&plugin.join("skills").display().to_string())
+        );
+    }
+
+    #[test]
+    fn only_a_harness_that_cannot_load_the_skills_is_briefed_on_them() {
+        // Claude Code and opencode discover the skills themselves; a listing on top would
+        // tell the model about every skill twice.
+        let plugin = bundled_plugin();
+        let kit = Kit {
+            binary: std::path::Path::new("/bin/charter"),
+            plugin: Some(&plugin),
+        };
+        for harness in [Harness::ClaudeCode, Harness::Opencode] {
+            let env = env_of(harness.state_hooks(kit, None, &BTreeMap::new()));
+            assert!(!env.contains_key(crate::skills::LISTED_ENV), "{harness:?}");
+        }
+    }
+
+    #[test]
+    fn an_opencode_chat_is_told_the_bundled_skills_through_the_shim() {
+        let plugin = bundled_plugin();
+        let env = env_of(Harness::Opencode.state_hooks(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: Some(&plugin),
+            },
+            None,
+            &BTreeMap::new(),
+        ));
+        let config: serde_json::Value =
+            serde_json::from_str(&env["OPENCODE_CONFIG_CONTENT"]).expect("JSON");
+        assert_eq!(
+            config["plugin"][0][1]["skills"].as_str(),
+            Some(plugin.join("skills").display().to_string().as_str()),
+            "{config}"
+        );
+        assert!(
+            config.get("skills").is_none(),
+            "a `skills` key here would replace the operator's own paths: {config}"
+        );
     }
 
     #[test]

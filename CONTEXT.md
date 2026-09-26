@@ -257,6 +257,13 @@ shim**, a script the app loads into each opencode chat it starts, and whose guar
 `charter plugin install` writes into opencode's plugin directory (ADR 0058).
 _Avoid_: extension (for this); "charter plugin" for anything but charter's own
 
+**charter's skills**:
+The skills in charter's plugin (`skills/` in the bundle), one source for every harness. Each
+harness is handed them by its own route, for the chat alone: Claude Code loads the plugin,
+opencode is told the directory through the shim, and a Codex chat is **briefed** on them, a list
+of names, descriptions and `SKILL.md` paths at `SessionStart` (ADR 0063).
+_Avoid_: "Claude Code skills" for these; a copy of them anywhere
+
 **Vault**:
 A named set of secrets charter keeps in the system keyring and hands to a command, never to
 the model and never to an extension. Vaults are core.
