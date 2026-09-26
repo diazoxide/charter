@@ -296,6 +296,26 @@ fn a_git_spelled_in_capitals_is_git() {
     assert!(reset(&f, "G\\IT reset --hard origin/main").is_some());
 }
 
+/// `git` written with ANSI-C escapes, as a locale string, or split by a backslash-newline is
+/// the `git` the shell runs, and the reset guard's `git` filter lets each of them through to the
+/// walk that decides.
+#[test]
+fn a_git_the_shell_spells_out_of_quoting_is_git() {
+    let f = fixture();
+    for cmd in [
+        "$'\\x67it' checkout feature",
+        "$'\\147\\151\\164' checkout feature",
+        "$\"git\" checkout feature",
+        "g\\\nit checkout feature",
+    ] {
+        assert!(branch(&f, cmd).is_some(), "{cmd:?}");
+    }
+    assert!(reset(&f, "$'\\x67it' reset --hard origin/main").is_some());
+    assert!(reset(&f, "$\\\n'\\x67it' reset --hard origin/main").is_some());
+    // A `!` alias is handed to `sh -c`, which decodes the same quoting.
+    assert!(branch(&f, "git -c \"alias.zzq=!$'\\x67it' checkout\" zzq feature").is_some());
+}
+
 /// An alias defined in one case and used in another is the same alias: git folds the key.
 #[test]
 fn an_inline_alias_is_found_in_any_case() {

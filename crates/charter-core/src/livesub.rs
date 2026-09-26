@@ -47,13 +47,53 @@
 //! the fail-OPEN direction, on the exact path the working rule steers agents onto.
 
 use crate::heredoc::{self, Line};
+use crate::shellseg::{past_continuations, spliced_end};
 
 /// The two spellings of command substitution — `_SUBSTITUTIONS`.
 ///
 /// `$(` covers `$((` arithmetic too, which is not a substitution — a false DENY on
 /// `--body "$((1+2))"`, and the direction to be wrong in. Separating them would mean deciding
 /// `$((x) )` from `$( (x) )`, and a parser that gets that wrong fails OPEN.
+///
+/// The frozen Python's table, recorded with every corpus row, so bash 5.3's third spelling is
+/// [`FUNSUB`] beside it rather than a new entry in it.
 pub const SUBSTITUTIONS: [&str; 2] = ["`", "$("];
+
+/// bash 5.3's substitution that runs in the current shell: `${ cmd; }`, and `${| cmd; }`, which
+/// substitutes `$REPLY` — `${` followed by a blank, a newline or `|` ([`funsub_at`]). `${VAR}`
+/// never is, and an older bash refuses the whole command as a bad substitution, so reading it as
+/// live costs nothing where it does not run.
+pub const FUNSUB: &str = "${";
+
+/// Whether `cmd` may hold a live substitution at all — the cheap test a hot-path guard asks
+/// before [`live_substitution`].
+///
+/// It must never answer no where the walk would answer yes, so it looks for each spelling with a
+/// backslash-newline allowed after the `$`: the shell removes that pair before it reads the line,
+/// and `"$\<newline>(x)"` runs `x`.
+pub fn may_substitute(cmd: &str) -> bool {
+    cmd.contains('`') || cmd.contains("$(") || cmd.contains("${") || cmd.contains("$\\\n")
+}
+
+/// Whether a bash 5.3 `${ …; }` or `${| …; }` substitution opens at `i`. See [`FUNSUB`].
+pub fn funsub_at(chars: &[char], i: usize) -> bool {
+    spliced_end(chars, i, "${").is_some_and(|j| {
+        matches!(
+            chars.get(past_continuations(chars, j)),
+            Some(' ' | '\t' | '\n' | '|')
+        )
+    })
+}
+
+/// The live substitution that opens at `i`, if one does, read as [`spliced_end`] reads.
+fn substitution_at(chars: &[char], i: usize) -> Option<&'static str> {
+    match chars.get(i) {
+        Some('`') => Some("`"),
+        Some('$') if spliced_end(chars, i, "$(").is_some() => Some("$("),
+        Some('$') if funsub_at(chars, i) => Some(FUNSUB),
+        _ => None,
+    }
+}
 
 /// Index just past the `'` closing a `$'…'` (ANSI-C) quotation opened at `i` — `_ansi_c_end`.
 ///
@@ -64,6 +104,9 @@ pub const SUBSTITUTIONS: [&str; 2] = ["`", "$("];
 ///
 /// `i` and the answer are CHARACTER indices, as every offset in this module is: the Python walks
 /// a `str`, and a byte index would part company with it on the first non-ASCII character.
+///
+/// A backslash-newline here is NOT removed — bash keeps both inside `$'…'` — and the backslash
+/// rule already steps over the pair.
 pub fn ansi_c_end(chars: &[char], mut i: usize) -> usize {
     let n = chars.len();
     while i < n {
@@ -93,11 +136,12 @@ pub fn ansi_c_end(chars: &[char], mut i: usize) -> usize {
 pub fn double_quoted_substitution(chars: &[char], mut i: usize) -> (Option<&'static str>, usize) {
     let n = chars.len();
     while i < n {
+        if let Some(hit) = substitution_at(chars, i) {
+            return (Some(hit), i);
+        }
         match chars[i] {
             '\\' => i += 2,
             '"' => return (None, i + 1),
-            '`' => return (Some("`"), i),
-            '$' if starts_with(chars, i, "$(") => return (Some("$("), i),
             _ => i += 1,
         }
     }
@@ -117,10 +161,11 @@ pub fn heredoc_substitution(body: &str) -> Option<&'static str> {
     let n = chars.len();
     let mut i = 0;
     while i < n {
+        if let Some(hit) = substitution_at(&chars, i) {
+            return Some(hit);
+        }
         match chars[i] {
             '\\' => i += 2,
-            '`' => return Some("`"),
-            '$' if starts_with(&chars, i, "$(") => return Some("$("),
             _ => i += 1,
         }
     }
@@ -183,8 +228,13 @@ pub fn heredoc_bodies(
 /// literal, and that ``<<<"…`x`…"`` expands (a here-STRING is an ordinary double-quoted word, so
 /// it is not treated as a heredoc and needs no special case).
 ///
+/// Two more were checked against GNU bash 3.2.57, 5.2.21 and 5.3 when they were added: a
+/// backslash-newline is removed before any of this is read, unquoted, inside `"…"` and in an
+/// expanding body alike (`$\<newline>(x)` runs `x`; [`spliced_end`]), but not inside `'…'` or
+/// `$'…'`; and bash 5.3 runs `${ x; }` ([`FUNSUB`]).
+///
 /// The return is a `&'static str` rather than a `String` because the answer is one of exactly
-/// two fixed spellings — it is the SHAPE that is reported, never a character of the command
+/// three fixed spellings — it is the SHAPE that is reported, never a character of the command
 /// line, which is the same rule [`crate::credguard::single_credential_hit`]'s shape field keeps
 /// and for the same reason: this value reaches a trace file that outlives the conversation.
 pub fn live_substitution(cmd: &str) -> Option<&'static str> {
@@ -219,12 +269,10 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
             if let Some(hit) = hit {
                 return Some(hit);
             }
-        } else if c == '`' {
-            return Some("`");
-        } else if c == '$' && starts_with(chars, i, "$(") {
-            return Some("$(");
-        } else if c == '$' && starts_with(chars, i, "$'") {
-            i = ansi_c_end(chars, i + 2);
+        } else if let Some(hit) = substitution_at(chars, i) {
+            return Some(hit);
+        } else if let Some(open) = spliced_end(chars, i, "$'").filter(|_| c == '$') {
+            i = ansi_c_end(chars, open);
         } else if c == '<' && starts_with(chars, i, "<<<") {
             // A here-STRING, not a heredoc: its word is an ordinary one and the loop must judge
             // it as such — ``<<<"a `x` b"`` runs `x`. All THREE characters are stepped over
@@ -385,5 +433,50 @@ mod tests {
     fn the_walk_counts_characters_and_not_bytes() {
         assert_eq!(live_substitution("echo 𝄞𝄞𝄞 `x`"), Some("`"));
         assert_eq!(live_substitution("echo '𝄞𝄞𝄞 `x`'"), None);
+    }
+
+    /// The shell removes a backslash-newline before it reads the line, inside `"…"` as outside
+    /// and in an expanding heredoc body, so a `$(` split by one still runs (checked against GNU
+    /// bash 3.2.57, 5.2.21 and 5.3). Inside `'…'` and a quoted heredoc body the pair stays.
+    #[test]
+    fn a_substitution_split_by_a_backslash_newline_is_still_live() {
+        for cmd in [
+            "x \"$\\\n(y)\"",
+            "x $\\\n(y)",
+            "x \"$\\\n\\\n(y)\"",
+            "cat <<EOF\n$\\\n(y)\nEOF\n",
+            // The delimiter the shell reads is `EOF`, unquoted, so the body expands.
+            "cat <<E\\\nOF\n$(y)\nEOF\n",
+        ] {
+            assert_eq!(live_substitution(cmd), Some("$("), "{cmd:?}");
+        }
+        assert_eq!(live_substitution("x '$\\\n(y)'"), None);
+        assert_eq!(live_substitution("cat <<'EOF'\n$\\\n(y)\nEOF\n"), None);
+        // A backtick is one character, so nothing can split it, and an escaped one is inert.
+        assert_eq!(live_substitution("x \"a\\\n`y`\""), Some("`"));
+        assert!(may_substitute("x \"$\\\n(y)\""));
+    }
+
+    /// `$\<newline>'…'` is an ANSI-C quotation too, and its own backslash rule decides where it
+    /// ends: read as a plain `'…'` it ends early and hides the backtick after it.
+    #[test]
+    fn an_ansi_c_quotation_split_from_its_dollar_still_ends_where_bash_ends_it() {
+        assert_eq!(live_substitution("x $\\\n'a\\'b' `y`"), Some("`"));
+    }
+
+    /// bash 5.3 runs `${ cmd; }` and `${| cmd; }`; `${VAR}` is a parameter.
+    #[test]
+    fn a_bash_5_3_substitution_is_live() {
+        for cmd in [
+            "x \"${ y; }\"",
+            "x ${|y; }",
+            "x ${\ty; }",
+            "x ${\ny\n}",
+            "x \"$\\\n{ y; }\"",
+        ] {
+            assert_eq!(live_substitution(cmd), Some(FUNSUB), "{cmd:?}");
+        }
+        assert_eq!(live_substitution("x \"${HOME}\" ${a:-b}"), None);
+        assert_eq!(live_substitution("x '${ y; }'"), None);
     }
 }

@@ -77,6 +77,18 @@ were recorded on a filesystem that folds case; on one that does not, the replay 
   `=`, in clusters and after long-name prefixes; `--` ending the options; and the other flags
   that take a value.
 
+**And where the shell reader learned more of bash's quoting.** The frozen Python read words with
+`shlex`, which knows neither ANSI-C quoting (`$'…'`) nor bash's `$"…"`, and which keeps a
+backslash-newline as part of the next word. The reader now reads all three as bash does, so
+169 shell-reader rows record what the shell makes of those lines (`shellseg-oracle.jsonl` rows
+42, 45, 46, 81, 102, 170, 410, 411, 418, 496, 501 and 502, and 157 generated rows). Every one of
+them holds a `$'…'`, a backslash-newline, or (one row) `${` before a blank; none changed from
+refused to allowed. The keys that moved are the reader's own (`lex`, `sp`, `seg`, `so`, `sec`,
+`gg`, `lp`, `che`, `cms`, `ghb`, `rr`, `ee`, `dac`, `a7seg`, `hs7`, `gseg`, `s4seg`), the heredoc
+readings that follow from them (`hh`, `hcr`, `bh`, `hsp`, `dqs`, `hb`, `hsub`), and the verdicts
+of the leak guard and A7 (`lr`, `ih`, `hl7`, `hr`, `hrd`, `ssh7`), each now a refusal where the
+Python allowed.
+
 ## The session recording
 
 Re-record with:

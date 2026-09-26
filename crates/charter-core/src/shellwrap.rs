@@ -320,8 +320,13 @@ pub fn prefilter_text(cmd: &str) -> String {
 
 /// Whether `cmd` may name the program `name` (lower-case), as a hot-path prefilter must ask it:
 /// through [`prefilter_text`], so it never rejects a spelling the reader behind it accepts.
+///
+/// **A line with an ANSI-C quotation in it always may**: the reader decodes `$'…'`
+/// ([`shellseg::ansi_c_decode`]), so `$'\x67it'` is `git`, and no substring of the text as
+/// written says so. The `$` may be split from its quote by a backslash-newline, which the shell
+/// removes first. Such a line is rare, so the filter still rejects almost every command.
 pub fn may_name(cmd: &str, name: &str) -> bool {
-    prefilter_text(cmd).contains(name)
+    cmd.contains("$'") || cmd.contains("$\\\n") || prefilter_text(cmd).contains(name)
 }
 
 /// Whether `tok` is a REDIRECTION token — `_REDIRECT_RE.match`.

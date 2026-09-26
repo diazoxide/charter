@@ -874,7 +874,13 @@ pub fn resolve_git_alias(
         }
         let shell = body.starts_with('!');
         let text = if shell { &body[1..] } else { &body[..] };
-        let Ok(mut toks) = shellseg::posix_split(text) else {
+        // A `!` alias is run by `sh -c`, so it is read as the shell reads it.
+        let split = if shell {
+            shellseg::shell_split(text)
+        } else {
+            shellseg::posix_split(text)
+        };
+        let Ok(mut toks) = split else {
             return (sub, post);
         };
         if shell {

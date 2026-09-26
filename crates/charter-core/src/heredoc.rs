@@ -173,24 +173,6 @@ const GH_BODY_COMMANDS: [(&str, &str); 4] = [
     ("issue", "comment"),
 ];
 
-/// ANSI-C `$'…'` decodes a handful of backslash escapes; the rest pass through as the character
-/// after the backslash, which is enough to KEEP THE QUOTES BALANCED — the only property the guard
-/// needs from it.
-const ANSI_C_ESCAPES: [(char, char); 12] = [
-    ('n', '\n'),
-    ('t', '\t'),
-    ('r', '\r'),
-    ('a', '\u{7}'),
-    ('b', '\u{8}'),
-    ('f', '\u{c}'),
-    ('v', '\u{b}'),
-    ('\\', '\\'),
-    ('\'', '\''),
-    ('"', '"'),
-    ('?', '?'),
-    ('e', '\u{1b}'),
-];
-
 /// One line, read ONCE: its characters and its quote map.
 ///
 /// Everything below indexes by CHARACTER, because CPython indexes a `str` by character and every
@@ -431,8 +413,11 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
     }
     // `" \t"`, not `\s`: bash's header skips a blank but not a newline, and the difference from
     // `_HEREDOC_RE`'s `\s*` is exactly the kind of disagreement that makes a plan unknown.
-    while j < n && (chars[j] == ' ' || chars[j] == '\t') {
-        j += 1;
+    // A backslash-newline is removed before the shell reads the header at all, so it is neither
+    // a blank nor quoting: `<<E\<newline>OF` is the unquoted delimiter `EOF`, whose body expands.
+    let continuation = |j: usize| j + 1 < n && chars[j] == '\\' && chars[j + 1] == '\n';
+    while j < n && (chars[j] == ' ' || chars[j] == '\t' || continuation(j)) {
+        j += if continuation(j) { 2 } else { 1 };
     }
     let mut parts = String::new();
     let mut quoted = false;
@@ -441,7 +426,9 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
         if " \t\n;&|<>()".contains(c) {
             break;
         }
-        if c == '\\' {
+        if continuation(j) {
+            j += 2;
+        } else if c == '\\' {
             quoted = true;
             if j + 1 < n {
                 parts.push(chars[j + 1]);
@@ -476,12 +463,14 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
 }
 
 /// `cmd` with each unquoted ANSI-C `$'…'` rewritten as an ordinary shell-quoted token —
-/// `_desugar_ansi_c`.
+/// `_desugar_ansi_c`, decoded by [`shellseg::ansi_c_decode`].
 ///
-/// `shlex` — and so [`shellseg::lex`] — does not know `$'…'`: it reads `$` as a bare character
-/// and the following `'…'` as a plain single-quoted string, so `$'\''` (one apostrophe) leaves a
-/// dangling quote that swallows the rest of the line, and a `| sh -s` after it stopped being a
-/// token. The executor behind it was never seen and a heredoc body it runs was stripped as data.
+/// `shlex` does not know `$'…'`: it reads `$` as a bare character and the following `'…'` as a
+/// plain single-quoted string, so `$'\''` (one apostrophe) leaves a dangling quote that swallows
+/// the rest of the line, and a `| sh -s` after it stopped being a token. The executor behind it
+/// was never seen and a heredoc body it runs was stripped as data. [`shellseg::lex`] now reads
+/// `$'…'` itself, so this rewrite and a plain lex give the same tokens; it stays because the
+/// recorded corpus pins its output (`dac`).
 ///
 /// Only an UNQUOTED `$'` is a real ANSI-C string; inside `'…'` or `"…"` the `$` is literal, so
 /// the quote map gates it. The terminator is the first unescaped `'`, exactly as bash ends it.
@@ -496,22 +485,19 @@ pub fn desugar_ansi_c(line: &Line) -> String {
     while i < n {
         if line.starts_with(i, "$'") && !line.quoted(i) {
             let mut j = i + 2;
-            let mut buf = String::new();
+            let mut raw: Vec<char> = Vec::new();
             while j < n && chars[j] != '\'' {
                 if chars[j] == '\\' && j + 1 < n {
-                    let c = chars[j + 1];
-                    buf.push(
-                        ANSI_C_ESCAPES
-                            .iter()
-                            .find(|(k, _)| *k == c)
-                            .map_or(c, |(_, v)| *v),
-                    );
+                    raw.extend([chars[j], chars[j + 1]]);
                     j += 2;
                 } else {
-                    buf.push(chars[j]);
+                    raw.push(chars[j]);
                     j += 1;
                 }
             }
+            // The one decoder the command-line reader uses too, so `$'\x67it'` is `git` here as
+            // it is to every guard.
+            let buf = shellseg::ansi_c_decode(&raw);
             out.push_str(&shellseg::shell_quote(&buf));
             i = if j < n { j + 1 } else { n }; // step over the closing quote
             continue;

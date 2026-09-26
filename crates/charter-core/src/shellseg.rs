@@ -272,6 +272,9 @@ enum St {
     Punct,
     Quote(char),
     Esc(char),
+    /// Inside bash's ANSI-C quotation `$'…'`, which [`Cfg::bash_quoting`] turns on. Its text is
+    /// gathered raw and decoded by [`ansi_c_decode`] when the closing quote arrives.
+    Ansi,
 }
 
 /// The character source the lexer reads, whose `readline` stops BEFORE the newline instead of
@@ -321,6 +324,11 @@ struct Cfg {
     /// Whether `#` begins a comment. `shlex.split(s)` is `comments=False`, so its `commenters`
     /// is empty and its `readline` is never reached.
     comments: bool,
+    /// Whether the three quoting forms `shlex` does not know are read the way the shell reads
+    /// them: `$'…'` decoded ([`ansi_c_decode`]), `$"…"` read as `"…"`, and a live
+    /// backslash-newline removed. Only a command line is read that way; `shlex.split`'s callers
+    /// (`env -S`, a git alias body) hand the string to programs that do not do it.
+    bash_quoting: bool,
 }
 
 /// `_ShellLexer`: what a charter command line is read with.
@@ -328,6 +336,7 @@ const SHELL_CFG: Cfg = Cfg {
     whitespace: WHITESPACE,
     punctuation: PUNCTUATION_CHARS,
     comments: true,
+    bash_quoting: true,
 };
 
 /// CPython's `shlex.split(s)`: `posix=True`, `whitespace_split=True`, `comments=False`, and no
@@ -344,6 +353,7 @@ const SPLIT_CFG: Cfg = Cfg {
     whitespace: " \t\r\n",
     punctuation: "",
     comments: false,
+    bash_quoting: false,
 };
 
 /// `shlex.shlex` in posix mode, plus the three things `_ShellLexer` changes about it.
@@ -356,6 +366,15 @@ struct Lexer {
     bare: bool,
     start: isize,
     end: isize,
+    /// How many unquoted, unescaped `$` end the token so far. A `$'` or `$"` opens a bash
+    /// quotation only when this is ODD: `$$` is the shell's PID, so `$$'x'` is the PID and a
+    /// plain `'x'`, and `$$$'x'` is the PID and an ANSI-C `$'x'` (checked against bash).
+    dollars: usize,
+    /// `bare` and `start` as they stood before the escape being read, so a backslash-newline
+    /// that the shell removes leaves the token as though it had never been there.
+    before_esc: (bool, isize),
+    /// The raw text of the `$'…'` being read, escapes still in it.
+    ansi: Vec<char>,
 }
 
 impl Lexer {
@@ -372,6 +391,9 @@ impl Lexer {
             bare: true,
             start: -1,
             end: -1,
+            dollars: 0,
+            before_esc: (true, -1),
+            ansi: Vec::new(),
         }
     }
 
@@ -382,7 +404,7 @@ impl Lexer {
         // it is honouring, and to nothing else that is not a plain word/punctuation marker — so
         // this catches quoting wherever it appears in the token, including a quote glued to the
         // middle of one.
-        if matches!(value, St::Quote(_) | St::Esc(_)) {
+        if matches!(value, St::Quote(_) | St::Esc(_) | St::Ansi) {
             self.bare = false;
         }
         // The same transition says where the token STARTS. `shlex` leaves whitespace on the
@@ -417,6 +439,7 @@ impl Lexer {
         self.bare = true; // per token, not per lex
         self.start = -1;
         self.end = -1;
+        self.dollars = 0;
         let mut quoted = false;
         let mut escapedstate = St::Space;
         loop {
@@ -443,19 +466,23 @@ impl Lexer {
                         self.instream.readline();
                     } else if c == ESCAPE {
                         escapedstate = St::Word;
+                        self.before_esc = (self.bare, self.start);
                         self.set_state(St::Esc(c));
                     } else if WORDCHARS.contains(c) {
                         self.token = vec![c];
+                        self.dollars = 0;
                         self.set_state(St::Word);
                     } else if self.cfg.punctuation.contains(c) {
                         self.token = vec![c];
                         self.set_state(St::Punct);
                     } else if QUOTES.contains(c) {
+                        self.dollars = 0;
                         self.set_state(St::Quote(c));
                     } else {
                         // `whitespace_split` is true, so this is the arm that catches
                         // everything else, and it is the same assignment `wordchars` makes.
                         self.token = vec![c];
+                        self.dollars = usize::from(c == '$');
                         self.set_state(St::Word);
                     }
                 }
@@ -468,6 +495,7 @@ impl Lexer {
                         self.set_state(St::Word);
                     } else if c == ESCAPE && ESCAPED_QUOTES.contains(q) {
                         escapedstate = St::Quote(q);
+                        self.before_esc = (self.bare, self.start);
                         self.set_state(St::Esc(c));
                     } else {
                         self.token.push(c);
@@ -477,6 +505,21 @@ impl Lexer {
                     let Some(c) = nextchar else {
                         return Err(LexError::NoEscapedCharacter);
                     };
+                    if c == '\n' && self.cfg.bash_quoting {
+                        // A live backslash-newline: the shell removes both before it reads a
+                        // word, outside quotes and inside `"…"` alike, so `c\<newline>at` runs
+                        // `cat` and `"$\<newline>(x)"` runs `x`. It is not quoting, so the token
+                        // is left as bare as it was; and one that stood between two words
+                        // belongs to neither.
+                        (self.bare, self.start) = self.before_esc;
+                        if escapedstate == St::Word && self.token.is_empty() && !quoted {
+                            self.set_state(St::Space);
+                        } else {
+                            self.state = escapedstate;
+                        }
+                        continue;
+                    }
+                    self.dollars = 0;
                     // In posix shells, only the quote itself or the escape character may be
                     // escaped within quotes.
                     if let St::Quote(q) = escapedstate
@@ -487,6 +530,27 @@ impl Lexer {
                     }
                     self.token.push(c);
                     self.set_state(escapedstate);
+                }
+                St::Ansi => {
+                    let Some(c) = nextchar else {
+                        return Err(LexError::NoClosingQuotation);
+                    };
+                    if c == '\'' {
+                        let raw = std::mem::take(&mut self.ansi);
+                        self.token.extend(ansi_c_decode(&raw).chars());
+                        self.set_state(St::Word);
+                    } else if c == ESCAPE {
+                        // The escaped character is taken whatever it is, so `\'` does not close.
+                        let Some(next) =
+                            self.pushback_chars.pop().or_else(|| self.instream.read1())
+                        else {
+                            return Err(LexError::NoClosingQuotation);
+                        };
+                        self.ansi.push(c);
+                        self.ansi.push(next);
+                    } else {
+                        self.ansi.push(c);
+                    }
                 }
                 St::Word | St::Punct => {
                     let Some(c) = nextchar else {
@@ -520,14 +584,27 @@ impl Lexer {
                             break;
                         }
                     } else if QUOTES.contains(c) {
+                        if self.cfg.bash_quoting && self.dollars % 2 == 1 {
+                            // `$'…'` and `$"…"`: the `$` is part of the quotation, not the word.
+                            self.token.pop();
+                            if c == '\'' {
+                                quoted = true;
+                                self.dollars = 0;
+                                self.set_state(St::Ansi);
+                                continue;
+                            }
+                        }
+                        self.dollars = 0;
                         self.set_state(St::Quote(c));
                     } else if c == ESCAPE {
                         escapedstate = St::Word;
+                        self.before_esc = (self.bare, self.start);
                         self.set_state(St::Esc(c));
                     } else if WORDCHARS.contains(c)
                         || QUOTES.contains(c)
                         || !self.cfg.punctuation.contains(c)
                     {
+                        self.dollars = if c == '$' { self.dollars + 1 } else { 0 };
                         self.token.push(c);
                     } else {
                         self.pushback_chars.push(c);
@@ -571,6 +648,158 @@ pub fn lex(cmd: &str) -> Result<Vec<Tok>, LexError> {
 /// discards them too.
 pub fn posix_split(s: &str) -> Result<Vec<String>, LexError> {
     let mut lexer = Lexer::new(s, SPLIT_CFG);
+    let mut out = Vec::new();
+    loop {
+        match lexer.read_token()? {
+            None => return Ok(out),
+            Some(text) => out.push(text),
+        }
+    }
+}
+
+/// The text of an ANSI-C quotation `$'…'` — `raw` is what stood between the quotes, escapes
+/// still in it — as the shell hands it to the program.
+///
+/// Every guard matches the words a program receives, and `$'\x67it'` is `git` to the shell, so
+/// the one reader behind them all has to decode it: a guard that saw `$\x67it` saw no program at
+/// all. Checked against GNU bash 3.2.57 and 5.2.21 and zsh 5.9 with `printf '%s|'`:
+///
+/// - `\a \b \e \E \f \n \r \t \v \\ \' \" \?` are the characters they name;
+/// - `\NNN` is one to three OCTAL digits and `\xHH` one or two hex digits, each ONE BYTE (so
+///   `\777` is `0xff`, and `\303\251` is the two bytes of `é`); bash also reads `\x{…}`, all the
+///   hex digits inside the braces, as one byte;
+/// - `\uHHHH` and `\UHHHHHHHH` are one to four and one to eight hex digits naming a character,
+///   written as UTF-8 (bash 4.2 and later, and zsh; bash 3.2 leaves them as written, and reading
+///   them decoded there costs nothing but a refusal);
+/// - `\x`, `\u` and `\U` with no digit after them stay as written, and so does a trailing `\c`;
+/// - a NUL ends the quotation's text: `$'gi\0x't` is `git`, because bash builds the word from C
+///   strings.
+///
+/// **Where the two shells part, the reading that names something wins.** Claude Code runs a
+/// command in the user's shell, and that is zsh on a Mac. An escape bash does not know (`\q`)
+/// keeps its backslash in bash and loses it in zsh, and zsh does not know `\cX` (bash's control
+/// character) at all: `$'\cat'` is `^At` to bash and `cat` to zsh. Bash's reading there is a
+/// backslash or a control character, which names no program and no path, so the reader takes
+/// zsh's, and a guard sees the `cat` zsh runs.
+///
+/// Bytes that are not UTF-8 (`\377`) come back as U+FFFD, since a word here is a `String`. No
+/// name a guard matches is spelled with one.
+pub fn ansi_c_decode(raw: &[char]) -> String {
+    fn hex(c: char) -> Option<u32> {
+        c.to_digit(16)
+    }
+    /// Up to `max` hex digits from `raw[*i..]`, or `None` when there is not even one.
+    fn hex_run(raw: &[char], i: &mut usize, max: usize) -> Option<u32> {
+        let mut value: Option<u32> = None;
+        let mut taken = 0;
+        while taken < max
+            && let Some(d) = raw.get(*i).copied().and_then(hex)
+        {
+            value = Some(value.unwrap_or(0).wrapping_mul(16).wrapping_add(d));
+            *i += 1;
+            taken += 1;
+        }
+        value
+    }
+    fn push_char(out: &mut Vec<u8>, c: char) {
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+    }
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = 0usize;
+    while i < raw.len() {
+        let c = raw[i];
+        i += 1;
+        if c != '\\' || i >= raw.len() {
+            push_char(&mut out, c);
+            continue;
+        }
+        let e = raw[i];
+        i += 1;
+        let byte: Option<u8> = match e {
+            'a' => Some(0x07),
+            'b' => Some(0x08),
+            'e' | 'E' => Some(0x1b),
+            'f' => Some(0x0c),
+            'n' => Some(b'\n'),
+            'r' => Some(b'\r'),
+            't' => Some(b'\t'),
+            'v' => Some(0x0b),
+            '\\' | '\'' | '"' | '?' => Some(e as u8),
+            '0'..='7' => {
+                let mut v = e as u32 - '0' as u32;
+                let mut taken = 1;
+                while taken < 3
+                    && let Some(d) = raw.get(i).and_then(|c| c.to_digit(8))
+                {
+                    v = v * 8 + d;
+                    i += 1;
+                    taken += 1;
+                }
+                Some((v & 0xff) as u8)
+            }
+            'x' if raw.get(i) == Some(&'{') => {
+                i += 1;
+                let v = hex_run(raw, &mut i, usize::MAX).unwrap_or(0);
+                if raw.get(i) == Some(&'}') {
+                    i += 1;
+                }
+                Some((v & 0xff) as u8)
+            }
+            'x' => match hex_run(raw, &mut i, 2) {
+                Some(v) => Some(v as u8),
+                None => {
+                    out.extend_from_slice(b"\\x");
+                    continue;
+                }
+            },
+            'u' | 'U' => {
+                let max = if e == 'u' { 4 } else { 8 };
+                match hex_run(raw, &mut i, max) {
+                    Some(0) => Some(0),
+                    Some(v) => {
+                        push_char(&mut out, char::from_u32(v).unwrap_or('\u{fffd}'));
+                        continue;
+                    }
+                    None => {
+                        out.push(b'\\');
+                        push_char(&mut out, e);
+                        continue;
+                    }
+                }
+            }
+            // bash's `\cX`, read as zsh reads it — see above. A trailing `\c` is `\c` to bash
+            // and `c` to zsh; the same rule takes zsh's.
+            _ => {
+                push_char(&mut out, e);
+                continue;
+            }
+        };
+        match byte {
+            Some(0) => break,
+            Some(b) => out.push(b),
+            None => {}
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `s` as the words a POSIX shell makes of a string it is handed whole — [`posix_split`]'s
+/// reading, plus the quoting forms [`lex`] reads the way the shell does (`$'…'`, `$"…"`, a
+/// backslash-newline).
+///
+/// For a string that a SHELL runs rather than a program splitting it by its own rules: a git
+/// alias that begins `!` is handed to `sh -c`, and `!$'\x67it' checkout` switches branches as
+/// surely as `!git checkout` (checked with git 2.50 and macOS's `/bin/sh`). `posix_split` stays
+/// the reading for `env -S` and a plain alias, whose programs do none of this.
+pub fn shell_split(s: &str) -> Result<Vec<String>, LexError> {
+    let mut lexer = Lexer::new(
+        s,
+        Cfg {
+            bash_quoting: true,
+            ..SPLIT_CFG
+        },
+    );
     let mut out = Vec::new();
     loop {
         match lexer.read_token()? {
@@ -765,6 +994,8 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
     enum Open {
         Subst,
         Subshell,
+        /// bash 5.3's `${ …; }` / `${| …; }`, which closes at a `}` in command position.
+        Funsub,
     }
 
     let mut out: Vec<JoinedSegment> = Vec::new();
@@ -819,10 +1050,16 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
                     continue;
                 }
                 // nothing is open for it to close: an ordinary word, as above.
-                None => {}
+                Some(Open::Funsub) | None => {}
             }
         } else if t.is_op(&["{", "}"]) {
             if open_segs.last().is_some_and(|s| s.is_empty()) {
+                if t.text == "}" && matches!(stack.last(), Some(Open::Funsub)) {
+                    let seg = open_segs.pop().unwrap_or_default();
+                    let mut before = befores.pop().flatten();
+                    close(seg, &mut before, "}");
+                    stack.pop();
+                }
                 continue; // command position: the reserved word
             }
             // mid-command: an ordinary argument to the program already named.
@@ -832,9 +1069,19 @@ pub fn joined_segments(toks: Vec<Tok>) -> Vec<JoinedSegment> {
             }
             continue;
         }
+        // bash 5.3 runs `${ cmd; }` as a substitution: the lexer ends the `${` word at the blank
+        // (`${VAR}` stays one word and never gets here), and what follows is read as `$( … )`'s
+        // contents are. An older bash refuses the line as a bad substitution, so reading it as
+        // one only ever shows the guards more.
+        let funsub = t.bare && t.text.ends_with("${");
         for seg in open_segs.iter_mut() {
             // every open segment, the outer ones included
             seg.push(t.clone());
+        }
+        if funsub {
+            open_segs.push(Vec::new());
+            befores.push(None);
+            stack.push(Open::Funsub);
         }
     }
     for (seg, before) in open_segs.into_iter().zip(befores) {
@@ -870,6 +1117,35 @@ fn resegment(toks: &[String]) -> Vec<Vec<String>> {
     segment_tokens(pieces)
 }
 
+/// Index just past `pat` matched at `i` the way the shell reads it: with any number of
+/// backslash-newlines between its characters, because the shell removes each such pair before
+/// it reads anything — `$\<newline>(` is `$(`. `None` when `pat` does not start at `i`.
+///
+/// Only where a backslash is live: unquoted, inside `"…"` and in an expanding heredoc body.
+/// Inside `'…'` and `$'…'` the pair stays, and neither [`quote_map`] nor
+/// [`crate::livesub::live_substitution`] looks for a substitution there.
+pub fn spliced_end(chars: &[char], i: usize, pat: &str) -> Option<usize> {
+    let mut j = i;
+    for (k, want) in pat.chars().enumerate() {
+        if k > 0 {
+            j = past_continuations(chars, j);
+        }
+        if chars.get(j) != Some(&want) {
+            return None;
+        }
+        j += 1;
+    }
+    Some(j)
+}
+
+/// `j` moved past every backslash-newline that starts there.
+pub fn past_continuations(chars: &[char], mut j: usize) -> usize {
+    while chars.get(j) == Some(&'\\') && chars.get(j + 1) == Some(&'\n') {
+        j += 2;
+    }
+    j
+}
+
 /// For each offset in `line`, whether it sits inside quotes — computed in ONE pass.
 ///
 /// Read off the source rather than from the lexer, because this runs on lines the lexer could
@@ -894,10 +1170,6 @@ pub fn quote_map(line: &str) -> Vec<bool> {
     fn quoted_now(stack: &[&'static str]) -> bool {
         stack.last().is_some_and(|t| QUOTED_CONTEXTS.contains(t))
     }
-    fn starts_with(chars: &[char], i: usize, s: &str) -> bool {
-        let len = s.chars().count();
-        i + len <= chars.len() && chars[i..i + len].iter().copied().eq(s.chars())
-    }
     let mut i = 0usize;
     while i < n {
         let here = quoted_now(&stack);
@@ -920,10 +1192,11 @@ pub fn quote_map(line: &str) -> Vec<bool> {
             if c == top.chars().nth(1).unwrap_or('\0') {
                 stack.pop();
             }
-        } else if starts_with(&chars, i, "$(") {
+        } else if let Some(end) = spliced_end(&chars, i, "$(") {
+            // `$\<newline>(` too: the shell removes the pair first, in `"…"` as outside.
             stack.push("(");
-            flags[i + 1] = here;
-            i += 2;
+            flags[i + 1..end].fill(here);
+            i = end;
             continue;
         } else if c == '`' {
             if top == "`" {
@@ -937,15 +1210,15 @@ pub fn quote_map(line: &str) -> Vec<bool> {
             if c == '"' {
                 stack.pop();
             }
-        } else if starts_with(&chars, i, "$'") {
+        } else if let Some(end) = spliced_end(&chars, i, "$'") {
             stack.push("$'");
-            flags[i + 1] = here;
-            i += 2;
+            flags[i + 1..end].fill(here);
+            i = end;
             continue;
-        } else if starts_with(&chars, i, "$\"") {
+        } else if let Some(end) = spliced_end(&chars, i, "$\"") {
             stack.push("$\"");
-            flags[i + 1] = here;
-            i += 2;
+            flags[i + 1..end].fill(here);
+            i = end;
             continue;
         } else if c == ')' && top == "(" {
             stack.pop();

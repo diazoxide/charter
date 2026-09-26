@@ -428,6 +428,60 @@ mod tests {
         assert_eq!(v.shape, None);
     }
 
+    /// Every guard reads the words the SHELL makes, through one reader, so a quoting form that
+    /// reader learns is one every arm learns at once. Asked here at the entry the hook calls.
+    #[test]
+    fn a_program_the_shell_spells_out_of_quoting_is_the_program_to_every_arm() {
+        let fix = Fixture::new();
+        let vault = format!(".charter/{}/db.json", "vaults");
+        let leak = |cmd: String| verdict_of(&cmd, &fix, true).map(|v| v.reason);
+        let read = verdict_of(&format!("cat {vault}"), &fix, true).map(|v| v.reason);
+        assert!(read.is_some());
+        for cmd in [
+            // ANSI-C escapes in the program name, in hex, octal and as a character.
+            format!("$'\\x63at' {vault}"),
+            format!("$'\\143at' {vault}"),
+            format!(concat!("$'\\", "u0063at' {}"), vault),
+            // bash's locale string.
+            format!("$\"cat\" {vault}"),
+            // A backslash-newline inside the name, and between `$` and `(`.
+            format!("c\\\nat {vault}"),
+            format!("echo $\\\n(cat {vault})"),
+            // bash 5.3's `${ …; }`.
+            format!("echo ${{ cat {vault}; }}"),
+        ] {
+            assert_eq!(leak(cmd.clone()), read, "{cmd:?}");
+        }
+        for cmd in [
+            "$'\\x67'h issue create --body \"$(x)\"",
+            "gh issue create --body \"$\\\n(x)\"",
+            "gh issue create --body \"${ x; }\"",
+        ] {
+            assert_eq!(
+                verdict_of(cmd, &fix, false).map(|v| v.reason),
+                Some(REASON_FORGE_SUBSTITUTION.to_string()),
+                "{cmd:?}"
+            );
+        }
+        assert_eq!(
+            verdict_of(
+                "$'\\x63'harter persona remember devops \"$(x)\"",
+                &fix,
+                false
+            )
+            .map(|v| v.reason),
+            Some(REASON_CHARTER_SUBSTITUTION.to_string())
+        );
+        assert_eq!(
+            verdict_of("BASH -c 'charter handoff beta'", &fix, true).map(|v| v.reason),
+            Some(handoffguard::REASON_SHELL_STRING.to_string())
+        );
+        assert_eq!(
+            verdict_of("charter $'\\x68'andoff beta <<'B'\nx\nB", &fix, true).map(|v| v.reason),
+            Some(handoffguard::REASON_SPELLING.to_string())
+        );
+    }
+
     #[test]
     fn the_emitted_json_is_pythons_bytes() {
         let v = Verdict::new("r", None, "a — b …");

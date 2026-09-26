@@ -309,9 +309,8 @@ measured.
 | `charter {hand,}off`, `charter $'\x68andoff'` | **runs with no prompt** |
 | `bash <<'EOF'` whose body is the handoff | **runs with no prompt** |
 
-charter's hook refuses every call in both tables except `charter {hand,}off` and
-`charter $'\x68andoff'`, which it does not recognise (see *What charter's hook does not see*,
-below). One exact spelling is a rule a model can follow.
+charter's hook refuses every call in both tables except `charter {hand,}off`, which it does
+not recognise (see *What charter's hook does not see*, below). One exact spelling is a rule a model can follow.
 
 **Where the rule has to be.** Claude Code reads `.claude/settings.json` from the session's own
 directory, not from above it. Measured on 2.1.268 in a plane built by `charter init`: the rule
@@ -394,10 +393,8 @@ prompt cannot see (the table and reasons are in [hooks.md](hooks.md), under *The
   a quote to it, so `echo #' && bash <<'ZZ'` reads the rest of the line as quoted and the real
   opener is never seen — the handoff in that body runs with no prompt.
 
-  An ANSI-C word (`$'don\'t'`) is read correctly by this scan, but the shared lexer behind the
-  secret-leak guard cannot parse one. A call carrying it keeps every heredoc body visible to
-  *that* guard, so prose in a brief on such a line can be refused as a read. For the leak guard
-  that errs toward refusing.
+  An ANSI-C word (`$'don\'t'`) is read correctly by this scan, and the shared reader behind
+  every guard decodes it the way the shell does.
 - **with a stdin other than one quoted heredoc** on the handoff's own segment — so the prompt
   shows exactly the text the new chat is sent.
 
@@ -441,8 +438,7 @@ lone `'` (as in `don't`) leaves the call unparseable, and a handoff in a later `
 `bash -c '…'` is then allowed. A `cat` body is stripped before the look, so the same apostrophe
 there costs nothing. It recognises a word only when the word reads `charter` or `handoff` once
 quoting, expansion and glob characters are removed, so it does not recognise a brace split
-inside the word (`{hand,}off`, `h{a,}ndoff`), an ANSI-C escape (`$'\x68andoff'`,
-`$'\x63harter'`) or a parameter default split across it (`hand${x:-}off`,
+inside the word (`{hand,}off`, `h{a,}ndoff`) or a parameter default split across it (`hand${x:-}off`,
 `${x:-hand}${y:-off}`). Claude Code says the same of its own rule: a Bash rule "isn't a
 security boundary around the program"
 ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).

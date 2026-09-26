@@ -621,15 +621,17 @@ fn a_broken_quote_blinds_the_guard_to_its_own_line_and_no_other() {
         "the well-formed line before the broken quote is still seen: {segments:?}",
     );
 
-    // `$'…'` trips `shlex` and is valid bash; the `cat` after the `;` must still be a segment.
+    // `$'…'` tripped `shlex` and is valid bash. The reader now decodes it, so the line parses
+    // and the `cat` after the `;` is its own segment — the answer the fallback had to guess at.
     let (segments, parsed) =
         shellseg::segment_argv_parsed(&format!("echo $'it\\'s fine' ; cat {vault}"));
-    assert!(!parsed);
-    assert!(
-        segments
-            .iter()
-            .any(|s| s.first().is_some_and(|p| p == "cat")),
-        "the second command is visible: {segments:?}",
+    assert!(parsed);
+    assert_eq!(
+        segments,
+        vec![
+            vec!["echo".to_string(), "it's fine".to_string()],
+            vec!["cat".to_string(), vault.to_string()],
+        ],
     );
 }
 
@@ -868,4 +870,116 @@ fn the_wrapper_run_comes_off_before_the_program_is_named() {
         shellwrap::split_env_chdir(&argv("env GIT_SSH_COMMAND=/tmp/k git push")).env,
         vec!["GIT_SSH_COMMAND=/tmp/k".to_string()],
     );
+}
+
+fn words(cmd: &str) -> Vec<Vec<String>> {
+    shellseg::segment_argv(cmd)
+}
+
+fn w(xs: &[&str]) -> Vec<String> {
+    xs.iter().map(|s| s.to_string()).collect()
+}
+
+/// `$'…'` is a word the SHELL makes, and every guard matches the word a program receives: a
+/// program name written with ANSI-C escapes is that program. Each answer below is the one GNU
+/// bash 5.2 gives with `printf '%s|'`, except the two the decoder takes from zsh (see
+/// `shellseg::ansi_c_decode`).
+#[test]
+fn an_ansi_c_quotation_is_read_as_the_word_the_shell_makes() {
+    charter_core::unsteered!();
+    for cmd in [
+        r"$'\x67it' status",
+        r"$'\147it' status",
+        r"$'\x{67}it' status",
+        concat!("$'\\", "u0067it' status"),
+        concat!("$'\\", "U00000067it' status"),
+        r"g$'i't status",
+        r"$'gi\0x't status",
+        // A backslash-newline between the `$` and its quote is gone before the word is read.
+        "$\\\n'git' status",
+    ] {
+        assert_eq!(words(cmd), vec![w(&["git", "status"])], "{cmd:?}");
+    }
+    // bash's own escapes, and its reading of an escape it does not know.
+    assert_eq!(
+        words(r"x $'a\tb\x41\101\e\?\'\x'"),
+        vec![w(&["x", "a\tbAA\u{1b}?'\\x"])]
+    );
+    // zsh's reading where bash's names nothing: `\q` loses its backslash, and `\c` is no escape.
+    assert_eq!(words(r"$'\cat' $'\q'"), vec![w(&["cat", "q"])]);
+    // `$$` is the PID, so `$$'x'` is no quotation; `$$$'x'` is the PID and one.
+    assert_eq!(words("echo $$'x' $$$'x'"), vec![w(&["echo", "$$x", "$$x"])]);
+    // Quoted or escaped, the `$` opens nothing.
+    assert_eq!(
+        words(r#"echo "$'\x41'" '$'\x41 \$'\x41'"#),
+        vec![w(&["echo", r"$'\x41'", "$x41", r"$\x41"])]
+    );
+    // A quotation left open is still an unbalanced line.
+    assert!(!shellseg::segment_argv_parsed(r"echo $'a\'").1);
+}
+
+/// `$"…"` is bash's locale string: a double-quoted word whose `$` goes away.
+#[test]
+fn a_locale_string_is_read_as_a_double_quoted_word() {
+    charter_core::unsteered!();
+    assert_eq!(words(r#"$"git" status"#), vec![w(&["git", "status"])]);
+    assert_eq!(words(r#"echo $$"x""#), vec![w(&["echo", "$$x"])]);
+}
+
+/// The shell removes a live backslash-newline before it reads a word — outside quotes and
+/// inside `"…"` — so `c\<newline>at` runs `cat`. It is not quoting: the word stays bare, and one
+/// between two words belongs to neither.
+#[test]
+fn a_backslash_newline_is_gone_before_the_word_is_read() {
+    charter_core::unsteered!();
+    let vault = ".charter/vaults/x.json";
+    assert_eq!(words(&format!("c\\\nat {vault}")), vec![w(&["cat", vault])]);
+    assert_eq!(words("echo \"a\\\nb\""), vec![w(&["echo", "ab"])]);
+    // Inside single quotes it stays.
+    assert_eq!(words("echo 'a\\\nb'"), vec![w(&["echo", "a\\\nb"])]);
+    // Between words it is nothing, so the operator after it is still an operator.
+    assert_eq!(
+        words("echo a \\\n| cat"),
+        vec![w(&["echo", "a"]), w(&["cat"])]
+    );
+    // A `$\<newline>(` is a substitution, and its command is a segment of its own.
+    assert!(words(&format!("echo $\\\n(cat {vault})")).contains(&w(&["cat", vault])));
+    let toks = shellseg::lex("c\\\nat x").expect("this lexes");
+    assert!(toks[0].bare, "a continuation is not quoting");
+    assert_eq!(
+        (toks[0].start, toks[0].end),
+        (0, 5),
+        "offsets stay the source's"
+    );
+}
+
+/// bash 5.3 runs `${ cmd; }` and `${| cmd; }` as substitutions in the current shell. Read as
+/// `$( … )` is: the command inside is a segment of its own, and the enclosing one keeps it too.
+#[test]
+fn a_bash_5_3_substitution_is_a_segment_of_its_own() {
+    charter_core::unsteered!();
+    let vault = ".charter/vaults/x.json";
+    for cmd in [
+        format!("echo ${{ cat {vault}; }}"),
+        format!("echo ${{|cat {vault}; }}"),
+        format!("x=${{\ncat {vault}\n}}"),
+    ] {
+        assert!(
+            words(&cmd).contains(&w(&["cat", vault])),
+            "{cmd:?}: {:?}",
+            words(&cmd)
+        );
+    }
+    // A parameter expansion is one word, as before.
+    assert_eq!(words("echo ${HOME}"), vec![w(&["echo", "${HOME}"])]);
+}
+
+/// A heredoc delimiter split by a backslash-newline is the delimiter the shell reads, and it is
+/// unquoted, so the body expands.
+#[test]
+fn a_backslash_newline_in_a_heredoc_delimiter_is_not_quoting() {
+    charter_core::unsteered!();
+    let line = Line::of("cat <<E\\\nOF");
+    let h = heredoc::heredoc_header(&line, 4).expect("a header");
+    assert_eq!((h.delim.as_str(), h.expands), ("EOF", true));
 }
