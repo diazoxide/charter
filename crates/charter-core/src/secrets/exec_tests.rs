@@ -368,10 +368,30 @@ fn exec_refuses_what_it_could_never_clean_up_and_names_each_flag() {
     assert!(rec.errors()[0].starts_with("--exec and --stream"));
 }
 
+/// Set on the child that [`exec_with_nothing_to_clean_up_replaces_the_process_and_a_missing_program_is_127`]
+/// re-runs itself as.
+const EXEC: &str = "SECRETS_EXEC_TEST_EXEC_FAILS";
+
 #[test]
 fn exec_with_nothing_to_clean_up_replaces_the_process_and_a_missing_program_is_127() {
     // `--exec` with only an `--env` binding is allowed through to the replacement; a program
     // that does not exist is the one way it comes back, and in this process.
+    //
+    // **Alone, in a child** (#465). A failed `exec` is not free for the process it came back
+    // to: the standard library points the process's environment at the program's while it
+    // tries, and leaves SIGPIPE at its default afterwards. Beside other tests, a program
+    // started on another thread in that window read an environment that was then freed —
+    // `with_no_signal_the_childs_own_status_passes_through` failed with "Bad address" about
+    // one run in twenty-five — and a later write to a closed pipe killed the whole test run.
+    if std::env::var_os(EXEC).is_none() {
+        crate::testrun::rerun(
+            &[
+                "secrets::exec::tests::exec_with_nothing_to_clean_up_replaces_the_process_and_a_missing_program_is_127",
+            ],
+            &[(EXEC, "1".as_ref())],
+        );
+        return;
+    }
     let (_tmp, ctx) = plane(serde_json::json!({}), &[]);
     let (code, rec) = run(
         &ctx,
