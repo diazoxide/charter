@@ -1225,6 +1225,23 @@ fn a_session_in_a_clone_of_its_own_is_told_its_trust_is_its_own() {
 }
 
 #[test]
+fn the_codex_note_says_how_the_app_arms_codex_and_that_a_trusted_project_config_is_read() {
+    // #354: the app arms Codex with session `-c hooks.*` flags, not a plugin, and Codex reads
+    // a project `.codex/config.toml` once the project is trusted (codex-cli 0.147.0).
+    let (_d, root) = plane("schema = 1\n");
+    let l = one(&root, "session layer");
+    let codex = l
+        .detail
+        .split('\n')
+        .find(|line| line.contains("codex: "))
+        .unwrap_or_else(|| panic!("no codex line: {l:?}"));
+    assert!(!codex.contains("is ignored"), "{codex}");
+    assert!(!codex.contains("the plugin"), "{codex}");
+    assert!(codex.contains("`-c hooks.*`"), "{codex}");
+    assert!(codex.contains("once the project is trusted"), "{codex}");
+}
+
+#[test]
 fn a_plane_format_up_to_this_charters_own_is_read_and_one_past_it_is_refused() {
     for (schema, read) in [
         ("", true),
