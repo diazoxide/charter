@@ -285,6 +285,132 @@ pub fn proposals(rep: &Report) -> Vec<String> {
     out
 }
 
+/// One store an `optimize` curates: the name its heading shows, where it is, and — for a
+/// persona's — the share of its memories that say they were checked.
+pub struct Store {
+    pub label: String,
+    pub dir: std::path::PathBuf,
+    /// `None` for a store whose heading has no `verified` column (a workspace's). Inside,
+    /// `None` is a store with no memories, shown as 0% as Python's `or 0` shows it.
+    pub verified_pct: Option<Option<i64>>,
+}
+
+/// How an `optimize` runs, and the words that differ between `workspace optimize` and
+/// `persona optimize`.
+pub struct Optimizing {
+    /// Perform the safe ops, rather than name what they would be.
+    pub apply: bool,
+    /// Age in days past which a memory is proposed for archival.
+    pub stale_days: i64,
+    pub today: chrono::NaiveDate,
+    /// The heading over the proposals.
+    pub proposals: &'static str,
+    /// Said when `--apply` found nothing safe to do.
+    pub tidy: &'static str,
+}
+
+/// `workspace optimize` and `persona optimize`, over each of `stores` in order: the report,
+/// then the safe ops with `apply` or what they would be without it, then the proposals.
+/// `changed` is called once per store `--apply` changed. The exit code is 1 when a store
+/// could not be looked at — the others are still curated, and that one is named.
+pub fn optimize(
+    root: &Path,
+    stores: &[Store],
+    how: &Optimizing,
+    changed: &mut dyn FnMut(),
+    say: crate::repocmd::Sink,
+) -> u8 {
+    use crate::repocmd::Say;
+    let (apply, stale_days, today) = (how.apply, how.stale_days, how.today);
+    let mut actions_total = 0;
+    let mut unread: Unread = Vec::new();
+    let missed = |missing: Unread, unread: &mut Unread, say: crate::repocmd::Sink| {
+        for (path, code) in &missing {
+            say(Say::Fail(memstore::cannot_check(root, path, *code)));
+        }
+        unread.extend(missing);
+    };
+    for store in stores {
+        if !store.dir.exists() {
+            continue;
+        }
+        let rep = match report(root, &store.dir, stale_days, 0.5, today) {
+            Ok(rep) => rep,
+            Err(missing) => {
+                missed(missing, &mut unread, say);
+                continue;
+            }
+        };
+        if rep.total == 0 {
+            continue;
+        }
+        let verified = match store.verified_pct {
+            Some(pct) => format!("{}% verified · ", pct.unwrap_or(0)),
+            None => String::new(),
+        };
+        say(Say::Out(format!(
+            "\n◆ {}  ({} memories · {verified}{} exact-dup group(s) · {} near-dup pair(s) · {} \
+             stale)",
+            store.label,
+            rep.total,
+            rep.exact_dups.len(),
+            rep.near_dups.len(),
+            rep.stale.len()
+        )));
+        let rep = if apply {
+            let actions = match apply_safe(root, &store.dir, today) {
+                Ok(actions) => actions,
+                Err(missing) => {
+                    missed(missing, &mut unread, say);
+                    continue;
+                }
+            };
+            for action in &actions {
+                say(Say::Done(format!("  auto: {action}")));
+            }
+            actions_total += actions.len();
+            if !actions.is_empty() {
+                changed();
+            }
+            match report(root, &store.dir, stale_days, 0.5, today) {
+                Ok(rep) => rep,
+                Err(missing) => {
+                    missed(missing, &mut unread, say);
+                    continue;
+                }
+            }
+        } else {
+            let pending = pending_auto(&rep);
+            if !pending.is_empty() {
+                say(Say::Out("  would auto-apply (re-run with --apply):".into()));
+                for p in pending {
+                    say(Say::Out(format!("    + {p}")));
+                }
+            }
+            rep
+        };
+        let proposals = proposals(&rep);
+        if !proposals.is_empty() {
+            say(Say::Out(how.proposals.to_string()));
+            for p in proposals {
+                say(Say::Out(format!("    ? {p}")));
+            }
+        } else if apply {
+            say(Say::Info("  clean — nothing to propose.".into()));
+        }
+    }
+    if !apply {
+        say(Say::Info(
+            "\nRead-only. Re-run with --apply to auto-apply the safe/reversible ops (exact-dup \
+             collapse + index repair); proposals always stay manual."
+                .into(),
+        ));
+    } else if actions_total == 0 {
+        say(Say::Info(how.tidy.to_string()));
+    }
+    if unread.is_empty() { 0 } else { 1 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

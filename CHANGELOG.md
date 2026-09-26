@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A persona's memory can be kept up like a workspace's.** `charter persona forget <name>
+  <slug>` deletes one memory, `charter persona dedupe` lists near-duplicate pairs to prune,
+  `charter persona optimize` runs the curation `charter workspace optimize` runs over each
+  persona's memory and the shared store (read-only unless `--apply`), and `charter persona
+  log` notes to, or shows, a persona's activity in this session.
+  ([#366](https://github.com/diazoxide/charter/issues/366))
 - **A persona can be made, read, cleared and removed from the command line.** `charter persona
   create <name> --delegate-when "<the work that comes to it>"` writes
   `personas/<name>/persona.md` as a draft, with its memory and refs; `--extends` inherits from

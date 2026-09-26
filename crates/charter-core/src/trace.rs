@@ -161,6 +161,27 @@ pub fn private_mkdir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// One trace event as a persona's activity reads it: `ts`, the event padded to ten, then every
+/// other field but `persona` as `key=value` — `persona recall`'s and `persona log`'s line,
+/// Python's `f"{r['ts']}  {r['event']:10} {extra}"`, a number right-aligned as `:10` aligns it.
+pub fn activity_line(act: &serde_json::Map<String, serde_json::Value>) -> String {
+    let text = crate::pyrepr::str_json;
+    let extra: Vec<String> = act
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "ts" | "event" | "persona"))
+        .map(|(k, v)| format!("{k}={}", text(v)))
+        .collect();
+    let ts = act.get("ts").map(text).unwrap_or_default();
+    let event = match act.get("event") {
+        // A number the way Python prints what `json.loads` read (`1E5` is `100000.0`), and
+        // right-aligned, as `:10` aligns a number.
+        Some(v @ serde_json::Value::Number(_)) => format!("{:>10}", text(v)),
+        Some(v) => format!("{:<10}", text(v)),
+        None => format!("{:<10}", ""),
+    };
+    format!("{ts}  {event} {}", extra.join("  "))
+}
+
 /// This session's events attributed to `persona`, the last `n` of them (`0` for all) —
 /// `trace.for_persona`. A line that is not a JSON object is skipped.
 pub fn for_persona(
