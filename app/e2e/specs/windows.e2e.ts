@@ -168,9 +168,14 @@ describe("a project tab in a window of its own", function () {
 
     // The close button, as the operator presses it: a close REQUEST, which a split window
     // answers by handing its projects back.
-    await browser.executeAsync((done: () => void) => {
-      void window.__TAURI__.window.getCurrentWindow().close().finally(done);
-    });
+    //
+    // Not awaited inside the page: the window is gone before a script waiting on it could
+    // answer, and the driver would report the window missing rather than the close done.
+    await browser
+      .execute(() => {
+        void window.__TAURI__.window.getCurrentWindow().close();
+      })
+      .catch(() => undefined);
 
     await windowThere(label, false);
     await browser.switchToWindow(MAIN);
