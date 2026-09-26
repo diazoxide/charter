@@ -878,7 +878,7 @@ impl Executor {
             return Err(format!(
                 "'{extension}' is still answering the last thing it was asked. charter asks an \
                  extension one thing at a time; this one has at most {} left.",
-                self.deadline.as_secs()
+                self.deadline.as_secs_f32()
             ));
         }
         // Zero until the program exists: `stop_all` never signals a group of 0, which would be
@@ -913,7 +913,7 @@ impl Executor {
                 return Err(format!(
                     "'{extension}' was still answering the last thing it was asked after {} \
                      seconds, so charter did not ask it this.",
-                    self.deadline.as_secs()
+                    self.deadline.as_secs_f32()
                 ));
             }
             table = self
@@ -1120,7 +1120,7 @@ impl Executor {
                 Heard::Line(_) if !exited => Err(format!(
                     "'{extension}' closed its output and did not exit within {} seconds, so \
                      charter stopped it and passes none of what it printed on.",
-                    self.deadline.as_secs()
+                    self.deadline.as_secs_f32()
                 )),
                 Heard::Line(_) if overflowed => Err(format!(
                     "'{extension}' printed more than {} KiB on stderr, so charter passes none of \
@@ -1134,7 +1134,7 @@ impl Executor {
                     "'{extension}' exited, and its stderr did not end within {} seconds — \
                      something it started may still hold it open — so charter passes none of \
                      what it printed on.",
-                    self.deadline.as_secs()
+                    self.deadline.as_secs_f32()
                 )),
                 Heard::Line(stdout) => match status.and_then(|status| status.code()) {
                     Some(status) => Ok(Said::Whole(Printed {
@@ -1151,7 +1151,7 @@ impl Executor {
                 Heard::TooLate => Err(format!(
                     "'{extension}' did not finish within {} seconds, so charter stopped it and \
                      passes none of what it printed on.{}",
-                    self.deadline.as_secs(),
+                    self.deadline.as_secs_f32(),
                     last_words()
                 )),
                 Heard::TooMuch => Err(format!(
@@ -1174,7 +1174,7 @@ impl Executor {
             Heard::TooLate => Err(format!(
                 "'{extension}' did not answer within {} seconds, so charter stopped it. It was \
                  asked one question{}.{}",
-                self.deadline.as_secs(),
+                self.deadline.as_secs_f32(),
                 if wrote {
                     ""
                 } else {

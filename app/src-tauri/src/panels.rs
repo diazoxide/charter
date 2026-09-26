@@ -938,8 +938,13 @@ mod tests {
     }
 
     /// Everything the stand-in has recorded so far, once it has recorded anything.
+    ///
+    /// Waited for up to thirty seconds, which a passing test never spends: it returns the moment
+    /// the stand-in has written. The stand-in is a program written fresh for each test, and
+    /// macOS assesses a program file before its first run — on a loaded machine for seconds at a
+    /// time (#422) — so a shorter bound failed tests on how busy the machine was.
     fn ran(at: &Path) -> String {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             if let Ok(text) = std::fs::read_to_string(at.join("ran"))
                 && !text.is_empty()

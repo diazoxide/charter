@@ -64,6 +64,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The extension tests no longer fail on a busy machine.** Extensions still get the same time
+  as before: 5 seconds for a view, an action, an event or a command, and at a chat's start 2
+  seconds each and 3 seconds for all of them together. A debug build of `charter` now lets the
+  test suite set a different limit, so a test that is not about the limit gives a slow machine
+  room, and a test that is about it uses a short limit and a program that never answers.
+  ([#422](https://github.com/diazoxide/charter/issues/422))
+
 - **The dispatch log, the session trace and a memory index refuse to write through a link.**
   They now open the file without following a link, and refuse it when it is one.
   ([#420](https://github.com/diazoxide/charter/issues/420))

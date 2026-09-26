@@ -15,6 +15,17 @@ use charter_core::executor::Executor;
 use charter_core::panel::{Block, Shape};
 use charter_core::{extension, handed};
 
+/// How long the program is given by every executor here but the measurement's (#422): the
+/// program is copied in fresh for each test, and macOS assesses a program file the first time
+/// it runs — under a loaded machine, for longer than the real five seconds. No test here is
+/// about the deadline; `charter-core`'s executor tests hold it to account.
+const PATIENT: Duration = Duration::from_secs(30);
+
+/// An executor that gives its program [`PATIENT`].
+fn patient() -> Executor {
+    Executor::default().with_deadline(PATIENT)
+}
+
 /// A plane with two personas and some memories, the extension assembled beside it, and a
 /// config root with the extension installed and approved.
 struct Installed {
@@ -128,14 +139,14 @@ fn a_charter_that_speaks_a_later_protocol_asks_it_in_protocol_1_and_it_stays_app
     assert_eq!(row.standing, charter_core::extension::Standing::Approved);
 
     installed
-        .ask(&Executor::default(), None)
+        .ask(&patient(), None)
         .expect("asked in the protocol it speaks");
 }
 
 #[test]
 fn the_statistics_are_drawn_from_the_plane_as_it_is_now() {
     let installed = Installed::new();
-    let executor = Executor::default();
+    let executor = patient();
 
     let answer = installed.ask(&executor, None).expect("an answer");
     let drawn = charts(&answer.blocks);
@@ -173,7 +184,7 @@ fn the_statistics_are_drawn_from_the_plane_as_it_is_now() {
 fn opened_from_a_persona_s_card_it_answers_about_that_persona_first() {
     let installed = Installed::new();
     let answer = installed
-        .ask(&Executor::default(), Some("steward"))
+        .ask(&patient(), Some("steward"))
         .expect("an answer");
     match &answer.blocks[0] {
         Block::Note { text, .. } => assert!(text.starts_with("steward remembers 2"), "{text}"),
@@ -199,7 +210,7 @@ fn a_rebuilt_program_is_asked_about_again_before_it_runs() {
     std::fs::rename(&beside, &program).expect("in place");
 
     let refused = installed
-        .ask(&Executor::default(), None)
+        .ask(&patient(), None)
         .expect_err("a rebuilt program ran on the old approval");
     assert!(
         refused.contains("changed since you approved it"),

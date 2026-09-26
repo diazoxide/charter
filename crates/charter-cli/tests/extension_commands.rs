@@ -15,6 +15,15 @@ use charter_core::extension;
 
 const CHARTER: &str = env!("CARGO_BIN_EXE_charter");
 
+/// The debug build's seam for how long an extension's program is given (#422), set long: no
+/// test here is about the deadline, and the probe copied in fresh for each is a program macOS
+/// assesses before its first run, which on a loaded machine can outlast the real five seconds.
+/// `tests/extensions.rs` holds the deadline to account, against a short one.
+const DEADLINE_ENV: &str = "CHARTER_TEST_EXTENSION_DEADLINE_MS";
+
+/// What a program is given here: long, and never spent by a passing test.
+const ROOMY_MS: u64 = 30_000;
+
 /// The probe's program, built beside this binary. `cargo test --workspace` has built it already;
 /// a narrower run builds it here, once, with the cargo that is running this test.
 fn probe_program() -> PathBuf {
@@ -92,6 +101,7 @@ impl Setup {
             .env("HOME", self.root())
             .env("CHARTER_ROOT", self.plane())
             .env("CHARTER_CONFIG_HOME", self.config())
+            .env(DEADLINE_ENV, ROOMY_MS.to_string())
             .output()
             .expect("charter runs");
         Ran {
