@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **charter's plugin teaches personas, vaults and the browser again.** It now ships the
+  `charter:persona`, `charter:secrets` and `charter:browser` skills beside `handoff`,
+  `update` and `working-in-a-clone`, rewritten for this charter's commands. `charter browser
+  install [--version X.Y.Z]` generates Playwright's own page-driving skill into the plane's
+  `.claude/skills/playwright-cli/` with `npx`, and gitignores `.playwright-cli/`, where traces
+  of logged-in runs land. The version must be an exact version: anything else npm would read
+  there, such as a tag or a git URL, is refused.
+  ([#370](https://github.com/diazoxide/charter/issues/370))
 - **A persona's memory can be kept up like a workspace's.** `charter persona forget <name>
   <slug>` deletes one memory, `charter persona dedupe` lists near-duplicate pairs to prune,
   `charter persona optimize` runs the curation `charter workspace optimize` runs over each
