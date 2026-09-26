@@ -74,19 +74,24 @@ describe("what a menu lists", () => {
   });
 
   it("drops a row the catalogue does not have, without knowing which rows those are", () => {
-    // The strip of chats outside every workspace is not a workspace on the plane: it has no
-    // pin row and no delete row, because there is nothing on disk for either to name. Nothing
-    // in `Menus.tsx` or in `menuOn` was told about that case — the rows are looked up by id
-    // and the two that do not exist are not found.
-    const shown = titles(
-      { on: "workspace", workspace: OUTSIDE },
-      {
-        workspaces: ["alpha", OUTSIDE],
-        plane: "/plane",
-      },
-    );
+    // A workspace with no settings row offered — here, one the catalogue was not told is on
+    // the plane — has no such row in its menu. Nothing in `Menus.tsx` or in `menuOn` was told
+    // which: the rows are looked up by id and the ones that do not exist are not found.
+    const shown = titles({ on: "workspace", workspace: "ghost" }, { workspaces: ["alpha"] });
 
-    expect(shown.above).toEqual(["Focus the chats outside every workspace", "New workspace…"]);
+    expect(shown.above).toEqual(["New workspace…"]);
+    expect(shown.below).toEqual([]);
+  });
+
+  it("gives the plane root a menu of its own: focus, a chat and a shell there, and no delete (SI-1)", () => {
+    const shown = titles({ on: "root" }, { workspaces: [OUTSIDE, "alpha"], plane: "/plane" });
+
+    expect(shown.above).toEqual([
+      "Focus the plane root",
+      "New chat at the plane root",
+      "New shell at the plane root",
+      "New workspace…",
+    ]);
     expect(shown.below).toEqual([]);
   });
 
@@ -375,21 +380,51 @@ describe("the Curate ▸ submenu (ADR 0061)", () => {
     expect(safe.getAttribute("title")).toContain("first prompt");
   });
 
-  it("is not drawn on the strip of chats outside every workspace", async () => {
+  it("curates the plane from the plane root's tab (SI-1)", async () => {
+    const pressed: string[] = [];
+    const plane = {
+      subject: "plane",
+      name: "plane",
+      actions: [
+        {
+          id: "ops/audit",
+          label: "Audit the plane",
+          declared_by: "ops",
+          runner: "ops",
+          cwd: "/plane",
+          prompt: "Audit.",
+        },
+      ],
+      left_out: [],
+      trouble: null,
+    };
     render(
       <Menued
-        on={{ on: "workspace", workspace: OUTSIDE }}
-        offers={catalogued(catalogue(now({ workspaces: ["alpha", OUTSIDE], plane: "/plane" })))}
-        onPress={() => undefined}
+        on={{ on: "root" }}
+        offers={catalogued(
+          catalogue(
+            now({
+              workspaces: [OUTSIDE, "alpha"],
+              plane: "/plane",
+              curations: { subjects: [plane], cannot: null },
+            }),
+          ),
+        )}
+        onPress={(offer) => pressed.push(offer.id)}
       >
-        <span data-testid="outside">outside</span>
+        <span data-testid="root">root</span>
       </Menued>,
     );
 
-    fireEvent.contextMenu(screen.getByTestId("outside"));
+    fireEvent.contextMenu(screen.getByTestId("root"));
     const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Curate" }));
+    const menus = await screen.findAllByRole("menu");
+    await userEvent.click(
+      within(menus[menus.length - 1]).getByRole("menuitem", { name: "Audit the plane" }),
+    );
 
-    expect(within(menu).queryByRole("menuitem", { name: "Curate" })).toBeNull();
+    expect(pressed).toEqual(["curate:plane/ops/audit"]);
   });
 });
 

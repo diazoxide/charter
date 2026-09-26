@@ -734,7 +734,9 @@ mod tests {
                 &root,
                 "claude-stand-in",
                 &format!(
-                    "#!/bin/sh\nstty raw -echo\n: > {:?}\nexec cat > {:?}\n",
+                    "#!/bin/sh\nprintf '%s|%s' \"$CHARTER_WORKSPACE\" \"$CHARTER_PLANE_ROOT_SESSION\" \
+                     > {:?}\nstty raw -echo\n: > {:?}\nexec cat > {:?}\n",
+                    root.join("standing"),
                     root.join("ready"),
                     root.join("typed")
                 ),
@@ -906,6 +908,31 @@ mod tests {
         let bytes = std::fs::read_to_string(&typed).unwrap_or_default();
         assert_eq!(bytes, wanted, "exactly one paste, and no Enter after it");
         assert!(!submits(&bytes));
+        held.close_chat(curating.session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_action_run_at_the_plane_root_opens_a_plane_root_chat() {
+        // `charter/safe-remove` runs at the plane root, because its workspace is going away:
+        // its chat is on the plane root's tab, and is told it is at the root (SI-1).
+        let plane = Plane::new("claude");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+
+        let curating =
+            open(&held, "workspace:alpha", "charter/safe-remove", SIZE).expect("it opens");
+
+        assert_eq!(curating.workspace, None);
+        assert_eq!(curating.label, "Safe remove · alpha");
+        let standing = plane.root.join("standing");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !standing.exists() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(std::fs::read_to_string(&standing).unwrap_or_default(), "|1");
         held.close_chat(curating.session).unwrap();
     }
 

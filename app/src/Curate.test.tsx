@@ -157,7 +157,7 @@ describe("choosing a curation action", () => {
     expect(tab).toHaveAttribute("aria-selected", "true");
   });
 
-  it("files a chat that runs at the plane root outside every workspace", async () => {
+  it("files a chat that runs at the plane root on the plane root's tab", async () => {
     core({
       session: 5,
       name: "5",
@@ -171,10 +171,11 @@ describe("choosing a curation action", () => {
     await runFromThePalette("Curate alpha: Safe remove");
 
     await waitFor(() => expect(tabNames()).toContain("Safe remove · alpha"));
-    expect(screen.getByRole("tab", { name: /Outside every workspace/ })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(
+      within(screen.getByRole("tablist", { name: "Workspaces" })).getByRole("tab", {
+        name: "Plane root",
+      }),
+    ).toHaveAttribute("aria-selected", "true");
   });
 
   it("says the core's refusal and opens no tab", async () => {

@@ -126,22 +126,13 @@ impl Plane {
     ///
     /// This is how the app files one of its own chats under a workspace: a chat is app state,
     /// not a plane file, so what relates the two is where the chat is working.
+    ///
+    /// **The path arithmetic is the ladder's cwd rung** ([`crate::active::workspace_of_tree`]),
+    /// so the window and `charter` cannot file one directory under two answers (SI-1). This
+    /// adds only that the workspace is one this plane HAS: a chat's cwd is not a reason to
+    /// invent one.
     pub fn workspace_of(&self, path: &Path) -> Option<String> {
-        let workspaces = self.root.join("workspaces");
-        // Compared after resolving both sides where the filesystem will: a plane reached
-        // through a symlink (`/tmp` is one on macOS) would otherwise never match.
-        let base = workspaces.canonicalize().unwrap_or(workspaces);
-        let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let name = target
-            .strip_prefix(&base)
-            .ok()?
-            .components()
-            .next()?
-            .as_os_str()
-            .to_string_lossy()
-            .to_string();
-        // A name that is not a workspace this plane has is not one: a chat's cwd is not a
-        // reason to invent one.
+        let name = crate::active::workspace_of_tree(&self.root, path)?;
         self.workspaces()
             .ok()?
             .into_iter()

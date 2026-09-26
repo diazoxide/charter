@@ -50,6 +50,7 @@ fn run_in(root: &Path, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Ran {
         .env("CHARTER_ROOT", root);
     for name in [
         "CHARTER_WORKSPACE",
+        "CHARTER_PLANE_ROOT_SESSION",
         "CHARTER_PERSONA",
         "CHARTER_SESSION_ID",
         "CLAUDE_CODE_SESSION_ID",

@@ -345,7 +345,7 @@ describe("a window holding more than one project", () => {
 
     await userEvent.click(hand);
     await userEvent.click(
-      await screen.findByRole("menuitem", { name: "Go to one.1 · Outside every workspace · one" }),
+      await screen.findByRole("menuitem", { name: "Go to one.1 · Plane root · one" }),
     );
 
     await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));

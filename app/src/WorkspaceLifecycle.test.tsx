@@ -187,10 +187,12 @@ function core(
   return { asked, calls: (cmd: string) => asked.filter((one) => one.cmd === cmd) };
 }
 
-/** The workspaces, as the strip lists them. */
+/** The workspaces, as the strip lists them — after the plane root's tab, which is first on
+ *  every strip and tested on its own (`Workspaces.test.tsx`, SI-1). */
 const strip = () =>
   within(screen.getByRole("tablist", { name: "Workspaces" }))
     .getAllByRole("tab")
+    .filter((tab) => !tab.classList.contains("plane-root"))
     .map((tab) => tab.querySelector(".workspace-name")?.textContent);
 
 /** Right-clicks a workspace tab and waits for charter's own menu. */

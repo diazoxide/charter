@@ -200,7 +200,11 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         .ok()
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| handoff::NO_CHAT.to_string());
-    let source_ws = here.active_workspace(None);
+    // **The ladder's answer, even in a plane-root chat** (SI-1). The stamp names a workspace
+    // and the app refuses one that cannot be a workspace's name, so a root chat's handoff is
+    // stamped with the workspace it always was — the plane's default — until the stamp can
+    // say "the plane root" in words the app reads.
+    let source_ws = here.ladder_workspace(None);
     let now = match when(args.now.as_deref()) {
         Ok(now) => now,
         Err(why) => {

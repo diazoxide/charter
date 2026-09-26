@@ -269,10 +269,21 @@ how it is cited and nothing here is renumbered.
     already was, on this machine and never committed: projects in the window arrangement of
     decision 25, workspace pins in the same store, chats in the plane's own
     `.charter/app/reopen.json`. **ADR 0039, as amended 2026-09-26.**
+30. **The plane root is the workspace strip's first tab, and a chat knows where it was
+    started.** The root tab is always drawn, drawn as an icon whose tooltip is *"Plane — chats
+    here start at the plane root"*, and it cannot be dragged, pinned, renamed or deleted. Chats
+    and shells started from it start in the plane's own directory. It is not a workspace: it
+    has no charter, memory or todos, and the panels that are a workspace's say so while it is
+    focused. Every chat the app starts is told where it started, in its environment:
+    `$CHARTER_WORKSPACE=<name>` in a workspace, `$CHARTER_PLANE_ROOT_SESSION=1` at the plane
+    root, neither anywhere else — so no chat the app started is asked which workspace it is in.
+    A plane-root chat is in no workspace: `charter` refuses a command that needs one unless it
+    is named with `-w`, `charter workspace use` does not move it, and its briefing lists the
+    plane's workspaces as ones it may manage. Operator's rulings, 2026-09-26 (SI-1).
 
 ### Curation actions — added 2026-09-26
 
-30. **A curation action is a chat opened with its prompt typed and never sent.** The operator
+31. **A curation action is a chat opened with its prompt typed and never sent.** The operator
     reviews the prompt and presses Enter, and nothing can opt out of that. It is offered on a
     workspace, a persona or the plane. charter's own three come first (`charter/safe-remove`,
     `charter/compact` — "Compact & improve" — and `charter/add-curation-action`), ship inside the
@@ -283,7 +294,7 @@ how it is cited and nothing here is renumbered.
     charter's own run as the persona being curated, or else as the plane's default persona, or
     as no persona. The core resolves a subject's list (`charter curation show <subject>`), and
     `charter persona curation list|add|remove` manages a persona's files. In the app, a
-    workspace's and a persona's right-click menu has a "Curate ▸" submenu — charter's own, then
+    workspace's, a persona's and the plane root tab's right-click menu has a "Curate ▸" submenu — charter's own, then
     a group per declaring persona, then every action left out, disabled, with the reason — and
     the palette lists each as `Curate <subject>: <label>`. Choosing one opens a new chat on the
     project's default profile, as the action's runner, where it runs, named `<label> ·

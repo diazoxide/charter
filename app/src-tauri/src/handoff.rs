@@ -228,11 +228,10 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
 }
 
 /// The workspace a chat standing in `cwd` works in: the directory under the plane's
-/// `workspaces/` it is in, where it is in one.
+/// `workspaces/` it is in, where it is in one. The ladder's cwd rung, so this and `charter`
+/// cannot answer one directory two ways (SI-1).
 fn workspace_of(root: &std::path::Path, cwd: &std::path::Path) -> Option<String> {
-    let inside = cwd.strip_prefix(root.join("workspaces")).ok()?;
-    let first = inside.components().next()?.as_os_str().to_str()?;
-    charter_core::contain::workspace_name_ok(first).then(|| first.to_owned())
+    charter_core::active::workspace_of_tree(root, cwd)
 }
 
 fn no(why: String) -> Answer {

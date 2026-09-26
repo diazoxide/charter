@@ -885,6 +885,91 @@ mod tests {
         assert!(printed.contains("chat-env-checked"), "{printed}");
     }
 
+    // --- where the chat was started (SI-1) -------------------------------------------- //
+
+    /// Set in the child's environment only, so the parent knows it is the child.
+    const PINNED_CHILD: &str = "CHARTER_TEST_PINNED_APP_CHILD";
+
+    /// What a chat's program sees of the two variables that say where it was started.
+    fn pins_in_a_chat(sessions: &Sessions, env: Vec<(String, String)>) -> String {
+        let mut opening = opening(
+            "printf 'pins<%s|%s>' \"$CHARTER_WORKSPACE\" \"$CHARTER_PLANE_ROOT_SESSION\"; sleep 600",
+        );
+        opening.env = env;
+        let id = sessions
+            .open(None, &opening, &|_| {})
+            .expect("the session opens");
+        let (_view, seen) = watching(sessions, id);
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let shown = lock(&seen).clone();
+            if let Some((_, rest)) = shown.split_once("pins<")
+                && let Some((pins, _)) = rest.split_once('>')
+            {
+                return pins.to_owned();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the chat never printed, only {shown:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The child half of the test below: an app launched from a chat pinned to `launcher`.
+    #[test]
+    fn an_app_launched_from_a_pinned_chat_starts_each_chat_where_charter_put_it() {
+        if std::env::var_os(PINNED_CHILD).is_none() {
+            return;
+        }
+        use charter_core::active::{PLANE_ROOT_ENV, PLANE_ROOT_ON, WORKSPACE_ENV};
+        let sessions = Sessions::new();
+        // A workspace chat: `start::ready` put the workspace in its environment.
+        let in_alpha = pins_in_a_chat(
+            &sessions,
+            vec![(WORKSPACE_ENV.to_owned(), "alpha".to_owned())],
+        );
+        assert_eq!(in_alpha, "alpha|", "a workspace chat");
+        // A plane-root chat: the launcher's pin would outrank the root, so it is not inherited.
+        let at_root = pins_in_a_chat(
+            &sessions,
+            vec![(PLANE_ROOT_ENV.to_owned(), PLANE_ROOT_ON.to_owned())],
+        );
+        assert_eq!(at_root, "|1", "a plane-root chat");
+        // Anywhere else: neither, whatever the app was launched with.
+        assert_eq!(
+            pins_in_a_chat(&sessions, Vec::new()),
+            "|",
+            "a chat elsewhere"
+        );
+        println!("chat-pins-checked");
+    }
+
+    #[test]
+    fn no_chat_inherits_where_the_apps_own_launcher_was_pinned() {
+        let out = charter_core::forklock::output(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sessions::tests::an_app_launched_from_a_pinned_chat_starts_each_chat_where_charter_put_it",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(PINNED_CHILD, "1")
+                .env(charter_core::active::WORKSPACE_ENV, "launcher")
+                .env(charter_core::active::PLANE_ROOT_ENV, "1")
+                .stdin(std::process::Stdio::null()),
+        )
+        .unwrap();
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{printed}");
+        assert!(printed.contains("chat-pins-checked"), "{printed}");
+    }
+
     // --- the chat's own session id (charter-app#63) ------------------------------------ //
 
     /// What `$CHARTER_SESSION_ID` was in the environment of the program a chat started.

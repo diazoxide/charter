@@ -80,6 +80,7 @@ fn charter(root: &Path, app: Option<&Path>, args: &[&str]) -> Output {
     for name in [
         "CLAUDE_CODE_SESSION_ID",
         "CHARTER_WORKSPACE",
+        "CHARTER_PLANE_ROOT_SESSION",
         "CHARTER_PERSONA",
         "TERM_SESSION_ID",
         "TMUX_PANE",
@@ -502,6 +503,7 @@ fn source_workspace(root: &Path) -> String {
         .env("CHARTER_ROOT", root)
         .env("CHARTER_SESSION_ID", ASKING.to_string())
         .env_remove("CHARTER_WORKSPACE")
+        .env_remove("CHARTER_PLANE_ROOT_SESSION")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("TMUX_PANE")
         .output()

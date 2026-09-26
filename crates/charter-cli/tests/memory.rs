@@ -53,6 +53,7 @@ fn charter(root: &Path, args: &[&str]) -> Output {
     for name in [
         "CLAUDE_CODE_SESSION_ID",
         "CHARTER_WORKSPACE",
+        "CHARTER_PLANE_ROOT_SESSION",
         "CHARTER_PERSONA",
         "TERM_SESSION_ID",
         "TMUX_PANE",

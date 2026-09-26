@@ -118,8 +118,8 @@ fn choices() -> extension::project::Choices {
     let Ok(here) = crate::Here::read() else {
         return extension::project::Choices::default();
     };
-    let workspace = here.active_workspace(None);
-    let workspace = (!workspace.is_empty()).then_some(workspace);
+    // None in a plane-root chat, which is in no workspace: the project's choices alone.
+    let workspace = here.workspace_if_any(None).filter(|ws| !ws.is_empty());
     extension::project::Choices::read_in(here.plane.root(), workspace.as_deref())
 }
 

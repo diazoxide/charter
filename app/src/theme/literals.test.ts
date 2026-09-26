@@ -277,19 +277,21 @@ describe("the stylesheet and the vocabulary agree", () => {
    * The custom properties the WINDOW sets rather than the stylesheet.
    *
    * - `--least`: how narrow a tab of a strip may be drawn (`src/fits.ts`).
+   * - `--root`: how wide the plane root's icon tab is drawn (`src/fits.ts`, `LEAST_ROOT`, SI-1) —
+   *   the same number the workspace strip's arithmetic takes off its room.
    * - `--window-controls`: how much of the title bar the operating system's own window
    *   controls have already spent (`src/TitleBar.tsx`, `title_bar_room`). macOS's traffic
    *   lights float over charter's bar under `titleBarStyle: "Overlay"` and no other platform
    *   has them there at all, so the number is `cfg!(target_os)`'s and cannot be written in a
    *   stylesheet that is built once for every target.
    *
-   * Both are here rather than in `TOKENS` because neither is a colour and a theme has no
+   * Each is here rather than in `TOKENS` because neither is a colour and a theme has no
    * business with either, and neither is in `App.css` because the Rust that decides the number
    * is the only honest source — two copies of a number that must agree is how they come to
    * differ. Listed by hand, so that adding one is a decision somebody makes in this file
    * rather than a hole that opens quietly; the test below holds each to being really set.
    */
-  const fromTheWindow = ["--least", "--window-controls"];
+  const fromTheWindow = ["--least", "--root", "--window-controls"];
 
   it("every custom property the stylesheet reads is a token, its own, or the window's", () => {
     // A `var(--typo)` resolves to nothing and the rule silently disappears, which is the one

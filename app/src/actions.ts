@@ -109,20 +109,30 @@ export const CHAT_KEYBOARD = "data-chat-keyboard";
 export const RENAMES_ON_F2 = "data-renames-on-f2";
 
 /**
- * The strip a chat working outside every workspace appears on.
+ * The **plane root**: the workspace strip's first tab, always drawn (SI-1), and the strip every
+ * chat working in no workspace appears on.
  *
- * The sidebar has always shown those chats rather than dropping them, and a strip that shows
- * one workspace's chats has to have somewhere to put them or they become unreachable — which
- * is the defect being fixed, not one to introduce (charter-app#130).
+ * It began as the strip for chats outside every workspace, drawn only when there were some:
+ * the sidebar has always shown those chats rather than dropping them, and a strip that shows
+ * one workspace's chats has to have somewhere to put them (charter-app#130). The operator's
+ * ruling made it permanent, because the plane root is where a chat that looks after the plane
+ * itself — its personas, its settings, its workspaces — works. It is not a workspace: it has
+ * no `workspace.md`, no memory and no todos, and a chat started on it is told so
+ * (`$CHARTER_PLANE_ROOT_SESSION`).
  *
- * Slashes, because this stands where a workspace name stands and a workspace name is a
- * directory name: no directory can contain one, so it can never collide with a real
- * workspace. It never reaches the operator — `catalogue` gives its row its own words.
+ * The internal name stays what it was, because it is still exactly what it holds: a chat
+ * whose directory is in no workspace. Slashes, because this stands where a workspace name
+ * stands and a workspace name is a directory name: no directory can contain one, so it can
+ * never collide with a real workspace. It never reaches the operator — `catalogue` gives its
+ * rows their own words.
  */
 export const OUTSIDE = "outside/every/workspace";
 
-/** What the strip and the palette call that one. */
-export const OUTSIDE_TITLE = "Outside every workspace";
+/** What the palette, a menu and a screen reader call it: the glossary's **plane root**. */
+export const OUTSIDE_TITLE = "Plane root";
+
+/** The root tab's tooltip — the operator's words, exactly (SI-1). The tab draws only an icon. */
+export const ROOT_TIP = "Plane — chats here start at the plane root";
 
 /** The key that opens a shell tab, as this platform spells it — said on the row, so the palette
  *  is where an operator learns it (`shellKey.ts`). */
@@ -136,6 +146,9 @@ export type Does =
    *  names none. Nothing asks first: a shell starts no harness, so ADR 0022's picker has
    *  nothing to ask about. */
   | { verb: "newShell"; workspace?: string }
+  /** Opens the picker for a new tab whose chat starts in `path` — the plane root's own row
+   *  (SI-1). It starts nothing by itself; the picker is the only path ADR 0022 admits. */
+  | { verb: "newChatIn"; path: string }
   | { verb: "split"; direction: Direction }
   /** Hands a key the palette claimed to the chat in front, rather than swallowing it. */
   | { verb: "sendKey"; key: string }
@@ -955,16 +968,38 @@ export function catalogue(now: Now): Offer[] {
   for (const workspace of now.workspaces) {
     const [title, name] =
       workspace === OUTSIDE
-        ? [`Focus the chats ${OUTSIDE_TITLE.toLowerCase()}`, undefined]
+        ? ["Focus the plane root", undefined]
         : [`Focus workspace ${workspace}`, workspace];
     offers.push(
       workspace === now.focused
         ? cannot(`workspace.focus:${workspace}`, title, "It is already focused.", name)
         : can(`workspace.focus:${workspace}`, title, { verb: "focusWorkspace", workspace }, name),
     );
-    // Not for the strip of chats outside every workspace: it is not a workspace on the plane
-    // and there is nothing on disk for a pin to name — nor a directory for a shell to start in.
-    if (workspace === OUTSIDE) continue;
+    // **The plane root has a chat and a shell of its own, and nothing else** (SI-1): it is not
+    // a workspace on the plane, so there is nothing on disk for a pin, its settings, a rename
+    // or a delete to name. Its directory is the plane's, and a chat started there is told it
+    // is in no workspace.
+    if (workspace === OUTSIDE) {
+      const noRoot = "The plane has not been read yet, so there is no root to start in.";
+      offers.push(
+        now.plane === undefined
+          ? cannot("root.chat", "New chat at the plane root", noRoot)
+          : {
+              ...can("root.chat", "New chat at the plane root", {
+                verb: "newChatIn",
+                path: now.plane,
+              }),
+              note: "In no workspace: it looks after the plane and names a workspace with -w.",
+            },
+        now.plane === undefined
+          ? cannot(`shell.new:${OUTSIDE}`, "New shell at the plane root", noRoot)
+          : can(`shell.new:${OUTSIDE}`, "New shell at the plane root", {
+              verb: "newShell",
+              workspace: OUTSIDE,
+            }),
+      );
+      continue;
+    }
     // A shell in this workspace's own directory, filed under it (SI-5): the workspace menu's
     // way to reach a terminal there without focusing it first.
     offers.push(
@@ -1565,6 +1600,7 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       doing.pickClone(does.repo, does.path);
       return DID;
     case "newTabIn":
+    case "newChatIn":
       doing.newChatIn(does.path);
       return DID;
     case "sendKey":
@@ -1835,6 +1871,8 @@ export type MenuOn =
   /** One chat, by the tab that holds it. Its rows are the same rows the tab strip draws. */
   | { on: "chat"; tab: number }
   | { on: "workspace"; workspace: string }
+  /** The plane root's tab (SI-1): not a workspace, so a menu of its own. */
+  | { on: "root" }
   | { on: "project"; plane: string }
   /** One worktree of the focused workspace, as the explorer's rows name it — the clone and
    *  the piece. Not a `Cut`: the workspace is the focused one on every surface that draws
@@ -1851,10 +1889,7 @@ export type MenuOn =
   | { on: "clone"; repo: string }
   /** The panes — the centre of the window, where a chat is. Not about any one pane: a split
    *  acts on the pane that has the keyboard, which is what the bar's buttons act on too. */
-  | { on: "pane" }
-  /** The plane itself, as a curation subject (ADR 0061). Its menu is the "Curate ▸" group
-   *  alone until the plane has a tab of its own to hang one on. */
-  | { on: "plane" };
+  | { on: "pane" };
 
 /**
  * Which rows a context menu on that item lists, **by catalogue id and in order**.
@@ -1870,9 +1905,8 @@ export type MenuOn =
  * chat; a menu pops up under the pointer, so the same rule matters more here, not less.
  *
  * **An id this catalogue does not have is simply not in the menu** — see [`menuRows`]. It is
- * how `Outside every workspace` gets a menu with no pin and no delete in it without anything
- * here knowing that strip exists, and how a row that is deleted from the catalogue takes its
- * menu entry with it.
+ * how a row that is deleted from the catalogue takes its menu entry with it. The plane root,
+ * which is not a workspace, has a menu of its own (`root`) rather than a workspace's with holes.
  */
 export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
   switch (what.on) {
@@ -1893,6 +1927,16 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           "workspace.create",
         ],
         below: [`workspace.remove:${what.workspace}`],
+      };
+    case "root":
+      return {
+        above: [
+          `workspace.focus:${OUTSIDE}`,
+          "root.chat",
+          `shell.new:${OUTSIDE}`,
+          "workspace.create",
+        ],
+        below: [],
       };
     case "project":
       return {
@@ -1944,8 +1988,6 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         above: ["chat.new", "shell.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],
         below: ["pane.close"],
       };
-    case "plane":
-      return { above: [], below: [] };
   }
 }
 
@@ -1961,7 +2003,9 @@ export function curateSubjectOf(what: MenuOn): string | undefined {
       return what.workspace === OUTSIDE ? undefined : `workspace:${what.workspace}`;
     case "persona":
       return `persona:${what.persona}`;
-    case "plane":
+    // The plane root's tab is the plane's own place on the strip (SI-1), so the plane is
+    // curated from it.
+    case "root":
       return "plane";
     default:
       return undefined;

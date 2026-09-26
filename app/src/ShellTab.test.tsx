@@ -156,13 +156,17 @@ const chatTabs = () =>
 const workspaces = () =>
   within(screen.getByRole("tablist", { name: "Workspaces" }))
     .getAllByRole("tab")
-    .map((tab) => tab.querySelector(".workspace-name")?.textContent);
+    .map(
+      (tab) => tab.querySelector(".workspace-name")?.textContent ?? tab.getAttribute("aria-label"),
+    );
 
 const focusedWorkspace = () =>
   within(screen.getByRole("tablist", { name: "Workspaces" }))
     .getAllByRole("tab")
     .filter((tab) => tab.getAttribute("aria-selected") === "true")
-    .map((tab) => tab.querySelector(".workspace-name")?.textContent);
+    .map(
+      (tab) => tab.querySelector(".workspace-name")?.textContent ?? tab.getAttribute("aria-label"),
+    );
 
 /** The mark a shell tab wears: aria-hidden, as every tab's kind mark is, so looked up by what
  *  it says it is rather than by a name a screen reader would read twice. */
@@ -189,7 +193,7 @@ describe("a plain shell tab", () => {
   it("opens from the palette in the focused workspace, as a shell and not a harness", async () => {
     const { opens } = core();
     render(<App />);
-    await waitFor(() => expect(workspaces()).toEqual(["alpha", "beta"]));
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
 
     await fromThePalette("New shell");
 
@@ -205,7 +209,7 @@ describe("a plain shell tab", () => {
   it("opens in the workspace a row names, and is filed under that workspace", async () => {
     const { opens } = core();
     render(<App />);
-    await waitFor(() => expect(workspaces()).toEqual(["alpha", "beta"]));
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
 
     await fromThePalette("New shell in beta");
 
@@ -218,12 +222,36 @@ describe("a plain shell tab", () => {
   it("opens from its key, wherever the keyboard is", async () => {
     const { opens } = core();
     render(<App />);
-    await waitFor(() => expect(workspaces()).toEqual(["alpha", "beta"]));
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
 
     const mac = onAMac();
     fireEvent.keyDown(window, { key: "T", shiftKey: true, metaKey: mac, ctrlKey: !mac });
 
     await waitFor(() => expect(opens()).toEqual([expect.objectContaining({ cwd: ALPHA })]));
+  });
+
+  it("opens at the plane root when the root's tab is focused, and from the root's own row (SI-1)", async () => {
+    const { opens } = core();
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+
+    await userEvent.click(
+      within(screen.getByRole("tablist", { name: "Workspaces" })).getByRole("tab", {
+        name: "Plane root",
+      }),
+    );
+    await waitFor(() => expect(focusedWorkspace()).toEqual(["Plane root"]));
+    await fromThePalette("New shell");
+    await waitFor(() => expect(opens()).toEqual([expect.objectContaining({ cwd: PLANE })]));
+    await waitFor(() => expect(focusedWorkspace()).toEqual(["Plane root"]));
+
+    await fromThePalette("New shell at the plane root");
+    await waitFor(() =>
+      expect(opens()).toEqual([
+        expect.objectContaining({ cwd: PLANE }),
+        expect.objectContaining({ cwd: PLANE }),
+      ]),
+    );
   });
 
   it("comes back from the record as a shell, with its mark", async () => {

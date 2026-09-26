@@ -45,7 +45,10 @@ async function untilTheStripIsRead(): Promise<void> {
 /** Focuses a workspace from the strip, by the tab's own name rather than by its whole text —
  *  a strip tab carries counts beside its name. */
 async function focus(workspace: string): Promise<void> {
-  const tabs = await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements();
+  const tabs = await $$(
+    // Not the plane root's icon tab (SI-1), which has no drawn name to compare.
+    '[role="tablist"][aria-label="Workspaces"] [role="tab"]:not(.plane-root)',
+  ).getElements();
   for (const tab of tabs) {
     if ((await tab.$(".workspace-name").getText()) === workspace) {
       await tab.click();

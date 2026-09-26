@@ -20,12 +20,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plugin (`safe-remove`, `compact`, `add-curation-action`). A persona adds its own as
   `personas/<name>/curation/<id>.md`, or with `charter persona curation add`, and
   `charter persona lint` reports one that is broken or that takes a built-in's name. In the app,
-  right-click a workspace or a persona for **Curate ▸**, or type `curate` in the palette: the
-  chat opens on your default profile as the action's persona, named `<action> · <subject>`, and
-  the prompt appears in its input once the harness has started — never sent. An action a
+  right-click a workspace, a persona or the plane root for **Curate ▸**, or type `curate` in the
+  palette: the chat opens on your default profile as the action's persona, named `<action> ·
+  <subject>`, and the prompt appears in its input once the harness has started — never sent. An action a
   persona's file could not offer is listed, greyed, with why. It needs a Claude Code default
   profile: Codex and opencode say nothing until your first prompt, so charter has no moment to
   type into them, and says so on the menu (ADR 0061).
+- **The plane root is the first tab of the workspace strip.** It is always there, drawn as an
+  icon (its tooltip: *Plane — chats here start at the plane root*), and it cannot be dragged,
+  pinned, renamed or deleted. Its menu starts a chat or a shell at the plane root, and so do
+  `New tab` and `New shell` while it is focused. A chat started there is in no workspace on
+  purpose: it is not asked which workspace to use, its briefing lists the plane's workspaces as
+  ones it may manage, and `charter` asks it to name one with `-w` rather than acting on one it
+  picked (`charter workspace use` does not move it). The Todos box is not offered there, and
+  the region says why. It replaces the "Outside every workspace" tab, and the chats it held are
+  on it.
 - **Plain shell tabs, and a warning when a harness starts inside one.** `New shell` sits beside
   `New tab` in the palette, on the panes' menu and on each workspace's menu (`New shell in
   <workspace>`), on ⌘⇧T (Ctrl+Shift+T off a Mac): your own shell, where a new chat would start,
@@ -238,6 +247,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#369](https://github.com/diazoxide/charter/issues/369))
 
 ### Fixed
+
+- **A chat started in a workspace is no longer asked which workspace it is in.** The app filed
+  it under its workspace and told it nothing, so its briefing asked you to confirm one. Every
+  chat the app starts now carries `$CHARTER_WORKSPACE` in a workspace, or
+  `$CHARTER_PLANE_ROOT_SESSION=1` at the plane root, and never inherits either from whatever
+  launched the app. `charter` also counts a workspace's own directory, `workspaces/<ws>`, as
+  being in that workspace, as the window already did.
 
 - **A chat's terminal scrolls as far as your fingers move, from the first pixel.** A trackpad
   or wheel now moves the history one row for every row's height of travel, and a harness in

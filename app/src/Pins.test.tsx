@@ -127,9 +127,12 @@ async function runFromPalette(typed: string) {
 }
 
 const strip = (name: string) => screen.getByRole("tablist", { name });
+/** The names on a strip — leaving out the plane root's tab, which is first on every workspace
+ *  strip, is never a pin, and is tested on its own (`Workspaces.test.tsx`, SI-1). */
 const namesIn = (name: string, inside: string) =>
   within(strip(name))
     .getAllByRole("tab")
+    .filter((tab) => !tab.classList.contains("plane-root"))
     .map((tab) => tab.querySelector(inside)?.textContent);
 const chatNames = () => namesIn("Tabs", ".tab-name");
 const workspaceNames = () => namesIn("Workspaces", ".workspace-name");
