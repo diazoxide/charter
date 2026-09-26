@@ -124,6 +124,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   next character landed in the last column in one pane and on the next row in the other. A few
   more cases, such as deleting more characters than the row had left, now come out the same in
   both panes too. ([#441](https://github.com/diazoxide/charter/issues/441))
+- **A pane that opens late puts the cursor where a pane that was open all along puts it.** A
+  tab, or a restored cursor, right after a program wrote the last column sent the next
+  character to the next row in one pane and not in the other. So did inserting or deleting
+  lines, which move the cursor to the first column, and moving the cursor up or down inside a
+  scroll region, which stops at the region's edge. A restored cursor now also comes back to
+  the same row in both panes after the screen scrolled. A pane that opens late now also keeps
+  the program's scroll region, so a full-screen program such as an editor or a pager scrolls
+  the right rows in it. ([#447](https://github.com/diazoxide/charter/issues/447))
 - **The extension tests no longer fail on a busy machine.** Extensions still get the same time
   as before: 5 seconds for a view, an action, an event or a command, and at a chat's start 2
   seconds each and 3 seconds for all of them together. A debug build of `charter` now lets the

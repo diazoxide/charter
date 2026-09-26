@@ -24,9 +24,8 @@
 //!   it. A snapshot taken then opens the alternate screen on a blank main screen, so a pane
 //!   that opened late and then sees the program leave the alternate screen finds the scrollback
 //!   underneath gone. It stays gone: leaving the alternate screen redraws nothing by itself.
-//! - **The scroll region**, and **the tab stops** a program moved. Output that arrives after
-//!   the snapshot and relies on either lands in the wrong row or column until the program sets
-//!   them again.
+//! - **The tab stops** a program moved. Output that arrives after the snapshot and relies on
+//!   them lands in the wrong column until the program sets them again.
 //! - **The character set** a program selected, so line-drawing output that arrives after the
 //!   snapshot is drawn as the letters it is mapped from. `ncurses` re-issues the selection
 //!   around every run of such output, which repairs it in practice.
@@ -39,14 +38,26 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
-pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
+use super::pane_rules::Beside;
+
+/// `beside` is what the engine keeps beside `term`: the scroll region, and where restoring the
+/// cursor puts it.
+pub(super) fn snapshot<T>(term: &Term<T>, beside: &Beside) -> Vec<u8> {
     let grid = term.grid();
     let mode = *term.mode();
     let mut out = Out::default();
 
-    if mode.contains(TermMode::ALT_SCREEN) {
+    let [main_region, alternate_region] = beside.scroll_regions(term);
+    let region = if mode.contains(TermMode::ALT_SCREEN) {
+        // The main screen keeps its own scroll region behind the alternate one.
+        if let Some((top, bottom)) = main_region {
+            let _ = write!(out.bytes, "\x1b[{top};{bottom}r");
+        }
         out.text("\x1b[?1049h\x1b[H");
-    }
+        alternate_region
+    } else {
+        main_region
+    };
 
     let columns = grid.columns();
     let (top, bottom) = (grid.topmost_line().0, grid.bottommost_line().0);
@@ -86,10 +97,16 @@ pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
 
     out.plain();
     let saved = &grid.saved_cursor;
-    out.move_to(saved);
+    out.move_to_point(beside.saved_line(term), saved.point.column);
     out.pen(&saved.template);
     out.text("\x1b7");
     out.plain();
+
+    // It homes the cursor, and so goes before the cursor is placed; and it changes where the
+    // rows above scroll, and so goes after them.
+    if let Some((top, bottom)) = region {
+        let _ = write!(out.bytes, "\x1b[{top};{bottom}r");
+    }
 
     for (flag, on, off) in [
         (TermMode::APP_CURSOR, "\x1b[?1h", ""),
@@ -108,6 +125,10 @@ pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
         (TermMode::ORIGIN, "\x1b[?6h", ""),
     ] {
         out.text(if mode.contains(flag) { on } else { off });
+    }
+    // In origin mode, the cursor is placed from the top of the scroll region.
+    if let Some((top, _)) = region.filter(|_| mode.contains(TermMode::ORIGIN)) {
+        out.origin = top - 1;
     }
 
     // The shape a program chose for the cursor, which a pane would otherwise draw as a block.
@@ -159,6 +180,8 @@ fn cursor_shape<T>(term: &Term<T>) -> Option<u8> {
 #[derive(Default)]
 struct Out {
     bytes: String,
+    /// The row the cursor is placed from.
+    origin: i32,
     sgr: String,
     link: Option<(String, String)>,
 }
@@ -233,7 +256,12 @@ impl Out {
     }
 
     fn move_to_point(&mut self, line: Line, column: Column) {
-        let _ = write!(self.bytes, "\x1b[{};{}H", line.0 + 1, column.0 + 1);
+        let _ = write!(
+            self.bytes,
+            "\x1b[{};{}H",
+            line.0 - self.origin + 1,
+            column.0 + 1
+        );
     }
 }
 
