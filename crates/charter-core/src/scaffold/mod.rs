@@ -326,6 +326,9 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
     baseline_dirs(&mut run, root);
 
     if let Some(path) = run.gate(root, ".gitignore") {
+        // One writer of the plane's `.gitignore` at a time: `charter workspace live` edits it
+        // too, and each of them rewrites the whole file from what it read.
+        let _held = crate::rewrite::Lock::on(root);
         match ensure_gitignore(&path) {
             Ok(true) => run.created.push(".gitignore".to_owned()),
             Ok(false) => run.present.push(".gitignore".to_owned()),
@@ -437,6 +440,7 @@ pub fn reinit(place: &Place) -> Outcome {
     baseline_dirs(&mut run, root);
 
     if let Some(path) = run.gate(root, ".gitignore") {
+        let _held = crate::rewrite::Lock::on(root);
         match append_gitignore(
             &path,
             &[LOCAL_PROFILES_IGNORE],
@@ -540,6 +544,40 @@ fn baseline_dirs(run: &mut Run, root: &Path) {
             }
         }
     }
+    workspaces_gitkeep(run, root);
+}
+
+/// `workspaces/.gitkeep`: the file the baseline `.gitignore` un-ignores, and the line the
+/// LIVE block is spliced in after (#355). Without it an empty `workspaces/` cannot be
+/// committed at all, and the splice point depends on whether it happens to be there.
+///
+/// Created when absent and never truncated, like the persona `.gitkeep`s. It is part of
+/// making `workspaces/`, so it is named on its own only when a plane that already had the
+/// directory is given it. Something that is not a file at that name is left alone: the
+/// directory still works without it.
+fn workspaces_gitkeep(run: &mut Run, root: &Path) {
+    const GITKEEP: &str = "workspaces/.gitkeep";
+    let dir = root.join("workspaces");
+    if !dir.is_dir() {
+        return;
+    }
+    let Some(path) = run.gate(root, GITKEEP) else {
+        return;
+    };
+    if occupied(&path) {
+        return;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    match crate::contain::nofollow(&mut options).open(&path) {
+        Ok(_) => {
+            if !run.created.iter().any(|c| c == "workspaces/") {
+                run.created.push(GITKEEP.to_owned());
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => write_failed(run, &path, &e),
+    }
 }
 
 /// Whether the settings file may be touched at all: inside the plane, and under a `.claude`
@@ -639,6 +677,7 @@ fn fold(entries: &[String]) -> Vec<String> {
 /// The plane's `.gitattributes` merge rules, written through the same gate as `.gitignore`.
 fn merge_rules(run: &mut Run, root: &Path) {
     if let Some(path) = run.gate(root, ".gitattributes") {
+        let _held = crate::rewrite::Lock::on(root);
         match ensure_gitattributes(&path) {
             Ok(true) => run.created.push(".gitattributes (merge rules)".to_owned()),
             Ok(false) => run.present.push(".gitattributes (merge rules)".to_owned()),
@@ -716,13 +755,13 @@ pub fn ensure_gitattributes(path: &Path) -> Result<bool, String> {
     if next == text {
         return Ok(false);
     }
-    std::fs::write(path, next).map_err(|e| strerror(&e))?;
+    replace_text(path, &next)?;
     Ok(true)
 }
 
 fn ensure_gitignore(path: &Path) -> Result<bool, String> {
     if !path.exists() {
-        std::fs::write(path, GITIGNORE_BASELINE).map_err(|e| strerror(&e))?;
+        replace_text(path, GITIGNORE_BASELINE)?;
         return Ok(true);
     }
     let body = read_text(path)?;
@@ -745,6 +784,27 @@ fn ensure_gitignore(path: &Path) -> Result<bool, String> {
     }
     append_gitignore(path, &missing, "added by `charter init`")?;
     Ok(true)
+}
+
+/// Replace a plane file `init` or `reinit` edits, whole or not at all (#358): a temp file
+/// beside it, then one rename, so a crash never leaves the plane's `.gitignore` cut short.
+///
+/// A link the caller's gate let through — one that stays inside the plane — is followed, as
+/// it always was: the file it lands on is the one replaced, and the link is left a link.
+fn replace_text(path: &Path, text: &str) -> Result<(), String> {
+    let target = linked_to(path);
+    let dir = target.parent().unwrap_or(Path::new("."));
+    crate::rewrite::replace(dir, &target, text.as_bytes(), None).map_err(|e| strerror(&e))
+}
+
+/// Where `path` lands when it is a symlink, else `path` itself.
+pub(super) fn linked_to(path: &Path) -> PathBuf {
+    match std::fs::symlink_metadata(path) {
+        Ok(found) if found.file_type().is_symlink() => {
+            crate::contain::resolved(path).unwrap_or_else(|| path.to_path_buf())
+        }
+        _ => path.to_path_buf(),
+    }
 }
 
 fn read_text(path: &Path) -> Result<String, String> {
@@ -780,7 +840,7 @@ fn append_gitignore(path: &Path, lines: &[&str], header: &str) -> Result<Vec<Str
         format!("{}\n\n", body.trim_end_matches(['\n', '\r']))
     };
     let block: String = missing.iter().map(|l| format!("{l}\n")).collect();
-    std::fs::write(path, format!("{prefix}# {header}\n{block}")).map_err(|e| strerror(&e))?;
+    replace_text(path, &format!("{prefix}# {header}\n{block}"))?;
     Ok(missing)
 }
 
@@ -1687,8 +1747,8 @@ mod tests {
 
         let outcome = init(&at(&root, false), &plain());
 
-        let mut created = "charter.toml, personas/, .gitignore, .gitattributes (merge rules), \
-                           .claude/settings.json (env), \
+        let mut created = "charter.toml, personas/, workspaces/.gitkeep, .gitignore, \
+                           .gitattributes (merge rules), .claude/settings.json (env), \
                            .claude/settings.json (ask: charter handoff), opencode.json (ask: \
                            charter handoff), personas/steward/ (front door, declared in \
                            charter.toml)"
@@ -2065,6 +2125,41 @@ mod tests {
     /// `cmd_reinit` healing a plane that predates a directory and the profiles ignore line:
     /// `Reinitialized control plane → added …`, then what it found, and the line appended
     /// under `_ensure_local_profiles_ignored`'s header with the rest of the file kept.
+    /// #355: the baseline `.gitignore` un-ignores `workspaces/.gitkeep`, and the LIVE block is
+    /// spliced in after that line, so the file it names exists — part of making `workspaces/`,
+    /// and said on its own when a plane made before this is healed.
+    #[test]
+    fn init_creates_workspaces_gitkeep_so_the_anchor_it_unignores_exists() {
+        let (_dir, root) = empty_plane();
+        init(&at(&root, false), &plain());
+        assert!(root.join("workspaces/.gitkeep").is_file());
+
+        std::fs::remove_file(root.join("workspaces/.gitkeep")).expect("an older plane");
+        let outcome = reinit(&at(&root, true));
+
+        assert!(root.join("workspaces/.gitkeep").is_file());
+        assert_eq!(
+            outcome.said[0],
+            Say::Ok("Reinitialized control plane → added workspaces/.gitkeep.".to_owned()),
+            "{:?}",
+            outcome.said
+        );
+        assert_eq!(outcome.code, 0);
+    }
+
+    /// `.gitkeep` is created, never truncated: a plane whose `.gitkeep` holds something keeps it.
+    #[test]
+    fn a_workspaces_gitkeep_that_is_there_is_left_as_it_is() {
+        let (_dir, root) = empty_plane();
+        init(&at(&root, false), &plain());
+        std::fs::write(root.join("workspaces/.gitkeep"), "mine\n").expect("a note");
+        reinit(&at(&root, true));
+        assert_eq!(
+            std::fs::read_to_string(root.join("workspaces/.gitkeep")).expect("read"),
+            "mine\n"
+        );
+    }
+
     #[test]
     fn reinit_heals_what_a_plane_predates_and_names_each_thing_it_added() {
         let (_dir, root) = empty_plane();
@@ -2213,6 +2308,35 @@ mod tests {
             outcome.said
         );
         assert_eq!(outcome.code, 1);
+    }
+
+    /// #358's neighbours: `init` and `reinit` add their lines to the plane's `.gitignore` and
+    /// `.gitattributes` by replacing the file, so a crash between the write and the rename
+    /// leaves the file as it was rather than cut short.
+    #[test]
+    fn init_s_own_edits_to_gitignore_and_gitattributes_are_whole_or_not_at_all() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let ignore = dir.path().join(".gitignore");
+        let attributes = dir.path().join(".gitattributes");
+        std::fs::write(&ignore, "build/\n").expect("a .gitignore");
+        std::fs::write(&attributes, "*.png binary\n").expect("a .gitattributes");
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = calls.clone();
+        let _hook = crate::rewrite::hook::set(move |_, _| {
+            counted.set(counted.get() + 1);
+            Err(std::io::Error::other("killed before the rename"))
+        });
+
+        assert!(ensure_gitignore(&ignore).is_err());
+        assert!(ensure_gitattributes(&attributes).is_err());
+
+        assert_eq!(calls.get(), 2, "both went through the temp-and-rename");
+        assert_eq!(std::fs::read_to_string(&ignore).expect("read"), "build/\n");
+        assert_eq!(
+            std::fs::read_to_string(&attributes).expect("read"),
+            "*.png binary\n"
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).expect("list").count(), 2);
     }
 
     /// `commands._ensure_gitignore` against a file that has every rule — `.charter/` found

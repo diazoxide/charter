@@ -341,7 +341,12 @@ Paths derived from the root (all in `derive`, `charter/config.py:661`) that land
     faithful subset of TOML basic-string escaping.
   - `_set_key` (`charter/instance.py:389`) reads with `splitlines(keepends=True)` and writes
     with `p.write_text("".join(lines))` (`charter/instance.py:441`) — **not** atomic, no temp
-    file, no lock, comments and formatting preserved.
+    file, no lock, comments and formatting preserved. **In charter-app** (#357) the same text
+    edit is written whole or not at all: a temp file beside `charter.toml`, flushed, then one
+    rename, keeping the file's mode and refusing a read-only file. The read, the edit and the
+    rename happen under an advisory `flock` on the plane root directory
+    (`crates/charter-core/src/rewrite.rs`), which the settings tab's save takes too, so two
+    writers at once both land.
     - Section located by `^[ \t]*\[<section>\][ \t]*$`; the edit is confined to that section's
       span, ending at the next line matching `^[ \t]*\[` (`charter/instance.py:416`,
       `charter/instance.py:426`).
@@ -572,7 +577,11 @@ key refuses.
   - `__pycache__/`, `*.py[cod]`, `.venv/`, `.DS_Store` (`charter/commands.py:1107`–`:1112`)
   - Presence detection is **whole-line, stripped**, except `.charter/` which is a substring
     test on the body (`charter/commands.py:1136`) — both quirks are deliberate and recorded.
-  - Plain `write_text`; no atomic write, no lock.
+  - Plain `write_text`; no atomic write, no lock. **In charter-app** (#358) every write of
+    the plane's `.gitignore` (`init`, `reinit`, the LIVE block) is a temp file beside it and
+    one rename, under the same `flock` on the plane root as `charter.toml`; a `.gitignore`
+    that cannot be read as UTF-8 text is refused rather than rewritten from nothing. The
+    same holds for `.gitattributes`.
 
 ---
 
@@ -621,6 +630,9 @@ key refuses.
   Measured on a fresh `charter init`: `workspaces/` is created empty and no `.gitkeep` is
   written, so an empty `workspaces/` does not survive a clone. Only
   `personas/<front-door>/{memory,refs}/.gitkeep` is written (`charter/commands.py:2680`).
+  **Fixed in charter-app** (#355): `init` and `reinit` create an empty `workspaces/.gitkeep`
+  when it is absent, and never truncate one that is there. It is reported as part of
+  `workspaces/`, or on its own (`+ workspaces/.gitkeep`) when `workspaces/` already existed.
 
 ---
 
@@ -1429,6 +1441,9 @@ excepted), and for a secret-shaped value, named by its kind.
     (`charter/workspace.py:1414`) — the anchor `charter init` writes
     (`charter/commands.py:1091`) — else appended at EOF with one blank-free `\n` on each side
     (`charter/workspace.py:1417`). Written with a plain `gi.write_text`, non-atomically.
+    **In charter-app** (#358) it is replaced by rename, and `set_live` reads the block and
+    writes the next one under the plane root's `flock`, so two workspaces made LIVE at once
+    are both LIVE.
   - Liveness is *parsed back* only from the `workspace.json` line:
     `^!/workspaces/([^/]+)/workspace\.json$` inside the block
     (`charter/workspace.py:1360`).
@@ -2386,7 +2401,10 @@ given never writes it.
   implementation:** `json.dumps(data, indent=2, sort_keys=True) + "\n"` written with
   `Path.write_text`, then `os.chmod(p, 0o600)` **after** the write
   (`charter/secrets/reference.py:194`-`195`). So: **sorted keys** here, insertion order in
-  the plain-file vault; and the mode is applied after the content, not before.
+  the plain-file vault; and the mode is applied after the content, not before. **In
+  charter-app** (#356) the encoding is unchanged but the write goes through the plain-file
+  provider's writer: created `0600`, the mode settled on the descriptor and read back, and
+  only then truncated and written.
 - **Git:** default path is under `.charter/` and therefore ignored; a team that commits
   these points `--file` at a tracked path, which is allowed for this provider (the
   unignored-path refusal is `plain-file` only, `charter/commands_secrets.py:159`).
@@ -3667,12 +3685,13 @@ so each one can be filed on its own merits.
    words. A Rust reader has to implement both readings. Flagged as **stable** either way.
 2. **`workspaces/.gitkeep` is ignored-negated and anchored on, but never created** by `init`
    or `reinit` (measured). Whether the app should create it is a question for the workspaces
-   area; the anchor line matters to `.gitignore` splicing either way.
+   area; the anchor line matters to `.gitignore` splicing either way. *charter-app creates
+   it (#355).*
 3. **`charter.toml` is rewritten non-atomically** (`p.write_text`, `charter/instance.py:441`)
    with no lock, while every `.charter/` writer goes through `config.replace_for`. Two
    concurrent `persona default` / `version bump` runs can interleave. Marked stable; noting the
    write discipline because a second implementation writing the same file needs to know
-   charter does *not* hold a lock.
+   charter does *not* hold a lock. *charter-app replaces it by rename under a lock (#357).*
 4. **`.charter/harness-profiles-launched.json` is read-modify-written whole with no lock**
    (`charter/profiletrust.py:172`). Its own module documents that it is not a boundary
    (`charter/profiletrust.py:18`). Marked **stable** because a second process reads it and
@@ -3743,7 +3762,8 @@ so each one can be filed on its own merits.
    one list.
 10. **The LIVE block is written non-atomically** (`gi.write_text`,
     `charter/workspace.py:1418`) where every other committed file charter writes goes through
-    `config.replace_for`. A kill mid-write truncates the plane's `.gitignore`.
+    `config.replace_for`. A kill mid-write truncates the plane's `.gitignore`. *charter-app
+    replaces it by rename under a lock (#358).*
 11. **Legacy migrations a Rust reader will meet:** `repos/` → `workspaces/`
     (`charter/workspace.py:53`) and `.edm-structure` → `.charter-structure`
     (`charter/workspace.py:4477`, `charter/workspace.py:4494`). Both are best-effort renames

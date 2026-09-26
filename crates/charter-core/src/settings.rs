@@ -569,7 +569,12 @@ fn to_edit(value: &Value) -> toml_edit::Value {
 /// since is not overwritten: the tab would be writing over an edit it never saw. The write is
 /// whole or not at all — a temp file beside it, then one rename — keeps the mode an existing
 /// file had, and makes a new one readable by this user alone.
+///
+/// The check and the write are one act: both happen under [`crate::rewrite::Lock`], which
+/// every other writer of these files takes too, so nothing can land between "unchanged since
+/// the tab read it" and the rename that would overwrite it (#357).
 pub fn save(root: &Path, which: Which, base: Option<&str>, text: &str) -> Result<(), Vec<String>> {
+    let _held = crate::rewrite::Lock::on(root);
     let (exists, now) = on_disk(root, which).map_err(|why| vec![why])?;
     if (exists, now.as_str()) != (base.is_some(), base.unwrap_or_default()) {
         return Err(vec![format!(
@@ -604,21 +609,9 @@ pub fn save(root: &Path, which: Which, base: Option<&str>, text: &str) -> Result
 }
 
 fn write(root: &Path, which: Which, text: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let path = which.path(root);
-    crate::contain::no_link_on_the_way(root, &path)?;
-    let mode = std::fs::metadata(&path).ok().map(|m| m.permissions());
-    let mut temp = tempfile::NamedTempFile::new_in(root)?;
-    temp.write_all(text.as_bytes())?;
-    temp.as_file().sync_all()?;
-    if let Some(permissions) = mode {
-        temp.as_file().set_permissions(permissions)?;
-    }
-    // A new file keeps `NamedTempFile`'s 0600: nobody else on this machine has any business
-    // reading this plane's settings, and the Local file is this user's by definition.
-    temp.persist(&path).map_err(|e| e.error)?;
-    Ok(())
+    // A new file is 0600: nobody else on this machine has any business reading this plane's
+    // settings, and the Local file is this user's by definition. An existing one keeps its mode.
+    crate::rewrite::replace(root, &which.path(root), text.as_bytes(), Some(0o600))
 }
 
 #[cfg(test)]

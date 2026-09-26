@@ -98,9 +98,14 @@ pub fn live_workspaces(root: &Path) -> BTreeSet<String> {
     let Ok(text) = std::fs::read_to_string(root.join(".gitignore")) else {
         return BTreeSet::new();
     };
+    live_in(&text)
+}
+
+/// The workspaces the managed block in `text` marks LIVE.
+fn live_in(text: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let mut inside = false;
-    for line in crate::mdsection::split_lines(&text) {
+    for line in crate::mdsection::split_lines(text) {
         let line = crate::memstore::py_strip(line);
         if line == LIVE_BEGIN {
             inside = true;
@@ -164,18 +169,45 @@ pub fn live_block<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
 /// The three placements are Python's `_write_live_block`, in its order: replace the block
 /// that is there, else put one straight after the `!/workspaces/.gitkeep` line `charter init`
 /// writes (so the un-ignores sit with the rule they qualify), else append.
+///
+/// **Whole or not at all, one writer at a time** (#358): this file is what keeps `/.charter/`
+/// out of git, so it is replaced by rename under [`crate::rewrite::update`]'s lock, and one
+/// that is there but cannot be read as text is refused rather than rewritten from nothing.
 pub fn write_live_block<'a>(
     root: &Path,
     names: impl IntoIterator<Item = &'a str>,
 ) -> io::Result<()> {
-    let path = root.join(".gitignore");
-    // The file charter is about to write, gated as ITSELF: a `.gitignore` symlinked out of
-    // the plane would otherwise take this write with it.
-    crate::contain::no_link_on_the_way(root, &path)?;
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
     let block = live_block(names);
-    let next = if text.contains(LIVE_BEGIN) {
-        replace_every_block(&text, &block)
+    rewrite_gitignore(root, |text| Some(with_block(text, &block))).map(|_| ())
+}
+
+/// Rewrite the managed block for the workspaces it already lists — what `reinit` does to
+/// bring an older block's per-workspace paths up to date. Read and written under one lock.
+pub fn refresh_live_block(root: &Path) -> io::Result<()> {
+    rewrite_gitignore(root, |text| {
+        let names = live_in(text);
+        Some(with_block(
+            text,
+            &live_block(names.iter().map(String::as_str)),
+        ))
+    })
+    .map(|_| ())
+}
+
+/// The plane's `.gitignore`, read, handed to `change` (`""` when absent), and replaced with
+/// what it returns unless that is `None`. The path is gated as itself by
+/// [`crate::rewrite::replace`]: a `.gitignore` symlinked out of the plane would otherwise take
+/// this write with it.
+fn rewrite_gitignore(root: &Path, change: impl FnOnce(&str) -> Option<String>) -> io::Result<bool> {
+    let path = root.join(".gitignore");
+    crate::contain::no_link_on_the_way(root, &path)?;
+    crate::rewrite::update(root, &path, |text| Ok(change(text.unwrap_or_default())))
+}
+
+/// `text` with the managed block set to `block`.
+fn with_block(text: &str, block: &str) -> String {
+    if text.contains(LIVE_BEGIN) {
+        replace_every_block(text, block)
     } else if let Some(at) = text.find("!/workspaces/.gitkeep\n") {
         let cut = at + "!/workspaces/.gitkeep\n".len();
         format!("{}{block}\n{}", &text[..cut], &text[cut..])
@@ -183,8 +215,7 @@ pub fn write_live_block<'a>(
         // `text.rstrip("\n")` — newlines alone, which is what Python strips here. A trailing
         // space in somebody's `.gitignore` is theirs and is kept.
         format!("{}\n{block}\n", text.trim_end_matches('\n'))
-    };
-    std::fs::write(&path, next)
+    }
 }
 
 /// Every `BEGIN … END` span in `text`, replaced by `block` —
@@ -217,19 +248,25 @@ fn replace_every_block(text: &str, block: &str) -> String {
 }
 
 /// Mark `name` LIVE or LOCAL; `true` when the liveness actually changed.
+///
+/// The read of the current block and the write of the next one are one act under the plane's
+/// lock, so two workspaces made LIVE at once are both LIVE afterwards (#358).
 pub fn set_live(root: &Path, name: &str, live: bool) -> io::Result<bool> {
-    let names = live_workspaces(root);
-    if names.contains(name) == live {
-        return Ok(false);
-    }
-    let mut next = names;
-    if live {
-        next.insert(name.to_string());
-    } else {
-        next.remove(name);
-    }
-    write_live_block(root, next.iter().map(String::as_str))?;
-    Ok(true)
+    rewrite_gitignore(root, |text| {
+        let mut names = live_in(text);
+        if names.contains(name) == live {
+            return None;
+        }
+        if live {
+            names.insert(name.to_string());
+        } else {
+            names.remove(name);
+        }
+        Some(with_block(
+            text,
+            &live_block(names.iter().map(String::as_str)),
+        ))
+    })
 }
 
 /// A LIVE workspace's shareable paths, plane-relative — what `live --off` and `save` hand to
@@ -682,6 +719,73 @@ mod tests {
         assert!(
             workspace_dir_exists(dir.path(), "beta"),
             "exists() follows the link; a workspace charter would write through is not absent"
+        );
+    }
+
+    /// #358: the LIVE block replaces `.gitignore` by rename. A crash between the write and
+    /// the rename leaves the file that keeps `/.charter/` out of git exactly as it was.
+    #[test]
+    fn the_live_block_replaces_gitignore_whole_or_not_at_all() {
+        let dir = plane();
+        let before = "/workspaces/*/*\n!/workspaces/.gitkeep\n/.charter/\n";
+        std::fs::write(dir.path().join(".gitignore"), before).unwrap();
+        let _hook = crate::rewrite::hook::set(move |target, temp| {
+            assert_eq!(std::fs::read_to_string(target).unwrap(), before);
+            let next = std::fs::read_to_string(temp).unwrap();
+            assert!(
+                next.contains("/.charter/") && next.contains(LIVE_END),
+                "{next}"
+            );
+            Err(io::Error::other("killed before the rename"))
+        });
+
+        assert!(set_live(dir.path(), "beta", true).is_err());
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
+            before
+        );
+        let strays: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "{strays:?}");
+    }
+
+    /// #358: two workspaces made LIVE at once. The second `set_live` starts while the first
+    /// is between its read and its rename; it must see the first one's block, not the old one.
+    #[test]
+    fn two_workspaces_made_live_at_once_are_both_live() {
+        let dir = plane();
+        let root = dir.path().to_path_buf();
+        let second: std::rc::Rc<std::cell::RefCell<Option<std::thread::JoinHandle<()>>>> =
+            Default::default();
+        let started = second.clone();
+        let _hook = crate::rewrite::hook::set(move |_, _| {
+            if started.borrow().is_none() {
+                let root = root.clone();
+                let (done, finished) = std::sync::mpsc::channel();
+                *started.borrow_mut() = Some(std::thread::spawn(move || {
+                    set_live(&root, "gamma", true).unwrap();
+                    let _ = done.send(());
+                }));
+                let _ = finished.recv_timeout(std::time::Duration::from_millis(300));
+            }
+            Ok(())
+        });
+
+        set_live(dir.path(), "beta", true).unwrap();
+        second
+            .borrow_mut()
+            .take()
+            .expect("the hook ran")
+            .join()
+            .unwrap();
+
+        assert_eq!(
+            live_workspaces(dir.path()),
+            BTreeSet::from(["beta".to_string(), "gamma".to_string()])
         );
     }
 }

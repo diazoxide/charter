@@ -96,6 +96,13 @@ pub fn keys(ctx: &Ctx, vault: &Vault) -> Result<Vec<String>, VaultError> {
 /// nothing written at all (#437). Opened without `O_TRUNC`, the mode settled on the
 /// DESCRIPTOR and read back, and only then truncated and written.
 pub fn write_private(p: &Path, payload: &Value) -> Result<(), VaultError> {
+    write_private_text(p, &crate::pyjson::dumps_indent2_unicode(payload))
+}
+
+/// [`write_private`] for text the caller has already encoded — the reference provider's,
+/// which sorts its keys and escapes to ASCII where this provider does neither (#356). Same
+/// guarantee: `p` is `0600` before a byte of `text` reaches it, or nothing is written.
+pub fn write_private_text(p: &Path, text: &str) -> Result<(), VaultError> {
     if let Some(parent) = p.parent() {
         super::make_private_dir(parent)
             .map_err(|e| VaultError::new(format!("cannot create {}: {e}", parent.display())))?;
@@ -109,6 +116,8 @@ pub fn write_private(p: &Path, payload: &Value) -> Result<(), VaultError> {
         options.mode(0o600);
     }
     let mut file = options.open(p).map_err(fail)?;
+    #[cfg(test)]
+    watch::opened(&file);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -127,7 +136,6 @@ pub fn write_private(p: &Path, payload: &Value) -> Result<(), VaultError> {
         }
     }
     file.set_len(0).map_err(fail)?;
-    let text = crate::pyjson::dumps_indent2_unicode(payload);
     std::io::Write::write_all(&mut file, text.as_bytes()).map_err(fail)
 }
 
@@ -250,5 +258,40 @@ pub fn loose_dirs(ctx: &Ctx, vault: &Vault) -> Vec<(PathBuf, u32)> {
             None => Vec::new(),
         },
         Err(_) => Vec::new(),
+    }
+}
+
+/// A test's view of the descriptor [`write_private_text`] holds, the instant it is opened:
+/// before its mode is touched and before any content is written, so a new file's mode here is
+/// the one it was created with. Thread-local, so it sees only its own test.
+#[cfg(test)]
+pub(crate) mod watch {
+    use std::cell::RefCell;
+
+    type Watch = Box<dyn FnMut(&std::fs::File)>;
+
+    thread_local! {
+        static WATCH: RefCell<Option<Watch>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn set(f: impl FnMut(&std::fs::File) + 'static) -> Unset {
+        WATCH.with(|w| *w.borrow_mut() = Some(Box::new(f)));
+        Unset
+    }
+
+    pub(crate) struct Unset;
+
+    impl Drop for Unset {
+        fn drop(&mut self) {
+            WATCH.with(|w| *w.borrow_mut() = None);
+        }
+    }
+
+    pub(super) fn opened(file: &std::fs::File) {
+        WATCH.with(|w| {
+            if let Some(f) = w.borrow_mut().as_mut() {
+                f(file);
+            }
+        });
     }
 }
