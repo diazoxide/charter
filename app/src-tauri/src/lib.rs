@@ -920,10 +920,10 @@ fn chat_in_front(
 struct Pins {
     /// Whether this project itself is pinned.
     project: bool,
-    /// Its pinned workspaces that still exist, in the plane's own order.
+    /// Its pinned workspaces that still exist, in the order they were pinned in.
     ///
-    /// The plane's order and never the pin's: a pin says WHICH workspaces come first, not in
-    /// what order they do, so two operators who pin the same two see the same arrangement.
+    /// The order the workspace strip draws them in (ADR 0054, charter#402): the operator's
+    /// arrangement, where it used to be the plane's order filtered.
     workspaces: Vec<String>,
     /// Pins that no longer name a workspace on the plane — renamed, or removed.
     ///

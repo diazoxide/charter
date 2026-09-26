@@ -96,17 +96,9 @@ function core(
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
-    // In the plane's own order whatever order they were pinned in, as the store answers.
-    if (cmd === "plane_pins") {
-      const kept = [...pinnedNow];
-      return {
-        ...pins,
-        workspaces: [
-          ...names.filter((name) => kept.includes(name)),
-          ...kept.filter((name) => !names.includes(name)),
-        ],
-      };
-    }
+    // In the order they were pinned in, as the store answers (charter#402): a `Set` keeps
+    // insertion order, and an unpin followed by a pin puts the name last.
+    if (cmd === "plane_pins") return { ...pins, workspaces: [...pinnedNow] };
     if (cmd === "workspace_create") {
       names.push(given.name as string);
       return [`✓ workspace ${String(given.name)} created`];
@@ -220,14 +212,24 @@ describe("a pinned chat", () => {
 });
 
 describe("a pinned workspace", () => {
-  it("is drawn first on the workspace strip, in the plane's own order", async () => {
+  it("is drawn first on the workspace strip, in the order it was pinned in", async () => {
     core([chat(1, "one", "alpha")], { project: false, workspaces: ["gamma", "beta"], missing: [] });
     render(<App />);
 
-    // `beta` before `gamma` although the pins arrived the other way round: a pin says WHICH
-    // workspaces come first, never in what order they do.
-    await vi.waitFor(() => expect(workspaceNames()).toEqual(["beta", "gamma", "alpha"]));
+    // `gamma` before `beta` although the plane lists them the other way round: the strip
+    // draws pins in the order they were pinned in (ADR 0054, charter#402).
+    await vi.waitFor(() => expect(workspaceNames()).toEqual(["gamma", "beta", "alpha"]));
     expect(pinned().filter((one) => one === "pinned workspace")).toHaveLength(2);
+  });
+
+  it("pinned after the others is drawn after them", async () => {
+    core([chat(1, "one", "alpha")], { project: false, workspaces: ["gamma"], missing: [] });
+    render(<App />);
+    await waitFor(() => expect(workspaceNames()).toEqual(["gamma", "alpha"]));
+
+    await runFromPalette("Pin workspace beta");
+
+    await vi.waitFor(() => expect(workspaceNames()).toEqual(["gamma", "beta", "alpha"]));
   });
 
   it("is pinned by the palette, and the machine store is asked again", async () => {

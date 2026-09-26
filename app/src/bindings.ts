@@ -1404,8 +1404,9 @@ export type Moved = {
 	 */
 	queue: number[],
 	/**
-	 *  When this chat last moved, as a count of moves on its plane's board — bigger is
-	 *  more recent. `charter_core::state::Board::moved_at` is the whole definition.
+	 *  When this chat last moved, as a count of moves on every plane's board in this process
+	 *  — bigger is more recent, within a plane and across planes.
+	 *  `charter_core::state::Board::moved_at` is the whole definition.
 	 * 
 	 *  **The window cannot work this out for itself, which is why it rides an event that
 	 *  already fires.** Charter ADR 0039 sorts the chat strip's overflow menu by last
@@ -1764,10 +1765,10 @@ export type Pins = {
 	/**  Whether this project itself is pinned. */
 	project: boolean,
 	/**
-	 *  Its pinned workspaces that still exist, in the plane's own order.
+	 *  Its pinned workspaces that still exist, in the order they were pinned in.
 	 * 
-	 *  The plane's order and never the pin's: a pin says WHICH workspaces come first, not in
-	 *  what order they do, so two operators who pin the same two see the same arrangement.
+	 *  The order the workspace strip draws them in (ADR 0054, charter#402): the operator's
+	 *  arrangement, where it used to be the plane's order filtered.
 	 */
 	workspaces: string[],
 	/**

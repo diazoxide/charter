@@ -880,6 +880,22 @@ function App() {
     projectsShown.shown.map((project) => project.plane),
   );
 
+  /**
+   * What the project strip's show-more menu lists: the projects it is not drawing, **most
+   * recently moved first** — the workspace strip's rule one level up (ADR 0039, ADR 0054,
+   * charter#401). `ShowMore` puts the ones that need you before these.
+   *
+   * A project moved when the newest of its chats did (`PlaneReport.moved`). One nothing has
+   * been heard about reads `0` and keeps the strip's order: `sort` is stable. **The cost,
+   * stated:** the core's count lives as long as the app, and reopening a chat is a move, so
+   * right after a relaunch the projects rank by the order their chats were put back in until
+   * one of them does something. The chat and workspace menus pay the same (ADR 0054).
+   */
+  const projectsNotShowing = useMemo(() => {
+    const movedIn = (project: Project) => reports[project.plane]?.moved ?? 0;
+    return [...projectsShown.hidden].sort((one, other) => movedIn(other) - movedIn(one));
+  }, [projectsShown.hidden, reports]);
+
   /** How many chats in `project` need you: its tab's count, and its share of the count on the
    *  show-more button when the strip is not drawing it (ADR 0054). Its own report's queue for
    *  both, so the button goes down exactly when the tab would. */
@@ -1116,7 +1132,7 @@ function App() {
                   <Doer offer={strip.create} onPress={press} iconOnly />
                   <ShowMore
                     noun="project"
-                    hidden={projectsShown.hidden.map((project) => ({
+                    hidden={projectsNotShowing.map((project) => ({
                       key: project.plane,
                       offer: strip.switchTo[drawn.indexOf(project)],
                       needs: askingIn(project),

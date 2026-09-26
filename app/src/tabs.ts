@@ -518,7 +518,7 @@ export function tabsIn(
 }
 
 /**
- * When a chat last moved, as the core counts moves on its plane. Bigger is more recent.
+ * When a chat last moved, as the core counts moves across every plane. Bigger is more recent.
  *
  * A function rather than a field, for the same reason `FiledIn` is: the count is the core's,
  * it arrives on `chat-moved`, and a copy on the tab would be a second answer that nothing

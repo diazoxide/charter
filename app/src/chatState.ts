@@ -67,7 +67,7 @@ export function stateOf(states: ChatStates, session: number): State {
 }
 
 /**
- * When a chat last moved, as the core counts moves on its plane. Bigger is more recent.
+ * When a chat last moved, as the core counts moves across every plane. Bigger is more recent.
  *
  * `0` for a chat nothing has been heard about — which sorts last, and is honest: a window
  * that has been told nothing about a chat knows nothing about when it last did something.

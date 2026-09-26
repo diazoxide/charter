@@ -28,8 +28,9 @@ pub struct Moved {
     /// Every chat asking for you, so the queue is never assembled from a series of events
     /// the window might have missed one of.
     pub queue: Vec<u32>,
-    /// When this chat last moved, as a count of moves on its plane's board — bigger is
-    /// more recent. `charter_core::state::Board::moved_at` is the whole definition.
+    /// When this chat last moved, as a count of moves on every plane's board in this process
+    /// — bigger is more recent, within a plane and across planes.
+    /// `charter_core::state::Board::moved_at` is the whole definition.
     ///
     /// **The window cannot work this out for itself, which is why it rides an event that
     /// already fires.** Charter ADR 0039 sorts the chat strip's overflow menu by last

@@ -840,7 +840,8 @@ export function PlaneView({
   );
 
   /** Every workspace the window can bring forward: this project's, plus the one for chats
-   *  outside them all when there are any. In the plane's own order, which is the sidebar's.
+   *  outside them all when there are any: the pinned ones first, in the order they were
+   *  pinned in, then the rest in the plane's own order, which is the sidebar's.
    *  The palette lists all of them; the strip draws fewer (`onWorkspaceStrip`, below). */
   const strips = useMemo(() => {
     if (sidebar === undefined) return [];
@@ -849,11 +850,11 @@ export function PlaneView({
       sidebar.unfiled.length > 0 ||
       tabs.order.some((id) => workspaceOf(tabs, id, filedIn) === OUTSIDE);
     const all = stray ? [...names, OUTSIDE] : names;
-    // **Pinned first, and the plane's own order inside each group** (ADR 0039). A pin says
-    // WHICH workspaces come first, never in what order they do — so two operators who pin
-    // the same two see the same arrangement, which is the plane's.
+    // **Pinned first, in the order they were pinned in, then the rest in the plane's own
+    // order** (ADR 0039, ADR 0054, charter#402). The store answers the pins in that order, and
+    // only the ones the plane still has.
     return [
-      ...all.filter((name) => pinnedWorkspaces.includes(name)),
+      ...pinnedWorkspaces.filter((name) => all.includes(name)),
       ...all.filter((name) => !pinnedWorkspaces.includes(name)),
     ];
   }, [filedIn, pinnedWorkspaces, sidebar, tabs]);
@@ -2212,8 +2213,21 @@ export function PlaneView({
       workspace: ofWorkspace,
       colour: colourWithHue(sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.colour),
       saving,
+      moved: Math.max(0, ...Object.values(states.movedAt)),
     }),
-    [asking, ending, ofWorkspace, offers, quiet, report, run, saving, settled, sidebar],
+    [
+      asking,
+      ending,
+      ofWorkspace,
+      offers,
+      quiet,
+      report,
+      run,
+      saving,
+      settled,
+      sidebar,
+      states.movedAt,
+    ],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -2859,6 +2873,13 @@ export type PlaneReport = {
   colour?: string | null;
   /** Where this project's unsaved work sits (charter-app#302), once read. */
   saving?: PlaneSaving;
+  /**
+   * When anything in it last moved: the newest `movedAt` among its chats, `0` when nothing
+   * has been heard. What the project strip's show-more menu orders its rows by after the ones
+   * that need you (ADR 0054, charter#401). The core counts moves across every project's
+   * board with one count, so this compares across projects.
+   */
+  moved: number;
 };
 
 /** What a project asks the WINDOW to do, because the window is what holds projects. */
@@ -3154,9 +3175,9 @@ export const MARKS: Record<string, typeof Plus> = {
  * because it needs you: that would move tabs under the operator's hand, which is the one
  * thing ADR 0039 refuses, and the count and the title bar's ✋ menu already say it.
  *
- * **After those, the caller's order.** The chat and workspace strips hand their rows in most
- * recently moved first. The project strip hands its rows in the strip's order, because the
- * window holds no count of when a project last moved — each project's is its own `PlaneView`'s.
+ * **After those, the caller's order**, which on all three strips is most recently moved first:
+ * a tab by its chats' newest move, a workspace by its chats', and a project by the newest move
+ * its `PlaneView` reports (`PlaneReport.moved`, charter#401).
  *
  * **Only rows that bring a tab forward.** Every row is the catalogue's `tab.select:<id>`,
  * which is the same row the tab itself is and the same row the palette lists. Nothing

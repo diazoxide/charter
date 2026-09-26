@@ -347,9 +347,10 @@ describe("making a workspace and deleting one", function () {
     await (await $('[role="dialog"]')).waitForDisplayed({ timeout: 20_000 });
     await (await $('[role="dialog"] input')).setValue("doomed");
     await $("button=Create workspace").click();
-    // The strip is the PLANE's own order, which is `read_dir_sorted`'s — so a workspace
-    // made now lands where its name puts it and not at the end.
-    await stripBecomes(["beta", "doomed", "gamma"]);
+    // A workspace made from the window is pinned, and pins are drawn in the order they were
+    // pinned in (charter#402) — so it lands after the pins already there, not where its name
+    // would put it in the plane's own order.
+    await stripBecomes(["beta", "gamma", "doomed"]);
     aRepoWithWorkInIt(join(mine, "workspaces", "doomed", "svc"));
 
     await runRow("Delete workspace doomed", "Delete workspace doomed");
