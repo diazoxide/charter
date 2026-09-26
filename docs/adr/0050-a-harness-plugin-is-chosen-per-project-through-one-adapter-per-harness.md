@@ -187,7 +187,8 @@ not installed anyway.
 **Never write the harness's config.** Every value here is handed to one chat on its command
 line, or it is not handed at all. Writing `~/.codex/config.toml` would change every Codex the
 operator runs, outside charter as well. That is why Codex is *not supported yet* and not
-supported by editing its file.
+supported by editing its file. One exception, for a command the operator runs themselves: `charter plugin
+install` ([ADR 0057](0057-the-operator-installs-charters-plugin-for-chats-outside-the-app.md)).
 
 ## What was rejected
 

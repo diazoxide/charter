@@ -193,7 +193,9 @@ A Claude Code, Codex or opencode plugin, chosen per project. "Plugin" on its own
 this, never a charter extension. charter's own is one too: the Claude Code plugin the app
 bundles, named `charter` (`charter@inline`, skills `charter:<skill>`), always on in the chats
 the app starts. It is not the Python charter's `charter@charter`, which is always off there.
-_Avoid_: extension (for this), charter plugin
+`charter plugin install` puts a copy of it, `charter@charter-app`, in front of the chats the
+operator starts outside the app (ADR 0057).
+_Avoid_: extension (for this); "charter plugin" for anything but charter's own
 
 **Vault**:
 A named set of secrets charter keeps in the system keyring and hands to a command, never to

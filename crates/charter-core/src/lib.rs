@@ -62,6 +62,7 @@ pub mod planegit;
 pub mod planeroot;
 pub mod planesave;
 pub mod plugin;
+pub mod plugin_install;
 pub mod process;
 pub mod profiles;
 pub mod profiletrust;

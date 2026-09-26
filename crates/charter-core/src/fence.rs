@@ -71,6 +71,9 @@ pub enum Act {
     /// no config home of its own writes its throwaway projects and their trust into the
     /// operator's own — the same class of damage as charter-app#129, one ladder over.
     Store,
+    /// Writing a harness's own configuration — Claude Code's user settings, Codex's
+    /// `config.toml` — which every chat on this machine reads, not only one a run started.
+    HarnessConfig,
 }
 
 impl Act {
@@ -82,6 +85,7 @@ impl Act {
             Self::Write => "write the reopen record of the plane",
             Self::Open => "open the plane",
             Self::Store => "keep this machine's charter store at",
+            Self::HarnessConfig => "write a harness's own configuration at",
         }
     }
 }

@@ -78,10 +78,29 @@ report a chat's state and the Bash guard, described in [hooks.md](hooks.md) — 
 `charter-app:<skill>`. It lives in `Contents/Resources/plugin` on macOS and
 `/usr/lib/charter/plugin` on Linux. A chat the app starts also turns a plugin named
 `charter@charter` off for itself, so a plane whose settings enable an older charter plugin for
-your own terminal sessions does not give an app chat two sets of hooks; a `claude` you run in
-a terminal is untouched. A Codex chat gets charter's state hooks and Bash guard as `-c` flags on
+your own terminal sessions does not give an app chat two sets of hooks. A `claude` you run in
+a terminal is untouched until you run `charter plugin install` (below). A Codex chat gets charter's state hooks and Bash guard as `-c` flags on
 its command line, and Codex asks once to trust them. How each harness is armed is in
 [harnesses.md](harnesses.md#per-profile--armed-at-launch).
+
+### Chats you start in a terminal
+
+The app arms only the chats it starts. For a `claude` or `codex` you start yourself, run
+
+```
+charter plugin install            # --dry-run first to see each change
+```
+
+once. It prints every change it makes and changes nothing that is already so, so running it
+again after moving or updating the app is safe. For Claude Code it keeps a copy of the app's
+plugin in `~/.config/charter/plugin/` whose hooks name this `charter` by its path, and
+registers it in your user `settings.json` as `charter@charter-app`. A chat the app starts
+still loads the app's own copy instead. For Codex it adds only charter's Bash guard to
+`~/.codex/config.toml`, because the app already gives its own Codex chats the rest and Codex
+would run both. Codex asks you to trust that hook the next time it starts. It never enables
+the retired `charter@charter` plugin, and turns it off in the files it writes.
+`charter plugin uninstall` takes back what it wrote. `--harness claude|codex` limits
+either one to one harness.
 
 `charter doctor --fix` is refused in this version, and `charter doctor` reports without
 it.
