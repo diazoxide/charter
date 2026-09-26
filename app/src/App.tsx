@@ -9,6 +9,16 @@ import {
 } from "react";
 import { listen } from "./here";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
+import { closestCenter, DndContext } from "@dnd-kit/core";
+import { horizontalListSortingStrategy, SortableContext } from "@dnd-kit/sortable";
+import { afterDrop } from "./reorder";
+import {
+  ALONG_THE_STRIP,
+  keepsTheFocus,
+  SortableTab,
+  stripAccessibility,
+  useStripSensors,
+} from "./sortable";
 import "./styles.css";
 import {
   commands,
@@ -889,6 +899,13 @@ function App() {
       // No plane, no vaults: both rows are unavailable without one.
       pickVault: () => undefined,
       createVault: () => undefined,
+      removeVault: () => undefined,
+      // No plane, no personas and no workspace: every row these answer is unavailable.
+      createPersona: () => undefined,
+      removePersona: () => undefined,
+      editPersona: async () => nowhere(),
+      closeTodo: async () => nowhere(),
+      forgetTodo: async () => nowhere(),
       pinTab: async () => nowhere(),
       pinWorkspace: async () => nowhere(),
       pinProject: windowDoes.pinProject,
@@ -984,6 +1001,40 @@ function App() {
       ),
     [drawn, inFront, room, projectLeast],
   );
+  /**
+   * A project tab dragged onto another (SI-6): the window's projects put in the new order, and
+   * the project pinned or unpinned when it was carried across the boundary (`reorder.ts`).
+   *
+   * **The order is `planes`, and nothing new holds it.** The strip draws the window's projects
+   * pinned first and otherwise in the order the window holds them, and that order is already
+   * this machine's record of the window (`window_holds_planes`, ADR 0033) — so a dragged strip
+   * is put back at the next cold launch by the record that already puts it back. A split
+   * window's strip is its own window's, and is remembered as its own.
+   */
+  const dragProject = useCallback(
+    (moved: string, onto: string) => {
+      const made = afterDrop({
+        whole: drawn.map((one) => one.plane),
+        drawn: projectsShown.shown.map((one) => one.plane),
+        moved,
+        onto,
+        isPinned: (plane) => pinnedProjects.includes(plane),
+      });
+      if (made === undefined) return;
+      setPlanes(made.order as PlaneId[]);
+      if (made.pinned === undefined) return;
+      void pinProject(moved, made.pinned).then((ran) => {
+        if (!ran.ok) setReport({ from: "project.drag", refused: true, words: ran.refused });
+      });
+    },
+    [drawn, pinProject, pinnedProjects, projectsShown.shown],
+  );
+  const dragSensors = useStripSensors();
+  const projectDragWords = useMemo(
+    () => stripAccessibility("project", (id) => calledOn(String(id))),
+    [],
+  );
+
   const projectStop = useTabStop(
     inFront,
     projectsShown.shown.map((project) => project.plane),
@@ -1200,92 +1251,126 @@ function App() {
             // One Tab stop for the strip, the project in front, and the arrows along it
             // (charter-app#189, `roving.ts`). Its own controls after the tabs are stops of
             // their own.
-            <RovingFocusGroup.Root asChild orientation="horizontal" {...projectStop}>
-              <nav
-                className="projects"
-                role="tablist"
-                aria-label="Projects"
-                ref={projectStrip}
-                style={{ "--least": `${projectLeast}px` } as CSSProperties}
+            // Draggable along the strip (SI-6, `sortable.tsx`): a drop puts the window's
+            // projects in a new order, and one carried across the pinned boundary pins or
+            // unpins it. Every tab is a `<button>`, so Tauri's window drag never starts on one.
+            <DndContext
+              sensors={dragSensors}
+              collisionDetection={closestCenter}
+              modifiers={ALONG_THE_STRIP}
+              accessibility={projectDragWords}
+              onDragEnd={({ active, over }) => {
+                if (over) dragProject(String(active.id), String(over.id));
+              }}
+            >
+              <SortableContext
+                items={projectsShown.shown.map((project) => project.plane)}
+                strategy={horizontalListSortingStrategy}
               >
-                {projectsShown.shown.map((project) => {
-                  const at = drawn.indexOf(project);
-                  return (
-                    /* Right-click is the third reader of the same catalogue (`Menus.tsx`).
+                <RovingFocusGroup.Root asChild orientation="horizontal" {...projectStop}>
+                  <nav
+                    className="projects"
+                    role="tablist"
+                    aria-label="Projects"
+                    ref={projectStrip}
+                    style={{ "--least": `${projectLeast}px` } as CSSProperties}
+                  >
+                    {projectsShown.shown.map((project) => {
+                      const at = drawn.indexOf(project);
+                      return (
+                        <SortableTab key={project.plane} id={project.plane}>
+                          {({ sortable, style }) => (
+                            /* Right-click is the third reader of the same catalogue (`Menus.tsx`).
                        `asChild`, so the strip gains no wrapper element: this IS the `span` it
                        always was — which is what #171's `flex: 1 1 0` cells require. */
-                    <Menued
-                      key={project.plane}
-                      on={{ on: "project", plane: project.plane }}
-                      offers={stripFound}
-                      onPress={press}
-                    >
-                      <span className="project">
-                        <RovingFocusGroup.Item
-                          asChild
-                          tabStopId={project.plane}
-                          active={project.plane === inFront}
-                        >
-                          <button
-                            role="tab"
-                            aria-selected={project.plane === inFront}
-                            onKeyDown={(event) => closeOnDelete(event, strip.close[at], press)}
-                            // The path, because two projects can share a directory name and
-                            // the name is all the tab has room for.
-                            title={project.plane}
-                            onClick={() => {
-                              const offer = strip.switchTo[at];
-                              if (offer.available) press(offer);
-                            }}
-                          >
-                            {projectMarks(project)}
-                          </button>
-                        </RovingFocusGroup.Item>
-                        <Closer offer={strip.close[at]} onPress={press} />
-                      </span>
-                    </Menued>
-                  );
-                })}
-                {/* The strip's own controls, and the one part of this strip that never
-                    collapses. They are inside the tablist because a `role="tab"` has to be owned
-                    by the tablist it belongs to, so `useRoom` is told to take their width off the
-                    room the tabs get rather than leaving the tabs to be squeezed under them.
+                            <Menued
+                              on={{ on: "project", plane: project.plane }}
+                              offers={stripFound}
+                              onPress={press}
+                            >
+                              <span
+                                className="project"
+                                ref={sortable.setNodeRef}
+                                style={style}
+                                data-dragging={sortable.isDragging || undefined}
+                              >
+                                <RovingFocusGroup.Item
+                                  asChild
+                                  tabStopId={project.plane}
+                                  active={project.plane === inFront}
+                                >
+                                  <button
+                                    role="tab"
+                                    aria-selected={project.plane === inFront}
+                                    aria-describedby={sortable.attributes["aria-describedby"]}
+                                    {...sortable.listeners}
+                                    onKeyDown={(event) => {
+                                      // A tab that is up is being carried: its keys are the drag's.
+                                      keepsTheFocus(event, sortable.isDragging);
+                                      sortable.listeners?.onKeyDown?.(event);
+                                      if (!sortable.isDragging)
+                                        closeOnDelete(event, strip.close[at], press);
+                                    }}
+                                    // The path, because two projects can share a directory name and
+                                    // the name is all the tab has room for.
+                                    title={project.plane}
+                                    onClick={() => {
+                                      const offer = strip.switchTo[at];
+                                      if (offer.available) press(offer);
+                                    }}
+                                  >
+                                    {projectMarks(project)}
+                                  </button>
+                                </RovingFocusGroup.Item>
+                                <Closer offer={strip.close[at]} onPress={press} />
+                              </span>
+                            </Menued>
+                          )}
+                        </SortableTab>
+                      );
+                    })}
+                    {/* The strip's own controls, and the one part of this strip that never
+                        collapses. They are inside the tablist because a `role="tab"` has to be owned
+                        by the tablist it belongs to, so `useRoom` is told to take their width off the
+                        room the tabs get rather than leaving the tabs to be squeezed under them.
 
-                    **A `+` and not a labelled button** — the operator's: *"open-project button
-                    is not looks like separate button, but it should looks like new tab, without
-                    label — just icon."* It is the same shape as the chat strip's `New tab` one
-                    level down: the `+` at the end of a strip makes one more of what the strip
-                    lists. Its accessible name is still the catalogue's `Open a project…`.
+                        **A `+` and not a labelled button** — the operator's: *"open-project button
+                        is not looks like separate button, but it should looks like new tab, without
+                        label — just icon."* It is the same shape as the chat strip's `New tab` one
+                        level down: the `+` at the end of a strip makes one more of what the strip
+                        lists. Its accessible name is still the catalogue's `Open a project…`.
 
-                    **And beside it, the other half of the same sentence** — *"also we need to
-                    have create new project button too"* (charter-app#178). Two controls and not
-                    one menu: opening a project the operator already has and making one that does
-                    not exist yet are different acts, and the second writes to disk. It is drawn
-                    exactly as its neighbour is — one `Doer` over the catalogue's
-                    `project.create`, icon-only, named `New project…` by the same row the palette
-                    and the tab's menu read — so there is still one place those words are written
-                    down. It is second because opening one is the commoner act; both are always
-                    available, including with no project open, which is exactly the window that
-                    needs them.
+                        **And beside it, the other half of the same sentence** — *"also we need to
+                        have create new project button too"* (charter-app#178). Two controls and not
+                        one menu: opening a project the operator already has and making one that does
+                        not exist yet are different acts, and the second writes to disk. It is drawn
+                        exactly as its neighbour is — one `Doer` over the catalogue's
+                        `project.create`, icon-only, named `New project…` by the same row the palette
+                        and the tab's menu read — so there is still one place those words are written
+                        down. It is second because opening one is the commoner act; both are always
+                        available, including with no project open, which is exactly the window that
+                        needs them.
 
-                    And the projects there was no room for, in the same component the chat strip
-                    uses, so an operator learns one control for all three strips. */}
-                <span className="strip-doing" ref={projectControls}>
-                  <Doer offer={strip.open} onPress={press} iconOnly />
-                  <Doer offer={strip.create} onPress={press} iconOnly />
-                  <ShowMore
-                    noun="project"
-                    hidden={projectsNotShowing.map((project) => ({
-                      key: project.plane,
-                      offer: strip.switchTo[drawn.indexOf(project)],
-                      needs: askingIn(project),
-                      children: projectMarks(project),
-                    }))}
-                    onPress={press}
-                  />
-                </span>
-              </nav>
-            </RovingFocusGroup.Root>
+                        And the projects there was no room for, in the same component the chat strip
+                        uses, so an operator learns one control for all three strips. */}
+                    <span className="strip-doing" ref={projectControls}>
+                      <Doer offer={strip.open} onPress={press} iconOnly />
+                      <Doer offer={strip.create} onPress={press} iconOnly />
+                      <ShowMore
+                        noun="project"
+                        hidden={projectsNotShowing.map((project) => ({
+                          key: project.plane,
+                          offer: strip.switchTo[drawn.indexOf(project)],
+                          needs: askingIn(project),
+                          children: projectMarks(project),
+                        }))}
+                        onPress={press}
+                      />
+                    </span>
+                  </nav>
+                </RovingFocusGroup.Root>
+              </SortableContext>
+            </DndContext>
           )
         }
         updates={updates}

@@ -127,6 +127,16 @@ pub struct Chat {
     /// Riding the record is what lets the pairing outlive a relaunch. `None` is every chat the
     /// operator opened, and every record written before this field.
     pub from: Option<HandedFrom>,
+    /// The workspace this chat's directory was renamed away from, where a rename left it with
+    /// no conversation its harness can find (charter#367, D10).
+    ///
+    /// Claude Code finds a conversation by the directory it ran in
+    /// ([`Harness::keeps_conversations_by_directory`]), so `charter workspace rename` drops
+    /// such a chat's [`Self::resume`] and sets this instead. The next start is a fresh
+    /// conversation and says why ([`Fresh::WorkspaceRenamed`]), once: the chat is recorded
+    /// again without it. `None` is every other chat, and every record written before this
+    /// field — not a format change, for [`Self::pinned`]'s reason.
+    pub renamed_from: Option<String>,
 }
 
 /// The chat a handoff came from, as the chat it opened keeps it.
@@ -242,6 +252,13 @@ pub struct View {
 /// Every chat that was open, and the numbers this plane has already spent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Record {
+    /// Every chat that was open, **in the order the chat strip drew them** — which is the
+    /// order a launch puts them back in (ADR 0039, amended when a tab could be dragged).
+    ///
+    /// Not the order they were numbered in: a chat keeps its number across a launch
+    /// ([`Chat::number`]), and the operator can drag it anywhere on the strip. Not a format
+    /// change either, for [`Chat::pinned`]'s reason: a record written before tabs could be
+    /// dragged lists them in number order, which was the strip's order when it was written.
     pub chats: Vec<Chat>,
     /// The view tabs that were open — see [`View`]. Empty in every record written before a tab
     /// could hold one, which is what was true of those.
@@ -371,6 +388,9 @@ pub enum Fresh {
     /// Its own arguments already name a session, so charter added none of its own. What
     /// happens then is between the operator and the harness.
     SessionNamedByTheOperator,
+    /// Its workspace was renamed, and its harness finds a conversation by the directory it ran
+    /// in, so the one it had is under the old name ([`Chat::renamed_from`]).
+    WorkspaceRenamed,
 }
 
 /// What starts a chat, and what the app has to remember about having started it.
@@ -386,6 +406,18 @@ pub struct Launch {
 }
 
 impl Chat {
+    /// How this chat came back, told what a start that knew no chat said: "nothing recorded
+    /// a conversation" is, for a chat a workspace rename left without its conversation, that
+    /// its workspace was renamed. `start::ready` knows no chat, so its answer passes here.
+    pub fn told(&self, how: Reopened) -> Reopened {
+        match how {
+            Reopened::Fresh(Fresh::NoConversationRecorded) if self.renamed_from.is_some() => {
+                Reopened::Fresh(Fresh::WorkspaceRenamed)
+            }
+            how => how,
+        }
+    }
+
     /// The harness this chat runs, or none for a program that is not one.
     pub fn harness(&self) -> Option<Harness> {
         Harness::of_command(&self.program)
@@ -431,7 +463,11 @@ impl Chat {
                     .as_ref()
                     .map(|id| harness.new_session_argv(id, &self.name))
                     .unwrap_or_default();
-                (argv, chosen, Reopened::Fresh(Fresh::NoConversationRecorded))
+                (
+                    argv,
+                    chosen,
+                    self.told(Reopened::Fresh(Fresh::NoConversationRecorded)),
+                )
             }
         };
         let mut args = added;
@@ -841,6 +877,10 @@ struct ChatOnDisk {
     /// always wrote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     from: Option<FromOnDisk>,
+    /// The workspace a rename moved this chat away from, or absent — see
+    /// [`Chat::renamed_from`]. A value that is not a workspace name reads as absent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    renamed_from: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -919,6 +959,7 @@ impl From<&Record> for OnDisk {
                     number: chat.number.unwrap_or_default(),
                     label: chat.label.clone().unwrap_or_default(),
                     from: chat.from.as_ref().map(FromOnDisk::from),
+                    renamed_from: chat.renamed_from.clone().unwrap_or_default(),
                 })
                 .collect(),
             dealt: highest_dealt(record),
@@ -966,6 +1007,8 @@ impl From<ChatOnDisk> for Chat {
             number: (chat.number > 0).then_some(chat.number),
             label: label(&chat.label).ok().flatten(),
             from: chat.from.and_then(FromOnDisk::sound),
+            renamed_from: Some(chat.renamed_from)
+                .filter(|name| crate::contain::workspace_name_ok(name)),
         }
     }
 }
@@ -990,6 +1033,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         }
     }
 
@@ -1124,6 +1168,68 @@ mod tests {
             "the chat's own arguments no longer come last: {:?}",
             launch.args
         );
+    }
+
+    #[test]
+    fn a_chat_a_workspace_rename_left_without_its_conversation_starts_fresh_and_says_why() {
+        // charter#367, D10: Claude Code cannot find the conversation under the new directory,
+        // so the rename dropped it. The chat starts a new one under an id charter chose, which
+        // is what the next quit records, and says why rather than "nothing recorded".
+        let chat = Chat {
+            renamed_from: Some("alpha".to_owned()),
+            ..claude("ide.7", None)
+        };
+
+        let launch = chat.launch();
+
+        assert_eq!(launch.how, Reopened::Fresh(Fresh::WorkspaceRenamed));
+        assert!(
+            launch.args.contains(&"--session-id".to_owned()),
+            "{:?}",
+            launch.args
+        );
+        assert!(launch.session.is_some());
+    }
+
+    #[test]
+    fn a_profile_start_that_knew_no_chat_is_told_the_rename_and_nothing_else_is_changed() {
+        let renamed = Chat {
+            renamed_from: Some("alpha".to_owned()),
+            ..claude("ide.7", None)
+        };
+        let nothing = Reopened::Fresh(Fresh::NoConversationRecorded);
+
+        assert_eq!(
+            renamed.told(nothing.clone()),
+            Reopened::Fresh(Fresh::WorkspaceRenamed)
+        );
+        assert_eq!(claude("ide.7", None).told(nothing.clone()), nothing);
+        let resumed = Reopened::Resumed(SessionId::new(ID).unwrap());
+        assert_eq!(renamed.told(resumed.clone()), resumed);
+    }
+
+    #[test]
+    fn the_workspace_a_rename_moved_a_chat_from_survives_a_quit_and_a_bad_one_reads_as_none() {
+        let plane = tempfile::tempdir().unwrap();
+        let renamed = Chat {
+            renamed_from: Some("alpha".to_owned()),
+            ..claude("ide.7", None)
+        };
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![renamed.clone(), claude("ide.8", Some(ID))],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+        assert_eq!(text.matches("renamed_from").count(), 1, "{text}");
+
+        assert_eq!(read(plane.path()).chats[0], renamed);
+
+        fs::write(path(plane.path()), text.replace("\"alpha\"", "\"../x\"")).unwrap();
+        assert_eq!(read(plane.path()).chats[0].renamed_from, None);
     }
 
     #[test]
@@ -1320,6 +1426,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             }],
         }
     }

@@ -174,7 +174,9 @@ plane's alphabetical order does not describe it. So (charter#402):
 - **The strip draws them in that order**, and the workspace you are in, when it is not pinned,
   still comes after them.
 - **Pin order means the order they were pinned in, and nothing else.** Arranging pins by
-  dragging them is out of scope. The one-time pinning ADR 0054 does on a first open pins the
+  dragging them is out of scope. *(Brought into scope the same day, SI-6: see ADR 0039's
+  amendment of 2026-09-26. The list is now in the order the operator pinned or dragged them
+  into, and it is the same list in the same store.)* The one-time pinning ADR 0054 does on a first open pins the
   most recently active workspace first, so those pins are drawn most active first.
 - **A store written before this reads unchanged.** It held the names as a set, written sorted,
   which is the order the plane lists its workspaces in. So it reads back as the arrangement its

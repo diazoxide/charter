@@ -64,6 +64,9 @@ const PAIRS: [Token, Token, number][] = [
   ["needs-you.text", "needs-you.base", 4.5],
   ["danger.text", "danger.surface", 4.5],
   ["terminal.foreground", "terminal.background", 4.5],
+  // A find in a pane draws its matches as the cells' background, under the terminal's text.
+  ["terminal.foreground", "terminal.find-match", 4.5],
+  ["terminal.foreground", "terminal.find-match-active", 4.5],
   // Marks rather than prose: a chip, a dot, a one-word CI state.
   ["state.running", "surface.base", 3],
   ["state.waiting", "surface.base", 3],

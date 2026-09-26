@@ -2663,3 +2663,94 @@ fn aborting_the_merge_by_hand_clears_the_planes_block_at_once() {
     assert_ne!(got.stage, Stage::Blocked, "{got:?}");
     assert!(got.conflicts.is_empty(), "{got:?}");
 }
+
+// --------------------------------------------------------------------------------------- //
+// the small answers the rest is built from (#464)                                           //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn a_stage_is_named_by_the_word_the_window_reads() {
+    // `app/src/saving.ts` switches on these strings; a stage the window cannot name is shown
+    // as nothing at all.
+    let words: Vec<&str> = [
+        Stage::Blocked,
+        Stage::Changed,
+        Stage::Committed,
+        Stage::PrOpen,
+        Stage::Saved,
+    ]
+    .into_iter()
+    .map(Stage::word)
+    .collect();
+    assert_eq!(
+        words,
+        ["blocked", "changed", "committed", "pr-open", "saved"]
+    );
+}
+
+#[test]
+fn a_message_naming_every_group_it_has_counts_none_as_more() {
+    let staged: Vec<String> = [
+        "personas/steward/memory/a.md",
+        "personas/_dispatch/b.jsonl",
+        "workspaces/ide/todos/c.md",
+        "README.md",
+    ]
+    .map(String::from)
+    .to_vec();
+    assert_eq!(
+        summary(&staged),
+        "charter save: 4 files (README.md 1, dispatch 1, ide todos 1, steward memory 1)"
+    );
+}
+
+#[test]
+fn the_signers_words_are_kept_and_gits_progress_hints_and_bare_prefixes_are_not() {
+    let err = "Rebasing (1/1)\rerror: gpg failed to sign the data\n\
+               \n\
+               hint: Could not execute the todo command\n\
+               error:\n\
+               error: failed to write commit object\n";
+    assert_eq!(signer_said(err), "gpg failed to sign the data");
+    assert_eq!(
+        signer_said("hint: nothing but a hint\nfailed to write commit object"),
+        "the signer gave no reason"
+    );
+}
+
+#[test]
+fn a_claim_asked_for_within_a_bound_is_had_once_its_holder_lets_go_inside_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let held = Claim::of(&root).expect("nobody holds it yet");
+    assert!(
+        Claim::within(&root, Duration::from_millis(120)).is_none(),
+        "a claim still held when the bound runs out is not had"
+    );
+    let letting_go = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        drop(held);
+    });
+    let started = std::time::Instant::now();
+    let had = Claim::within(&root, Duration::from_secs(10));
+    letting_go.join().unwrap();
+    assert!(had.is_some(), "the holder let go well inside the bound");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "it waited {:?} for a claim let go after 150 ms",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn the_push_record_is_stamped_with_the_time_it_is_now() {
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let stamped = now();
+    assert!(
+        (stamped - before).abs() < 60.0,
+        "stamped {stamped}, and it is {before}"
+    );
+}

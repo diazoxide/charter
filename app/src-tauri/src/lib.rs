@@ -22,6 +22,7 @@ mod live;
 mod opener;
 mod panels;
 mod panics;
+mod personas;
 mod pin;
 mod planes;
 mod planewatch;
@@ -29,6 +30,7 @@ mod saving;
 mod sessions;
 mod settings;
 mod slowstart;
+mod todos;
 mod updates;
 mod usage;
 mod vaults;
@@ -280,6 +282,9 @@ struct Watching {
     columns: u16,
     rows: u16,
     scrollback: u32,
+    /// What Shift+Enter sends: the newline of the harness the session runs
+    /// (`Harness::newline`), or none for a shell, which keeps the terminal's own Enter.
+    newline: Option<String>,
 }
 
 /// When this process started, as close to it as the app can see.
@@ -858,6 +863,7 @@ fn start_chat(
         number: None,
         label: label.clone(),
         from: None,
+        renamed_from: None,
     };
     let session = held
         .chats()
@@ -911,6 +917,7 @@ fn open_session(
         number: None,
         label: None,
         from: None,
+        renamed_from: None,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
@@ -1065,6 +1072,20 @@ fn pin_workspace(
     planes.pin(&root, Some(&workspace), pinned)
 }
 
+/// Puts a project's pinned workspaces in the order the operator dragged them into on the
+/// workspace strip (SI-6). Only the order moves: a name that is not pinned is passed over, and
+/// pinning stays [`pin_workspace`]'s.
+#[tauri::command]
+#[specta::specta]
+fn arrange_workspace_pins(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspaces: Vec<String>,
+) -> Result<(), String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    planes.arrange_workspaces(&root, &workspaces)
+}
+
 /// Pins or unpins one chat.
 ///
 /// Its own command rather than a third case of the two above, because it is written
@@ -1079,6 +1100,24 @@ fn pin_chat(
     pinned: bool,
 ) -> Result<(), String> {
     planes.held(&plane)?.chats().pin(session, pinned)
+}
+
+/// The order the chat strip draws this project's chats in, by session, so the record lists
+/// them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
+///
+/// **In the plane's own `.charter/app/reopen.json`, beside each chat's pin**, and never in the
+/// machine store, for [`pin_chat`]'s reason: a chat is numbered per plane, and ADR 0034 keeps
+/// its number out of a file every plane shares. That file is out of git, so the order is this
+/// machine's as a pin is.
+#[tauri::command]
+#[specta::specta]
+fn chat_order(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    sessions: Vec<u32>,
+) -> Result<(), String> {
+    planes.held(&plane)?.chats().hold_order(sessions);
+    Ok(())
 }
 
 /// Gives one chat a name, or takes the one it was given off with a blank — and answers the name
@@ -1171,6 +1210,11 @@ impl From<chats::Open> for OpenChat {
                 Reopened::Fresh(Fresh::SessionNamedByTheOperator) => {
                     Some("its own arguments name a session, so charter added none".to_owned())
                 }
+                Reopened::Fresh(Fresh::WorkspaceRenamed) => Some(
+                    "its workspace was renamed, and Claude Code keeps a conversation under the \
+                     folder it ran in"
+                        .to_owned(),
+                ),
             },
         }
     }
@@ -1236,7 +1280,10 @@ fn watch_session(
     session: u32,
     output: Channel<String>,
 ) -> Result<Watching, String> {
-    let watching = planes.held(&plane)?.chats().sessions().watch(
+    let held = planes.held(&plane)?;
+    let chats = held.chats();
+    let newline = chats.harness(session).map(|h| h.newline().to_owned());
+    let watching = chats.sessions().watch(
         session,
         // A view whose window has gone is closed by the pane that owned it; until then, text
         // it cannot take is dropped rather than held, and the session keeps running.
@@ -1249,6 +1296,7 @@ fn watch_session(
         columns: watching.size.columns,
         rows: watching.size.rows,
         scrollback: sessions::SCROLLBACK,
+        newline,
     })
 }
 

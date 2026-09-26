@@ -1,12 +1,13 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { forgetExtensionThemes } from "./Extensions";
 import { forgetExtensionsOn } from "./extensionsOn";
 import { forgetProjectThemes } from "./projectTheme";
 import App from "./App";
+import { sayingSomething } from "./test-strips";
 
 /**
  * The palette against the whole window: every action it lists reaching what the window
@@ -337,8 +338,8 @@ describe("the palette reaching what the window can do", () => {
 
     await runFromPalette("merge this chat");
 
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "charter/fix-it landed: abc1234 → def5678",
+    await waitFor(() =>
+      expect(sayingSomething()[0]).toHaveTextContent("charter/fix-it landed: abc1234 → def5678"),
     );
     expect(asked.find(({ cmd }) => cmd === "worktree_merge")?.args).toMatchObject({
       plane: "/home/dev/plane",

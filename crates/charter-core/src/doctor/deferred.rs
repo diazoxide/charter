@@ -35,8 +35,6 @@ pub(crate) const FRAME: &str = "this charter has no tmux frame; its window takes
 pub(crate) const GUARD: &str = "this version of charter does not check the guard yet";
 pub(crate) const WORKSPACE_LAYER: &str = "this version of charter does not check whether each \
                                           workspace's generated layer is current yet";
-pub(crate) const CHANGES: &str = "this version of charter does not check cross-repo changes \
-                                  yet";
 pub(crate) const VAULTS: &str = "this version of charter does not check vaults and the \
                                  credentials they hold yet";
 pub(crate) const NEWS: &str = "this version of charter does not check release news";

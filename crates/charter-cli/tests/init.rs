@@ -196,6 +196,30 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
         front_door,
         Node::File(text.replacen("\nrouting: advise\n", "\n", 1).into_bytes()),
     );
+    // And the ask rule for filing a report, which the Python charter never had (#363, ADR
+    // 0059 amended 2026-09-26): appended after the handoff rule in both harnesses' files.
+    for (rel, from, to) in [
+        (
+            ".claude/settings.json",
+            r#""Bash(charter handoff *)"]"#,
+            r#""Bash(charter handoff *)","Bash(charter report *--yes*)"]"#,
+        ),
+        (
+            "opencode.json",
+            "\"charter handoff *\": \"ask\"\n",
+            "\"charter handoff *\": \"ask\",\n      \"charter report *--yes*\": \"ask\"\n",
+        ),
+    ] {
+        let Some(Node::File(python)) = want.get(Path::new(rel)) else {
+            panic!("the fixture has {rel}");
+        };
+        let text = String::from_utf8(python.clone()).expect("UTF-8");
+        assert!(text.contains(from), "{text}");
+        want.insert(
+            PathBuf::from(rel),
+            Node::File(text.replacen(from, to, 1).into_bytes()),
+        );
+    }
     assert_eq!(tree(&scene.plane), want);
 }
 
@@ -244,12 +268,13 @@ fn a_file_already_at_every_path_init_writes_is_left_byte_for_byte() {
     scene.write(
         ".claude/settings.json",
         "{\n    \"env\": {\"CHARTER_HARNESS\": \"claude-code\"},\n    \"permissions\": {\"ask\": \
-         [\"Bash(charter handoff *)\"]},\n    \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \
+         [\"Bash(charter handoff *)\", \"Bash(charter report *--yes*)\"]},\n    \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \
          \"hooks\": [{\"type\": \"command\", \"command\": \"charter hook pretooluse\"}]}]}\n}",
     );
     scene.write(
         "opencode.json",
-        "{\"permission\": {\"bash\": {\"charter handoff *\": \"ask\"}}}",
+        "{\"permission\": {\"bash\": {\"charter handoff *\": \"ask\", \"charter report *--yes*\": \
+         \"ask\"}}}",
     );
     scene.write("personas/ops/persona.md", "---\nname: ops\n---\n");
     scene.write("inventory/repos.json", "{}");

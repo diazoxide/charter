@@ -29,6 +29,18 @@
 //!   new name.
 //! - this machine's pins (`machine.rs`), which would otherwise dangle.
 //!
+//! # What does NOT follow: a harness's own conversation files
+//!
+//! Claude Code files each conversation under `~/.claude/projects/<encoded cwd>/`, and finds
+//! it again only from that directory. charter does not write the harness's files (ADR 0050),
+//! so a Claude Code chat recorded in the workspace cannot be resumed under the new name. The
+//! rename goes ahead, and says first, by name, which chats will start a fresh conversation
+//! ([`starts_fresh`]); the record then drops their conversation and says why
+//! ([`crate::reopen::Chat::renamed_from`]), so reopening one starts fresh with a note instead
+//! of failing to resume. A harness that finds a conversation by its id from anywhere (Codex,
+//! opencode) is not affected, and is not named
+//! ([`Harness::keeps_conversations_by_directory`]). The operator's ruling D10 on charter#367.
+//!
 //! Dispatch rows name no workspace (`docs/plane-format.md`), so there is nothing to rewrite in
 //! them.
 //!
@@ -74,6 +86,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::harness::Harness;
 use crate::repocmd::{Say, Sink};
 use crate::wscmd;
 
@@ -104,6 +117,9 @@ pub struct Move {
     /// `(from, to)` directory pairs: the plane's workspace directory as it is spelled, and as
     /// the filesystem resolves it (`/tmp` is a link on macOS, and git records resolved paths).
     dirs: Vec<(PathBuf, PathBuf)>,
+    /// The harness each of the plane's profiles declares, by the profile's name: a chat on a
+    /// profile runs the harness its `kind` says, whatever its command is called.
+    kinds: std::collections::BTreeMap<String, Harness>,
 }
 
 impl Move {
@@ -118,11 +134,36 @@ impl Move {
                 )
             })
             .collect();
+        let kinds = crate::profiles::current(root)
+            .profiles()
+            .iter()
+            .filter_map(|p| Some((p.name.clone(), Harness::of_kind(&p.kind)?)))
+            .collect();
         Self {
             old: old.to_string(),
             new: new.to_string(),
             dirs,
+            kinds,
         }
+    }
+
+    /// The harness a recorded chat runs: its profile's declared kind, else what its program
+    /// is called — the rule the reopen starts it by.
+    fn harness_of(&self, chat: &crate::reopen::Chat) -> Option<Harness> {
+        match chat.profile.as_deref() {
+            Some(profile) => self.kinds.get(profile).copied(),
+            None => chat.harness(),
+        }
+    }
+
+    /// Whether this move leaves `chat` with a conversation its harness can no longer find: it
+    /// has one, it runs in the workspace, and its harness finds a conversation by directory.
+    fn loses_conversation(&self, chat: &crate::reopen::Chat) -> bool {
+        chat.resume.is_some()
+            && chat.cwd.as_deref().and_then(|cwd| self.path(cwd)).is_some()
+            && self
+                .harness_of(chat)
+                .is_some_and(Harness::keeps_conversations_by_directory)
     }
 
     /// Where `path` is after the move, or `None` for a path the move did not touch.
@@ -138,8 +179,18 @@ impl Move {
     }
 
     /// Follows the move in one chat of the app's record; `true` when it changed.
+    ///
+    /// A chat whose harness would no longer find its conversation drops it, and records the
+    /// workspace it came from, so its next start is a fresh one that says why.
     pub fn chat(&self, chat: &mut crate::reopen::Chat) -> bool {
         let mut changed = false;
+        if self.loses_conversation(chat) {
+            chat.resume = None;
+            if chat.renamed_from.is_none() {
+                chat.renamed_from = Some(self.old.clone());
+            }
+            changed = true;
+        }
         if let Some(cwd) = chat.cwd.as_deref().and_then(|cwd| self.path(cwd)) {
             chat.cwd = Some(cwd);
             changed = true;
@@ -353,6 +404,9 @@ pub fn rename(request: &Request, say: Sink) -> u8 {
             )));
             return 1;
         }
+        if let Some(warning) = fresh_warning(&starts_fresh_on_disk(root, old)) {
+            say(Say::Warn(warning));
+        }
         let journal = Journal {
             from: old.to_string(),
             to: new.to_string(),
@@ -394,10 +448,13 @@ pub fn rename(request: &Request, say: Sink) -> u8 {
             let _ = std::fs::remove_file(journal_path(root));
             say(Say::Fail(match back {
                 Ok(()) => format!(
-                    "could not record that workspaces/{old} moved ({why}), so it was put back                      and nothing was renamed."
+                    "could not record that workspaces/{old} moved ({why}), so it was put back \
+                     and nothing was renamed."
                 ),
                 Err(stuck) => format!(
-                    "could not record that workspaces/{old} moved ({why}), nor put it back                      ({stuck}). It is at workspaces/{new}: finish with charter workspace                      rename {old} {new}"
+                    "could not record that workspaces/{old} moved ({why}), nor put it back \
+                     ({stuck}). It is at workspaces/{new}: finish with charter workspace \
+                     rename {old} {new}"
                 ),
             }));
             return 1;
@@ -954,6 +1011,49 @@ fn config_named(root: &Path, old: &str) -> Vec<String> {
             )
         })
         .collect()
+}
+
+// ----------------------------------------------------------------------------------------
+// which chats start a fresh conversation after it
+// ----------------------------------------------------------------------------------------
+
+/// The chats in `record` that will start a fresh conversation once `workspace` is renamed,
+/// whatever to, by the name each is shown under (charter#367, D10).
+///
+/// A chat is named when it has a conversation to resume, runs in the workspace, and its
+/// harness finds a conversation by the directory it ran in — Claude Code. A Codex or opencode
+/// chat resumes by its id wherever it runs, and is not named.
+pub fn starts_fresh(root: &Path, workspace: &str, record: &crate::reopen::Record) -> Vec<String> {
+    // Only where a path moves FROM decides which chats lose theirs, so any new name will do.
+    let moved = Move::in_plane(root, workspace, workspace);
+    record
+        .chats
+        .iter()
+        .filter(|chat| moved.loses_conversation(chat))
+        .map(|chat| crate::reopen::shown_name(chat, moved.harness_of(chat).map(Harness::name)))
+        .collect()
+}
+
+/// [`starts_fresh`], for the app's record on disk — what a terminal's rename knows. A record
+/// that cannot be read names nothing.
+pub fn starts_fresh_on_disk(root: &Path, workspace: &str) -> Vec<String> {
+    crate::reopen::read_or_refusal(root)
+        .map(|record| starts_fresh(root, workspace, &record))
+        .unwrap_or_default()
+}
+
+/// The sentence that names them, or none when there are none.
+pub fn fresh_warning(chats: &[String]) -> Option<String> {
+    let (one, they) = match chats.len() {
+        0 => return None,
+        1 => ("This chat", "its conversation"),
+        _ => ("These chats", "their conversations"),
+    };
+    Some(format!(
+        "{one} will start a fresh conversation after the rename: {}. Claude Code keeps \
+         {they} under the folder it ran in, and charter does not move that folder.",
+        chats.join(", ")
+    ))
 }
 
 // ----------------------------------------------------------------------------------------

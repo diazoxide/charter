@@ -57,7 +57,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::livesub::{live_substitution, may_substitute};
+use crate::livesub::{is_process_substitution, live_substitution, may_substitute};
 use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
 
@@ -327,7 +327,26 @@ fn shown_as(spelling: &str) -> &'static str {
     match spelling {
         "`" => "`…`",
         "${" => "${ …; }",
+        "<(" => "<(…)",
+        ">(" => ">(…)",
+        "=(" => "=(…)",
         _ => "$(…)",
+    }
+}
+
+/// `(what a denial calls the substitution, and what it says the shell does with the output)`.
+/// A process substitution hands the program a path to read its output from rather than splicing
+/// the output into its argv, and a denial that called it a command substitution would describe
+/// something the line does not do. `command_effect` is what the denial says a command
+/// substitution does, which differs between A5 and A6.
+fn kind_of(spelling: &str, command_effect: &'static str) -> (&'static str, &'static str) {
+    if is_process_substitution(spelling) {
+        (
+            "process substitution",
+            "hands the program a path to read its OUTPUT from",
+        )
+    } else {
+        ("command substitution", command_effect)
     }
 }
 
@@ -373,13 +392,14 @@ pub fn forge_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
     let spelling = live_substitution(cmd)?;
     let where_ = forge_prose_command(cmd)?;
     let shown = shown_as(spelling);
+    let (kind, effect) = kind_of(spelling, "substitutes its OUTPUT");
     // Python's `where.split()[0]`, which is the program name the pair was found under.
     let program = where_.split_whitespace().next().unwrap_or("").to_string();
     Some((
         spelling,
         format!(
             "`{where_}` publishes prose a reader sees, and this line carries a LIVE {shown} \
-             command substitution. The shell runs it and substitutes its OUTPUT before {program} \
+             {kind}. The shell runs it and {effect} before {program} \
              is started — charter is handed the command, never the value it becomes — and a forge \
              keeps public edit history, so what gets published cannot be withdrawn by editing it. \
              Put the text in a file and pass `--body-file <path>`, or pipe it in with \
@@ -414,6 +434,7 @@ pub fn charter_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
     let spelling = live_substitution(cmd)?;
     let (where_, dest, from_file) = charter_prose_command(cmd)?;
     let shown = shown_as(spelling);
+    let (kind, effect) = kind_of(spelling, "splices its OUTPUT in");
     let fix = match from_file {
         Some(flag) => format!(
             ", or pass `{flag} <path>` (or `--stdin`) and keep the text out of argv altogether"
@@ -424,7 +445,7 @@ pub fn charter_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
         spelling,
         format!(
             "`{where_}` takes text charter PERSISTS — {dest} — and this line carries a LIVE \
-             {shown} command substitution. The shell runs it and splices its OUTPUT in before \
+             {shown} {kind}. The shell runs it and {effect} before \
              charter is started, so what gets saved is not what you typed: charter is handed the \
              command, never the value it becomes. This is #778 — the memory that read \
              \"appending to  each pass\" with the word gone — and #703, where the same slip on a \
@@ -658,5 +679,55 @@ mod tests {
         // A command the table would match, with no substitution on the line.
         assert_eq!(forge_substitution_hit("gh issue create --body x"), None);
         assert_eq!(charter_substitution_hit("charter persona remember x"), None);
+    }
+
+    /// A process substitution publishes a command's output as surely as `$(…)` does, and the
+    /// denial names it as what it is rather than as a command substitution.
+    #[test]
+    fn a_process_substitution_is_refused_and_named() {
+        for (cmd, spelling, shown) in [
+            (
+                "gh pr create --body-file <(env)",
+                "<(",
+                "<(…) process substitution",
+            ),
+            (
+                "gh issue comment 1 --body-file >(x) -b y",
+                ">(",
+                ">(…) process substitution",
+            ),
+            (
+                "gh issue create --body-file =(env)",
+                "=(",
+                "=(…) process substitution",
+            ),
+        ] {
+            let (hit, said) = forge_substitution_hit(cmd).unwrap_or_else(|| panic!("{cmd}"));
+            assert_eq!(hit, spelling, "{cmd}");
+            assert!(said.contains(shown), "{cmd}: {said}");
+            assert!(!said.contains("command substitution"), "{cmd}: {said}");
+        }
+        for (cmd, spelling) in [
+            ("charter persona remember devops <(env)", "<("),
+            ("charter workspace note w >(tee x) y", ">("),
+            ("charter persona remember devops =(env)", "=("),
+        ] {
+            let (hit, said) = charter_substitution_hit(cmd).unwrap_or_else(|| panic!("{cmd}"));
+            assert_eq!(hit, spelling, "{cmd}");
+            assert!(
+                said.contains(&format!("{spelling}…) process substitution")),
+                "{said}"
+            );
+            assert!(!said.contains("command substitution"), "{said}");
+        }
+        // Quoted, it is two characters of prose.
+        assert_eq!(
+            forge_substitution_hit("gh pr create --body 'use <(cmd)'"),
+            None
+        );
+        assert_eq!(
+            charter_substitution_hit("charter persona remember devops \"use <(cmd)\""),
+            None
+        );
     }
 }

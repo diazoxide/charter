@@ -352,7 +352,7 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
             Ok(c) => c,
             Err(e) => return not_started(&command[0], &e, io),
         };
-        let code = supervise(spawned, &signals);
+        let code = supervise(spawned, &signals, CTRL_C_GRACE);
         drop(cleanup);
         return code;
     }
@@ -374,7 +374,7 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
         let _ = err_pipe.read_to_end(&mut buf);
         buf
     });
-    let code = supervise(spawned, &signals);
+    let code = supervise(spawned, &signals, CTRL_C_GRACE);
     if code >= 128 && signals.caught().is_some() {
         // Died on a signal charter caught: the child is gone and nothing it said is printed.
         drop(cleanup);
@@ -429,11 +429,16 @@ fn replace_process(mut child: Command, program: &str, io: &mut dyn Io) -> i32 {
     127
 }
 
+/// How long a child is given to finish after a Ctrl-C before it is killed: a quarter of a
+/// second, as Python's `subprocess` gives it.
+const CTRL_C_GRACE: Duration = Duration::from_millis(250);
+
 /// Wait for `child`, and if a terminating signal arrives first, kill it and return `128+N`.
 ///
-/// A SIGINT is given a quarter of a second first — the child got the same Ctrl-C from the
-/// terminal, and Python's `subprocess` waits that long before killing it.
-fn supervise(mut child: std::process::Child, signals: &Termination) -> i32 {
+/// A SIGINT is given `grace` first — the child got the same Ctrl-C from the terminal. Always
+/// [`CTRL_C_GRACE`] in the product; a parameter so that a test of the grace is not failed by a
+/// loaded machine taking longer than a quarter second to run a shell's last line (#465).
+fn supervise(mut child: std::process::Child, signals: &Termination, grace: Duration) -> i32 {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return exit_status(&status),
@@ -442,7 +447,7 @@ fn supervise(mut child: std::process::Child, signals: &Termination) -> i32 {
         }
         if let Some(sig) = signals.caught() {
             if sig == Termination::SIGINT {
-                let deadline = std::time::Instant::now() + Duration::from_millis(250);
+                let deadline = std::time::Instant::now() + grace;
                 // `<` and `<=` differ only at the one instant equal to the deadline, which a
                 // 10 ms poll cannot land on (`.cargo/mutants.toml` excludes that mutant).
                 while std::time::Instant::now() < deadline {

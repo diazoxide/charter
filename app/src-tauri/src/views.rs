@@ -430,8 +430,9 @@ fn commanded(seen: &extension::Survey) -> Vec<ExtensionCommand> {
     out
 }
 
-/// charter's own views that answer in panel blocks, by id. **One today**, the persona view, and
-/// the match is the whole of the registry: a built-in view is code in this process, so there is
+/// charter's own views that answer in panel blocks, by id: the persona view and a workspace's
+/// cross-repo changes (#470). The
+/// match is the whole of the registry: a built-in view is code in this process, so there is
 /// nothing to discover. The vault view (`{ view: "vault", key: <vault> }`, charter-app#235) is
 /// charter's too, but the window draws it itself from the `vault_*` commands — a table the
 /// operator writes to is not something blocks can say — so it is never asked here, and a caller
@@ -457,6 +458,27 @@ fn built_in(
                 why: format!("This plane has no persona called {key} any more."),
             },
         }),
+        // A workspace's cross-repo changes (#470), keyed by the workspace. This is the one
+        // built-in view that asks a forge, and it is asked only here: when its tab is opened and
+        // when its Refresh is pressed, never on a workspace switch.
+        "changes" => {
+            if !charter_core::contain::workspace_name_ok(key) {
+                return Err(format!(
+                    "{key:?} is not a workspace name charter would read"
+                ));
+            }
+            if !charter_core::wscmd::workspace_dir_exists(root, key) {
+                return Ok(ViewAnswer::Gone {
+                    why: format!("This plane has no workspace called {key} any more."),
+                });
+            }
+            let blocks = charter_core::change::view::blocks(root, key, chrono::Utc::now());
+            Ok(ViewAnswer::Answered {
+                blocks: blocks.iter().map(PanelBlock::from).collect(),
+                took_ms: millis(began.elapsed()),
+                overreach: None,
+            })
+        }
         other => Ok(ViewAnswer::Gone {
             why: format!("This version of charter has no view called '{other}'."),
         }),
@@ -595,6 +617,62 @@ mod tests {
                 title: "Statistics".into(),
                 about: "personas".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn a_workspace_with_no_changes_is_answered_with_how_to_create_one() {
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::create_dir_all(plane.path().join("workspaces/alpha")).expect("a workspace");
+        let ViewAnswer::Answered { blocks, .. } = built_in(
+            plane.path(),
+            &plane.path().join(".charter"),
+            "changes",
+            "alpha",
+        )
+        .expect("an answer") else {
+            panic!("the changes view was not answered");
+        };
+        let empty = blocks
+            .iter()
+            .find_map(|block| match block {
+                PanelBlock::List { rows, empty } if rows.is_empty() => Some(empty.clone()),
+                _ => None,
+            })
+            .expect("an empty list");
+        assert_eq!(empty.headline, "No cross-repo changes in alpha");
+        let facts: Vec<&str> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PanelBlock::Facts { facts } => Some(facts),
+                _ => None,
+            })
+            .flatten()
+            .map(|fact| fact.label.as_str())
+            .collect();
+        assert!(facts.contains(&"read from the forge"), "{facts:?}");
+    }
+
+    #[test]
+    fn a_changes_view_for_a_workspace_that_is_gone_says_so() {
+        let plane = tempfile::tempdir().expect("a plane");
+        std::fs::create_dir_all(plane.path().join("workspaces")).expect("workspaces");
+        let answer = built_in(
+            plane.path(),
+            &plane.path().join(".charter"),
+            "changes",
+            "gone",
+        )
+        .expect("an answer");
+        assert!(matches!(answer, ViewAnswer::Gone { .. }), "{answer:?}");
+        assert!(
+            built_in(
+                plane.path(),
+                &plane.path().join(".charter"),
+                "changes",
+                "../x"
+            )
+            .is_err()
         );
     }
 

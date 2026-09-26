@@ -179,6 +179,8 @@ struct Run {
     escapes: Vec<Escape>,
     /// Something asked for failed in a way that has already been said.
     failed: bool,
+    /// An ask rule was written, so the workspace layers are rewritten to carry it.
+    carry: bool,
 }
 
 impl Run {
@@ -352,7 +354,8 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         }
     }
 
-    handoff_gate(&mut run, root, settings_ok);
+    ask_gate(&mut run, root, settings_ok, &HANDOFF_ASK, "init");
+    ask_gate(&mut run, root, settings_ok, &REPORT_ASK, "init");
 
     profile_approvals(&mut run, root);
 
@@ -393,6 +396,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
             let line = format!("  already present: {}", run.present.join(", "));
             run.info(line);
         }
+        carry_rules(&mut run, root);
         return run.outcome(1);
     }
 
@@ -416,6 +420,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         let line = format!("  already present: {}", run.present.join(", "));
         run.info(line);
     }
+    carry_rules(&mut run, root);
     run.info(
         "Next: `charter doctor` to preflight, then `charter discover` to build the inventory.",
     );
@@ -468,6 +473,8 @@ pub fn reinit(place: &Place) -> Outcome {
         }
     }
 
+    ask_gate(&mut run, root, settings_ok, &REPORT_ASK, "reinit");
+
     profile_approvals(&mut run, root);
 
     if settings_ok {
@@ -503,6 +510,7 @@ pub fn reinit(place: &Place) -> Outcome {
             let line = format!("  already present: {}", run.present.join(", "));
             run.info(line);
         }
+        carry_rules(&mut run, root);
         return run.outcome(1);
     }
 
@@ -522,6 +530,7 @@ pub fn reinit(place: &Place) -> Outcome {
         let line = format!("  already present: {}", run.present.join(", "));
         run.info(line);
     }
+    carry_rules(&mut run, root);
     run.outcome(0)
 }
 
@@ -872,11 +881,40 @@ pub(crate) fn append_gitignore(
     Ok(missing)
 }
 
-/// `commands.ensure_handoff_gate`: the ask rule for `charter handoff *` in every harness that
-/// can hold one, or in none of them. Every file is asked first with nothing written, and one
-/// that cannot take the rule stops the whole write — a rule in force under one harness and
-/// not another is the split `charter guard` exists to prevent.
-fn handoff_gate(run: &mut Run, root: &Path, settings_ok: bool) {
+/// An ask rule `init` writes by default, in each harness's own syntax (#363 D11).
+struct AskRule {
+    /// What the run's lines call it: `ask: <label>`.
+    label: &'static str,
+    /// Claude Code's rule.
+    rule: &'static str,
+    /// opencode's `permission.bash` glob.
+    pattern: &'static str,
+}
+
+/// The consent rule for a handoff (`commands.HANDOFF_ASK_PATTERN`).
+const HANDOFF_ASK: AskRule = AskRule {
+    label: "charter handoff",
+    rule: settings::HANDOFF_RULE,
+    pattern: settings::HANDOFF_PATTERN,
+};
+
+/// The consent rule for filing a report (ADR 0059, amended 2026-09-26): the harness asks the
+/// operator before `charter report … --yes <digest>` files anything.
+const REPORT_ASK: AskRule = AskRule {
+    label: "charter report --yes",
+    rule: settings::REPORT_RULE,
+    pattern: settings::REPORT_PATTERN,
+};
+
+/// `commands.ensure_handoff_gate`, for any of charter's default ask rules: the rule in every
+/// harness that can hold one, or in none of them. Every file is asked first with nothing
+/// written, and one that cannot take the rule stops the whole write — a rule in force under
+/// one harness and not another is the split `charter guard` exists to prevent.
+///
+/// `command` is the command the run is (`init` or `reinit`). `reinit` lists what it added
+/// only, so a rule already there is not said. A rule written now is carried into every
+/// workspace layer charter generates, as `charter guard ask` carries it (#449).
+fn ask_gate(run: &mut Run, root: &Path, settings_ok: bool, ask: &AskRule, command: &str) {
     let opencode_ok = run.gate(root, settings::OPENCODE).is_some();
     if !settings_ok || !opencode_ok {
         // The blocker is reported where it was found; nothing is written anywhere.
@@ -885,11 +923,11 @@ fn handoff_gate(run: &mut Run, root: &Path, settings_ok: bool) {
     let checked = [
         (
             "claude-code",
-            settings::ensure_ask_rule(root, settings::HANDOFF_RULE, true),
+            settings::ensure_ask_rule(root, ask.rule, true),
         ),
         (
             "opencode",
-            settings::ensure_opencode_ask(root, settings::HANDOFF_PATTERN, true),
+            settings::ensure_opencode_ask(root, ask.pattern, true),
         ),
     ];
     let bad: Vec<&str> = checked
@@ -901,29 +939,35 @@ fn handoff_gate(run: &mut Run, root: &Path, settings_ok: bool) {
         .collect();
     if !bad.is_empty() {
         let line = format!(
-            "the ask rule for `charter handoff` was not written anywhere — {} is not valid, and \
-             charter writes every harness or none. Fix it, then run charter init again",
+            "the ask rule for `{}` was not written anywhere — {} is not valid, and \
+             charter writes every harness or none. Fix it, then run charter {command} again",
+            ask.label,
             bad.join(", ")
         );
         run.warn(line);
         return;
     }
+    let mut added = false;
     for (name, check) in checked {
         let (rel, wrote) = match (name, check) {
             ("claude-code", Wrote::Created) => (
                 settings::SETTINGS,
-                settings::ensure_ask_rule(root, settings::HANDOFF_RULE, false),
+                settings::ensure_ask_rule(root, ask.rule, false),
             ),
             ("opencode", Wrote::Created) => (
                 settings::OPENCODE,
-                settings::ensure_opencode_ask(root, settings::HANDOFF_PATTERN, false),
+                settings::ensure_opencode_ask(root, ask.pattern, false),
             ),
             ("claude-code", other) => (settings::SETTINGS, other),
             (_, other) => (settings::OPENCODE, other),
         };
         match wrote {
-            Wrote::Created => run.created.push(format!("{rel} (ask: charter handoff)")),
-            Wrote::Present => run.present.push(format!("{rel} (ask: charter handoff)")),
+            Wrote::Created => {
+                added = true;
+                run.created.push(format!("{rel} (ask: {})", ask.label));
+            }
+            Wrote::Present if command == "reinit" => {}
+            Wrote::Present => run.present.push(format!("{rel} (ask: {})", ask.label)),
             Wrote::Failed(path, e) => {
                 run.err(format!(
                     "{name}: could not write {} ({}) — left untouched.",
@@ -937,6 +981,22 @@ fn handoff_gate(run: &mut Run, root: &Path, settings_ok: bool) {
             }
             Wrote::Blocked(dir) => run.blocked.push((".claude".to_owned(), dir)),
             Wrote::Malformed(_) => {}
+        }
+    }
+    run.carry |= added;
+}
+
+/// When the run wrote an ask rule, rewrite every workspace layer charter generates so the rule
+/// is in force there now, as `charter guard ask` does (#449), and say where it went. Said last,
+/// after what the run wrote in the plane.
+fn carry_rules(run: &mut Run, root: &Path) {
+    if !run.carry {
+        return;
+    }
+    for line in crate::guardcmd::mirror(root).lines() {
+        match line.strip_prefix("! ") {
+            Some(warning) => run.warn(warning.to_owned()),
+            None => run.info(line.to_owned()),
         }
     }
 }
@@ -1482,7 +1542,7 @@ mod tests {
     }
 
     /// `InitArgs` as `charter init --forge github --owner acme` builds it.
-    fn plain() -> InitArgs {
+    pub(super) fn plain() -> InitArgs {
         InitArgs {
             forge: "github".to_owned(),
             owner: "acme".to_owned(),
@@ -1591,7 +1651,7 @@ mod tests {
         (dir, root)
     }
 
-    fn at(root: &Path, is_plane: bool) -> Place {
+    pub(super) fn at(root: &Path, is_plane: bool) -> Place {
         Place {
             root: root.to_path_buf(),
             is_plane,
@@ -1661,9 +1721,10 @@ mod tests {
         let outcome = init(&at(&root, false), &plain());
 
         let settings_item = if guard_created {
-            ".claude/settings.json (env, ask: charter handoff, plane-root guard)"
+            ".claude/settings.json (env, ask: charter handoff, ask: charter report --yes, \
+             plane-root guard)"
         } else {
-            ".claude/settings.json (env, ask: charter handoff)"
+            ".claude/settings.json (env, ask: charter handoff, ask: charter report --yes)"
         };
         let mut said = vec![
             Say::Ok("Initialized control plane (schema 1) — 9 item(s) written.".to_owned()),
@@ -1674,7 +1735,9 @@ mod tests {
             Say::Info("  + .gitignore".to_owned()),
             Say::Info("  + .gitattributes (merge rules)".to_owned()),
             Say::Info(format!("  + {settings_item}")),
-            Say::Info("  + opencode.json (ask: charter handoff)".to_owned()),
+            Say::Info(
+                "  + opencode.json (ask: charter handoff, ask: charter report --yes)".to_owned(),
+            ),
             Say::Info("  + personas/steward/ (front door, declared in charter.toml)".to_owned()),
         ];
         if !guard_created {
@@ -1715,7 +1778,9 @@ mod tests {
                      .gitignore, .gitattributes (merge rules), .claude/settings.json (env), \
                      .claude/settings.json (ask: \
                      charter handoff), opencode.json (ask: charter handoff), \
-                     .claude/settings.json (plane-root guard already wired)"
+                     .claude/settings.json (ask: charter report --yes), opencode.json (ask: \
+                     charter report --yes), .claude/settings.json (plane-root guard already \
+                     wired)"
                         .to_owned()
                 ),
                 Say::Info(NEXT.to_owned()),
@@ -1792,8 +1857,9 @@ mod tests {
         let mut created = "charter.toml, personas/, workspaces/.gitkeep, .gitignore, \
                            .gitattributes (merge rules), .claude/settings.json (env), \
                            .claude/settings.json (ask: charter handoff), opencode.json (ask: \
-                           charter handoff), personas/steward/ (front door, declared in \
-                           charter.toml)"
+                           charter handoff), .claude/settings.json (ask: charter report --yes), \
+                           opencode.json (ask: charter report --yes), personas/steward/ (front \
+                           door, declared in charter.toml)"
             .to_owned();
         let mut present = "workspaces/".to_owned();
         if guard_created {
@@ -2282,7 +2348,9 @@ mod tests {
         let outcome = reinit(&at(&root, true));
 
         let mut added = "personas/, inventory/, workspaces/, .gitignore (/charter.local.toml), \
-                         .gitattributes (merge rules), .claude/settings.json (env)"
+                         .gitattributes (merge rules), .claude/settings.json (env), \
+                         .claude/settings.json (ask: charter report --yes), opencode.json (ask: \
+                         charter report --yes)"
             .to_owned();
         let mut said = Vec::new();
         if guard_created {
@@ -2312,7 +2380,8 @@ mod tests {
 
         let mut created =
             "workspaces/, .gitignore (/charter.local.toml), .gitattributes (merge rules), \
-             .claude/settings.json (env)"
+             .claude/settings.json (env), .claude/settings.json (ask: charter report --yes), \
+             opencode.json (ask: charter report --yes)"
                 .to_owned();
         let mut present = "personas/".to_owned();
         if guard_created {
@@ -2960,5 +3029,150 @@ mod tests {
 
         let (_dir, root) = a_repo("https://example.com/acme/Not A Name.git");
         assert_eq!(first_clone_name(&root), "plane");
+    }
+}
+
+/// The default ask rule for `charter report --yes` (#363, ADR 0059 amended 2026-09-26).
+#[cfg(test)]
+mod report_ask_tests {
+    use super::tests::{at as place, plain as args};
+    use super::*;
+    use serde_json::{Value, json};
+
+    /// A directory for a plane, canonical so the workspace writer's containment checks agree
+    /// with it, and the tempdir that keeps it alive.
+    fn plane() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = std::fs::canonicalize(dir.path())
+            .expect("canonical")
+            .join("plane");
+        std::fs::create_dir_all(&root).expect("the plane's directory");
+        (dir, root)
+    }
+
+    /// A settings file as JSON.
+    fn read(path: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).expect("the file")).expect("json")
+    }
+
+    #[test]
+    fn init_writes_the_report_ask_rule_in_every_harness_that_can_hold_one() {
+        let (_d, root) = plane();
+        let outcome = init(&place(&root, false), &args());
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        assert_eq!(
+            read(&root.join(settings::SETTINGS))["permissions"]["ask"],
+            json!(["Bash(charter handoff *)", "Bash(charter report *--yes*)"])
+        );
+        assert_eq!(
+            read(&root.join(settings::OPENCODE))["permission"]["bash"],
+            json!({"charter handoff *": "ask", "charter report *--yes*": "ask"})
+        );
+    }
+
+    #[test]
+    fn reinit_adds_the_report_rule_to_an_existing_plane_and_touches_no_other_rule() {
+        let (_d, root) = plane();
+        std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(
+            root.join(settings::SETTINGS),
+            r#"{"permissions": {"ask": ["Bash(charter handoff *)", "Bash(terraform *)"], "allow": ["Bash(ls *)"], "deny": ["Bash(rm -rf *)"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(settings::OPENCODE),
+            r#"{"permission": {"bash": {"charter handoff *": "ask", "ls *": "allow"}}}"#,
+        )
+        .unwrap();
+
+        let outcome = reinit(&place(&root, true));
+
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        let said = format!("{:?}", outcome.said);
+        assert!(
+            said.contains(
+                ".claude/settings.json (ask: charter report --yes), opencode.json (ask: charter \
+                 report --yes)"
+            ),
+            "{said}"
+        );
+        let claude = read(&root.join(settings::SETTINGS));
+        assert_eq!(
+            claude["permissions"]["ask"],
+            json!([
+                "Bash(charter handoff *)",
+                "Bash(terraform *)",
+                "Bash(charter report *--yes*)"
+            ])
+        );
+        assert_eq!(claude["permissions"]["allow"], json!(["Bash(ls *)"]));
+        assert_eq!(claude["permissions"]["deny"], json!(["Bash(rm -rf *)"]));
+        assert_eq!(
+            read(&root.join(settings::OPENCODE))["permission"]["bash"],
+            json!({"charter handoff *": "ask", "ls *": "allow", "charter report *--yes*": "ask"})
+        );
+
+        // Once it is there, `reinit` has nothing to add and does not mention it.
+        let again = reinit(&place(&root, true));
+        assert!(
+            !format!("{:?}", again.said).contains("charter report"),
+            "{:?}",
+            again.said
+        );
+    }
+
+    #[test]
+    fn reinit_carries_the_report_rule_into_a_workspaces_generated_settings() {
+        let (_d, root) = plane();
+        std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(root.join(settings::SETTINGS), "{}\n").unwrap();
+        crate::wscmd::ensure::ensure(
+            &root,
+            "alpha",
+            "2026-05-04T11:32:17Z".parse().unwrap(),
+            "fixture",
+        )
+        .unwrap();
+        let layer = root.join("workspaces/alpha/.claude/settings.json");
+
+        let outcome = reinit(&place(&root, true));
+
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        let ask = read(&layer)["permissions"]["ask"].clone();
+        assert!(
+            ask.as_array()
+                .is_some_and(|a| a.contains(&json!("Bash(charter report *--yes*)"))),
+            "{ask}"
+        );
+        assert!(
+            outcome.said.contains(&Say::Info(
+                "  Carried into the generated settings of workspace(s) alpha.".to_owned()
+            )),
+            "{:?}",
+            outcome.said
+        );
+    }
+
+    #[test]
+    fn a_broken_opencode_json_stops_the_report_rule_everywhere() {
+        let (_d, root) = plane();
+        std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
+        std::fs::write(root.join(settings::OPENCODE), "{broken").unwrap();
+
+        let outcome = reinit(&place(&root, true));
+
+        let settings = std::fs::read_to_string(root.join(settings::SETTINGS)).unwrap_or_default();
+        assert!(!settings.contains("charter report"), "{settings}");
+        assert!(
+            outcome.said.iter().any(|s| matches!(
+                s,
+                Say::Warn(w) if w.starts_with("the ask rule for `charter report --yes` was not written anywhere")
+                    && w.ends_with("run charter reinit again")
+            )),
+            "{:?}",
+            outcome.said
+        );
     }
 }

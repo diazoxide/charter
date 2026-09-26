@@ -22,6 +22,45 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the command being started — charter's shims stand first on a shell tab's `PATH`, and stay
   first after zsh's and bash's own start files — and nothing reads what the harness prints
   (ADR 0062).
+- **The harness asks you before `charter report` files an issue.** `charter init` now writes an
+  ask rule for `charter report *--yes*` in `.claude/settings.json` and `opencode.json`, beside
+  the one for `charter handoff`, so a chat cannot file a public report without your yes.
+  `charter reinit` adds it to an existing plane and carries it into your workspaces.
+  `charter doctor`'s `ask rules` row warns when it is missing, and `charter guard report` or
+  `charter doctor --fix` puts it back. So `--fix` now writes the plane's committed harness
+  settings too, not only this machine's. Codex has no rule that can say this, so nothing is
+  written there (ADR 0059).
+- **`charter change` declares a piece of work that spans several repos.** `create` names it
+  and says why, `add` puts in a repo already cloned in the workspace (on `change/<slug>` or a
+  branch you name, with `--needs` for the repos that must land first), `drop` takes one out
+  with the reason, and `list`, `show` and `forget` read and end it. The record is
+  `workspaces/<ws>/changes/<slug>.json` and holds intent only; it is committed when the
+  workspace is LIVE. An unknown change, a repo with no clone, a repo added twice or an order
+  that cannot be true is refused with exit 2. Pushing, landing and reverting come later
+  (ADR 0060).
+- **`charter doctor` checks cross-repo changes in every workspace.** Its `changes` row fails on
+  a change record charter cannot read, naming the file and what is wrong with it, and on a
+  change's branch sitting in a clone that is a member of no change. It reads only this disk and
+  says which `changes/` directory it could not look at.
+- **`charter change show` says where each member's pull request stands.** Under the record it
+  prints each member's request number, whether it is open, merged or rejected, and its checks at
+  the request's exact head commit: PASSED, FAILED, RUNNING, NOT RUN or UNKNOWN. Zero checks is
+  NOT RUN and a check charter could not read is UNKNOWN, and neither is ever shown as passing.
+  It says which members still wait on a blocker, and when the reading was taken. If the forge
+  cannot be asked, the record still prints and each member says why. Nothing it reads is
+  written back.
+- **A workspace's cross-repo changes open in a tab.** "Open changes" in the palette (`F2`)
+  opens a tab for the focused workspace. It shows each change, each member's branch, its pull
+  request and its checks at the head commit, which members are blocked, and when that was read.
+  It asks the forge when the tab opens and when you press Refresh, and never when you switch
+  workspaces. A workspace with no changes says how to create one.
+- **Renaming a workspace names the chats that will start a fresh conversation.** Claude Code
+  keeps a conversation under the folder it ran in, and charter does not move that folder. So
+  `charter workspace rename`, and the Rename dialog before you confirm, list by name each
+  Claude Code chat in the workspace that will start fresh. The rename then goes ahead. When
+  you reopen one of those chats, it starts a new conversation and says why once, instead of
+  failing to resume. Codex and opencode chats resume as before and are not listed.
+  ([#367](https://github.com/diazoxide/charter/issues/367))
 
 - **charter's plugin teaches personas, vaults and the browser again.** It now ships the
   `charter:persona`, `charter:secrets` and `charter:browser` skills beside `handoff`,
@@ -132,6 +171,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The nightly mutation run's slowest test takes about a quarter of the time it did.** The
+  plane-root replay asks git each distinct question once instead of once per recorded row,
+  and more of how saving and the `CHARTER_*` steering variables behave is pinned by tests.
+  ([#464](https://github.com/diazoxide/charter/issues/464))
+
 - **Removing a worktree that holds work now says which work.** The refusal lists the
   uncommitted files and the commits no other branch has, so you can see what `--force` (or
   "Discard that work and remove the worktree anyway", in the window) would discard. A merge refused over uncommitted changes no
@@ -181,6 +225,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#369](https://github.com/diazoxide/charter/issues/369))
 
 ### Fixed
+
+- **The prose guards treat a process substitution as the substitution it is.** A `gh` or
+  `glab` command that publishes prose, a charter command that persists it, and `charter
+  handoff` now refuse `<(…)` and `>(…)` wherever the shell runs them, and zsh's `=(…)`, exactly
+  as they refuse `$(…)`. Quoted, or in a heredoc body, they are text and are left alone. The
+  refusal names a process substitution rather than calling it a command substitution.
+
+- **The guards read `<<` inside arithmetic and parameter expansions the way the shell may.**
+  Inside `(( … ))`, `$(( … ))`, `$[ … ]`, `${ … }` or an array subscript, `<<` can be a shift
+  rather than a heredoc. The guards now read the lines after it both as commands and as a
+  heredoc body, and never set them aside as a body alone. The leak guard also reads the
+  command inside zsh's `=(…)` as a command of its own, as it already did for `<(…)`, and a
+  heredoc opened inside a process substitution that closes on the same line is read the way a
+  heredoc inside `$(…)` already was.
+
+- **The guards read a heredoc inside a substitution that spans lines the way each shell does.**
+  When a heredoc is opened inside `$(…)`, backticks, `<(…)` or `>(…)` and the substitution
+  does not close on that line, bash 3.2, bash 5 and zsh can disagree about which of the
+  following lines are the heredoc's body. The guards now read those lines both as commands and
+  as a body, and never set them aside as a body alone. After such a body, or after a heredoc
+  whose delimiter the shells read differently, they no longer set aside any later heredoc body
+  either.
 
 - **The nightly mutation run finishes again.** Its shards were sized for a test suite half as
   long as today's, so two of them ran out of time. The run now uses smaller shards and a longer
@@ -238,6 +304,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   test suite set a different limit, so a test that is not about the limit gives a slow machine
   room, and a test that is about it uses a short limit and a program that never answers.
   ([#422](https://github.com/diazoxide/charter/issues/422))
+- **The extension runner's tests and the `secrets exec` tests no longer fail on a busy
+  machine.** Extensions keep the same 5 seconds, and a program `secrets exec` runs still gets
+  a quarter of a second to finish after a Ctrl-C. The tests about the limit now use a short
+  limit and a program that never answers, and no longer need the program to report that it
+  started. A test whose program has to get somewhere before the limit now waits for it to get
+  there. The one `secrets exec` test that replaces its own process now runs apart from the
+  others, so it can no longer break a test running next to it.
+  ([#465](https://github.com/diazoxide/charter/issues/465))
 - **The guards read more of the shell's quoting the way the shell does.** The shared command
   reader behind every guard now decodes ANSI-C quoting (`$'…'`) and bash's `$"…"` strings, and
   drops a backslash-newline line continuation before it reads a word, inside double quotes as

@@ -86,7 +86,8 @@ _Avoid_: detached tab, pop-out, secondary window
 
 **Strip**:
 One row of tabs: projects (in the title bar), a project's workspaces, or a workspace's chats.
-A strip's order never changes on its own, and it never scrolls.
+A strip's order never changes on its own, and it never scrolls. The operator can drag a tab
+along it; dropped among the pinned tabs it is pinned, and among the others it is unpinned.
 _Avoid_: tab bar, scroller
 
 **Pin**:

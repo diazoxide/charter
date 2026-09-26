@@ -137,11 +137,36 @@ describe("what a menu lists", () => {
     ]);
   });
 
-  it("offers the one thing charter can do to a persona, and nothing below the line", () => {
+  it("offers a persona's reading and editing above the line and its deletion below (SI-3)", () => {
     const shown = titles({ on: "persona", persona: "steward" }, { personas: ["steward"] });
 
-    expect(shown.above).toEqual(["Show what steward is"]);
-    expect(shown.below).toEqual([]);
+    expect(shown.above).toEqual([
+      "Show what steward is",
+      "Edit steward's persona.md",
+      "New persona…",
+    ]);
+    expect(shown.below).toEqual(["Delete persona steward…"]);
+  });
+
+  it("offers a vault's opening above the line and its deletion below (SI-3)", () => {
+    const shown = titles({ on: "vault", vault: "ops" }, { vaults: ["ops"] });
+
+    expect(shown.above).toEqual(["Open vault ops", "New vault…"]);
+    expect(shown.below).toEqual(["Delete vault ops…"]);
+  });
+
+  it("offers to close a todo above the line and to forget it below (SI-3)", () => {
+    const shown = titles(
+      { on: "todo", slug: "20260302-091400-review" },
+      {
+        workspaces: ["alpha"],
+        focused: "alpha",
+        todos: [{ slug: "20260302-091400-review", title: "Review the plan" }],
+      },
+    );
+
+    expect(shown.above).toEqual(["Mark done: Review the plan"]);
+    expect(shown.below).toEqual(["Forget todo Review the plan"]);
   });
 
   it("offers the pane's own verbs in the centre of the window", () => {

@@ -62,7 +62,23 @@ When two choices conflict, the higher priority wins.
      that names those chats; with neither, nothing is drawn. Ignoring an item lasts until its
      chat asks again (charter-app#248).
    - **Center:** tabs and free split panes.
-   - **Right:** panels for the focused workspace: repos, branches, CI, todos, personas.
+   - **Right:** panels for the focused workspace: repos, branches, CI, todos, personas, and
+     the plane's vaults. Amended 2026-09-26 (SI-3): the panels are not read-only any more.
+     Each write goes through the core function its CLI command calls, so the window and a
+     terminal refuse the same things in the same words:
+     - **Todos** are the focused workspace's, and the panel names it. A box at the top records
+       one (`charter ws todo "<text>"`), and a row's menu marks it done (journalled) or
+       forgets it (not journalled).
+     - **Personas:** the heading's `+` makes one as a draft (`charter persona create`: name,
+       role, delegate-when, inherits-from). A row's menu and the persona's tab open its
+       `persona.md` in the operator's own editor, because charter has no editor for it, and
+       delete it (`charter persona remove`, never forced: a persona another one extends or
+       uses is refused).
+     - **Vaults:** the heading's `+` makes one. A row's menu and the vault's tab delete one,
+       after a dialog that lists its secrets and takes the vault's name typed back. Deleting
+       a keychain vault destroys every secret it holds in the keychain, and they cannot be
+       recovered. Deleting any other kind of vault leaves its file or its 1Password item
+       where it is. `charter vault remove` only unregisters a vault, as before.
    - **Palette:** the command palette is the primary input, keyboard first.
 2. **No TUI.** In the terminal, charter is the CLI.
 3. **Session state comes from hooks only.** A hook calls `charter hook …`, which hands an
@@ -247,6 +263,12 @@ how it is cited and nothing here is renumbered.
     unchanged; the two records are separate because an arrangement spans planes and a plane's
     chats travel with the plane. A plane that has moved or gone is dropped with a line saying
     so, never an error dialog. `--no-restore` starts clean. **ADR 0033.**
+29. **A strip's order is the operator's.** Nothing reorders a strip by itself; the operator can
+    drag a tab along its own strip, with the pointer or the keyboard, and a drop across the
+    pinned tabs' boundary pins or unpins it. Each order is kept where that strip's arrangement
+    already was, on this machine and never committed: projects in the window arrangement of
+    decision 25, workspace pins in the same store, chats in the plane's own
+    `.charter/app/reopen.json`. **ADR 0039, as amended 2026-09-26.**
 
 ## Limits (acceptance)
 
@@ -285,7 +307,8 @@ Each milestone is something the operator actually uses, not a layer.
     (`crates/charter-core/tests/a_chat_in_a_worktree_gets_the_planes_layer.rs`). `unwired` is
     left only on a tree whose layer is not in it yet, and a chat is refused there rather than
     started unguarded. What is still missing is in decision 4
-  - read-only panels and the palette
+  - panels and the palette (read-only at M1; the panels write todos, personas and vaults since
+    SI-3 — decision 1)
   - lifecycle: tray, a quit warning mid-turn, reopen on relaunch
   - `charter hook …` answered by the Rust binary, which is also what meets the hook limit
     ADR 0026 measured at 107.6 ms through Python

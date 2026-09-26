@@ -36,22 +36,22 @@ Zed's, and it is the only one that can colour the terminal at all.
 ## The vocabulary
 
 `TOKENS` in `app/src/theme/theme.ts` is the list, with a comment on each group saying what it
-means. Fifty-eight names in twelve groups:
+means. Sixty names in twelve groups:
 
-| group                                  | tokens                                                             | what it is                                                                                   |
-| -------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `surface.*`                            | `base` `sunken` `deep` `raised` `overlay` `hover`                  | the layers of the window, deepest first                                                      |
-| `control.*`                            | `base` `hover` `aimed` `count`                                     | things that are pressed; `aimed` is where the keyboard is, which is not where the pointer is |
-| `text.*`                               | `primary` `secondary` `muted`                                      |                                                                                              |
-| `border.*`                             | `subtle` `strong`                                                  |                                                                                              |
-| `accent.*`, `focus.ring`, `tab.active` | `base` `surface`                                                   | what charter is drawing attention to                                                         |
-| `layer.*`                              | `project` `workspace` `chat` `selected`                            | which of the three strips of the axis a row is, and the tab you are on                       |
-| `needs-you.*`                          | `base` `text`                                                      | the one signal this app exists for                                                           |
-| `danger.*`                             | `base` `surface` `text` `wash`                                     | an answer that cannot be taken back                                                          |
-| `state.*`                              | `running` `waiting` `waiting-glow` `failed` `success` `unreadable` | what a chat, or a check on a branch, is doing                                                |
-| `overlay.*`                            | `scrim` `shadow`                                                   | what goes over the window when something is modal                                            |
-| `terminal.*`                           | `background` `foreground` `cursor` `cursor-accent` `selection`     |                                                                                              |
-| `terminal.ansi.*`                      | the eight, and the eight bright                                    |                                                                                              |
+| group                                  | tokens                                                                                          | what it is                                                                                        |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `surface.*`                            | `base` `sunken` `deep` `raised` `overlay` `hover`                                               | the layers of the window, deepest first                                                           |
+| `control.*`                            | `base` `hover` `aimed` `count`                                                                  | things that are pressed; `aimed` is where the keyboard is, which is not where the pointer is      |
+| `text.*`                               | `primary` `secondary` `muted`                                                                   |                                                                                                   |
+| `border.*`                             | `subtle` `strong`                                                                               |                                                                                                   |
+| `accent.*`, `focus.ring`, `tab.active` | `base` `surface`                                                                                | what charter is drawing attention to                                                              |
+| `layer.*`                              | `project` `workspace` `chat` `selected`                                                         | which of the three strips of the axis a row is, and the tab you are on                            |
+| `needs-you.*`                          | `base` `text`                                                                                   | the one signal this app exists for                                                                |
+| `danger.*`                             | `base` `surface` `text` `wash`                                                                  | an answer that cannot be taken back                                                               |
+| `state.*`                              | `running` `waiting` `waiting-glow` `failed` `success` `unreadable`                              | what a chat, or a check on a branch, is doing                                                     |
+| `overlay.*`                            | `scrim` `shadow`                                                                                | what goes over the window when something is modal                                                 |
+| `terminal.*`                           | `background` `foreground` `cursor` `cursor-accent` `selection` `find-match` `find-match-active` | the two `find-*` are a find's matches in a pane, drawn under the text (`theme.searchDecorations`) |
+| `terminal.ansi.*`                      | the eight, and the eight bright                                                                 |                                                                                                   |
 
 **Two tokens may look like one token and are not.** `needs-you.base` and `danger.base` were a
 single value before this — `--stop`, `#c05c5c`, "charter's red" — and splitting them by meaning

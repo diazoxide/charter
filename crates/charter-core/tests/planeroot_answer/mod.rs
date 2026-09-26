@@ -10,7 +10,9 @@
 //! 2026-09-23, when the recording was frozen and the Python harness retired; its `main` went
 //! with the harness, and what is left is the per-request answer the replay has always shared.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 use charter_core::gitconfig;
 use charter_core::planeroot::{self, OptKind};
@@ -103,7 +105,41 @@ fn config_probe(dir: &Path, text: &str, as_pointer: bool) -> Value {
     ))
 }
 
-pub fn answer(case: &Value, scratch: &Path) -> Value {
+/// What a git probe answered for one repository, kept for the rest of the replay.
+///
+/// The fixture repository is built once and nothing in the replay writes to it, so what git says
+/// about an operand, a reset target or the default branch of a root is the same on every row that
+/// asks. The recording asks often: 5,641 operand probes over 230 distinct ones, 3,413 target
+/// probes over 188, and 1,912 default-branch probes over 6 roots, two or more git calls each. Every
+/// DISTINCT question still goes to the code under test once and its answer is still compared on
+/// every row that recorded it; only the repeats are answered from here. That took the replay, the
+/// test every surviving mutant waits out, from about 290 to about 60 thread-seconds (#464).
+///
+/// The guards themselves (`bra`, `rst`) and alias resolution are never answered from here: those
+/// questions are nearly all distinct, and they are the code the recording pins end to end.
+#[derive(Default)]
+pub struct Probes {
+    operand: Mutex<HashMap<(String, String), &'static str>>,
+    unpushed: Mutex<HashMap<(String, String), Value>>,
+    default_branch: Mutex<HashMap<String, Value>>,
+}
+
+/// `key`'s answer from `memo`, asking `ask` the first time. Two threads may both ask a question
+/// neither has seen; they get the same answer, so the second write changes nothing.
+fn remembered<K, V>(memo: &Mutex<HashMap<K, V>>, key: K, ask: impl FnOnce() -> V) -> V
+where
+    K: std::hash::Hash + Eq,
+    V: Clone,
+{
+    if let Some(v) = memo.lock().expect("a probe memo").get(&key) {
+        return v.clone();
+    }
+    let v = ask();
+    memo.lock().expect("a probe memo").insert(key, v.clone());
+    v
+}
+
+pub fn answer(case: &Value, scratch: &Path, probes: &Probes) -> Value {
     let cmd = case["cmd"].as_str().expect("cmd");
     let cwd = case["cwd"].as_str().expect("cwd");
     let root_cfg = case["root"].as_str().expect("root");
@@ -192,20 +228,32 @@ pub fn answer(case: &Value, scratch: &Path) -> Value {
             .collect();
         let okind: Vec<Value> = strs(&case["ops"])
             .iter()
-            .map(|w| json!([w, planeroot::checkout_operand_kind(&root, w).as_str()]))
+            .map(|w| {
+                let kind = remembered(&probes.operand, (root.clone(), w.clone()), || {
+                    planeroot::checkout_operand_kind(&root, w).as_str()
+                });
+                json!([w, kind])
+            })
             .collect();
         let upr: Vec<Value> = strs(&case["targets"])
             .iter()
-            .map(|t| match planeroot::unpushed_at_risk(&root, t) {
-                None => json!([t, null]),
-                Some((n, up)) => json!([t, [n, up]]),
+            .map(|t| {
+                let risk = remembered(&probes.unpushed, (root.clone(), t.clone()), || {
+                    match planeroot::unpushed_at_risk(&root, t) {
+                        None => Value::Null,
+                        Some((n, up)) => json!([n, up]),
+                    }
+                });
+                json!([t, risk])
             })
             .collect();
         let extra = json!({
             "rga": rga,
             "okind": okind,
             "upr": upr,
-            "pdb": opt(planeroot::default_branch(&root)),
+            "pdb": remembered(&probes.default_branch, root.clone(), || {
+                opt(planeroot::default_branch(&root))
+            }),
             "bra": opt(planeroot::plane_root_branch_reason(cmd, cwd, root_cfg)),
             "rst": opt(planeroot::plane_root_reset_reason(cmd, cwd, root_cfg)),
         });

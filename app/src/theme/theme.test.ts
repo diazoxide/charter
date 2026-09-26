@@ -10,6 +10,7 @@ import {
   load,
   property,
   drawIn,
+  searchDecorations,
   xtermTheme,
 } from "./theme";
 import dark from "./charter-dark.json";
@@ -185,6 +186,27 @@ describe("one theme, two consumers", () => {
     expect(object.brightMagenta).toBe(dark.tokens["terminal.ansi.bright-magenta"]);
     // Sixteen ANSI colours plus four, and no key xterm does not know.
     expect(Object.keys(object)).toHaveLength(21);
+  });
+
+  it("colours the find bar's matches in the pane from the theme (SI-4)", () => {
+    const drawn = searchDecorations(BUILT_IN["charter-dark"]);
+    expect(drawn.matchBackground).toBe(dark.tokens["terminal.find-match"]);
+    expect(drawn.matchOverviewRuler).toBe(dark.tokens["terminal.find-match"]);
+    expect(drawn.activeMatchBackground).toBe(dark.tokens["terminal.find-match-active"]);
+    expect(drawn.activeMatchColorOverviewRuler).toBe(dark.tokens["terminal.find-match-active"]);
+  });
+
+  it("hands the search addon a short or translucent match colour as the #rrggbb it takes", () => {
+    // The addon's own contract: a match background "must use #RRGGBB format". A theme may
+    // write any of the four forms, so the long form is made here, once.
+    const { theme } = load(
+      file({
+        tokens: { "terminal.find-match": "#abc", "terminal.find-match-active": "#11223380" },
+      }),
+    );
+    const drawn = searchDecorations(theme);
+    expect(drawn.matchBackground).toBe("#aabbcc");
+    expect(drawn.activeMatchBackground).toBe("#112233");
   });
 
   it("gives the terminal and the window the same theme, which is the whole point", () => {

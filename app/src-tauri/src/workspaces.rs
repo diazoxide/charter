@@ -323,6 +323,41 @@ pub async fn workspace_rename(
     .map_err(|err| format!("the rename did not finish: {err}"))?
 }
 
+/// The core's sentence naming the chats that will start a fresh conversation if `workspace` is
+/// renamed, or none — what the Rename dialog says before it is answered (charter#367, D10).
+///
+/// Asked of what the window holds, which is what the record is written from: a Claude Code
+/// chat in the workspace with a conversation to resume. A chat that is running is left out: it
+/// refuses the rename instead, and is named then. The rename itself still goes ahead.
+// Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
+#[tauri::command]
+#[specta::specta]
+pub async fn workspace_starts_fresh(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+) -> Result<Option<String>, String> {
+    let held = planes.held(&plane)?;
+    tauri::async_runtime::spawn_blocking(move || starts_fresh_in(&held, &workspace))
+        .await
+        .map_err(|err| format!("could not ask which chats start fresh: {err}"))
+}
+
+/// [`workspace_starts_fresh`], against a plane the registry holds.
+pub(crate) fn starts_fresh_in(held: &crate::planes::Held, workspace: &str) -> Option<String> {
+    let chats = held.chats();
+    let running = chats.sessions().running();
+    let mut record = chats.record();
+    record
+        .chats
+        .retain(|chat| chat.number.is_none_or(|number| !running.contains(&number)));
+    wscmd::rename::fresh_warning(&wscmd::rename::starts_fresh(
+        held.root(),
+        workspace,
+        &record,
+    ))
+}
+
 /// The rename itself, against a plane the registry holds.
 pub(crate) fn rename_in(
     held: &crate::planes::Held,

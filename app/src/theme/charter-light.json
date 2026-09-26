@@ -55,6 +55,8 @@
     "terminal.cursor": "#1f2328",
     "terminal.cursor-accent": "#ffffff",
     "terminal.selection": "#2d6d8540",
+    "terminal.find-match": "#fff1b8",
+    "terminal.find-match-active": "#f2c94c",
     "terminal.ansi.black": "#24292f",
     "terminal.ansi.red": "#cf222e",
     "terminal.ansi.green": "#116329",

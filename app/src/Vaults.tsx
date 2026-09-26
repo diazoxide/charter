@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { KeyRound } from "lucide-react";
 import { PanelList } from "./PanelList";
-import { PanelSection } from "./PanelSection";
+import { Menued } from "./Menus";
+import { HeadingOffer, PanelSection } from "./PanelSection";
 import type { Catalogued, Offer } from "./actions";
 import { commands, type PanelRow, type VaultSummary } from "./bindings";
 
@@ -13,6 +14,9 @@ import { commands, type PanelRow, type VaultSummary } from "./bindings";
  * **Names and counts, and never a value.** `vault_list` answers with nothing else
  * (`app/src-tauri/src/vaults.rs`, whose test serializes every answer and looks for the values
  * it wrote), so there is nothing here that could draw one.
+ *
+ * **Made and deleted from here too** (SI-3): the heading's `+` is `vault.create`, and each row's
+ * context menu offers `vault.remove:<name>`, which asks in `DeleteVault` before anything goes.
  *
  * **The plane's, not the workspace's.** A vault is registered once per plane, so this section
  * is drawn whichever workspace is focused, and with none.
@@ -33,7 +37,14 @@ export function Vaults({
 }) {
   const { vaults, trouble } = said;
   return (
-    <PanelSection testid="panel-vaults" mark={KeyRound} title="Vaults">
+    <PanelSection
+      testid="panel-vaults"
+      mark={KeyRound}
+      title="Vaults"
+      // **New vault… on the heading** (SI-3): the palette's row, one press from where the vaults
+      // are listed. It needs a plane and not a vault, so it is there on an empty section too.
+      actions={<HeadingOffer offer={offers.get("vault.create")} onPress={onPress} />}
+    >
       {trouble !== undefined ? (
         <p className="trouble" role="alert">
           {trouble}
@@ -54,6 +65,18 @@ export function Vaults({
               const offer = offers.get(id);
               if (offer) onPress(offer);
             }}
+            // Right-click on a vault: open it, make another, delete it (SI-3). The rows are the
+            // catalogue's (`menuOn`), so the menu and the palette say the same thing.
+            wrap={(row, item) => (
+              <Menued
+                key={row.key}
+                on={{ on: "vault", vault: row.key }}
+                offers={offers}
+                onPress={onPress}
+              >
+                {item}
+              </Menued>
+            )}
           />
         )
       )}
@@ -69,7 +92,7 @@ export function counted(n: number): string {
 /** What a list of vaults says when the plane has none. */
 const NO_VAULTS = {
   headline: "No vaults on this plane",
-  body: "Make one with New vault… in the palette.",
+  body: "Make one with the + above, or New vault… in the palette.",
   offer: null,
 };
 

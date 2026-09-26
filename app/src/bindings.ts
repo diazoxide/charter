@@ -311,6 +311,12 @@ export const commands = {
 	/**  Pins or unpins one workspace inside a project. */
 	pinWorkspace: (plane: PlaneId, workspace: string, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_workspace", { plane, workspace, pinned })),
 	/**
+	 *  Puts a project's pinned workspaces in the order the operator dragged them into on the
+	 *  workspace strip (SI-6). Only the order moves: a name that is not pinned is passed over, and
+	 *  pinning stays [`pin_workspace`]'s.
+	 */
+	arrangeWorkspacePins: (plane: PlaneId, workspaces: string[]) => typedError<null, string>(__TAURI_INVOKE("arrange_workspace_pins", { plane, workspaces })),
+	/**
 	 *  Pins or unpins one chat.
 	 * 
 	 *  Its own command rather than a third case of the two above, because it is written
@@ -318,6 +324,16 @@ export const commands = {
 	 *  and never in the machine store, which ADR 0034 forbids holding a chat's name.
 	 */
 	pinChat: (plane: PlaneId, session: number, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_chat", { plane, session, pinned })),
+	/**
+	 *  The order the chat strip draws this project's chats in, by session, so the record lists
+	 *  them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
+	 * 
+	 *  **In the plane's own `.charter/app/reopen.json`, beside each chat's pin**, and never in the
+	 *  machine store, for [`pin_chat`]'s reason: a chat is numbered per plane, and ADR 0034 keeps
+	 *  its number out of a file every plane shares. That file is out of git, so the order is this
+	 *  machine's as a pin is.
+	 */
+	chatOrder: (plane: PlaneId, sessions: number[]) => typedError<null, string>(__TAURI_INVOKE("chat_order", { plane, sessions })),
 	/**
 	 *  Gives one chat a name, or takes the one it was given off with a blank — and answers the name
 	 *  it now has, so the tab draws what charter holds rather than what was typed (charter-app#254).
@@ -460,6 +476,15 @@ export const commands = {
 	 *  back.
 	 */
 	workspaceRename: (plane: PlaneId, workspace: string, name: string) => typedError<string[], string>(__TAURI_INVOKE("workspace_rename", { plane, workspace, name })),
+	/**
+	 *  The core's sentence naming the chats that will start a fresh conversation if `workspace` is
+	 *  renamed, or none — what the Rename dialog says before it is answered (charter#367, D10).
+	 * 
+	 *  Asked of what the window holds, which is what the record is written from: a Claude Code
+	 *  chat in the workspace with a conversation to resume. A chat that is running is left out: it
+	 *  refuses the rename instead, and is named then. The rename itself still goes ahead.
+	 */
+	workspaceStartsFresh: (plane: PlaneId, workspace: string) => typedError<string | null, string>(__TAURI_INVOKE("workspace_starts_fresh", { plane, workspace })),
 	/**
 	 *  The operator brought a workspace to the front: tell the extensions that hear it
 	 *  (charter-app#343). It does nothing else and answers nothing — focusing is the window's own
@@ -711,6 +736,11 @@ export const commands = {
 	 *  with it opened. No value crosses.
 	 */
 	vaultCreate: (plane: PlaneId, vault: string, provider: string | null, opVault: string | null) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_create", { plane, vault, provider, opVault })),
+	/**
+	 *  Delete a vault and, for a keyring vault, every secret it holds ([`remove`]). No value
+	 *  crosses.
+	 */
+	vaultRemove: (plane: PlaneId, vault: string) => typedError<VaultRemoved, string>(__TAURI_INVOKE("vault_remove", { plane, vault })),
 	/**  Store a new secret. The value comes in here and goes nowhere but the vault. */
 	vaultSecretAdd: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_add", { plane, vault, key, value })),
 	/**  Replace a held secret's value. The value comes in here and goes nowhere but the vault. */
@@ -732,6 +762,39 @@ export const commands = {
 	 *  the window, never an error. The preferred path (#271 review, U3).
 	 */
 	vaultIdentityPut: (plane: PlaneId, vault: string, token: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_put", { plane, vault, token })),
+	/**
+	 *  Make a persona: `charter persona create <name> [--role …] [--delegate-when …] [--extends …]`,
+	 *  where `parent` is `--extends` (a word TypeScript keeps for itself).
+	 * 
+	 *  Empty boxes are flags not given, so the core's defaults apply: the role is the name,
+	 *  title-cased; the vault is the persona's own name. The core refuses a taken name, a name
+	 *  outside the alphabet, a routing line that is missing when nothing is inherited, and any
+	 *  value that would break persona.md's frontmatter — in its own sentences.
+	 */
+	personaCreate: (plane: PlaneId, name: string, role: string | null, delegateWhen: string | null, parent: string | null) => typedError<string[], string>(__TAURI_INVOKE("persona_create", { plane, name, role, delegateWhen, parent })),
+	/**
+	 *  Delete a persona: `charter persona remove <name>`, never forced.
+	 * 
+	 *  The core refuses one another persona still `extends:` or `uses:`, naming them. What it
+	 *  deletes is the persona's directory — definition, memory and refs — and its generated agent;
+	 *  its vault is left alone, and the answer says so. When the plane-wide selection
+	 *  (`.charter/active-persona`) names it, that selection goes too, as it does from a terminal
+	 *  that has no session or pane of its own.
+	 */
+	personaRemove: (plane: PlaneId, name: string) => typedError<string[], string>(__TAURI_INVOKE("persona_remove", { plane, name })),
+	/**
+	 *  Open a persona's definition in whatever the operating system opens a `.md` file with.
+	 * 
+	 *  The path is found and checked here, from the persona's name: the window names a persona,
+	 *  never a file, so no path it sends can be opened.
+	 */
+	personaEdit: (plane: PlaneId, name: string) => typedError<null, string>(__TAURI_INVOKE("persona_edit", { plane, name })),
+	/**  Record a todo in `workspace`, and answer with what was said. */
+	todoAdd: (plane: PlaneId, workspace: string, text: string) => typedError<string, string>(__TAURI_INVOKE("todo_add", { plane, workspace, text })),
+	/**  Close a todo as done: the journal records it, then the todo goes. */
+	todoDone: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_done", { plane, workspace, slug })),
+	/**  Forget a todo: it goes, and nothing is journalled. */
+	todoForget: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_forget", { plane, workspace, slug })),
 	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
@@ -2597,6 +2660,20 @@ export type VaultIdentity = {
 	held: IdentityHeld,
 };
 
+/**
+ *  What deleting a vault took away: its provider, and the secrets deleted from the keyring by
+ *  name. Never a value.
+ */
+export type VaultRemoved = {
+	name: string,
+	provider: string,
+	/**
+	 *  Deleted from the system keyring: empty for every provider but `keyring`, whose file or
+	 *  1Password item is left where it is.
+	 */
+	destroyed: string[],
+};
+
 /**  One secret, as a vault's table shows it: its name, and what the keys index knows. */
 export type VaultSecret = {
 	key: string,
@@ -2680,6 +2757,11 @@ export type Watching = {
 	columns: number,
 	rows: number,
 	scrollback: number,
+	/**
+	 *  What Shift+Enter sends: the newline of the harness the session runs
+	 *  (`Harness::newline`), or none for a shell, which keeps the terminal's own Enter.
+	 */
+	newline: string | null,
 };
 
 /**

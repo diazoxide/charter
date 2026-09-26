@@ -1,4 +1,4 @@
-//! `charter guard ask|allow|handoff|list`: the plane's force-prompt and stop-prompting rules,
+//! `charter guard ask|allow|handoff|report|list`: the plane's force-prompt and stop-prompting rules,
 //! written in each harness's own syntax (#364).
 //!
 //! A port of the Python charter's `cmd_guard_*` (`commands.py` at `cli-final`), with its rules:
@@ -27,6 +27,9 @@ use crate::scaffold::settings::{self, Wrote};
 
 /// The pattern a handoff's consent rule names; `charter guard handoff` writes it.
 pub const HANDOFF_PATTERN: &str = settings::HANDOFF_PATTERN;
+
+/// The pattern a report's consent rule names; `charter guard report` writes it.
+pub const REPORT_PATTERN: &str = settings::REPORT_PATTERN;
 
 /// The tools a Claude Code rule can name bare or as `Tool(pattern)`.
 const RULE_TOOLS: [&str; 9] = [
@@ -349,7 +352,7 @@ pub fn report(root: &Path, rule: &str, bucket: Bucket, local: bool) -> (String, 
 /// force there now (#449) — [`crate::wslayer::wire`], the writer a launch and `charter
 /// workspace reinit` use, with its rule that a file charter did not write is never touched.
 /// What it says: the workspaces it carried the rule into, and the ones it could not.
-fn mirror(root: &Path) -> String {
+pub(crate) fn mirror(root: &Path) -> String {
     let plane = crate::workspaces::Plane::open(root);
     let (names, unread) = match plane.read_workspaces() {
         Ok(listing) => listing,

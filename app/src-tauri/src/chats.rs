@@ -131,6 +131,16 @@ pub struct Chats {
     /// chats only because the record is one file and is written whole, in one place, under
     /// [`Self::writing`] — a second writer of `reopen.json` would be two answers racing to disk.
     views: Mutex<Vec<View>>,
+    /// The order the window's strip draws the chats in, by session, as it last said — or, at
+    /// a launch, the order the record listed them in (ADR 0039, as amended by SI-6).
+    ///
+    /// **The window's to say, for the reason [`Self::views`] is**: the operator drags a tab
+    /// there, and nothing here could know it moved. It is held here and not in the window
+    /// because the record is written from here, and because a reloaded window asks this layer
+    /// what is open ([`Self::open_now`]) and has to get the strip back in the order it left it.
+    /// A chat it has not placed yet — one that has just started — comes after the ones it has
+    /// ([`Self::in_order`]).
+    order: Mutex<Vec<u32>>,
     record_it: Recorder,
     /// Held across building a record and handing it over, so two changes at once cannot
     /// write themselves out of order and leave the older one on disk.
@@ -162,6 +172,7 @@ impl Chats {
             front: Mutex::new(None),
             would_not_start: Mutex::new(Vec::new()),
             views: Mutex::new(Vec::new()),
+            order: Mutex::new(Vec::new()),
             record_it,
             writing: Mutex::new(()),
             putting_back: AtomicBool::new(false),
@@ -294,6 +305,12 @@ impl Chats {
             },
             root,
         )?;
+        // The core's start knows no chat, so it says "nothing recorded"; this chat may know
+        // better — a workspace rename left it without its conversation (charter#367).
+        let ready = charter_core::start::Ready {
+            how: chat.told(ready.how.clone()),
+            ..ready
+        };
         self.start_ready(chat, &ready, size)
     }
 
@@ -430,10 +447,13 @@ impl Chats {
         // Under the id it was actually given, not the one it was recorded with: a chat
         // started fresh is under an id the app just chose, and that is what has to be
         // written down for the next launch to resume it.
+        // And no longer as a chat a workspace rename left without its conversation: it has
+        // said so once, at this start, and is under a conversation of its own now.
         let under = Chat {
             resume: conversation
                 .as_deref()
                 .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
+            renamed_from: None,
             ..chat.clone()
         };
         lock(&self.open).insert(
@@ -525,6 +545,13 @@ impl Chats {
         ))
     }
 
+    /// The harness `session` was started as, or none for a shell or a chat charter does not
+    /// have open — the same one [`Self::open_now`] answers, never one inferred from the
+    /// program's name.
+    pub fn harness(&self, session: u32) -> Option<Harness> {
+        lock(&self.open).get(&session)?.harness
+    }
+
     /// The handoff `session` was opened by, where one opened it.
     pub fn handed_from(&self, session: u32) -> Option<charter_core::reopen::HandedFrom> {
         lock(&self.open).get(&session)?.chat.from.clone()
@@ -585,6 +612,40 @@ impl Chats {
         }
     }
 
+    /// What order the window's strip now draws the chats in, by session (SI-6).
+    ///
+    /// Written down when the order the record would list them in moves, and not otherwise —
+    /// for [`Self::pin`]'s reason. Not when the list said differs from the one held: the window
+    /// says it after every change to its tabs, and a chat it has just opened is already last.
+    pub fn hold_order(&self, sessions: Vec<u32>) {
+        let was = self.in_order();
+        *lock(&self.order) = sessions;
+        if self.in_order() != was {
+            self.write_it_down();
+        }
+    }
+
+    /// The running sessions in the strip's order: the ones the window placed, where it placed
+    /// them, then any it has not placed yet in the order they were opened.
+    ///
+    /// **The one answer to "in what order"**, for both the record and a reloaded window, so the
+    /// two cannot disagree about which tab comes first.
+    fn in_order(&self) -> Vec<u32> {
+        let running = self.sessions.running();
+        let placed = lock(&self.order).clone();
+        let mut ordered: Vec<u32> = placed
+            .iter()
+            .copied()
+            .filter(|session| running.contains(session))
+            .collect();
+        ordered.extend(
+            running
+                .into_iter()
+                .filter(|session| !placed.contains(session)),
+        );
+        ordered
+    }
+
     /// Says which chat is in front, so the record knows which one to bring back in front.
     pub fn bring_to_front(&self, session: Option<u32>) {
         let changed = std::mem::replace(&mut *lock(&self.front), session) != session;
@@ -593,14 +654,14 @@ impl Chats {
         }
     }
 
-    /// What is open, in the order the sessions were opened.
+    /// What is open, in the strip's order.
     pub fn open_now(&self) -> Vec<Open> {
+        // In the strip's order (`in_order`), so the window comes back with its tabs the way
+        // they were left. Asked before `open` is held: it takes `order` itself.
+        let ordered = self.in_order();
         let open = lock(&self.open);
         let front = *lock(&self.front);
-        // In the order the sessions were opened, which is the order their ids were handed
-        // out, so the window comes back with its tabs the way they were left.
-        self.sessions
-            .running()
+        ordered
             .into_iter()
             .filter_map(|session| {
                 let running = open.get(&session)?;
@@ -628,6 +689,7 @@ impl Chats {
 
     /// What was open, to write down.
     pub fn record(&self) -> Record {
+        let ordered = self.in_order();
         let open = lock(&self.open);
         let front = *lock(&self.front);
         // The ones that could not be started come first, in the order they were recorded,
@@ -636,7 +698,9 @@ impl Chats {
             .iter()
             .map(|(chat, _)| chat.clone())
             .collect();
-        chats.extend(self.sessions.running().into_iter().filter_map(|session| {
+        // Then the running ones, in the strip's order — which is the order the next launch
+        // puts them back in.
+        chats.extend(ordered.into_iter().filter_map(|session| {
             let chat = &open.get(&session)?.chat;
             Some(Chat {
                 active: front == Some(session),
@@ -706,6 +770,9 @@ impl Chats {
             }
         }
         self.bring_to_front(front);
+        // The strip comes back in the record's order, which is the order it was drawn in when
+        // it was written — not the order of the numbers the chats kept (charter-app#90).
+        *lock(&self.order) = opened.clone();
         // Nothing is written here. What is on disk is the record that was just read, which
         // is still true — and writing what came back would be writing the chats that did
         // not, out of it.
@@ -800,6 +867,7 @@ mod tests {
                     number: None,
                     label: None,
                     from: None,
+                    renamed_from: None,
                 },
                 Size {
                     columns: 80,
@@ -864,6 +932,7 @@ mod tests {
                     number: None,
                     label: None,
                     from: None,
+                    renamed_from: None,
                 },
                 Size {
                     columns: 80,
@@ -913,6 +982,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             },
             Size {
                 columns: 80,
@@ -963,6 +1033,7 @@ mod tests {
                     number: None,
                     label: None,
                     from: None,
+                    renamed_from: None,
                 },
                 Size {
                     columns: 80,
@@ -1026,6 +1097,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         }
     }
 
@@ -1255,6 +1327,110 @@ mod tests {
         assert!(lock(&wrote).is_empty(), "putting a record back wrote it");
     }
 
+    /// The names the record lists its chats under, in the order it lists them.
+    fn names_in(record: &Record) -> Vec<String> {
+        record.chats.iter().map(|chat| chat.name.clone()).collect()
+    }
+
+    #[test]
+    fn the_record_lists_the_chats_in_the_order_the_window_arranged_them() {
+        // SI-6: the operator drags a tab, and the strip's order is what comes back at the next
+        // launch — not the order the chats happened to be numbered in.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        let c = chats.start(&chat(&claude, "c", None), SIZE).unwrap();
+
+        chats.hold_order(vec![c, a, b]);
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(names_in(&last), ["c", "a", "b"]);
+        let open: Vec<String> = chats.open_now().into_iter().map(|one| one.name).collect();
+        assert_eq!(
+            open,
+            ["c", "a", "b"],
+            "a reloaded window would draw another order"
+        );
+    }
+
+    #[test]
+    fn saying_the_same_chat_order_again_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        chats.hold_order(vec![b, a]);
+        let so_far = lock(&wrote).len();
+
+        chats.hold_order(vec![b, a]);
+
+        assert_eq!(lock(&wrote).len(), so_far);
+    }
+
+    #[test]
+    fn saying_the_order_the_record_already_has_writes_nothing() {
+        // The window says the order after every change to its tabs, opening a chat included,
+        // and a chat it has just opened is already last in the record.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        let so_far = lock(&wrote).len();
+
+        chats.hold_order(vec![a, b]);
+
+        assert_eq!(lock(&wrote).len(), so_far);
+    }
+
+    #[test]
+    fn a_chat_the_window_has_not_placed_yet_comes_after_the_ones_it_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        let a = chats.start(&chat(&claude, "a", None), SIZE).unwrap();
+        let b = chats.start(&chat(&claude, "b", None), SIZE).unwrap();
+        chats.hold_order(vec![b, a]);
+
+        chats.start(&chat(&claude, "c", None), SIZE).unwrap();
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(names_in(&last), ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn a_record_is_put_back_in_its_own_order_and_not_by_chat_number() {
+        // The record lists the chats in the order the strip drew them, and a chat keeps its
+        // number across a launch (charter-app#90) — so number order is not strip order.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let chats = Chats::new();
+
+        let open = chats.put_back_here(
+            &Record {
+                chats: vec![
+                    Chat {
+                        number: Some(5),
+                        ..chat(&claude, "dragged first", None)
+                    },
+                    Chat {
+                        number: Some(2),
+                        ..chat(&claude, "opened first", None)
+                    },
+                ],
+                ..Default::default()
+            },
+            SIZE,
+        );
+
+        let names: Vec<&str> = open.iter().map(|one| one.name.as_str()).collect();
+        assert_eq!(names, ["dragged first", "opened first"]);
+        assert_eq!(names_in(&chats.record()), ["dragged first", "opened first"]);
+    }
+
     #[test]
     fn opening_a_chat_writes_the_record_without_waiting_for_a_quit() {
         // An app that is killed, or crashes, runs no exit handler. Everything open would be
@@ -1367,6 +1543,28 @@ mod tests {
         assert_eq!(record.chats[0].name, "ide.7");
         assert_eq!(chats.open_now()[0].session, session);
         assert_eq!(chats.open_now()[0].harness, Some(Harness::ClaudeCode));
+    }
+
+    #[test]
+    fn a_chats_harness_is_answered_by_its_session_number_and_a_shells_is_none() {
+        // What a pane asks as it opens its view (SI-4): Shift+Enter is the harness's newline,
+        // and a shell keeps the terminal's own Enter.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let claude = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .expect("the chat starts");
+        let shell = chats
+            .start(&chat("/bin/sh", "a shell", None), SIZE)
+            .expect("the shell starts");
+
+        assert_eq!(chats.harness(claude), Some(Harness::ClaudeCode));
+        assert_eq!(chats.harness(shell), None);
+        assert_eq!(
+            chats.harness(claude + shell + 1),
+            None,
+            "a chat that is not open"
+        );
     }
 
     #[test]
@@ -1600,6 +1798,46 @@ mod tests {
         );
 
         assert_eq!(open[0].how, Reopened::Fresh(Fresh::NoConversationRecorded));
+    }
+
+    #[test]
+    fn a_claude_chat_reopened_after_its_workspace_was_renamed_starts_fresh_and_says_so_once() {
+        // charter#367, D10: Claude Code keeps the conversation under the old folder, so the
+        // rename dropped it from the record. The reopen starts a new conversation instead of a
+        // `--resume` that would fail, says why, and records the chat as an ordinary one.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("plane");
+        std::fs::create_dir_all(root.join("workspaces/beta")).unwrap();
+        let mut record = Record {
+            views: Vec::new(),
+            chats: vec![Chat {
+                cwd: Some(root.join("workspaces/alpha")),
+                ..chat(&a_claude(dir.path()), "ide.7", Some(ID))
+            }],
+            dealt: 0,
+            relaunch_after_update: false,
+        };
+        // What `charter workspace rename alpha beta` does to the record.
+        assert!(
+            charter_core::wscmd::rename::Move::in_plane(&root, "alpha", "beta").record(&mut record)
+        );
+        let chats = Chats::new();
+
+        let open = chats.put_back_here(&record, SIZE);
+
+        assert_eq!(open[0].how, Reopened::Fresh(Fresh::WorkspaceRenamed));
+        let printed = until_printed(&chats, open[0].session, "--session-id");
+        assert!(!printed.contains("--resume"), "{printed:?}");
+        let recorded = &chats.record().chats[0];
+        assert_eq!(
+            recorded.renamed_from, None,
+            "it would say so again next time"
+        );
+        assert!(
+            recorded.resume.is_some(),
+            "the new conversation is not recorded"
+        );
+        assert_ne!(recorded.resume, Some(SessionId::new(ID).unwrap()));
     }
 
     #[test]
@@ -2186,6 +2424,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
 
         let session = chats
@@ -2227,6 +2466,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2296,6 +2536,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2406,6 +2647,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
         let session = chats.start_ready(&chat, &ready, SIZE).expect("it runs");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

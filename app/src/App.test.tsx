@@ -1,9 +1,10 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { sayingSomething } from "./test-strips";
 
 // The pane's own terminal is driven by the scenario tests, against the real app. Here it
 // stands in for one, so these tests are about the tabs, the splits and what they ask the core.
@@ -220,8 +221,10 @@ describe("App", () => {
 
     render(<App />);
 
-    const said = await screen.findByRole("status");
-    expect(said).toHaveTextContent("charter took 31 s to start, against a 2 s limit.");
+    await waitFor(() => expect(sayingSomething()).toHaveLength(1));
+    expect(sayingSomething()[0]).toHaveTextContent(
+      "charter took 31 s to start, against a 2 s limit.",
+    );
   });
 
   it("says nothing about an ordinary launch", async () => {
@@ -232,7 +235,7 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("/home/dev/plane")).toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(sayingSomething()).toEqual([]);
   });
 
   it("puts that notice away when it is dismissed", async () => {
@@ -246,11 +249,11 @@ describe("App", () => {
       return null;
     });
     render(<App />);
-    await screen.findByRole("status");
+    await waitFor(() => expect(sayingSomething()).toHaveLength(1));
 
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(sayingSomething()).toEqual([]);
   });
 
   it("does not send that marker once the window has gone", async () => {

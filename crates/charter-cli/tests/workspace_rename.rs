@@ -150,6 +150,43 @@ fn a_chat_the_app_has_open_in_it_stops_the_rename_and_is_named() {
 }
 
 #[test]
+fn the_chats_that_will_start_fresh_are_named_before_the_rename_goes_ahead() {
+    // charter#367, D10: Claude Code finds a conversation by the folder it ran in, so the
+    // Claude Code chat is named; Codex resumes by its id from anywhere, so it is not.
+    let world = World::new();
+    let app = world.root.join(".charter/app");
+    std::fs::create_dir_all(&app).unwrap();
+    let svc = world.root.join("workspaces/alpha/svc");
+    std::fs::write(
+        app.join("reopen.json"),
+        serde_json::json!({
+            "version": 1,
+            "at": 0,
+            "chats": [
+                {"program": "claude", "cwd": svc, "name": "3", "persona": "steward",
+                 "resume": "11111111-2222-4333-8444-555555555555"},
+                {"program": "codex", "cwd": svc, "name": "4",
+                 "resume": "11111111-2222-4333-8444-666666666666"},
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let out = world.charter(&["workspace", "rename", "alpha", "beta"]);
+
+    assert!(out.status.success(), "{}", said(&out));
+    let text = said(&out);
+    assert!(
+        text.contains("This chat will start a fresh conversation after the rename: steward 3."),
+        "{text}"
+    );
+    assert!(!text.contains("codex 4"), "{text}");
+    let record = std::fs::read_to_string(app.join("reopen.json")).unwrap();
+    assert!(record.contains("renamed_from"), "{record}");
+}
+
+#[test]
 fn a_taken_name_is_refused() {
     let world = World::new();
     std::fs::create_dir_all(world.root.join("workspaces/beta")).unwrap();

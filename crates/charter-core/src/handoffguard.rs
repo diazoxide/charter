@@ -610,8 +610,14 @@ pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, S
     // command's own argument, which the prompt shows as it is. Only a live substitution is
     // still refused, because that text is not the one the prompt showed.
     if is_a_report(&seg) {
-        return livesub::live_substitution(cmd)
-            .map(|_| (REASON_BRIEF_SOURCE, HANDOFF_REPORT_SOURCE.to_string()));
+        return livesub::live_substitution(cmd).map(|hit| {
+            let said = if livesub::is_process_substitution(hit) {
+                HANDOFF_REPORT_PROCESS_SOURCE
+            } else {
+                HANDOFF_REPORT_SOURCE
+            };
+            (REASON_BRIEF_SOURCE, said.to_string())
+        });
     }
     let what = brief_source(cmd, &seg, piped)?;
     Some((REASON_BRIEF_SOURCE, handoff_source(what)))
@@ -626,7 +632,26 @@ fn is_a_report(seg: &[Tok]) -> bool {
     seg.get(2)
         .is_some_and(|word| word.bare && word.text == "report")
         && seg.len() > 3
-        && !seg.iter().any(|t| t.is_op(&["<<", "<<<", "<", "<>"]))
+        && !seg.iter().enumerate().any(|(i, t)| {
+            t.is_op(&["<<", "<<<", "<", "<>"]) && !opens_a_process_substitution(seg, i)
+        })
+}
+
+/// Whether the `<` at `seg[i]` is the first half of a `<(…)` process substitution rather than
+/// a redirection that reads a file: the lexer hands the pair back as a `<` and a `(` with nothing
+/// between them. A substitution is refused as the live substitution it is, and a denial that
+/// called it "a file (<)" would name the wrong thing. `< (x)`, with a blank, stays a read: bash
+/// refuses it, and zsh reads the file the glob `(x)` names. zsh's `<<(…)` is the same pair
+/// behind a `<<`, and is not a heredoc.
+fn opens_a_process_substitution(seg: &[Tok], i: usize) -> bool {
+    let (Some(lt), Some(paren)) = (seg.get(i), seg.get(i + 1)) else {
+        return false;
+    };
+    // A negative offset is one nothing measured, and two of them say nothing about adjacency.
+    (lt.text == "<" || lt.text == "<<")
+        && paren.is_op(&["("])
+        && lt.end >= 0
+        && paren.start == lt.end
 }
 
 /// What a report back with a live substitution in it is told.
@@ -634,6 +659,13 @@ pub const HANDOFF_REPORT_SOURCE: &str = "`charter handoff report` sends its summ
      text the permission prompt shows, and this call has a live command substitution in it, \
      which the shell would replace before charter reads it. Write the summary out in plain \
      words: charter handoff report \"<summary>\"";
+
+/// What a report back with a live PROCESS substitution in it is told: the shell runs that
+/// command too, and hands charter a path to its output where the words stood.
+pub const HANDOFF_REPORT_PROCESS_SOURCE: &str = "`charter handoff report` sends its summary as \
+     the text the permission prompt shows, and this call has a live process substitution in it, \
+     which the shell would run and replace with a path before charter reads it. Write the \
+     summary out in plain words: charter handoff report \"<summary>\"";
 
 /// Whether the handoff on `line` is spelled the way the host's rule matches: the SOURCE, not
 /// the words a shell makes of it.
@@ -695,13 +727,17 @@ fn brief_source(cmd: &str, seg: &[Tok], piped: bool) -> Option<&'static str> {
     let heredocs: Vec<usize> = seg
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.is_op(&["<<"]))
+        .filter(|&(i, t)| t.is_op(&["<<"]) && !opens_a_process_substitution(seg, i))
         .map(|(i, _)| i)
         .collect();
     if seg.iter().any(|t| t.is_op(&["<<<"])) {
         return Some("a here-string (<<<)");
     }
-    if seg.iter().any(|t| t.is_op(&REDIRECT_READS)) {
+    if seg
+        .iter()
+        .enumerate()
+        .any(|(i, t)| t.is_op(&REDIRECT_READS) && !opens_a_process_substitution(seg, i))
+    {
         return Some("a file (<), which the prompt shows as a path rather than as the brief");
     }
     if piped {
@@ -720,8 +756,12 @@ fn brief_source(cmd: &str, seg: &[Tok], piped: bool) -> Option<&'static str> {
     if seg.get(first + 1).is_none_or(|t| t.bare) {
         return Some("an unquoted heredoc, which expands $… and `…` in the brief");
     }
-    if livesub::live_substitution(cmd).is_some() {
-        return Some("a live command substitution");
+    if let Some(hit) = livesub::live_substitution(cmd) {
+        return Some(if livesub::is_process_substitution(hit) {
+            "a live process substitution"
+        } else {
+            "a live command substitution"
+        });
     }
     None
 }
@@ -819,6 +859,31 @@ mod tests {
         let (r, said) = refusal(cmd).expect("refused");
         assert_eq!(r, REASON_BRIEF_SOURCE);
         assert!(said.contains("a live command substitution"), "{said}");
+    }
+
+    /// A process substitution anywhere in the call is refused as one, and named as one.
+    #[test]
+    fn a_live_process_substitution_is_refused_and_named() {
+        let cmd = "charter handoff beta <<'BRIEF' && cat <(env)\nx\nBRIEF";
+        let (r, said) = refusal(cmd).expect("refused");
+        assert_eq!(r, REASON_BRIEF_SOURCE);
+        assert!(said.contains("a live process substitution"), "{said}");
+        let (r, said) = refusal("charter handoff report done <(env)").expect("refused");
+        assert_eq!(r, REASON_BRIEF_SOURCE);
+        assert!(said.contains("process substitution"), "{said}");
+        assert!(!said.contains("command substitution"), "{said}");
+        let (_, said) = refusal("charter handoff beta <(env) <<'B'\nx\nB").expect("refused");
+        assert!(said.contains("a live process substitution"), "{said}");
+        // zsh's `<<(…)` is a redirection of one, not a heredoc.
+        let (_, said) = refusal("charter handoff report done <<(env)").expect("refused");
+        assert!(said.contains("process substitution"), "{said}");
+        let (_, said) = refusal("charter handoff beta <<(env) <<'B'\nx\nB").expect("refused");
+        assert!(said.contains("a live process substitution"), "{said}");
+        // With a blank before the `(` it is a redirection that reads a file, as it was.
+        let (_, said) = refusal("charter handoff beta < (env) <<'B'\nx\nB").expect("refused");
+        assert!(said.contains("a file (<)"), "{said}");
+        // Quoted, it is prose.
+        assert_eq!(refusal("charter handoff report 'done <(x)'"), None);
     }
 
     #[test]

@@ -135,15 +135,15 @@ exclude_re = [
     # function says which of the macOS ones macOS CI pins and which no test can reach. Its
     # whole-body mutant (`with ()`) is not excluded: every platform catches it.
     'src/executor\.rs:\d+:\d+: replace (==|&&|>|<|/) with \S+ in inherit_nothing_else$',
-    # `executor::drain`'s two `>` against `>=`: one is an instant on a clock, which is equivalent.
-    # The other, the stderr bound, is NOT: `>=` sets `overflowed` at exactly the bound and a
-    # command's stderr of exactly that many bytes is refused. A pattern cannot tell the two
-    # apart, so both stay excluded, and the bound is pinned by a test instead
-    # (`a_command_s_stderr_of_exactly_the_most_charter_passes_on_is_passed_and_one_byte_more_is_not`).
-    # Each site says so.
-    'src/executor\.rs:\d+:\d+: replace > with >= in drain$',
-    # `executor::drain`'s `Instant::now() < by` against `<=`: they differ only at the one instant
-    # equal to a command's deadline. The site says so.
+    # `reposave::nobody_working` IS `Vec::new()`, so its `vec![]` mutant is the function itself,
+    # as `glrefresh::empty` above. Its `vec![String::new()]` and `vec!["xyzzy".into()]` mutants
+    # are not excluded: a save would wait on a session that is not there. The site says so.
+    'src/reposave\.rs:\d+:\d+: replace nobody_working -> Vec<String> with vec!\[\]$',
+    # `executor::drain`'s two clock comparisons, `Instant::now() < by` and
+    # `STDERR_AFTER_STOP < at.elapsed()`, against `<=`: each differs only at the one instant
+    # equal to its bound, and the loop polls every 50 ms. The second is written `<` so that it
+    # falls under this entry and drain's one `>`, the stderr bound, is tested rather than
+    # excluded (#464). The site says so.
     'src/executor\.rs:\d+:\d+: replace < with <= in drain$',
     # `Running::exits_by`'s `waitid` options are single, distinct bits (`EXITED`, `NOHANG`,
     # `NOWAIT`), and XOR of distinct bits IS their OR: `^` for either `|` asks the same thing.

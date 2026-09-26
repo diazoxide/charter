@@ -540,6 +540,60 @@ pub fn remove(ctx: &Ctx, name: &str, io: &mut dyn Io) -> i32 {
     }
 }
 
+/// What [`destroy`] took away: the vault's provider, and the keyring entries it deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Destroyed {
+    pub provider: String,
+    /// The secrets deleted from the system keyring, by name. Empty for every provider but
+    /// `keyring`, whose store charter owns: a plain file, a references file and a 1Password
+    /// item are the operator's, and a delete leaves them where they are, as [`remove`] does.
+    pub destroyed: Vec<String>,
+}
+
+/// Delete a vault: **every secret a keyring vault holds is deleted from the keyring**, then its
+/// keys index, then its registration. The window's Delete vault (SI-3); `charter vault remove`
+/// ([`remove`]) only unregisters, and keeps saying so.
+///
+/// **The registration goes last.** An entry the keyring will not delete — a locked keychain, a
+/// refused prompt — stops here with the store's sentence, and the vault stays registered with
+/// whatever it still holds, so the operator can see it and try again. Unregistering first would
+/// leave entries nothing names.
+pub fn destroy(ctx: &Ctx, name: &str) -> Result<Destroyed, super::VaultError> {
+    destroy_with(&*super::keyring::store(ctx), ctx, name)
+}
+
+/// [`destroy`] against a keyring the caller chose.
+pub fn destroy_with(
+    store: &dyn super::keyring::Store,
+    ctx: &Ctx,
+    name: &str,
+) -> Result<Destroyed, super::VaultError> {
+    let v = registry::vault(ctx, name)?;
+    let mut destroyed = Vec::new();
+    if v.provider == "keyring" {
+        for key in super::keyring::keys(ctx, &v)? {
+            super::keyring::delete_with(store, ctx, &v, &key)?;
+            destroyed.push(key);
+        }
+        let index = super::keyring::index_path(ctx, &v);
+        match std::fs::remove_file(&index) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(super::VaultError::new(format!(
+                    "the keys index {} could not be removed: {e}",
+                    super::short_path(&ctx.root, &index)
+                )));
+            }
+        }
+    }
+    registry::remove_vault(ctx, name)?;
+    Ok(Destroyed {
+        provider: v.provider,
+        destroyed,
+    })
+}
+
 #[cfg(test)]
 #[path = "vaultcmd_tests.rs"]
 mod tests;

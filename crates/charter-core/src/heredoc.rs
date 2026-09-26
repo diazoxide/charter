@@ -281,6 +281,90 @@ pub struct Opener {
     pub start: usize,
     /// The header bash reads after it.
     pub header: Header,
+    /// The `<<` stands inside a bracket where a shell may read it as a shift or as plain text
+    /// and open no heredoc at all ([`ShiftContext`]). A caller reads such an opener BOTH ways:
+    /// [`heredoc_layout`] drops no body from there on and reads every one as lines a shell
+    /// runs, and [`crate::livesub::live_substitution`] walks the text once as each reading.
+    pub maybe_shift: bool,
+}
+
+/// The brackets a walk is inside where a `<<` may be a shift or plain text rather than a
+/// heredoc opener: `(( … ))` and `$(( … ))` arithmetic, `$[ … ]`, `${ … }` and an assignment's
+/// subscript `name[ … ]`.
+///
+/// Checked against GNU bash 3.2.57 and zsh 5.9: with `(( 1<<"2" ))`, `$[1<<"2"]`,
+/// `$((1<<"2"))`, `${v:-1<<"2"}`, `x=((1<<"2"))` or `a[1<<"2"]=x` on a line, one or both
+/// shells run the lines after it, where a heredoc reading makes them a body delimited by `2`.
+///
+/// **Where it stands is not asked, on purpose.** Whether `((` opens arithmetic depends on
+/// position (command position does; inside `[[ … ]]`, a zsh glob or `${…}` it may not), and
+/// bash re-reads a `((` or `$((` whose parentheses do not close as `))` as two groups, where the
+/// `<<` is a heredoc after all. A walk of characters cannot settle every one of those, and a
+/// wrong guess either way hides lines. So nothing here decides "shift" or "heredoc": inside any
+/// of these brackets the `<<` is read both ways ([`Opener::maybe_shift`]), which only ever reads
+/// more lines than either reading alone. A bracket that never closes keeps the rest of the line
+/// inside it, which errs the same way.
+///
+/// One type, stepped by [`heredoc_openers`] (the leak guard and A7) and by
+/// [`crate::livesub::live_substitution`] (A5 and A6), so the two cannot disagree about where a
+/// bracket opens or closes. Each steps only UNQUOTED characters; quoting is theirs to read.
+#[derive(Clone, Debug, Default)]
+pub struct ShiftContext {
+    /// The closer each open bracket waits for, innermost last, and whether a `<<` inside it may
+    /// be a shift.
+    open: Vec<(char, bool)>,
+}
+
+impl ShiftContext {
+    /// Whether a `<<` here may be a shift or plain text.
+    pub fn may_shift(&self) -> bool {
+        self.open.iter().any(|&(_, shift)| shift)
+    }
+
+    /// Read the unquoted character at `i` and answer how many characters that took.
+    ///
+    /// A closer closes the innermost bracket waiting for it and every bracket opened inside
+    /// that one; a closer nothing waits for is text (`case x in a)`).
+    pub fn step(&mut self, chars: &[char], i: usize) -> usize {
+        let next = chars.get(i + 1).copied();
+        match chars[i] {
+            '\\' => 2, // an escaped character opens and closes nothing
+            '$' if next == Some('[') => {
+                self.open.push((']', true));
+                2
+            }
+            '$' if next == Some('{') => {
+                self.open.push(('}', true));
+                2
+            }
+            '(' if next == Some('(') => {
+                self.open.push((')', true));
+                self.open.push((')', true));
+                2
+            }
+            '(' => {
+                self.open.push((')', false));
+                1
+            }
+            '{' => {
+                self.open.push(('}', false));
+                1
+            }
+            '[' => {
+                // `a[…]`: a subscript. `[[` and `[` in command position are tests.
+                let subscript = i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+                self.open.push((']', subscript));
+                1
+            }
+            c @ (')' | ']' | '}') => {
+                if let Some(k) = self.open.iter().rposition(|&(want, _)| want == c) {
+                    self.open.truncate(k);
+                }
+                1
+            }
+            _ => 1,
+        }
+    }
 }
 
 /// The heredocs `line` opens, left to right — `_heredoc_openers`, read the way bash reads them.
@@ -293,10 +377,21 @@ pub struct Opener {
 /// of the input and the REAL opener after it is never consulted. A `<<<` is stepped over whole,
 /// because the last two of its characters are no opener.
 ///
-/// A `<<` in a `#` comment or in `$(( … ))` arithmetic is still counted. The lexer counts
-/// neither, so the counts disagree, the strip plan is unknown, and every body on the line stays
-/// visible, which only ever shows a guard more text.
+/// A `<<` in a `#` comment is still counted. The lexer does not count it, so the counts
+/// disagree, the strip plan is unknown, and every body on the line stays visible, which only
+/// ever shows a guard more text.
+///
+/// A `<<` inside arithmetic, `${…}` or a subscript is counted too, and marked
+/// [`Opener::maybe_shift`]: the shell may read it as a shift, and then the lines after it are
+/// commands. Its header is read as text rather than skipped, because that is what it is then.
 pub fn heredoc_openers(line: &Line) -> Vec<Opener> {
+    openers_after(line, &mut ShiftContext::default())
+}
+
+/// [`heredoc_openers`] for a line that begins inside whatever brackets `ctx` holds open, and
+/// leaves `ctx` holding what is open at its end. Arithmetic and `${…}` may span lines, and a
+/// `<<` on the second line of `(( 1 +` is as much a shift as one on the first.
+fn openers_after(line: &Line, ctx: &mut ShiftContext) -> Vec<Opener> {
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < line.len() {
@@ -306,13 +401,20 @@ pub fn heredoc_openers(line: &Line) -> Vec<Opener> {
             match heredoc_header(line, i) {
                 Some(header) => {
                     let start = i;
-                    i = header.end;
-                    out.push(Opener { start, header });
+                    let maybe_shift = ctx.may_shift();
+                    i = if maybe_shift { i + 2 } else { header.end };
+                    out.push(Opener {
+                        start,
+                        header,
+                        maybe_shift,
+                    });
                 }
                 None => i += 2,
             }
-        } else {
+        } else if line.quoted(i) {
             i += 1;
+        } else {
+            i += ctx.step(&line.chars, i);
         }
     }
     out
@@ -798,7 +900,12 @@ pub fn line_runs_text(line: &str) -> bool {
     let line = Line::of(line);
     let mut blanked = String::new();
     let mut i = 0usize;
-    for m in heredoc_openers(&line) {
+    // A `<<` that may be a shift keeps its "delimiter": that word may be an operand the shell
+    // reads, and reading it errs toward the over-match.
+    for m in heredoc_openers(&line)
+        .into_iter()
+        .filter(|m| !m.maybe_shift)
+    {
         blanked.push_str(&line.slice(i, m.start));
         blanked.push(' ');
         i = m.header.end;
@@ -1290,85 +1397,214 @@ pub fn pipeline_continues(line: &str) -> bool {
         .is_some_and(|t| t.bare && (t.text == "|" || t.text == "|&"))
 }
 
-/// The `(open, close)` character spans of every `$( … )` and backtick substitution that opens
-/// AND closes on `line`.
-///
-/// A heredoc opened inside one of those has no body inside it, and the shells disagree about
-/// where its body is then. Measured with `x=$( cat <<'EOF' )`, a line, then `EOF`: GNU bash
-/// 5.2.15 and 5.3 read the line as the heredoc's body, while GNU bash 3.2.57 and zsh 5.9 run it
-/// as a command; with backticks all four run it. So such a body is read both ways: never
-/// dropped, and searched as a shell would run it. A subshell `( … )` or group `{ …; }` is not
-/// this: every one of those shells reads the body after the line.
-///
-/// Read with its own small walk, because a backtick's pairing is what matters here and the
-/// quote map marks the two backticks of a pair differently inside `"…"`.
-fn closed_substitutions(line: &Line) -> Vec<(usize, usize)> {
-    #[derive(PartialEq)]
-    enum Frame {
-        Sub,
-        Tick,
-        Paren,
-        DoubleQuoted,
+/// Whether the unquoted `(` at `i` opens a process substitution: `<(…)` or `>(…)`, or zsh's
+/// `=(…)` where [`shellseg::equals_ends_a_name`] says zsh runs it. A backslash-newline
+/// between the two is not looked through here, which only leaves a body where it was.
+fn opens_process_substitution(chars: &[char], i: usize) -> bool {
+    match i.checked_sub(1).map(|k| chars[k]) {
+        Some('<' | '>') => true,
+        Some('=') => !shellseg::equals_ends_a_name(chars, i - 1),
+        _ => false,
     }
-    let chars = &line.chars;
-    let n = chars.len();
-    let mut stack: Vec<(Frame, usize)> = Vec::new();
-    let mut spans = Vec::new();
-    let mut i = 0usize;
-    while i < n {
-        let c = chars[i];
-        let in_dq = stack.last().is_some_and(|(f, _)| *f == Frame::DoubleQuoted);
-        if c == '\\' {
-            i += 2;
-            continue;
+}
+
+/// Where a heredoc opener stands among the substitutions around it ([`SubstitutionContext`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Enclosed {
+    /// In no `$( … )`, backtick or process substitution.
+    No,
+    /// In one that closes later on the header's own line.
+    ClosedOnItsLine,
+    /// In one still open when the header's line ends: the characters that end the kinds of
+    /// substitution it is in, `)` for `$( … )` and the process substitutions and a backtick for a
+    /// backtick's.
+    SpansLines(&'static [char]),
+}
+
+impl Enclosed {
+    /// The answer that reads more of the two: a body either reading runs is run.
+    fn either(self, other: Self) -> Self {
+        use Enclosed::*;
+        match (self, other) {
+            (ClosedOnItsLine, _) | (_, ClosedOnItsLine) => ClosedOnItsLine,
+            (No, x) | (x, No) => x,
+            (SpansLines(a), SpansLines(b)) if a == b => SpansLines(a),
+            (SpansLines(_), SpansLines(_)) => SpansLines(&[')', '`']),
         }
-        if line.starts_with(i, "$(") {
-            stack.push((Frame::Sub, i));
-            i += 2;
-            continue;
-        }
-        if !in_dq && line.starts_with(i, "$'") {
-            // ANSI-C: ends at the first `'` no backslash escapes. This `$` is unescaped, since
-            // an escaped one was stepped over with its backslash above.
-            let mut k = i + 2;
-            while k < n && chars[k] != '\'' {
-                k += if chars[k] == '\\' { 2 } else { 1 };
-            }
-            i = k + 1;
-            continue;
-        }
-        if c == '`' {
-            if stack.last().is_some_and(|(f, _)| *f == Frame::Tick) {
-                let (_, open) = stack.pop().expect("just checked");
-                spans.push((open, i));
-            } else {
-                stack.push((Frame::Tick, i));
-            }
-        } else if in_dq {
-            if c == '"' {
-                stack.pop();
-            }
-        } else if c == '\'' {
-            // Literal to the next `'`.
-            let mut k = i + 1;
-            while k < n && chars[k] != '\'' {
-                k += 1;
-            }
-            i = k;
-        } else if c == '"' {
-            stack.push((Frame::DoubleQuoted, i));
-        } else if c == '(' {
-            stack.push((Frame::Paren, i));
-        } else if c == ')' {
-            match stack.pop() {
-                Some((Frame::Sub, open)) => spans.push((open, i)),
-                Some((Frame::Paren, _)) | None => {}
-                Some(other) => stack.push(other), // a `)` inside a backtick is a word
-            }
-        }
-        i += 1;
     }
-    spans
+}
+
+/// The `$( … )`, backtick and process substitutions (`<( … )`, `>( … )`, zsh's `=( … )`) open
+/// at each point of the command text, carried from one command line to the next.
+///
+/// A heredoc opened inside one of those is read differently by the shells:
+///
+/// - **closed on the header's line.** The body cannot be inside the substitution. Measured with
+///   `x=$( cat <<'EOF' )`, a line, then `EOF`: GNU bash 5.2.15 and 5.3 read the line as the
+///   heredoc's body, while GNU bash 3.2.57 and zsh 5.9 run it as a command; with backticks all
+///   four run it, and with `<( … )` and `>( … )` GNU bash 3.2.57 and zsh 5.9 run it too (zsh
+///   alone for `=( … )`). The same holds when the substitution opened on an earlier line.
+/// - **still open when the header's line ends.** GNU bash 5.2, 5.3 and zsh 5.9 read the body
+///   inside the substitution. GNU bash 3.2.57 ends a `$( … )` or process substitution at a `)`
+///   in the body and runs the lines after it, and every one of those shells ends a backtick
+///   substitution at a backtick in the body. Without that character in the body the four read
+///   the same lines as the body: a backtick in the body of a heredoc in a `$( … )` is text to
+///   all of them (fuzzed against bash 3.2.57 and zsh 5.9, and each pinned case checked against
+///   all four with a `touch` marker).
+///
+/// A subshell `( … )` or group `{ …; }` is neither: every one of those shells reads the body
+/// after the line. [`heredoc_layout`] reads either kind of body both ways.
+///
+/// A `#` comment is read both ways too ([`SubstitutionContext::comments`]): GNU bash 3.2.57
+/// skips a `)` in a comment inside an unquoted `$( … )` but closes a `"$( … )"` at one, and a
+/// backtick in a comment ends a backtick substitution in every one of those shells.
+///
+/// Its own small walk, because a backtick's pairing is what matters here and the quote map
+/// marks the two backticks of a pair differently inside `"…"`. It steps only command text:
+/// body lines are not read, as no shell reads them for its brackets but GNU bash 3.2.57.
+#[derive(Debug, Default)]
+struct SubstitutionContext {
+    /// Whether a `#` that begins a word begins a comment, whose brackets open and close
+    /// nothing. The layout keeps one context each way.
+    comments: bool,
+    /// Each open frame, innermost last, with the id a substitution frame is known by.
+    stack: Vec<(Frame, usize)>,
+    next_id: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Frame {
+    Sub,
+    Tick,
+    Paren,
+    DoubleQuoted,
+}
+
+impl SubstitutionContext {
+    /// Read `line`, which begins inside whatever this context holds open and leaves it holding
+    /// what is open at its end, and answer where each offset in `at` (ascending) stands. One
+    /// pass over the line, whatever the number of offsets.
+    fn read(&mut self, line: &Line, at: &[usize]) -> Vec<Enclosed> {
+        let chars = &line.chars;
+        let n = chars.len();
+        // The substitutions open at each asked offset, and where each one closed. An offset the
+        // walk steps over takes what is open at the next character it reads.
+        let mut open_at: Vec<Vec<(Frame, usize)>> = Vec::with_capacity(at.len());
+        let mut closed_at: HashMap<usize, usize> = HashMap::new();
+        let note = |i: usize, stack: &[(Frame, usize)], open_at: &mut Vec<Vec<(Frame, usize)>>| {
+            while open_at.len() < at.len() && at[open_at.len()] <= i {
+                open_at.push(
+                    stack
+                        .iter()
+                        .filter(|(f, _)| matches!(f, Frame::Sub | Frame::Tick))
+                        .copied()
+                        .collect(),
+                );
+            }
+        };
+        let mut i = 0usize;
+        while i < n {
+            note(i, &self.stack, &mut open_at);
+            let c = chars[i];
+            let in_dq = self
+                .stack
+                .last()
+                .is_some_and(|(f, _)| *f == Frame::DoubleQuoted);
+            if c == '\\' {
+                i += 2;
+                continue;
+            }
+            if line.starts_with(i, "$(") {
+                self.push(Frame::Sub);
+                i += 2;
+                continue;
+            }
+            if !in_dq && line.starts_with(i, "$'") {
+                // ANSI-C: ends at the first `'` no backslash escapes. This `$` is unescaped, since
+                // an escaped one was stepped over with its backslash above.
+                let mut k = i + 2;
+                while k < n && chars[k] != '\'' {
+                    k += if chars[k] == '\\' { 2 } else { 1 };
+                }
+                i = k + 1;
+                continue;
+            }
+            if c == '`' {
+                if self.stack.last().is_some_and(|(f, _)| *f == Frame::Tick) {
+                    let (_, id) = self.stack.pop().expect("just checked");
+                    closed_at.insert(id, i);
+                } else {
+                    self.push(Frame::Tick);
+                }
+            } else if in_dq {
+                if c == '"' {
+                    self.stack.pop();
+                }
+            } else if c == '\'' {
+                // Literal to the next `'`.
+                let mut k = i + 1;
+                while k < n && chars[k] != '\'' {
+                    k += 1;
+                }
+                i = k;
+            } else if self.comments && c == '#' && (i == 0 || BEFORE_COMMENT.contains(chars[i - 1]))
+            {
+                // A comment, to the end of the line.
+                while i + 1 < n && chars[i + 1] != '\n' {
+                    i += 1;
+                }
+            } else if c == '"' {
+                self.push(Frame::DoubleQuoted);
+            } else if c == '(' && opens_process_substitution(chars, i) {
+                self.push(Frame::Sub);
+            } else if c == '(' {
+                self.push(Frame::Paren);
+            } else if c == ')' {
+                match self.stack.pop() {
+                    Some((Frame::Sub, id)) => {
+                        closed_at.insert(id, i);
+                    }
+                    Some((Frame::Paren, _)) | None => {}
+                    Some(other) => self.stack.push(other), // a `)` inside a backtick is a word
+                }
+            }
+            i += 1;
+        }
+        note(usize::MAX, &self.stack, &mut open_at);
+        at.iter()
+            .zip(open_at)
+            .map(|(&a, around)| {
+                // Closed on the header's own line: a newline kept in the folded line for an
+                // open quote puts the close on a later line, where the body is inside it.
+                let closes_here = around.iter().any(|(_, id)| {
+                    closed_at
+                        .get(id)
+                        .is_some_and(|&hi| !chars[a..hi].contains(&'\n'))
+                });
+                let inside = |frame: Frame| around.iter().any(|&(f, _)| f == frame);
+                match (closes_here, inside(Frame::Sub), inside(Frame::Tick)) {
+                    (true, _, _) => Enclosed::ClosedOnItsLine,
+                    (false, false, false) => Enclosed::No,
+                    (false, true, false) => Enclosed::SpansLines(&[')']),
+                    (false, false, true) => Enclosed::SpansLines(&['`']),
+                    (false, true, true) => Enclosed::SpansLines(&[')', '`']),
+                }
+            })
+            .collect()
+    }
+
+    /// A context that reads a comment as a comment (`true`) or as text.
+    fn new(comments: bool) -> Self {
+        Self {
+            comments,
+            ..Self::default()
+        }
+    }
+
+    fn push(&mut self, frame: Frame) {
+        self.stack.push((frame, self.next_id));
+        self.next_id += 1;
+    }
 }
 
 /// One line of [`heredoc_layout`]'s answer.
@@ -1406,13 +1642,33 @@ pub struct LayoutLine {
 /// - a body whose terminator never arrives is **not dropped at all**, whoever opened it. Bash
 ///   reads an unterminated body to the end of the input, so a drop there would hide everything
 ///   after it if the delimiter was misread;
-/// - a body opened in a substitution closed on its own line (`closed_substitutions`) is not
-///   dropped either, and is read as lines a shell runs, because the shells disagree about
-///   whether those lines are a body at all.
+/// - a body the shells read differently is not dropped either, and is read as lines a shell
+///   runs: one opened in a substitution closed on the header's line, or in one that spans lines
+///   when the body holds a `)` or a backtick ([`SubstitutionContext`]), one whose delimiter the
+///   shells read differently ([`Header::shells_disagree`]), and one opened by a `<<` that may be
+///   a shift ([`Opener::maybe_shift`]);
+/// - nor is any body after one of those: where one shell runs the lines another reads as a
+///   body, those lines may open heredocs of their own, and the readings do not agree again
+///   about which lines are bodies.
 pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
     let lines: Vec<&str> = cmd.split('\n').collect();
     let n = lines.len();
     let mut layout: Vec<LayoutLine> = Vec::new();
+    // The brackets open at the end of the command text read so far: a bracket opened on one
+    // command line is still open on the next, and heredoc bodies between them are not read.
+    let mut ctx = ShiftContext::default();
+    // The substitutions open at the end of the command text read so far, carried the same way.
+    // One reads a comment as a comment and one as text, as the shells differ there.
+    let mut subs = [
+        SubstitutionContext::new(true),
+        SubstitutionContext::new(false),
+    ];
+    // Once a body the shells read differently has been met, the lines after it have two
+    // structures — one where they are commands with heredocs of their own, one where they are
+    // its body — and the two part company for the rest of the text. So from there on no body is
+    // dropped and every body is read as lines a shell runs: what either reading runs is then
+    // read.
+    let mut diverged = false;
     let mut i = 0usize;
     while i < n {
         // One LOGICAL command: command-text lines folded for the plan, heredoc bodies buffered as
@@ -1422,8 +1678,7 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
         let mut ended: HashMap<usize, bool> = HashMap::new();
         let mut fallback: HashMap<usize, bool> = HashMap::new();
         let mut body_count = 0usize;
-        // Bodies whose opener sits in a substitution closed on its own line: which lines are
-        // body there depends on the shell, so they are read both ways.
+        // Bodies the shells read differently, which are read both ways.
         let mut read_both_ways: HashSet<usize> = HashSet::new();
         let mut plan_text = String::new();
         let mut join = ""; // separator carried from the previous stage
@@ -1469,21 +1724,29 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
             } else {
                 HashSet::new()
             };
-            let closed = closed_substitutions(&folded_line);
-            for (h, m) in heredoc_openers(&folded_line).into_iter().enumerate() {
+            let openers = openers_after(&folded_line, &mut ctx);
+            let starts: Vec<usize> = openers.iter().map(|m| m.start).collect();
+            // The line is also read on its own. What is carried from earlier lines can be wrong
+            // where a shell closed a bracket this walk did not see open, and then a substitution
+            // that opens and closes on this line would go unseen; read alone, it is seen.
+            let mut enclosed = vec![Enclosed::No; starts.len()];
+            for ctx in subs.iter_mut() {
+                let alone = SubstitutionContext::new(ctx.comments).read(&folded_line, &starts);
+                let carried = ctx.read(&folded_line, &starts);
+                for (k, (a, c)) in alone.into_iter().zip(carried).enumerate() {
+                    // Alone, only a substitution closed on this line is taken: one still open
+                    // at its end is the carried reading's to judge.
+                    let a = if a == Enclosed::ClosedOnItsLine {
+                        a
+                    } else {
+                        Enclosed::No
+                    };
+                    enclosed[k] = enclosed[k].either(a).either(c);
+                }
+            }
+            for (h, (m, within)) in openers.into_iter().zip(enclosed).enumerate() {
                 let idx = body_count;
                 body_count += 1;
-                // Closed on the header's own line: a newline kept in `folded` for an open quote
-                // puts the close on a later line, where the body is inside the substitution.
-                if m.header.shells_disagree
-                    || closed.iter().any(|&(lo, hi)| {
-                        lo < m.start
-                            && m.start < hi
-                            && !folded_line.chars[m.start..hi].contains(&'\n')
-                    })
-                {
-                    read_both_ways.insert(idx);
-                }
                 if unknown {
                     fallback.insert(
                         idx,
@@ -1493,6 +1756,21 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
                 // Where bash ends the body, from the one header reading and the one body walk.
                 let h = &m.header;
                 let (len, found) = body_extent(&lines[i..], &h.delim, h.expands, h.dash);
+                // The body with its terminator: where a shell may end the substitution around it.
+                let body_ends_it = |closers: &[char]| {
+                    lines[i..(i + len + 1).min(n)]
+                        .iter()
+                        .any(|l| l.contains(closers))
+                };
+                let differ = match within {
+                    Enclosed::No => false,
+                    Enclosed::ClosedOnItsLine => true,
+                    Enclosed::SpansLines(closers) => body_ends_it(closers),
+                };
+                if m.maybe_shift || h.shells_disagree || differ {
+                    read_both_ways.insert(idx);
+                    diverged = true;
+                }
                 for body_line in &lines[i..i + len] {
                     chunks.push((Some(idx), (*body_line).to_string()));
                 }
@@ -1532,15 +1810,14 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
             // what every delimiter disagreement in this walk has looked like, and keeping it only
             // shows the guard more text.
             let unterminated = idx.is_some_and(|k| !ended.get(&k).copied().unwrap_or(true));
+            let both_ways = |k: usize| diverged || read_both_ways.contains(&k);
             layout.push(LayoutLine {
                 text,
                 body: idx.is_some(),
-                drop: idx.is_some_and(|k| {
-                    drop.get(&k).copied().unwrap_or(false) && !read_both_ways.contains(&k)
-                }) && !unterminated,
-                executed: idx.is_some_and(|k| {
-                    executed.get(&k).copied().unwrap_or(false) || read_both_ways.contains(&k)
-                }),
+                drop: idx.is_some_and(|k| drop.get(&k).copied().unwrap_or(false) && !both_ways(k))
+                    && !unterminated,
+                executed: idx
+                    .is_some_and(|k| executed.get(&k).copied().unwrap_or(false) || both_ways(k)),
             });
         }
     }

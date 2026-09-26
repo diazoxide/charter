@@ -754,3 +754,16 @@ whose tabs are shells. xterm.js 6.0.0 encodes `Ctrl` with a letter only when Shi
 so `Ctrl+Shift+T` is no byte, and plain `Ctrl+T` still reaches the shell as transpose-chars.
 It is a capture listener on the window, held by the project in front, and it presses the
 catalogue's own `shell.new` row.
+
+**Find in a pane is `⌘F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either** (SI-4,
+`SessionPane.opensFind`). xterm.js 6.0.0 sends nothing for `⌘F`. It would send `\x06` for
+`Ctrl+F` — readline's forward-char — so off a Mac the chord adds `Shift`, as GNOME Terminal and
+Konsole do for their own find, and a Mac's `Ctrl+F` stays the shell's as well. It is caught by the
+pane's own terminal (`attachCustomKeyEventHandler`) rather than on the window, because find is
+over the pane that has the keyboard and nowhere else. Neither the palette (`⌘K`, `F2`) nor the
+native menu claims `F`: the macOS menu is charter's, Edit's predefined items and nothing else.
+
+**Shift+Enter in a harness's pane is the harness's newline** (SI-4, `Harness::newline`). A
+terminal has no Shift+Enter: xterm.js 6.0.0 sends a bare CR for it, the byte Enter sends, so every
+harness submitted on it. The pane sends the harness's own newline instead — ESC CR for all three,
+measured — and a shell's pane, which runs no harness, keeps xterm's Enter.

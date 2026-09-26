@@ -144,6 +144,24 @@ impl Harness {
         }
     }
 
+    /// Whether this harness finds a conversation by the directory it ran in, so a chat whose
+    /// directory moves can no longer be resumed by its id (charter#367, D10).
+    ///
+    /// - **Claude Code** files each transcript under `~/.claude/projects/<encoded cwd>/`, and
+    ///   `--resume <id>` looks there, under the directory it is started in. After
+    ///   `charter workspace rename` the chat starts in the new directory and its conversation
+    ///   stays under the old one. charter does not move the harness's files (ADR 0050).
+    /// - **Codex** keeps its rollouts by date under `~/.codex/sessions/`, and
+    ///   `codex resume <id>` finds one by its id from any directory.
+    /// - **opencode** keys a session by its project, which is the repository's first commit
+    ///   (or `global` outside git), not by a path, and `-s <id>` names the session itself.
+    pub fn keeps_conversations_by_directory(self) -> bool {
+        match self {
+            Self::ClaudeCode => true,
+            Self::Codex | Self::Opencode => false,
+        }
+    }
+
     /// The arguments that start a new session under `id`, or none for a harness that
     /// chooses its own id.
     pub fn new_session_argv(self, id: &SessionId, name: &str) -> Vec<String> {
@@ -401,6 +419,23 @@ impl Harness {
         }
     }
 
+    /// What a chat's pane sends for Shift+Enter: the bytes this harness reads as "a new line
+    /// in what I am typing", rather than "send it" (SI-4).
+    ///
+    /// A terminal has no Shift+Enter of its own — xterm.js 6.0.0 sends a bare CR for it, the
+    /// same as Enter, so every harness submitted on it. ESC CR is Alt/Option+Enter, the
+    /// sequence each of these harnesses already reads as a newline. Measured, not assumed: in a
+    /// pseudo-terminal, `hello`, ESC CR, `world` left both words in the input on two lines,
+    /// unsent, on Claude Code 2.1.283, codex-cli 0.147.0 and opencode 1.18.23.
+    ///
+    /// A harness's and not the pane's, because it is a fact about the program reading the
+    /// keys; a chat that runs no harness — a shell — keeps the terminal's own Enter.
+    pub fn newline(self) -> &'static str {
+        match self {
+            Self::ClaudeCode | Self::Codex | Self::Opencode => "\x1b\r",
+        }
+    }
+
     /// What a chat on this harness cannot tell charter, in a sentence the chat shows — or
     /// none, where it can tell charter everything the board asks.
     ///
@@ -573,6 +608,16 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn every_harness_takes_escape_return_as_a_newline_in_its_input() {
+        // Measured live in a pseudo-terminal: `hello`, ESC CR, `world` left both words in the
+        // input on two lines, unsent, on Claude Code 2.1.283, codex-cli 0.147.0 and opencode
+        // 1.18.23 (SI-4).
+        for harness in [Harness::ClaudeCode, Harness::Codex, Harness::Opencode] {
+            assert_eq!(harness.newline(), "\x1b\r", "{harness:?}");
+        }
+    }
+
+    #[test]
     fn claude_code_is_started_under_the_id_charter_chose() {
         // `charter/harness/claude_code.py:300` — `--session-id <uuid> --name <name>`, so the
         // link exists before the harness starts.
@@ -603,6 +648,15 @@ mod tests {
                 "ide.7".to_owned(),
             ])
         );
+    }
+
+    #[test]
+    fn only_claude_code_loses_a_conversation_when_its_directory_moves() {
+        // charter#367, D10: Claude Code files a transcript under the directory it ran in;
+        // Codex and opencode find a session by its id from anywhere.
+        assert!(Harness::ClaudeCode.keeps_conversations_by_directory());
+        assert!(!Harness::Codex.keeps_conversations_by_directory());
+        assert!(!Harness::Opencode.keeps_conversations_by_directory());
     }
 
     #[test]

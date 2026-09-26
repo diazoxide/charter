@@ -1099,3 +1099,173 @@ fn a_brief_is_a_brief_in_any_case() {
     }
     assert!(heredoc::brief_heredocs(&Line::of("'charter' handoff b <<'B'")).is_empty());
 }
+
+/// A `<<` inside `(( … ))`, `$(( … ))`, `$[ … ]`, `${ … }` or an assignment's subscript can be a
+/// shift or plain text, and then the lines after it are commands the shell runs: GNU bash 3.2.57
+/// and zsh 5.9 ran them for each shape below, or one of the two did. Such a `<<` is read both
+/// ways, as the layout reads a heredoc the shells end at different lines: its would-be body is
+/// never dropped, and it is read as lines a shell runs.
+#[test]
+fn a_shift_opens_no_body_a_guard_may_skip() {
+    charter_core::unsteered!();
+    for first in [
+        "cat $[1<<\"2\"]",
+        "cat $((1<<\"2\"))",
+        "(( 1<<\"2\" )) && cat",
+        "cat ${v:-1<<\"2\"}",
+        "a[1<<\"2\"]=x cat",
+        "x=((1<<\"2\")); cat",
+        // A bracket may span lines, and the `<<` on its second line is a shift all the same.
+        "(( 1 +\n1<<\"2\" )) && cat",
+        "echo $[ 1 +\n1<<\"2\" ]",
+        "echo ${v:-\n1<<\"2\"}",
+    ] {
+        let cmd = format!("{first}\nsecret\n2\nls");
+        assert_eq!(heredoc::strip_reader_heredocs(&cmd), cmd, "{cmd:?}");
+        let layout = heredoc::heredoc_layout(&cmd);
+        assert!(
+            layout.iter().all(|l| !l.drop && (!l.body || l.executed)),
+            "{cmd:?}: {layout:?}"
+        );
+    }
+    // Once the bracket closes, a quoted reader body is data again.
+    assert_eq!(
+        heredoc::strip_reader_heredocs("echo $[2] ${v} a[1]=b; cat <<\"2\"\nsecret\n2\nls"),
+        "echo $[2] ${v} a[1]=b; cat <<\"2\"\nls"
+    );
+}
+
+/// A heredoc opened inside a substitution that does not close on the header's line — `$( … )`,
+/// a backtick, `<( … )`, `>( … )` or zsh's `=( … )`, however nested — has a body the shells
+/// read differently when a line of it holds a `)` or a backtick. GNU bash 3.2.57 ends the
+/// substitution there and runs the lines after it; GNU bash 5.2 and 5.3 and zsh 5.9 read them
+/// as the body, and every one of those shells ends a backtick substitution at a backtick in the
+/// body. Each first line below ran `secret` in at least one of those shells, checked with a
+/// `touch` marker. Such a body is read both ways: never dropped, and read as lines a shell runs.
+#[test]
+fn a_heredoc_in_a_substitution_spanning_lines_opens_no_body_a_guard_may_skip() {
+    charter_core::unsteered!();
+    for cmd in [
+        "x=$(\ncat <<\"2\"\n)\nsecret\n2\nls",
+        "x=`\ncat <<\"2\"\n`\nsecret\n2\nls",
+        "cat <(\ncat <<\"2\"\n)\nsecret\n2\nls",
+        "cat >(\ncat <<\"2\"\n)\nsecret\n2\nls",
+        "x=\"$(\ncat <<'2'\n)\"\nsecret\n2\nls",
+        "x=$(\ny=$(\ncat <<\"2\"\n)\n)\nsecret\n2\nls",
+        "x=$(echo `\ncat <<'2'\n`)\nsecret\n2\nls",
+        "x=`echo $(\ncat <<'2'\n)`\nsecret\n2\nls",
+        "x=$(cat <<\"2\"\n)\nsecret\n2\nls",
+        "cat <(cat <<\"2\"\n)\nsecret\n2\nls",
+        "x=\"$(cat <<'2'\nfix )\"\nsecret\n2\n)\"",
+        "x=`cat <<'2'\na`\nsecret\n2\n`",
+        // Closed on the header's line, having opened on an earlier one.
+        "x=$(\ncat <<\"2\")\nsecret\n2\nls",
+        // bash 5.3's `${ …; }`, which GNU bash 3.2.57 and 5.2 read as a parameter expansion.
+        "x=${ \ncat <<\"2\"\n}\nsecret\n2\nls",
+        // A bracket in a comment closes nothing.
+        "x=$(\n# )\ncat <<\"2\"\n)\nsecret\n2\n)",
+        "x=$( # )\ncat <<\"2\"\n)\nsecret\n2\n)",
+        "cat <(\n# )\ncat <<\"2\"\n)\nsecret\n2\n)",
+        // …and one in a comment may close a substitution all the same.
+        "x=\"$( cat <<'2' # )\"\nsecret\n2",
+        "x=`cat <<'2' # `\nsecret\n2",
+    ] {
+        assert_eq!(heredoc::strip_reader_heredocs(cmd), cmd, "{cmd:?}");
+        let layout = heredoc::heredoc_layout(cmd);
+        assert!(
+            layout.iter().all(|l| !l.drop && (!l.body || l.executed)),
+            "{cmd:?}: {layout:?}"
+        );
+    }
+}
+
+/// Once the shells part company about which lines are a body, they do not agree again: GNU bash
+/// 3.2.57 reads the would-be body as commands, one of which opens a heredoc of its own, and
+/// that one's body takes the terminator the other reading ends at. So from the first body read
+/// both ways, no body after it is dropped either. The first two lines below ran `secret` in
+/// bash 3.2.57 (the first in zsh 5.9 too), and the third, whose delimiter the shells read
+/// differently, in zsh 5.9.
+#[test]
+fn a_body_read_both_ways_keeps_every_body_after_it() {
+    charter_core::unsteered!();
+    for cmd in [
+        "x=$(cat <<'E' )\ncat <<'Y'\nE\ncat <<'W'\nY\nsecret\nW",
+        "x=$(cat <<'E'\n)\ncat <<'Y'\nE\ncat <<'W'\nY\nsecret\nW",
+        "cat <<$\"E\"\nE\ncat <<'W'\n$E\nsecret\nW",
+    ] {
+        assert_eq!(heredoc::strip_reader_heredocs(cmd), cmd, "{cmd:?}");
+        let layout = heredoc::heredoc_layout(cmd);
+        assert!(
+            layout.iter().all(|l| !l.drop && (!l.body || l.executed)),
+            "{cmd:?}: {layout:?}"
+        );
+    }
+}
+
+/// Where no line of the body holds a `)` or a backtick, every shell above reads the same body,
+/// and a quoted reader's body is data as before (GNU bash 3.2.57, 5.2, 5.3 and zsh 5.9 all left
+/// `secret` unrun).
+#[test]
+fn a_heredoc_in_a_substitution_with_no_closer_in_its_body_is_read_once() {
+    charter_core::unsteered!();
+    for (cmd, kept) in [
+        (
+            "x=$(\ncat <<'2'\nsecret\n2\n)\nls",
+            "x=$(\ncat <<'2'\n)\nls",
+        ),
+        ("x=`\ncat <<'2'\nsecret\n2\n`\nls", "x=`\ncat <<'2'\n`\nls"),
+        // A substitution that closed before the header is not around it.
+        (
+            "x=$(date)\ncat <<'2'\n)\nsecret\n2\nls",
+            "x=$(date)\ncat <<'2'\nls",
+        ),
+        // A `#` inside a word begins no comment.
+        (
+            "x=$(\necho a#)\ncat <<'2'\n)\nsecret\n2\nls",
+            "x=$(\necho a#)\ncat <<'2'\nls",
+        ),
+    ] {
+        assert_eq!(heredoc::strip_reader_heredocs(cmd), kept, "{cmd:?}");
+    }
+}
+
+/// zsh runs `=(…)` at the start of a word, as an assignment's value and as the operand of a
+/// `${…}` operator, and hands the program a temporary file holding the output. Its command is a
+/// segment of its own, as a `<(…)`'s is. After a name (`a=(…)`, an array) or a quoted part of
+/// the word it is no substitution. Checked against zsh 5.9; bash refuses every `=(` form.
+#[test]
+fn a_zsh_equals_substitution_is_a_segment_of_its_own() {
+    charter_core::unsteered!();
+    let vault = ".charter/vaults/x.json";
+    for cmd in [
+        format!("echo =(cat {vault})"),
+        format!("=(cat {vault})"),
+        format!("v==(cat {vault})"),
+        format!("echo ${{v:-=(cat {vault})}}"),
+        format!("echo x;=(cat {vault})"),
+        format!("echo >=(cat {vault})"),
+        format!("gh pr create --body-file =(cat {vault})"),
+    ] {
+        assert!(
+            words(&cmd).contains(&w(&["cat", vault])),
+            "{cmd:?}: {:?}",
+            words(&cmd)
+        );
+    }
+    for cmd in [
+        format!("a=(cat {vault})"),
+        format!("a+=(cat {vault})"),
+        format!("a[1]=(cat {vault})"),
+        format!("echo a=(cat {vault})"),
+        format!("echo \"\"=(cat {vault})"),
+        format!("echo '='(cat {vault})"),
+        format!("echo \\=(cat {vault})"),
+        format!("echo = (cat {vault})"),
+    ] {
+        assert!(
+            !words(&cmd).contains(&w(&["cat", vault])),
+            "{cmd:?}: {:?}",
+            words(&cmd)
+        );
+    }
+}

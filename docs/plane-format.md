@@ -2581,6 +2581,11 @@ same bound.
 (`charter/commands.py:1354`) is written verbatim; an `mcp__…` pattern with a wildcard or
 arguments raises `UnexpressibleRule` and nothing is written.
 
+**Default ask rules** (charter-app): `init` writes two, `Bash(charter handoff *)` and
+`Bash(charter report *--yes*)`. The second is new in charter-app (ADR 0059, amended
+2026-09-26), and `reinit` adds it to a plane that predates it. `opencode.json` gets the same
+two globs.
+
 Measured after `init` + `guard ask 'terraform apply *'`:
 
 ```json
@@ -3294,7 +3299,8 @@ down rather than read off the code.
   relaunch's worth of chats: the app starts with none open, which is what a first launch
   does anyway. No second process reads it, which is what would make it stable.
 - **Written by:** `app/src-tauri/src/lib.rs` (charter-app) — whenever what is open changes
-  (a chat started, closed, or brought to front), and again on the way out. Not only on the
+  (a chat started, closed, brought to front, or dragged to another place on its strip), and
+  again on the way out. Not only on the
   way out: an app that is killed, or crashes, runs no exit handler. **Restart to update**
   (charter-app#251) writes it too, with `relaunch_after_update`, before the restart is asked
   for, so a relaunch that fails loses nothing: the next launch reads the same record.
@@ -3311,7 +3317,7 @@ down rather than read off the code.
 |---|---|---|---|
 | `version` | int | `1`; any other value and the record is ignored whole | format version |
 | `at` | int epoch | required | when it was written; nothing reads it |
-| `chats[]` | list | required | one entry per chat that was open |
+| `chats[]` | list | required | one entry per chat that was open, **in the order the chat strip drew them**, which is the order a launch puts them back in (ADR 0039, amended for SI-6: the operator can drag a tab). A record written before that lists them in the order they were numbered, which was the strip's order then, so it reads back as the strip its operator last saw |
 | `chats[].program` | str | required | the program, as it was launched: a path or a bare name |
 | `chats[].args` | list[str] | default `[]` | its arguments, **without** any charter added — a resume spells those differently from a start, so they are decided again at the reopen |
 | `chats[].cwd` | str | default `""` (absent) | the directory it ran in |
@@ -3323,6 +3329,7 @@ down rather than read off the code.
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
 | `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
 | `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone; `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that cannot be one reads as the whole key absent — the note is not drawn and no report is owed |
+| `chats[].renamed_from` | str | default `""` (absent) | the workspace `charter workspace rename` moved this chat away from, where the rename left it with no conversation its harness can find (charter#367, D10). Claude Code keeps a conversation under the folder it ran in, so the rename clears such a chat's `resume` and writes this instead; a Codex or opencode chat keeps its `resume`. The next start is a new conversation whose pane says why, and the chat is written without this key from then on. Held to the workspace-name rule on the way in; anything else reads as absent |
 | `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251, **Restart to update**, the only writer of `true`), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. **It counts only at the launch that follows the restart**: the restart also leaves an empty `restarted-to-update` file beside the machine store (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), and the next launch removes it whatever it opens. A plane that launch did not open keeps the flag, and it says nothing at any later launch |
 
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a

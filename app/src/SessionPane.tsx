@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import { CHAT_KEYBOARD } from "./actions";
 import * as bench from "./bench";
 import { commands, type PlaneId } from "./bindings";
+import { FindBar } from "./FindBar";
 import { draw } from "./renderer";
+import { onAMac } from "./tabKeys";
 import { moveAlong } from "./tabSequence";
 import { onTextSizes, textSizes } from "./textSize";
 import { inForce, onDrawn, xtermTheme } from "./theme/theme";
@@ -32,6 +35,15 @@ export function SessionPane({
 }) {
   const holder = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | undefined>(undefined);
+  /** The find bar, while it is open: the terminal's search, and how many times it has been
+   *  asked for — a second `⌘F` puts the keyboard back in the field of a bar already open. */
+  const [finding, setFinding] = useState<{ search: SearchAddon; asked: number } | null>(null);
+
+  /** Esc, or the bar's close: nothing is left drawn, and the keyboard is the chat's again. */
+  const closeFind = useCallback(() => {
+    setFinding(null);
+    terminal.current?.focus();
+  }, []);
 
   /** Clicking a pane puts the keyboard in it, which is the whole point of clicking it. Both
    *  events are handled: a person's press arrives as `mousedown`, and something driving the
@@ -60,9 +72,39 @@ export function SessionPane({
       // nothing keeping them equal — and which left the other eighteen colours a terminal
       // has to the library's defaults.
       theme: xtermTheme(inForce()),
+      // The search addon draws every match as a decoration, which xterm.js 6.0.0 still calls
+      // proposed API (`registerDecoration` throws without this). Nothing else here uses it.
+      allowProposedApi: true,
     });
     const fit = new FitAddon();
     pane.loadAddon(fit);
+    const search = new SearchAddon();
+    pane.loadAddon(search);
+    /** What Shift+Enter sends, once the view says which harness this is — none for a shell,
+     *  which keeps the terminal's own Enter (`Harness::newline`). */
+    let newline: string | undefined;
+    // **The two keys a chat's terminal answers itself** (SI-4), decided before xterm encodes
+    // them. Each is swallowed on every phase — keydown, keypress, keyup — so xterm sends
+    // nothing of its own for it, and acted on once, at keydown.
+    pane.attachCustomKeyEventHandler((event) => {
+      if (opensFind(event)) {
+        if (event.type === "keydown") {
+          event.preventDefault();
+          setFinding((open) => ({ search, asked: (open?.asked ?? 0) + 1 }));
+        }
+        return false;
+      }
+      if (newline !== undefined && isShiftEnter(event)) {
+        if (event.type === "keydown") {
+          event.preventDefault();
+          // Through the terminal's own input, so it reaches the program by the one path
+          // everything typed does (`onData` below).
+          pane.input(newline);
+        }
+        return false;
+      }
+      return true;
+    });
     pane.open(where);
     // **A theme drawn while the pane is up is the pane's theme too** (M6.7). xterm is handed an
     // object, not a stylesheet, so nothing about the custom properties changing reaches it: the
@@ -140,6 +182,7 @@ export function SessionPane({
       // The core keeps the history; the pane keeps the same, so scrolling back shows what the
       // session has rather than what this terminal happens to have seen.
       pane.options.scrollback = opened.data.scrollback;
+      newline = opened.data.newline ?? undefined;
       pane.resize(opened.data.columns, opened.data.rows);
       ready = true;
       for (const held of waiting.splice(0)) pane.write(held.text, held.written);
@@ -157,23 +200,53 @@ export function SessionPane({
       if (view !== undefined) void commands.unwatchSession(plane, session, view);
       pane.dispose();
       terminal.current = undefined;
+      setFinding(null);
       bench.paneClosed(session);
     };
   }, [plane, session]);
 
   return (
-    <div
-      className={focused ? "pane focused" : "pane"}
-      data-testid="pane"
-      // Everything under here is a shell's keyboard, and the window's own bindings stand
-      // back from the chords a terminal encodes (`actions.CHAT_KEYBOARD`, charter-app#106).
-      {...{ [CHAT_KEYBOARD]: "" }}
-      data-session={session}
-      onKeyDownCapture={leavesTheChat}
-      onMouseDown={take}
-      onClick={take}
-      ref={holder}
-    />
+    <>
+      <div
+        className={focused ? "pane focused" : "pane"}
+        data-testid="pane"
+        // Everything under here is a shell's keyboard, and the window's own bindings stand
+        // back from the chords a terminal encodes (`actions.CHAT_KEYBOARD`, charter-app#106).
+        {...{ [CHAT_KEYBOARD]: "" }}
+        data-session={session}
+        onKeyDownCapture={leavesTheChat}
+        onMouseDown={take}
+        onClick={take}
+        ref={holder}
+      />
+      {finding && <FindBar search={finding.search} asked={finding.asked} onClose={closeFind} />}
+    </>
+  );
+}
+
+/**
+ * **Whether this key opens the find bar: `⌘F` on a Mac, `Ctrl+Shift+F` everywhere else.**
+ *
+ * One modifier per platform, as the text-size keys are (`textSize.sizeKey`), and for the rule
+ * `docs/ui-primitives.md` holds every claimed key to. xterm.js 6.0.0 sends nothing for a
+ * `⌘`-chord but `⌘A`, so `⌘F` takes nothing from the chat. `Ctrl+F` would: it is `\x06`,
+ * readline's forward-char, in the shell every chat starts in — so off a Mac the chord adds
+ * `Shift`, as GNOME Terminal and Konsole do for their own find, and xterm sends nothing for a
+ * `Ctrl+Shift` letter. A Mac's `Ctrl+F` stays the shell's too.
+ */
+export function opensFind(event: globalThis.KeyboardEvent, mac: boolean = onAMac()): boolean {
+  if (event.key !== "f" && event.key !== "F") return false;
+  if (event.altKey) return false;
+  return mac
+    ? event.metaKey && !event.ctrlKey && !event.shiftKey
+    : event.ctrlKey && event.shiftKey && !event.metaKey;
+}
+
+/** Shift+Enter and nothing else held. xterm.js 6.0.0 ignores Shift on Enter and sends a bare
+ *  CR — the same byte as Enter, which is why every harness submitted on it. */
+function isShiftEnter(event: globalThis.KeyboardEvent): boolean {
+  return (
+    event.key === "Enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
   );
 }
 

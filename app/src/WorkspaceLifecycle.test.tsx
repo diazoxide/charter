@@ -81,6 +81,8 @@ function core(
     loggedOut?: boolean;
     /** Repos whose clone fails, with the core's sentence. */
     cloneFails?: Record<string, string>;
+    /** The core's sentence `workspace_starts_fresh` answers with. */
+    startsFresh?: string;
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -165,6 +167,7 @@ function core(
       if (fails !== undefined) throw fails;
       return [`✓ ${String(got.repo)} cloned`];
     }
+    if (cmd === "workspace_starts_fresh") return over.startsFresh ?? null;
     if (cmd === "workspace_rename") {
       const name = String(got.name);
       if (name === "beta")
@@ -732,6 +735,57 @@ describe("renaming a workspace (charter#367)", () => {
     ]);
     // The window was in alpha, so it is in gamma now.
     await waitFor(() => expect(strip()).toEqual(["beta", "gamma"]));
+  });
+
+  it("names the chats that will start a fresh conversation before the rename is answered", async () => {
+    const said =
+      "These chats will start a fresh conversation after the rename: steward 1, billing bug. " +
+      "Claude Code keeps their conversations under the folder it ran in, and charter does not " +
+      "move that folder.";
+    const { calls } = core({ startsFresh: said });
+    render(<App />);
+    await settled();
+
+    await menuOn("alpha");
+    await userEvent.click(screen.getByRole("menuitem", { name: /Rename workspace alpha/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename workspace alpha" });
+
+    const note = await within(dialog).findByLabelText("Chats that will start fresh");
+    expect(note).toHaveTextContent(said);
+    expect(calls("workspace_starts_fresh").map((one) => one.args)).toContainEqual({
+      plane: PLANE,
+      workspace: "alpha",
+    });
+    expect(calls("workspace_rename")).toEqual([]);
+
+    // A warning, not a refusal: the rename still goes ahead.
+    const box = within(dialog).getByLabelText("New name");
+    await userEvent.clear(box);
+    await userEvent.type(box, "gamma");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename workspace" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls("workspace_rename").map((one) => one.args)).toEqual([
+      { plane: PLANE, workspace: "alpha", name: "gamma" },
+    ]);
+  });
+
+  it("says nothing about fresh conversations when no chat will start one", async () => {
+    core();
+    render(<App />);
+    await settled();
+
+    await menuOn("alpha");
+    await userEvent.click(screen.getByRole("menuitem", { name: /Rename workspace alpha/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename workspace alpha" });
+    const box = within(dialog).getByLabelText("New name");
+    await userEvent.clear(box);
+    await userEvent.type(box, "gamma");
+
+    // The answer waits for the core's; once it can be given, the core has said there is none.
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Rename workspace" })).toBeEnabled(),
+    );
+    expect(within(dialog).queryByLabelText("Chats that will start fresh")).toBeNull();
   });
 
   it("does not offer to rename a workspace to the name it already has", async () => {

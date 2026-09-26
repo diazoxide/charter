@@ -1083,25 +1083,41 @@ impl Planes {
     /// (`Unsupported`, which on Windows is ADR 0031's refusal and is the honest answer to
     /// "pin this": charter cannot, here, and says so).
     pub fn pin(&self, root: &Path, workspace: Option<&str>, pinned: bool) -> Result<(), String> {
+        let plane = root.to_path_buf();
+        self.arranging(|store| match workspace {
+            Some(name) => store.pin_workspace(&plane, name, pinned).map(drop),
+            None => store.pin(&plane, pinned).map(drop),
+        })
+    }
+
+    /// Puts a project's pinned workspaces in the order the operator dragged them into (SI-6),
+    /// in the machine store beside the pins themselves — refusing as [`Self::pin`] does, for
+    /// the same reason: it is a drag the operator just finished.
+    pub fn arrange_workspaces(&self, root: &Path, order: &[String]) -> Result<(), String> {
+        let plane = root.to_path_buf();
+        let order: Vec<&str> = order.iter().map(String::as_str).collect();
+        self.arranging(|store| store.arrange_workspaces(&plane, &order).map(drop))
+    }
+
+    /// Changes how the operator arranged things in the machine store, and hands back the
+    /// store's own refusal whole: the one path [`Self::pin`] and [`Self::arrange_workspaces`]
+    /// both take, so a store that cannot be written says the same sentence for either.
+    fn arranging(
+        &self,
+        act: impl FnOnce(&mut machine::Store) -> Result<(), String>,
+    ) -> Result<(), String> {
         let Some(config) = self.config.as_deref() else {
             return Err(
                 "charter has no config home on this machine, so it cannot remember a pin."
                     .to_owned(),
             );
         };
-        let plane = root.to_path_buf();
-        let workspace = workspace.map(str::to_owned);
         // The store's own refusal, out of the closure: `update` answers an `io::Error`, and
         // wrapping a bound the operator can act on ("unpin one first") in one would turn a
         // sentence they can follow into a sentence about a file.
         let mut refused = None;
-        machine::update(config, |store| {
-            refused = match &workspace {
-                Some(name) => store.pin_workspace(&plane, name, pinned).err(),
-                None => store.pin(&plane, pinned).err(),
-            };
-        })
-        .map_err(|why| format!("charter could not write the pin down: {why}"))?;
+        machine::update(config, |store| refused = act(store).err())
+            .map_err(|why| format!("charter could not write the pin down: {why}"))?;
         match refused {
             Some(why) => Err(why),
             None => Ok(()),
@@ -2211,6 +2227,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             }],
             dealt: 0,
             relaunch_after_update: false,
@@ -2243,6 +2260,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             })
             .collect();
         reopen::write(
@@ -3995,6 +4013,44 @@ mod tests {
             Some("beta"),
             "what the next write of the record is made from"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_dialog_names_no_chat_that_is_running_because_that_one_refuses_the_rename() {
+        // charter#367, D10: a running Claude Code chat with a conversation would be named as
+        // starting fresh, and then the rename would be refused over it. It is named by the
+        // refusal alone.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+        let claude = dir.path().join("bin/claude");
+        std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
+        std::fs::write(&claude, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let mut chat = one_chat_on(&claude.display().to_string()).chats.remove(0);
+        // The plane as the registry holds it, which is how the app spells a chat's directory.
+        chat.cwd = Some(held.root().join("workspaces/alpha"));
+        chat.resume = Some(
+            charter_core::harness::SessionId::new("11111111-2222-4333-8444-555555555555").unwrap(),
+        );
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+        assert_eq!(
+            charter_core::wscmd::rename::starts_fresh(held.root(), "alpha", &held.chats().record())
+                .len(),
+            1,
+            "the premise: the record would name it"
+        );
+
+        assert_eq!(crate::workspaces::starts_fresh_in(&held, "alpha"), None);
+        held.chats().close(session).expect("it closes");
     }
 
     #[cfg(unix)]

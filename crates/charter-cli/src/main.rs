@@ -34,6 +34,7 @@ use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
+mod change;
 mod extcmd;
 mod extensions;
 mod guard;
@@ -99,6 +100,12 @@ enum Command {
     /// Pieces: worktrees of a workspace's clones — cut, declared done or abandoned, removed.
     #[command(subcommand, alias = "wt")]
     Worktree(piece::WorktreeCommand),
+
+    /// A cross-repo change: one piece of work across several of a workspace's repos — why,
+    /// which repos, which branch in each, and which must land first
+    /// (workspaces/<ws>/changes/<slug>.json).
+    #[command(subcommand)]
+    Change(change::ChangeCommand),
 
     /// Harness profiles: which program a chat runs, and with what environment.
     #[command(subcommand)]
@@ -237,9 +244,10 @@ enum Command {
         /// one. Every other check runs.
         #[arg(long)]
         preflight: bool,
-        /// Install charter's plugin for chats started outside the app first — what
-        /// `charter plugin install` does, each change printed on stderr — then report. It
-        /// writes this machine's harness settings only, never a file in the plane.
+        /// Repair first, then report: install charter's plugin for chats started outside the
+        /// app (what `charter plugin install` does), and add the plane's default ask rule for
+        /// `charter report --yes` when it is missing (what `charter guard ask` does). Each
+        /// change is printed on stderr.
         #[arg(long)]
         fix: bool,
     },
@@ -570,6 +578,9 @@ enum GuardCommand {
     },
     /// Always prompt before a handoff runs: the rule `charter init` writes, put back.
     Handoff,
+    /// Always prompt before `charter report … --yes` files an issue: the rule `charter init`
+    /// writes, put back (ADR 0059).
+    Report,
     /// Show this plane's ask and allow rules, by the file each lives in.
     List,
 }
@@ -2027,6 +2038,7 @@ fn run(command: Command) -> Result<u8, String> {
                     (pattern.as_str(), Bucket::Allow, *local)
                 }
                 Some(GuardCommand::Handoff) => (guardcmd::HANDOFF_PATTERN, Bucket::Ask, false),
+                Some(GuardCommand::Report) => (guardcmd::REPORT_PATTERN, Bucket::Ask, false),
             };
             let rule = match guardcmd::as_rule(pattern) {
                 Ok(rule) => rule,
@@ -2094,6 +2106,7 @@ fn run(command: Command) -> Result<u8, String> {
         Command::Recall(args) => return memory::recall(&here, args),
         Command::Persona(command) => return memory::persona(&here, command),
         Command::Worktree(command) => return piece::run(&here, command),
+        Command::Change(command) => return change::run(&here, command),
         Command::Workspace(WorkspaceCommand::Remember {
             text,
             title,
@@ -2244,7 +2257,7 @@ fn todo(
                     return code;
                 }
             }
-            if let Err(e) = charter_core::memstore::forget(root, &dir, slug) {
+            if let Err(e) = ws.forget_todo(slug) {
                 voice::err(&e.to_string());
                 return 1;
             }
@@ -2280,20 +2293,9 @@ fn todo(
             1
         }
         [text] => {
-            // Duplicate INTENT is worse than duplicate memory: closing one of a near-identical
-            // pair leaves its twin looking outstanding, so the list starts lying about what is
-            // left. Warn and skip rather than merge. CONTAINED, as `commands_workspace.py`
-            // contains it: `dup` is the `# ` heading of a file on disk, and since `charter
-            // handoff` a stored title can be a model's prose.
-            if let Some(dup) = charter_core::memstore::duplicate_of(root, &dir, text) {
-                voice::err(&format!(
-                    "already on the list: {}",
-                    charter_core::personas::one_line(&dup)
-                ));
-                voice::info(&format!("  See it: {see}"));
-                return 1;
-            }
-            match ws.add_todo(text, stamp) {
+            // The rule is the core's (`Workspace::record_todo`), so the window's Todos panel
+            // refuses the same todos in the same words.
+            match ws.record_todo(text, stamp) {
                 Ok(path) => {
                     voice::ok(&format!(
                         "Todo recorded in '{name}' → workspaces/{name}/todos/{}",
@@ -2306,8 +2308,13 @@ fn todo(
                     }
                     0
                 }
-                Err(e) => {
-                    voice::err(&e.to_string());
+                Err(refused @ charter_core::workspaces::RecordRefused::AlreadyListed(_)) => {
+                    voice::err(&refused.to_string());
+                    voice::info(&format!("  See it: {see}"));
+                    1
+                }
+                Err(refused) => {
+                    voice::err(&refused.to_string());
                     1
                 }
             }
@@ -2692,9 +2699,9 @@ fn with_here(f: impl FnOnce(&Here) -> u8) -> ExitCode {
 
 /// `charter doctor`: every check, as a table or as `--json`, and the verdict as the exit.
 ///
-/// **`--fix` is refused, not ignored.** Python's installs the Claude Code plugin before it
-/// reports, so the report reads as the state after the repair; this charter installs nothing
-/// yet, and a report printed under that flag would be read as one.
+/// `--fix` repairs before it reports, so the report reads as the state after the repair, as
+/// Python's did when it installed the Claude Code plugin first. Its repairs are charter's plugin
+/// (#373) and the plane's ask rule for `charter report --yes` (ADR 0059).
 fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
     use std::io::IsTerminal;
 
@@ -2722,6 +2729,11 @@ fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The plane repair: the ask rule a report is filed behind (ADR 0059, amended 2026-09-26).
+    if fix && let Some((said, code)) = charter_core::doctor::fix_report_rule(&cwd) {
+        eprint!("{said}");
+        fix_failed |= code != 0;
+    }
     let rows = charter_core::doctor::Doctor::new(&cwd, preflight).run();
     if json {
         print!("{}", charter_core::doctor::json(&rows));

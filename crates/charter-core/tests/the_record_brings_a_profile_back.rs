@@ -29,6 +29,7 @@ fn a_chat_on(profile: &str, persona: Option<&str>) -> Chat {
         number: None,
         label: None,
         from: None,
+        renamed_from: None,
     }
 }
 

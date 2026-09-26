@@ -398,6 +398,12 @@ struct Table {
     /// out after it, and a program that was started before it and recorded after it is killed
     /// the moment it is recorded.
     closing: bool,
+    /// Every process group a program was started in, and when, in order: for a test that has
+    /// to know which process a deadline stopped whether or not the program got far enough to
+    /// say so itself, and to time the deadline from where it starts (#465). Test builds only:
+    /// the product keeps no record of what it ran.
+    #[cfg(test)]
+    groups: Vec<(i32, Instant)>,
 }
 
 impl Executor {
@@ -933,6 +939,8 @@ impl Executor {
         if let Some(slot) = table.running.get_mut(extension) {
             *slot = group;
         }
+        #[cfg(test)]
+        table.groups.push((group, Instant::now()));
         if table.closing {
             kill_group(group);
         }
@@ -1532,8 +1540,11 @@ fn drain(
         // `<` against `<=` differs only at the one instant equal to the deadline, which no test
         // can land on (`.cargo/mutants.toml`).
         let waiting = whole_by.is_some_and(|by| Instant::now() < by);
-        // `>` against `>=` differs at one instant of a clock no test can land on.
-        if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) && !waiting {
+        // Written `<` rather than `elapsed() > STDERR_AFTER_STOP` so that its one equivalent
+        // mutant, `<=` (one instant of a clock no test can land on), falls under the same
+        // `< with <= in drain` exclusion as the deadline above, and no `>` in this function has
+        // to be excluded: the stderr bound's `>` below is a real mutant and a test catches it.
+        if stopped_at.is_some_and(|at| STDERR_AFTER_STOP < at.elapsed()) && !waiting {
             break;
         }
         match err_ours.read(&mut chunk) {
@@ -1546,8 +1557,6 @@ fn drain(
                 // At exactly the bound the cut is 0, but `>=` would still set `overflowed`, and a
                 // command's stderr of exactly `most` bytes would be refused: that is pinned by
                 // `a_command_s_stderr_of_exactly_the_most_charter_passes_on_is_passed_and_one_byte_more_is_not`.
-                // `.cargo/mutants.toml` still excludes it, because a pattern cannot tell it from
-                // the clock's `>` above, which is equivalent.
                 if kept.len() > most {
                     overflowed = true;
                     let cut = kept.len() - most;

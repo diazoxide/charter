@@ -174,6 +174,7 @@ function draw(
     contributed?: PanelView[];
     views?: ExtensionView[];
     vaults?: VaultSummary[];
+    onAddTodo?: (workspace: string, text: string) => Promise<string | undefined>;
   } = {},
 ) {
   function Window() {
@@ -189,6 +190,7 @@ function draw(
         shownRow={shownRow}
         onShowRow={setShownRow}
         vaults={on.vaults === undefined ? undefined : { vaults: on.vaults }}
+        onAddTodo={on.onAddTodo}
       />
     );
   }
@@ -480,7 +482,12 @@ describe("a persona row's menu", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["Show what devops is"]);
+    ).toEqual([
+      "Show what devops is",
+      "Edit devops's persona.md",
+      "New persona…",
+      "Delete persona devops…",
+    ]);
   });
 
   it("hands back the row that opens the persona's tab", async () => {
@@ -569,5 +576,152 @@ describe("persona statistics", () => {
         name: "Statistics",
       }),
     ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Making and deleting from the panels (SI-3)
+// ---------------------------------------------------------------------------------------
+
+/** The catalogue with a focused workspace, its todos and a vault: every SI-3 row there is. */
+function crudOffers(): Catalogued {
+  return catalogued(
+    catalogue({
+      tabs: noTabs(),
+      workspaces: ["alpha"],
+      focused: "alpha",
+      plane: PLANE,
+      personas: ["devops", "steward"],
+      vaults: ["ops"],
+      todos: PANELS.todos,
+      needsYou: [],
+      nameOf: String,
+    }),
+  );
+}
+
+function rightClickRow(testid: string, name: string) {
+  within(screen.getByTestId(testid))
+    .getByRole("button", { name: new RegExp(name) })
+    .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+}
+
+describe("the Todos panel's box", () => {
+  it("says which workspace a todo goes to, and records it there", async () => {
+    const added: string[] = [];
+    draw({
+      onAddTodo: async (workspace, text) => {
+        added.push(`${workspace}:${text}`);
+        return undefined;
+      },
+    });
+
+    const box = within(screen.getByTestId("panel-todos")).getByRole("textbox", {
+      name: "New todo in alpha",
+    });
+    await userEvent.type(box, "Cut the release{Enter}");
+
+    expect(added).toEqual(["alpha:Cut the release"]);
+    expect(box).toHaveValue("");
+  });
+
+  it("keeps the words and says the core's refusal when the todo is refused", async () => {
+    draw({ onAddTodo: async () => "already on the list: Cut the release" });
+
+    const panel = screen.getByTestId("panel-todos");
+    const box = within(panel).getByRole("textbox", { name: "New todo in alpha" });
+    await userEvent.type(box, "cut the release{Enter}");
+
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("already on the list");
+    expect(box).toHaveValue("cut the release");
+  });
+
+  it("sends nothing for a box with no words in it", async () => {
+    const added: string[] = [];
+    draw({
+      onAddTodo: async (_workspace, text) => {
+        added.push(text);
+        return undefined;
+      },
+    });
+
+    await userEvent.type(
+      within(screen.getByTestId("panel-todos")).getByRole("textbox", { name: "New todo in alpha" }),
+      "   {Enter}",
+    );
+
+    expect(added).toEqual([]);
+  });
+});
+
+describe("a todo row's menu", () => {
+  it("offers to mark it done above the line and to forget it below", async () => {
+    const pressed: Offer[] = [];
+    draw({ offers: crudOffers(), onPress: (offer) => pressed.push(offer) });
+
+    rightClickRow("panel-todos", "Review the rollout plan");
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual(["Mark done: Review the rollout plan", "Forget todo Review the rollout plan"]);
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Mark done: Review the rollout plan" }),
+    );
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      { verb: "closeTodo", workspace: "alpha", slug: "20260302-091400-review" },
+    ]);
+  });
+});
+
+describe("the + on a heading", () => {
+  it("makes a persona from the Personas panel", async () => {
+    const pressed: Offer[] = [];
+    draw({ offers: crudOffers(), onPress: (offer) => pressed.push(offer) });
+
+    await userEvent.click(
+      within(screen.getByTestId("panel-personas")).getByRole("button", { name: "New persona…" }),
+    );
+
+    expect(pressed.map((offer) => offer.id)).toEqual(["persona.create"]);
+  });
+
+  it("makes a vault from the Vaults section", async () => {
+    const pressed: Offer[] = [];
+    draw({
+      offers: crudOffers(),
+      onPress: (offer) => pressed.push(offer),
+      vaults: [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }],
+    });
+
+    await userEvent.click(
+      within(screen.getByTestId("panel-vaults")).getByRole("button", { name: "New vault…" }),
+    );
+
+    expect(pressed.map((offer) => offer.id)).toEqual(["vault.create"]);
+  });
+});
+
+describe("a vault row's menu", () => {
+  it("offers to delete the vault, below the line", async () => {
+    const pressed: Offer[] = [];
+    draw({
+      offers: crudOffers(),
+      onPress: (offer) => pressed.push(offer),
+      vaults: [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }],
+    });
+
+    rightClickRow("panel-vaults", "ops");
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual(["Open vault ops", "New vault…", "Delete vault ops…"]);
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete vault ops…" }));
+    expect(pressed.map((offer) => offer.does)).toEqual([{ verb: "removeVault", vault: "ops" }]);
   });
 });
