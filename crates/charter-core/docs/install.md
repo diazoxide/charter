@@ -102,8 +102,13 @@ the retired `charter@charter` plugin, and turns it off in the files it writes.
 `charter plugin uninstall` takes back what it wrote. `--harness claude|codex` limits
 either one to one harness.
 
-`charter doctor --fix` is refused in this version, and `charter doctor` reports without
-it.
+`charter doctor` says whether it is installed for each harness set up on the machine
+(`plugin install`), whether the copy is what this charter would install now (`plugin`),
+whether the `charter` its hooks run still exists (`plugin files`), and names every settings
+file that still enables `charter@charter` (`superseded plugin`). `charter doctor --fix` runs
+`charter plugin install` first, printing each change, and then reports. That is its only
+repair: it writes this machine's harness settings and never a file in the plane, so a plane
+file that still enables `charter@charter` stays yours to edit.
 
 ## What charter reaches on its own, and how to stop it
 

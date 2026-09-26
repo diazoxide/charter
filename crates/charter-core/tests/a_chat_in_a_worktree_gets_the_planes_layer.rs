@@ -52,8 +52,9 @@ fn a_worktree_charter_cuts_carries_the_planes_rules_its_agents_and_charter_harne
         "the plane's ask rules: {settings}"
     );
     assert!(
-        settings.contains("charter@charter"),
-        "and the plugin the next wiring probe resolves at this directory: {settings}"
+        !settings.contains("charter@charter"),
+        "but never the retired Python charter's plugin, which the plane still enables (#374): \
+         {settings}"
     );
     let local = std::fs::read_to_string(added.path.join(".claude/settings.local.json"))
         .expect("the plane's machine-local rules reach the piece");
@@ -716,9 +717,6 @@ fn the_generated_settings_are_the_pythons_document_byte_for_byte() {
         want.get(".claude/settings.json").map(String::as_str),
         Some(concat!(
             "{\n",
-            "  \"enabledPlugins\": {\n",
-            "    \"charter@charter\": true\n",
-            "  },\n",
             "  \"env\": {\n",
             "    \"CHARTER_HARNESS\": \"claude-code\"\n",
             "  },\n",
@@ -1094,5 +1092,43 @@ fn a_block_written_for_the_first_time_is_created_and_a_rewrite_of_it_refreshed()
     assert_eq!(
         guest::wire(&f.plane, &piece.path).block,
         guest::Block::Refreshed
+    );
+}
+
+#[test]
+fn a_plugin_the_plane_enables_travels_and_the_retired_one_does_not() {
+    charter_core::unsteered!();
+    let f = layered_plane("thing");
+    std::fs::write(
+        f.plane.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"charter@charter": true, "other@market": true, "off@market": false}}"#,
+    )
+    .unwrap();
+
+    let want = guest::want(&f.plane);
+
+    assert_eq!(
+        want.get(".claude/settings.json").map(String::as_str),
+        Some(concat!(
+            "{\n",
+            "  \"enabledPlugins\": {\n",
+            "    \"other@market\": true,\n",
+            "    \"off@market\": false\n",
+            "  }\n",
+            "}\n",
+        ))
+    );
+
+    // A plane that turns it OFF keeps saying so, which is what outranks a user-level `true`.
+    std::fs::write(
+        f.plane.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"charter@charter": false}}"#,
+    )
+    .unwrap();
+    let want = guest::want(&f.plane);
+    assert!(
+        want.get(".claude/settings.json")
+            .is_some_and(|doc| doc.contains("\"charter@charter\": false")),
+        "{want:?}"
     );
 }

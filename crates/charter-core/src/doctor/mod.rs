@@ -31,6 +31,7 @@ mod git;
 mod inventory;
 mod memory;
 mod plane;
+mod plugin;
 mod profiles;
 pub(crate) mod session;
 
@@ -289,6 +290,10 @@ pub struct Doctor {
     /// `--preflight`: what the SessionStart hook runs. No profile probe, no git call for one.
     pub(crate) preflight: bool,
     pub(crate) config: Config,
+    /// Where this machine's harnesses keep their configuration, for the plugin rows. `None`
+    /// where nobody can tell, and for a doctor a test names ([`Self::at`]), which must never
+    /// read the operator's own.
+    pub(crate) machine: Option<crate::plugin_install::Machine>,
 }
 
 impl Doctor {
@@ -304,7 +309,21 @@ impl Doctor {
         let root = crate::plane::resolve(cwd)
             .map(|p| canonical(&p))
             .unwrap_or_else(|_| canonical(cwd));
-        Self::at(&root, cwd, pinned, preflight)
+        let mut d = Self::at(&root, cwd, pinned, preflight);
+        d.machine = std::env::current_exe()
+            .and_then(|p| p.canonicalize())
+            .ok()
+            .and_then(|binary| {
+                let bundle = crate::plugin_install::bundle_beside(&binary);
+                crate::plugin_install::Machine::from_env_to_read(binary, bundle).ok()
+            });
+        d
+    }
+
+    /// This doctor, reading `machine`'s harness configuration.
+    pub fn with_machine(mut self, machine: crate::plugin_install::Machine) -> Self {
+        self.machine = Some(machine);
+        self
     }
 
     /// The doctor for an explicit plane, which is how a test names one.
@@ -316,12 +335,13 @@ impl Doctor {
             cwd: cwd.to_path_buf(),
             preflight,
             config: Config::load(root),
+            machine: None,
         }
     }
 
     /// Every row, in the order Python's `doctor._checks` runs them: cheap and local first.
     pub fn run(&self) -> Vec<Row> {
-        let mut rows = vec![deferred::python3(), git::git(), git::identity(self)];
+        let mut rows = vec![python3(), git::git(), git::identity(self)];
         for cli in config::forge_clis(self) {
             rows.push(deferred::row(&cli, deferred::FORGES));
             rows.push(deferred::row(&format!("{cli} auth"), deferred::FORGES));
@@ -359,11 +379,22 @@ impl Doctor {
         rows.push(deferred::row("shadowed docs", deferred::SHADOWED_DOCS));
         rows.push(deferred::row("credential paths", deferred::VAULTS));
         rows.push(deferred::row("mcp", deferred::VAULTS));
-        rows.push(deferred::row("plugin install", deferred::PLUGIN));
-        rows.push(deferred::row("plugin", deferred::PLUGIN));
-        rows.push(deferred::row("plugin files", deferred::PLUGIN));
+        rows.push(plugin::plugin_install(self));
+        rows.push(plugin::plugin(self));
+        rows.push(plugin::plugin_files(self));
+        rows.push(plugin::superseded_plugin(self));
         rows
     }
+}
+
+/// The Python charter's first row reported its own interpreter. This charter has none and
+/// needs none — a fact about this binary, not a check left undone — so the row is green
+/// (#373), and keeps its place so a script reading `--json` still finds it.
+fn python3() -> Row {
+    Row::ok(
+        "python3",
+        "not needed — the Python charter is retired, and this charter has no Python in it",
+    )
 }
 
 /// `path` with its links resolved, or `path` itself when it cannot be — Python's

@@ -253,6 +253,22 @@ pub fn config_root() -> Option<PathBuf> {
     found
 }
 
+/// [`config_root`], for `charter doctor`'s plugin rows, which read the copy `charter plugin
+/// install` keeps under it: fenced once there is a directory there to read, as
+/// [`config_root_if_there`] is, and otherwise the answer with nothing asked — a directory that
+/// does not exist holds no copy, and a doctor run in a fixture must still be able to say so.
+pub fn config_root_to_read_the_plugin_copy() -> Option<PathBuf> {
+    let found = rooted(
+        std::env::var_os(HOME_VAR),
+        std::env::var_os("XDG_CONFIG_HOME"),
+        dirs::home_dir(),
+    )?;
+    if found.is_dir() {
+        crate::fence::hold(crate::fence::Act::Store, &found);
+    }
+    Some(found)
+}
+
 /// [`config_root`], for a reader that only reads: `None` as well when there is no directory
 /// there yet, since a store that does not exist holds nothing to read.
 ///

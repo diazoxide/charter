@@ -27,14 +27,6 @@ pub(crate) fn row(name: &str, why: &str) -> Row {
     Row::warn(name, format!("not checked ({why})"), DEFERRED_HINT)
 }
 
-/// The Python charter's first row reported its own interpreter. This charter has none and
-/// needs none; the row keeps its place so a script reading `--json` still finds it.
-pub(crate) fn python3() -> Row {
-    row("python3", PYTHON)
-}
-
-pub(crate) const PYTHON: &str = "this charter does not run on Python and has no interpreter \
-                                 to report";
 pub(crate) const FORGES: &str = "this version of charter does not check forges yet";
 pub(crate) const HARNESS: &str = "this version of charter does not check the harness \
                                   registry's capability ceilings yet";
@@ -55,5 +47,3 @@ pub(crate) const HANDOFF_GATE: &str = "this version of charter does not check th
                                        yet";
 pub(crate) const SHADOWED_DOCS: &str = "this version of charter does not check shadowed \
                                         knowledge docs yet";
-pub(crate) const PLUGIN: &str = "this version of charter does not check the Claude Code \
-                                 plugin's install and version yet";

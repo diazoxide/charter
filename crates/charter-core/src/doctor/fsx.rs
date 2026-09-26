@@ -89,7 +89,7 @@ const MAX_BYTES: u64 = 1_048_576;
 /// The data directories, as a refusal names them.
 const DATA_ROOTS: &str = "persona-state, personas, workspaces";
 
-fn path_field(p: &Path) -> String {
+pub(super) fn path_field(p: &Path) -> String {
     one_line(&p.display().to_string(), PATH_DISPLAY_LIMIT)
 }
 

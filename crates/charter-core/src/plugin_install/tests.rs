@@ -356,3 +356,53 @@ fn a_write_that_fails_is_reported_as_not_done() {
     );
     assert!(said.contains("FAILED: "), "{said}");
 }
+
+#[test]
+fn what_is_installed_is_read_back_by_harness() {
+    let (_d, m) = machine();
+    for a in adapters() {
+        assert_eq!(a.installed(&m), Ok(false), "{}", a.harness());
+        assert_eq!(a.runs(&m), None, "{}", a.harness());
+    }
+    run(&m, Verb::Install, &[], false);
+    for a in adapters() {
+        assert_eq!(a.installed(&m), Ok(true), "{}", a.harness());
+        assert_eq!(a.runs(&m), Some(m.binary.clone()), "{}", a.harness());
+    }
+}
+
+#[test]
+fn the_retired_plugin_is_found_in_each_file_that_enables_it() {
+    let (d, m) = machine();
+    std::fs::write(
+        m.claude_config.join("settings.json"),
+        r#"{"enabledPlugins": {"charter@charter": true}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        m.codex_home.join("config.toml"),
+        "[plugins.\"charter@charter\"]\nenabled = true\n",
+    )
+    .unwrap();
+    let plane = d.path().join("plane");
+    std::fs::create_dir_all(plane.join(".claude")).unwrap();
+    std::fs::write(
+        plane.join(".claude/settings.local.json"),
+        r#"{"enabledPlugins": {"charter@charter": true}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        plane.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"charter@charter": false}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        ClaudeCode.superseded(&m),
+        vec![m.claude_config.join("settings.json")]
+    );
+    assert_eq!(Codex.superseded(&m), vec![m.codex_home.join("config.toml")]);
+    assert_eq!(
+        superseded_in_plane(&plane),
+        vec![plane.join(".claude/settings.local.json")]
+    );
+}

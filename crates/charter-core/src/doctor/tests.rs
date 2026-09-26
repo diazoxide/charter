@@ -139,7 +139,7 @@ fn colour_is_drawn_only_when_asked_for() {
 /// Python's `_FIXED_CHECK_NAMES`, with the forge pair spliced in after `git identity` as
 /// `check_names` does. No row may go missing: a doctor that stops printing one tells its
 /// reader the problem it reported has gone.
-const PYTHON_ROWS: [&str; 39] = [
+const PYTHON_ROWS: [&str; 40] = [
     "python3",
     "git",
     "git identity",
@@ -179,6 +179,7 @@ const PYTHON_ROWS: [&str; 39] = [
     "plugin install",
     "plugin",
     "plugin files",
+    "superseded plugin",
 ];
 
 #[test]
@@ -206,7 +207,8 @@ fn every_deferred_row_says_it_did_not_check_and_why() {
         .into_iter()
         .filter(|r| r.hint == deferred::DEFERRED_HINT)
         .collect();
-    assert!(deferred.len() >= 20, "{deferred:?}");
+    // #373 checks python3 and the three plugin rows now; the rest are still deferred.
+    assert!(deferred.len() >= 15, "{deferred:?}");
     for r in deferred {
         assert!(r.detail.starts_with("not checked ("), "{r:?}");
         assert!(r.detail.ends_with(')'), "{r:?}");
@@ -220,7 +222,6 @@ fn a_deferred_row_is_told_apart_from_a_check_that_ran_and_could_not_finish() {
     // never goes down. A check that RAN and could not finish is a real warning and has to be
     // counted — so the two answers have to differ.
     assert!(deferred::row("vaults", deferred::VAULTS).deferred());
-    assert!(deferred::python3().deferred());
     assert!(!Row::not_checked("git", "git timed out").deferred());
     assert!(!Row::warn("x", "y", "z").deferred());
     assert!(!Row::ok("x", "y").deferred());
@@ -1462,4 +1463,188 @@ fn git_auth_names_a_workspace_it_cannot_read_rather_than_counting_it_clean() {
         r.hint,
         "workspaces/beta cannot be checked — restoring read access to it clears this."
     );
+}
+
+// ---- plugin rows (#373, #374) ---------------------------------------------------------------
+
+/// A machine inside `dir`: Claude Code's and Codex's folders exist, the bundle is the
+/// repository's own plugin, and the binary is a file that exists.
+fn plugin_machine(dir: &Path) -> crate::plugin_install::Machine {
+    std::fs::create_dir_all(dir.join("claude")).unwrap();
+    std::fs::create_dir_all(dir.join("codex")).unwrap();
+    std::fs::write(dir.join("charter-bin"), "").unwrap();
+    crate::plugin_install::Machine {
+        claude_config: dir.join("claude"),
+        codex_home: dir.join("codex"),
+        charter_dir: dir.join("config/charter"),
+        binary: dir.join("charter-bin"),
+        bundle: Some(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../app/src-tauri/plugin")
+                .canonicalize()
+                .unwrap(),
+        ),
+    }
+}
+
+fn plugin_row(root: &Path, m: &crate::plugin_install::Machine, name: &str) -> Row {
+    let rows = Doctor::at(root, root, true, false)
+        .with_machine(m.clone())
+        .run();
+    row(&rows, name).clone()
+}
+
+#[test]
+fn the_python3_row_is_green_now_the_python_charter_is_retired() {
+    let (_d, root) = plane("schema = 1\n");
+    let r = one(&root, "python3");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert!(r.detail.contains("retired"), "{r:?}");
+}
+
+#[test]
+fn a_machine_without_the_plugin_is_told_how_to_install_it_and_one_with_it_passes() {
+    let (d, root) = plane("schema = 1\n");
+    let m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
+    let r = plugin_row(&root, &m, "plugin install");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(
+        r.detail.starts_with("not installed for claude and codex"),
+        "{r:?}"
+    );
+    assert!(r.hint.contains("charter plugin install"), "{r:?}");
+
+    let out = crate::plugin_install::run(&m, crate::plugin_install::Verb::Install, &[], false);
+    assert!(!crate::plugin_install::failed(&out));
+    for name in [
+        "plugin install",
+        "plugin",
+        "plugin files",
+        "superseded plugin",
+    ] {
+        let r = plugin_row(&root, &m, name);
+        assert_eq!(r.status, Status::Ok, "{r:?}");
+    }
+    assert_eq!(
+        plugin_row(&root, &m, "plugin install").detail,
+        "installed for claude and codex"
+    );
+}
+
+#[test]
+fn an_older_copy_is_stale_and_one_whose_charter_is_gone_is_named() {
+    let (d, root) = plane("schema = 1\n");
+    let mut m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
+    crate::plugin_install::run(&m, crate::plugin_install::Verb::Install, &[], false);
+    std::fs::remove_file(&m.binary).unwrap();
+    let r = plugin_row(&root, &m, "plugin files");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(r.detail.contains("which is not there"), "{r:?}");
+    assert!(r.hint.contains("lets the tool call through"), "{r:?}");
+
+    // Another charter asking — a development build, one on PATH — is not a stale copy.
+    m.binary = d.path().join("machine/elsewhere");
+    assert_eq!(plugin_row(&root, &m, "plugin").status, Status::Ok);
+
+    // A copy an older app wrote, whose skills differ from this one's, is.
+    std::fs::write(
+        m.charter_dir.join("plugin/skills/handoff/SKILL.md"),
+        "an older skill\n",
+    )
+    .unwrap();
+    let r = plugin_row(&root, &m, "plugin");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(
+        r.detail
+            .starts_with("installed for claude, but not what this charter would install now"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn inside_a_chat_a_missing_install_is_said_without_a_warning() {
+    let (d, root) = plane("schema = 1\n");
+    let m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
+    let rows = Doctor::at(&root, &root, true, true).with_machine(m).run();
+    let r = row(&rows, "plugin install");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert!(
+        r.detail.starts_with("not installed for claude and codex"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_workspace_layer_that_still_carries_the_retired_plugin_is_named_with_its_repair() {
+    let (d, root) = plane("schema = 1\n");
+    let m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
+    std::fs::create_dir_all(root.join("workspaces/alpha/.claude")).unwrap();
+    std::fs::write(
+        root.join("workspaces/alpha/.claude/settings.json"),
+        r#"{"enabledPlugins": {"charter@charter": true}}"#,
+    )
+    .unwrap();
+    let r = plugin_row(&root, &m, "superseded plugin");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(
+        r.detail.contains("workspaces/alpha/.claude/settings.json"),
+        "{r:?}"
+    );
+    assert!(r.hint.contains("charter workspace reinit --all"), "{r:?}");
+}
+
+#[test]
+fn every_file_that_enables_the_retired_plugin_is_named() {
+    let (d, root) = plane("schema = 1\n");
+    let m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"charter@charter": true}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        m.codex_home.join("config.toml"),
+        "[plugins.\"charter@charter\"]\nenabled = true\n",
+    )
+    .unwrap();
+    let r = plugin_row(&root, &m, "superseded plugin");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(
+        r.detail
+            .contains(&root.join(".claude/settings.json").display().to_string()),
+        "{r:?}"
+    );
+    assert!(
+        r.detail
+            .contains(&m.codex_home.join("config.toml").display().to_string()),
+        "{r:?}"
+    );
+    assert!(r.hint.contains("charter plugin install"), "{r:?}");
+
+    std::fs::write(root.join(".claude/settings.json"), "{}").unwrap();
+    std::fs::write(m.codex_home.join("config.toml"), "").unwrap();
+    assert_eq!(
+        plugin_row(&root, &m, "superseded plugin").status,
+        Status::Ok
+    );
+}
+
+#[test]
+fn a_doctor_a_test_names_never_reads_this_machines_harness_config() {
+    let (_d, root) = plane("schema = 1\n");
+    for name in [
+        "plugin install",
+        "plugin",
+        "plugin files",
+        "superseded plugin",
+    ] {
+        let r = one(&root, name);
+        assert!(r.detail.starts_with("not checked"), "{r:?}");
+        assert_eq!(
+            r.status,
+            Status::Warn,
+            "a row that did not look is never green: {r:?}"
+        );
+    }
 }
