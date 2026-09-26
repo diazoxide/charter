@@ -184,6 +184,18 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
     // And the file the baseline `.gitignore` un-ignores, which the Python charter never
     // created (#355): without it an empty `workspaces/` cannot be committed.
     want.insert(PathBuf::from("workspaces/.gitkeep"), Node::File(Vec::new()));
+    // And the front door without the Python's `routing: advise`: the key is retired (#369).
+    // The fixture keeps it, as a plane the Python made still does.
+    let front_door = PathBuf::from("personas/steward/persona.md");
+    let Some(Node::File(python)) = want.get(&front_door) else {
+        panic!("the fixture has a front door");
+    };
+    let text = String::from_utf8(python.clone()).expect("UTF-8");
+    assert!(text.contains("\nrouting: advise\n"), "{text}");
+    want.insert(
+        front_door,
+        Node::File(text.replacen("\nrouting: advise\n", "\n", 1).into_bytes()),
+    );
     assert_eq!(tree(&scene.plane), want);
 }
 

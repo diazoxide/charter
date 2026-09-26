@@ -353,6 +353,11 @@ enum Command {
     /// memory, the workspace gate, the workspace's todos, the plane's other workspaces — as
     /// `additionalContext`, and freezes the persona tool gate's ceiling.
     ///
+    /// `userpromptsubmit` keeps the session's heartbeat and adds, as `additionalContext`, the
+    /// commitment gate — a prompt asking for work with a real fork in it is told to scout and
+    /// ask before building; never on a lookup, never unattended, then quiet for three prompts —
+    /// and any report a chat this one handed work to has sent back.
+    ///
     /// `pretooluse` is the Bash guard and the persona tool gate, `pretooluse-read` the vault
     /// guard on Read/Grep, `pretooluse-edit` the state-directory guard on Write/Edit, and
     /// `pretooluse-dispatch` the ask before a code-writing persona is sent out beside a running

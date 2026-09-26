@@ -23,6 +23,7 @@ each is wired to.
 | --- | --- |
 | `sessionstart`, `userpromptsubmit`, `notification`, `subagentstop`, `stop`, `sessionend` | reports what the session just did to the app that started it, which is how the window knows which chat needs you. Outside the app it has nobody to tell, except that `sessionstart` starts a background forge refresh |
 | `sessionstart`, in a plane | also briefs the session, as `additionalContext`: the workspace gate (confirm a workspace before repo work, unless the session is locked to one or `$CHARTER_WORKSPACE` pins it), the persona it was started as and a digest of that persona's memory, memory not yet shared, the workspace's oldest open todos, the plane's other workspaces, and the piece the session stands in. It also freezes each persona's `tools:` for the persona tool gate below |
+| `userpromptsubmit`, in a plane | also adds, as `additionalContext`, the commitment gate: a prompt that asks for work and leaves a real fork open (open-ended wording, a broad scope, something irreversible, a long many-part ask) is told to scout first, then ask the operator at the fork before building. Never on a question, on work with nothing to ask about, or on a slash command; never in an unattended run (`permission_mode: bypassPermissions`); and quiet for the three prompts after it fires. A report a handed-off chat sent back rides the same context |
 | `pretooluse` on `Bash` | the guards below, then the persona tool gate |
 | `pretooluse-read` on `Read`/`Grep` | the vault guard on those tools (*Vault read*, below) |
 | `pretooluse-edit` on `Write`/`Edit`/`MultiEdit` | the state-directory guard (*A hand-written state file*, below) |
@@ -635,10 +636,12 @@ because one of them was wrong once. It is an uninstall.
 ## What is not injected, and not counted
 
 `SessionStart` briefs the session (see *What this version answers*), but not with the brief
-of a handed-off chat that reopened empty. `UserPromptSubmit` injects nothing: no commitment
-gate, no roster and no placement advice. The dispatch and skill logs are kept; no hook keeps
-a tally of routing advice or handoffs, and no trace of verdicts is written. Each of those is
-a feature this version does not have yet, not one that ran and found nothing.
+of a handed-off chat that reopened empty. `UserPromptSubmit` injects the commitment gate
+and nothing else of its own: no persona roster (`routing:` is retired — personas reach the
+harness as sub-agents), no placement advice, and no "control plane updated" note — a chat
+running on instructions that changed after it started is marked on its tab in the window
+instead. The dispatch and skill logs are kept; no hook keeps a tally of routing advice or
+handoffs, and no trace of verdicts is written.
 
 ## When a hook fails
 

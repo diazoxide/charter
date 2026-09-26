@@ -596,6 +596,17 @@ body {
   color: var(--accent-base);
 }
 
+/* A chat running on instructions the plane changed after it started (charter#369). Quiet on
+   purpose: nothing is waiting on the operator, so it is not red and not a count — the pin's
+   size, in the secondary text colour. */
+.plane-updated {
+  flex: none;
+  margin-left: 0.3rem;
+  font-size: 0.7em;
+  line-height: 1;
+  color: var(--text-secondary);
+}
+
 /* The bar's own controls — `+`, the two splits, `End this pane's chat`, the region toggles.
    Each carries an icon beside its words (`PlaneView`'s `Doer`), so this is a flex row: the
    words stay, because an icon-only bar is a bar an operator has to learn. */

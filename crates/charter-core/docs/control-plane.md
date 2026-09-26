@@ -28,8 +28,10 @@ or skip it entirely with `--no-front-door`; either way charter's own code knows 
 a plane may declare a default, never which one. If the plane already has personas, `init`
 scaffolds nothing — it creates only what is absent.
 
-The generated charter declares `routing: advise`. Showing the front door the persona roster
-on each prompt is not in this version yet. See `charter docs show personas`.
+A charter the Python generated also declares `routing: advise`. That key is retired: it is
+read without error and does nothing, and `charter doctor` says so. Personas are offered to
+the harness as sub-agents, which is where a request is routed. See `charter docs show
+personas`.
 
 ## Every key, in full
 

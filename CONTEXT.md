@@ -71,6 +71,12 @@ A chat that is waiting on the operator. Every project's are listed in the title 
 and each is counted in red on its tab and on any show-more hiding it.
 _Avoid_: notification, alert (alerts are a separate drawer)
 
+**Plane updated** (of a chat):
+A chat started before the plane's start-time instructions (`CLAUDE.md`, the harness settings
+and sub-agents, a persona's charter) changed on disk. It runs on what it read until it is
+started fresh, and its tab carries a quiet mark saying so. It is not a needs-you item.
+_Avoid_: stale, behind, outdated, Incoming (that is the remote's commits)
+
 ### Saving
 
 **Save**:

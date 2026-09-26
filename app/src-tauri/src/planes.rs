@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::Size;
+use charter_core::instructions::Stamp;
 use charter_core::machine;
 use charter_core::reopen;
 use charter_core::reopen::Choice;
@@ -191,6 +192,27 @@ pub struct Held {
     /// The plane's auto-save worker (charter-app#296): saves it after a quiet period and when
     /// a chat ends, and fetches what comes in. Stopped when the plane is let go of.
     autosave: Mutex<Option<crate::autosave::Worker>>,
+    /// What each open chat read of the plane's instructions when it started (charter#369), so
+    /// the window can mark a chat still running on ones that have since changed.
+    started_on: StartedOn,
+}
+
+/// Each chat's [`Stamp`], by session, taken as it starts.
+type StartedOn = Arc<Mutex<HashMap<u32, Stamp>>>;
+
+/// The stamps, through a poisoned lock too: a panic elsewhere must not cost the marks.
+fn lock_started(started_on: &StartedOn) -> MutexGuard<'_, HashMap<u32, Stamp>> {
+    started_on.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A chat running on instructions the plane has changed since it started (charter#369): the
+/// "control plane updated" the Python said in the transcript, said on the chat's tab instead.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct PlaneUpdated {
+    pub session: u32,
+    /// The files that changed, by their path from the plane root: `CLAUDE.md`,
+    /// `personas/steward/persona.md`, …
+    pub files: Vec<String>,
 }
 
 impl Held {
@@ -204,6 +226,34 @@ impl Held {
 
     pub fn chats(&self) -> &Chats {
         &self.chats
+    }
+
+    /// Every chat this plane has open whose start-time instructions — `CLAUDE.md`, the
+    /// harness settings and sub-agents, a persona's charter — have changed since it started,
+    /// by session (charter#369). Read from disk each time it is asked: the window asks when the
+    /// plane changes, and a chat started after the change read the new ones and is not here.
+    pub fn plane_updated(&self) -> Vec<PlaneUpdated> {
+        let now = Stamp::of(&self.root);
+        // The persona each chat started as, whose charter is the one it read.
+        let personas: HashMap<u32, Option<String>> = self
+            .chats
+            .open_now()
+            .into_iter()
+            .map(|open| (open.session, open.persona))
+            .collect();
+        let mut updated: Vec<PlaneUpdated> = lock_started(&self.started_on)
+            .iter()
+            .filter_map(|(session, then)| {
+                let persona = personas.get(session).cloned().flatten();
+                let files = now.changed_since(then, persona.as_deref());
+                (!files.is_empty()).then_some(PlaneUpdated {
+                    session: *session,
+                    files,
+                })
+            })
+            .collect();
+        updated.sort_by_key(|one| one.session);
+        updated
     }
 
     /// Puts back the chats this plane had open when it was last closed, which STARTS the
@@ -285,6 +335,7 @@ impl Held {
     /// is gone from the app, and a window left believing otherwise is the defect.
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
         let gone = self.hooks.closed(session);
+        lock_started(&self.started_on).remove(&session);
         let closed = self.chats.close(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
@@ -1085,18 +1136,28 @@ impl Planes {
         // A harness fires `SessionStart` at its own exec, and a board that learned the chat's
         // number afterwards would miss it — for a chat that is then idle, waiting for a first
         // prompt, no second event ever comes and it reads `unknown` for the rest of the run.
+        // What the chat will read of the plane's instructions is taken here too, before its
+        // program can read them (charter#369).
+        let started_on: StartedOn = Arc::default();
         {
             let board = hooks.shared_board();
             chats.when_one_starts(Box::new({
                 let board = Arc::clone(&board);
+                let started_on = Arc::clone(&started_on);
+                let root = root.clone();
                 move |session, harness, conversation| {
                     hooks::held_board(&board).opened(session, harness, conversation);
+                    // Read before the lock is taken: a stamp is a read of several files.
+                    let stamp = Stamp::of(&root);
+                    lock_started(&started_on).insert(session, stamp);
                 }
             }));
             // And taken back if the program then fails to start: the announcement has to come
             // first, so it can be about a chat that never happens.
+            let started_on = Arc::clone(&started_on);
             chats.when_one_does_not_start(Box::new(move |session| {
                 hooks::held_board(&board).closed(session);
+                lock_started(&started_on).remove(&session);
             }));
         }
         // Before a chat can end, so its end is one the worker hears.
@@ -1150,6 +1211,7 @@ impl Planes {
             records,
             watch: Mutex::new(watch),
             autosave: Mutex::new(Some(autosave)),
+            started_on,
         }
     }
 
@@ -3631,5 +3693,53 @@ mod tests {
 
         let asked = held.hooks().now(session);
         assert!(asked.queue.is_empty() && !asked.needs_you, "{asked:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_is_marked_when_the_instructions_it_started_on_change_under_it() {
+        // charter#369: a running chat goes on with the `CLAUDE.md` it read at its start. The
+        // window marks its tab when that is no longer what is on disk; a chat started after
+        // the change read the new one and is not marked.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        std::fs::write(root.join("CLAUDE.md"), "be kind\n").expect("instructions");
+        a_record_naming(&root, "/bin/cat");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+        let held = planes.held(&plane).expect("it is held");
+        let session = held.chats().open_now()[0].session;
+        assert_eq!(held.plane_updated(), Vec::new(), "nothing has changed yet");
+        // A persona's charter this chat, which started as none, never read.
+        std::fs::create_dir_all(root.join("personas/ops")).expect("personas");
+        std::fs::write(
+            root.join("personas/ops/persona.md"),
+            "---\nrole: Ops\n---\n",
+        )
+        .expect("a persona");
+        assert_eq!(
+            held.plane_updated(),
+            Vec::new(),
+            "another persona's charter"
+        );
+
+        std::fs::write(root.join("CLAUDE.md"), "be kinder\n").expect("instructions change");
+
+        assert_eq!(
+            held.plane_updated(),
+            vec![PlaneUpdated {
+                session,
+                files: vec!["CLAUDE.md".to_owned()],
+            }]
+        );
+        held.close_chat(session).expect("it closes");
+        assert_eq!(
+            held.plane_updated(),
+            Vec::new(),
+            "a closed chat is not marked"
+        );
+        planes.close(&plane).expect("it closes");
     }
 }

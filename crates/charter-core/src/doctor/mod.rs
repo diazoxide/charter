@@ -352,6 +352,7 @@ impl Doctor {
         rows.push(deferred::row("personas", deferred::PERSONA_LINT));
         rows.push(deferred::row("persona grant", deferred::PERSONA_LINT));
         rows.push(plane::front_door(self));
+        rows.extend(plane::routing(self));
         rows.push(deferred::row("news", deferred::NEWS));
         rows.push(deferred::row("ask rules", deferred::ASK_RULES));
         rows.push(deferred::row("handoff gate", deferred::HANDOFF_GATE));

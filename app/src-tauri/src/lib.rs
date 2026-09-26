@@ -899,6 +899,18 @@ fn chats_that_would_not_start(
     Ok(planes.held(&plane)?.chats().would_not_start())
 }
 
+/// Every chat this plane has open that is running on instructions the plane has changed since
+/// it started (charter#369): its tab is marked, and the mark names the files. The window asks
+/// again whenever the plane changes on disk.
+#[tauri::command]
+#[specta::specta]
+fn chats_plane_updated(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Vec<planes::PlaneUpdated>, String> {
+    Ok(planes.held(&plane)?.plane_updated())
+}
+
 /// Says which chat is in front, so the record brings that one back in front.
 #[tauri::command]
 #[specta::specta]

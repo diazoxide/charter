@@ -27,9 +27,9 @@
 //!   `.charter/persona-state/trace/`. It changes no verdict and nothing in charter-app reads it.
 //! - **The ask marks** (`_ask_mark_set`, `_ask_approved`): they exist only to write the
 //!   `…-approved` trace row when an asked tool call goes through.
-//! - **The routing ask on `pretooluse-edit`** (`_route_mark_take`): it answers a mark
-//!   `userpromptsubmit` sets when it shows the roster under `routing: require`, and charter-app's
-//!   `userpromptsubmit` shows no roster, so the mark is never set.
+//! - **The routing ask on `pretooluse-edit`** (`_route_mark_take`): it answered a mark the
+//!   persona roster set under `routing: require`, and `routing:` is retired (charter#369) —
+//!   personas are offered to the harness as sub-agents, which is where routing happens now.
 //! - **The turn markers** (`_turn_begin`, `_turn_bump`, `_turn_end`) and `notify.plane_changed`:
 //!   the tmux frame's spinner and repaint. The app has its own (`hookwire`).
 //! - **`_record_reported_session`**: opencode's session report inside a tmux frame.

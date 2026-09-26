@@ -1048,6 +1048,42 @@ fn a_front_door_that_walks_out_of_personas_is_not_a_persona() {
     assert_eq!(one(&root, "front door").status, Status::Warn);
 }
 
+// ---- routing (retired, charter#369) -----------------------------------------------------------
+
+#[test]
+fn a_persona_still_declaring_routing_is_read_and_told_the_key_is_ignored() {
+    let (_d, root) = plane("[persona]\ndefault = \"steward\"\n");
+    assert!(
+        doctor(&root).run().iter().all(|r| r.name != "routing"),
+        "no row where nothing declares it"
+    );
+    std::fs::create_dir_all(root.join("personas/steward")).unwrap();
+    std::fs::write(
+        root.join("personas/steward/persona.md"),
+        "---\nname: steward\nrouting: require\n---\nbody\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("personas/ops.md"), "---\nrouting: advise\n---\n").unwrap();
+
+    let rows = doctor(&root).run();
+
+    assert_eq!(
+        row(&rows, "front door").detail,
+        "'steward' via charter.toml [persona] default"
+    );
+    let r = row(&rows, "routing");
+    assert_eq!(r.status, Status::Ok);
+    assert_eq!(
+        r.detail,
+        "ignored — `routing:` is retired; personas are offered to the harness as sub-agents \
+         (declared by ops, steward)"
+    );
+    assert_eq!(r.hint, "");
+    let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+    let at = names.iter().position(|n| *n == "front door").unwrap();
+    assert_eq!(names[at + 1], "routing", "{names:?}");
+}
+
 // ---- harness profiles -------------------------------------------------------------------------
 
 #[test]

@@ -14,7 +14,10 @@
 //! - `workspaces/`, so a workspace made or deleted elsewhere is seen and watched in turn;
 //! - each `workspaces/<ws>/` (`workspace.json`, a clone arriving, `todos/` being created);
 //! - each `workspaces/<ws>/todos/`, which is the bug;
-//! - `personas/`.
+//! - `personas/`, and each `personas/<name>/`, whose `persona.md` a chat reads at its start;
+//! - `.claude/` and `.claude/agents/`, the harness settings and sub-agents a chat reads at its
+//!   start — with the root's `CLAUDE.md`, what the window marks a chat for when it changes under
+//!   it (charter#369, [`charter_core::instructions`]).
 //!
 //! Not the plane recursively, because a workspace holds its clones: a recursive inotify watch
 //! would put one watch on every directory of every clone's `node_modules/` and `target/`, and
@@ -202,7 +205,19 @@ fn wanted(root: &Path) -> HashSet<PathBuf> {
     }
     let personas = root.join("personas");
     if a_dir(&personas) {
+        for name in std::fs::read_dir(&personas).into_iter().flatten().flatten() {
+            let persona = name.path();
+            if a_dir(&persona) {
+                wanted.insert(persona);
+            }
+        }
         wanted.insert(personas);
+    }
+    for harness in [".claude", ".claude/agents"] {
+        let dir = root.join(harness);
+        if a_dir(&dir) {
+            wanted.insert(dir);
+        }
     }
     let workspaces = root.join("workspaces");
     if !a_dir(&workspaces) {
@@ -387,6 +402,9 @@ mod tests {
         std::fs::create_dir_all(root.join("workspaces/alpha/svc/.git")).expect("a clone");
         std::fs::create_dir_all(root.join("workspaces/alpha/svc/src")).expect("its source");
         std::fs::create_dir_all(root.join("workspaces/.worktrees")).expect("charter's own");
+        std::fs::create_dir_all(root.join("personas/steward/memory")).expect("a persona");
+        std::fs::create_dir_all(root.join(".claude/agents")).expect("sub-agents");
+        std::fs::create_dir_all(root.join(".claude/skills/x")).expect("a skill");
 
         let mut got: Vec<_> = wanted(root)
             .into_iter()
@@ -402,7 +420,10 @@ mod tests {
             got,
             [
                 "",
+                ".claude",
+                ".claude/agents",
                 "personas",
+                "personas/steward",
                 "workspaces",
                 "workspaces/alpha",
                 "workspaces/alpha/todos"
