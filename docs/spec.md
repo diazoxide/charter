@@ -262,6 +262,21 @@ how it is cited and nothing here is renumbered.
     decision 25, workspace pins in the same store, chats in the plane's own
     `.charter/app/reopen.json`. **ADR 0039, as amended 2026-09-26.**
 
+### Curation actions — added 2026-09-26
+
+29. **A curation action is a chat opened with its prompt typed and never sent.** The operator
+    reviews the prompt and presses Enter, and nothing can opt out of that. It is offered on a
+    workspace, a persona or the plane. charter's own three come first (`charter/safe-remove`,
+    `charter/compact` — "Compact & improve" — and `charter/add-curation-action`), ship inside the
+    binary and cannot be overridden; then each persona's, declared one file per action at
+    `personas/<persona>/curation/<id>.md` and run by that persona. A template has four
+    variables and no expansion of anything else. A persona's file that is broken, or that takes
+    a built-in's id or label, is left out with a warning and fails `charter persona lint`.
+    charter's own run as the persona being curated, or else as the plane's default persona, or
+    as no persona. The core resolves a subject's list (`charter curation show <subject>`), and
+    `charter persona curation list|add|remove` manages a persona's files. The app's menus are a
+    later change. **ADR 0061.**
+
 ## Limits (acceptance)
 
 Only what a person would notice. Measured on the operator's machine, in the scenario harness.

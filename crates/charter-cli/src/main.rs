@@ -35,6 +35,7 @@ use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
 mod change;
+mod curation;
 mod extcmd;
 mod extensions;
 mod guard;
@@ -105,6 +106,12 @@ enum Command {
     /// (workspaces/<ws>/changes/<slug>.json).
     #[command(subcommand)]
     Change(change::ChangeCommand),
+
+    /// Curation actions: what a workspace, a persona or the plane is offered — charter's own
+    /// and each persona's (personas/<name>/curation/<id>.md) — each a chat opened with its
+    /// prompt typed and never sent.
+    #[command(subcommand)]
+    Curation(curation::CurationCommand),
 
     /// Harness profiles: which program a chat runs, and with what environment.
     #[command(subcommand)]
@@ -2089,6 +2096,7 @@ fn run(command: Command) -> Result<u8, String> {
         Command::Persona(command) => return memory::persona(&here, command),
         Command::Worktree(command) => return piece::run(&here, command),
         Command::Change(command) => return change::run(&here, command),
+        Command::Curation(command) => return curation::run(here.plane.root(), command),
         Command::Workspace(WorkspaceCommand::Remember {
             text,
             title,

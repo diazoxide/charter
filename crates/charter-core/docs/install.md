@@ -73,7 +73,8 @@ from the same build, so they cannot drift apart.
 
 The plugin is called `charter`. It carries every hook charter answers — the ones that
 report a chat's state and the Bash guard, described in [hooks.md](hooks.md) — and the
-`handoff`, `working-in-a-clone`, `update`, `persona`, `secrets` and `browser` skills, which
+`handoff`, `working-in-a-clone`, `update`, `persona`, `secrets`, `browser`, `safe-remove`,
+`compact` and `add-curation-action` skills, which
 reach the model as
 `charter:<skill>`. Up to 0.2.0 it was called `charter-app`, and its skills were
 `charter-app:<skill>`. It lives in `Contents/Resources/plugin` on macOS and

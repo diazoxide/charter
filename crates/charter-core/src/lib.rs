@@ -13,6 +13,7 @@ pub mod commitgate;
 pub mod contain;
 pub mod credguard;
 pub mod curate;
+pub mod curation;
 pub mod dispatch;
 pub mod docsrc;
 pub mod doctor;

@@ -108,11 +108,12 @@ fn kind_of(word: &str) -> Option<&'static Kind> {
 /// Taken from the Python charter's `cli.command_words()`, which is the surface both binaries
 /// share until M2 finishes porting it. A profile named like a command would shadow the
 /// command, and the name belongs to the command.
-const COMMAND_WORDS: [&str; 53] = [
+const COMMAND_WORDS: [&str; 54] = [
     "_version-check",
     "browser",
     "change",
     "clone",
+    "curation",
     "discover",
     "docs",
     "doctor",
