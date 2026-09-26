@@ -1318,6 +1318,15 @@ pub fn py_str(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// `gh_as_the_operator` withholds only credential variables a forge call would pass.
+    #[test]
+    fn every_token_withheld_is_one_a_forge_call_would_pass() {
+        for name in TOKEN_ENV {
+            assert!(git::CREDENTIAL_ENV.contains(&name), "{name}");
+        }
+    }
+
     use super::*;
 
     /// charter-app#100's `PATH` joined with `:`, as it bit on unix: a forge CLI found under a

@@ -91,7 +91,7 @@ fn a_planes_names_are_read_from_its_directories_and_default_is_not_one() {
         "workspaces/acme/billing-api/.git",
         "workspaces/acme/notes",
         "workspaces/default",
-        "personas/steward",
+        "personas/reviewer",
         "personas/_shared",
     ] {
         std::fs::create_dir_all(plane.join(d)).expect("mkdir");
@@ -103,7 +103,7 @@ fn a_planes_names_are_read_from_its_directories_and_default_is_not_one() {
         vec![
             ("acme".to_string(), "[workspace]"),
             ("billing-api".to_string(), "[repo]"),
-            ("steward".to_string(), "[persona]"),
+            ("reviewer".to_string(), "[persona]"),
         ]
     );
 }
@@ -179,6 +179,7 @@ fn the_newest_panic_in_the_log_is_the_one_read() {
     assert_eq!(
         p,
         Panic {
+            at: Some(9),
             place: "/Users/someone/.cargo/registry/src/index/tokio-1.0/src/rt.rs:12:5".into(),
             message: "workspace acme is gone\nsecond line".into(),
             version: Some("9.8.7".into()),
@@ -220,4 +221,61 @@ fn a_panic_becomes_a_bug_with_its_place_and_version_and_nothing_else_of_the_reco
             d.body
         );
     }
+}
+
+#[test]
+fn a_panic_is_offered_for_two_weeks_and_not_after() {
+    let p = latest_panic(LOG).unwrap();
+    assert!(p.is_recent(9 + PANIC_OFFERED_FOR_SECS));
+    assert!(!p.is_recent(10 + PANIC_OFFERED_FOR_SECS));
+    let undated = Panic { at: None, ..p };
+    assert!(!undated.is_recent(9));
+}
+
+#[test]
+fn charters_own_words_and_the_placeholders_words_are_never_scrubbed_as_names() {
+    let dir = tempfile::tempdir().expect("a directory");
+    for d in [
+        "workspaces/ide/charter/.git",
+        "workspaces/ide/charter-app/.git",
+        "workspaces/env",
+        "personas/steward",
+    ] {
+        std::fs::create_dir_all(dir.path().join(d)).expect("mkdir");
+    }
+    let known = Known {
+        names: names_in(dir.path()),
+        ..Known::default()
+    };
+    let (out, _) = known.scrub("charter report fails in charter-app for steward");
+    assert_eq!(out, "charter report fails in charter-app for steward");
+    assert_eq!(known.names, vec![("ide".to_string(), "[workspace]")]);
+}
+
+#[test]
+fn a_home_path_flattened_into_one_directory_name_is_a_home_path() {
+    let (out, _) = Known::default().scrub("under /private/tmp/x/-Users-someone-work-acme/y.rs");
+    assert_eq!(out, "under /private/tmp/x/[home path]");
+}
+
+#[test]
+fn a_title_given_by_hand_is_one_line_and_bounded() {
+    let long = format!("first\nsecond {}", "word ".repeat(30));
+    let d = Draft::described(Kind::Bug, "x", Some(&long), &Known::default()).unwrap();
+    assert!(!d.title.contains('\n'), "{}", d.title);
+    assert!(d.title.chars().count() <= TITLE_MAX, "{}", d.title);
+}
+
+#[test]
+fn a_body_too_long_for_a_link_is_left_out_of_it_to_be_pasted() {
+    let short = Draft::described(Kind::Bug, "short", None, &Known::default()).unwrap();
+    let (url, whole) = short.fallback_url();
+    assert!(whole && url.contains("&body=short"), "{url}");
+    let long = Draft::described(Kind::Bug, &"x".repeat(9_000), None, &Known::default()).unwrap();
+    let (url, whole) = long.fallback_url();
+    assert!(
+        !whole && !url.contains("&body=") && url.len() <= LINK_MAX,
+        "{}",
+        url.len()
+    );
 }

@@ -61,7 +61,10 @@ pub fn run(command: &ReportCommand) -> ExitCode {
 }
 
 fn draft(command: &ReportCommand) -> Result<(Draft, &TextArgs), String> {
-    let plane = charter_core::plane::resolve(&std::env::current_dir().unwrap_or_default()).ok();
+    // No working directory means no plane, and a report needs none.
+    let plane = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| charter_core::plane::resolve(&cwd).ok());
     let known = Known::here(plane.as_deref());
     let (kind, args, panic) = match command {
         ReportCommand::Bug { text, panic } => (Kind::Bug, text, *panic),
@@ -80,8 +83,11 @@ fn draft(command: &ReportCommand) -> Result<(Draft, &TextArgs), String> {
         };
         Draft::of_panic(&saved, words.as_deref(), &known)
     } else {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
         if kind == Kind::Bug
-            && let Some(saved) = &saved
+            && let Some(saved) = saved.as_ref().filter(|p| p.is_recent(now))
         {
             eprintln!(
                 "charter report: the app saved a panic (at {}). `charter report bug --panic` \
@@ -130,10 +136,17 @@ fn decide(draft: &Draft, args: &TextArgs) -> ExitCode {
         }
         None => {}
     }
+    let query = draft.query();
+    if !query.is_empty() {
+        println!(
+            "Searching {} for possible duplicates of: {query}",
+            report::UPSTREAM
+        );
+    }
     match report::search_duplicates(draft) {
         Ok(hits) if hits.is_empty() => println!("Possible duplicates: none found."),
         Ok(hits) => {
-            println!("Possible duplicates — comment on one instead if it is the same:");
+            println!("Possible duplicates — if one is the same, add to it on GitHub instead:");
             for hit in hits {
                 println!(
                     "  #{} {} ({}) {}",
@@ -175,10 +188,15 @@ fn send(draft: &Draft) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
+            let (url, whole) = draft.fallback_url();
             eprintln!(
                 "charter report: gh could not file it: {e}\n\
-                 Open this link to file it in the browser instead:\n{}",
-                draft.fallback_url()
+                 Open this link to file it in the browser instead{}:\n{url}",
+                if whole {
+                    ""
+                } else {
+                    ", and paste the body from the draft above"
+                }
             );
             ExitCode::FAILURE
         }

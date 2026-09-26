@@ -4,7 +4,8 @@
 //! # What this module promises
 //!
 //! **Nothing leaves before it has been shown.** A [`Draft`] is built, scrubbed and rendered
-//! ([`Draft::preview`]) with no network at all. Filing it ([`file`]) is a separate call, and the
+//! ([`Draft::preview`]) with no network at all. The one thing sent before a yes is the
+//! duplicate search's query ([`Draft::query`]): words of the scrubbed title, printed first. Filing it ([`file`]) is a separate call, and the
 //! command line reaches it only with the reporter's "yes": a prompt on a terminal, or
 //! `--yes <digest>` where the digest ([`Draft::digest`]) is the one the preview printed. A digest
 //! is over the repository, the title and the body, so a `--yes` can only file the exact bytes
@@ -48,6 +49,10 @@ pub const UPSTREAM: &str = "diazoxide/charter";
 /// The most characters a report body may hold. GitHub refuses a body over 65,536.
 pub const BODY_MAX: usize = 60_000;
 
+/// The longest prefilled `issues/new` link charter prints. Browsers and GitHub start refusing
+/// links not far beyond this.
+pub const LINK_MAX: usize = 8_000;
+
 /// The longest an issue title may be, ellipsis included: the maintainer's issue list is
 /// where a title that wraps stops being scannable.
 const TITLE_MAX: usize = 72;
@@ -59,9 +64,10 @@ const BREAK_FLOOR: usize = 40;
 /// ordinary words far more often than they are anybody's secret.
 const ENV_VALUE_MIN: usize = 8;
 
-/// Variables whose values describe a terminal and never a person, so a report about a
-/// terminal can still say which one.
-const ENV_HARMLESS: [&str; 10] = [
+/// Variables whose values name a terminal, a locale or a standard program, never a person or a
+/// place, so a report about a terminal can still say which one. `OLDPWD` and `PWD` are not
+/// here: they are directories.
+const ENV_HARMLESS: [&str; 12] = [
     "TERM",
     "COLORTERM",
     "TERM_PROGRAM",
@@ -70,8 +76,28 @@ const ENV_HARMLESS: [&str; 10] = [
     "LC_ALL",
     "LC_CTYPE",
     "SHLVL",
-    "_",
-    "OLDPWD",
+    "SHELL",
+    "EDITOR",
+    "VISUAL",
+    "PAGER",
+];
+
+/// Names that are charter's own words rather than the reporter's: a plane that clones charter,
+/// or keeps the default steward, would otherwise lose "charter" from every sentence about it.
+const OWN_WORDS: [&str; 4] = ["charter", "charter-app", "charter-plane", "steward"];
+
+/// The words the scrub's own placeholders are made of. A workspace called `env` or `home`
+/// would otherwise rewrite `[env $X]` into `[[workspace] $X]`, and a name that plain identifies
+/// nobody.
+const PLACEHOLDER_WORDS: [&str; 8] = [
+    "env",
+    "home",
+    "path",
+    "plane",
+    "repo",
+    "vault",
+    "workspace",
+    "persona",
 ];
 
 /// What a report is.
@@ -89,6 +115,14 @@ impl Kind {
         match self {
             Kind::Bug => "bug",
             Kind::Feature => "feature request",
+        }
+    }
+
+    /// The `charter report` verb that drafts it.
+    pub fn verb(self) -> &'static str {
+        match self {
+            Kind::Bug => "bug",
+            Kind::Feature => "feature",
         }
     }
 }
@@ -113,7 +147,15 @@ impl Known {
         Known {
             plane: plane.map(|p| p.display().to_string()),
             home: dirs::home_dir().map(|h| h.display().to_string()),
-            env: std::env::vars().collect(),
+            // `vars_os`, lossily: `vars` panics on a variable that is not Unicode.
+            env: std::env::vars_os()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect(),
             names: plane.map(names_in).unwrap_or_default(),
         }
     }
@@ -195,12 +237,14 @@ impl Known {
     }
 }
 
-/// Absolute paths under a home directory, which carry a user name and then project names.
-/// Stops at a quote, a bracket or a backtick so the Markdown around a path survives.
+/// Absolute paths under a home directory, which carry a user name and then project names —
+/// and the same path flattened into one directory name (`-Users-someone-work-…`), which is how
+/// some tools name a directory per project. Stops at a quote, a bracket or a backtick so the
+/// Markdown around a path survives.
 fn home_paths() -> &'static Regex {
     static ONCE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
-        Regex::new(r#"(?:/Users/|/home/|[A-Za-z]:\\Users\\)[^\s`'"()<>\[\]]*"#)
+        Regex::new(r#"(?:/Users/|/home/|[A-Za-z]:\\Users\\|-Users-|-home-)[^\s`'"()<>\[\]]*"#)
             .expect("a pattern this module wrote")
     })
 }
@@ -212,6 +256,9 @@ fn is_word(c: char) -> bool {
 
 /// `text` with every whole-word `name` replaced by `with`, and whether any was.
 fn replace_word(text: &str, name: &str, with: &str) -> (String, bool) {
+    if name.is_empty() {
+        return (text.to_string(), false);
+    }
     let mut out = String::with_capacity(text.len());
     let mut hit = false;
     let mut rest = text;
@@ -265,7 +312,11 @@ fn names_in(plane: &Path) -> Vec<(String, &'static str)> {
         }
     }
     out.retain(|(name, _)| {
-        name.chars().count() >= 3 && name != "default" && !name.starts_with(['_', '.'])
+        name.chars().count() >= 3
+            && name != "default"
+            && !name.starts_with(['_', '.'])
+            && !OWN_WORDS.contains(&name.as_str())
+            && !PLACEHOLDER_WORDS.contains(&name.as_str())
     });
     out
 }
@@ -313,7 +364,13 @@ impl Draft {
             )));
         }
         let (title, more) = match title {
-            Some(t) => known.scrub(t),
+            Some(t) => {
+                let (t, more) = known.scrub(t);
+                (
+                    cut_title(&t.split_whitespace().collect::<Vec<_>>().join(" ")),
+                    more,
+                )
+            }
             None => (title_of(&text), Vec::new()),
         };
         Draft::assemble(kind, title, text, merge(scrubbed, more))
@@ -367,10 +424,7 @@ impl Draft {
             crate::adopt::app_version(),
             std::env::consts::OS,
             std::env::consts::ARCH,
-            match kind {
-                Kind::Bug => "bug",
-                Kind::Feature => "feature",
-            }
+            kind.verb()
         );
         if body.chars().count() > BODY_MAX {
             return Err(Refused(format!(
@@ -403,7 +457,7 @@ impl Draft {
     /// The draft as the reporter reads it: exactly what [`file`] would send, and where.
     pub fn preview(&self) -> String {
         let mut out = format!(
-            "Draft {} for {UPSTREAM} — nothing has been sent.\n\n\
+            "Draft {} for {UPSTREAM} — nothing has been filed.\n\n\
              Title: {}\n\
              ----- body -----\n{}\n----- end -----\n",
             self.kind.word(),
@@ -422,18 +476,25 @@ impl Draft {
         out
     }
 
-    /// A prefilled `issues/new` link, for a reporter whose `gh` cannot file.
-    pub fn fallback_url(&self) -> String {
-        format!(
-            "https://github.com/{UPSTREAM}/issues/new?title={}&body={}",
-            forge::quote(&self.title),
-            forge::quote(&self.body)
-        )
+    /// A prefilled `issues/new` link, for a reporter whose `gh` cannot file, and whether the
+    /// body is in it. A body that would make the link longer than [`LINK_MAX`] is left out, to
+    /// be pasted from the preview: a browser or GitHub refuses a link that long.
+    pub fn fallback_url(&self) -> (String, bool) {
+        let title = format!(
+            "https://github.com/{UPSTREAM}/issues/new?title={}",
+            forge::quote(&self.title)
+        );
+        let whole = format!("{title}&body={}", forge::quote(&self.body));
+        if whole.len() <= LINK_MAX {
+            (whole, true)
+        } else {
+            (title, false)
+        }
     }
 
-    /// The words duplicate search looks for: the title's, without punctuation a search query
-    /// would read as syntax.
-    fn query(&self) -> String {
+    /// The words duplicate search sends to GitHub: the title's, without punctuation a search
+    /// query would read as syntax. Shown before it is sent.
+    pub fn query(&self) -> String {
         self.title
             .split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.')))
             .filter(|w| w.chars().count() > 2)
@@ -557,6 +618,8 @@ pub fn file(draft: &Draft) -> Result<String, ForgeError> {
 /// A panic the app wrote down, as `panics.rs` writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Panic {
+    /// When it panicked, in seconds since 1970, as the record's first line says.
+    pub at: Option<u64>,
     pub place: String,
     pub message: String,
     pub version: Option<String>,
@@ -577,10 +640,28 @@ pub fn panic_log() -> Option<PathBuf> {
     Some(dir.join("panics.log"))
 }
 
+/// How long a saved panic is offered: one older than this was most likely reported, or
+/// mattered to nobody, and offering it on every `report bug` would be noise.
+pub const PANIC_OFFERED_FOR_SECS: u64 = 14 * 24 * 60 * 60;
+
+impl Panic {
+    /// Whether it is recent enough, at `now` (seconds since 1970), to be offered unasked.
+    pub fn is_recent(&self, now: u64) -> bool {
+        self.at
+            .is_some_and(|at| now.saturating_sub(at) <= PANIC_OFFERED_FOR_SECS)
+    }
+}
+
 /// The newest panic in `log`, or `None` when it holds none.
 pub fn latest_panic(log: &str) -> Option<Panic> {
     let start = log.rfind("charter-panic pid ")?;
     let block = &log[start..];
+    let at = block
+        .lines()
+        .next()
+        .and_then(|l| l.split(" at ").nth(1))
+        .and_then(|l| l.split_whitespace().next())
+        .and_then(|n| n.parse().ok());
     let block = block.split("\nbacktrace:").next().unwrap_or(block);
     let mut place = None;
     let mut version = None;
@@ -598,6 +679,7 @@ pub fn latest_panic(log: &str) -> Option<Panic> {
         }
     }
     Some(Panic {
+        at,
         place: place?,
         message: message.unwrap_or_default(),
         version,

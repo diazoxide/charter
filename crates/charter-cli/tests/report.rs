@@ -118,10 +118,14 @@ fn a_bare_run_shows_the_draft_and_the_duplicates_and_sends_nothing() {
 
     assert!(o.status.success(), "{}", err(&o));
     let text = out(&o);
-    assert!(text.contains("nothing has been sent"), "{text}");
+    assert!(text.contains("nothing has been filed"), "{text}");
     assert!(text.contains("Title: The status line is wrong"), "{text}");
     assert!(text.contains("It says 3."), "{text}");
     assert!(text.contains("#7"), "the duplicate is named: {text}");
+    assert!(
+        text.contains("possible duplicates of: The status line wrong"),
+        "the query is shown before it is sent: {text}"
+    );
     assert!(text.contains(&format!("--yes {}", digest(&o))), "{text}");
     let calls = w.calls();
     assert!(
@@ -218,15 +222,21 @@ fn a_secret_a_vault_value_or_a_private_path_never_reaches_gh() {
 fn a_saved_panic_is_offered_and_becomes_a_draft_bug_with_its_place_and_version() {
     let w = World::new();
     let log = w.home.join("panics.log");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     std::fs::write(
         &log,
-        "charter-panic pid 4 at 5 (seconds since 1970)\n\
+        format!(
+            "charter-panic pid 4 at {now} (seconds since 1970)\n\
          version: 1.2.3\n\
          thread: main\n\
          place: crates/charter-core/src/engine.rs:88:9\n\
          message: index out of bounds\n\
          backtrace:\n   0: somewhere\n\
-         charter-panic end\n",
+         charter-panic end\n"
+        ),
     )
     .unwrap();
     let env = [("CHARTER_PANIC_LOG", log.to_str().unwrap())];
