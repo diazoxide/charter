@@ -510,3 +510,46 @@ fn remove_unregisters_and_fails_on_a_vault_that_is_not_there() {
     assert_eq!(remove(&plane.ctx, "p", &mut io), 1);
     assert!(io.said().starts_with("err: "));
 }
+
+#[test]
+fn a_keyring_vault_is_said_to_keep_its_key_names_in_its_index() {
+    let plane = Plane::new(&[]);
+    let mut io = Rec::default();
+    assert_eq!(
+        add(&plane.ctx, &req("k", "keyring"), &mut io),
+        0,
+        "{}",
+        io.said()
+    );
+    let said = io.said();
+    assert!(
+        said.contains(
+            "info:   charter keeps each secret as one item in the system keyring, and the key \
+             names — never the values — in .charter/vaults/k.keys.json."
+        ),
+        "{said}"
+    );
+    assert!(
+        said.ends_with("info:   add secrets with: charter secret set k <key> --stdin"),
+        "{said}"
+    );
+}
+
+#[test]
+fn removing_a_keyring_vault_says_its_secrets_stay_and_where_they_are_named() {
+    let plane = Plane::new(&[]);
+    plane.register("k", "keyring", json!({}), None);
+    plane.plain("p", json!({"x": "v"}));
+    let mut io = Rec::default();
+    assert_eq!(remove(&plane.ctx, "k", &mut io), 0);
+    assert_eq!(
+        io.said(),
+        "ok: Vault 'k' removed from the registry. (Any underlying file is left on disk \
+         untouched.)\ninfo:   Its secrets stay in the system keyring, named in \
+         .charter/vaults/k.keys.json; registering 'k' again as a keyring vault finds them."
+    );
+    // A vault of any other provider says nothing of a keyring.
+    let mut io = Rec::default();
+    assert_eq!(remove(&plane.ctx, "p", &mut io), 0);
+    assert!(!io.said().contains("keyring"), "{}", io.said());
+}

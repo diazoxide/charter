@@ -193,6 +193,23 @@ fn a_leaf_outside_the_stop_answers_for_itself_alone() {
     assert_eq!(loose_dirs(&elsewhere, &state), vec![(elsewhere, 0o755)]);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_walk_that_comes_back_to_a_directory_through_a_link_stops_there_and_is_not_under_the_stop() {
+    // `stop/a/link` points back at `stop/a`: walking up from `stop/a/link/x` meets `stop/a`
+    // twice before it meets `stop`, and stops at the second — as Python's walk does — so the
+    // leaf is answered for alone, and the loose `stop/a` is not reached.
+    let tmp = tempfile::tempdir().unwrap();
+    let stop = tmp.path().join("stop");
+    let a = stop.join("a");
+    std::fs::create_dir_all(a.join("x")).unwrap();
+    std::os::unix::fs::symlink(&a, a.join("link")).unwrap();
+    chmod(&stop, 0o700);
+    chmod(&a, 0o755);
+    chmod(&a.join("x"), 0o700);
+    assert_eq!(loose_dirs(&a.join("link").join("x"), &stop), Vec::new());
+}
+
 // ---------------------------------------------------------------------------------------------
 // `secrets/plain_file.rs`
 // ---------------------------------------------------------------------------------------------

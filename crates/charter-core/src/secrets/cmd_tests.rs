@@ -196,6 +196,17 @@ fn a_reference_vault_resolves_through_the_cli_its_uri_names() {
     assert_eq!(keys(&plane.ctx, &v).unwrap(), ["other"]);
 }
 
+#[test]
+fn a_keyring_vaults_health_is_read_from_its_index_and_not_asked_of_another_provider() {
+    let plane = Plane::new(&[]);
+    plane.register("k", "keyring", json!({}), None);
+    let v = provider(&plane.ctx, "k").unwrap();
+    assert_eq!(
+        health(&plane.ctx, &v),
+        (true, "no secrets yet in the system keyring".to_string())
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // The access record.
 
@@ -386,6 +397,22 @@ fn audit_of_a_fully_dated_vault_says_nothing_about_unknown_ages() {
     assert_eq!(
         io.said,
         [Say::Ok("no secrets in 'p' older than 90 days.".into())]
+    );
+}
+
+#[test]
+fn audit_dates_a_keyring_vaults_secrets_from_its_keys_index() {
+    let plane = Plane::new(&[]);
+    plane.register("k", "keyring", json!({}), None);
+    let v = provider(&plane.ctx, "k").unwrap();
+    let store = crate::secrets::keyring::store(&plane.ctx);
+    let old = format!("{}T00:00:00Z", days_ago(400));
+    crate::secrets::keyring::set_with(&*store, &plane.ctx, &v, "old", "1", &old).unwrap();
+    let mut io = Rec::default();
+    assert_eq!(audit(&plane.ctx, "k", 30, &mut io), 1);
+    assert_eq!(
+        io.said,
+        [Say::Warn("k/old: 400 days old — consider rotating".into())]
     );
 }
 
