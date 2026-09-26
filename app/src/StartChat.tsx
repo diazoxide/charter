@@ -70,12 +70,20 @@ const NO_PERSONA = "";
  */
 export function StartChat({
   options,
+  prefer,
   trouble,
   onStart,
   onApprove,
   onCancel,
 }: {
   options: StartOptions;
+  /**
+   * The harness (a profile's `kind`) to start on, when something already knows which one is
+   * wanted — a harness started by hand in a shell tab, opened as a chat instead (ADR 0062).
+   * The default profile when it is of that kind, else the first that is; the default when none
+   * is. It picks a row and starts nothing: the operator still presses Start.
+   */
+  prefer?: string;
   /** Why the last attempt did not start, if it did not. */
   trouble?: string;
   /** `label` is the Name field, or `null` when it was left empty. */
@@ -97,9 +105,14 @@ export function StartChat({
   ) => void;
   onCancel: () => void;
 }) {
-  const [profile, setProfile] = useState<string | undefined>(
-    () => options.profiles.find((p) => p.is_default)?.name ?? options.profiles[0]?.name,
-  );
+  const [profile, setProfile] = useState<string | undefined>(() => {
+    const ofKind = options.profiles.filter((p) => prefer !== undefined && p.kind === prefer);
+    return (
+      (ofKind.find((p) => p.is_default) ?? ofKind[0])?.name ??
+      options.profiles.find((p) => p.is_default)?.name ??
+      options.profiles[0]?.name
+    );
+  });
   // Only a persona there is a row for. The core already filters `[persona] default`
   // against the personas the plane has, so this should be unreachable from the app — but
   // the alternative, if it ever arrives, is a chat started on a persona the operator can

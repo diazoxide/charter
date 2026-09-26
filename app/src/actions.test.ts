@@ -11,6 +11,7 @@ import {
   narrow,
   OUTSIDE,
   perform,
+  SHELL_KEY_SAID,
   type Cut,
   type Doing,
   type Now,
@@ -38,6 +39,7 @@ function doing(): Doing & { calls: string[] } {
   return {
     calls,
     newChat: note("newChat"),
+    newShell: note("newShell"),
     split: note("split"),
     closePane: note("closePane"),
     closeTab: note("closeTab"),
@@ -947,6 +949,9 @@ describe("carrying out a row", () => {
     expect(new Set(hands.calls)).toEqual(
       new Set([
         "newChat",
+        "newShell",
+        "newShell:alpha",
+        "newShell:beta",
         "split:row",
         "split:column",
         "showChat:8",
@@ -1004,6 +1009,50 @@ describe("carrying out a row", () => {
         "quit",
       ]),
     );
+  });
+});
+
+describe("a plain shell tab (SI-5)", () => {
+  it("offers a new shell right after a new tab, on an empty window too", () => {
+    const offers = ids(catalogue(now()));
+
+    expect(offers.indexOf("shell.new")).toBe(offers.indexOf("chat.new") + 1);
+  });
+
+  it("runs a new shell where a new chat would start, with nothing named", async () => {
+    const hands = doing();
+
+    await run(catalogue(now({ workspaces: ["alpha"], focused: "alpha" })), "shell.new", hands);
+
+    expect(hands.calls).toEqual(["newShell"]);
+  });
+
+  it("offers a new shell in each workspace, and runs it in that one", async () => {
+    const hands = doing();
+    const offers = catalogue(now({ workspaces: ["alpha", "beta"], focused: "alpha" }));
+
+    await run(offers, "shell.new:beta", hands);
+
+    expect(by(offers, "shell.new:beta")?.title).toBe("New shell in beta");
+    expect(hands.calls).toEqual(["newShell:beta"]);
+  });
+
+  it("offers no shell in the strip of chats outside every workspace, which is no directory", () => {
+    const offers = ids(catalogue(now({ workspaces: ["alpha", OUTSIDE] })));
+
+    expect(offers).not.toContain(`shell.new:${OUTSIDE}`);
+  });
+
+  it("puts a new shell on a workspace's menu and on the panes' menu, beside a new tab", () => {
+    expect(menuOn({ on: "workspace", workspace: "alpha" }).above).toContain("shell.new:alpha");
+    const pane = menuOn({ on: "pane" }).above;
+    expect(pane.indexOf("shell.new")).toBe(pane.indexOf("chat.new") + 1);
+  });
+
+  it("says the key that opens one on the row, so the palette teaches it", () => {
+    const row = by(catalogue(now()), "shell.new");
+
+    expect(row?.note).toContain(SHELL_KEY_SAID);
   });
 });
 
@@ -1338,7 +1387,9 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("clone.pick:"))).toHaveLength(10);
     // One settings row per workspace (charter-app#280), and none for the strip outside.
     expect(offers.filter((row) => row.id.startsWith("workspace.settings:"))).toHaveLength(6);
-    // 435 rows: 50 chats four times over, 6 workspaces SIX times, 50 pieces THRICE, 10
+    // One new-shell row per workspace (SI-5), and none for the strip outside.
+    expect(offers.filter((row) => row.id.startsWith("shell.new:"))).toHaveLength(6);
+    // 442 rows: 435, then a shell tab's row and one per workspace (SI-5). The 435 were: 50 chats four times over, 6 workspaces SIX times, 50 pieces THRICE, 10
     // clones TWICE, 8 personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248),
     // and the sixteen verbs — the sixteenth is Preferences (charter-app#283) — plus the vault picker and New vault…
     // (charter-app#235; this plane has no vaults, so no `vault.open:` rows). It was 118 before the pins, 174 before
@@ -1351,7 +1402,7 @@ describe("the palette at fifty chats", () => {
     // renamed (charter#367), and 385 before a piece could be marked done (charter#368). What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(435);
+    expect(offers).toHaveLength(442);
   });
 
   /**

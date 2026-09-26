@@ -226,6 +226,7 @@ describe("deleting a workspace", () => {
         .map((row) => row.textContent?.trim()),
     ).toEqual([
       "Focus workspace alpha",
+      expect.stringContaining("New shell in alpha"),
       expect.stringContaining("Pin workspace alpha"),
       expect.stringContaining("Workspace settings…"),
       expect.stringContaining("Make alpha live…"),

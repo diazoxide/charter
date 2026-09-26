@@ -63,6 +63,7 @@ describe("what a menu lists", () => {
 
     expect(shown.above).toEqual([
       "Focus workspace alpha",
+      "New shell in alpha",
       "Pin workspace alpha",
       "Workspace settings…",
       "Make alpha live…",
@@ -148,6 +149,7 @@ describe("what a menu lists", () => {
 
     expect(pane.above).toEqual([
       "New tab",
+      "New shell",
       "Split right",
       "Split down",
       "Send F2 to the chat in front",
@@ -396,6 +398,7 @@ describe("a real contextmenu event, with the suppressor live", () => {
         .map((row) => row.getAttribute("aria-label")),
     ).toEqual([
       "Focus workspace alpha",
+      "New shell in alpha",
       "Pin workspace alpha",
       "Workspace settings…",
       "Make alpha live…",

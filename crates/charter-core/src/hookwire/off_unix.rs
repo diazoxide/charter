@@ -7,7 +7,7 @@
 
 use std::io;
 
-use super::{Answer, Answerer, Ask, Report};
+use super::{Answer, Answerer, Ask, Noticed, Report, StartedByHand};
 
 /// [`Asking`]'s counterpart where there is no unix socket: it refuses, so a handoff there
 /// prints the command to run in a terminal, as it always has.
@@ -30,6 +30,12 @@ impl Asking {
 /// What it does NOT do is pretend: the error names the platform, so a `doctor` that asks
 /// gets an answer rather than a success that moved nothing.
 pub fn send(_path: &std::path::Path, _report: &Report) -> io::Result<()> {
+    Err(no_channel())
+}
+
+/// [`send`]'s refusal, for a harness started by hand: a shell tab here has no shims, so
+/// nothing calls this, and it says why all the same.
+pub fn tell(_path: &std::path::Path, _notice: &StartedByHand) -> io::Result<()> {
     Err(no_channel())
 }
 
@@ -72,6 +78,16 @@ impl Listener {
         self,
         _each: Box<dyn Fn(Report) + Send + Sync + 'static>,
         _answer: Answerer,
+    ) -> Reading {
+        match self {}
+    }
+
+    /// Unreachable, for the same reason.
+    pub fn each_answering_and_noticing(
+        self,
+        _each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+        _answer: Answerer,
+        _noticed: Noticed,
     ) -> Reading {
         match self {}
     }

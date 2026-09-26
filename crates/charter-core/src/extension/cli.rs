@@ -29,7 +29,7 @@ use super::{ok_in_a_part_id, title_of};
 /// command is not protected by itself: CI goes red on the change that adds it until the word is
 /// here, and that change does not merge before it is. The `charter` binary needs no list: it
 /// asks its parser before it looks for an extension.
-pub const CORE_WORDS: [&str; 32] = [
+pub const CORE_WORDS: [&str; 33] = [
     "browser",
     "clone",
     "discover",
@@ -52,6 +52,7 @@ pub const CORE_WORDS: [&str; 32] = [
     "root",
     "save",
     "secret",
+    "shell-guard",
     "status",
     "statusline",
     "sync",

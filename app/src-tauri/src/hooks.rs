@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use charter_core::hookwire::{Answer, Ask, Listener, NOTHING_ANSWERS, Reading, Report};
+use charter_core::hookwire::{
+    Answer, Ask, Listener, NOTHING_ANSWERS, Reading, Report, StartedByHand,
+};
 use charter_core::session::Exit;
 use charter_core::state::{Board, State};
 
@@ -60,6 +62,43 @@ pub struct Moved {
     /// than the one it holds (`chatState.ts`), which it can do only because this is numbered
     /// in the order the board was read. [`sequence`] is the whole definition.
     pub sequence: u32,
+}
+
+/// The event the window is sent when a harness was started by hand in a shell tab (ADR 0062).
+pub const BY_HAND: &str = "harness-by-hand";
+
+/// A harness the operator started by hand in a shell tab, as the window draws its banner.
+///
+/// **Nothing about the chat moves.** It is not a state and not a needs-you item: the tab says
+/// what happened and offers to open that harness as a chat, and the operator's click is what
+/// does anything.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct ByHand {
+    pub plane: PlaneId,
+    /// The shell tab's chat.
+    pub session: u32,
+    /// The harness, by the word the plane calls it — a profile's `kind`.
+    pub harness: String,
+    /// Where the shell was standing when it started it, which is where a chat opened in its
+    /// place starts.
+    pub cwd: Option<String>,
+}
+
+/// Told when a harness is started by hand in a shell tab of any plane. The event carries its
+/// plane, as [`Moved`] does.
+pub type ByHandTeller = Arc<dyn Fn(ByHand) + Send + Sync + 'static>;
+
+/// What the window is told about `notice`, heard on `plane`'s socket — or nothing, for a
+/// harness this app does not start. A word charter has no chat for would put a button on the
+/// tab that could only be refused.
+fn by_hand(plane: &PlaneId, notice: StartedByHand) -> Option<ByHand> {
+    let harness = charter_core::harness::Harness::of_kind(&notice.started_by_hand)?;
+    Some(ByHand {
+        plane: plane.clone(),
+        session: notice.chat,
+        harness: harness.name().to_owned(),
+        cwd: notice.cwd.map(|cwd| cwd.display().to_string()),
+    })
 }
 
 /// The board, the socket, and the thread reading it — one plane's whole side of the channel.
@@ -205,12 +244,17 @@ impl Hooks {
     /// A socket that cannot be opened is not worth refusing to start over: the app comes up
     /// with every chat `unknown` and says so on stderr, which is a working app with one
     /// feature missing rather than no app at all.
-    pub fn listening_on(plane: PlaneId, at: &Where, moved: Teller) -> std::io::Result<Self> {
+    pub fn listening_on(
+        plane: PlaneId,
+        at: &Where,
+        moved: Teller,
+        told_by_hand: ByHandTeller,
+    ) -> std::io::Result<Self> {
         let listener = Listener::bind(&at.within, &at.socket)?;
         let socket = listener.path().to_path_buf();
         let board = Arc::new(Mutex::new(Board::new()));
         let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
-        let reading = listener.each_answering(
+        let reading = listener.each_answering_and_noticing(
             {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
@@ -234,6 +278,14 @@ impl Hooks {
                         None => Answer::No {
                             why: NOTHING_ANSWERS.to_owned(),
                         },
+                    }
+                })
+            },
+            {
+                let plane = plane.clone();
+                Box::new(move |notice| {
+                    if let Some(told) = by_hand(&plane, notice) {
+                        told_by_hand(told);
                     }
                 })
             },
@@ -559,5 +611,60 @@ mod tests {
         let deep = PathBuf::from("/Users/operator").join("a".repeat(120));
 
         assert_ne!(socket_for(Some(&deep)).socket, socket_for(None).socket);
+    }
+
+    #[test]
+    fn a_harness_started_by_hand_in_a_shell_tab_is_told_to_the_window_with_its_plane() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = Where {
+            within: dir.path().to_path_buf(),
+            socket: dir.path().join("app").join("hooks.sock"),
+        };
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        let hooks = Hooks::listening_on(
+            plane.clone(),
+            &at,
+            Arc::new(|_| panic!("a harness started by hand moves no chat")),
+            Arc::new(move |told| tx.lock().unwrap().send(told).unwrap()),
+        )
+        .expect("listening");
+
+        charter_core::hookwire::tell(
+            hooks.socket().expect("a socket"),
+            &StartedByHand {
+                chat: 3,
+                started_by_hand: "codex".to_owned(),
+                cwd: Some(PathBuf::from("/work/alpha")),
+            },
+        )
+        .expect("told");
+
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(ByHand {
+                plane,
+                session: 3,
+                harness: "codex".to_owned(),
+                cwd: Some("/work/alpha".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_word_that_is_no_harness_charter_starts_puts_nothing_on_the_tab() {
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+
+        let told = by_hand(
+            &plane,
+            StartedByHand {
+                chat: 3,
+                started_by_hand: "vim".to_owned(),
+                cwd: None,
+            },
+        );
+
+        assert_eq!(told, None);
     }
 }

@@ -747,3 +747,10 @@ real xterm sends `^_` for a plain `Ctrl+-` too; xterm.js does not, and it is the
 every pane.) They are a capture listener on the window, like the palette's, and not menu
 accelerators: which size a key changes depends on where the keystroke landed, which only the
 page knows. Preferences… is on the menu, on `⌘,` and `Ctrl+,`; xterm sends nothing for either.
+
+**The new-shell key takes nothing either** (SI-5, ADR 0062, `shellKey.opensAShell`): `⌘⇧T` on a
+Mac and `Ctrl+Shift+T` elsewhere — "new tab" in GNOME Terminal, Konsole and Windows Terminal,
+whose tabs are shells. xterm.js 6.0.0 encodes `Ctrl` with a letter only when Shift is not held,
+so `Ctrl+Shift+T` is no byte, and plain `Ctrl+T` still reaches the shell as transpose-chars.
+It is a capture listener on the window, held by the project in front, and it presses the
+catalogue's own `shell.new` row.

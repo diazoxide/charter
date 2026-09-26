@@ -28,6 +28,8 @@
  */
 import type { ChatWorktree, ExtensionCommand, ExtensionView, RowAction } from "./bindings";
 import { MAIN } from "./here";
+import { shellKeySaid } from "./shellKey";
+import { onAMac } from "./tabKeys";
 import {
   chatOf,
   contentsOf,
@@ -113,9 +115,18 @@ export const OUTSIDE = "outside/every/workspace";
 /** What the strip and the palette call that one. */
 export const OUTSIDE_TITLE = "Outside every workspace";
 
+/** The key that opens a shell tab, as this platform spells it — said on the row, so the palette
+ *  is where an operator learns it (`shellKey.ts`). */
+export const SHELL_KEY_SAID = shellKeySaid(onAMac());
+
 /** What a row does, as a value the window can carry out. */
 export type Does =
   | { verb: "chat.new" }
+  /** Opens a plain shell tab (SI-5): the operator's own `$SHELL`, no harness, no profile —
+   *  in `workspace`'s directory and filed under it, or where a new chat would start when it
+   *  names none. Nothing asks first: a shell starts no harness, so ADR 0022's picker has
+   *  nothing to ask about. */
+  | { verb: "newShell"; workspace?: string }
   | { verb: "split"; direction: Direction }
   /** Hands a key the palette claimed to the chat in front, rather than swallowing it. */
   | { verb: "sendKey"; key: string }
@@ -396,6 +407,8 @@ export type Now = {
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
 export type Doing = {
   newChat: () => void;
+  /** A shell tab, in `workspace` when a row names one, else where a new chat would start. */
+  newShell: (workspace?: string) => void;
   split: (direction: Direction) => void;
   closePane: () => void;
   closeTab: (tab: number) => void;
@@ -718,6 +731,14 @@ export function catalogue(now: Now): Offer[] {
   // opens that question; it never answers it.
   offers.push(can("chat.new", "New tab", { verb: "chat.new" }));
 
+  // **Beside it, and never inside the picker** (SI-5). A shell tab runs no harness, so there
+  // is no profile to pick and nothing for ADR 0022 to ask. It is still a chat to the core — a
+  // session with a number, recorded and put back — which is why it is a tab like one.
+  offers.push({
+    ...can("shell.new", "New shell", { verb: "newShell" }),
+    note: `Your own shell, with no harness, where a new tab would start. ${SHELL_KEY_SAID}.`,
+  });
+
   // **Always available, and available with nothing open.** ADR 0041 item 5: ADR 0035
   // shows what a project contributes in the dialog and nothing shows it afterwards, so the
   // surface every later trust decision is read on is the one that lists what is in force NOW.
@@ -825,8 +846,18 @@ export function catalogue(now: Now): Offer[] {
         : can(`workspace.focus:${workspace}`, title, { verb: "focusWorkspace", workspace }, name),
     );
     // Not for the strip of chats outside every workspace: it is not a workspace on the plane
-    // and there is nothing on disk for a pin to name.
+    // and there is nothing on disk for a pin to name — nor a directory for a shell to start in.
     if (workspace === OUTSIDE) continue;
+    // A shell in this workspace's own directory, filed under it (SI-5): the workspace menu's
+    // way to reach a terminal there without focusing it first.
+    offers.push(
+      can(
+        `shell.new:${workspace}`,
+        `New shell in ${workspace}`,
+        { verb: "newShell", workspace },
+        workspace,
+      ),
+    );
     const held = isPinned(pinned.workspaces, workspace);
     offers.push({
       ...can(
@@ -1242,6 +1273,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "chat.new":
       doing.newChat();
       return DID;
+    case "newShell":
+      doing.newShell(...(does.workspace === undefined ? [] : [does.workspace]));
+      return DID;
     case "split":
       doing.split(does.direction);
       return DID;
@@ -1608,6 +1642,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       return {
         above: [
           `workspace.focus:${what.workspace}`,
+          `shell.new:${what.workspace}`,
           `workspace.pin:${what.workspace}`,
           `workspace.settings:${what.workspace}`,
           `workspace.live:${what.workspace}`,
@@ -1652,7 +1687,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       return { above: [`clone.chat:${what.repo}`, `clone.pick:${what.repo}`], below: [] };
     case "pane":
       return {
-        above: ["chat.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],
+        above: ["chat.new", "shell.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],
         below: ["pane.close"],
       };
   }

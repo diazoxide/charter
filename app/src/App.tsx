@@ -863,6 +863,7 @@ function App() {
       // draws it beside the row that was pressed. Nothing is written to a second piece of
       // state that would then have to be cleared when a project arrives.
       newChat: () => undefined,
+      newShell: () => undefined,
       split: () => undefined,
       closePane: () => undefined,
       closeTab: () => undefined,
