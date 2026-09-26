@@ -14,6 +14,7 @@
 //! request is a **request**.
 
 pub mod cmd;
+pub mod observe;
 mod record;
 pub mod store;
 

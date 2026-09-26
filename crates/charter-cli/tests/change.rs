@@ -616,3 +616,16 @@ fn a_workspace_that_does_not_exist_is_refused_and_nothing_is_created() {
     assert_eq!(out.status.code(), Some(1));
     assert!(!plane.root.join("workspaces/typo").exists());
 }
+
+#[test]
+fn show_with_no_forge_to_ask_still_prints_the_record_and_says_it_could_not_ask() {
+    let plane = Plane::new();
+    plane.ok(&["create", "api-2", "--why", "bump"]);
+    plane.ok(&["add", "api-2", "svc"]);
+    let (code, out, _) = plane.change(&["show", "api-2"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("svc  branch change/api-2"), "{out}");
+    assert!(out.contains("read from the forge at"), "{out}");
+    assert!(out.contains("svc  could not ask:"), "{out}");
+    assert!(!out.contains("PASSED"), "{out}");
+}

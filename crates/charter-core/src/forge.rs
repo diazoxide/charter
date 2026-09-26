@@ -35,6 +35,7 @@ use serde_json::Value;
 
 use crate::worktree::git;
 
+pub mod checks;
 pub mod pr;
 
 /// The best-effort budget: an auth check. Python's `base.STATUS_TIMEOUT`.

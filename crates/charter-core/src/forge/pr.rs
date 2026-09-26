@@ -99,13 +99,13 @@ impl Repo {
         Ok(Repo { forge, path })
     }
 
-    fn owner_name(&self) -> (&str, &str) {
+    pub(super) fn owner_name(&self) -> (&str, &str) {
         self.path.split_once('/').unwrap_or((&self.path, ""))
     }
 
     /// Run the forge's CLI with `args` and read its answer as JSON. Any failure is an error
     /// in the CLI's own words; nothing here reads a failure as "none".
-    fn ask(&self, args: Vec<String>, doing: &str) -> Result<Value, String> {
+    pub(super) fn ask(&self, args: Vec<String>, doing: &str) -> Result<Value, String> {
         let kind = self.forge.kind;
         let answer = match call(kind, &args, LIST_TIMEOUT) {
             Ok(answer) => answer,
@@ -131,7 +131,7 @@ impl Repo {
     }
 
     /// `gh api --hostname H [-X METHOD] <path> [fields…]`, or glab's equivalent.
-    fn api(&self, method: Option<&str>, path: &str, fields: &[Field]) -> Vec<String> {
+    pub(super) fn api(&self, method: Option<&str>, path: &str, fields: &[Field]) -> Vec<String> {
         let host = self.forge.host.as_str();
         let mut args = match self.forge.kind {
             Kind::GitHub => strings(&["api", "--hostname", host]),
@@ -153,7 +153,7 @@ impl Repo {
 
 /// One field of an API call.
 #[derive(Clone, Copy)]
-enum Field<'a> {
+pub(super) enum Field<'a> {
     /// `-f`: sent as a literal string. Every value that is not charter's own.
     Text(&'a str, &'a str),
     /// `-F`: typed, so `true` is a boolean and `12` a number. Only for values charter writes,
@@ -359,6 +359,11 @@ pub fn state(repo: &Repo, pr: &Pr) -> Result<State, String> {
         ),
     };
     let record = repo.ask(repo.api(None, &path, &[]), &doing)?;
+    state_of(repo.forge.kind, &record, &doing)
+}
+
+/// The [`State`] one pull or merge request record says, read the same way wherever it came from.
+fn state_of(kind: Kind, record: &Value, doing: &str) -> Result<State, String> {
     let word = record["state"].as_str().unwrap_or("");
     // GitHub says `closed` for a merged PR too; `merged` (and `merged_at`) tell the two apart.
     let merged = record["merged"] == Value::Bool(true) || record["merged_at"].is_string();
@@ -371,17 +376,114 @@ pub fn state(repo: &Repo, pr: &Pr) -> Result<State, String> {
             .filter(|sha| !sha.is_empty())
             .map(str::to_string)
     };
-    let commit = match repo.forge.kind {
+    let commit = match kind {
         Kind::GitHub => named("merge_commit_sha"),
         Kind::GitLab => named("squash_commit_sha").or_else(|| named("merge_commit_sha")),
     };
-    match (repo.forge.kind, word) {
+    match (kind, word) {
         (Kind::GitHub, "open") | (Kind::GitLab, "opened" | "locked") => Ok(State::Open),
         (Kind::GitHub, "closed") if merged => Ok(State::Merged { commit }),
         (Kind::GitHub, "closed") | (Kind::GitLab, "closed") => Ok(State::Closed),
         (Kind::GitLab, "merged") => Ok(State::Merged { commit }),
         _ => Err(format!("{doing}: the forge answered the state {word:?}")),
     }
+}
+
+/// A pull or merge request found by its head branch: what `charter change show` reads of each
+/// member (ADR 0060).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    pub number: u64,
+    pub url: String,
+    pub state: State,
+    /// The commit the request's branch is at, as the forge says. Checks are read at exactly
+    /// this commit and at no other.
+    pub head: String,
+}
+
+/// The newest pull or merge request whose head is `branch`, in any state, or `None` when there
+/// is none. A lookup that fails is an error, never "none": a member with no request and a
+/// forge charter could not ask are different answers.
+pub fn by_head(repo: &Repo, branch: &str) -> Result<Option<Request>, String> {
+    let kind = repo.forge.kind;
+    let (path, doing) = match kind {
+        Kind::GitHub => {
+            let (owner, name) = repo.owner_name();
+            (
+                format!(
+                    "repos/{}/{}/pulls?state=all&head={}:{}&per_page=1",
+                    quote(owner),
+                    quote(name),
+                    quote(owner),
+                    quote(branch)
+                ),
+                format!("finding the pull request from {branch} in {}", repo.path),
+            )
+        }
+        Kind::GitLab => (
+            format!(
+                "projects/{}/merge_requests?source_branch={}&state=all&per_page=100",
+                quote(&repo.path),
+                quote(branch)
+            ),
+            format!("finding the merge request from {branch} in {}", repo.path),
+        ),
+    };
+    let listing = repo.ask(repo.api(None, &path, &[]), &doing)?;
+    // GitLab matches `source_branch` by name across forks too, so only an MR from the project
+    // itself is this member's; GitHub's `owner:branch` already says so.
+    let (found, number_key, url_key, head) = match kind {
+        Kind::GitHub => {
+            let found = first(&listing);
+            // Asked, not assumed: `owner:branch` can match a branch in another repo the owner
+            // holds, and a head filter GitHub cannot parse is ignored rather than refused. A
+            // pull request from anywhere else is not this member's, and printing its checks
+            // as this member's would be the one wrong answer worse than none.
+            if let Some(pr) = found {
+                let from = (
+                    pr["head"]["ref"].as_str(),
+                    pr["head"]["repo"]["full_name"].as_str(),
+                );
+                if from != (Some(branch), Some(repo.path.as_str())) {
+                    return Err(format!(
+                        "{doing}: the forge answered a pull request from {}:{}, not from this \
+                         branch",
+                        from.1.unwrap_or("?"),
+                        from.0.unwrap_or("?")
+                    ));
+                }
+            }
+            let head = found.and_then(|r| r["head"]["sha"].as_str());
+            (found, "number", "html_url", head)
+        }
+        Kind::GitLab => {
+            let found = own_mr(&listing);
+            // A full page with none of the project's own is a page charter could not see past,
+            // which is not "no merge request".
+            let full = listing.as_array().is_some_and(|all| all.len() >= 100);
+            if found.is_none() && full {
+                return Err(format!(
+                    "{doing}: a hundred merge requests from forks share this branch name, and \
+                     charter reads no further"
+                ));
+            }
+            let head = found.and_then(|r| r["sha"].as_str());
+            (found, "iid", "web_url", head)
+        }
+    };
+    let Some(record) = found else {
+        return Ok(None);
+    };
+    let pr = pr_of(record, number_key, url_key, &doing)?;
+    let head = head
+        .filter(|sha| !sha.is_empty())
+        .ok_or_else(|| format!("{doing}: the forge named no head commit"))?;
+    Ok(Some(Request {
+        number: pr.number,
+        url: pr.url,
+        state: state_of(kind, record, &doing)?,
+        head: head.to_string(),
+    }))
 }
 
 /// What a GitHub repo allows, and the PR's node id, in one question.
