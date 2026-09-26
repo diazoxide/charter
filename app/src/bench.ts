@@ -364,6 +364,10 @@ export type Bench = {
     rows: number;
     chunks: number;
     characters: number;
+    /** The history row at the top of the screen: 0 is the oldest, and it grows downwards. */
+    scrolledTo: number;
+    /** Which mouse events the program has asked the terminal to report. */
+    mouseTracking: string;
   }[];
   /** Types into a pane, the way a key press does. */
   type(session: number, text: string): void;
@@ -428,6 +432,8 @@ const bench: Bench = {
       rows: one.terminal.rows,
       chunks: one.chunks,
       characters: one.characters,
+      scrolledTo: one.terminal.buffer.active.viewportY,
+      mouseTracking: one.terminal.modes.mouseTrackingMode,
     })),
   type(session, text) {
     pane(session).terminal.input(text);

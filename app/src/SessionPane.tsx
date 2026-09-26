@@ -12,6 +12,7 @@ import { onAMac } from "./tabKeys";
 import { moveAlong } from "./tabSequence";
 import { onTextSizes, textSizes } from "./textSize";
 import { inForce, onDrawn, xtermTheme } from "./theme/theme";
+import { scrollByDistance } from "./wheel";
 
 /**
  * One pane, drawing one session.
@@ -106,6 +107,9 @@ export function SessionPane({
       return true;
     });
     pane.open(where);
+    // **The wheel scrolls by the distance moved** (SI-4), in the history and to a program that
+    // tracks the mouse alike — not xterm's own answer, which is slow to start (`wheel.ts`).
+    const wheeling = scrollByDistance(pane, where);
     // **A theme drawn while the pane is up is the pane's theme too** (M6.7). xterm is handed an
     // object, not a stylesheet, so nothing about the custom properties changing reaches it: the
     // window would repaint and the terminal — the thing the operator stares at — would not.
@@ -195,6 +199,7 @@ export function SessionPane({
       unfollow();
       unsize();
       watching.disconnect();
+      wheeling.dispose();
       typed.dispose();
       resized.dispose();
       if (view !== undefined) void commands.unwatchSession(plane, session, view);
