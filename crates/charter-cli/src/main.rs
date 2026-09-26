@@ -2239,7 +2239,7 @@ fn todo(
                     return code;
                 }
             }
-            if let Err(e) = charter_core::memstore::forget(root, &dir, slug) {
+            if let Err(e) = ws.forget_todo(slug) {
                 voice::err(&e.to_string());
                 return 1;
             }
@@ -2275,20 +2275,9 @@ fn todo(
             1
         }
         [text] => {
-            // Duplicate INTENT is worse than duplicate memory: closing one of a near-identical
-            // pair leaves its twin looking outstanding, so the list starts lying about what is
-            // left. Warn and skip rather than merge. CONTAINED, as `commands_workspace.py`
-            // contains it: `dup` is the `# ` heading of a file on disk, and since `charter
-            // handoff` a stored title can be a model's prose.
-            if let Some(dup) = charter_core::memstore::duplicate_of(root, &dir, text) {
-                voice::err(&format!(
-                    "already on the list: {}",
-                    charter_core::personas::one_line(&dup)
-                ));
-                voice::info(&format!("  See it: {see}"));
-                return 1;
-            }
-            match ws.add_todo(text, stamp) {
+            // The rule is the core's (`Workspace::record_todo`), so the window's Todos panel
+            // refuses the same todos in the same words.
+            match ws.record_todo(text, stamp) {
                 Ok(path) => {
                     voice::ok(&format!(
                         "Todo recorded in '{name}' → workspaces/{name}/todos/{}",
@@ -2301,8 +2290,13 @@ fn todo(
                     }
                     0
                 }
-                Err(e) => {
-                    voice::err(&e.to_string());
+                Err(refused @ charter_core::workspaces::RecordRefused::AlreadyListed(_)) => {
+                    voice::err(&refused.to_string());
+                    voice::info(&format!("  See it: {see}"));
+                    1
+                }
+                Err(refused) => {
+                    voice::err(&refused.to_string());
                     1
                 }
             }

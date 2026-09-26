@@ -555,3 +555,105 @@ fn removing_a_keyring_vault_says_its_secrets_stay_and_where_they_are_named() {
     assert_eq!(remove(&plane.ctx, "p", &mut io), 0);
     assert!(!io.said().contains("keyring"), "{}", io.said());
 }
+
+/// A keyring that refuses every delete, as a locked or unreachable one does.
+struct RefusesDeletes(crate::secrets::keyring::FileStore);
+
+impl crate::secrets::keyring::Store for RefusesDeletes {
+    fn get(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<crate::secrets::keyring::Secret>, crate::secrets::VaultError> {
+        self.0.get(service, account)
+    }
+    fn set(
+        &self,
+        service: &str,
+        account: &str,
+        value: &str,
+    ) -> Result<(), crate::secrets::VaultError> {
+        self.0.set(service, account, value)
+    }
+    fn delete(&self, _service: &str, _account: &str) -> Result<bool, crate::secrets::VaultError> {
+        Err(crate::secrets::VaultError::new("the keyring is locked"))
+    }
+}
+
+#[test]
+fn destroying_a_keyring_vault_deletes_every_entry_from_the_keyring_and_then_unregisters_it() {
+    use crate::secrets::keyring;
+    let plane = Plane::new(&[]);
+    plane.register("k", "keyring", json!({}), None);
+    let v = registry::vault(&plane.ctx, "k").unwrap();
+    keyring::set(&plane.ctx, &v, "B_TOKEN", "destroy-value-b-51").unwrap();
+    keyring::set(&plane.ctx, &v, "A_TOKEN", "destroy-value-a-37").unwrap();
+    let service = keyring::load_index(&plane.ctx, &v)
+        .unwrap()
+        .service
+        .unwrap();
+
+    let gone = destroy(&plane.ctx, "k").unwrap();
+
+    assert_eq!(gone.provider, "keyring");
+    assert_eq!(gone.destroyed, ["A_TOKEN", "B_TOKEN"]);
+    let store = keyring::store(&plane.ctx);
+    for key in ["A_TOKEN", "B_TOKEN"] {
+        assert!(
+            store.get(&service, key).unwrap().is_none(),
+            "{key} is still in the keyring"
+        );
+    }
+    assert!(
+        !keyring::index_path(&plane.ctx, &v).exists(),
+        "the keys index is left behind"
+    );
+    assert!(
+        registry::vault(&plane.ctx, "k").is_err(),
+        "still registered"
+    );
+}
+
+#[test]
+fn a_keyring_entry_that_cannot_be_deleted_leaves_the_vault_registered_to_try_again() {
+    use crate::secrets::keyring;
+    let plane = Plane::new(&[]);
+    plane.register("k", "keyring", json!({}), None);
+    let v = registry::vault(&plane.ctx, "k").unwrap();
+    keyring::set(&plane.ctx, &v, "A_TOKEN", "destroy-value-a-37").unwrap();
+    let locked = RefusesDeletes(keyring::FileStore::at(
+        plane.ctx.state.join(keyring::STUB_FILE),
+    ));
+
+    let refused = destroy_with(&locked, &plane.ctx, "k").unwrap_err();
+
+    assert!(refused.message.contains("locked"), "{}", refused.message);
+    assert!(
+        registry::vault(&plane.ctx, "k").is_ok(),
+        "unregistered anyway"
+    );
+    assert_eq!(keyring::keys(&plane.ctx, &v).unwrap(), ["A_TOKEN"]);
+}
+
+#[test]
+fn destroying_a_plain_file_vault_unregisters_it_and_leaves_its_file_on_disk() {
+    let plane = Plane::new(&[]);
+    let file = plane.plain("p", json!({"k": "v"}));
+
+    let gone = destroy(&plane.ctx, "p").unwrap();
+
+    assert_eq!(gone.provider, "plain-file");
+    assert!(gone.destroyed.is_empty(), "{:?}", gone.destroyed);
+    assert!(file.exists(), "the file went");
+    assert!(
+        registry::vault(&plane.ctx, "p").is_err(),
+        "still registered"
+    );
+}
+
+#[test]
+fn destroying_a_vault_that_is_not_registered_is_refused() {
+    let plane = Plane::new(&[]);
+    let refused = destroy(&plane.ctx, "nope").unwrap_err();
+    assert!(refused.message.contains("nope"), "{}", refused.message);
+}

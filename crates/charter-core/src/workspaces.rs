@@ -366,6 +366,37 @@ impl Workspace {
         )
     }
 
+    /// Record a todo, unless it has no words or an open todo is already about the same work.
+    ///
+    /// **The one rule a terminal and the window both record by** (SI-3): `charter ws todo
+    /// "<text>"` and the Todos panel's box call this and nothing lower. Duplicate intent is
+    /// worse than duplicate memory: closing one of a near-identical pair leaves its twin
+    /// looking outstanding, so the list starts lying about what is left. It is refused rather
+    /// than merged, naming the todo it repeats ([`memstore::duplicate_of`]).
+    pub fn record_todo(
+        &self,
+        text: &str,
+        stamp: chrono::NaiveDateTime,
+    ) -> Result<PathBuf, RecordRefused> {
+        if text.trim().is_empty() {
+            return Err(RecordRefused::Empty);
+        }
+        let dir = self.dir.join("todos");
+        if let Some(dup) = memstore::duplicate_of(&self.plane_root, &dir, text) {
+            return Err(RecordRefused::AlreadyListed(dup));
+        }
+        self.add_todo(text, stamp).map_err(RecordRefused::Io)
+    }
+
+    /// Drop a todo without closing it: the file and its index line go, and **nothing is
+    /// journalled** — it was abandoned, not done. A slug that is not one path segment is
+    /// refused before anything is looked up ([`memstore::forget`]).
+    pub fn forget_todo(&self, slug: &str) -> io::Result<()> {
+        let dir = self.dir.join("todos");
+        self.writable(&dir)?;
+        memstore::forget(&self.plane_root, &dir, slug)
+    }
+
     /// The title of an open todo about the same work as `text`, or `None` —
     /// `todos.duplicate_of(…, by_title=True)`, the rule `charter handoff` records by.
     ///
@@ -706,6 +737,35 @@ pub(crate) fn scratch_tag() -> String {
     let mixed = nanos ^ (NEXT.fetch_add(1, Ordering::Relaxed) << 32);
     format!("{:012x}", mixed & 0xffff_ffff_ffff)
 }
+
+/// Why [`Workspace::record_todo`] recorded nothing.
+#[derive(Debug)]
+pub enum RecordRefused {
+    /// The text has no words.
+    Empty,
+    /// An open todo is already about the same work: its title.
+    AlreadyListed(String),
+    /// The store could not be written.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for RecordRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("a todo needs some words to say what is to be done"),
+            // CONTAINED and one line: the title is the `# ` heading of a file on disk, and a
+            // handed-off todo's title can be a model's prose.
+            Self::AlreadyListed(title) => write!(
+                f,
+                "already on the list: {}",
+                crate::personas::one_line(title)
+            ),
+            Self::Io(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for RecordRefused {}
 
 /// A containment refusal as an IO error, so every caller handles one kind of failure.
 fn refusal(refused: crate::contain::Refused) -> io::Error {
