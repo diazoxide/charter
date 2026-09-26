@@ -336,9 +336,15 @@ impl Default for Chat {
 #[derive(Debug, Default)]
 pub struct Board {
     chats: std::collections::BTreeMap<u32, Tracked>,
-    /// How many times anything on this board has moved. See [`Board::moved_at`].
-    moves: u32,
 }
+
+/// How many times anything on any board in this process has moved. See [`Board::moved_at`].
+///
+/// **One count for every board, not one each**, because each project has its own board and
+/// the project strip's show-more menu orders projects by their newest move (ADR 0054,
+/// charter#401). Counts taken per board cannot be compared across them: a project that moved
+/// fifty times an hour ago would read above one that moved once just now.
+static MOVES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 #[derive(Debug)]
 struct Tracked {
@@ -596,7 +602,8 @@ impl Board {
         self.stamp(number, changed)
     }
 
-    /// When this chat last moved, as a count of moves on this board — bigger is more recent.
+    /// When this chat last moved, as a count of moves on every board in this process — bigger
+    /// is more recent, on this board and against any other ([`MOVES`]).
     ///
     /// **A count and not a clock, deliberately.** The only thing anything asks of it is an
     /// order: ADR 0039 puts the chat strip's overflow menu in last-activity order,
@@ -653,8 +660,15 @@ impl Board {
     /// second for a century is three billion — and the arithmetic is written down anyway
     /// because `u32` is a boundary this file chose rather than one it was given.
     fn moved(&mut self) -> u32 {
-        self.moves = self.moves.saturating_add(1);
-        self.moves
+        use std::sync::atomic::Ordering;
+        // `fetch_update` only fails when the closure answers `None`, and this one never does,
+        // so both arms hold the count as it was before this move.
+        let was = MOVES
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |was| {
+                Some(was.saturating_add(1))
+            })
+            .unwrap_or_else(|was| was);
+        was.saturating_add(1)
     }
 
     /// The conversation this chat holds NOW, where charter knows one — the id charter started
@@ -1667,6 +1681,30 @@ mod tests {
         assert!(board.exited(1, Some(1)));
 
         assert!(board.moved_at(1) > board.moved_at(2));
+    }
+
+    #[test]
+    fn a_move_on_one_board_counts_past_every_earlier_move_on_another() {
+        // Each project has its own board, and the project strip's show-more menu orders the
+        // projects by their newest move (ADR 0054, charter#401). A count per board would put
+        // a project that moved fifty times an hour ago above one that moved once just now.
+        let mut busy = Board::new();
+        let mut quiet = Board::new();
+        claude_chat(&mut busy, 1, Some(A));
+        claude_chat(&mut quiet, 1, Some(A));
+        for _ in 0..50 {
+            busy.reported(&report(1, Event::UserPromptSubmit, Some(A)));
+            busy.reported(&report(1, Event::Stop, Some(A)));
+        }
+
+        quiet.reported(&report(1, Event::UserPromptSubmit, Some(A)));
+
+        assert!(
+            quiet.moved_at(1) > busy.moved_at(1),
+            "the quiet project moved last and reads {} against {}",
+            quiet.moved_at(1),
+            busy.moved_at(1)
+        );
     }
 
     #[test]

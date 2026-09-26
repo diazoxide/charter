@@ -11,6 +11,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Pinned workspaces stay in the order you pinned them.** The workspace strip draws them in
+  that order, and a workspace you pin later goes after the others. Unpinning one leaves the
+  rest where they were. Pins from an earlier version keep the order they had.
+  ([#402](https://github.com/diazoxide/charter/issues/402))
+- **The project strip's show-more menu lists the most recently active projects first**, after
+  the ones that need you. It used to list them in the strip's order.
+  ([#401](https://github.com/diazoxide/charter/issues/401))
+
 ## [0.3.0] - 2026-09-25
 
 0.3.0 is about extensions you can act through and workspaces that carry their repos. An

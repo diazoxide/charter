@@ -763,10 +763,12 @@ pub struct Recent {
     /// here that no longer names a workspace is a dangling reference and reads as one — see
     /// [`Store::pinned_workspaces`].
     ///
-    /// A set, because a pin has no order of its own: the order a pinned workspace is drawn in
-    /// is the plane's own, filtered. Two operators who pin the same two workspaces see them in
-    /// the same order, which is the plane's.
-    pub pinned_workspaces: std::collections::BTreeSet<String>,
+    /// **In the order they were pinned in**, each name once: a pin is appended, an unpin takes
+    /// its name out, and the workspace strip draws them in this order (ADR 0054, charter#402).
+    /// This was a set drawn in the plane's order until then; a file written that way holds its
+    /// names sorted, which is the plane's own order, so it reads back as the arrangement the
+    /// operator already saw ([`read`]).
+    pub pinned_workspaces: Vec<String>,
     /// Whether [`Store::pin_the_most_active`] has run for this plane (ADR 0054).
     ///
     /// **Beside the pins, because it is a fact about them**: that this operator's workspace
@@ -823,7 +825,7 @@ impl Store {
                 opened: when,
                 trust: None,
                 pinned: false,
-                pinned_workspaces: std::collections::BTreeSet::new(),
+                pinned_workspaces: Vec::new(),
                 most_active_pinned: false,
             },
         };
@@ -900,7 +902,7 @@ impl Store {
             );
         };
         if pinned {
-            if entry.pinned_workspaces.contains(workspace) {
+            if entry.pinned_workspaces.iter().any(|one| one == workspace) {
                 return Ok(false);
             }
             if entry.pinned_workspaces.len() >= MOST_PINNED_WORKSPACES {
@@ -909,10 +911,12 @@ impl Store {
                      Unpin one first."
                 ));
             }
-            entry.pinned_workspaces.insert(workspace.to_owned());
+            entry.pinned_workspaces.push(workspace.to_owned());
             return Ok(true);
         }
-        Ok(entry.pinned_workspaces.remove(workspace))
+        let had = entry.pinned_workspaces.len();
+        entry.pinned_workspaces.retain(|one| one != workspace);
+        Ok(entry.pinned_workspaces.len() != had)
     }
 
     /// The workspaces pinned in `plane` that **still exist**, and the pins that no longer name
@@ -921,8 +925,9 @@ impl Store {
     /// **A dangling pin is named, never drawn.** A workspace renamed or removed on disk leaves
     /// a pin with nothing under it, and a window that drew it would be offering a workspace
     /// the plane does not have — the same hazard ADR 0034 already names for a trust entry
-    /// keyed on a path, one level down. `there` is the plane's own list, so the answer is in
-    /// the plane's order and never in the pin set's.
+    /// keyed on a path, one level down. `there` is the plane's own list and says which pins
+    /// still resolve; the answer is in the order they were pinned in, which is the order the
+    /// workspace strip draws them in (ADR 0054, charter#402).
     pub fn pinned_workspaces<'a>(
         &self,
         plane: &Path,
@@ -931,10 +936,10 @@ impl Store {
         let Some(entry) = self.recent(plane) else {
             return (Vec::new(), Vec::new());
         };
-        let kept = there
+        let kept = entry
+            .pinned_workspaces
             .iter()
-            .copied()
-            .filter(|name| entry.pinned_workspaces.contains(*name))
+            .filter_map(|name| there.iter().copied().find(|one| one == name))
             .collect();
         let gone = entry
             .pinned_workspaces
@@ -989,7 +994,7 @@ impl Store {
             if entry.pinned_workspaces.len() >= MOST_PINNED_WORKSPACES {
                 break;
             }
-            entry.pinned_workspaces.insert(name);
+            entry.pinned_workspaces.push(name);
         }
         entry.most_active_pinned = true;
         true
@@ -1628,11 +1633,17 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
 ///
 /// A name charter would not write is dropped rather than raised, exactly as a remembered plane
 /// is: a pin is an arrangement, and losing one costs the operator a click.
+///
+/// **In the file's order, which is the order they were pinned in** (charter#402). A file an
+/// older charter wrote held the names as a set, written sorted — the plane's own order, since
+/// the plane lists its workspaces sorted by name — so it reads back as the arrangement its
+/// operator already had, with nothing to migrate. A name written twice is kept once, where it
+/// was first.
 fn pinned_workspaces_of(
     raw: Option<&serde_json::Value>,
     dropped: &mut Vec<Dropped>,
-) -> std::collections::BTreeSet<String> {
-    let mut kept = std::collections::BTreeSet::new();
+) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
     for value in array(raw) {
         let Some(name) = value.as_str() else {
             dropped.push(Dropped::Pin {
@@ -1648,6 +1659,11 @@ fn pinned_workspaces_of(
             });
             continue;
         }
+        // Asked before the bound, so a repeat of a name already kept is merged rather than
+        // reported as past it.
+        if kept.iter().any(|one| one == name) {
+            continue;
+        }
         if kept.len() >= MOST_PINNED_WORKSPACES {
             dropped.push(Dropped::Pin {
                 workspace: name.to_owned(),
@@ -1657,7 +1673,7 @@ fn pinned_workspaces_of(
             });
             continue;
         }
-        kept.insert(name.to_owned());
+        kept.push(name.to_owned());
     }
     kept
 }
@@ -3296,19 +3312,81 @@ mod tests {
     }
 
     #[test]
-    fn pinned_workspaces_come_back_in_the_planes_own_order() {
-        // A pin says WHICH workspaces come first, never in what order they do. The order is
-        // the plane's, so two operators who pin the same two see the same arrangement.
+    fn pinned_workspaces_come_back_in_the_order_they_were_pinned_in() {
+        // The workspace strip draws its pins in pin order (ADR 0054, charter#402), so the
+        // plane's own order — alphabetical here — must not win over the operator's.
         let mut store = remembering(&["/planes/a"]);
-        for name in ["zeta", "alpha"] {
+        for name in ["zeta", "alpha", "mu"] {
             store
                 .pin_workspace(Path::new("/planes/a"), name, true)
                 .unwrap();
         }
 
-        let (kept, _) = store.pinned_workspaces(Path::new("/planes/a"), &["zeta", "beta", "alpha"]);
+        let (kept, _) =
+            store.pinned_workspaces(Path::new("/planes/a"), &["alpha", "beta", "mu", "zeta"]);
 
-        assert_eq!(kept, ["zeta", "alpha"]);
+        assert_eq!(kept, ["zeta", "alpha", "mu"]);
+    }
+
+    #[test]
+    fn unpinning_one_in_the_middle_keeps_the_others_order_and_a_repin_goes_last() {
+        let mut store = remembering(&["/planes/a"]);
+        let plane = Path::new("/planes/a");
+        for name in ["zeta", "alpha", "mu"] {
+            store.pin_workspace(plane, name, true).unwrap();
+        }
+
+        assert_eq!(store.pin_workspace(plane, "alpha", false), Ok(true));
+        let (kept, _) = store.pinned_workspaces(plane, &["alpha", "mu", "zeta"]);
+        assert_eq!(kept, ["zeta", "mu"]);
+
+        store.pin_workspace(plane, "alpha", true).unwrap();
+        let (kept, _) = store.pinned_workspaces(plane, &["alpha", "mu", "zeta"]);
+        assert_eq!(kept, ["zeta", "mu", "alpha"]);
+    }
+
+    #[test]
+    fn pin_order_survives_being_written_and_read_back() {
+        let machine = machine();
+        let mut store = remembering(&["/planes/a"]);
+        for name in ["zeta", "alpha", "mu"] {
+            store
+                .pin_workspace(Path::new("/planes/a"), name, true)
+                .unwrap();
+        }
+
+        write(machine.path(), &store).unwrap();
+        let back = read(machine.path()).store;
+
+        let (kept, _) = back.pinned_workspaces(Path::new("/planes/a"), &["alpha", "mu", "zeta"]);
+        assert_eq!(kept, ["zeta", "alpha", "mu"]);
+    }
+
+    #[test]
+    fn a_store_written_before_pins_had_an_order_keeps_its_pins_in_the_planes_order() {
+        // An older charter kept these as a set and wrote them sorted, which is the order the
+        // plane lists its workspaces in. Upgrading must neither lose them nor reshuffle a
+        // strip the operator already knows (charter#402). A name written twice is one pin.
+        let machine = machine();
+        std::fs::create_dir_all(dir(machine.path())).unwrap();
+        std::fs::write(
+            file(machine.path()),
+            br#"{"version":1,"at":0,"recents":[
+                 {"plane":"/planes/a","opened":1,"mostActivePinned":true,
+                  "pinnedWorkspaces":["alpha","ide","ide","zeta"]}]}"#,
+        )
+        .unwrap();
+
+        let mut back = read(machine.path()).store;
+
+        let there = ["alpha", "beta", "ide", "zeta"];
+        let (kept, _) = back.pinned_workspaces(Path::new("/planes/a"), &there);
+        assert_eq!(kept, ["alpha", "ide", "zeta"]);
+        // And the next pin goes after them, as any pin does.
+        back.pin_workspace(Path::new("/planes/a"), "beta", true)
+            .unwrap();
+        let (kept, _) = back.pinned_workspaces(Path::new("/planes/a"), &there);
+        assert_eq!(kept, ["alpha", "ide", "zeta", "beta"]);
     }
 
     /// A plane on disk holding these workspaces, each last active at the second given: its
@@ -3421,9 +3499,11 @@ mod tests {
         assert_eq!(store.pin_workspace(&plane, "epsilon", true), Ok(true));
         assert!(!store.pin_the_most_active(&plane));
 
+        // The one-time pins in the order charter pinned them, most active first, and the
+        // operator's own after them.
         let there = ["alpha", "beta", "delta", "epsilon", "gamma"];
         let (kept, _) = store.pinned_workspaces(&plane, &there);
-        assert_eq!(kept, ["beta", "delta", "epsilon", "gamma"]);
+        assert_eq!(kept, ["delta", "gamma", "beta", "epsilon"]);
     }
 
     #[test]
@@ -3580,7 +3660,7 @@ mod tests {
 
         let entry = store.recent(Path::new("/planes/a")).unwrap();
         assert!(entry.pinned);
-        assert!(entry.pinned_workspaces.contains("ide"));
+        assert_eq!(entry.pinned_workspaces, ["ide"]);
     }
 
     // ---------------------------------------------------------------- the disk question

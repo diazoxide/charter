@@ -370,4 +370,17 @@ describe("the project strip's show-more button", () => {
 
     expect(menuRows(".project-name")).toEqual(["three", "two"]);
   });
+
+  it("with no project needing you, lists hidden projects most recently active first", async () => {
+    // two comes before three on the strip, and three's chat moved last (charter#401).
+    const { move } = threeProjects();
+    render(<App />);
+    await waitFor(() => expect(showMore("project")).toBeInTheDocument());
+    move({ ...asking(TWO, 1, [], 1), state: "running" });
+    move({ ...asking(THREE, 1, [], 2), state: "running" });
+
+    await userEvent.click(showMore("project"));
+
+    expect(menuRows(".project-name")).toEqual(["three", "two"]);
+  });
 });
