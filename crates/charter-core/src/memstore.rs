@@ -191,7 +191,7 @@ pub fn write(
     if index {
         gate(root, &dir.join(INDEX))?;
     }
-    // Replaced whole through the walk from `root` (#434): a link planted at the chosen name
+    // Replaced whole (#434): a link planted at the chosen name
     // after the gate above answered is refused or replaced, never written through, and a
     // crash leaves no half-written memory. Charter's own state is 0600 whatever the file
     // had; a committed store keeps the operator's mode.
@@ -200,7 +200,9 @@ pub fn write(
     } else {
         crate::rewrite::Mode::Kept
     };
-    crate::rewrite::replace(root, &path, body.as_bytes(), mode)?;
+    // Gated from the store itself: `gate` has answered for the directories above it, and a
+    // link among them that stays inside the plane is followed, as it always was.
+    crate::rewrite::replace(dir, &path, body.as_bytes(), mode)?;
     if index {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         index_append(root, &dir.join(INDEX), &name, &title)?;
@@ -474,10 +476,16 @@ fn drop_index_line(root: &std::path::Path, dir: &std::path::Path, filename: &str
     } else {
         format!("{}\n", kept.join("\n"))
     };
-    // Replaced whole, through the walk and never through a link (#434): a link swapped in
-    // after `readable_file` answered is refused rather than truncated through. The index
-    // keeps its mode, as the in-place write kept it.
-    let _ = crate::rewrite::replace(root, &index, body.as_bytes(), crate::rewrite::Mode::Kept);
+    // Replaced whole and never through a link (#434): a link swapped in after
+    // `readable_file` answered is refused or replaced rather than truncated through. Gated
+    // from the store, which `gate` answered for above. A committed index keeps its mode, as
+    // the in-place write kept it; one under `.charter/` is charter's own, and 0600.
+    let mode = if under_state(root, dir) {
+        crate::rewrite::Mode::Private
+    } else {
+        crate::rewrite::Mode::Kept
+    };
+    let _ = crate::rewrite::replace(dir, &index, body.as_bytes(), mode);
 }
 
 // ---------------------------------------------------------------------------------------

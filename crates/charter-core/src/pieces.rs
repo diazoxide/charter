@@ -505,9 +505,12 @@ pub fn seen(
     crate::contain::writable(plane, &path).ok()?;
     std::fs::create_dir_all(path.parent()?).ok()?;
     let text = format!("{}\n", crate::pyjson::dumps_sorted(&Value::Object(blob)));
-    // Replaced whole, through the walk from the plane (#434): a link planted at the record
-    // after the gate above answered is refused or replaced, never written through.
-    crate::rewrite::replace(plane, &path, text.as_bytes(), crate::rewrite::Mode::Kept).ok()?;
+    // Replaced whole (#434): a link at the record is refused, and one planted after the gate
+    // above answered is replaced, never written through. Gated from the record's own
+    // directory: `writable` has already answered for the directories above it, and a link
+    // among them that stays inside the plane is followed, as it always was.
+    let dir = path.parent()?;
+    crate::rewrite::replace(dir, &path, text.as_bytes(), crate::rewrite::Mode::Kept).ok()?;
     Some(path)
 }
 

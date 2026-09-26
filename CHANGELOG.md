@@ -100,6 +100,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - The shared vault registry keeps the permissions it has, where it used to be reset to 0644
     on every write. A new one gets your usual file permissions.
   - `reopen.json` is now private to you (0600). It used to get your usual file permissions.
+    So is a memory index under `.charter/` when charter removes a line from it.
   - Charter's own state files that you made read-only are replaced, as charter owns their
     mode. A read-only shared vault registry, local registry or fingerprint key is refused.
   - A `.gitkeep` that is a symlink stops `charter init`'s front-door persona with an error.

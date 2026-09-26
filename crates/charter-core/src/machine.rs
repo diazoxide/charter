@@ -1339,7 +1339,8 @@ impl Drop for Lock {
 /// bytes go to a file beside the store, are flushed to the disk, and are then `rename`d over
 /// the name. A launch reading at that moment holds a descriptor on the old inode and reads
 /// the whole of the old store; a launch opening afterwards opens the new one. Neither can see
-/// half of one, and a process killed between the two leaves the previous store intact.
+/// half of one, and a process killed between the two leaves the previous store intact with a
+/// stray temp file beside it.
 ///
 /// That is [`crate::rewrite::replace`] with [`crate::rewrite::Mode::Private`] (#434), gated
 /// from the config home: the walk covers the store's path **and** the temp file the bytes

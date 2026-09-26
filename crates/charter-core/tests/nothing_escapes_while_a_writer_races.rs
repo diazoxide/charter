@@ -8,6 +8,10 @@
 //! 20,000 reads. Both are zero now, and both were watched failing at 4,000 rounds before
 //! they were trusted: 423 planted command lines taken, and the record captured outside.
 //!
+//! The record's writer has since moved to `rewrite::replace` (#434), whose temp name no racer
+//! can predict; the victim test below races the record's own name instead, and the ignored
+//! measurement still compares the two gates on a fixed `reopen.json.writing` path.
+//!
 //! **This is a net, not the bite.** The tests that go red the instant `O_NOFOLLOW` is dropped
 //! are in `contain`'s own module, driving the open half without the walk in front of it —
 //! through the public pair the walk answers first, so a planted link is refused either way

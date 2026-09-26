@@ -1221,7 +1221,9 @@ excepted), and for a secret-shaped value, named by its kind.
   `session`, and — only when a persona was resolved — `persona` and `by`
   (`charter/pieces.py:268`–`271`). `by` is `{persona: ts}`, pruned to the last hour
   (`PRESENCE_WINDOW`, `charter/pieces.py:220`) and capped at 8 entries
-  (`PRESENCE_KEEP`, `charter/pieces.py:225`).
+  (`PRESENCE_KEEP`, `charter/pieces.py:225`). charter-app (#434) replaces the record whole
+  (temp beside, fsync, rename) and refuses one that is a symlink; `Path.write_text` truncated
+  it in place and followed a link.
 
 ### `workspaces/<ws>/.charter-structure` — the layout stamp
 
@@ -1697,6 +1699,9 @@ with `", "` (`:907`-`:908`).
     Collision → `-2`, `-3`, … before `.md` (`charter/memstore.py:123`-`:124`).
   - Write goes through `config.write_for` (`charter/memstore.py:131`); outside
     `.charter/` that is a plain `open`, so the umask decides the mode. Not atomic.
+    charter-app (#434) replaces the file whole through `rewrite::replace` (temp beside,
+    fsync, rename), under the store's own mode rules, and never writes through a link at
+    the file; the index's line removal is replaced the same way.
   - Date used by `stats`/`recall --since`: in-body `_YYYY-MM-DD` stamp
     (`^_(\d{4}-\d{2}-\d{2})[ T]`, multiline — `charter/memstore.py:147`), falling back to a
     `YYYYMMDD-` filename prefix (`:160`).
@@ -2478,7 +2483,9 @@ line carries): `--env NAME=<key>`, `--file ENVVAR=<key>` (0600 temp file, prefix
   `:76`). **Git:** ignored with the rest of `.charter/`.
 - **Encoding:** `os.urandom(32)`, no newline; 0600 fchmod'ed and read back before the write,
   refusing on any `0o077` bit; a file of the wrong length is regenerated
-  (`charter/secrets/fingerprint.py:94`, `:111`).
+  (`charter/secrets/fingerprint.py:94`, `:111`). charter-app (#434) replaces the key whole
+  (temp beside, created 0600 and read back, fsync, rename) and refuses a key that is a
+  symlink; a crash mid-write leaves the old file.
 - **Fingerprint format on output:** `fp:` + first 12 hex chars of
   `HMAC-SHA256(key, value.encode("utf-8"))` (`charter/secrets/fingerprint.py:134`). The
   masked line is `<size band> · fp:<12 hex>`, or just the band when no key can be made
@@ -3276,8 +3283,10 @@ will see this directory, and whoever next changes the app should find its format
 down rather than read off the code.
 
 ### `app/reopen.json`
-- **Format:** JSON, `indent=2`, trailing `\n`. Written beside itself as
-  `reopen.json.writing` and renamed over, so a launch never reads half of one.
+- **Format:** JSON, `indent=2`, trailing `\n`. Replaced whole by `rewrite::replace`: written
+  to a temp file beside it (`.charter-generated.reopen.json.<pid>.<tag>.tmp`), flushed and
+  renamed over, so a launch never reads half of one. Mode 0600. A `reopen.json` that is a
+  symlink is refused (#434).
 - **Status:** **internal** — written and read by the app alone. Deleting it costs one
   relaunch's worth of chats: the app starts with none open, which is what a first launch
   does anyway. No second process reads it, which is what would make it stable.

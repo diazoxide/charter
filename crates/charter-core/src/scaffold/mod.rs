@@ -1100,12 +1100,13 @@ fn front_door(run: &mut Run, root: &Path, name: &str) {
         return;
     }
     let role = text::py_title(&name.replace(['-', '_'], " "));
-    fn scaffold(root: &Path, dir: &Path, name: &str, role: &str) -> std::io::Result<()> {
+    fn scaffold(dir: &Path, name: &str, role: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        // Through the walk and never through a link (#434): the paths were gated above, and
-        // a link that lands in between is refused or replaced rather than written through.
+        // Never through a link (#434): the paths were gated above — a link on the way that
+        // stays inside the plane is followed, as it always was — and a link that lands at the
+        // file in between is refused or replaced rather than written through.
         crate::rewrite::replace(
-            root,
+            dir,
             &dir.join("persona.md"),
             front_door_text(name, role).as_bytes(),
             crate::rewrite::Mode::Kept,
@@ -1116,7 +1117,7 @@ fn front_door(run: &mut Run, root: &Path, name: &str) {
         }
         Ok(())
     }
-    if let Err(e) = scaffold(root, &root.join(&rel), name, &role) {
+    if let Err(e) = scaffold(&root.join(&rel), name, &role) {
         write_failed(run, &root.join(&rel), &e);
         return;
     }
