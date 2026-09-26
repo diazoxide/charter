@@ -508,6 +508,32 @@ pub fn table(rows: &[Row], color: bool) -> String {
     out
 }
 
+/// `charter doctor --fix`'s one plane repair: the default ask rule for `charter report --yes`
+/// (ADR 0059, amended 2026-09-26), when the plane or the directory the doctor runs in lacks it.
+/// Written by `charter guard ask`'s own writer, every harness or none, and carried into every
+/// workspace layer charter generates. What that command prints and its exit status, or `None`
+/// when there is no plane or nothing to add.
+pub fn fix_report_rule(cwd: &Path) -> Option<(String, u8)> {
+    let root = canonical(&crate::plane::resolve(cwd).ok()?);
+    if !root.join(crate::plane::MANIFEST).is_file() {
+        return None;
+    }
+    let here = canonical(cwd);
+    let whole = |at: &Path| rules::report_rule_missing(&root, at).is_ok_and(|m| m.is_empty());
+    // The session directory counts only where a charter command writes its settings: the plane
+    // root and a workspace or its clone. Anywhere else nothing `--fix` does could reach it.
+    let reached = here == root || rules::reinit_reaches(&root, &here);
+    if whole(&root) && (!reached || whole(&here)) {
+        return None;
+    }
+    Some(crate::guardcmd::report(
+        &root,
+        crate::scaffold::settings::REPORT_RULE,
+        crate::guardcmd::Bucket::Ask,
+        false,
+    ))
+}
+
 /// The exit status: non-zero only when something is a blocker. A WARN — every row that could
 /// not be checked among them — is not "you cannot work".
 pub fn exit_code(rows: &[Row]) -> u8 {

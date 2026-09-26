@@ -243,9 +243,10 @@ enum Command {
         /// one. Every other check runs.
         #[arg(long)]
         preflight: bool,
-        /// Install charter's plugin for chats started outside the app first — what
-        /// `charter plugin install` does, each change printed on stderr — then report. It
-        /// writes this machine's harness settings only, never a file in the plane.
+        /// Repair first, then report: install charter's plugin for chats started outside the
+        /// app (what `charter plugin install` does), and add the plane's default ask rule for
+        /// `charter report --yes` when it is missing (what `charter guard ask` does). Each
+        /// change is printed on stderr.
         #[arg(long)]
         fix: bool,
     },
@@ -560,6 +561,9 @@ enum GuardCommand {
     },
     /// Always prompt before a handoff runs: the rule `charter init` writes, put back.
     Handoff,
+    /// Always prompt before `charter report … --yes` files an issue: the rule `charter init`
+    /// writes, put back (ADR 0059).
+    Report,
     /// Show this plane's ask and allow rules, by the file each lives in.
     List,
 }
@@ -2016,6 +2020,7 @@ fn run(command: Command) -> Result<u8, String> {
                     (pattern.as_str(), Bucket::Allow, *local)
                 }
                 Some(GuardCommand::Handoff) => (guardcmd::HANDOFF_PATTERN, Bucket::Ask, false),
+                Some(GuardCommand::Report) => (guardcmd::REPORT_PATTERN, Bucket::Ask, false),
             };
             let rule = match guardcmd::as_rule(pattern) {
                 Ok(rule) => rule,
@@ -2673,9 +2678,9 @@ fn with_here(f: impl FnOnce(&Here) -> u8) -> ExitCode {
 
 /// `charter doctor`: every check, as a table or as `--json`, and the verdict as the exit.
 ///
-/// **`--fix` is refused, not ignored.** Python's installs the Claude Code plugin before it
-/// reports, so the report reads as the state after the repair; this charter installs nothing
-/// yet, and a report printed under that flag would be read as one.
+/// `--fix` repairs before it reports, so the report reads as the state after the repair, as
+/// Python's did when it installed the Claude Code plugin first. Its repairs are charter's plugin
+/// (#373) and the plane's ask rule for `charter report --yes` (ADR 0059).
 fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
     use std::io::IsTerminal;
 
@@ -2703,6 +2708,11 @@ fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The plane repair: the ask rule a report is filed behind (ADR 0059, amended 2026-09-26).
+    if fix && let Some((said, code)) = charter_core::doctor::fix_report_rule(&cwd) {
+        eprint!("{said}");
+        fix_failed |= code != 0;
+    }
     let rows = charter_core::doctor::Doctor::new(&cwd, preflight).run();
     if json {
         print!("{}", charter_core::doctor::json(&rows));

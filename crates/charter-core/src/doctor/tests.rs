@@ -1694,10 +1694,14 @@ fn an_ask_rule_that_shadows_a_persona_tool_is_named_with_who_declares_it() {
     )
     .unwrap();
     std::fs::create_dir_all(root.join(".claude")).unwrap();
-    assert_eq!(one(&root, "ask rules").detail, "none");
+    std::fs::write(
+        root.join("opencode.json"),
+        r#"{"permission": {"bash": {"charter report *--yes*": "ask"}}}"#,
+    )
+    .unwrap();
     std::fs::write(
         root.join(".claude/settings.json"),
-        r#"{"permissions": {"ask": ["Bash(kubectl apply *)", "Bash(terraform *)"]}}"#,
+        r#"{"permissions": {"ask": ["Bash(charter report *--yes*)", "Bash(kubectl apply *)", "Bash(terraform *)"]}}"#,
     )
     .unwrap();
     let r = one(&root, "ask rules");
@@ -1705,13 +1709,82 @@ fn an_ask_rule_that_shadows_a_persona_tool_is_named_with_who_declares_it() {
     assert_eq!(r.detail, "kubectl prompt(s) despite being declared by ops");
     std::fs::write(
         root.join(".claude/settings.json"),
-        r#"{"permissions": {"ask": ["Bash(terraform *)"]}}"#,
+        r#"{"permissions": {"ask": ["Bash(charter report *--yes*)", "Bash(terraform *)"]}}"#,
     )
     .unwrap();
     assert_eq!(
         one(&root, "ask rules").detail,
-        "1 rule(s), none shadow a persona tool"
+        "2 rule(s), none shadow a persona tool"
     );
+}
+
+#[test]
+fn outside_a_plane_no_ask_rules_is_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let here = std::fs::canonicalize(dir.path()).unwrap();
+    let rows = Doctor::at(&here, &here, true, true).run();
+    let r = row(&rows, "ask rules");
+    assert_eq!((r.status, r.detail.as_str()), (Status::Ok, "none"), "{r:?}");
+}
+
+// ---- the default ask rule for `charter report --yes` (#363, ADR 0059 amended) --------------
+
+#[test]
+fn a_plane_without_the_report_rule_is_flagged_and_fix_adds_it() {
+    let (_d, root) = plane("schema = 1\n");
+    let r = one(&root, "ask rules");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "no ask rule for `charter report --yes` under claude-code, opencode"
+    );
+    assert!(r.hint.contains("`charter doctor --fix`"), "{r:?}");
+
+    let (said, code) = super::fix_report_rule(&root).expect("something to fix");
+    assert_eq!(code, 0, "{said}");
+    assert!(
+        said.contains("claude-code: asking for Bash(charter report *--yes*)"),
+        "{said}"
+    );
+    let r = one(&root, "ask rules");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(r.detail, "1 rule(s), none shadow a persona tool");
+    assert!(
+        std::fs::read_to_string(root.join("opencode.json"))
+            .unwrap()
+            .contains("\"charter report *--yes*\": \"ask\""),
+    );
+
+    // Nothing left to add: `--fix` says nothing and writes nothing.
+    assert!(super::fix_report_rule(&root).is_none());
+}
+
+#[test]
+fn the_report_rule_under_one_harness_only_names_the_other() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    std::fs::write(
+        root.join(".claude/settings.local.json"),
+        r#"{"permissions": {"ask": ["Bash(charter report *--yes*)"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        one(&root, "ask rules").detail,
+        "no ask rule for `charter report --yes` under opencode"
+    );
+}
+
+#[test]
+fn a_report_rule_check_that_cannot_read_a_file_does_not_call_the_rule_missing() {
+    let (_d, root) = plane("schema = 1\n");
+    std::fs::write(root.join("opencode.json"), "{broken").unwrap();
+    let r = one(&root, "ask rules");
+    assert!(r.detail.starts_with("not checked ("), "{r:?}");
+    // And `--fix` writes nowhere, saying which file stopped it.
+    let (said, code) = super::fix_report_rule(&root).expect("a refusal to say");
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("Nothing was written"), "{said}");
+    assert!(!root.join(".claude/settings.json").exists());
 }
 
 #[test]

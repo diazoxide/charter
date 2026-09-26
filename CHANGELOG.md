@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The harness asks you before `charter report` files an issue.** `charter init` now writes an
+  ask rule for `charter report *--yes*` in `.claude/settings.json` and `opencode.json`, beside
+  the one for `charter handoff`, so a chat cannot file a public report without your yes.
+  `charter reinit` adds it to an existing plane and carries it into your workspaces.
+  `charter doctor`'s `ask rules` row warns when it is missing, and `charter guard report` or
+  `charter doctor --fix` puts it back. So `--fix` now writes the plane's committed harness
+  settings too, not only this machine's. Codex has no rule that can say this, so nothing is
+  written there (ADR 0059).
 - **`charter change` declares a piece of work that spans several repos.** `create` names it
   and says why, `add` puts in a repo already cloned in the workspace (on `change/<slug>` or a
   branch you name, with `--needs` for the repos that must land first), `drop` takes one out
