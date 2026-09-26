@@ -126,6 +126,14 @@ Commits an agent makes with plain git are fine: the next save pushes them.
 - **Incoming changes:** it fetches every five minutes and on window focus, and fast-forwards a
   clean tree. With auto-save off, incoming changes are shown and not pulled.
 
+**Outside the app, the plane is saved only through `charter save`** (#375). A chat the app did
+not start (a terminal `claude` or `codex`) has no auto-save and no incoming loop, and no
+daemon stands in for them. `charter save --pull` runs the incoming loop's fetch and
+fast-forward first, through the same core function, so one command does both from a terminal.
+The fast-forward waits on the same conditions. If the tree has unsaved work, what came in is
+left where it is and the save goes ahead. If the tree has conflicts, the command refuses and
+saves nothing, because a save would stage the conflict markers.
+
 Defaults:
 
 | Scope | `autosave` |

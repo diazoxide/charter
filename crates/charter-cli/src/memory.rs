@@ -8,9 +8,9 @@
 //!
 //! Two things this binary does not do, and says so where a command meets them:
 //!
-//! - **Commit memory reactively.** A plane whose `[memory] share` is `commit` or `push` has
-//!   charter commit each memory as it is written. That is the plane-git layer, not ported;
-//!   the memory is written and the operator is told it was not committed.
+//! - **Commit memory reactively.** A plane whose `[memory] share` is `commit` or `push` had
+//!   the Python charter commit each memory as it was written. Here a memory travels with the
+//!   plane's next save: the app's auto-save, or, outside the app, `charter save` (ADR 0051).
 //! - **Follow a slug out of the store.** `workspace forget` takes one path segment. charter's
 //!   own resolver accepts more than that; this does not, and that is deliberate.
 

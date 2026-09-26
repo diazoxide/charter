@@ -41,7 +41,9 @@ A clone is its own git repository, so committing there touches *its* history and
 plane's. Push per that repo's workflow.
 
 The plane's own tracked files are a separate concern — `charter save` commits and pushes
-those.
+those. A chat the app did not start, such as a terminal `claude`, gets no auto-save: there
+the plane is saved only when `charter save` runs, and `charter save --pull` first brings in
+what the remote has.
 
 ## The boundary that is easy to get wrong
 

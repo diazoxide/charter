@@ -12,8 +12,8 @@
 //! handoff` once the app has opened the chat. Without the hook rows the roster `charter docs`
 //! draws would count only what the Python charter once logged. Committing the log is not done
 //! here: under `share = "commit"` or `"push"` the Python hook commits each row as it lands, and
-//! charter-app leaves that to `charter save`, which commits the plane's own files as one
-//! decision.
+//! charter-app leaves that to the plane's next save — auto-save in the app, `charter save`
+//! outside it (ADR 0051) — which commits the plane's own files as one decision.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -154,6 +154,10 @@ pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, host: &str) ->
 /// Append one row, keys sorted, as `json.dumps(…, sort_keys=True)` writes it — the three
 /// `dispatch.record*` writers' shared body. `None` when containment refuses the path or the
 /// write fails.
+///
+/// **Opened `O_NOFOLLOW`** (#420): containment answers for the path when it is asked, and a
+/// link swapped in at the log between that answer and the open would otherwise be followed.
+/// A log that is a link is refused wherever it points; `std` opens `O_CLOEXEC` already.
 pub fn append(path: &Path, root: &Path, row: &serde_json::Value) -> Option<PathBuf> {
     use std::io::Write;
     crate::contain::writable(root, path).ok()?;
@@ -165,7 +169,7 @@ pub fn append(path: &Path, root: &Path, row: &serde_json::Value) -> Option<PathB
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o644);
     }
-    let mut file = options.open(path).ok()?;
+    let mut file = crate::contain::nofollow(&mut options).open(path).ok()?;
     let line = format!("{}\n", crate::pyjson::dumps_sorted(row));
     file.write_all(line.as_bytes()).ok()?;
     Some(path.to_path_buf())
@@ -350,6 +354,28 @@ mod tests {
              \"ts\": \"2026-05-04T11:32:17+00:00\"}\n"
         );
         assert!(tally(dir.path()).is_empty(), "a handoff is not a dispatch");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_log_that_is_a_link_is_refused_and_what_it_points_at_is_left_alone() {
+        // A link that stays INSIDE the plane's data directories passes containment, so only
+        // the open's own `O_NOFOLLOW` stands between the row and the file the link names (#420).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+        let when = chrono::DateTime::parse_from_rfc3339("2026-05-04T11:32:17+00:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let victim = dir.path().join("personas/devops/memory/fact.md");
+        std::fs::create_dir_all(victim.parent().unwrap()).unwrap();
+        std::fs::write(&victim, "PRECIOUS\n").unwrap();
+        let log = path_for(dir.path(), when, "box");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&victim, &log).unwrap();
+
+        assert_eq!(record(dir.path(), "devops", when, "box"), None);
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "PRECIOUS\n");
+        assert!(std::fs::symlink_metadata(&log).unwrap().is_symlink());
     }
 
     #[test]
