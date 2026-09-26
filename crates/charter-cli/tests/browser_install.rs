@@ -3,8 +3,8 @@
 //! `.claude/skills/playwright-cli/` in the directory it runs in — and records its argv.
 //!
 //! **Nothing here writes outside the test's own directory.** The binary is a fenced build: a
-//! plane outside `$CHARTER_PLANE_FENCE` ends the process before the generator runs, which
-//! the last test holds.
+//! plane outside `$CHARTER_PLANE_FENCE` ends the process when the plane is resolved, before
+//! the generator could run, which the last test holds.
 
 #![cfg(unix)]
 
@@ -114,7 +114,7 @@ fn a_plane_outside_the_fence_is_never_generated_into() {
     let out = charter(&s, &["browser", "install"], Some(elsewhere.path()));
     assert!(!out.status.success());
     assert!(
-        err(&out).contains("a fenced build refused"),
+        err(&out).contains("a fenced build refused to resolve the plane"),
         "{}",
         err(&out)
     );

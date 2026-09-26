@@ -208,10 +208,11 @@ The app ships its own `charter`, and every chat the app starts finds that one fi
 ## What a chat brings with it
 
 Nothing has to be installed into Claude Code or Codex. The bundle carries its own Claude Code
-plugin, `charter-app` (`Contents/Resources/plugin` on macOS, `/usr/lib/charter/plugin` on
+plugin, `charter` (`Contents/Resources/plugin` on macOS, `/usr/lib/charter/plugin` on
 Linux), and each Claude Code chat the app starts loads it for that session alone with
-`--plugin-dir`: charter's hooks, its Bash guard, and the `handoff`, `working-in-a-clone`, `update`, `persona`, `secrets` and `browser` skills. The same chat turns the Python charter's `charter@charter` plugin off for
-itself, so a plane whose settings enable that plugin for your terminal sessions does not give
+`--plugin-dir`: charter's hooks, its Bash guard, and the `handoff`, `working-in-a-clone`,
+`update`, `persona`, `secrets` and `browser` skills. The same chat turns the Python charter's
+`charter@charter` plugin off for itself, so a plane whose settings enable that plugin for your terminal sessions does not give
 an app chat two sets of hooks. A Codex chat is armed the same way with `-c` flags. A `claude`
 or `codex` you run in a terminal is untouched, and an update to the app updates all of it.
 
