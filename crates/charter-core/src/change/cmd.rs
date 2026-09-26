@@ -410,7 +410,7 @@ pub fn list(plane: &Path, ws: &str, say: &mut dyn FnMut(Say)) -> u8 {
     }
     let listing = store::read_all(plane, ws);
     if let Some(unread) = listing.unread {
-        say(Say::Fail(unread));
+        say(Say::Fail(unread.why));
         return 1;
     }
     if listing.records.is_empty() && listing.refused.is_empty() {

@@ -207,8 +207,9 @@ fn every_deferred_row_says_it_did_not_check_and_why() {
         .into_iter()
         .filter(|r| r.hint == deferred::DEFERRED_HINT)
         .collect();
-    // #373 checks python3 and the three plugin rows now; the rest are still deferred.
-    assert!(deferred.len() >= 15, "{deferred:?}");
+    // #373 checks python3 and the three plugin rows now, and #468 the changes row; the rest
+    // are still deferred.
+    assert!(deferred.len() >= 14, "{deferred:?}");
     for r in deferred {
         assert!(r.detail.starts_with("not checked ("), "{r:?}");
         assert!(r.detail.ends_with(')'), "{r:?}");
@@ -1810,4 +1811,126 @@ fn a_git_identity_with_a_carriage_return_or_an_escape_is_quoted_on_one_line() {
         r.detail,
         "Ann\\x0d  \u{2713}  forged\\x0asecond <a@example.invalid\\x1b[2K>"
     );
+}
+
+// ---- changes ---------------------------------------------------------------------------------
+
+/// A clone at `workspaces/<ws>/<repo>` with one commit, and `branches` beside `main`.
+fn clone_with(root: &Path, ws: &str, repo: &str, branches: &[&str]) {
+    let dir = root.join("workspaces").join(ws).join(repo);
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q", "-b", "main", "."]);
+    git(&dir, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    for b in branches {
+        git(&dir, &["branch", b]);
+    }
+}
+
+fn change_record(root: &Path, ws: &str, slug: &str, members: &[(&str, &str)]) {
+    let mut rec = crate::change::Record::new(slug, "why", "t", "2026-09-26T00:00:00+00:00");
+    for (repo, branch) in members {
+        rec.members.push(crate::change::Member {
+            repo: (*repo).into(),
+            branch: (*branch).into(),
+            needs: vec![],
+        });
+    }
+    crate::change::store::write(root, ws, &rec).unwrap();
+}
+
+#[test]
+fn changes_with_none_anywhere_is_ok_and_says_none() {
+    let (_t, root) = plane("");
+    std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+    let r = one(&root, "changes");
+    assert_eq!((r.status, r.detail.as_str()), (Status::Ok, "none"));
+    assert!(!r.deferred());
+}
+
+#[test]
+fn changes_are_counted_across_every_workspace_not_only_the_active_one() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    clone_with(&root, "beta", "web", &[]);
+    change_record(&root, "alpha", "a", &[("svc", "change/a")]);
+    change_record(&root, "beta", "b", &[]);
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(r.detail, "2 change(s), none divergent");
+}
+
+#[test]
+fn an_unreadable_record_is_a_fail_that_names_it() {
+    let (_t, root) = plane("");
+    std::fs::create_dir_all(root.join("workspaces/alpha/changes")).unwrap();
+    std::fs::write(
+        root.join("workspaces/alpha/changes/bad.json"),
+        r#"{"change": "bad", "why": "x", "created": "t", "by": "b", "members": [], "excluded": [], "state": "landed"}"#,
+    )
+    .unwrap();
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail);
+    assert!(
+        r.detail
+            .starts_with("unreadable record(s): alpha/bad: change 'bad': unknown key state"),
+        "{}",
+        r.detail
+    );
+    assert!(r.hint.contains("charter change list"), "{}", r.hint);
+}
+
+#[test]
+fn a_members_branch_in_a_clone_that_is_in_no_change_is_a_fail() {
+    let (_t, root) = plane("");
+    clone_with(&root, "alpha", "svc", &["change/a"]);
+    clone_with(&root, "alpha", "web", &["change/a"]);
+    change_record(&root, "alpha", "a", &[("svc", "change/a")]);
+    let r = one(&root, "changes");
+    assert_eq!(r.status, Status::Fail, "{r:?}");
+    assert!(
+        r.detail.contains(
+            "alpha: web: has branch change/a, which change 'a' declares — and this repo is a \
+             member of no change"
+        ),
+        "{}",
+        r.detail
+    );
+    assert!(!r.detail.contains("svc:"), "{}", r.detail);
+}
+
+#[test]
+fn a_changes_directory_it_cannot_list_is_named_beside_the_verdict() {
+    let (_t, root) = plane("");
+    change_record(&root, "alpha", "a", &[]);
+    let outside = root.parent().unwrap().join(format!(
+        "outside-{}",
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(root.join("workspaces/beta")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("workspaces/beta/changes")).unwrap();
+    let r = one(&root, "changes");
+    std::fs::remove_dir_all(&outside).ok();
+    assert_eq!(
+        r.status,
+        Status::Warn,
+        "never OK over a store it did not read: {r:?}"
+    );
+    assert!(
+        r.detail.starts_with("1 change(s), none divergent"),
+        "{}",
+        r.detail
+    );
+    assert!(r.detail.contains("cannot be checked"), "{}", r.detail);
+}
+
+#[test]
+fn the_changes_check_never_reaches_a_network() {
+    let source = include_str!("changes.rs");
+    for word in ["fetch", "ls-remote", "forge::", "pull", "remote update"] {
+        assert!(
+            !source.contains(word),
+            "the changes row runs from SessionStart and reads only this disk: {word}"
+        );
+    }
 }

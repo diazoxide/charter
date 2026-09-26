@@ -96,8 +96,17 @@ pub struct Listing {
     pub records: Vec<Record>,
     /// `(file stem, why)` for each record charter would not act on. Reported, never dropped.
     pub refused: Vec<(String, String)>,
-    /// A `changes/` that exists and could not be listed, with why. Never read as "none".
-    pub unread: Option<String>,
+    /// A `changes/` that exists and could not be listed. Never read as "none".
+    pub unread: Option<Unread>,
+}
+
+/// A directory charter could not look at: where, the OS error number when there was one, and
+/// the sentence to say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unread {
+    pub path: PathBuf,
+    pub errno: Option<i32>,
+    pub why: String,
 }
 
 /// Every record in the workspace. A `changes/` that does not exist is no changes; one that
@@ -109,7 +118,11 @@ pub fn read_all(plane: &Path, ws: &str) -> Listing {
         return listing;
     }
     if let Err(e) = contain::readable(plane, &d) {
-        listing.unread = Some(e.to_string());
+        listing.unread = Some(Unread {
+            path: d,
+            errno: None,
+            why: e.to_string(),
+        });
         return listing;
     }
     let names = match std::fs::read_dir(&d) {
@@ -122,7 +135,11 @@ pub fn read_all(plane: &Path, ws: &str) -> Listing {
             names
         }
         Err(e) => {
-            listing.unread = Some(format!("could not list {}: {e}", d.display()));
+            listing.unread = Some(Unread {
+                why: format!("could not list {}: {e}", d.display()),
+                errno: e.raw_os_error(),
+                path: d,
+            });
             return listing;
         }
     };
