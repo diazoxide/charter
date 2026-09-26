@@ -33,6 +33,73 @@ body {
   margin: 0;
 }
 
+/* **Chrome is not selectable; content is** (SI-7). The operator's ruling: a drag or a
+   double-click on a tab, a row, a button or a caption must not leave words highlighted, which
+   in a desktop app reads as a web page leaking through. So nothing selects unless it opts in
+   below, and what opts in is what someone reads in order to copy it.
+
+   The switch is on the root and NOT on `*`: `auto`, which every other element has, resolves to
+   its parent's `none` or `text`, so one opt-in covers everything inside it. A `*` rule would
+   set `none` on each child of an opted-in element again.
+
+   **The two rules after this one are `:where`, so they have no specificity and the order of
+   the three is the whole cascade** — the opt-ins, then the controls, the later winning. Any utility
+   (`select-text`) still beats both. `selection.test.ts` resolves the rules the same way and
+   refuses a `user-select` written anywhere else in this file.
+
+   The title bar also relies on this: Tauri's drag handler calls `preventDefault` only on the
+   press it acts on, and a drag that began on a word would otherwise leave the word highlighted
+   behind the moving window.
+
+   xterm is left alone: `.xterm` sets `none` itself in the vendor layer and draws its own
+   selection, and its helper textarea is kept out of the field opt-in so nothing here changes
+   how the terminal takes input. */
+:root {
+  user-select: none;
+}
+
+/* Content: what is typed; paths, names and commands set as code; a view's answer (a memory, a
+   persona, statistics); an error, wherever it is said; the words of a dialog, an alert dialog
+   or a popover card (Radix gives each of those its role, and a row's card is portalled out of
+   the view it belongs to). A revealed vault value is `<code class="vault-value">`, so `code`
+   already covers it. */
+:where(
+  :is(input, textarea, [contenteditable]):not(.xterm *),
+  code,
+  pre,
+  .view-body,
+  .trouble,
+  [role="alert"],
+  .alert-detail,
+  [role="dialog"],
+  [role="alertdialog"]
+) {
+  user-select: text;
+}
+
+/* Controls, even inside content: pressing a button, a row or a label is not selecting its words,
+   and a name set as code inside one is part of the control. A field inside a label is not the
+   label, so it keeps the opt-in above. */
+:where(
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="menuitemradio"],
+  [role="menuitemcheckbox"],
+  [role="option"],
+  label,
+  summary,
+  :is(button, [role="button"], [role="tab"], label, summary) :is(code, pre)
+) {
+  user-select: none;
+}
+
+/* A link or an image pressed and pulled does not come away as a dragged ghost of itself. */
+:where(a, img) {
+  -webkit-user-drag: none;
+}
+
 /* **Wherever Tab can land, it is seen landing** (charter-app#189). Every stop in the window
    now says `tabindex`, and a stop with no ring is one the operator has to find by pressing
    Enter to see what happens. Most controls draw their own ring in this same token, inset,
@@ -3170,10 +3237,7 @@ h2.sidebar-title .node-icon {
   background: var(--surface-deep);
   border-bottom: 1px solid var(--border-subtle);
   overflow: hidden;
-  /* A bar the pointer can grab is not one the pointer selects text in. Tauri's handler calls
-     `preventDefault` on the press it acts on, but only on the press it acts on — a drag that
-     began on a word would otherwise leave the word highlighted behind the moving window. */
-  user-select: none;
+  /* Not selectable, like all chrome: see "Chrome is not selectable" near the top. */
 }
 
 /* The project strip, in the bar. It takes what the right-hand end and the drag stretch leave,
@@ -3752,7 +3816,8 @@ h2.sidebar-title .node-icon {
 }
 
 /* A revealed value, under its name: the only place one is ever drawn, for 30 seconds. It wraps
-   rather than widening the table, and is selectable, because reading it is what it is for. */
+   rather than widening the table, and is selectable (it is `code`: the opt-in list near the top),
+   because reading it is what it is for. */
 .vault-value {
   display: block;
   margin: 0 0 0.25rem 0.5rem;
@@ -3763,7 +3828,6 @@ h2.sidebar-title .node-icon {
   font-size: 0.8rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  user-select: text;
 }
 
 /* What a copy said. Takes no room while it says nothing, but stays in the page: a live region
