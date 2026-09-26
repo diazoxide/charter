@@ -1,5 +1,6 @@
 //! The memory commands: `charter recall`, `charter workspace remember|note|recall|forget|
-//! optimize` and `charter persona remember|recall` — `charter/commands.py:cmd_recall`,
+//! optimize` and `charter persona remember|recall|forget|dedupe|optimize|log` —
+//! `charter/commands.py:cmd_recall`,
 //! `commands_workspace.py` and `commands_persona.py`, with their output byte for byte.
 //!
 //! **What an agent reads is the contract.** `charter recall` runs at session start and on
@@ -236,6 +237,64 @@ pub enum PersonaCommand {
         /// Log lines to show / max search hits (default: 8).
         #[arg(long, default_value_t = 8, allow_negative_numbers = true)]
         log: i64,
+    },
+    /// Delete one memory by slug/filename.
+    ///
+    /// The work is [`charter_core::personaverbs::upkeep::forget`].
+    Forget {
+        name: String,
+        slug: String,
+        /// From the cross-persona _shared store.
+        #[arg(long)]
+        shared: bool,
+        /// From this session's scratch.
+        #[arg(long)]
+        ephemeral: bool,
+    },
+    /// Report near-duplicate memories (Jaccard overlap) to prune.
+    ///
+    /// The work is [`charter_core::personaverbs::upkeep::dedupe`].
+    Dedupe {
+        /// The persona (default: the active one).
+        name: Option<String>,
+        /// Overlap to flag (0-1).
+        #[arg(long, default_value_t = charter_core::memstore::DUPLICATE_THRESHOLD)]
+        threshold: f64,
+    },
+    /// Curate persona memory: auto-apply safe ops (--apply: collapse exact dups + repair
+    /// index) and print the proposals for a person to decide.
+    ///
+    /// The work is [`charter_core::personaverbs::upkeep::optimize`].
+    Optimize {
+        /// Only this persona, or _shared (default: all + _shared).
+        name: Option<String>,
+        /// Every persona and _shared (same as omitting the name).
+        #[arg(long)]
+        all: bool,
+        /// Auto-apply the safe/reversible ops (else read-only report).
+        #[arg(long)]
+        apply: bool,
+        /// Age (days) past which a memory is proposed for archival.
+        #[arg(long, default_value_t = 90, allow_negative_numbers = true)]
+        stale_days: i64,
+        /// Pin today's date, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
+    /// Append to (with a message) or show the persona's activity in this session.
+    ///
+    /// The work is [`charter_core::personaverbs::upkeep::log`].
+    Log {
+        /// The persona (default: the active one).
+        name: Option<String>,
+        /// Message to append; omit to show recent entries.
+        message: Option<String>,
+        /// How many entries to show.
+        #[arg(short = 'n', default_value_t = 20, allow_negative_numbers = true)]
+        n: i64,
+        /// Pin the clock, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
     },
 }
 
@@ -701,84 +760,29 @@ pub fn workspace_optimize(
         voice::info("No workspaces to optimize.");
         return Ok(0);
     }
-    let mut actions_total = 0;
-    let mut unread: Unread = Vec::new();
-    for n in &names {
-        let dir = root.join("workspaces").join(n).join("memory");
-        if !dir.exists() {
-            continue;
-        }
-        let rep = match charter_core::curate::report(root, &dir, stale_days, 0.5, today) {
-            Ok(rep) => rep,
-            Err(missed) => {
-                voice::unread(root, &missed);
-                unread.extend(missed);
-                continue;
-            }
-        };
-        if rep.total == 0 {
-            continue;
-        }
-        println!(
-            "\n◆ {n}  ({} memories · {} exact-dup group(s) · {} near-dup pair(s) · {} stale)",
-            rep.total,
-            rep.exact_dups.len(),
-            rep.near_dups.len(),
-            rep.stale.len()
-        );
-        let rep = if apply {
-            let actions = match charter_core::curate::apply_safe(root, &dir, today) {
-                Ok(actions) => actions,
-                Err(missed) => {
-                    voice::unread(root, &missed);
-                    unread.extend(missed);
-                    continue;
-                }
-            };
-            for action in &actions {
-                voice::ok(&format!("  auto: {action}"));
-            }
-            actions_total += actions.len();
-            if !actions.is_empty() {
-                reactive(plane);
-            }
-            match charter_core::curate::report(root, &dir, stale_days, 0.5, today) {
-                Ok(rep) => rep,
-                Err(missed) => {
-                    voice::unread(root, &missed);
-                    unread.extend(missed);
-                    continue;
-                }
-            }
-        } else {
-            let pending = charter_core::curate::pending_auto(&rep);
-            if !pending.is_empty() {
-                println!("  would auto-apply (re-run with --apply):");
-                for p in pending {
-                    println!("    + {p}");
-                }
-            }
-            rep
-        };
-        let proposals = charter_core::curate::proposals(&rep);
-        if !proposals.is_empty() {
-            println!("  proposals (not auto-applied — decide these yourself):");
-            for p in proposals {
-                println!("    ? {p}");
-            }
-        } else if apply {
-            voice::info("  clean — nothing to propose.");
-        }
-    }
-    if !apply {
-        voice::info(
-            "\nRead-only. Re-run with --apply to auto-apply the safe/reversible ops (exact-dup \
-             collapse + index repair); proposals always stay manual.",
-        );
-    } else if actions_total == 0 {
-        voice::info("\nNo safe ops to apply — the journal is already tidy.");
-    }
-    Ok(if unread.is_empty() { 0 } else { 1 })
+    let stores: Vec<charter_core::curate::Store> = names
+        .iter()
+        .map(|n| charter_core::curate::Store {
+            label: n.clone(),
+            dir: root.join("workspaces").join(n).join("memory"),
+            verified_pct: None,
+        })
+        .collect();
+    let words = charter_core::curate::Optimizing {
+        apply,
+        stale_days,
+        today,
+        proposals: "  proposals (not auto-applied — decide these yourself):",
+        tidy: "\nNo safe ops to apply — the journal is already tidy.",
+    };
+    let mut sink = crate::speak;
+    Ok(charter_core::curate::optimize(
+        root,
+        &stores,
+        &words,
+        &mut || reactive(plane),
+        &mut sink,
+    ))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -998,6 +1002,84 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
                 &mut sink,
             ))
         }
+        PersonaCommand::Forget {
+            name,
+            slug,
+            shared,
+            ephemeral,
+        } => {
+            let ask = charter_core::personaverbs::upkeep::Forget {
+                name: &name,
+                slug: &slug,
+                shared,
+                ephemeral,
+                session: &session(),
+            };
+            let mut sink = crate::speak;
+            let (code, changed) =
+                charter_core::personaverbs::upkeep::forget(plane.root(), &ask, &mut sink);
+            if changed {
+                reactive(plane);
+            }
+            Ok(code)
+        }
+        PersonaCommand::Dedupe { name, threshold } => {
+            let Some(name) = here.active_persona(name.as_deref().filter(|n| !n.is_empty())) else {
+                return Ok(1);
+            };
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::upkeep::dedupe(
+                plane.root(),
+                &name,
+                threshold,
+                &mut sink,
+            ))
+        }
+        PersonaCommand::Optimize {
+            name,
+            all,
+            apply,
+            stale_days,
+            now,
+        } => {
+            let ask = charter_core::personaverbs::upkeep::Optimize {
+                name: name.as_deref(),
+                all,
+                apply,
+                stale_days,
+                today: stamp(now.as_deref())?.date(),
+            };
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::upkeep::optimize(
+                plane.root(),
+                &ask,
+                &mut || reactive(plane),
+                &mut sink,
+            ))
+        }
+        PersonaCommand::Log {
+            name,
+            message,
+            n,
+            now,
+        } => {
+            let Some(name) = here.active_persona(name.as_deref().filter(|n| !n.is_empty())) else {
+                return Ok(1);
+            };
+            let ask = charter_core::personaverbs::upkeep::Log {
+                name: &name,
+                message: message.as_deref(),
+                n,
+                session: &session(),
+                now: stamp(now.as_deref())?,
+            };
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::upkeep::log(
+                plane.root(),
+                &ask,
+                &mut sink,
+            ))
+        }
         PersonaCommand::Recall { name, query, log } => {
             let Some(name) = here.active_persona(name.as_deref().filter(|n| !n.is_empty())) else {
                 return Ok(1);
@@ -1180,21 +1262,7 @@ fn persona_recall(
             acts.len()
         ));
         for act in &acts {
-            let extra: Vec<String> = act
-                .iter()
-                .filter(|(k, _)| !matches!(k.as_str(), "ts" | "event" | "persona"))
-                .map(|(k, v)| format!("{k}={}", py_str(v)))
-                .collect();
-            let ts = act.get("ts").map(py_str).unwrap_or_default();
-            let event = match act.get("event") {
-                Some(serde_json::Value::Number(n)) => {
-                    let n = n.to_string();
-                    format!("{n:>10}")
-                }
-                Some(v) => format!("{:<10}", py_str(v)),
-                None => format!("{:<10}", ""),
-            };
-            out.push_str(&format!("  {ts}  {event} {}\n", extra.join("  ")));
+            out.push_str(&format!("  {}\n", charter_core::trace::activity_line(act)));
         }
     }
     print!("{out}");
@@ -1222,15 +1290,4 @@ fn index_text(root: &Path, dir: &Path) -> String {
     memstore::read_text(&index)
         .map(|t| memstore::py_strip(&t).to_string())
         .unwrap_or_else(|| "(no index)".to_string())
-}
-
-/// `str(value)` for a JSON value, as Python prints one it read with `json.loads` —
-/// [`charter_core::pyrepr::str_json`].
-///
-/// **This crate had the second copy of the pair.** `charter-core`'s `inventory` had the other,
-/// and the two parted on a number: this one wrote `n.to_string()`, which under
-/// `arbitrary_precision` is the LITERAL the file held, so `1E5` was quoted back as `1E5` where
-/// Python — which reads it as a float and prints its `repr` — writes `100000.0`.
-fn py_str(value: &serde_json::Value) -> String {
-    charter_core::pyrepr::str_json(value)
 }

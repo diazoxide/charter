@@ -28,6 +28,7 @@ pub mod show;
 pub mod stats;
 #[cfg(test)]
 mod tests_plane;
+pub mod upkeep;
 
 /// `vault: none` — a persona that deliberately holds no credentials. `persona.NO_VAULT`.
 pub const NO_VAULT: &str = "none";

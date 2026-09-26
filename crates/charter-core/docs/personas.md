@@ -5,7 +5,8 @@ your work needs. Workspaces decide *which repos*; personas decide *who is workin
 they know*.
 
 The CLI's `charter persona` has `create`, `show`, `list`, `use`, `current`, `clear`,
-`default`, `remove`, `lint`, `remember`, `recall`, `secret`, `sync-agents` and `stats`.
+`default`, `remove`, `lint`, `remember`, `recall`, `forget`, `dedupe`, `optimize`, `log`,
+`secret`, `sync-agents` and `stats`.
 
 ```
 charter persona create qa --role "QA Engineer" --delegate-when "test plans, flaky suites"
@@ -17,6 +18,15 @@ charter persona lint                       # dangling uses:/extends:, missing ro
 charter persona sync-agents                # a Claude Code sub-agent per persona, in .claude/agents/
 charter persona stats                      # roster health: memory, verification, dispatches
 charter persona remove qa                  # refused while another persona extends or uses it
+```
+
+A persona's memory is kept up the way a workspace's is:
+
+```
+charter persona forget devops <slug>       # delete one memory (--shared, --ephemeral)
+charter persona dedupe devops              # near-duplicate pairs, to forget one of
+charter persona optimize                   # curate every persona and _shared; --apply the safe ops
+charter persona log devops "<note>"        # note to this session's activity; no note shows it
 ```
 
 `create` writes `personas/<name>/persona.md` as a **draft** (`draft: true`), with its
