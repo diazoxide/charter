@@ -86,6 +86,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrapped it onto the next row, and on the bottom row it scrolled the pane by one line. The
   pane now draws the blank that the terminal holds there.
   ([#435](https://github.com/diazoxide/charter/issues/435))
+- **A pane that opens late shows what a pane that was open all along shows, around wide
+  characters.** When a program deleted, inserted, erased or wrote over half of a wide
+  character, such as a CJK character, the open pane blanked it and a pane opened later still
+  showed it, until the program redrew that row. The same could happen after a program deleted
+  or inserted characters, or moved a row down or up, right after writing the last column: the
+  next character landed in the last column in one pane and on the next row in the other. A few
+  more cases, such as deleting more characters than the row had left, now come out the same in
+  both panes too. ([#441](https://github.com/diazoxide/charter/issues/441))
 - **The extension tests no longer fail on a busy machine.** Extensions still get the same time
   as before: 5 seconds for a view, an action, an event or a command, and at a chat's start 2
   seconds each and 3 seconds for all of them together. A debug build of `charter` now lets the

@@ -3,9 +3,10 @@
 //! This is how a pane that opens late catches up: the UI's terminal plays the snapshot, then
 //! the session's output from that moment on (VS Code reconnects its terminals the same way).
 //!
-//! A wide character pushed into the last column, where the terminal has no room for the
-//! second half it needs, is drawn as a blank in its colours: printing it there would wrap it
-//! onto the next row. That holds for the cell reprinted to leave a wrap pending as well.
+//! A wide character without its second half after it, such as one pushed into the last
+//! column, where the terminal has no room for the second half it needs, is drawn as a blank in
+//! its colours: printing it in the last column would wrap it onto the next row. That holds
+//! for the cell reprinted to leave a wrap pending as well.
 //!
 //! The second half of a wide character is written in the character's own pen. In the original
 //! it can hold another character's pen, after cells deleted beside it shifted that one in.
@@ -32,7 +33,7 @@
 
 use std::fmt::Write as _;
 
-use alacritty_terminal::grid::{Cursor, Dimensions};
+use alacritty_terminal::grid::{Cursor, Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Term, TermMode};
@@ -67,26 +68,7 @@ pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
             if spacer_of_a_wide_character(row, column) {
                 continue;
             }
-            let cell = &row[column];
-            if !out.drawable_cell(cell, column, columns) {
-                continue;
-            }
-            if cell.flags.contains(Flags::WIDE_CHAR)
-                && !(column.0 + 1 < columns
-                    && row[column + 1].flags.contains(Flags::WIDE_CHAR_SPACER))
-            {
-                // The terminal has just written a blank after the wide character, where this
-                // terminal has something else. That blank is deleted rather than written
-                // over, because writing over it erases the wide character itself. The cursor
-                // is one past the blank, unless the blank is the row's last cell, where it
-                // sits on it with a wrap pending that stepping aside clears.
-                out.plain();
-                out.text(if column.0 + 2 < columns {
-                    "\x1b[D\x1b[P"
-                } else {
-                    "\x1b[D\x1b[C\x1b[P"
-                });
-            }
+            out.drawable_cell(row, column);
         }
         if drawn < columns {
             // Whatever is left of the row is blank in the original. It is erased rather than
@@ -143,7 +125,7 @@ pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
             column -= 1;
         }
         out.move_to_point(cursor.point.line, column);
-        out.drawable_cell(&row[column], column, columns);
+        out.drawable_cell(row, column);
     } else {
         out.move_to(cursor);
     }
@@ -217,19 +199,21 @@ impl Out {
         }
     }
 
-    /// `cell` in `column` of a row `columns` wide, as it can be drawn there. Returns whether
-    /// the cell was drawn as itself.
+    /// The cell in `column` of `row`, as it can be drawn there.
     ///
-    /// A wide character pushed into the last column by cells being inserted has no room for
-    /// its second half. Printed there, it would wrap onto the next row instead, or scroll the
-    /// screen from the bottom row. So its colours are drawn as the blank they surround.
-    fn drawable_cell(&mut self, cell: &Cell, column: Column, columns: usize) -> bool {
-        if column.0 + 1 == columns && cell.flags.contains(Flags::WIDE_CHAR) {
-            self.blank(cell);
-            false
-        } else {
+    /// A wide character is drawn as the blank its colours surround when the cell after it is
+    /// not its second half: in the last column, pushed there by cells being inserted, printing
+    /// it would wrap it onto the next row, or scroll the screen from the bottom row. The engine
+    /// blanks both as the pane does (see `pane_rules`), so neither is expected here.
+    fn drawable_cell(&mut self, row: &Row<Cell>, column: Column) {
+        let cell = &row[column];
+        let whole = !cell.flags.contains(Flags::WIDE_CHAR)
+            || (column.0 + 1 < row.len()
+                && row[column + 1].flags.contains(Flags::WIDE_CHAR_SPACER));
+        if whole {
             self.cell(cell);
-            true
+        } else {
+            self.blank(cell);
         }
     }
 
@@ -260,7 +244,7 @@ impl Out {
 /// narrow for it, and one whose character was later overwritten — are printed as the blanks
 /// they are, which keeps the rest of the row in place. Only their markers are lost, and
 /// nothing draws them.
-fn spacer_of_a_wide_character(row: &alacritty_terminal::grid::Row<Cell>, column: Column) -> bool {
+fn spacer_of_a_wide_character(row: &Row<Cell>, column: Column) -> bool {
     row[column].flags.contains(Flags::WIDE_CHAR_SPACER)
         && column.0 > 0
         && row[column - 1].flags.contains(Flags::WIDE_CHAR)
