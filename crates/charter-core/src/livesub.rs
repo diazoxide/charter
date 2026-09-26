@@ -1,4 +1,4 @@
-//! Would the SHELL run a command substitution on this line? — `_live_substitution`.
+//! Would the SHELL run a command or process substitution on this line? — `_live_substitution`.
 //!
 //! A port of `charter/hooks.py`'s `_live_substitution` and the four scanners it walks with:
 //! `_ansi_c_end`, `_double_quoted_substitution`, `_heredoc_substitution` and
@@ -32,7 +32,9 @@
 //!
 //! # Known divergences from a shell, each in the direction of denying MORE
 //!
-//! * `$((…))` arithmetic reads as `$(` ([`SUBSTITUTIONS`]);
+//! * `$((…))` arithmetic reads as `$(` ([`SUBSTITUTIONS`]), and a `<(` or `>(` inside `((…))` or
+//!   `$[…]` arithmetic reads as live ([`PROCSUB`]);
+//! * a `#` comment is read as text, so a substitution inside one reads as live;
 //! * an unterminated quote or heredoc leaves the rest of the string literal, which is what a
 //!   shell does with the whole command — it refuses to run it;
 //! * a substitution's own contents are never scanned, because the verdict is already in.
@@ -65,14 +67,60 @@ pub const SUBSTITUTIONS: [&str; 2] = ["`", "$("];
 /// live costs nothing where it does not run.
 pub const FUNSUB: &str = "${";
 
+/// Process substitution, which runs its command and hands the program a path its output can be
+/// read from: `<(…)` and `>(…)` in bash and zsh, and zsh's `=(…)`, which hands it a temporary
+/// file instead ([`process_substitution_at`]). The frozen Python did not read any of them.
+///
+/// Only UNQUOTED text runs one. Inside `"…"`, `'…'`, `$'…'` and a heredoc body, expanding or not,
+/// `<(` is two characters in both shells, so [`double_quoted_substitution`] and
+/// [`heredoc_substitution`] do not look for these.
+///
+/// **Arithmetic is not told apart**, although it runs none of them (`((1<(x)))`, `$[1<(x)]`).
+/// Whether `((` opens arithmetic depends on where it stands, which a character walk cannot see,
+/// and each wrong guess fails OPEN: zsh reads `x (a|((1<(y))))` as a glob that runs `y`, and bash
+/// runs `y` in `[[ a && ((1<(y))) ]]` and in `${v:-a;((1<(y)))}` (checked against GNU bash
+/// 3.2.57 and zsh 5.9). So a `<(` in arithmetic reads as live, the direction [`SUBSTITUTIONS`]
+/// already reads `$((` in.
+pub const PROCSUB: [&str; 3] = ["<(", ">(", "=("];
+
+/// Whether zsh would NOT run a `=(` whose `=` is at `i`, because it ends a name being assigned
+/// (`a=(…)`, `a[1]=(…)`, `a+=(…)` are arrays) or follows a quote that is part of the same word
+/// (`""=(…)`). Everywhere else the `=(` reads as live: zsh runs it at the start of a word, as
+/// the value of an assignment (`v==(…)`) and as the operand of a `${…}` operator
+/// (`${v:-=(…)}`), and bash refuses the whole command, so reading more positions as live costs
+/// nothing where it does not run.
+fn equals_ends_a_name(chars: &[char], i: usize) -> bool {
+    let name_end = |c: char| c.is_alphanumeric() || c == '_' || c == ']';
+    match i.checked_sub(1).map(|k| chars[k]) {
+        Some(c) if name_end(c) || c == '"' || c == '\'' => true,
+        Some('+') => i >= 2 && name_end(chars[i - 2]),
+        _ => false,
+    }
+}
+
 /// Whether `cmd` may hold a live substitution at all — the cheap test a hot-path guard asks
 /// before [`live_substitution`].
 ///
 /// It must never answer no where the walk would answer yes, so it looks for each spelling with a
-/// backslash-newline allowed after the `$`: the shell removes that pair before it reads the line,
-/// and `"$\<newline>(x)"` runs `x`.
+/// backslash-newline allowed after its first character: the shell removes that
+/// pair before it reads the line, and `"$\<newline>(x)"` runs `x`.
 pub fn may_substitute(cmd: &str) -> bool {
-    cmd.contains('`') || cmd.contains("$(") || cmd.contains("${") || cmd.contains("$\\\n")
+    let spellings = || SUBSTITUTIONS[1..].iter().chain(&[FUNSUB]).chain(&PROCSUB);
+    cmd.contains('`')
+        || spellings().any(|s| cmd.contains(s))
+        // A spelling's first character with a backslash-newline after it.
+        || cmd.match_indices("\\\n").any(|(at, _)| {
+            cmd[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| spellings().any(|s| s.starts_with(c)))
+        })
+}
+
+/// Whether a spelling [`live_substitution`] answers is a process substitution ([`PROCSUB`]),
+/// which a denial names differently from a command substitution.
+pub fn is_process_substitution(spelling: &str) -> bool {
+    PROCSUB.contains(&spelling)
 }
 
 /// Whether a bash 5.3 `${ …; }` or `${| …; }` substitution opens at `i`. See [`FUNSUB`].
@@ -91,6 +139,22 @@ fn substitution_at(chars: &[char], i: usize) -> Option<&'static str> {
         Some('`') => Some("`"),
         Some('$') if spliced_end(chars, i, "$(").is_some() => Some("$("),
         Some('$') if funsub_at(chars, i) => Some(FUNSUB),
+        _ => None,
+    }
+}
+
+/// The process substitution that opens at `i` in UNQUOTED text, if one does. See [`PROCSUB`].
+///
+/// `<(` and `>(` open one anywhere in a word — `--body-file=<(x)`, `a<(x)b`, `2>(x)` — with a
+/// backslash-newline allowed inside, which bash removes first. `<<(` is zsh's redirection of a
+/// `<(…)`; `>>(` needs no arm of its own, because its second `>` opens a `>(`. `=(` opens one
+/// unless it ends a name or a quoted part of a word ([`equals_ends_a_name`]).
+pub fn process_substitution_at(chars: &[char], i: usize) -> Option<&'static str> {
+    match chars.get(i)? {
+        '<' if spliced_end(chars, i, "<(").is_some() => Some("<("),
+        '<' if starts_with(chars, i, "<<(") => Some("<("),
+        '>' if spliced_end(chars, i, ">(").is_some() => Some(">("),
+        '=' if spliced_end(chars, i, "=(").is_some() && !equals_ends_a_name(chars, i) => Some("=("),
         _ => None,
     }
 }
@@ -226,8 +290,12 @@ pub fn heredoc_bodies(
 /// expanding body alike (`$\<newline>(x)` runs `x`; [`spliced_end`]), but not inside `'…'` or
 /// `$'…'`; and bash 5.3 runs `${ x; }` ([`FUNSUB`]).
 ///
-/// The return is a `&'static str` rather than a `String` because the answer is one of exactly
-/// three fixed spellings — it is the SHAPE that is reported, never a character of the command
+/// Process substitution ([`PROCSUB`]) was checked against GNU bash 3.2.57 and zsh 5.9 when it was
+/// added: live unquoted, in the middle of a word and inside an unquoted `${…}`, and inert inside
+/// any quotes and in any heredoc body.
+///
+/// The return is a `&'static str` rather than a `String` because the answer is one of six
+/// fixed spellings — it is the SHAPE that is reported, never a character of the command
 /// line, which is the same rule [`crate::credguard::single_credential_hit`]'s shape field keeps
 /// and for the same reason: this value reaches a trace file that outlives the conversation.
 pub fn live_substitution(cmd: &str) -> Option<&'static str> {
@@ -269,6 +337,9 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
         {
             // A `$'…'` the shell reads, not the tail of `$$` — its own backslash rule ends it.
             i = ansi_c_end(chars, open);
+        } else if let Some(hit) = process_substitution_at(chars, i) {
+            // Before the `<<` arm, which would read zsh's `<<(` as a heredoc header.
+            return Some(hit);
         } else if c == '<' && starts_with(chars, i, "<<<") {
             // A here-STRING, not a heredoc: its word is an ordinary one and the loop must judge
             // it as such — ``<<<"a `x` b"`` runs `x`. All THREE characters are stepped over
@@ -524,5 +595,103 @@ mod tests {
         }
         assert_eq!(live_substitution("x \"${HOME}\" ${a:-b}"), None);
         assert_eq!(live_substitution("x '${ y; }'"), None);
+    }
+
+    /// `<(…)` and `>(…)` run their command wherever the shell reads them unquoted: as a word, in
+    /// the middle of one, after a redirection's digit and inside an unquoted `${…}`. Checked
+    /// against GNU bash 3.2.57 and zsh 5.9. A `<\<newline>(` is bash's (the pair is removed
+    /// first); `>>(` and `<<(` are zsh's, which reads them as a redirection and a substitution.
+    #[test]
+    fn a_process_substitution_is_live_where_the_shell_reads_it() {
+        for (cmd, want) in [
+            ("gh x --body-file <(y)", "<("),
+            ("x >(y)", ">("),
+            ("x --body-file=<(y)", "<("),
+            ("x a<(y)b", "<("),
+            ("x 2>(y)", ">("),
+            ("x >>(y)", ">("),
+            ("x <<(y)", "<("),
+            ("x ${v:-<(y)}", "<("),
+            ("x \"$v\"<(y)", "<("),
+            ("x $'a'<(y)", "<("),
+            ("x <\\\n(y)", "<("),
+            ("x >\\\n(y)", ">("),
+            ("cat <<< <(y)", "<("),
+            ("cat <<'E' <(y)\nb\nE\n", "<("),
+            ("cat <<'E'\nb\nE\nx <(y)", "<("),
+        ] {
+            assert_eq!(live_substitution(cmd), Some(want), "{cmd:?}");
+            assert!(may_substitute(cmd), "{cmd:?}");
+        }
+    }
+
+    /// Quoted, escaped or in a heredoc body, `<(` is two characters: neither shell runs it.
+    #[test]
+    fn a_quoted_process_substitution_is_not_live() {
+        for cmd in [
+            "x \"<(y)\"",
+            "x '<(y)'",
+            "x $'<(y)'",
+            "x \\<(y)",
+            "x \"${v:-<(y)}\"",
+            "x \"a >(y)\"",
+            "cat <<E\n<(y)\nE\n",
+            "cat <<'E'\n>(y)\nE\n",
+            "cat <<<(y)",
+            "x '<\\\n(y)'",
+        ] {
+            assert_eq!(live_substitution(cmd), None, "{cmd:?}");
+        }
+    }
+
+    /// zsh runs `=(…)` at the start of a word, as an assignment's value and as a `${…}`
+    /// operand, and bash refuses the whole command, so reading it as live costs nothing where it
+    /// does not run. After a name (`a=(…)`, an array assignment) it is not a substitution in
+    /// either shell. Checked against zsh 5.9 and GNU bash 3.2.57.
+    #[test]
+    fn a_zsh_equals_substitution_is_live_where_zsh_runs_it() {
+        for cmd in [
+            "v==(y)",
+            "a+==(y)",
+            "F==(y) sh -c x",
+            "x ${v:-=(y)}",
+            "gh x --body-file ${v:-=(y)}",
+            "=(y)",
+            "gh x --body-file =(y)",
+            "x;=(y)",
+            "x|=(y)",
+            "x >=(y)",
+            "(=(y))",
+            "x\t=(y)",
+            "x =\\\n(y)",
+        ] {
+            assert_eq!(live_substitution(cmd), Some("=("), "{cmd:?}");
+            assert!(may_substitute(cmd), "{cmd:?}");
+        }
+        for cmd in [
+            "x a=(y)",
+            "a=(1 2)",
+            "a+=(y)",
+            "a[1]=(y)",
+            "x ${v:-a+=(y)}",
+            "x \"\"=(y)",
+            "x '=(y)'",
+            "x \"=(y)\"",
+            "x \\=(y)",
+        ] {
+            assert_eq!(live_substitution(cmd), None, "{cmd:?}");
+        }
+    }
+
+    /// Arithmetic does not run a process substitution, and this walk does not tell arithmetic
+    /// apart from the rest of the line: whether `((` opens it depends on where it stands, which
+    /// a character walk cannot see. In zsh `x (a|((1<(y))))` is a glob that runs `y`; in bash
+    /// `[[ a && ((1<(y))) ]]` and `${v:-a;((1<(y)))}` run it. So `<(` in arithmetic reads as
+    /// live, the direction `$((` already reads in.
+    #[test]
+    fn a_process_substitution_in_arithmetic_reads_as_live() {
+        assert_eq!(live_substitution("((1<(y)))"), Some("<("));
+        assert_eq!(live_substitution("x $[1<(y)]"), Some("<("));
+        assert_eq!(live_substitution("x $((1<(y)))"), Some("$("));
     }
 }

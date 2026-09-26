@@ -124,6 +124,17 @@ rows:
   in none of GNU bash 3.2.57, 5.2.15 and 5.3 and zsh 5.9. The Python refused it only because
   its pattern did not see that heredoc. Rows 177 and 1606 are still refused by the leak guard.
 
+**And where the live-substitution walk reads process substitution.** The frozen Python's walk
+(`_live_substitution`) looked only for `` ` `` and `$(`, so it answered "nothing live" for a line
+whose only substitution is a process substitution, which the shell runs all the same. The walk
+now reads `<(` and `>(` wherever they stand unquoted, and zsh's `=(` wherever zsh runs it, so
+27 rows record the spelling the walk now finds in the `ls` key instead of `null`:
+`shellseg-oracle.jsonl` rows 33 and 34, and generated rows 72, 125, 181, 232, 256, 272, 419,
+426, 428, 480, 490, 575, 697, 787, 819, 995, 1016, 1176, 1335, 1403, 1928, 2002, 2038, 2116 and
+2294.
+`ls` is the only key that moved: no A5, A6 or A7 answer changed on any row, because none of
+those lines is a prose command the guards judge.
+
 ## The session recording
 
 Re-record with:

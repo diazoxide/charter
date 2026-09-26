@@ -180,6 +180,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The prose guards treat a process substitution as the substitution it is.** A `gh` or
+  `glab` command that publishes prose, a charter command that persists it, and `charter
+  handoff` now refuse `<(…)` and `>(…)` wherever the shell runs them, and zsh's `=(…)`, exactly
+  as they refuse `$(…)`. Quoted, or in a heredoc body, they are text and are left alone. The
+  refusal names a process substitution rather than calling it a command substitution.
+
 - **The nightly mutation run finishes again.** Its shards were sized for a test suite half as
   long as today's, so two of them ran out of time. The run now uses smaller shards and a longer
   per-mutant limit. It also stops reporting slow survivors as timeouts. New tests now cover the
