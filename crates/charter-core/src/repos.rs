@@ -117,6 +117,25 @@ pub fn clones(plane: &Path, ws: &str) -> Result<Clones, Trouble> {
     Ok(found)
 }
 
+/// The clone `name` resolves to in workspace `ws`, or `None`.
+///
+/// For a name somebody typed or a record carries, rather than one read off the directory: the
+/// name must be one entry ([`contain::segment_ok`], so `.github` is a name and `..` is not),
+/// the path must stay inside the workspace without passing through a link, and its `.git`
+/// must be a directory. A link out of the workspace, a plain directory and a linked worktree
+/// are all `None`.
+pub fn clone_at(plane: &Path, ws: &str, name: &str) -> Option<Repo> {
+    if !contain::segment_ok(name) {
+        return None;
+    }
+    let dir = confine::workspace_dir(plane, ws).ok()?;
+    let path = confine::within_workspace(plane, ws, &dir.join(name)).ok()?;
+    matches!(git_at(&path), Git::Directory).then(|| Repo {
+        name: name.to_string(),
+        path,
+    })
+}
+
 /// What sits where a clone's `.git` would be.
 ///
 /// Three answers and not two, for the same reason `state_of` has three: "not a clone" and

@@ -34,6 +34,7 @@ use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
+mod change;
 mod extcmd;
 mod extensions;
 mod guard;
@@ -98,6 +99,12 @@ enum Command {
     /// Pieces: worktrees of a workspace's clones — cut, declared done or abandoned, removed.
     #[command(subcommand, alias = "wt")]
     Worktree(piece::WorktreeCommand),
+
+    /// A cross-repo change: one piece of work across several of a workspace's repos — why,
+    /// which repos, which branch in each, and which must land first
+    /// (workspaces/<ws>/changes/<slug>.json).
+    #[command(subcommand)]
+    Change(change::ChangeCommand),
 
     /// Harness profiles: which program a chat runs, and with what environment.
     #[command(subcommand)]
@@ -2076,6 +2083,7 @@ fn run(command: Command) -> Result<u8, String> {
         Command::Recall(args) => return memory::recall(&here, args),
         Command::Persona(command) => return memory::persona(&here, command),
         Command::Worktree(command) => return piece::run(&here, command),
+        Command::Change(command) => return change::run(&here, command),
         Command::Workspace(WorkspaceCommand::Remember {
             text,
             title,
