@@ -1,8 +1,9 @@
 import { realpathSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { $, $$, browser, expect } from "@wdio/globals";
+import { $, browser, expect } from "@wdio/globals";
 import { anEmptyRecord, copyFixturePlane } from "../harness.js";
 import { closeProject } from "../opening.js";
+import { attributesOfEach } from "../reading.js";
 
 /**
  * A project tab split into an OS window of its own, and moved back (charter#126; ADR 0033,
@@ -54,12 +55,15 @@ async function ask<T>(command: string, args: Record<string, unknown> = {}): Prom
   return answer.ok as T;
 }
 
-/** The paths of the project tabs in the window the driver is in. */
+/**
+ * The paths of the project tabs in the window the driver is in, read in one pass: a move takes
+ * a tab off this strip while it is being polled, and a tab found and then read can be gone in
+ * between (charter#506, `reading.ts`).
+ */
 async function strip(): Promise<string[]> {
-  const tabs = await $$(`${PROJECTS} [role="tab"]`).getElements();
-  const paths = [];
-  for (const tab of tabs) paths.push((await tab.getAttribute("title")) ?? "");
-  return paths;
+  return (await attributesOfEach(`${PROJECTS} [role="tab"]`, ["title"])).map(
+    (tab) => tab.title ?? "",
+  );
 }
 
 async function stripHas(path: string, has: boolean): Promise<void> {
