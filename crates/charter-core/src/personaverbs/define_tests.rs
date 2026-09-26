@@ -507,3 +507,18 @@ fn clear_under_the_environment_says_the_environment_still_decides() {
          `charter persona use` and `charter persona clear`, so neither moves it.\n"
     );
 }
+
+#[test]
+fn create_refuses_the_reserved_name_charter_and_writes_nothing() {
+    let plane = Plane::fixture("daily");
+    let (rc, heard) = create_on(&plane, &ask("charter", Some("x")));
+    assert_eq!(
+        (rc, heard.err.as_str()),
+        (
+            1,
+            "✗ the persona name 'charter' is reserved — `charter/<id>` names charter's own \
+             actions, so this one would pass as a built-in. Choose another name\n"
+        )
+    );
+    assert!(!plane.path("personas/charter").exists());
+}
