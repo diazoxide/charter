@@ -358,8 +358,9 @@ export function PlaneView({
     workspace: string;
     busy: boolean;
     trouble?: string;
-    /** The chats that will start a fresh conversation after it, named before it is answered. */
-    startsFresh?: string[];
+    /** The core's sentence naming the chats that will start a fresh conversation after it,
+     *  `null` for none, `undefined` until the core has answered. */
+    startsFresh?: string | null;
   }>();
   /** The same, for the pins: a pin is written by the core, so the window asks what the core
    *  now says rather than assuming its own write landed as it expected. */
@@ -1614,10 +1615,15 @@ export function PlaneView({
       void commands
         .workspaceStartsFresh(plane, workspace)
         .then((answer) => {
-          const startsFresh = answer.status === "ok" ? (answer.data ?? []) : [];
+          const startsFresh = answer.status === "ok" ? answer.data : null;
           setRenamingWs((now) => (now?.workspace === workspace ? { ...now, startsFresh } : now));
         })
-        .catch(() => undefined);
+        // A question that fails names nobody, and does not hold the answer back.
+        .catch(() =>
+          setRenamingWs((now) =>
+            now?.workspace === workspace ? { ...now, startsFresh: null } : now,
+          ),
+        );
     },
     [plane],
   );
