@@ -162,6 +162,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The nightly mutation run's slowest test takes about a quarter of the time it did.** The
+  plane-root replay asks git each distinct question once instead of once per recorded row,
+  and more of how saving and the `CHARTER_*` steering variables behave is pinned by tests.
+  ([#464](https://github.com/diazoxide/charter/issues/464))
+
 - **Removing a worktree that holds work now says which work.** The refusal lists the
   uncommitted files and the commits no other branch has, so you can see what `--force` (or
   "Discard that work and remove the worktree anyway", in the window) would discard. A merge refused over uncommitted changes no

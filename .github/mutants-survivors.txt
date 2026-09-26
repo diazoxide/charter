@@ -42,6 +42,13 @@
 # `cfg(not(unix))` refusals no unix build compiles, which now live in `hookwire/off_unix.rs`
 # and are excluded as a file in `.cargo/mutants.toml`.
 
+# #464 (2026-09-26): `planegit::push_head_within` builds a `PushResult` with a `detail` at three
+# sites, and one mutation description names all three. The first — git could not be STARTED
+# for the push — has no test short of taking git off the machine mid-save, so the line stays.
+# The other two (a conflict's files, a failed push's words) have tests written on the branch
+# `mutants-464-wip`, not yet compiled; they do not retire this line on their own.
+crates/charter-core/src/planegit.rs: delete field detail from struct PushResult expression in push_head_within
+
 crates/charter-core/src/cistate.rs: replace && with || in Cache::age_of
 crates/charter-core/src/cistate.rs: replace > with == in read
 crates/charter-core/src/cistate.rs: replace > with >= in Cache::about

@@ -26,6 +26,24 @@ use std::process::Command;
 /// and answer what it printed. Fails the calling test unless every one of them ran and passed:
 /// a filter that matches nothing passes too, so the count is the evidence they ran.
 pub fn rerun(tests: &[&str], env: &[(&str, &OsStr)]) -> String {
+    rerun_with(tests, env, false)
+}
+
+/// Set on a child [`rerun_steered`] started: its steering variables were chosen by the test,
+/// so [`rerun_if_steered`] leaves them in place.
+const STEERED_ON_PURPOSE: &str = "TESTRUN_STEERED_ON_PURPOSE";
+
+/// [`rerun`], for a test in `tests/` whose subject IS a steering variable that is set.
+///
+/// Every test there opens with [`unsteered!`](crate::unsteered), which re-runs a test with a
+/// steering variable set WITHOUT it — right for the shell's variables, and exactly wrong for
+/// the ones a test hands its own child. The child this starts is marked, so the guard lets the
+/// variables in `env` through; any other `CHARTER_*` of the shell is still removed first.
+pub fn rerun_steered(tests: &[&str], env: &[(&str, &OsStr)]) -> String {
+    rerun_with(tests, env, true)
+}
+
+fn rerun_with(tests: &[&str], env: &[(&str, &OsStr)], steered: bool) -> String {
     let mut child = Command::new(std::env::current_exe().expect("the test binary"));
     child.args(["--exact", "--test-threads=1", "--nocapture"]);
     child.args(tests);
@@ -34,6 +52,11 @@ pub fn rerun(tests: &[&str], env: &[(&str, &OsStr)]) -> String {
         if name.starts_with("CHARTER_") && name != crate::fence::VAR {
             child.env_remove(&*name);
         }
+    }
+    // Never inherited: a steered child's own re-runs are ordinary ones.
+    child.env_remove(STEERED_ON_PURPOSE);
+    if steered {
+        child.env(STEERED_ON_PURPOSE, "1");
     }
     for (name, value) in env {
         child.env(name, value);
@@ -54,11 +77,15 @@ pub fn rerun(tests: &[&str], env: &[(&str, &OsStr)]) -> String {
 
 /// Whether this process has a steering variable set — one of [`crate::steer::STEERING`] — and
 /// so has re-run the calling test without it, in a child ([`rerun`]). The caller returns when
-/// it has: the child ran the test, and failed this one if the test failed there.
+/// it has: the child ran the test, and failed this one if the test failed there. A child
+/// [`rerun_steered`] started answers `false`: its variables are the test's, not the shell's.
 ///
 /// The test is named by its thread, which is how libtest names one. Read straight from the
 /// environment, not through [`crate::steer::var_os`], which hides these under `cfg(test)`.
 pub fn rerun_if_steered() -> bool {
+    if std::env::var_os(STEERED_ON_PURPOSE).is_some() {
+        return false;
+    }
     if !crate::steer::STEERING
         .iter()
         .any(|name| std::env::var_os(name).is_some())

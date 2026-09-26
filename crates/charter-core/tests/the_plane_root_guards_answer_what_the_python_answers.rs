@@ -203,6 +203,8 @@ fn replay(base: &str) -> Vec<String> {
     // thread has a scratch directory of its own for the config probes.
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get().clamp(1, 16));
     let chunk = rows.len().div_ceil(threads);
+    let probes = planeroot_answer::Probes::default();
+    let probes = &probes;
     std::thread::scope(|s| {
         let handles: Vec<_> = rows
             .chunks(chunk)
@@ -212,7 +214,7 @@ fn replay(base: &str) -> Vec<String> {
                 s.spawn(move || {
                     let mut wrong = Vec::new();
                     for row in part {
-                        check(row, base, &scratch, &mut wrong);
+                        check(row, base, &scratch, probes, &mut wrong);
                     }
                     wrong
                 })
@@ -225,10 +227,16 @@ fn replay(base: &str) -> Vec<String> {
     })
 }
 
-fn check(recorded: &oracle_corpus::Row, base: &str, scratch: &Path, wrong: &mut Vec<String>) {
+fn check(
+    recorded: &oracle_corpus::Row,
+    base: &str,
+    scratch: &Path,
+    probes: &planeroot_answer::Probes,
+    wrong: &mut Vec<String>,
+) {
     let (at, row) = (&recorded.at, &recorded.row);
     let got = normalise(
-        &planeroot_answer::answer(&request(&row["request"], base), scratch),
+        &planeroot_answer::answer(&request(&row["request"], base), scratch, probes),
         base,
     );
     let want = &row["answer"];
