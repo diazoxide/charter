@@ -283,7 +283,7 @@ how it is cited and nothing here is renumbered.
 
 ### Curation actions — added 2026-09-26
 
-30. **A curation action is a chat opened with its prompt typed and never sent.** The operator
+31. **A curation action is a chat opened with its prompt typed and never sent.** The operator
     reviews the prompt and presses Enter, and nothing can opt out of that. It is offered on a
     workspace, a persona or the plane. charter's own three come first (`charter/safe-remove`,
     `charter/compact` — "Compact & improve" — and `charter/add-curation-action`), ship inside the
