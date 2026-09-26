@@ -748,6 +748,13 @@ every pane.) They are a capture listener on the window, like the palette's, and 
 accelerators: which size a key changes depends on where the keystroke landed, which only the
 page knows. Preferences… is on the menu, on `⌘,` and `Ctrl+,`; xterm sends nothing for either.
 
+**The new-shell key takes nothing either** (SI-5, ADR 0062, `shellKey.opensAShell`): `⌘⇧T` on a
+Mac and `Ctrl+Shift+T` elsewhere — "new tab" in GNOME Terminal, Konsole and Windows Terminal,
+whose tabs are shells. xterm.js 6.0.0 encodes `Ctrl` with a letter only when Shift is not held,
+so `Ctrl+Shift+T` is no byte, and plain `Ctrl+T` still reaches the shell as transpose-chars.
+It is a capture listener on the window, held by the project in front, and it presses the
+catalogue's own `shell.new` row.
+
 **Find in a pane is `⌘F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either** (SI-4,
 `SessionPane.opensFind`). xterm.js 6.0.0 sends nothing for `⌘F`. It would send `\x06` for
 `Ctrl+F` — readline's forward-char — so off a Mac the chord adds `Shift`, as GNOME Terminal and

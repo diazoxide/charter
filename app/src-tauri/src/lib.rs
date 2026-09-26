@@ -75,6 +75,29 @@ pub(crate) fn charter_binary() -> Option<PathBuf> {
     named.into_iter().chain(beside).find(|path| path.is_file())
 }
 
+/// The shims a shell tab finds first on its `PATH`, written under the app's data directory to
+/// run `binary` (ADR 0062). None where they cannot be: a shell tab is then a plain shell, which
+/// is what it was before there were any, and the reason is said unless it is the platform's.
+fn shell_tab_shims<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    binary: &std::path::Path,
+) -> Option<charter_core::shellguard::Shims> {
+    let dir = app.path().app_data_dir().ok()?.join("shims");
+    let shims = charter_core::shellguard::Shims::at(&dir);
+    match shims.write(binary) {
+        Ok(()) => Some(shims),
+        Err(why) if why.kind() == std::io::ErrorKind::Unsupported => None,
+        Err(why) => {
+            eprintln!(
+                "charter: no shell-tab shims at {} ({why}); a harness started in a shell tab \
+                 will not be warned about",
+                dir.display()
+            );
+            None
+        }
+    }
+}
+
 /// What the app ships that a chat is armed with, found once at launch.
 ///
 /// A property of this build and not of a project, so every plane arms with the same one.
@@ -84,6 +107,9 @@ pub(crate) struct Shipped {
     pub binary: Option<PathBuf>,
     /// The Claude Code plugin a chat loads (`charter_core::plugin`), inside the bundle.
     pub plugin: Option<PathBuf>,
+    /// The shims a shell tab finds first on its `PATH` (ADR 0062), written at launch under the
+    /// app's data directory — none where they could not be written, or off unix.
+    pub shims: Option<charter_core::shellguard::Shims>,
 }
 
 /// Re-run `charter plugin install` for each harness whose installed copy runs this app's
@@ -1320,6 +1346,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<planewatch::PlaneChanged>()
         // What `extension-heard` carries (charter-app#343).
         .typ::<heard::ExtensionHeard>()
+        // What `harness-by-hand` carries (ADR 0062).
+        .typ::<hooks::ByHand>()
 }
 
 /// Where the generated TypeScript lives.
@@ -1480,6 +1508,11 @@ pub fn run() {
                      without charter's hooks, guard or skills; every one will show as unknown"
                 );
             }
+            // What a shell tab finds first on its `PATH` (ADR 0062), written at every launch so
+            // each shim runs THIS build's `charter`. None without a `charter` for them to run.
+            let shims = binary
+                .as_deref()
+                .and_then(|binary| shell_tab_shims(app.handle(), binary));
             // The copy `charter plugin install` made for chats started outside the app, brought
             // up to date with this build (#449). Off the main thread: it reads and writes a few
             // files, and nothing on screen waits for it.
@@ -1495,7 +1528,11 @@ pub fn run() {
                         let window = app.handle().clone();
                         std::sync::Arc::new(move |moved: Moved| told(&window, moved))
                     },
-                    Shipped { binary, plugin },
+                    Shipped {
+                        binary,
+                        plugin,
+                        shims,
+                    },
                     // Resolved once, here, like the plane: it is an environment ladder, and a
                     // second reader of it is a second answer to where this machine's store is.
                     charter_core::machine::config_root(),
@@ -1510,6 +1547,19 @@ pub fn run() {
                             &arrived.plane.clone(),
                             handoff::ARRIVED,
                             &arrived,
+                        );
+                    })
+                })
+                // A harness started by hand in a shell tab: the window draws a banner on that
+                // tab, offering to open it as a chat (ADR 0062).
+                .telling_by_hand({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |told: hooks::ByHand| {
+                        windows::emit_for_plane(
+                            &window,
+                            &told.plane.clone(),
+                            hooks::BY_HAND,
+                            &told,
                         );
                     })
                 })

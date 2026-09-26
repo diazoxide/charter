@@ -44,6 +44,7 @@ mod memory;
 mod piece;
 mod report;
 mod secret;
+mod shellguard;
 mod statusline;
 mod voice;
 
@@ -340,6 +341,22 @@ enum Command {
     /// Shows the draft first and sends nothing without your yes.
     #[command(subcommand)]
     Report(report::ReportCommand),
+
+    /// What a shell tab's shims run in front of a harness started by hand there (ADR 0062):
+    /// says it runs outside charter's session tracking, tells the app, and runs the real one.
+    ///
+    /// Hidden: nobody types it. The shims charter writes at every launch are its one caller.
+    #[command(name = "shell-guard", hide = true)]
+    ShellGuard {
+        /// The shim directory, left out of the search and off the harness's `PATH`.
+        #[arg(long, value_name = "DIR")]
+        shims: std::path::PathBuf,
+        /// The harness the operator typed: `claude`, `codex` or `opencode`.
+        harness: String,
+        /// Its arguments, exactly as typed, after `--`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
 
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
     /// heredoc on stdin. Your harness asks before it runs.
@@ -1979,6 +1996,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Save { .. }
         | Command::Handoff { .. }
         | Command::Report(_)
+        | Command::ShellGuard { .. }
         | Command::Workspace(WorkspaceCommand::Remove { .. })
         | Command::Workspace(WorkspaceCommand::Rename { .. })
         | Command::Workspace(WorkspaceCommand::Live { .. })
@@ -2420,6 +2438,15 @@ fn main() -> ExitCode {
     // Needs no plane: a chat anywhere can report a charter bug.
     if let Command::Report(command) = &cli.command {
         return report::run(command);
+    }
+    // Needs no plane either, and must never stand in the way of the harness it guards.
+    if let Command::ShellGuard {
+        shims,
+        harness,
+        args,
+    } = &cli.command
+    {
+        return shellguard::run(shims, harness, args);
     }
     // The three internal words the Python charter's plugin wires beside its hooks. Answered —
     // exit 0, nothing printed, nothing read — so a plugin that still names them can never fail

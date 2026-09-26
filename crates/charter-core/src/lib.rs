@@ -90,6 +90,7 @@ pub mod secrets;
 pub mod secretshape;
 pub mod session;
 pub mod settings;
+pub mod shellguard;
 pub mod shellseg;
 pub mod shellwrap;
 pub mod shown;

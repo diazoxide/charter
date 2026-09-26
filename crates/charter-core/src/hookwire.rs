@@ -455,7 +455,36 @@ pub const NO_TICKET: &str =
 enum Line {
     Report(Report),
     Ask(Ask),
+    /// Last, so it can never shadow the two above: it requires `started_by_hand`, which
+    /// neither carries, and a report or an ask never reads as one.
+    ByHand(StartedByHand),
 }
+
+/// A harness the operator started by hand, in a shell tab's own shell (SI-5).
+///
+/// **Neither a report nor an ask.** It moves no chat — nothing about a chat's state is
+/// learned from it — and it asks the app to do nothing: the window draws a banner on the tab
+/// it came from, and whatever happens next is the operator's click. What sends it is `charter
+/// shell-guard`, which the shims on a shell tab's `PATH` run in front of the real harness, so
+/// the whole of the detection is which command was started. Nothing reads what the harness
+/// then prints.
+///
+/// Anything that can write the socket can send one, which is the same account that can already
+/// move a chat's state; the most it buys is a banner the operator can dismiss.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StartedByHand {
+    /// The app's number for the shell tab's chat, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The harness, by the word the plane calls it (`claude`, `codex`, `opencode`).
+    pub started_by_hand: String,
+    /// Where the shell was standing when it started it — where a chat opened in its place
+    /// would start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<std::path::PathBuf>,
+}
+
+/// What hears a [`StartedByHand`].
+pub type Noticed = Box<dyn Fn(StartedByHand) + Send + Sync + 'static>;
 
 /// Sends one report to the socket at `path`. Answers whether the app took it.
 ///
@@ -474,6 +503,28 @@ pub fn send(path: &std::path::Path, report: &Report) -> io::Result<()> {
     socket.write_all(&line)?;
     socket.flush()
 }
+
+/// Tells the app at `path` a harness was started by hand. Answers whether the app took it.
+///
+/// [`send`]'s shape — one connection, one line, closed — with a deadline on the write as well:
+/// what calls it is a harness the operator is waiting to see start, and it is started whether
+/// or not this got through.
+#[cfg(unix)]
+pub fn tell(path: &std::path::Path, notice: &StartedByHand) -> io::Result<()> {
+    use std::io::Write;
+
+    let mut socket = std::os::unix::net::UnixStream::connect(path)?;
+    socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
+    let mut line = serde_json::to_vec(notice).map_err(io::Error::other)?;
+    line.push(b'\n');
+    socket.write_all(&line)?;
+    socket.flush()
+}
+
+/// How long [`tell`] may spend writing its line: a line is under 4 KiB and the app reads it on
+/// a thread of its own, so this is only a bound on an app that has stopped reading.
+#[cfg(unix)]
+const A_NOTICE_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// One conversation with the app: lines written, and each answered on the same connection.
 ///
@@ -535,7 +586,7 @@ impl Asking {
 #[cfg(not(unix))]
 mod off_unix;
 #[cfg(not(unix))]
-pub use off_unix::{Asking, Listener, Reading, send};
+pub use off_unix::{Asking, Listener, Reading, send, tell};
 
 /// What the app answers an ask with, told which connection it came on.
 ///
@@ -626,12 +677,24 @@ impl Listener {
         each: Box<dyn Fn(Report) + Send + Sync + 'static>,
         answer: Answerer,
     ) -> Reading {
+        self.each_answering_and_noticing(each, answer, Box::new(|_| {}))
+    }
+
+    /// [`Listener::each_answering`], and every [`StartedByHand`] handed to `noticed`.
+    pub fn each_answering_and_noticing(
+        self,
+        each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+        answer: Answerer,
+        noticed: Noticed,
+    ) -> Reading {
         let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let path = self.path.clone();
         let stopped = std::sync::Arc::clone(&stopping);
         let each: std::sync::Arc<dyn Fn(Report) + Send + Sync> = std::sync::Arc::from(each);
         let answer: std::sync::Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync> =
             std::sync::Arc::from(answer);
+        let noticed: std::sync::Arc<dyn Fn(StartedByHand) + Send + Sync> =
+            std::sync::Arc::from(noticed);
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
             for connection in self.socket.incoming() {
@@ -658,11 +721,12 @@ impl Listener {
                 // are mid-write, which is almost always none.
                 let each = std::sync::Arc::clone(&each);
                 let answer = std::sync::Arc::clone(&answer);
+                let noticed = std::sync::Arc::clone(&noticed);
                 dealt += 1;
                 let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
-                    .spawn(move || serve(connection, this, &*each, &*answer));
+                    .spawn(move || serve(connection, this, &*each, &*answer, &*noticed));
                 // A thread that will not start costs this one report. Refusing the rest of
                 // the channel over it would cost every report after it too.
                 let _ = started;
@@ -765,6 +829,7 @@ fn serve(
     this: u64,
     each: &(dyn Fn(Report) + Send + Sync),
     answer: &(dyn Fn(u64, Ask) -> Answer + Send + Sync),
+    noticed: &(dyn Fn(StartedByHand) + Send + Sync),
 ) {
     use std::io::{BufRead, Read, Write};
 
@@ -795,6 +860,7 @@ fn serve(
                     return;
                 }
             }
+            Ok(Line::ByHand(notice)) => noticed(notice),
             // A line that is neither is the end of this connection, never of the channel.
             Err(_) => return,
         }
@@ -2027,6 +2093,70 @@ mod tests {
         let started = std::time::Instant::now();
 
         assert!(Asking::on(&dir.path().join("gone.sock")).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    // ------------------------------------------------------------------------------------
+    // a harness started by hand in a shell tab (SI-5)
+    // ------------------------------------------------------------------------------------
+
+    fn by_hand() -> StartedByHand {
+        StartedByHand {
+            chat: 4,
+            started_by_hand: "claude".to_owned(),
+            cwd: Some(std::path::PathBuf::from("/work/alpha")),
+        }
+    }
+
+    #[test]
+    fn a_harness_started_by_hand_reaches_the_app_as_a_notice_and_never_as_a_report() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.each_answering_and_noticing(
+            Box::new(|_| panic!("a notice is not a report")),
+            Box::new(|_, _| panic!("a notice is not an ask")),
+            Box::new(move |notice| tx.lock().unwrap().send(notice).unwrap()),
+        );
+
+        tell(&path, &by_hand()).expect("the app took it");
+
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(by_hand())
+        );
+    }
+
+    #[test]
+    fn a_report_is_never_read_as_a_harness_started_by_hand() {
+        let line = serde_json::to_string(&Report {
+            chat: 4,
+            event: Event::Stop,
+            conversation: Conversation::Unknown,
+            pid: None,
+            detail: Detail::default(),
+        })
+        .unwrap();
+
+        assert!(matches!(
+            serde_json::from_str::<Line>(&line),
+            Ok(Line::Report(_))
+        ));
+        let line = serde_json::to_string(&by_hand()).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Line>(&line),
+            Ok(Line::ByHand(_))
+        ));
+    }
+
+    #[test]
+    fn telling_an_app_that_is_not_listening_fails_at_once_rather_than_waiting() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let started = std::time::Instant::now();
+
+        assert!(tell(&dir.path().join("gone.sock"), &by_hand()).is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }

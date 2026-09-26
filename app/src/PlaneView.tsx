@@ -27,11 +27,13 @@ import {
   Plus,
   SquareSplitHorizontal,
   SquareSplitVertical,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import {
   commands,
   type AtRisk,
+  type ByHand,
   type PlaneSaving,
   type ChatWorktree,
   type OpenChat,
@@ -138,7 +140,8 @@ import { OpenVault, useVaults } from "./Vaults";
 import { usePlaneEdits } from "./PlaneEdits";
 import { ViewMark, ViewPane } from "./Views";
 import { useTabStop } from "./roving";
-import { closeOnDelete, renameOnF2 } from "./tabKeys";
+import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
+import { opensAShell } from "./shellKey";
 import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
 import type { ExtensionCommand, ExtensionView, PanelView, RowAction } from "./bindings";
@@ -159,8 +162,10 @@ const NONE: readonly never[] = [];
 
 /** Where the picker's chat goes: a new tab — started in `in` when a row asked for one
  *  directory for that tab alone (charter-app#174), else where the explorer's pick says — or a
- *  split of the pane in front. */
-type Where = { tab: true; in?: string } | { split: Direction };
+ *  split of the pane in front. `prefer` is the harness (a profile's `kind`) the picker starts
+ *  on, where something already knows which one is wanted: a harness started by hand in a shell
+ *  tab, opened as a chat instead (ADR 0062). */
+type Where = { tab: true; in?: string; prefer?: string } | { split: Direction };
 
 /**
  * One project, with everything that belongs to it.
@@ -419,6 +424,18 @@ export function PlaneView({
    * number. A chat no handoff opened has none.
    */
   const [handedFrom, setHandedFrom] = useState<Record<number, string>>({});
+  /**
+   * The chats that are shell tabs (SI-5): the operator's own shell, no harness, no profile. Its
+   * tab wears a terminal's mark rather than nothing, so a shell is told from a harness before
+   * its name is read. Filled when one is opened here and when one comes back from the record.
+   */
+  const [shells, setShells] = useState<ReadonlySet<number>>(() => new Set());
+  /**
+   * A harness started by hand in a shell tab, by that tab's session, as its banner says it
+   * (ADR 0062). The core says so over `harness-by-hand`; the banner stays until it is dismissed
+   * or answered.
+   */
+  const [byHand, setByHand] = useState<Record<number, ByHandNote>>({});
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
@@ -545,6 +562,14 @@ export function PlaneView({
           }));
           // A pinned chat comes back pinned: the pin rides the record it came back from.
           setPinnedChats(open.filter((chat) => chat.pinned).map((chat) => chat.session));
+          // A shell comes back a shell: on no profile, running no harness.
+          setShells(
+            new Set(
+              open
+                .filter((chat) => chat.harness === null && chat.profile === null)
+                .map((chat) => chat.session),
+            ),
+          );
         }
         setPinnedViews(back.filter((view) => view.pinned).map((view) => viewKey(refOf(view))));
         // The persona comes with the chat, so a tab put back reads `steward 3` from its first
@@ -1149,9 +1174,53 @@ export function PlaneView({
   const newTabIn = useCallback((path: string) => void ask({ tab: true, in: path }), [ask]);
 
   /**
+   * **A shell tab** (SI-5): the operator's own `$SHELL` in `cwd`, filed on `filed`'s strip, in a
+   * tab of its own in front. `open_session` with no program is the core's shell, and the core
+   * puts charter's shims first on its `PATH` (ADR 0062). Nothing asks first: a shell starts no
+   * harness, so there is no profile for the picker to ask about.
+   *
+   * Named `shell <N>` as the chat's own name, not only the tab's, so the tab that comes back
+   * from the record reads the same: a chat's name is what its tab is drawn from at a relaunch.
+   */
+  const openShell = useCallback(
+    (cwd: string | null, filed: string) => {
+      const name = `shell ${now.current.named.tabs + 1}`;
+      void commands
+        .openSession(plane, null, [], cwd, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .then((opened) => {
+          if (opened.status === "error") {
+            setTrouble(opened.error);
+            return;
+          }
+          const session = opened.data;
+          setShells((was) => new Set(was).add(session));
+          setStartedIn((was) => ({ ...was, [session]: filed }));
+          change((tabs) => openTab(tabs, session, name));
+        })
+        .catch((err: unknown) => setTrouble(String(err)));
+    },
+    [change, plane],
+  );
+
+  /** A shell tab where a new chat would start — or in `workspace`'s own directory, filed under
+   *  it, when a row names one. */
+  const newShell = useCallback(
+    (workspace?: string) => {
+      if (workspace === undefined) {
+        openShell(startIn, filedFor(startIn, focused));
+        return;
+      }
+      const path = sidebar?.workspaces.find((ws) => ws.name === workspace)?.path;
+      if (path !== undefined) openShell(path, workspace);
+    },
+    [focused, openShell, sidebar, startIn],
+  );
+
+  /**
    * **A blocked save's two ways out** (charter-app#295), asked by the Saving tab: a chat started
    * in the plane — the picker, so the operator chooses who resolves it — or a plain terminal
-   * there, a shell with no harness, for somebody who resolves a conflict with git by hand.
+   * there, a shell with no harness, for somebody who resolves a conflict with git by hand. The
+   * terminal is a shell tab like any other, opened by the same function.
    */
   useEffect(() => {
     const out = (event: Event) => {
@@ -1161,30 +1230,55 @@ export function PlaneView({
         newTabIn(sidebar.root);
         return;
       }
-      void commands
-        .openSession(
-          plane,
-          null,
-          [],
-          sidebar.root,
-          "terminal",
-          STARTING_SIZE.columns,
-          STARTING_SIZE.rows,
-        )
-        .then((opened) => {
-          if (opened.status === "error") {
-            setTrouble(opened.error);
-            return;
-          }
-          const session = opened.data;
-          setStartedIn((was) => ({ ...was, [session]: OUTSIDE }));
-          change((tabs) => openTab(tabs, session, "terminal", "shell"));
-        })
-        .catch((err: unknown) => setTrouble(String(err)));
+      openShell(sidebar.root, OUTSIDE);
     };
     window.addEventListener(WAY_OUT, out);
     return () => window.removeEventListener(WAY_OUT, out);
-  }, [change, newTabIn, plane, sidebar]);
+  }, [newTabIn, openShell, plane, sidebar]);
+
+  /**
+   * A harness started by hand in one of this project's shell tabs (ADR 0062): the core says so,
+   * and the tab's pane draws a banner until it is answered. Filtered on the plane, as
+   * `chat-moved` is. A window that cannot listen (a unit test with no events) never hears one.
+   */
+  useEffect(() => {
+    let gone = false;
+    let stop: (() => void) | undefined;
+    void (async () => {
+      try {
+        const unlisten = await listen<ByHand>("harness-by-hand", (event) => {
+          const told = event.payload;
+          if (gone || told.plane !== plane) return;
+          setByHand((was) => ({
+            ...was,
+            [told.session]: { harness: told.harness, cwd: told.cwd },
+          }));
+        });
+        if (gone) unlisten();
+        else stop = unlisten;
+      } catch {
+        // No window to listen in.
+      }
+    })();
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, [plane]);
+
+  /** The banner's two answers: open that harness as a chat where the shell was standing — the
+   *  picker, started on that harness — or put the banner away. Either way it is answered. */
+  const answerByHand = useCallback(
+    (session: number, open: boolean) => {
+      const note = byHand[session];
+      setByHand((was) =>
+        Object.fromEntries(Object.entries(was).filter(([held]) => Number(held) !== session)),
+      );
+      if (!open || note === undefined) return;
+      void ask({ tab: true, in: note.cwd ?? startIn ?? undefined, prefer: note.harness });
+    },
+    [ask, byHand, startIn],
+  );
 
   /** A row was picked: the chat starts on that profile, with that persona, either drawing
    *  charter's footer in its pane or leaving it blank (ADR 0029), and under the name typed in
@@ -1232,7 +1326,7 @@ export function PlaneView({
       // Where charter put it, written down before the tab is drawn: the plane will say the
       // same thing a tick later, and until it does this is what keeps the tab on the strip
       // the operator is looking at.
-      const filed = cwd === null ? OUTSIDE : (focused ?? OUTSIDE);
+      const filed = filedFor(cwd, focused);
       setStartedIn((was) => ({ ...was, [session]: filed }));
       if ("tab" in where) {
         const kind = picking?.options.profiles.find((one) => one.name === profile)?.kind;
@@ -2053,6 +2147,7 @@ export function PlaneView({
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
+      newShell,
       runAction,
       split,
       closePane,
@@ -2111,6 +2206,7 @@ export function PlaneView({
       mergeWorktree,
       declareWorktreeDone,
       newTab,
+      newShell,
       pickVault,
       newTabIn,
       openWorkspaceSettings,
@@ -2364,6 +2460,28 @@ export function PlaneView({
     },
     [run],
   );
+
+  /**
+   * **The key that opens a shell tab** (`shellKey.ts`): the catalogue's `shell.new` row, pressed
+   * as the palette would press it. Claimed on the window, capture-phase, for the reason the
+   * palette's key is — a pane's terminal would otherwise have it first — and only by the
+   * project in front, so one keypress is one shell.
+   */
+  useEffect(() => {
+    if (!inFront) return;
+    const key = (e: KeyboardEvent) => {
+      if (!opensAShell(e, onAMac())) return;
+      const offer = by("shell.new");
+      if (offer === undefined) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // A held key is not a second press: one shell for one press.
+      if (e.repeat) return;
+      press(offer);
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [by, inFront, press]);
 
   /**
    * A pane's own button: that pane becomes the focused one, and then the row runs.
@@ -2726,6 +2844,7 @@ export function PlaneView({
                                   id={id}
                                   states={states}
                                   updates={planeUpdates}
+                                  shells={shells}
                                   pin={
                                     <Pin
                                       held={isPinned(id)}
@@ -2762,7 +2881,15 @@ export function PlaneView({
               key: String(id),
               offer: by(`tab.select:${id}`),
               needs: waitingOn(id),
-              children: <TabMarks tabs={tabs} id={id} states={states} updates={planeUpdates} />,
+              children: (
+                <TabMarks
+                  tabs={tabs}
+                  id={id}
+                  states={states}
+                  updates={planeUpdates}
+                  shells={shells}
+                />
+              ),
             }))}
             onPress={press}
           />
@@ -2923,6 +3050,8 @@ export function PlaneView({
                   states={states}
                   name={frontTab.name}
                   handedFrom={handedFrom}
+                  byHand={byHand}
+                  onByHand={answerByHand}
                   offered={views}
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
@@ -3138,6 +3267,7 @@ export function PlaneView({
       {picking && (
         <StartChat
           options={picking.options}
+          prefer={"prefer" in picking.where ? picking.where.prefer : undefined}
           trouble={pickerTrouble}
           onStart={(profile, persona, footer, label) =>
             void startPicked(profile, persona, footer, label)
@@ -3255,6 +3385,41 @@ type Arrived = {
   from?: HandedFrom | null;
 };
 
+/** A harness started by hand in a shell tab, as its banner needs it (ADR 0062). */
+type ByHandNote = { harness: string; cwd: string | null };
+
+/**
+ * The strip a chat started in `cwd` is filed on until the plane says: the focused workspace's,
+ * or the one for chats outside every workspace when it starts in no directory at all. One
+ * function for a chat the picker started and a shell tab, so the two are filed alike.
+ */
+function filedFor(cwd: string | null, focused: string | undefined): string {
+  return cwd === null ? OUTSIDE : (focused ?? OUTSIDE);
+}
+
+/**
+ * **What a shell tab says when a harness is started by hand in it** (ADR 0062): that it runs
+ * outside charter's session tracking, and a way to open it as a chat instead.
+ *
+ * In the pane's own top-left corner, over the terminal and taking no row — the property the
+ * gauge keeps, for the operator's reason (a pane must not change height when charter has
+ * something to say). A `status`, not an `alert`: nothing is wrong and nothing is waiting on
+ * the operator, and the harness is already running whatever they press.
+ */
+function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: boolean) => void }) {
+  return (
+    <div className="pane-by-hand" role="status" aria-label={`${note.harness} started by hand`}>
+      <span>{note.harness} runs outside charter&apos;s session tracking here.</span>
+      <button type="button" tabIndex={0} onClick={() => onAnswer(true)}>
+        Open as chat
+      </button>
+      <button type="button" tabIndex={0} className="dismiss" onClick={() => onAnswer(false)}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 /**
  * What a chat's default name puts before its number (charter-app#254): the persona it adopted,
  * or — with none — the program it runs, by the word the plane calls its harness. `steward 3`,
@@ -3350,6 +3515,8 @@ function PaneFrame({
   moved,
   running,
   from,
+  byHand,
+  onByHand,
   doing,
   children,
 }: {
@@ -3359,6 +3526,9 @@ function PaneFrame({
   running: boolean;
   /** Where a handed-off chat came from, `↳ from steward 3 · ops`, in the chat's own corner. */
   from?: string;
+  /** A harness started by hand in this shell tab, while its banner is up (ADR 0062). */
+  byHand?: ByHandNote;
+  onByHand: (open: boolean) => void;
   doing: ReactNode;
   children: ReactNode;
 }) {
@@ -3372,6 +3542,7 @@ function PaneFrame({
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
         {from && <span className="pane-from">{from}</span>}
+        {byHand && <ByHandBanner note={byHand} onAnswer={onByHand} />}
       </div>
       <div className="pane-corner at-end">{doing}</div>
       {children}
@@ -3695,6 +3866,7 @@ function TabMarks({
   id,
   states,
   updates,
+  shells,
   pin,
 }: {
   tabs: Tabs;
@@ -3702,6 +3874,8 @@ function TabMarks({
   states: ChatStates;
   /** The chats the plane's instructions changed under, by session (charter#369). */
   updates: PlaneUpdates;
+  /** The chats that are shell tabs, whose tab wears a terminal's mark (SI-5). */
+  shells: ReadonlySet<number>;
   /** The pin mark, on the strip; the menu of hidden tabs draws none. */
   pin?: ReactNode;
 }) {
@@ -3718,6 +3892,11 @@ function TabMarks({
   }
   return (
     <>
+      {/* A shell tab's mark, before its name as a view's is: what kind of thing the tab holds,
+          read before the name is. A harness chat wears none — it is the ordinary case. */}
+      {chat !== undefined && shells.has(chat) && (
+        <SquareTerminal className="tab-mark" data-mark="shell" aria-hidden="true" />
+      )}
       <span className="tab-name">{tabs.byId[id].name}</span>
       {pin}
       <PlaneUpdatedMark files={chat === undefined ? undefined : updates[chat]} />
@@ -3740,6 +3919,8 @@ function LayoutPanes({
   states,
   name,
   handedFrom,
+  byHand,
+  onByHand,
   offered,
   onOpenView,
   onAsk,
@@ -3761,6 +3942,10 @@ function LayoutPanes({
   name: string;
   /** Where each handed-off chat came from, by session (charter-app#258). */
   handedFrom: Readonly<Record<number, string>>;
+  /** A harness started by hand in a shell tab, by session, for its banner (ADR 0062). */
+  byHand: Readonly<Record<number, ByHandNote>>;
+  /** The banner answered: `open` asks for that harness as a chat, else it is put away. */
+  onByHand: (session: number, open: boolean) => void;
   /** The views approved extensions offer, for the buttons a view draws beside itself. */
   offered: readonly ExtensionView[];
   onOpenView: (view: ViewRef, title: string) => void;
@@ -3809,6 +3994,8 @@ function LayoutPanes({
         moved={movedAt(states, content.session)}
         running={stateOf(states, content.session) === "running"}
         from={handedFrom[content.session]}
+        byHand={byHand[content.session]}
+        onByHand={(open) => onByHand(content.session, open)}
         doing={<PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />}
       >
         <SessionPane
@@ -3852,6 +4039,8 @@ function LayoutPanes({
               states={states}
               name={name}
               handedFrom={handedFrom}
+              byHand={byHand}
+              onByHand={onByHand}
               offered={offered}
               onOpenView={onOpenView}
               onAsk={onAsk}

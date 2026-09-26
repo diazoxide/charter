@@ -492,6 +492,8 @@ pub struct Planes {
     changes: crate::planewatch::Changed,
     /// Told when auto-save saved a plane (charter-app#343).
     saves: crate::autosave::Saved,
+    /// Told when a harness is started by hand in a shell tab of any plane (ADR 0062).
+    by_hand: hooks::ByHandTeller,
     /// The launch's question and its answer — see [`Relaunching`].
     relaunching: Mutex<Relaunching>,
 }
@@ -552,6 +554,7 @@ impl Planes {
             arrivals: Arc::new(|_| {}),
             changes: Arc::new(|_| {}),
             saves: Arc::new(|_, _| {}),
+            by_hand: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
         }
     }
@@ -573,6 +576,13 @@ impl Planes {
     /// that hear a plane being saved are told (charter-app#343).
     pub fn telling_saves(mut self, saves: crate::autosave::Saved) -> Self {
         self.saves = saves;
+        self
+    }
+
+    /// Tells `by_hand` whenever a harness is started by hand in a shell tab of a plane this
+    /// registry holds, so the window can put a banner on that tab (ADR 0062).
+    pub fn telling_by_hand(mut self, by_hand: hooks::ByHandTeller) -> Self {
+        self.by_hand = by_hand;
         self
     }
 
@@ -1134,16 +1144,21 @@ impl Planes {
         // up with every chat `unknown` and says so, which is a working project with one
         // feature missing rather than no project at all.
         let at = hooks::socket_for(Some(&root));
-        let hooks =
-            Hooks::listening_on(id.clone(), &at, Arc::clone(&self.tell)).unwrap_or_else(|why| {
-                eprintln!(
-                    "charter: no hook channel at {} ({why}); every chat in {} will show as \
+        let hooks = Hooks::listening_on(
+            id.clone(),
+            &at,
+            Arc::clone(&self.tell),
+            Arc::clone(&self.by_hand),
+        )
+        .unwrap_or_else(|why| {
+            eprintln!(
+                "charter: no hook channel at {} ({why}); every chat in {} will show as \
                      unknown",
-                    at.socket.display(),
-                    root.display()
-                );
-                Hooks::deaf(id.clone())
-            });
+                at.socket.display(),
+                root.display()
+            );
+            Hooks::deaf(id.clone())
+        });
         let reporting = hooks.socket().map(|socket| Reporting {
             socket: socket.to_path_buf(),
         });

@@ -156,7 +156,8 @@ describe("a blocked save's ways out, in the window (charter-app#295)", () => {
           program: null,
           args: [],
           cwd: PLANE,
-          name: "terminal",
+          // A shell tab like any other (SI-5): one function opens both.
+          name: expect.stringMatching(/^shell \d+$/),
         }),
       ]),
     );

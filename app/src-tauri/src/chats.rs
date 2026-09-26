@@ -320,6 +320,9 @@ impl Chats {
     /// decided from the record alone.
     pub fn start(&self, chat: &Chat, size: Size) -> Result<u32, String> {
         let launch = chat.launch();
+        // A shell tab's shims, and the start files that keep them first. Never recorded: they
+        // are this build's, and worked out again at every start.
+        let (args, env) = self.shell_start(chat, &launch.program, launch.args);
         self.open_it(
             chat,
             launch.program,
@@ -327,8 +330,8 @@ impl Chats {
             // command to keep in front: its recorded words follow charter's, as they always
             // have, because they may end in a positional prompt.
             Vec::new(),
-            launch.args,
-            Vec::new(),
+            args,
+            env,
             chat.harness(),
             launch.session.as_ref().map(ToString::to_string),
             launch.how,
@@ -337,6 +340,39 @@ impl Chats {
             &std::collections::BTreeMap::new(),
             size,
         )
+    }
+
+    /// What a shell tab's shell is started with beyond `args`, the chat's own words: charter's
+    /// shims first on its `PATH`, and the start files that keep them first (ADR 0062). A chat
+    /// that is not a shell tab — one on a profile, or one running a harness — gets nothing,
+    /// and nor does any chat in an app that has no shims.
+    fn shell_start(
+        &self,
+        chat: &Chat,
+        program: &str,
+        args: Vec<String>,
+    ) -> (Vec<String>, Vec<(String, String)>) {
+        let Some(shims) = self.shipped.shims.as_ref() else {
+            return (args, Vec::new());
+        };
+        // A shell tab is a chat on no profile running no harness — `open_session` with no
+        // program, and the same chat put back from the record.
+        if chat.profile.is_some() || chat.harness().is_some() {
+            return (args, Vec::new());
+        }
+        // The `PATH` every chat gets, worked out by the one function that works it out, with
+        // the shims put in front of it.
+        let chat_env =
+            charter_core::start::with_chat_path(Vec::new(), self.shipped.binary.as_deref());
+        let start = shims.shell_start(
+            program,
+            chat_env,
+            std::env::var_os("PATH").as_deref(),
+            std::env::var_os("ZDOTDIR").as_deref(),
+        );
+        let mut all = start.args;
+        all.extend(args);
+        (all, start.env)
     }
 
     /// The one place a session is opened and a chat is remembered.
@@ -2583,6 +2619,7 @@ mod tests {
         chats.arming_with(crate::Shipped {
             binary: Some(root.join("charter")),
             plugin: Some(plugin.clone()),
+            shims: None,
         });
         let ready = charter_core::start::ready(
             &charter_core::start::Start {
@@ -2682,5 +2719,80 @@ mod tests {
         assert_eq!(argv[2], "--settings", "{argv:?}");
         assert_eq!(argv[4], "--session-id", "{argv:?}");
         assert_eq!(argv[6..], ["--name", "ide.7"], "{argv:?}");
+    }
+
+    // --- a shell tab's shims (SI-5, ADR 0062) ---------------------------------------------- //
+
+    fn armed_with_shims() -> Chats {
+        let mut chats = Chats::new();
+        chats.arming_with(crate::Shipped {
+            binary: None,
+            plugin: None,
+            shims: Some(charter_core::shellguard::Shims::at("/app/data/shims")),
+        });
+        chats
+    }
+
+    fn path_of(env: &[(String, String)]) -> Option<&str> {
+        env.iter()
+            .find(|(name, _)| name == "PATH")
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn a_shell_tab_finds_charters_shims_first_on_its_path() {
+        let chats = armed_with_shims();
+
+        let (args, env) = chats.shell_start(&chat("/bin/sh", "shell", None), "/bin/sh", vec![]);
+
+        assert!(args.is_empty(), "{args:?}");
+        let path = path_of(&env).expect("a PATH");
+        assert!(path.starts_with("/app/data/shims/bin:"), "{path}");
+    }
+
+    #[test]
+    fn a_zsh_shell_tab_is_pointed_at_charters_start_files_and_keeps_its_own_arguments() {
+        let chats = armed_with_shims();
+        let mut shell = chat("/bin/zsh", "shell", None);
+        shell.args = vec!["-l".to_owned()];
+
+        let (args, env) = chats.shell_start(&shell, "/bin/zsh", shell.args.clone());
+
+        assert_eq!(args, ["-l"]);
+        assert!(
+            env.contains(&("ZDOTDIR".to_owned(), "/app/data/shims/zsh".to_owned())),
+            "{env:?}"
+        );
+    }
+
+    #[test]
+    fn a_harness_chat_never_gets_the_shims() {
+        let chats = armed_with_shims();
+
+        let (args, env) = chats.shell_start(&chat("claude", "1", None), "claude", vec![]);
+
+        assert!(args.is_empty());
+        assert!(env.is_empty(), "{env:?}");
+    }
+
+    #[test]
+    fn a_chat_on_a_profile_never_gets_the_shims() {
+        let chats = armed_with_shims();
+        let mut on_a_profile = chat("/usr/local/bin/wrapper", "1", None);
+        on_a_profile.profile = Some("work".to_owned());
+
+        let (_, env) = chats.shell_start(&on_a_profile, "/usr/local/bin/wrapper", vec![]);
+
+        assert!(env.is_empty(), "{env:?}");
+    }
+
+    #[test]
+    fn a_shell_tab_in_an_app_with_no_shims_is_a_plain_shell() {
+        let chats = Chats::new();
+
+        let (args, env) = chats.shell_start(&chat("/bin/zsh", "shell", None), "/bin/zsh", vec![]);
+
+        assert!(args.is_empty());
+        assert!(env.is_empty(), "{env:?}");
     }
 }

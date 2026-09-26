@@ -1095,6 +1095,26 @@ export type Build =
 /**  A version with no section and no prerelease suffix. A local build of `main` is one. */
 { kind: "unlisted" };
 
+/**
+ *  A harness the operator started by hand in a shell tab, as the window draws its banner.
+ * 
+ *  **Nothing about the chat moves.** It is not a state and not a needs-you item: the tab says
+ *  what happened and offers to open that harness as a chat, and the operator's click is what
+ *  does anything.
+ */
+export type ByHand = {
+	plane: PlaneId,
+	/**  The shell tab's chat. */
+	session: number,
+	/**  The harness, by the word the plane calls it — a profile's `kind`. */
+	harness: string,
+	/**
+	 *  Where the shell was standing when it started it, which is where a chat opened in its
+	 *  place starts.
+	 */
+	cwd: string | null,
+};
+
 /**  Everything the chat's gauge draws. Every part is absent when charter does not know it. */
 export type ChatUsage = {
 	/**  `ctx NN%`: how full the context window was at the last turn that said. */

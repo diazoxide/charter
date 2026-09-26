@@ -106,6 +106,13 @@ A chat that is waiting on the operator. Every project's are listed in the title 
 and each is counted in red on its tab and on any show-more hiding it.
 _Avoid_: notification, alert (alerts are a separate drawer)
 
+**Shell tab**:
+A tab running the operator's own shell, with no harness and no profile, opened by `New shell`.
+A harness typed into one runs outside charter's session tracking, so charter's **shell-tab
+shims** stand first on its `PATH`: the harness still starts, after one line saying so, and the
+tab shows a banner offering to open it as a chat instead (ADR 0062).
+_Avoid_: terminal (for the tab), console, plain chat
+
 **Plane updated** (of a chat):
 A chat started before the plane's start-time instructions (`CLAUDE.md`, the harness settings
 and sub-agents, a persona's charter) changed on disk. It runs on what it read until it is
