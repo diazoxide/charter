@@ -41,12 +41,13 @@
 //! What the ticket on that socket is worth, and what it is not, is argued once, where it is
 //! implemented: `charter_core::hookwire::OpenChat`.
 //!
-//! **Python's writes after the open are not ported**: the todo in the target workspace, the
-//! dispatch tally, the arrival mark on the strip. This charter has no todo store and writes
-//! no dispatch log, and the recorded scenario declares the difference rather than hiding it
-//! (`handoff-inside-the-app-opens-the-chat-there-and-writes-nothing`, ADR 0046). With `--create`
-//! the app creates the workspace before it opens the chat, because a chat has to stand in a
-//! directory that exists.
+//! **After the open, the command writes what Python wrote around its own** (#372): the todo in
+//! the target workspace, de-duplicated by first line, and one `handoff` row in the dispatch
+//! log ([`record_opened`]). Both are best-effort and never undo the open. The arrival mark on
+//! the strip is the app's: it draws the new tab without taking the screen. The recorded
+//! scenario is `handoff-inside-the-app-opens-the-chat-there-and-records-its-todo` (ADR 0046).
+//! With `--create` the app creates the workspace before it opens the chat, because a chat has
+//! to stand in a directory that exists.
 
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
@@ -67,6 +68,9 @@ pub struct Args {
     pub report: bool,
     /// The word after `report` in `charter handoff report "<summary>"`.
     pub summary: Option<String>,
+    /// The hidden `--now`: a local naive time the stamp, the todo and the dispatch row are
+    /// written at, so a recorded scenario can pin them.
+    pub now: Option<String>,
 }
 
 /// The word that makes `charter handoff` a report back rather than a handoff.
@@ -197,8 +201,15 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| handoff::NO_CHAT.to_string());
     let source_ws = here.active_workspace(None);
+    let now = match when(args.now.as_deref()) {
+        Ok(now) => now,
+        Err(why) => {
+            voice::err(&format!("charter handoff: {why}"));
+            return ExitCode::FAILURE;
+        }
+    };
     let msg = handoff::first_message(
-        &handoff::stamp(&source_chat, &source_ws, chrono::Local::now().naive_local()),
+        &handoff::stamp(&source_chat, &source_ws, now.naive_local()),
         &brief,
     );
     // Measured as the chat will be sent it: with the report line when one is asked for, and
@@ -223,6 +234,16 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     let create_vision = vision.filter(|_| args.create);
     let refused = match in_the_app(ws, &msg, create_vision, persona, name, args.report) {
         Host::Opened(chat) => {
+            record_opened(&Opened {
+                here,
+                chat,
+                ws,
+                brief: &brief,
+                source_chat: &source_chat,
+                source_ws: &source_ws,
+                created: args.create,
+                now,
+            });
             // `commands_handoff.OPENED`, word for word, on stdout where Python prints it.
             println!(
                 "charter handoff: opened chat {chat} in workspace '{ws}', started on the brief"
@@ -257,6 +278,102 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
     }
     voice::err(&said);
     ExitCode::FAILURE
+}
+
+/// The instant this handoff happens at: the hidden `--now`, a LOCAL naive time as it is
+/// everywhere in this binary, else the clock. A `--now` that names no single local instant
+/// is refused rather than swapped for the clock.
+fn when(now: Option<&str>) -> Result<chrono::DateTime<chrono::Local>, String> {
+    let Some(text) = now else {
+        return Ok(chrono::Local::now());
+    };
+    let naive: chrono::NaiveDateTime = text
+        .parse()
+        .map_err(|e| format!("--now is not a local naive timestamp: {e}"))?;
+    chrono::TimeZone::from_local_datetime(&chrono::Local, &naive)
+        .single()
+        .ok_or_else(|| "--now names no single local instant".to_owned())
+}
+
+/// What an opened handoff leaves behind (#372): the todo in the target workspace, and one
+/// row in the dispatch log — `commands_handoff.py`'s writes around its open.
+///
+/// **After the open, and never able to undo it.** Python records the todo before it opens;
+/// here the app is what opens, and with `--create` it is also what makes the workspace, so
+/// the todo cannot be written any earlier. A handoff the app would not open leaves nothing.
+/// Each write is best-effort: one that fails is said, on stderr as a `!`, because the chat
+/// is open and the command did what it was asked.
+fn record_opened(opened: &Opened<'_>) {
+    let (chat, ws) = (opened.chat, opened.ws);
+    match record_todo(opened) {
+        Ok(Todo::Recorded) => {}
+        // Reported and continued: a second chat on the same work may be exactly what was
+        // approved, and charter makes no judgement about the content of work.
+        Ok(Todo::AlreadyListed(dup)) => voice::info(&format!(
+            "already on '{ws}'s list: {} — not recorded twice",
+            charter_core::personas::one_line(&dup)
+        )),
+        Err(why) => voice::warn(&format!(
+            "charter handoff: chat {chat} is open in '{ws}', but its todo could not be \
+             recorded there ({}). Record it with: charter workspace todo -w {ws} \"<the \
+             brief's first line>\"",
+            charter_core::personas::one_line(&why)
+        )),
+    }
+    let placement = if ws == opened.source_ws {
+        charter_core::dispatch::Placement::Here
+    } else {
+        charter_core::dispatch::Placement::Elsewhere
+    };
+    let recorded = charter_core::dispatch::record_handoff(
+        opened.here.plane.root(),
+        placement,
+        opened.created,
+        opened.now.with_timezone(&chrono::Utc),
+        &charter_core::dispatch::host(),
+    );
+    if recorded.is_none() {
+        voice::warn(&format!(
+            "charter handoff: chat {chat} is open in '{ws}', but its row could not be added \
+             to the dispatch log (personas/{}).",
+            charter_core::dispatch::DIR_NAME
+        ));
+    }
+}
+
+/// What became of an opened handoff's todo.
+enum Todo {
+    Recorded,
+    /// An open todo there is already about the same work; this is its title.
+    AlreadyListed(String),
+}
+
+fn record_todo(opened: &Opened<'_>) -> Result<Todo, String> {
+    let text = handoff::todo_text(opened.brief, opened.source_chat, opened.source_ws);
+    let target = opened
+        .here
+        .plane
+        .workspace(opened.ws)
+        .map_err(|e| e.to_string())?;
+    if let Some(dup) = target.todo_for_the_same_work(&text) {
+        return Ok(Todo::AlreadyListed(dup));
+    }
+    target
+        .add_todo(&text, opened.now.naive_local())
+        .map(|_| Todo::Recorded)
+        .map_err(|e| e.to_string())
+}
+
+/// A handoff the app opened, and the facts [`record_opened`] writes down about it.
+struct Opened<'a> {
+    here: &'a crate::Here,
+    chat: u32,
+    ws: &'a str,
+    brief: &'a str,
+    source_chat: &'a str,
+    source_ws: &'a str,
+    created: bool,
+    now: chrono::DateTime<chrono::Local>,
 }
 
 /// What the app that started this chat did with a handoff.

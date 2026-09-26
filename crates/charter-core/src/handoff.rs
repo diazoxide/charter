@@ -50,10 +50,11 @@
 //! Either way the command does every check in front of the open, which is where a handoff's
 //! whole value is, because charter fails toward no change, and it never claims to have opened
 //! a chat it did not. The printed-command path writes nothing: Python's writes (the workspace,
-//! its vision, the todo) all come *after* the frame check. The app path writes only the
-//! workspace, when the call creates one; the todo, the dispatch tally and the arrival mark
-//! Python writes after its open have no counterpart here, and the recorded scenario declares
-//! that (`handoff-inside-the-app-opens-the-chat-there-and-writes-nothing`, ADR 0046).
+//! its vision, the todo) all come *after* the frame check. The app path writes the workspace
+//! when the call creates one, and after the open, the [`todo_text`] todo in the target
+//! workspace and a `handoff` row in the dispatch log (`crate::dispatch::record_handoff`,
+//! #372). The arrival mark is the app's own, drawn on its strip. The recorded scenario is
+//! `handoff-inside-the-app-opens-the-chat-there-and-records-its-todo` (ADR 0046).
 
 /// The first line of every handoff's first message. Facts charter can observe and no
 /// instruction: where it came from, which workspace that was, and when.

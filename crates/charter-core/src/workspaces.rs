@@ -366,6 +366,25 @@ impl Workspace {
         )
     }
 
+    /// The title of an open todo about the same work as `text`, or `None` —
+    /// `todos.duplicate_of(…, by_title=True)`, the rule `charter handoff` records by.
+    ///
+    /// First lines against titles, never the whole text: every handoff todo ends in the same
+    /// provenance sentence (`handoff::todo_text`), which would otherwise read as agreement.
+    /// Careful rather than catching, because a false match drops a real handoff's todo. The
+    /// rule is [`memstore::same_work`].
+    ///
+    /// A store that cannot be read has no duplicate, so the todo is written — and the
+    /// write, which asks the same questions, is where a real failure is said.
+    pub fn todo_for_the_same_work(&self, text: &str) -> Option<String> {
+        let open = self.todos().ok()?;
+        memstore::same_work(
+            &memstore::title_of(text),
+            open.iter().map(|todo| todo.title.as_str()),
+        )
+        .map(str::to_owned)
+    }
+
     /// Close a todo: write its closing memory into the journal, then delete the todo file
     /// and its index line. There is no state field — a closed todo is a deleted file.
     pub fn close_todo(&self, slug: &str, stamp: chrono::NaiveDateTime) -> io::Result<()> {

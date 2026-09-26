@@ -6,12 +6,14 @@
 //! file per month per machine. It is **committed**, which is what makes the roster block a
 //! fact every engineer sees the same way rather than a reading of one laptop.
 //!
-//! Two rows are written here, both by a hook: [`record`], when a `Task`/`Agent` call returns
-//! (`posttooluse-dispatch`), and [`record_resume`], when a `SendMessage` resumes a persona
-//! (`posttooluse-message`). Without them the roster `charter docs` draws would count only
-//! what the Python charter once logged. Committing the log is not done here: under `share =
-//! "commit"` or `"push"` the Python hook commits each row as it lands, and charter-app leaves
-//! that to `charter save`, which commits the plane's own files as one decision.
+//! Three rows are written here. Two are written by a hook: [`record`], when a `Task`/`Agent`
+//! call returns (`posttooluse-dispatch`), and [`record_resume`], when a `SendMessage` resumes a
+//! persona (`posttooluse-message`). The third, [`record_handoff`], is written by `charter
+//! handoff` once the app has opened the chat. Without the hook rows the roster `charter docs`
+//! draws would count only what the Python charter once logged. Committing the log is not done
+//! here: under `share = "commit"` or `"push"` the Python hook commits each row as it lands, and
+//! charter-app leaves that to `charter save`, which commits the plane's own files as one
+//! decision.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -213,6 +215,55 @@ pub fn record_resume(
     )
 }
 
+/// The `event` a handoff row carries — `dispatch.HANDOFF`. A chat handed work to a new CHAT
+/// rather than to a sub-agent, so, like a resume, it is not a dispatch [`tally`] counts.
+pub const HANDOFF: &str = "handoff";
+
+/// Where a handoff sent its work, relative to the chat that handed it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// Into the workspace the handing-off chat is in.
+    Here,
+    /// Into another workspace.
+    Elsewhere,
+}
+
+impl Placement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Here => "here",
+            Self::Elsewhere => "elsewhere",
+        }
+    }
+}
+
+/// Log one handoff: when, here or elsewhere, and whether it made the workspace —
+/// `dispatch.record_handoff`.
+///
+/// **Four fields, and what is missing is the design.** No workspace name: a LOCAL
+/// workspace's name must not reach a committed file, and this log is committed. No persona.
+/// No brief, nor any part of one: the brief never leaves the chat it opened. What is left
+/// answers the one question this row exists for: how often work is routed to a new chat,
+/// and whether a new workspace is made to do it.
+pub fn record_handoff(
+    root: &Path,
+    placement: Placement,
+    created: bool,
+    when: chrono::DateTime<chrono::Utc>,
+    host: &str,
+) -> Option<PathBuf> {
+    append(
+        &path_for(root, when, host),
+        root,
+        &serde_json::json!({
+            "created": created,
+            "event": HANDOFF,
+            "placement": placement.as_str(),
+            "ts": stamp(when),
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +332,24 @@ mod tests {
         );
         assert_eq!(tally(dir.path()).get("devops"), Some(&1));
         assert_eq!(record(dir.path(), "  ", when, "box"), None);
+    }
+
+    #[test]
+    fn a_handoff_is_logged_by_where_it_went_and_nothing_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let when = chrono::DateTime::parse_from_rfc3339("2026-05-04T11:32:17+00:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let p = record_handoff(dir.path(), Placement::Elsewhere, true, when, "box").unwrap();
+        record_handoff(dir.path(), Placement::Here, false, when, "box").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "{\"created\": true, \"event\": \"handoff\", \"placement\": \"elsewhere\", \
+             \"ts\": \"2026-05-04T11:32:17+00:00\"}\n\
+             {\"created\": false, \"event\": \"handoff\", \"placement\": \"here\", \
+             \"ts\": \"2026-05-04T11:32:17+00:00\"}\n"
+        );
+        assert!(tally(dir.path()).is_empty(), "a handoff is not a dispatch");
     }
 
     #[test]

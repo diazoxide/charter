@@ -336,6 +336,10 @@ enum Command {
         /// workspace gets.
         #[arg(long)]
         persona: Option<String>,
+        /// Pin the clock the stamp, the todo and the dispatch row are written at, for tests
+        /// only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
     },
 
     /// Answer a harness hook. Run by a harness's hooks, never by a person.
@@ -2479,6 +2483,7 @@ fn main() -> ExitCode {
         create,
         vision,
         persona,
+        now,
     } = &cli.command
     {
         let here = match Here::read() {
@@ -2498,6 +2503,7 @@ fn main() -> ExitCode {
                 name: name.clone(),
                 report: *report,
                 summary: summary.clone(),
+                now: now.clone(),
             },
         );
         if code == ExitCode::SUCCESS {

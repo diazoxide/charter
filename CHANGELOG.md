@@ -19,6 +19,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   crash in a `PreToolUse` hook now exits 2, which both read as "block", with one line on
   stderr saying the guard could not answer. A crash in any other hook still never blocks.
   ([#349](https://github.com/diazoxide/charter/issues/349))
+- **A handoff leaves a todo in the workspace it went to.** Once the app has opened the new
+  chat, `charter handoff` records a todo there: the brief's first line and which chat handed it
+  off, never the rest of the brief. If a todo about the same work is already open there, it
+  says so and records nothing twice. It also adds one row to the dispatch log saying whether
+  the chat went to this workspace or another, and whether the handoff created it; the row
+  names no workspace, persona or brief. A write that fails is said and never undoes the open.
+  ([#372](https://github.com/diazoxide/charter/issues/372))
 
 ## [0.3.0] - 2026-09-25
 

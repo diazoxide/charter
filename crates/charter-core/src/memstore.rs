@@ -370,6 +370,42 @@ pub fn duplicate_of(root: &std::path::Path, dir: &std::path::Path, text: &str) -
     None
 }
 
+/// The fewest words two TITLES must share before their overlap says anything about them —
+/// `todos._MIN_SHARED_WORDS`. [`same_work`] only.
+const MIN_SHARED_WORDS: usize = 3;
+
+/// The first of `titles` that names the same work as `subject`, a todo's first line —
+/// `todos._same_work`.
+///
+/// **Below `MIN_SHARED_WORDS` (three) shared words, identity decides**: `Update the README` and
+/// `Update the README file` share two words, which cannot tell "retitled by a word" from
+/// "different work sharing a word", so they are two todos unless they read the same once
+/// case and runs of whitespace are set aside. Past it, Jaccard against
+/// [`DUPLICATE_THRESHOLD`], as [`duplicate_of`] measures.
+pub fn same_work<'a>(subject: &str, titles: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let words = wordset(subject);
+    let mine = normal(subject);
+    titles.into_iter().find(|title| {
+        let other = wordset(title);
+        let shared = words.intersection(&other).count();
+        if shared < MIN_SHARED_WORDS {
+            return mine == normal(title);
+        }
+        shared as f64 / words.union(&other).count() as f64 >= DUPLICATE_THRESHOLD
+    })
+}
+
+/// `todos._normal`: case and runs of whitespace are not differences between two titles.
+/// `to_lowercase` where Python has `casefold`; the two part only on a few letters such as
+/// `ß`, where this reads two titles as different that Python reads as one.
+fn normal(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// The `# ` heading of a stored memory.
 fn title_of_stored(raw: &str) -> String {
     crate::mdsection::split_lines(raw)

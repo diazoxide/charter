@@ -80,10 +80,19 @@ below. Then, from a chat the app started:
 5. The chat lands as a new tab on the target workspace's strip, **behind the tab you are
    reading**, and the window is not raised. It takes the front only in a window with no tab at
    all, where there is nothing to interrupt.
-6. The command prints the new chat and its workspace.
+6. The command records a todo in the target workspace: the brief's first line, and which chat
+   and workspace handed it off. The rest of the brief is not in it, because a LIVE workspace
+   commits its todos and a brief never reaches a committed file. If an open todo there is
+   already about the same work, compared by first line, the command says it is already on the
+   list and records nothing twice.
+7. The command adds one `handoff` row to the dispatch log (`personas/_dispatch/`): when,
+   whether the chat went to the workspace it was asked from or elsewhere, and whether the
+   handoff created the workspace. It names no workspace, no persona and nothing of the brief.
+8. The command prints the new chat and its workspace.
 
-A handoff records no todo in the target workspace, keeps no tally and sets no mark on the
-strip: the brief is the new chat's first message, and the tab is how you see it.
+The todo and the row come after the chat is open, and a failure to write either is said and
+never undoes the open. A handoff the app would not open writes neither. There is no mark on
+the strip beyond the new tab itself: the tab is how you see it.
 
 **Your yes to the prompt in front of `charter handoff` is the only one asked for.** The app
 opens one chat per `charter handoff`: the command asks the app for a single-use ticket and
