@@ -179,8 +179,7 @@ pub fn pin_verdict(pinned: Option<&str>) -> PinVerdict {
 /// **ADR 0045, amending ADR 0030.** This charter's version is the app's — [`app_version`] — and
 /// a plane's `[charter] version` means a version of the app. ADR 0030 printed the newest release
 /// the Python news corpus names as "the charter this brought", with the app's own number second
-/// as the build; that corpus is now frozen history, and a number taken from it is not this
-/// charter's.
+/// as the build; that corpus was never this app's, and has since been removed (#352).
 ///
 /// * `charter` — [`app_version`].
 /// * `pinned` — `[charter] version`, verbatim.

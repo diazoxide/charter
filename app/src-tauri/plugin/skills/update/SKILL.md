@@ -1,6 +1,6 @@
 ---
 name: update
-description: Update charter to a newer version and adopt what it brings — the app installs the new version, then this skill walks what this plane has not taken up. Use when asked to update or upgrade charter, whether a newer charter is published, what a version added, or how to adopt a new charter feature.
+description: Update charter to a newer version and say what it brings — the app installs the new version, then this skill relays what `charter news` says each version brought. Use when asked to update or upgrade charter, whether a newer charter is published, what a version added, or how to adopt a new charter feature.
 ---
 
 # Updating charter

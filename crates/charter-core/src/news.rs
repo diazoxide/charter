@@ -58,6 +58,13 @@ impl Report {
         self.code = self.code.max(other.code);
     }
 
+    fn printed(out: String) -> Self {
+        Report {
+            out,
+            ..Report::new()
+        }
+    }
+
     fn refused(line: String, code: u8) -> Self {
         Report {
             out: String::new(),
@@ -84,9 +91,9 @@ pub struct Args {
 const WHAT_TO_RUN: &str = "Every version this app has, newest first: charter news. One version: \
                            charter news --for <version>";
 
-/// Exit status for a flag this command no longer has. 1 and not clap's 2, which a harness hook
-/// reads as "block".
-const RETIRED: u8 = 1;
+/// Exit status for a refusal: a retired flag, or a version the changelog does not have. 1 and
+/// not clap's 2, which a harness hook reads as "block".
+const REFUSED: u8 = 1;
 
 /// `charter news`.
 pub fn report(args: &Args) -> Report {
@@ -101,7 +108,7 @@ fn report_from(changelog: &str, args: &Args) -> Report {
                 "`charter news --pending` is retired: nothing this app ships carries an \
                  adoption probe. {WHAT_TO_RUN}"
             ),
-            RETIRED,
+            REFUSED,
         );
     }
     if args.since || args.until {
@@ -110,12 +117,13 @@ fn report_from(changelog: &str, args: &Args) -> Report {
                 "`charter news --since/--until` is retired: charter news reads this app's \
                  CHANGELOG.md, which needs no baseline. {WHAT_TO_RUN}"
             ),
-            RETIRED,
+            REFUSED,
         );
     }
     match args.for_version.as_deref().map(str::trim) {
-        Some(version) if !version.is_empty() => one(changelog, version),
-        _ => every(changelog),
+        Some("") => Report::refused(format!("`--for` needs a version. {WHAT_TO_RUN}"), REFUSED),
+        Some(version) => one(changelog, version),
+        None => every(changelog),
     }
 }
 
@@ -136,11 +144,7 @@ fn one(changelog: &str, version: &str) -> Report {
             )],
             code: 0,
         },
-        Ok(section) => Report {
-            out: format!("{}\n", section.notes),
-            said: Vec::new(),
-            code: 0,
-        },
+        Ok(section) => Report::printed(format!("{}\n", section.notes)),
         Err(changelog::Error::NoSection(_)) => {
             let known = changelog::released(changelog).unwrap_or_default();
             Report::refused(
@@ -152,10 +156,10 @@ fn one(changelog: &str, version: &str) -> Report {
                         known.join(", ")
                     }
                 ),
-                1,
+                REFUSED,
             )
         }
-        Err(why) => Report::refused(why.to_string(), 1),
+        Err(why) => Report::refused(why.to_string(), REFUSED),
     }
 }
 
@@ -163,7 +167,7 @@ fn one(changelog: &str, version: &str) -> Report {
 fn every(changelog: &str) -> Report {
     let versions = match changelog::released(changelog) {
         Ok(versions) => versions,
-        Err(why) => return Report::refused(why.to_string(), 1),
+        Err(why) => return Report::refused(why.to_string(), REFUSED),
     };
     let mut out = String::new();
     let unreleased = changelog::section(changelog, changelog::UNRELEASED)
@@ -177,7 +181,7 @@ fn every(changelog: &str) -> Report {
     for section in sections {
         let section = match section {
             Ok(section) => section,
-            Err(why) => return Report::refused(why.to_string(), 1),
+            Err(why) => return Report::refused(why.to_string(), REFUSED),
         };
         if !out.is_empty() {
             out.push('\n');
@@ -189,11 +193,7 @@ fn every(changelog: &str) -> Report {
         out.push_str(&section.notes);
         out.push('\n');
     }
-    Report {
-        out,
-        said: Vec::new(),
-        code: 0,
-    }
+    Report::printed(out)
 }
 
 #[cfg(test)]
@@ -308,6 +308,15 @@ Words about the file.
             err_text(&got),
             "CHANGELOG.md has no section for 9.9.9. The versions it has: 0.2.0, 0.1.0."
         );
+    }
+
+    #[test]
+    fn for_with_no_version_is_refused_rather_than_read_as_no_flag() {
+        let got = report_from(LOG, &for_version("  "));
+
+        assert_eq!(got.code, 1);
+        assert_eq!(got.out, "");
+        assert!(err_text(&got).starts_with("`--for` needs a version."));
     }
 
     #[test]

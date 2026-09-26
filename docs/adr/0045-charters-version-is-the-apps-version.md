@@ -142,7 +142,8 @@ draws for an older Python pin, where this app draws none, is held by `alerts/tes
   follow-up, still open.
 - Calling a Python-line pin drift, or telling the operator to install, run or return to the
   Python charter to meet one.
-- Writing news entries about this app into the frozen corpus.
+- Writing news entries about this app into the frozen corpus. (The corpus is gone since the
+  2026-09-26 amendment; the app's notes are CHANGELOG.md.)
 
 ## Amendment, 2026-09-26: `charter news` is the app's changelog, and the corpus is gone
 
