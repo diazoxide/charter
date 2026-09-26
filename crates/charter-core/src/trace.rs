@@ -173,7 +173,9 @@ pub fn activity_line(act: &serde_json::Map<String, serde_json::Value>) -> String
         .collect();
     let ts = act.get("ts").map(text).unwrap_or_default();
     let event = match act.get("event") {
-        Some(serde_json::Value::Number(n)) => format!("{:>10}", n.to_string()),
+        // A number the way Python prints what `json.loads` read (`1E5` is `100000.0`), and
+        // right-aligned, as `:10` aligns a number.
+        Some(v @ serde_json::Value::Number(_)) => format!("{:>10}", text(v)),
         Some(v) => format!("{:<10}", text(v)),
         None => format!("{:<10}", ""),
     };

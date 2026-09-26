@@ -7,8 +7,8 @@
 //!
 //! - **`persona migrate`** (legacy `personas/<name>.md` → `<name>/persona.md` + `memory/`).
 //!   Every reader here still reads the flat layout ([`crate::personas::def_path`]), so a
-//!   plane that never migrated loses nothing, and `persona create --force` rewrites one into
-//!   the directory layout when somebody wants it.
+//!   plane that never migrated loses nothing; moving one is a `git mv` to
+//!   `personas/<name>/persona.md`.
 //! - **`persona dispatch-backfill`**, a one-off seeding of the dispatch tally from old
 //!   transcripts. The tally has been written live for months; there is nothing left to seed.
 //! - **`persona memory-sync`**: a memory goes with the plane's next save (ADR 0051).
@@ -73,10 +73,7 @@ pub fn forget(root: &Path, ask: &Forget, say: Sink) -> (u8, bool) {
             (0, !ask.ephemeral)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            say(Say::Fail(format!(
-                "no memory '{}' in that store",
-                crate::shown::short(ask.slug)
-            )));
+            say(Say::Fail(format!("no memory '{}' in that store", ask.slug)));
             (1, false)
         }
         // A slug is one file in the store; `../<elsewhere>` is a path, and the store's resolver
@@ -183,19 +180,25 @@ pub fn optimize(root: &Path, ask: &Optimize, changed: &mut dyn FnMut(), say: Sin
         .map(|n| crate::curate::Store {
             label: n.clone(),
             dir: memory_dir(root, n),
+            // Read only for a store that is there: a missing one is skipped by the runner.
             verified_pct: Some(
-                super::stats::row(root, n, super::stats::RECENT_DAYS, ask.today).verify_pct,
+                memory_dir(root, n)
+                    .is_dir()
+                    .then(|| {
+                        super::stats::row(root, n, super::stats::RECENT_DAYS, ask.today).verify_pct
+                    })
+                    .flatten(),
             ),
         })
         .collect();
-    let words = crate::curate::Optimizing {
+    let how = crate::curate::Optimizing {
         apply: ask.apply,
         stale_days: ask.stale_days,
         today: ask.today,
         proposals: "  proposals (steward: quiz the engineer — not auto-applied):",
         tidy: "\nNo safe ops to apply — corpus is already tidy.",
     };
-    crate::curate::optimize(root, &stores, &words, changed, say)
+    crate::curate::optimize(root, &stores, &how, changed, say)
 }
 
 /// What `charter persona log` was asked for.

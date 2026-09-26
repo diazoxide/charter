@@ -290,6 +290,8 @@ pub fn proposals(rep: &Report) -> Vec<String> {
 pub struct Store {
     pub label: String,
     pub dir: std::path::PathBuf,
+    /// `None` for a store whose heading has no `verified` column (a workspace's). Inside,
+    /// `None` is a store with no memories, shown as 0% as Python's `or 0` shows it.
     pub verified_pct: Option<Option<i64>>,
 }
 

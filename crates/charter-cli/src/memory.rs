@@ -768,7 +768,7 @@ pub fn workspace_optimize(
             verified_pct: None,
         })
         .collect();
-    let words = charter_core::curate::Optimizing {
+    let how = charter_core::curate::Optimizing {
         apply,
         stale_days,
         today,
@@ -779,7 +779,7 @@ pub fn workspace_optimize(
     Ok(charter_core::curate::optimize(
         root,
         &stores,
-        &words,
+        &how,
         &mut || reactive(plane),
         &mut sink,
     ))
