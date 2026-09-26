@@ -63,7 +63,9 @@ a `cd` not joined by `&&` (after `;`, `||`, `&`, a newline, or in a pipeline or 
 whose destination the guard cannot name (`$VAR`, a glob, `cd -`) or reads as the shell does (`~`,
 a logical `..`), a wrapper's chdir flag, a `git` in capitals or split by quotes (`g''it`), an
 inline alias used in a different case, a re-cased root, and a working directory inside the root's
-repository. In the prose-guard rows: a `gh`, `glab` or `charter` in capitals. The keys that moved are the verdicts (`bra`,
+repository. In the prose-guard rows: a `gh`, `glab` or `charter` in capitals. The re-cased rows
+were recorded on a filesystem that folds case; on one that does not, the replay links
+`@B@/PLANE` to the root so the recorded answer holds on both. The keys that moved are the verdicts (`bra`,
 `rst`, `fsh`, `csh`) and what the walk found on the way (`prg`, `rga`, `cb`, `gt`).
 
 ## The session recording
