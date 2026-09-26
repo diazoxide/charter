@@ -80,7 +80,7 @@ impl Rig {
     }
 }
 
-/// The deadline of every executor here but the one test whose subject is [`DEADLINE`].
+/// The deadline of every executor here but the ones whose subject is a deadline.
 ///
 /// **Not the real five seconds, because this module's programs are strangers to the machine**
 /// (charter-app#303). macOS assesses a program file the first time it runs, and under a busy
@@ -384,10 +384,24 @@ fn a_program_that_never_answers_is_refused_as_too_late_never_as_a_lost_connectio
 }
 
 #[test]
+fn every_executor_charter_makes_gives_its_programs_the_real_deadline() {
+    // **The real [`DEADLINE`], held to account without a program racing it** (#422). This used
+    // to be the one test that ran a program against the real five seconds, and on a machine too
+    // busy to start a shell in five seconds its program never wrote its pid and the test failed
+    // on that rather than on anything about the deadline. What it proved is two facts, and each
+    // is asserted on its own now: every executor charter makes has this deadline (here), and an
+    // executor stops a program at whatever deadline it has (the test below, against a short one).
+    assert_eq!(Executor::default().deadline, DEADLINE);
+    assert_eq!(
+        Executor::with_built_in(extension::BuiltIn::none()).deadline,
+        DEADLINE
+    );
+    assert_eq!(DEADLINE, Duration::from_secs(5), "ADR 0041's five seconds");
+}
+
+#[test]
 fn a_program_that_never_answers_is_stopped_at_the_deadline() {
-    // **The one test on the real executor**, because its subject is the real [`DEADLINE`]:
-    // what every executor charter makes gives a program. It is the one test here a machine too
-    // busy to start a shell in five seconds can still fail (charter-app#303).
+    const SHORT: Duration = Duration::from_millis(500);
     let rig = Rig::new();
     let pid = rig.marker("pid");
     rig.approved(&format!(
@@ -395,19 +409,33 @@ fn a_program_that_never_answers_is_stopped_at_the_deadline() {
         pid.display()
     ));
 
-    let began = Instant::now();
-    let refused = rig
-        .ask(&Executor::default())
-        .expect_err("an answer from nothing");
-    let took = began.elapsed();
+    // Asked until the program got as far as saying who it is before its deadline: a program
+    // file is assessed by macOS the first time it runs, and on a loaded machine that can outlast
+    // a short deadline — the program is still stopped, but it never wrote the pid this test
+    // needs to see that. Once assessed, it starts at once.
+    let mut asked = 0;
+    let started = loop {
+        asked += 1;
+        let began = Instant::now();
+        let refused = rig
+            .ask(&Executor::default().with_deadline(SHORT))
+            .expect_err("an answer from nothing");
+        let took = began.elapsed();
 
-    assert!(refused.contains("did not answer within"), "{refused}");
-    assert!(
-        took < DEADLINE + Duration::from_secs(2),
-        "the caller waited {took:?}, past the deadline"
-    );
-    let pid = alive_from(&pid).expect("its pid");
-    assert!(gone(pid), "a program that timed out is still running");
+        assert!(
+            refused.contains("did not answer within 0.5 seconds"),
+            "{refused}"
+        );
+        assert!(
+            took < SHORT + Duration::from_secs(2),
+            "the caller waited {took:?}, past the deadline"
+        );
+        if let Some(started) = alive_from(&pid) {
+            break started;
+        }
+        assert!(asked < 10, "the program never started in {asked} tries");
+    };
+    assert!(gone(started), "a program that timed out is still running");
 }
 
 #[test]

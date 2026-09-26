@@ -16,8 +16,60 @@ use std::io::Write;
 use std::path::Path;
 
 use charter_core::executor::Executor;
+use charter_core::extension::briefing::Bounds;
 use charter_core::extension::events::{self, Event};
 use charter_core::extension::project::Choices;
+
+/// Set in a debug build, how long every extension's program is given, in milliseconds (#422):
+/// the test suite's seam for the deadlines this binary arms. Compiled out of a release build,
+/// which always gives [`charter_core::executor::DEADLINE`] and [`Bounds::SESSION_START`].
+///
+/// **Why a test needs it.** The deadlines are the product's — five seconds for an event or a
+/// command, two for each extension at a chat's start and three for all of them (ADR 0041,
+/// ADR 0053) — and a test extension is a program copied in fresh, which macOS assesses before
+/// its first run. On a loaded machine that alone outlasts two seconds, so a test whose subject
+/// is not the deadline gives a long one here; a test whose subject is the deadline gives a
+/// short one and a program that never answers, and is fast and certain either way.
+#[cfg(debug_assertions)]
+const DEADLINE_ENV: &str = "CHARTER_TEST_EXTENSION_DEADLINE_MS";
+
+/// The deadline the test suite asked for, in a debug build that was asked for one.
+fn asked_for() -> Option<std::time::Duration> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var(DEADLINE_ENV)
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+            .map(std::time::Duration::from_millis)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
+/// The executor this binary starts an extension's program with — for an event it hears, and
+/// for a command run from the command line.
+pub fn executor() -> Executor {
+    match asked_for() {
+        Some(deadline) => Executor::default().with_deadline(deadline),
+        None => Executor::default(),
+    }
+}
+
+/// How long `charter hook sessionstart` waits for extensions: [`Bounds::SESSION_START`], or,
+/// in a test, the deadline it asked for for each, and the wait for all of them together kept
+/// in the same proportion to it.
+pub fn at_session_start() -> Bounds {
+    let real = Bounds::SESSION_START;
+    match asked_for() {
+        Some(each) => Bounds {
+            each,
+            total: each.mul_f64(real.total.as_secs_f64() / real.each.as_secs_f64()),
+        },
+        None => real,
+    }
+}
 
 /// Tell every approved extension on in `root`'s project that hears it that `event` happened.
 pub fn tell(root: &Path, event: &Event) {
@@ -28,7 +80,7 @@ pub fn tell(root: &Path, event: &Event) {
     };
     let _ = std::io::stdout().flush();
     let choices = Choices::read_in(root, event.workspace());
-    for note in events::deliver(&Executor::default(), &config, &choices, event) {
+    for note in events::deliver(&executor(), &config, &choices, event) {
         eprintln!("charter: {note}");
     }
 }

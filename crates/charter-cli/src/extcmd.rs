@@ -91,13 +91,8 @@ fn run(extension: &str, command: &str, args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let project = choices();
-    let ran = charter_core::executor::Executor::default().command(
-        &config_root,
-        &project,
-        extension,
-        command,
-        args,
-    );
+    let ran =
+        crate::extensions::executor().command(&config_root, &project, extension, command, args);
     match ran {
         Ok(ran) => {
             let _ = std::io::stdout().write_all(&ran.stdout);

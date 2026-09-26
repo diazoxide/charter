@@ -137,7 +137,7 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
         // (charter-app#343). None of it can hold the start past `Bounds::SESSION_START`, and a
         // machine with no config directory has no extension to ask.
         if let Some(config) = charter_core::machine::config_root_if_there() {
-            use charter_core::extension::briefing::{self, Asked, Bounds};
+            use charter_core::extension::briefing::{self, Asked};
             // `BuiltIn::none()`, as `charter statusline`: the binary does not know where an app
             // bundle is, so a built-in extension neither briefs nor hears a chat start
             // (ADR 0041's amendment for charter-app#343).
@@ -149,7 +149,7 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
                     workspace: workspace.clone(),
                     persona: env(charter_core::active::PERSONA_ENV).filter(|it| !it.is_empty()),
                 },
-                Bounds::SESSION_START,
+                crate::extensions::at_session_start(),
             );
             parts.extend(briefed.parts);
             for note in briefed.notes {

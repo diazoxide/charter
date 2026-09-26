@@ -15,6 +15,21 @@ use charter_core::executor::{Acted, Executor, On, Ran};
 use charter_core::panel::Block;
 use charter_core::{extension, handed};
 
+/// How long a program is given by every executor here but the ones whose subject is a deadline
+/// (#422, as charter-app#303 found of the executor's own tests).
+///
+/// **Not the real five seconds, because the probe is copied in fresh for each test**, and macOS
+/// assesses a program file the first time it runs: under a loaded machine those assessments
+/// queue past five seconds, and a test about what the probe answers was failed by a probe that
+/// had not started yet. A test whose subject is the deadline gives a short one of its own and a
+/// probe told to sleep past it, so it stays fast and its verdict does not depend on the load.
+const PATIENT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// An executor that gives its programs [`PATIENT`].
+fn patient() -> Executor {
+    Executor::default().with_deadline(PATIENT)
+}
+
 /// A plane with one persona, the probe assembled beside it, and a config root to install it in.
 struct Probe {
     dir: tempfile::TempDir,
@@ -85,7 +100,7 @@ impl Probe {
     /// Run the probe's action `action` on `on`, with the operator's yes or without it.
     fn act(&self, action: &str, on: On<'_>, confirmed: bool) -> Result<Acted, String> {
         let plane = self.plane();
-        Executor::default().act(
+        patient().act(
             &self.config(),
             &extension::project::Choices::read(&plane),
             "extension-probe",
@@ -103,7 +118,7 @@ impl Probe {
 
     fn ask(&self) -> Result<charter_core::executor::Answer, String> {
         let plane = self.plane();
-        Executor::default().ask(
+        patient().ask(
             &self.config(),
             &extension::project::Choices::read(&plane),
             "extension-probe",
@@ -813,7 +828,7 @@ use charter_core::extension::events::{self, Event};
 impl Probe {
     /// Tell every extension that hears it about `event`, as a core action does once it is done.
     fn deliver(&self, event: &Event) -> Vec<String> {
-        self.deliver_with(&Executor::default(), event)
+        self.deliver_with(&patient(), event)
     }
 
     fn deliver_with(&self, executor: &Executor, event: &Event) -> Vec<String> {
@@ -964,7 +979,7 @@ fn two_events_a_moment_apart_are_both_heard() {
     // An event waits its turn behind the one before it, where a view's second press is refused.
     let probe = Probe::approved();
     probe.behaves(serde_json::json!({ "sleep_ms": 300 }));
-    let executor = Executor::default();
+    let executor = patient();
     let (first, second) = std::thread::scope(|scope| {
         let first = scope.spawn(|| probe.deliver_with(&executor, &Event::PlaneSaved));
         let second = scope.spawn(|| {
@@ -1302,7 +1317,7 @@ fn a_built_in_hears_and_briefs_while_on_and_does_neither_once_turned_off_on_this
         )
     };
 
-    let executor = Executor::with_built_in(built_in.clone());
+    let executor = Executor::with_built_in(built_in.clone()).with_deadline(PATIENT);
     assert!(events::deliver(&executor, &probe.config(), &choices, &Event::PlaneSaved).is_empty());
     assert_eq!(heard(), 1);
     assert_eq!(brief().parts.len(), 1);
@@ -1349,7 +1364,7 @@ impl Probe {
     /// does from this probe's plane.
     fn command(&self, name: &str, args: &[&str]) -> Result<Ran, String> {
         let args: Vec<String> = args.iter().map(|&it| it.to_owned()).collect();
-        Executor::default().command(
+        patient().command(
             &self.config(),
             &extension::project::Choices::read(&self.plane()),
             "extension-probe",

@@ -13,6 +13,21 @@ use charter_core::extension;
 
 const CHARTER: &str = env!("CARGO_BIN_EXE_charter");
 
+/// The debug build's seam for how long an extension's program is given, in milliseconds
+/// (#422). It stands in for every deadline the binary arms for an extension: the five seconds
+/// an event or a command has, and the two a chat's start gives each extension — with the wait
+/// for all of them together kept in proportion.
+const DEADLINE_ENV: &str = "CHARTER_TEST_EXTENSION_DEADLINE_MS";
+
+/// What a test whose subject is not the deadline gives a program: a script copied in fresh is
+/// one macOS assesses before its first run, and on a loaded machine that alone outlasts the
+/// two seconds a chat's start allows (#422, as charter-app#303 found of the executor's).
+const ROOMY_MS: u64 = 30_000;
+
+/// What a test whose subject IS the deadline gives a program that never answers: short, so the
+/// test is fast, and the verdict the same however busy the machine is.
+const SHORT_MS: u64 = 500;
+
 struct Rig {
     dir: tempfile::TempDir,
 }
@@ -49,6 +64,21 @@ impl Rig {
     /// Install and approve an extension that answers a briefing with `section` and an event
     /// with `told`, each one line of JSON, and writes down every question it is asked.
     fn extension(&self, section: &serde_json::Value, told: &serde_json::Value) {
+        self.extension_running(&format!(
+            "#!/bin/sh\nIFS= read -r line\nmkdir -p \"$CHARTER_EXTENSION_STATE\"\n\
+             printf '%s\\n' \"$line\" >> \"$CHARTER_EXTENSION_STATE/asked.jsonl\"\n\
+             case \"$line\" in\n  *'\"briefing\"'*) printf '%s\\n' '{section}' ;;\n  \
+             *) printf '%s\\n' '{told}' ;;\nesac\n"
+        ));
+    }
+
+    /// Install and approve an extension that is asked every question and never answers one.
+    fn extension_that_never_answers(&self) {
+        self.extension_running("#!/bin/sh\nexec sleep 60\n");
+    }
+
+    /// Install and approve the extension, its program being the shell script `script`.
+    fn extension_running(&self, script: &str) {
         let ext = self.ext();
         std::fs::create_dir_all(ext.join("bin")).expect("the extension's directory");
         std::fs::write(
@@ -72,16 +102,7 @@ impl Rig {
         )
         .expect("a manifest");
         let program = ext.join("bin/script");
-        std::fs::write(
-            &program,
-            format!(
-                "#!/bin/sh\nIFS= read -r line\nmkdir -p \"$CHARTER_EXTENSION_STATE\"\n\
-                 printf '%s\\n' \"$line\" >> \"$CHARTER_EXTENSION_STATE/asked.jsonl\"\n\
-                 case \"$line\" in\n  *'\"briefing\"'*) printf '%s\\n' '{section}' ;;\n  \
-                 *) printf '%s\\n' '{told}' ;;\nesac\n"
-            ),
-        )
-        .expect("a program");
+        std::fs::write(&program, script).expect("a program");
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
             .expect("runnable");
@@ -103,6 +124,17 @@ impl Rig {
     /// `charter <args>` at the plane, with `stdin`, and the machine's config home when
     /// `configured` — without it the machine has no extension record at all.
     fn charter(&self, args: &[&str], stdin: &str, configured: bool) -> Ran {
+        self.charter_within(ROOMY_MS, args, stdin, configured)
+    }
+
+    /// [`Self::charter`], with every extension's program given `deadline_ms`.
+    fn charter_within(
+        &self,
+        deadline_ms: u64,
+        args: &[&str],
+        stdin: &str,
+        configured: bool,
+    ) -> Ran {
         let mut command = Command::new(CHARTER);
         command
             .args(args)
@@ -113,6 +145,7 @@ impl Rig {
             .env("TMPDIR", std::env::temp_dir())
             .env("CHARTER_ROOT", self.plane())
             .env("CHARTER_WORKSPACE", "alpha")
+            .env(DEADLINE_ENV, deadline_ms.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -135,7 +168,12 @@ impl Rig {
     }
 
     fn session_start(&self, configured: bool) -> Ran {
-        self.charter(
+        self.session_start_within(ROOMY_MS, configured)
+    }
+
+    fn session_start_within(&self, deadline_ms: u64, configured: bool) -> Ran {
+        self.charter_within(
+            deadline_ms,
             &["hook", "sessionstart"],
             r#"{"session_id":"11111111-2222-4333-8444-555555555555","source":"startup"}"#,
             configured,
@@ -317,5 +355,61 @@ fn a_fork_tells_an_extension_that_is_on_which_workspace_it_came_from() {
             &serde_json::json!("beta"),
             &serde_json::json!("alpha")
         )
+    );
+}
+
+// ---- the deadline itself, against a short one (#422) ----------------------------------------
+
+#[test]
+fn an_extension_that_never_answers_a_chats_start_is_stopped_and_the_chat_starts_without_it() {
+    let rig = Rig::new();
+    rig.extension_that_never_answers();
+
+    let began = std::time::Instant::now();
+    let ran = rig.session_start_within(SHORT_MS, true);
+    let took = began.elapsed();
+
+    assert_eq!(ran.code, 0, "{}{}", ran.out, ran.err);
+    // Held for the short deadline and not for the program's sixty seconds.
+    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    // The chat is briefed without the section, and told there should have been one.
+    let said = context(&ran.out);
+    assert!(
+        said.contains("⚠ The extension “Script” (`script`) adds a section to this briefing"),
+        "{said}"
+    );
+    assert!(
+        ran.err
+            .contains("charter: Script's briefing section was left out: ")
+            // Its own deadline, or the start's for every extension together — whichever a
+            // loaded machine reaches first — and never the real two or three seconds.
+            && (ran.err.contains("did not answer within 0.5 seconds")
+                || ran.err.contains("did not answer within the 0.75 seconds")),
+        "{}",
+        ran.err
+    );
+}
+
+#[test]
+fn an_extension_that_never_answers_an_event_is_stopped_and_the_command_is_unchanged() {
+    let rig = Rig::new();
+    let without = rig.charter(&["workspace", "create", "beta"], "", false);
+    rig.extension_that_never_answers();
+
+    let began = std::time::Instant::now();
+    let with = rig.charter_within(SHORT_MS, &["workspace", "create", "gamma"], "", true);
+    let took = began.elapsed();
+
+    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    assert_eq!(with.code, without.code);
+    assert_eq!(with.out, without.out.replace("beta", "gamma"));
+    assert!(
+        with.err.starts_with(&without.err.replace("beta", "gamma"))
+            && with
+                .err
+                .contains("charter: Script missed workspace 'gamma' being created")
+            && with.err.contains("did not answer within 0.5 seconds"),
+        "{}",
+        with.err
     );
 }
