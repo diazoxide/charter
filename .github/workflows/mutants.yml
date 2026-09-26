@@ -24,10 +24,11 @@ name: mutants
 # Four causes, one colour. The changes below give each one its own answer, and the fourth
 # keeps the answer affordable:
 #
-# 1. **The budget fits.** Shards of at most 200 mutants, round-robin so no shard inherits a
-#    slow file, as many as the run needs — `plan` counts them, so the shard count cannot go
-#    stale the way a fixed one did (24 shards sized on 2026-09-22 for 6,632 mutants were
-#    already 337 apiece by 09-23, when the crate had 8,085: 4 h 40 m against a 5 h timeout).
+# 1. **The budget fits.** Shards of at most `PER_SHARD` mutants (below), round-robin so no
+#    shard inherits a slow file, as many as the run needs — `plan` counts them, so the shard
+#    count cannot go stale the way a fixed one did (24 shards sized on 2026-09-22 for 6,632
+#    mutants were already 337 apiece by 09-23, when the crate had 8,085: 4 h 40 m against a
+#    5 h timeout).
 #    Measured from run 35837846519's artifacts (2026-09-23, 322 mutants over three shards):
 #    42.7 s a mutant — 23 s to build, 20 s to test, because a caught mutant usually stops at
 #    the first failing test binary. The longest test phase of any mutant that was not a
@@ -38,6 +39,13 @@ name: mutants
 #    (`profiles::ignore_check_within`).
 #    Sizing is a measurement and it WILL go stale. The `incomplete` verdict below is what says
 #    so, in words, instead of a job vanishing at the platform limit.
+#    It went stale on 2026-09-25 (run 36115292771, 13 shards of ~188): shards 0 and 7 were cut
+#    at 300 minutes with 97% done and nine more finished between 4 h 34 m and 4 h 58 m. A mutant
+#    cost 97 s, not 43: the build had grown to 42 s, and a mutant no test catches runs the
+#    whole suite, which had grown to 119-146 s, 79 s of it one test
+#    (`the_recorded_plane_root_cases_answer_what_the_python_answered`, 1,912 recorded cases
+#    that each ask git). One mutant in five survived that night, so survivors were half of
+#    every shard's time. 120 mutants at 97 s is ~3 h 15 m, and leaves room for a worse night.
 # 2. **The baseline is checked ONCE.** With a per-shard baseline, 24 shards is 24 rolls of
 #    the same flaky dice: three separate deadline-bound tests were caught failing an
 #    unmutated charter-core while this was being written. One job asks the question, every
@@ -104,7 +112,7 @@ env:
   # one number becomes the matrix, the `--shard N/K` denominator, and the count of verdicts
   # the report checks it received — so a drift between them is visible rather than a silent
   # hole in the coverage.
-  PER_SHARD: "200"
+  PER_SHARD: "120"
   # The weekly full run's cron line, as `github.event.schedule` reports it.
   FULL_CRON: "17 3 * * 0"
   # Pinned on purpose. An unpinned tool in a nightly changes its own answers, and "the
@@ -257,6 +265,11 @@ jobs:
       # test phase of any mutant that did not time out: 64.5 s on 2026-09-23 and 96.5 s on
       # 09-22, both with the 30 s git wait the suite no longer has. It was 300 s, and every
       # TIMEOUT mutant — an infinite loop, which no timeout ends sooner — paid all of it.
+      # 240 s since 2026-09-25, when the whole suite took 119-146 s. At 150 s the three shards
+      # that drew faster runners reported 131 MISSED and 1 TIMEOUT, and the ten that drew slower
+      # ones reported 0 MISSED and 432 TIMEOUTs: the suite still running at the limit, not hangs.
+      # A mutant cut off before the last test binary is not even known to survive. The limit
+      # has to sit clearly above the whole suite, or TIMEOUT means nothing.
       #
       # `--in-diff` on a `diff` run only; on a full run `plan` leaves `mutants.diff` empty and
       # it is not passed, because cargo-mutants reads an empty diff as "nothing to test".
@@ -269,7 +282,7 @@ jobs:
           --shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }}
           --sharding round-robin
           --baseline skip
-          --timeout 150
+          --timeout 240
           --build-timeout 900
           ${{ needs.plan.outputs.scope == 'diff' && '--in-diff mutants.diff' || '' }}
       # `always()`, so this runs after a timeout, after a crash, and after a clean run. It is

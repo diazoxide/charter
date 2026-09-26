@@ -105,14 +105,21 @@ fn build(base: &Path) {
     }
 }
 
+/// A config probe's scratch directory, as the harness spelled it. Compiled once: `normalise` meets
+/// every string of every recorded answer, some 160,000 of them, and compiling it for each one was
+/// a large share of this test's time — the test every surviving mutant waits out.
+fn config_probe_dir() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"@B@/cfg(?:py|rs-\d+)").unwrap())
+}
+
 /// The harness's `normalise`: the base directory as `@B@`, a config probe's scratch directory as
 /// `@CFG@`.
 fn normalise(v: &Value, base: &str) -> Value {
     match v {
         Value::String(s) => {
             let s = s.replace(base, B);
-            let re = regex::Regex::new(r"@B@/cfg(?:py|rs-\d+)").unwrap();
-            Value::String(re.replace_all(&s, "@CFG@").into_owned())
+            Value::String(config_probe_dir().replace_all(&s, "@CFG@").into_owned())
         }
         Value::Array(a) => Value::Array(a.iter().map(|x| normalise(x, base)).collect()),
         Value::Object(o) => Value::Object(
