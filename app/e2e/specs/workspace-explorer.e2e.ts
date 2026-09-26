@@ -1,5 +1,6 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { pressAndStart } from "../opening.js";
+import { textOfEach } from "../reading.js";
 
 /**
  * The left region — the repo and worktree **explorer** (ADR 0038) — against the real
@@ -25,10 +26,8 @@ import { pressAndStart } from "../opening.js";
  *  screen, and WebdriverIO's Tauri service keeps ONE app process for the whole run, so a
  *  chat another spec started would otherwise land in this list. */
 async function listed(): Promise<string[]> {
-  const names = await $$(
-    '[role="tablist"][aria-label="Workspaces"] [role="tab"] .workspace-name',
-  ).getElements();
-  return Promise.all([...names].map((name) => name.getText()));
+  // In one pass: the strip is drawn while it is polled (charter#506, `reading.ts`).
+  return textOfEach('[role="tablist"][aria-label="Workspaces"] [role="tab"] .workspace-name');
 }
 
 /** Waits until the strip has read the plane, and says what it found if it never does. */
@@ -424,10 +423,8 @@ describe("the explorer's rows, in a region too narrow for them", () => {
 
 /** The chats on the strip, which is the focused workspace's and no other's. */
 async function chatTabs(): Promise<string[]> {
-  const names = await $$(
-    '[role="tablist"][aria-label="Tabs"] [role="tab"] .tab-name',
-  ).getElements();
-  return Promise.all([...names].map((name) => name.getText()));
+  // In one pass: a chat is being added to the strip while it is polled (charter#506).
+  return textOfEach('[role="tablist"][aria-label="Tabs"] [role="tab"] .tab-name');
 }
 
 /** What the tab in front is called. */
