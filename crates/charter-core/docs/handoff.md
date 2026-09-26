@@ -161,8 +161,8 @@ Reports wait in `.charter/handbacks/` in the plane, one file each, until a hook 
 
 `charter handoff report` runs under the same prompt as every `charter handoff`, so you see the
 report before it is sent. It needs no heredoc — its text is the command's own argument, which
-the prompt shows as it is — and a live command substitution in it (`"$(cat notes.md)"`) is
-refused, because that text is not the one the prompt showed. `charter handoff report <<'BRIEF'`,
+the prompt shows as it is — and a live command or process substitution in it
+(`"$(cat notes.md)"`, `<(cat notes.md)`) is refused, because that text is not the one the prompt showed. `charter handoff report <<'BRIEF'`,
 with no summary after `report`, is still a handoff into a workspace called `report`.
 
 ## What `charter handoff` refuses before it changes anything

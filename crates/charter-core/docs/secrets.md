@@ -244,5 +244,6 @@ a credential; both checks let it through.
 Separately, a forge command that publishes prose (`gh issue create --body "…"`) and charter's
 own text-taking commands (`persona remember`, `workspace remember|note|todo|vision`) refuse a
 live command substitution in their text, because inside double quotes a backtick or `$(…)`
-runs and can carry your whole environment into a public page. Write such text with
+runs and can carry your whole environment into a public page. A process substitution (`<(…)`,
+`>(…)`, zsh's `=(…)`) is refused on those lines too. Write such text with
 `--body-file -` and a **quoted** heredoc (`<<'BODY'`). [hooks.md](hooks.md) has the scope.
