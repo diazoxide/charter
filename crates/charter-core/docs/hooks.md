@@ -243,7 +243,7 @@ rule while one who reads a bare refusal files an issue.
   create|edit`, and glab's `issue`/`mr` `create|note|update`, `release create`,
   `snippet create` — may not carry a command substitution the shell would **run**, and the
   same holds for a process substitution: `<(…)` and `>(…)` wherever they stand unquoted, and
-  zsh's `=(…)` at the start of a word.
+  zsh's `=(…)` wherever zsh runs it.
 
   ```bash
   gh issue create --body "run `env` first"     # DENIED — the shell runs env, gh gets the output

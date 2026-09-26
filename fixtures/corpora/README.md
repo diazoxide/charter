@@ -127,7 +127,7 @@ rows:
 **And where the live-substitution walk reads process substitution.** The frozen Python's walk
 (`_live_substitution`) looked only for `` ` `` and `$(`, so it answered "nothing live" for a line
 whose only substitution is a process substitution, which the shell runs all the same. The walk
-now reads `<(` and `>(` wherever they stand unquoted, and zsh's `=(` at the start of a word, so
+now reads `<(` and `>(` wherever they stand unquoted, and zsh's `=(` wherever zsh runs it, so
 27 rows record the spelling the walk now finds in the `ls` key instead of `null`:
 `shellseg-oracle.jsonl` rows 33 and 34, and generated rows 72, 125, 181, 232, 256, 272, 419,
 426, 428, 480, 490, 575, 697, 787, 819, 995, 1016, 1176, 1335, 1403, 1928, 2002, 2038, 2116 and

@@ -611,7 +611,7 @@ pub fn handoff_refusal(cmd: &str, caller: Caller<'_>) -> Option<(&'static str, S
     // still refused, because that text is not the one the prompt showed.
     if is_a_report(&seg) {
         return livesub::live_substitution(cmd).map(|hit| {
-            let said = if livesub::PROCSUB.contains(&hit) {
+            let said = if livesub::is_process_substitution(hit) {
                 HANDOFF_REPORT_PROCESS_SOURCE
             } else {
                 HANDOFF_REPORT_SOURCE
@@ -641,12 +641,17 @@ fn is_a_report(seg: &[Tok]) -> bool {
 /// a redirection that reads a file: the lexer hands the pair back as a `<` and a `(` with nothing
 /// between them. A substitution is refused as the live substitution it is, and a denial that
 /// called it "a file (<)" would name the wrong thing. `< (x)`, with a blank, stays a read: bash
-/// refuses it, and zsh reads the file the glob `(x)` names.
+/// refuses it, and zsh reads the file the glob `(x)` names. zsh's `<<(…)` is the same pair
+/// behind a `<<`, and is not a heredoc.
 fn opens_a_process_substitution(seg: &[Tok], i: usize) -> bool {
     let (Some(lt), Some(paren)) = (seg.get(i), seg.get(i + 1)) else {
         return false;
     };
-    lt.text == "<" && paren.is_op(&["("]) && lt.end >= 0 && paren.start == lt.end
+    // A negative offset is one nothing measured, and two of them say nothing about adjacency.
+    (lt.text == "<" || lt.text == "<<")
+        && paren.is_op(&["("])
+        && lt.end >= 0
+        && paren.start == lt.end
 }
 
 /// What a report back with a live substitution in it is told.
@@ -722,7 +727,7 @@ fn brief_source(cmd: &str, seg: &[Tok], piped: bool) -> Option<&'static str> {
     let heredocs: Vec<usize> = seg
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.is_op(&["<<"]))
+        .filter(|&(i, t)| t.is_op(&["<<"]) && !opens_a_process_substitution(seg, i))
         .map(|(i, _)| i)
         .collect();
     if seg.iter().any(|t| t.is_op(&["<<<"])) {
@@ -752,7 +757,7 @@ fn brief_source(cmd: &str, seg: &[Tok], piped: bool) -> Option<&'static str> {
         return Some("an unquoted heredoc, which expands $… and `…` in the brief");
     }
     if let Some(hit) = livesub::live_substitution(cmd) {
-        return Some(if livesub::PROCSUB.contains(&hit) {
+        return Some(if livesub::is_process_substitution(hit) {
             "a live process substitution"
         } else {
             "a live command substitution"
@@ -868,6 +873,11 @@ mod tests {
         assert!(said.contains("process substitution"), "{said}");
         assert!(!said.contains("command substitution"), "{said}");
         let (_, said) = refusal("charter handoff beta <(env) <<'B'\nx\nB").expect("refused");
+        assert!(said.contains("a live process substitution"), "{said}");
+        // zsh's `<<(…)` is a redirection of one, not a heredoc.
+        let (_, said) = refusal("charter handoff report done <<(env)").expect("refused");
+        assert!(said.contains("process substitution"), "{said}");
+        let (_, said) = refusal("charter handoff beta <<(env) <<'B'\nx\nB").expect("refused");
         assert!(said.contains("a live process substitution"), "{said}");
         // With a blank before the `(` it is a redirection that reads a file, as it was.
         let (_, said) = refusal("charter handoff beta < (env) <<'B'\nx\nB").expect("refused");

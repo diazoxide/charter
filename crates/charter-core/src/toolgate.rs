@@ -500,9 +500,18 @@ mod tests {
             verdict_of("charter persona remember devops <(env)", &fix, false).map(|v| v.reason),
             Some(REASON_CHARTER_SUBSTITUTION.to_string())
         );
+        for cmd in [
+            "charter handoff report done <(env)",
+            "charter handoff beta <<'B' && cat <(env)\nx\nB",
+        ] {
+            let v = verdict_of(cmd, &fix, true).unwrap_or_else(|| panic!("{cmd:?}"));
+            assert_eq!(v.reason, handoffguard::REASON_BRIEF_SOURCE, "{cmd:?}");
+            assert!(v.denial.contains("process substitution"), "{cmd:?}");
+        }
+        // zsh's `=(…)` as the operand of a `${…}` operator.
         assert_eq!(
-            verdict_of("charter handoff report done <(env)", &fix, true).map(|v| v.reason),
-            Some(handoffguard::REASON_BRIEF_SOURCE.to_string())
+            verdict_of("gh pr create --body-file ${x:-=(env)}", &fix, false).map(|v| v.reason),
+            Some(REASON_FORGE_SUBSTITUTION.to_string())
         );
         assert_eq!(
             verdict_of("gh pr create --body 'a <(b)'", &fix, false),

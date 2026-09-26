@@ -83,24 +83,44 @@ pub const FUNSUB: &str = "${";
 /// already reads `$((` in.
 pub const PROCSUB: [&str; 3] = ["<(", ">(", "=("];
 
-/// What may stand before a `=(` that zsh reads as a substitution: nothing, which is the start of
-/// a word. `a=(…)` is an array assignment in both shells, and `""=(…)` is a word.
-const BEFORE_A_WORD: &str = " \t\n;&|()<>";
+/// Whether zsh would NOT run a `=(` whose `=` is at `i`, because it ends a name being assigned
+/// (`a=(…)`, `a[1]=(…)`, `a+=(…)` are arrays) or follows a quote that is part of the same word
+/// (`""=(…)`). Everywhere else the `=(` reads as live: zsh runs it at the start of a word, as
+/// the value of an assignment (`v==(…)`) and as the operand of a `${…}` operator
+/// (`${v:-=(…)}`), and bash refuses the whole command, so reading more positions as live costs
+/// nothing where it does not run.
+fn equals_ends_a_name(chars: &[char], i: usize) -> bool {
+    let name_end = |c: char| c.is_alphanumeric() || c == '_' || c == ']';
+    match i.checked_sub(1).map(|k| chars[k]) {
+        Some(c) if name_end(c) || c == '"' || c == '\'' => true,
+        Some('+') => i >= 2 && name_end(chars[i - 2]),
+        _ => false,
+    }
+}
 
 /// Whether `cmd` may hold a live substitution at all — the cheap test a hot-path guard asks
 /// before [`live_substitution`].
 ///
 /// It must never answer no where the walk would answer yes, so it looks for each spelling with a
-/// backslash-newline allowed after the `$`: the shell removes that pair before it reads the line,
-/// and `"$\<newline>(x)"` runs `x`.
+/// backslash-newline allowed after its first character: the shell removes that
+/// pair before it reads the line, and `"$\<newline>(x)"` runs `x`.
 pub fn may_substitute(cmd: &str) -> bool {
+    let spellings = || SUBSTITUTIONS[1..].iter().chain(&[FUNSUB]).chain(&PROCSUB);
     cmd.contains('`')
-        || ["$(", "${", "<(", ">(", "=("]
-            .iter()
-            .any(|s| cmd.contains(s))
-        || ["$\\\n", "<\\\n", ">\\\n", "=\\\n"]
-            .iter()
-            .any(|s| cmd.contains(s))
+        || spellings().any(|s| cmd.contains(s))
+        // A spelling's first character with a backslash-newline after it.
+        || cmd.match_indices("\\\n").any(|(at, _)| {
+            cmd[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| spellings().any(|s| s.starts_with(c)))
+        })
+}
+
+/// Whether a spelling [`live_substitution`] answers is a process substitution ([`PROCSUB`]),
+/// which a denial names differently from a command substitution.
+pub fn is_process_substitution(spelling: &str) -> bool {
+    PROCSUB.contains(&spelling)
 }
 
 /// Whether a bash 5.3 `${ …; }` or `${| …; }` substitution opens at `i`. See [`FUNSUB`].
@@ -128,17 +148,13 @@ fn substitution_at(chars: &[char], i: usize) -> Option<&'static str> {
 /// `<(` and `>(` open one anywhere in a word — `--body-file=<(x)`, `a<(x)b`, `2>(x)` — with a
 /// backslash-newline allowed inside, which bash removes first. `<<(` is zsh's redirection of a
 /// `<(…)`; `>>(` needs no arm of its own, because its second `>` opens a `>(`. `=(` opens one
-/// only at the start of a word ([`BEFORE_A_WORD`]).
+/// unless it ends a name or a quoted part of a word ([`equals_ends_a_name`]).
 pub fn process_substitution_at(chars: &[char], i: usize) -> Option<&'static str> {
     match chars.get(i)? {
         '<' if spliced_end(chars, i, "<(").is_some() => Some("<("),
         '<' if starts_with(chars, i, "<<(") => Some("<("),
         '>' if spliced_end(chars, i, ">(").is_some() => Some(">("),
-        '=' if spliced_end(chars, i, "=(").is_some()
-            && (i == 0 || BEFORE_A_WORD.contains(chars[i - 1])) =>
-        {
-            Some("=(")
-        }
+        '=' if spliced_end(chars, i, "=(").is_some() && !equals_ends_a_name(chars, i) => Some("=("),
         _ => None,
     }
 }
@@ -628,12 +644,18 @@ mod tests {
         }
     }
 
-    /// zsh runs `=(…)` at the start of a word, and bash refuses the whole command, so reading it
-    /// as live costs nothing where it does not run. Inside a word (`a=(…)`, an array assignment)
-    /// it is not a substitution in either shell. Checked against zsh 5.9 and GNU bash 3.2.57.
+    /// zsh runs `=(…)` at the start of a word, as an assignment's value and as a `${…}`
+    /// operand, and bash refuses the whole command, so reading it as live costs nothing where it
+    /// does not run. After a name (`a=(…)`, an array assignment) it is not a substitution in
+    /// either shell. Checked against zsh 5.9 and GNU bash 3.2.57.
     #[test]
-    fn a_zsh_equals_substitution_is_live_at_the_start_of_a_word() {
+    fn a_zsh_equals_substitution_is_live_where_zsh_runs_it() {
         for cmd in [
+            "v==(y)",
+            "a+==(y)",
+            "F==(y) sh -c x",
+            "x ${v:-=(y)}",
+            "gh x --body-file ${v:-=(y)}",
             "=(y)",
             "gh x --body-file =(y)",
             "x;=(y)",
@@ -650,7 +672,8 @@ mod tests {
             "x a=(y)",
             "a=(1 2)",
             "a+=(y)",
-            "x ==(y)",
+            "a[1]=(y)",
+            "x ${v:-a+=(y)}",
             "x \"\"=(y)",
             "x '=(y)'",
             "x \"=(y)\"",

@@ -57,7 +57,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::livesub::{PROCSUB, live_substitution, may_substitute};
+use crate::livesub::{is_process_substitution, live_substitution, may_substitute};
 use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
 
@@ -337,16 +337,16 @@ fn shown_as(spelling: &str) -> &'static str {
 /// `(what a denial calls the substitution, and what it says the shell does with the output)`.
 /// A process substitution hands the program a path to read its output from rather than splicing
 /// the output into its argv, and a denial that called it a command substitution would describe
-/// something the line does not do. `spliced` is the command substitution's own verb phrase,
-/// which differs between A5 and A6.
-fn kind_of(spelling: &str, spliced: &'static str) -> (&'static str, &'static str) {
-    if PROCSUB.contains(&spelling) {
+/// something the line does not do. `command_effect` is what the denial says a command
+/// substitution does, which differs between A5 and A6.
+fn kind_of(spelling: &str, command_effect: &'static str) -> (&'static str, &'static str) {
+    if is_process_substitution(spelling) {
         (
             "process substitution",
             "hands the program a path to read its OUTPUT from",
         )
     } else {
-        ("command substitution", spliced)
+        ("command substitution", command_effect)
     }
 }
 
@@ -707,11 +707,19 @@ mod tests {
             assert!(said.contains(shown), "{cmd}: {said}");
             assert!(!said.contains("command substitution"), "{cmd}: {said}");
         }
-        let (hit, said) =
-            charter_substitution_hit("charter persona remember devops <(env)").expect("refused");
-        assert_eq!(hit, "<(");
-        assert!(said.contains("<(…) process substitution"), "{said}");
-        assert!(!said.contains("command substitution"), "{said}");
+        for (cmd, spelling) in [
+            ("charter persona remember devops <(env)", "<("),
+            ("charter workspace note w >(tee x) y", ">("),
+            ("charter persona remember devops =(env)", "=("),
+        ] {
+            let (hit, said) = charter_substitution_hit(cmd).unwrap_or_else(|| panic!("{cmd}"));
+            assert_eq!(hit, spelling, "{cmd}");
+            assert!(
+                said.contains(&format!("{spelling}…) process substitution")),
+                "{said}"
+            );
+            assert!(!said.contains("command substitution"), "{said}");
+        }
         // Quoted, it is two characters of prose.
         assert_eq!(
             forge_substitution_hit("gh pr create --body 'use <(cmd)'"),
