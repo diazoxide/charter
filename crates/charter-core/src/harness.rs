@@ -401,6 +401,23 @@ impl Harness {
         }
     }
 
+    /// What a chat's pane sends for Shift+Enter: the bytes this harness reads as "a new line
+    /// in what I am typing", rather than "send it" (SI-4).
+    ///
+    /// A terminal has no Shift+Enter of its own — xterm.js 6.0.0 sends a bare CR for it, the
+    /// same as Enter, so every harness submitted on it. ESC CR is Alt/Option+Enter, the
+    /// sequence each of these harnesses already reads as a newline. Measured, not assumed: in a
+    /// pseudo-terminal, `hello`, ESC CR, `world` left both words in the input on two lines,
+    /// unsent, on Claude Code 2.1.283, codex-cli 0.147.0 and opencode 1.18.23.
+    ///
+    /// A harness's and not the pane's, because it is a fact about the program reading the
+    /// keys; a chat that runs no harness — a shell — keeps the terminal's own Enter.
+    pub fn newline(self) -> &'static str {
+        match self {
+            Self::ClaudeCode | Self::Codex | Self::Opencode => "\x1b\r",
+        }
+    }
+
     /// What a chat on this harness cannot tell charter, in a sentence the chat shows — or
     /// none, where it can tell charter everything the board asks.
     ///
@@ -571,6 +588,16 @@ fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn every_harness_takes_escape_return_as_a_newline_in_its_input() {
+        // Measured live in a pseudo-terminal: `hello`, ESC CR, `world` left both words in the
+        // input on two lines, unsent, on Claude Code 2.1.283, codex-cli 0.147.0 and opencode
+        // 1.18.23 (SI-4).
+        for harness in [Harness::ClaudeCode, Harness::Codex, Harness::Opencode] {
+            assert_eq!(harness.newline(), "\x1b\r", "{harness:?}");
+        }
+    }
 
     #[test]
     fn claude_code_is_started_under_the_id_charter_chose() {

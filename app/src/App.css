@@ -811,6 +811,78 @@ button.show-more:focus-visible {
   right: 8px;
 }
 
+/* **The find bar** (SI-4, `app/src/FindBar.tsx`): what `⌘F` opens over the focused pane. A
+   sibling of the terminal like the corners, positioned against the same frame — and under the
+   end corner rather than in it, so the pane's own controls, which appear there on hover, never
+   land on top of the field being typed into. It is drawn only while open, and it is where the
+   keyboard is while it is, so it is always visible and never takes the corners' hover rule. */
+.pane-find {
+  position: absolute;
+  top: 2.1rem;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px var(--overlay-shadow);
+}
+
+.pane-find input {
+  width: 14rem;
+  padding: 0.15rem 0.35rem;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+}
+
+.pane-find input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+/* Wide enough for "No matches" before it is needed, so the buttons do not move as the count
+   changes under the operator's pointer. */
+.pane-find-count {
+  min-width: 5.5rem;
+  padding: 0 0.2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.pane-find button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  padding: 0.15rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pane-find button:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.pane-find button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 /* **The gauge floats; it takes no row.** For one build (#207) the pane gave the gauge a row of
    its own, so as not to cover the start of the terminal's first line. The operator saw the
    cost at once: *"context usage component position is not absolute and its changing harness

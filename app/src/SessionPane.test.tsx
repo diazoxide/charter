@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
@@ -126,3 +126,151 @@ describe("a terminal and the terminal text size (charter-app#283)", () => {
     expect(was.options.fontSize).toBe(13);
   });
 });
+
+/** A key pressed in the pane's terminal: delivered where xterm reads the keyboard, its own
+ *  textarea, exactly as WebKit delivers one. Answers the event, so what became of its default
+ *  can be asked. */
+function press(init: KeyboardEventInit & { keyCode?: number }, on?: Element | null): KeyboardEvent {
+  const target = on ?? document.querySelector(".xterm-helper-textarea");
+  if (!target) throw new Error("the pane has no terminal to type into");
+  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+  // jsdom's KeyboardEvent has no `keyCode` of its own, and xterm encodes keys by it.
+  if (init.keyCode !== undefined) Object.defineProperty(event, "keyCode", { value: init.keyCode });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
+/** What the pane handed the program, in order: every `send_input` the core was asked for. */
+let sent: string[] = [];
+
+/** A view that opens, on a session running `newline`'s harness — or a shell, for null. */
+function opening(newline: string | null) {
+  sent = [];
+  mockIPC((cmd, args) => {
+    if (cmd === "watch_session")
+      return { view: 1, columns: 80, rows: 24, scrollback: 5000, newline };
+    if (cmd === "send_input") sent.push((args as { text: string }).text);
+    return null;
+  });
+}
+
+/** Renders a pane and waits until its view is open, so the pane knows its harness. */
+async function openPane() {
+  pane();
+  await waitFor(() => expect(made[0].options.scrollback).toBe(5000));
+}
+
+const onA = (platform: string) => vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+
+describe("Shift+Enter in a chat's terminal (SI-4)", () => {
+  it("sends the harness's newline rather than a return, so the input grows a line", async () => {
+    opening("\u001b\r");
+    await openPane();
+
+    press({ key: "Enter", keyCode: 13, shiftKey: true });
+
+    await vi.waitFor(() => expect(sent).toEqual(["\u001b\r"]));
+  });
+
+  it("leaves plain Enter a return, which submits", async () => {
+    opening("\u001b\r");
+    await openPane();
+
+    press({ key: "Enter", keyCode: 13 });
+
+    await vi.waitFor(() => expect(sent).toEqual(["\r"]));
+  });
+
+  it("leaves a shell's Shift+Enter to the terminal, which sends a return", async () => {
+    opening(null);
+    await openPane();
+
+    press({ key: "Enter", keyCode: 13, shiftKey: true });
+
+    await vi.waitFor(() => expect(sent).toEqual(["\r"]));
+  });
+});
+
+describe("finding text in a chat's terminal (SI-4)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const bar = () => screen.queryByRole("search", { name: "Find in the chat" });
+  const field = () => screen.getByRole("searchbox", { name: "Find" });
+
+  it("opens on ⌘F on a Mac, with the keyboard in the find field", async () => {
+    onA("MacIntel");
+    opening("\u001b\r");
+    await openPane();
+
+    const chord = press({ key: "f", keyCode: 70, metaKey: true });
+
+    expect(bar()).not.toBeNull();
+    expect(document.activeElement).toBe(field());
+    // Neither the page's own find nor the program is given the chord.
+    expect(chord.defaultPrevented).toBe(true);
+    expect(sent).toEqual([]);
+  });
+
+  it("opens on Ctrl+Shift+F off a Mac, and leaves Ctrl+F to the shell as forward-char", async () => {
+    onA("Linux x86_64");
+    opening(null);
+    await openPane();
+
+    const plain = press({ key: "f", keyCode: 70, ctrlKey: true });
+    expect(bar()).toBeNull();
+    expect(plain.defaultPrevented).toBe(true); // xterm's own: it sent the byte on
+    await vi.waitFor(() => expect(sent).toEqual(["\u0006"]));
+
+    press({ key: "F", keyCode: 70, ctrlKey: true, shiftKey: true });
+    expect(bar()).not.toBeNull();
+    expect(sent).toEqual(["\u0006"]);
+  });
+
+  it("closes on Esc and gives the keyboard back to the terminal", async () => {
+    onA("MacIntel");
+    opening(null);
+    await openPane();
+    press({ key: "f", keyCode: 70, metaKey: true });
+
+    press({ key: "Escape" }, field());
+
+    expect(bar()).toBeNull();
+    expect(document.activeElement).toBe(document.querySelector(".xterm-helper-textarea"));
+    expect(sent).toEqual([]);
+  });
+
+  it("counts the matches, and walks them with Enter and Shift+Enter", async () => {
+    onA("MacIntel");
+    opening(null);
+    await openPane();
+    await new Promise<void>((done) => made[0].write("one fish\r\ntwo fish\r\nred fish\r\n", done));
+    press({ key: "f", keyCode: 70, metaKey: true });
+    const status = () => screen.getByRole("status").textContent;
+
+    act(() => {
+      fireInput(field(), "fish");
+    });
+    await waitFor(() => expect(status()).toBe("1 of 3"));
+
+    press({ key: "Enter" }, field());
+    await waitFor(() => expect(status()).toBe("2 of 3"));
+
+    press({ key: "Enter", shiftKey: true }, field());
+    await waitFor(() => expect(status()).toBe("1 of 3"));
+
+    act(() => {
+      fireInput(field(), "whale");
+    });
+    await waitFor(() => expect(status()).toBe("No matches"));
+  });
+});
+
+/** Types `value` into a text field the way React hears it. */
+function fireInput(on: HTMLElement, value: string) {
+  const input = on as HTMLInputElement;
+  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  set?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
