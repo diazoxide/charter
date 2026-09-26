@@ -701,6 +701,20 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn a_snapshot_after_the_screen_is_erased_has_the_scrollback_the_pane_has() {
+        // `clear`: the pane erases the screen in place, so nothing reaches its scrollback.
+        let mut term = fed(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\x1b[2J");
+        let snapshot = String::from_utf8(term.snapshot()).unwrap();
+
+        assert!(
+            snapshot.starts_with("1\x1b[K\r\n2\x1b[K\r\n\x1b[K"),
+            "{snapshot:?}"
+        );
+        assert!(!snapshot.contains('3'), "{snapshot:?}");
+        assert_rebuilt(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\x1b[2J");
+    }
+
+    #[test]
     fn a_snapshot_keeps_the_scroll_region() {
         assert_rebuilt(b"\x1b[2;4r\x1b[3;5Hx");
     }
@@ -889,6 +903,29 @@ mod snapshot_tests {
         #[test]
         fn any_output_is_redrawn_by_its_snapshot(pieces in prop::collection::vec(piece(), 0..60)) {
             assert_rebuilt(&pieces.concat());
+        }
+
+        /// The pane puts a line into its scrollback only when a line feed scrolls it off the
+        /// screen, so these leave the scrollback as it was after any output (see `pane_rules`).
+        #[test]
+        fn erasing_the_screen_or_deleting_or_scrolling_lines_leaves_the_scrollback_alone(
+            pieces in prop::collection::vec(piece(), 0..60),
+            edit in prop_oneof![
+                Just(&b"\x1b[2J"[..]),
+                Just(&b"\x1b[3S"[..]),
+                Just(&b"\x1b[H\x1b[3M"[..]),
+                Just(&b"\x1b[20M"[..]),
+            ],
+        ) {
+            let mut term = fed(&pieces.concat());
+            let history = |term: &AlacrittyEngine| {
+                let rows = cells(term);
+                rows[..term.term.history_size()].to_vec()
+            };
+            let before = history(&term);
+            term.advance(edit);
+
+            prop_assert_eq!(history(&term), before);
         }
     }
 }
