@@ -13,6 +13,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A persona can be made, read, cleared and removed from the command line.** `charter persona
+  create <name> --delegate-when "<the work that comes to it>"` writes
+  `personas/<name>/persona.md` as a draft, with its memory and refs; `--extends` inherits from
+  another persona, `--with-vault` registers its vault and `--use` selects it. `charter persona
+  show` prints what a persona adopts, `charter persona clear` drops your selection, and
+  `charter persona remove` refuses while another persona still extends or uses it (`--force`
+  overrides). `charter persona lint` finds dangling `uses:`/`extends:`, keys charter cannot
+  read, a missing role, vault or `delegate-when`, and stale generated sub-agents, and `charter
+  doctor`'s `personas` and `persona grant` rows now run it instead of saying "not checked".
+  A refusal about a missing persona suggests `charter persona create` again.
+  ([#365](https://github.com/diazoxide/charter/issues/365))
 - **A project tab can move into a window of its own, and back.** Right-click a project tab, or
   use the palette, and choose *Move project … to a new window*. Its chats keep running. In that
   window, *Move project … to the main window* brings it back, and so does closing the window.

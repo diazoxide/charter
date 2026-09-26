@@ -379,7 +379,7 @@ fn is_generated(path: &Path) -> bool {
 }
 
 /// `_remove_agent`: remove a persona's GENERATED agent, never a hand-written one.
-fn remove_agent(root: &Path, name: &str) -> bool {
+pub(crate) fn remove_agent(root: &Path, name: &str) -> bool {
     let path = agents_dir(root).join(format!("{name}.md"));
     if path.exists() && is_generated(&path) && crate::contain::within_plane(root, &path) {
         return std::fs::remove_file(&path).is_ok();

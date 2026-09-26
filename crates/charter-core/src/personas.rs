@@ -331,11 +331,11 @@ pub fn one_line(value: &str) -> String {
     crate::shown::line(value)
 }
 
-/// Why a command must not act on the persona `name`, or `None` when this plane defines it
-/// — `persona.name_refusal`. Four sentences for four fixes: blank, outside the alphabet,
-/// defined nowhere (with the create hint), and a definition that is there and does not
-/// load — itself, or the parent it inherits from.
-pub fn name_refusal(root: &Path, name: &str) -> Option<String> {
+/// Why `name` cannot be a persona's name at all, defined or not — the first two of
+/// [`name_refusal`]'s sentences, and `persona.name_refusal(name, defined=False)`: what
+/// `persona create` and `persona lint` ask, because a name nothing defines yet is the point
+/// of the one and a finding of the other.
+pub fn shape_refusal(name: &str) -> Option<String> {
     if !name.is_empty() && memstore::py_strip(name).is_empty() {
         return Some(format!(
             "no persona '{}' (a persona name is never only whitespace)",
@@ -348,6 +348,17 @@ pub fn name_refusal(root: &Path, name: &str) -> Option<String> {
             one_line(name)
         ));
     }
+    None
+}
+
+/// Why a command must not act on the persona `name`, or `None` when this plane defines it
+/// — `persona.name_refusal`. Four sentences for four fixes: blank, outside the alphabet,
+/// defined nowhere (with the create hint), and a definition that is there and does not
+/// load — itself, or the parent it inherits from.
+pub fn name_refusal(root: &Path, name: &str) -> Option<String> {
+    if let Some(refused) = shape_refusal(name) {
+        return Some(refused);
+    }
     let relative = |path: PathBuf| {
         path.strip_prefix(root)
             .map(|p| p.to_string_lossy().into_owned())
@@ -357,17 +368,17 @@ pub fn name_refusal(root: &Path, name: &str) -> Option<String> {
         let file = def_path(root, name);
         if file.exists() {
             return Some(format!(
-                "persona '{name}' does not load from {} (its frontmatter does not parse)",
+                "persona '{name}' does not load from {} (see why: charter persona lint {name})",
                 relative(file)
             ));
         }
         return Some(format!(
-            "no persona '{name}' (add it: write personas/{name}/persona.md)"
+            "no persona '{name}' (create it: charter persona create {name})"
         ));
     }
     let parent = ancestor_that_does_not_load(root, name)?;
     Some(format!(
-        "persona '{name}' inherits from '{parent}', which does not load from {} (its frontmatter does not parse)",
+        "persona '{name}' inherits from '{parent}', which does not load from {} (see why: charter persona lint {parent})",
         relative(def_path(root, &parent))
     ))
 }
@@ -629,15 +640,15 @@ mod name_tests {
         );
         assert_eq!(
             name_refusal(dir.path(), "nope").unwrap(),
-            "no persona 'nope' (add it: write personas/nope/persona.md)"
+            "no persona 'nope' (create it: charter persona create nope)"
         );
         assert_eq!(
             name_refusal(dir.path(), "broken").unwrap(),
-            "persona 'broken' does not load from personas/broken/persona.md (its frontmatter does not parse)"
+            "persona 'broken' does not load from personas/broken/persona.md (see why: charter persona lint broken)"
         );
         assert_eq!(
             name_refusal(dir.path(), "child").unwrap(),
-            "persona 'child' inherits from 'broken', which does not load from personas/broken/persona.md (its frontmatter does not parse)"
+            "persona 'child' inherits from 'broken', which does not load from personas/broken/persona.md (see why: charter persona lint broken)"
         );
     }
 
@@ -1014,7 +1025,7 @@ mod detail_tests {
 
         assert_eq!(
             details(dir.path(), &dir.path().join(".charter"), "nope").unwrap_err(),
-            "no persona 'nope' (add it: write personas/nope/persona.md)"
+            "no persona 'nope' (create it: charter persona create nope)"
         );
         assert_eq!(
             details(dir.path(), &dir.path().join(".charter"), "Bad").unwrap_err(),

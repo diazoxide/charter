@@ -1,9 +1,10 @@
-//! `charter persona list`, `use`, `sync-agents` and `stats` — the four persona verbs the
-//! operator's planes call that the app's `charter` did not have (charter-app 0.1.0 audit,
-//! 2026-09-24).
+//! The persona verbs: `charter persona list`, `use`, `sync-agents` and `stats` (the four the
+//! operator's planes called that the app's `charter` did not have, charter-app 0.1.0 audit,
+//! 2026-09-24), and `create`, `show`, `clear`, `remove` and `lint` (#365).
 //!
 //! A port of `commands_persona.cmd_persona_list`, `cmd_persona_use`,
-//! `cmd_persona_sync_agents` and `cmd_persona_stats`, and of the parts of `persona.py`,
+//! `cmd_persona_sync_agents`, `cmd_persona_stats`, `cmd_persona_create`, `cmd_persona_show`,
+//! `cmd_persona_clear`, `cmd_persona_remove` and `cmd_persona_lint`, and of the parts of `persona.py`,
 //! `mcpseen.py`, `dispatch.py` and `skilluse.py` beneath them that no earlier port needed.
 //! Every sentence here is the Python charter's, byte for byte; the recorded scenarios named
 //! `persona-list-…`, `persona-use-…`, `persona-sync-agents-…` and `persona-stats-…` hold them.
@@ -18,9 +19,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub mod agents;
+pub mod define;
+pub mod lint;
 pub mod list;
 pub mod mcp;
 pub mod select;
+pub mod show;
 pub mod stats;
 #[cfg(test)]
 mod tests_plane;

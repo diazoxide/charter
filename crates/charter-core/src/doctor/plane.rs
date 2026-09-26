@@ -159,9 +159,7 @@ pub(super) fn front_door(d: &Doctor) -> Row {
                 "{place} names '{value}', which is not a persona — this plane has no front door \
                  and every session starts with no identity"
             ),
-            format!(
-                "charter persona default <name>  (or add it: write personas/{value}/persona.md)"
-            ),
+            format!("charter persona default <name>  (or `charter persona create {value}`)"),
         );
     }
     let others = super::memory::list_personas(&d.root)

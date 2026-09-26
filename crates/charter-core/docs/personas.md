@@ -4,18 +4,30 @@ A **persona** is a role identity a chat adopts — `devops`, `qa`, `keycloak-mas
 your work needs. Workspaces decide *which repos*; personas decide *who is working* and *what
 they know*.
 
-In this version the CLI's `charter persona` has `list`, `use`, `current`, `default`,
-`remember`, `recall`, `secret`, `sync-agents` and `stats`. Creating, showing, linting and removing
-personas from the CLI are not in this version yet: a persona is added by writing its
-directory, and a chat is started on one from the app's picker or switched with `charter
-persona use`.
+The CLI's `charter persona` has `create`, `show`, `list`, `use`, `current`, `clear`,
+`default`, `remove`, `lint`, `remember`, `recall`, `secret`, `sync-agents` and `stats`.
 
 ```
+charter persona create qa --role "QA Engineer" --delegate-when "test plans, flaky suites"
+charter persona show qa                    # its metadata and the charter it adopts
 charter persona list                       # who exists, who's active, each one's vault
 charter persona use devops                 # the active persona for this session + this pane
+charter persona clear                      # drop this session's, pane's and plane-wide choice
+charter persona lint                       # dangling uses:/extends:, missing role/vault, stale agents
 charter persona sync-agents                # a Claude Code sub-agent per persona, in .claude/agents/
 charter persona stats                      # roster health: memory, verification, dispatches
+charter persona remove qa                  # refused while another persona extends or uses it
 ```
+
+`create` writes `personas/<name>/persona.md` as a **draft** (`draft: true`), with its
+`memory/` and `refs/`. `--delegate-when` is required unless `--extends` names a parent to
+inherit it from; a value holding a line break or `---` is refused, because each is written as
+one frontmatter line. While the draft line is there no sub-agent is generated: write what the
+persona owns, drop the line, then `charter persona sync-agents`. `--with-vault` registers its
+vault as `charter vault add <vault> --persona <name>` would, and `--use` selects it.
+
+`charter doctor` runs the same lint: its `personas` row summarises the roster, and `persona
+grant` warns when the active persona is broken and its `tools:` are still approved.
 
 A persona lives in a **committed** directory, `personas/<name>/`:
 

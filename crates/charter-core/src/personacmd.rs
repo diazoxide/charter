@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(code, 1);
         assert_eq!(
             said,
-            vec!["✗ no persona 'nope' (add it: write personas/nope/persona.md)"]
+            vec!["✗ no persona 'nope' (create it: charter persona create nope)"]
         );
         assert_eq!(manifest(dir.path()), "# the plane\n");
     }

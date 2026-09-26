@@ -34,7 +34,7 @@ pub enum Scope {
     Plane,
 }
 
-fn usable(id: Option<&str>) -> Option<&str> {
+pub(super) fn usable(id: Option<&str>) -> Option<&str> {
     id.filter(|id| !id.is_empty() && crate::contain::segment_ok(id))
 }
 
@@ -72,7 +72,7 @@ pub fn set_active(root: &Path, name: &str, ids: &Ids) -> Scope {
 
 /// `commands_persona._scope_note`: how far the selection reaches, in the words the reader
 /// needs.
-fn scope_note(root: &Path, scope: Scope) -> String {
+pub(super) fn scope_note(root: &Path, scope: Scope) -> String {
     match scope {
         Scope::Terminal => " for this terminal (kept across closing/reopening Claude)".into(),
         Scope::Session => {
@@ -122,8 +122,64 @@ pub fn use_persona(root: &Path, name: &str, asking: &Asking, say: Sink) -> u8 {
     0
 }
 
+/// `charter persona clear`: drop this session's pointer, this pane's, and the plane-wide
+/// file — `persona.clear_active` and `commands_persona.cmd_persona_clear`.
+///
+/// All three, because they are rungs of one ladder: clearing only the top one would hand
+/// the shell straight back to a lower one, and "cleared" would be false the next command.
+/// What the shell resolves to afterwards is READ BACK through the ladder rather than
+/// predicted, so a `$CHARTER_PERSONA` that still decides, or a front door below, is named.
+///
+/// A chat is treated as the terminal it runs in, as [`use_persona`] treats it: this charter
+/// does not read the tmux frame's launch record that told Python's apart.
+pub fn clear(asking: &crate::active::Asking, say: Sink) -> u8 {
+    let root = asking.root;
+    let pointers = crate::active::persona_pointers(root, asking.ids);
+    let held = pointers
+        .iter()
+        .any(|p| crate::active::read_pointer(root, p).is_some());
+    for pointer in &pointers {
+        if crate::contain::no_link_on_the_way(root, pointer).is_ok() {
+            let _ = std::fs::remove_file(pointer);
+        }
+    }
+    let now = crate::active::persona(asking);
+    if !held {
+        say(Say::Info(
+            "This shell had no persona selection of its own, so nothing was cleared.".into(),
+        ));
+    } else if now.rung == crate::active::PersonaRung::Environment {
+        say(Say::Warn(
+            "Persona selection cleared, but $CHARTER_PERSONA outranks every selection and \
+             still decides in this shell."
+                .into(),
+        ));
+    } else {
+        say(Say::Done("Active persona cleared.".into()));
+    }
+    let Some(name) = now.name.as_deref() else {
+        say(Say::Info("This shell now resolves to no persona.".into()));
+        return 0;
+    };
+    let source = now.rung.label();
+    let at = format!("'{}' (via {source})", crate::personas::one_line(name));
+    if super::list::exists(root, name) {
+        say(Say::Info(format!("This shell now resolves to {at}.")));
+    } else {
+        say(Say::Info(format!(
+            "This shell now resolves to {at}, where {}.",
+            super::list::MISSING
+        )));
+        say(Say::Info(format!(
+            "Ways out: {}.",
+            super::list::ways_out(source)
+        )));
+    }
+    0
+}
+
 /// `_warn_env`: `$CHARTER_PERSONA` outranks every pointer this wrote.
-fn warn_env(name: &str, env: Option<&str>, say: Sink) {
+pub(super) fn warn_env(name: &str, env: Option<&str>, say: Sink) {
     let env = crate::memstore::py_strip(env.unwrap_or_default());
     if env.is_empty() || env == name {
         return;
@@ -347,7 +403,7 @@ mod tests {
         assert_eq!(rc, 1);
         assert_eq!(
             heard.err,
-            "✗ no persona 'ghost' (add it: write personas/ghost/persona.md)\n"
+            "✗ no persona 'ghost' (create it: charter persona create ghost)\n"
         );
         assert!(!plane.path(".charter/sessions/s-1.persona").exists());
     }

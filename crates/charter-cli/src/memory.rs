@@ -79,6 +79,62 @@ pub enum PersonaCommand {
     /// charter's own `persona current` takes none: the top rung of the ladder is typed on
     /// the command it acts on, and a flag here would report a resolution nothing performed.
     Current,
+    /// Clear the active persona: this session's, this pane's and the plane-wide selection.
+    ///
+    /// The work is [`charter_core::personaverbs::select::clear`].
+    Clear,
+    /// Create a persona → committed personas/<name>/persona.md, as a draft.
+    ///
+    /// The work is [`charter_core::personaverbs::define::create`].
+    Create {
+        name: String,
+        /// Human role, e.g. "DevOps Engineer" (default: the name, title-cased).
+        #[arg(long)]
+        role: Option<String>,
+        /// REQUIRED (unless --extends): when the steward should route work here, e.g. "CI/CD
+        /// pipelines, k8s deploys". Becomes the persona's routing line in its dispatchable
+        /// description.
+        #[arg(long, value_name = "WHEN")]
+        delegate_when: Option<String>,
+        /// Vault this persona uses (default: the persona name; `none` for no credentials).
+        #[arg(long)]
+        vault: Option<String>,
+        /// Inherit another persona's charter + tools; this one adds its own on top.
+        #[arg(long, value_name = "PARENT")]
+        extends: Option<String>,
+        /// Also register its vault now, as `charter vault add <vault> --persona <name>`.
+        #[arg(long)]
+        with_vault: bool,
+        /// Make it the active persona.
+        #[arg(long = "use")]
+        select: bool,
+        /// Overwrite an existing definition.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print a persona's metadata and charter.
+    ///
+    /// The work is [`charter_core::personaverbs::show`].
+    Show { name: String },
+    /// Delete a persona definition (commit the deletion).
+    ///
+    /// The work is [`charter_core::personaverbs::define::remove`].
+    Remove {
+        name: String,
+        /// Remove even if another persona extends/uses it (leaves a dangling ref).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Config eval: dangling uses:, missing role/vault/delegate-when, stale agents.
+    ///
+    /// The work is [`charter_core::personaverbs::lint`].
+    Lint {
+        /// Only this persona (default: all).
+        name: Option<String>,
+        /// Report only findings mentioning KEY, and exit non-zero solely on those.
+        #[arg(long, value_name = "KEY")]
+        only: Option<String>,
+    },
     /// Write a memory (persistent by default; --ephemeral for scratch).
     Remember {
         /// `[NAME] TEXT` — the persona, then the fact. One word is the FACT, and the persona
@@ -761,6 +817,82 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
             let found = here.active_persona(None);
             println!("{}", found.as_deref().unwrap_or("(none)"));
             Ok(0)
+        }
+        PersonaCommand::Clear => {
+            let asking = here.asking(None, here.persona_env.as_deref());
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::select::clear(
+                &asking, &mut sink,
+            ))
+        }
+        PersonaCommand::Create {
+            name,
+            role,
+            delegate_when,
+            vault,
+            extends,
+            with_vault,
+            select,
+            force,
+        } => {
+            let root = plane.root();
+            let state = charter_core::personaverbs::state_dir(root);
+            let ask = charter_core::personaverbs::define::Create {
+                name: &name,
+                role: role.as_deref(),
+                delegate_when: delegate_when.as_deref(),
+                vault: vault.as_deref(),
+                extends: extends.as_deref(),
+                with_vault,
+                select: select.then_some(charter_core::personaverbs::define::Selecting {
+                    ids: &here.ids,
+                    env_persona: here.persona_env.as_deref(),
+                }),
+                force,
+            };
+            let mut sink = crate::speak;
+            let code = charter_core::personaverbs::define::create(root, &state, &ask, &mut sink);
+            let vault = vault.as_deref().filter(|v| !v.is_empty()).unwrap_or(&name);
+            if code != 0 || !with_vault || vault == charter_core::personaverbs::NO_VAULT {
+                return Ok(code);
+            }
+            Ok(crate::secret::add_persona_vault(here, vault, &name))
+        }
+        PersonaCommand::Show { name } => {
+            let root = plane.root();
+            let state = charter_core::personaverbs::state_dir(root);
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::show::show(
+                root,
+                &state,
+                &name,
+                &session(),
+                &mut sink,
+            ))
+        }
+        PersonaCommand::Remove { name, force } => {
+            let selection =
+                charter_core::active::persona(&here.asking(None, here.persona_env.as_deref()));
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::define::remove(
+                plane.root(),
+                &name,
+                force,
+                &selection,
+                &mut sink,
+            ))
+        }
+        PersonaCommand::Lint { name, only } => {
+            let root = plane.root();
+            let state = charter_core::personaverbs::state_dir(root);
+            let linter = charter_core::personaverbs::lint::Linter::new(root, &state);
+            let mut sink = crate::speak;
+            Ok(charter_core::personaverbs::lint::lint_command(
+                &linter,
+                name.as_deref(),
+                only.as_deref(),
+                &mut sink,
+            ))
         }
         PersonaCommand::Default { name, clear } => {
             let mut sink = crate::speak;

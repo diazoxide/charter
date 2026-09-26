@@ -30,6 +30,7 @@ pub(crate) mod fsx;
 mod git;
 mod inventory;
 mod memory;
+mod personas;
 mod plane;
 mod plugin;
 mod profiles;
@@ -295,6 +296,13 @@ pub struct Doctor {
     /// where nobody can tell, and for a doctor a test names ([`Self::at`]), which must never
     /// read the operator's own.
     pub(crate) machine: Option<crate::plugin_install::Machine>,
+    /// Who is asking, for the `persona grant` row's active persona: this process's session
+    /// and pane, and `$CHARTER_PERSONA`. Empty for a doctor a test names.
+    pub(crate) ids: crate::active::Ids,
+    pub(crate) persona_env: Option<String>,
+    /// The home whose `.claude` the persona lint looks for installed skills in. `None` for a
+    /// doctor a test names, which must never read the operator's own.
+    pub(crate) home: Option<PathBuf>,
 }
 
 impl Doctor {
@@ -311,6 +319,9 @@ impl Doctor {
             .map(|p| canonical(&p))
             .unwrap_or_else(|_| canonical(cwd));
         let mut d = Self::at(&root, cwd, pinned, preflight);
+        d.ids = crate::active::Ids::from_env();
+        d.persona_env = std::env::var(crate::active::PERSONA_ENV).ok();
+        d.home = crate::profiles::home();
         d.machine = std::env::current_exe()
             .and_then(|p| p.canonicalize())
             .ok()
@@ -337,6 +348,9 @@ impl Doctor {
             preflight,
             config: Config::load(root),
             machine: None,
+            ids: crate::active::Ids::default(),
+            persona_env: None,
+            home: None,
         }
     }
 
@@ -370,8 +384,8 @@ impl Doctor {
         rows.push(deferred::row("vault registry", deferred::VAULTS));
         rows.push(config::version_lock(self));
         rows.push(memory::memory_indexes(self));
-        rows.push(deferred::row("personas", deferred::PERSONA_LINT));
-        rows.push(deferred::row("persona grant", deferred::PERSONA_LINT));
+        rows.push(personas::personas(self));
+        rows.push(personas::persona_grant(self));
         rows.push(plane::front_door(self));
         rows.extend(plane::routing(self));
         rows.push(deferred::row("news", deferred::NEWS));
