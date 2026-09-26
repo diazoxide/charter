@@ -143,6 +143,16 @@ fn wait_for(marker: &Path) {
     }
 }
 
+/// Kill the helper whose pid `marker` holds, if it wrote one: by the pid this test caused to
+/// exist, never by name.
+fn kill_escaped(marker: &Path) {
+    if let Some(pid) = alive_from(marker)
+        && let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
+    {
+        let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
+    }
+}
+
 // -------------------------------------------------------------------------------------
 // Can a program run without approval?
 // -------------------------------------------------------------------------------------
@@ -433,39 +443,44 @@ fn every_executor_charter_makes_gives_its_programs_the_real_deadline() {
 fn a_program_that_never_answers_is_stopped_at_the_deadline() {
     const SHORT: Duration = Duration::from_millis(500);
     let rig = Rig::new();
-    let pid = rig.marker("pid");
-    rig.approved(&format!(
-        "#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n",
-        pid.display()
-    ));
+    rig.approved("#!/bin/sh\nexec sleep 60\n");
+    let executor = Executor::default().with_deadline(SHORT);
 
-    // Asked until the program got as far as saying who it is before its deadline: a program
-    // file is assessed by macOS the first time it runs, and on a loaded machine that can outlast
-    // a short deadline — the program is still stopped, but it never wrote the pid this test
-    // needs to see that. Once assessed, it starts at once.
-    let mut asked = 0;
-    let started = loop {
-        asked += 1;
-        let began = Instant::now();
-        let refused = rig
-            .ask(&Executor::default().with_deadline(SHORT))
-            .expect_err("an answer from nothing");
-        let took = began.elapsed();
+    let refused = rig.ask(&executor).expect_err("an answer from nothing");
+    let returned = Instant::now();
 
-        assert!(
-            refused.contains("did not answer within 0.5 seconds"),
-            "{refused}"
-        );
-        assert!(
-            took < SHORT + Duration::from_secs(2),
-            "the caller waited {took:?}, past the deadline"
-        );
-        if let Some(started) = alive_from(&pid) {
-            break started;
-        }
-        assert!(asked < 10, "the program never started in {asked} tries");
+    // Stopped by the deadline it was given, and not by the real one: the refusal names it.
+    assert!(
+        refused.contains("did not answer within 0.5 seconds"),
+        "{refused}"
+    );
+    // **Which process, and from when, is the executor's own record of what it started**, not a
+    // pid the program writes (#465). A program has to run to write one, and on a loaded machine
+    // a shell can take longer than the deadline to get there — ten tries in a row at load 118
+    // — so the test failed on how busy the machine was. The group is recorded the moment the
+    // program exists, whether or not it got as far as saying anything; and the deadline is
+    // timed from there, so the work before the start — the fingerprint, the fork — which a
+    // loaded machine makes take seconds, is not counted against it.
+    let groups = executor
+        .table
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .groups
+        .clone();
+    let [(group, at)] = groups[..] else {
+        panic!("one program started, not {groups:?}");
     };
-    assert!(gone(started), "a program that timed out is still running");
+    let took = returned.duration_since(at);
+    assert!(took >= SHORT, "gave up after {took:?}, before the deadline");
+    // Under the real deadline: it was this executor's short one that stopped it.
+    assert!(
+        took < DEADLINE,
+        "the caller waited {took:?} after the start, past the deadline"
+    );
+    assert!(
+        gone(u32::try_from(group).expect("a pid")),
+        "a program that timed out is still running"
+    );
 }
 
 #[test]
@@ -1274,11 +1289,18 @@ fn a_helper_that_holds_stdin_and_reads_slowly_cannot_hold_the_question_past_the_
     // left the group, kept the program's stdin and read a byte a second held the question for
     // as long as a large request took to trickle — 15.6 s measured. The program itself answers
     // at once; what is timed is charter giving up on the rest of the write.
+    //
+    // **It answers only once the helper has left the group** (#465), as the command test below
+    // waits for its own. Answering first raced the helper's start: charter kills the group the
+    // moment it has its answer, and on a loaded machine that landed before perl had called
+    // `setpgrp` — the helper died with the program, never wrote where it was, and the test
+    // failed thirty seconds later on a helper that never escaped rather than on the write.
     let rig = Rig::new();
     let escaped = rig.marker("escaped");
     rig.approved(&format!(
-        "#!/bin/sh\nexec 3<&0\nperl -e 'setpgrp(0,0); open(F,\">{}\"); print F $$; close F; \
+        "#!/bin/sh\nexec 3<&0\nperl -e 'setpgrp(0,0); open(F,\">{0}\"); print F $$; close F; \
          while(1){{ sysread(STDIN,$b,1) or exit; sleep 1 }}' <&3 &\n\
+         while [ ! -s '{0}' ]; do sleep 0.01; done\n\
          printf '%s\\n' '{ANSWER}'\n",
         escaped.display()
     ));
@@ -1306,13 +1328,9 @@ fn a_helper_that_holds_stdin_and_reads_slowly_cannot_hold_the_question_past_the_
     let took = is_done.recv_timeout(PATIENT + Duration::from_secs(5));
 
     wait_for(&escaped);
-    // Killed by the pid this test itself caused to exist, never by name. That also ends the
-    // question if charter was still waiting on it, so the thread can be joined either way.
-    if let Some(pid) = alive_from(&escaped)
-        && let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
-    {
-        let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
-    }
+    // That also ends the question if charter was still waiting on it, so the thread can be
+    // joined either way.
+    kill_escaped(&escaped);
     let said = asking.join().expect("the asking thread");
     // Under the deadline, not merely near it: the program answered at once, and once it has
     // there is nothing left worth waiting for — charter's end is shut down, which ends the
@@ -1789,18 +1807,25 @@ impl Rig {
     }
 }
 
-/// Ask `ask` until the program got far enough to be judged on what it did rather than on how
-/// long macOS took to assess a program file it had not seen (see
-/// [`a_program_that_never_answers_is_stopped_at_the_deadline`]): an attempt refused as not
-/// having finished at all is asked again.
-fn once_started(ask: impl Fn() -> Result<Ran, String>) -> Result<Ran, String> {
-    let mut tries = 0;
+/// Ask `ask` with a deadline long enough for the program to get as far as the test needs
+/// before it passes, and answer what it said and the deadline it said it under.
+///
+/// **For a test whose program has to reach some point before its deadline and then outlast
+/// it** — close its output, see a helper leave its group. Nothing but the program running can
+/// get it there, and on a loaded machine a shell takes seconds to start (#465): ten tries at
+/// one second each were not enough at load 118. So an attempt refused as not having finished
+/// at all is asked again with twice the deadline, up to about [`PATIENT`] in all, the time
+/// a program here is given to start. The first one usually decides it, so a passing test
+/// on a quiet machine still takes a second.
+fn once_started(ask: impl Fn(&Executor) -> Result<Ran, String>) -> (Result<Ran, String>, Duration) {
+    let mut deadline = Duration::from_secs(1);
     loop {
-        tries += 1;
-        let said = ask();
+        let said = ask(&Executor::default().with_deadline(deadline));
         match &said {
-            Err(why) if why.contains("did not finish within") && tries < 10 => {}
-            _ => return said,
+            Err(why) if why.contains("did not finish within") && deadline < PATIENT / 2 => {
+                deadline *= 2;
+            }
+            _ => return (said, deadline),
         }
     }
 }
@@ -1847,12 +1872,14 @@ fn a_command_that_closes_its_output_and_never_exits_passes_nothing_on() {
     let rig = Rig::new();
     rig.talking("#!/bin/sh\nprintf 'out\\n'\nexec >&- <&-\nexec sleep 60\n");
 
-    let refused =
-        once_started(|| rig.command(&Executor::default().with_deadline(Duration::from_secs(1))))
-            .expect_err("a command that never exited was passed on");
+    let (said, deadline) = once_started(|executor| rig.command(executor));
+    let refused = said.expect_err("a command that never exited was passed on");
 
     assert!(
-        refused.contains("closed its output and did not exit within 1 seconds"),
+        refused.contains(&format!(
+            "closed its output and did not exit within {} seconds",
+            deadline.as_secs_f32()
+        )),
         "{refused}"
     );
 }
@@ -1916,25 +1943,32 @@ fn a_command_whose_stderr_something_it_started_still_holds_passes_nothing_on() {
     // The helper leaves the group, so charter's kill does not reach it, and keeps the
     // program's stderr open past the deadline: what was read of it is not all of it. The
     // program exits only once the helper has left, or the kill could land first.
+    //
+    // **Each attempt's helper writes a marker of its own**, named by the program's pid (#465):
+    // with one shared marker, the helper of an attempt refused as too slow could write it
+    // after the next attempt began, and that attempt's program would print before its own
+    // helper had left.
     let rig = Rig::new();
     let escaped = rig.marker("escaped");
+    std::fs::create_dir(&escaped).expect("a directory for the markers");
     rig.talking(&format!(
-        "#!/bin/sh\nperl -e 'setpgrp(0,0); open(F,\">{0}\"); print F $$; close F; sleep 30' \
-         >/dev/null </dev/null &\nwhile [ ! -s '{0}' ]; do sleep 0.01; done\nprintf 'out\\n'\n",
+        "#!/bin/sh\ne='{0}'/$$\n\
+         perl -e 'setpgrp(0,0); open(F,\">$ARGV[0]\"); print F $$; close F; sleep 30' \"$e\" \
+         >/dev/null </dev/null &\nwhile [ ! -s \"$e\" ]; do sleep 0.01; done\nprintf 'out\\n'\n",
         escaped.display()
     ));
 
-    let said =
-        once_started(|| rig.command(&Executor::default().with_deadline(Duration::from_secs(1))));
+    let (said, deadline) = once_started(|executor| rig.command(executor));
 
-    if let Some(pid) = alive_from(&escaped)
-        && let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
-    {
-        let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
+    for marker in std::fs::read_dir(&escaped).expect("the markers").flatten() {
+        kill_escaped(&marker.path());
     }
     let refused = said.expect_err("a stderr still open was passed on as the whole of it");
     assert!(
-        refused.contains("its stderr did not end within 1 seconds"),
+        refused.contains(&format!(
+            "its stderr did not end within {} seconds",
+            deadline.as_secs_f32()
+        )),
         "{refused}"
     );
 }

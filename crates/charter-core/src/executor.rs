@@ -398,6 +398,12 @@ struct Table {
     /// out after it, and a program that was started before it and recorded after it is killed
     /// the moment it is recorded.
     closing: bool,
+    /// Every process group a program was started in, and when, in order: for a test that has
+    /// to know which process a deadline stopped whether or not the program got far enough to
+    /// say so itself, and to time the deadline from where it starts (#465). Test builds only:
+    /// the product keeps no record of what it ran.
+    #[cfg(test)]
+    groups: Vec<(i32, Instant)>,
 }
 
 impl Executor {
@@ -933,6 +939,8 @@ impl Executor {
         if let Some(slot) = table.running.get_mut(extension) {
             *slot = group;
         }
+        #[cfg(test)]
+        table.groups.push((group, Instant::now()));
         if table.closing {
             kill_group(group);
         }
