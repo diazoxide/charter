@@ -2116,6 +2116,104 @@ fn with_auto_save_off_incoming_commits_are_counted_and_never_pulled() {
 }
 
 // --------------------------------------------------------------------------------------- //
+// `charter save --pull`: the app's incoming path, asked for from a terminal (#375)          //
+// --------------------------------------------------------------------------------------- //
+
+impl Fixture {
+    fn pull(&self) -> (u8, String) {
+        let mut said = String::new();
+        let mut say = |line: Say| {
+            said.push_str(&line.to_string());
+            said.push('\n');
+        };
+        let code = super::pull(&self.root, &mut say);
+        (code, said)
+    }
+}
+
+#[test]
+fn a_pull_brings_incoming_commits_into_a_clean_tree_and_says_how_many() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+
+    let (code, said) = fixture.pull();
+
+    assert_eq!(code, 0, "{said}");
+    assert!(fixture.root.join("theirs.md").is_file(), "{said}");
+    assert!(said.contains("Brought in 1 incoming commit"), "{said}");
+}
+
+#[test]
+fn a_pull_with_nothing_incoming_says_so() {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    run(
+        &fixture.root,
+        &[
+            "push",
+            "-q",
+            &bare.display().to_string(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+
+    let (code, said) = fixture.pull();
+
+    assert_eq!(code, 0, "{said}");
+    assert!(said.contains("Nothing incoming"), "{said}");
+}
+
+#[test]
+fn a_pull_into_a_tree_with_work_in_it_leaves_it_and_says_why_without_failing() {
+    // The save that follows commits the work; a pull is not what may cost it.
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+    std::fs::write(fixture.root.join("mine.md"), "mine").unwrap();
+    let before = ask(&fixture.root, &["rev-parse", "HEAD"]);
+
+    let (code, said) = fixture.pull();
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(ask(&fixture.root, &["rev-parse", "HEAD"]), before);
+    assert!(said.contains("1 incoming commit not brought in"), "{said}");
+    assert!(said.contains("unsaved changes"), "{said}");
+}
+
+#[test]
+fn a_pull_into_a_tree_with_conflicts_is_refused_and_names_them() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+    // A merge of two sides that both changed README.md, stopped on its conflict.
+    run(&fixture.root, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(fixture.root.join("README.md"), "side\n").unwrap();
+    run(&fixture.root, &["commit", "-q", "-am", "side"]);
+    run(&fixture.root, &["checkout", "-q", "main"]);
+    std::fs::write(fixture.root.join("README.md"), "main\n").unwrap();
+    run(&fixture.root, &["commit", "-q", "-am", "main"]);
+    let _ = crate::testgit::run(&fixture.root, &["merge", "side"]);
+    assert!(fixture.root.join(".git/MERGE_HEAD").exists());
+    let before = ask(&fixture.root, &["rev-parse", "HEAD"]);
+
+    let (code, said) = fixture.pull();
+
+    assert_eq!(code, 1, "{said}");
+    assert_eq!(ask(&fixture.root, &["rev-parse", "HEAD"]), before);
+    assert!(said.contains("conflict"), "{said}");
+    assert!(said.contains("README.md"), "{said}");
+}
+
+#[test]
+fn a_pull_with_nowhere_to_fetch_from_fails_in_words() {
+    let fixture = Fixture::plane();
+    let (code, said) = fixture.pull();
+    assert_eq!(code, 1, "{said}");
+    assert!(
+        said.contains("origin is not on a forge charter knows"),
+        "{said}"
+    );
+}
+
+// --------------------------------------------------------------------------------------- //
 // review of #335                                                                            //
 // --------------------------------------------------------------------------------------- //
 

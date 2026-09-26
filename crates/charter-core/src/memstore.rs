@@ -234,15 +234,30 @@ pub fn index_append(
     title: &str,
 ) -> std::io::Result<()> {
     gate(root, index)?;
-    if !index.exists() {
-        if let Some(parent) = index.parent() {
-            gate(root, parent)?;
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(index, "# Memory Index\n\n")?;
+    if let Some(parent) = index.parent()
+        && std::fs::symlink_metadata(index).is_err()
+    {
+        gate(root, parent)?;
+        std::fs::create_dir_all(parent)?;
     }
-    let mut f = std::fs::OpenOptions::new().append(true).open(index)?;
-    std::io::Write::write_all(&mut f, format!("- [{title}]({filename})\n").as_bytes())
+    let line = format!("- [{title}]({filename})\n");
+    // Neither open follows a link at the index (#420): `create_new` is `O_EXCL`, which never
+    // does, and the append is `O_NOFOLLOW`. Containment answered for the path a moment ago; a
+    // link swapped in since is refused rather than written through.
+    let mut fresh = std::fs::OpenOptions::new();
+    fresh.write(true).create_new(true);
+    match crate::contain::nofollow(&mut fresh).open(index) {
+        Ok(mut f) => {
+            std::io::Write::write_all(&mut f, format!("# Memory Index\n\n{line}").as_bytes())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let mut more = std::fs::OpenOptions::new();
+            more.append(true);
+            let mut f = crate::contain::nofollow(&mut more).open(index)?;
+            std::io::Write::write_all(&mut f, line.as_bytes())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Find a memory file by its full filename or by a bare slug.
@@ -1412,6 +1427,39 @@ mod gate_tests {
         assert_eq!(
             std::fs::read_to_string(outside.path().join("idx")).unwrap(),
             "PRECIOUS\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_index_that_is_a_link_is_refused_and_what_it_points_at_is_left_alone() {
+        // A link to another file in the same store passes containment; the open refuses it.
+        let (dir, store, _outside) = plane();
+        std::fs::write(store.join("fact.md"), "PRECIOUS\n").unwrap();
+        std::os::unix::fs::symlink(store.join("fact.md"), store.join(INDEX)).unwrap();
+
+        assert!(index_append(dir.path(), &store.join(INDEX), "a.md", "A").is_err());
+        assert_eq!(
+            std::fs::read_to_string(store.join("fact.md")).unwrap(),
+            "PRECIOUS\n"
+        );
+
+        // A dangling one is refused too: the header is not written through it.
+        let gone = store.join("gone.md");
+        std::fs::remove_file(store.join(INDEX)).unwrap();
+        std::os::unix::fs::symlink(&gone, store.join(INDEX)).unwrap();
+        assert!(index_append(dir.path(), &store.join(INDEX), "a.md", "A").is_err());
+        assert!(!gone.exists(), "nothing was created where the link points");
+    }
+
+    #[test]
+    fn a_new_index_gets_its_header_and_then_its_lines_in_order() {
+        let (dir, store, _outside) = plane();
+        index_append(dir.path(), &store.join(INDEX), "a.md", "A").unwrap();
+        index_append(dir.path(), &store.join(INDEX), "b.md", "B").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(store.join(INDEX)).unwrap(),
+            "# Memory Index\n\n- [A](a.md)\n- [B](b.md)\n"
         );
     }
 

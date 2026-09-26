@@ -11,6 +11,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`charter save --pull` brings in what the remote has before it saves.** A chat the app did
+  not start, such as a `claude` or `codex` in a terminal, gets no auto-save and no incoming
+  changes. Outside the app, the plane is saved only through `charter save`. `--pull` fetches
+  the plane's target branch and fast-forwards a clean tree first, the same way the app does.
+  With unsaved work in the tree, what came in is left alone and the save still runs. If the
+  tree has conflicts, or there is no remote to pull from, the command stops and saves nothing.
+  ([#375](https://github.com/diazoxide/charter/issues/375))
+
 ### Changed
 
 - **`charter news` prints this changelog.** It shows every version of the app, newest first,
@@ -34,6 +44,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The dispatch log, the session trace and a memory index refuse to write through a link.**
+  They now open the file without following a link, and refuse it when it is one.
+  ([#420](https://github.com/diazoxide/charter/issues/420))
 - **A guard that crashes now refuses the tool call instead of letting it run.** If charter hit
   an internal error while checking a tool call, the crash ended the process with a status
   Claude Code and Codex read as a non-blocking error, so the call went ahead unchecked. Any

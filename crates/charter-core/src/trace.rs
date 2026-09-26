@@ -104,7 +104,8 @@ pub fn append_private(root: &Path, path: &Path, bytes: &[u8]) -> std::io::Result
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut out = options.open(path)?;
+    // `O_NOFOLLOW`: a link swapped in after the containment answer is refused, not followed.
+    let mut out = crate::contain::nofollow(&mut options).open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -354,6 +355,22 @@ mod tests {
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_trace_that_is_a_link_is_refused_and_what_it_points_at_is_left_alone() {
+        // Inside the plane, so containment passes: the open's `O_NOFOLLOW` is what refuses.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+        let victim = dir.path().join(".charter/persona-state/other.json");
+        let path = file(dir.path(), "s1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&victim, "PRECIOUS\n").unwrap();
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+
+        assert!(append_private(dir.path(), &path, b"row\n").is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "PRECIOUS\n");
     }
 
     #[test]

@@ -682,12 +682,61 @@ pub struct Incoming {
     pub behind: u32,
     /// Whether the plane was fast-forwarded onto them.
     pub moved: bool,
+    /// Why commits that came in were left on the remote-tracking branch: `Some` only when a
+    /// fast-forward was asked for, something came in, and the plane was not moved.
+    pub held: Option<Held>,
 }
 
-/// Fetch the plane's target branch, and — when `fast_forward` (auto-save is on) — move onto it
-/// when that cannot touch anyone's work (charter-app#296): a clean tree, on the target branch, with nothing of its own the
-/// remote lacks, and no merge or rebase in progress. Otherwise the plane is left exactly as it
-/// is, and the next save's rebase brings the commits in.
+/// Why a fetch left incoming commits where they are rather than moving the plane onto them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Held {
+    /// A merge or rebase stopped part-way, or files git still calls unmerged. Named first:
+    /// it is the one a person has to settle, and a save now would commit the markers.
+    Conflicts(Vec<String>),
+    /// Another git command holds the index, or one died holding it.
+    IndexLocked,
+    /// The plane is checked out on a branch that is not its target branch.
+    OffTarget { here: String, branch: String },
+    /// The plane has commits of its own the remote lacks, so a fast-forward cannot reach.
+    Ahead(u32),
+    /// Changed files nobody has saved yet.
+    Unsaved,
+    /// `git merge --ff-only` itself refused, in git's words.
+    Refused(String),
+}
+
+impl Held {
+    /// The reason, as a clause: "N incoming commits left on origin/main: <this>".
+    pub fn why(&self) -> String {
+        match self {
+            Self::Conflicts(files) if files.is_empty() => {
+                "a merge or rebase is stopped part-way; settle its conflicts first".into()
+            }
+            Self::Conflicts(files) => {
+                format!(
+                    "the tree has conflicts to settle first: {}",
+                    files.join(", ")
+                )
+            }
+            Self::IndexLocked => "git's index is locked by another git command".into(),
+            Self::OffTarget { here, branch } => {
+                format!("the plane is on `{here}`, not its target branch `{branch}`")
+            }
+            Self::Ahead(n) => format!(
+                "the plane has {n} commit(s) of its own the remote lacks, and a pull only \
+                 fast-forwards"
+            ),
+            Self::Unsaved => "the tree has unsaved changes, and a pull never moves them".into(),
+            Self::Refused(detail) => format!("git refused the fast-forward: {detail}"),
+        }
+    }
+}
+
+/// Fetch the plane's target branch, and — when `fast_forward` (auto-save is on, or `charter
+/// save --pull` asked) — move onto it when that cannot touch anyone's work (charter-app#296): a
+/// clean tree, on the target branch, with nothing of its own the remote lacks, and no merge or
+/// rebase in progress. Otherwise the plane is left exactly as it is, [`Incoming::held`] says
+/// why, and the next save's rebase brings the commits in.
 ///
 /// `Err` when there is nothing to fetch from — no origin on a forge charter knows — or the
 /// fetch failed, in git's words.
@@ -727,31 +776,15 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
         && prsave::settle(root, &plane, &branch, plane.sign.value, None, &mut |_| {})
             == prsave::Settled::Moved;
     let mine = count(root, &format!("refs/remotes/origin/{branch}..HEAD")).unwrap_or(0);
-    // The repository's own directory, which is a file's target for a worktree plane.
-    let git_dir = git::run(root, &["rev-parse", "--absolute-git-dir"], git::READ)
-        .ok()
-        .filter(git::Run::ok)
-        .map_or_else(|| root.join(".git"), |r| PathBuf::from(r.line().trim()));
-    let can_move = fast_forward
-        && !settled
-        && behind > 0
-        && here == branch
-        && mine == 0
-        && changed_paths(root).is_empty()
-        && crate::gitstate::find(&git_dir).is_none()
-        && ![
-            "MERGE_HEAD",
-            "REBASE_HEAD",
-            "CHERRY_PICK_HEAD",
-            "rebase-merge",
-            "rebase-apply",
-        ]
-        .iter()
-        .any(|marker| git_dir.join(marker).exists());
-    let moved = settled
-        || can_move
+    let git_dir = git_dir_of(root);
+    let held = (fast_forward && !settled && behind > 0)
+        .then(|| hold(root, &git_dir, &here, &branch, mine))
+        .flatten();
+    let (moved, held) = if settled {
+        (true, None)
+    } else if fast_forward && behind > 0 && held.is_none() {
         // Untimed: a merge checks out a tree, and a killed one leaves it half-written.
-        && git::run_untimed(
+        match git::run_untimed(
             root,
             &[
                 "merge",
@@ -759,9 +792,119 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
                 "--no-overwrite-ignore",
                 &format!("refs/remotes/origin/{branch}"),
             ],
-        )
-        .is_ok_and(|run| run.ok());
-    Ok(Incoming { behind, moved })
+        ) {
+            Ok(run) if run.ok() => (true, None),
+            Ok(run) => (false, Some(Held::Refused(tail(&run)))),
+            Err(unavailable) => (false, Some(Held::Refused(unavailable.to_string()))),
+        }
+    } else {
+        (false, held)
+    };
+    Ok(Incoming {
+        behind,
+        moved,
+        held,
+    })
+}
+
+/// Why a fast-forward onto incoming commits would touch someone's work, or `None` when it
+/// cannot (charter-app#296): a clean tree, on the target branch, with nothing of its own the
+/// remote lacks, and no merge or rebase in progress.
+fn hold(root: &Path, git_dir: &Path, here: &str, branch: &str, mine: u32) -> Option<Held> {
+    if let Some(conflicts) = conflicts(root, git_dir) {
+        return Some(conflicts);
+    }
+    if crate::gitstate::find(git_dir).is_some() {
+        return Some(Held::IndexLocked);
+    }
+    if here != branch {
+        return Some(Held::OffTarget {
+            here: here.to_string(),
+            branch: branch.to_string(),
+        });
+    }
+    if mine > 0 {
+        return Some(Held::Ahead(mine));
+    }
+    if !changed_paths(root).is_empty() {
+        return Some(Held::Unsaved);
+    }
+    None
+}
+
+/// A merge, rebase or cherry-pick stopped part-way, or files git still calls unmerged.
+fn conflicts(root: &Path, git_dir: &Path) -> Option<Held> {
+    let stopped = [
+        "MERGE_HEAD",
+        "REBASE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+    ]
+    .iter()
+    .any(|marker| git_dir.join(marker).exists());
+    let unmerged = unmerged(root);
+    (stopped || !unmerged.is_empty()).then_some(Held::Conflicts(unmerged))
+}
+
+/// The repository's own directory, which is a file's target for a worktree plane.
+fn git_dir_of(root: &Path) -> PathBuf {
+    git::run(root, &["rev-parse", "--absolute-git-dir"], git::READ)
+        .ok()
+        .filter(git::Run::ok)
+        .map_or_else(|| root.join(".git"), |r| PathBuf::from(r.line().trim()))
+}
+
+/// `charter save --pull`'s first half: [`fetch`] the plane's target branch and fast-forward
+/// onto it, exactly as the app's incoming loop does with auto-save on (ADR 0051), and say
+/// what happened. The pull is asked for, so it is made whatever the plane's mode — `off`
+/// included, where the save that follows then commits nothing.
+///
+/// `0` when there is nothing to stop the save that follows: nothing came in, it was brought
+/// in, or it was left for a reason the save does not make worse (unsaved work, which the save
+/// commits). `1` when the fetch failed, or the tree has conflicts — saving then would stage
+/// the conflict markers, so the caller stops.
+pub fn pull(root: &Path, say: Sink) -> u8 {
+    let incoming = match fetch(root, true) {
+        Ok(incoming) => incoming,
+        Err(why) => {
+            say(Say::Fail(format!("Could not pull the plane: {why}")));
+            return 1;
+        }
+    };
+    let n = incoming.behind;
+    let commits = if n == 1 { "commit" } else { "commits" };
+    // Conflicts stop the save even when nothing came in: a save would stage their markers.
+    let held = incoming.held.or_else(|| conflicts(root, &git_dir_of(root)));
+    match (&held, incoming.moved) {
+        (_, true) => {
+            say(Say::Done(format!("Brought in {n} incoming {commits}.")));
+            0
+        }
+        (None, false) => {
+            say(Say::Info("Nothing incoming.".into()));
+            0
+        }
+        (Some(held), false) => {
+            let line = if n == 0 {
+                format!("Nothing incoming, but {}.", held.why())
+            } else {
+                format!("{n} incoming {commits} not brought in: {}.", held.why())
+            };
+            if matches!(held, Held::Conflicts(_)) {
+                say(Say::Fail(line));
+                say(Say::Info(
+                    "  Nothing was saved. Settle the conflicts, then run `charter save --pull` \
+                     again."
+                        .into(),
+                ));
+                1
+            } else {
+                say(Say::Warn(line));
+                0
+            }
+        }
+    }
 }
 
 /// `git status --porcelain=v1 -z`'s paths: what `git add -A` would take. `-z` for the same

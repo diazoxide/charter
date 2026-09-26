@@ -160,6 +160,10 @@ enum Command {
         /// Commit only; do not push.
         #[arg(long)]
         no_push: bool,
+        /// First bring in what the remote has, as the app does: fetch the target branch and
+        /// fast-forward a clean tree. Refuses, and saves nothing, when the tree has conflicts.
+        #[arg(long)]
+        pull: bool,
     },
 
     /// Golden rule 0: check — or `--apply` — token-only git auth on the plane and every clone.
@@ -1332,16 +1336,24 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
             message,
             sign,
             no_push,
-        } => charter_core::planegit::save(
-            &charter_core::planegit::Request {
-                root: &root,
-                message: message.as_deref(),
-                sign: *sign,
-                no_push: *no_push,
-                cwd: &cwd,
-            },
-            &mut say,
-        ),
+            pull,
+        } => {
+            // A pull that failed, or met conflicts, stops the save: it would stage the markers.
+            if *pull && charter_core::planegit::pull(&root, &mut say) != 0 {
+                1
+            } else {
+                charter_core::planegit::save(
+                    &charter_core::planegit::Request {
+                        root: &root,
+                        message: message.as_deref(),
+                        sign: *sign,
+                        no_push: *no_push,
+                        cwd: &cwd,
+                    },
+                    &mut say,
+                )
+            }
+        }
         Command::GitPolicy { apply } => charter_core::gitpolicy::policy(&root, *apply, &mut say),
         _ => return None,
     };
