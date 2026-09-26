@@ -186,8 +186,9 @@ fn the_footer_names_the_surfaces_it_does_not_draw() {
         "frame, row, rule, declaration, frame: {:?}",
         ran.out
     );
+    // At the plane root with no workspace chosen, the row names the plane root (SI-1b).
     assert!(
-        lines[1].contains("default"),
+        lines[1].contains("plane root"),
         "the workspace: {:?}",
         lines[1]
     );
