@@ -790,7 +790,10 @@ fn the_fingerprint_moves_with_the_head_the_changed_count_and_the_unpushed_count_
     };
     assert_eq!(base.fingerprint(), print(&|s| s.pr = Some("#7".into())));
     assert_eq!(base.fingerprint(), print(&|s| s.stage = Stage::Changed));
-    assert_ne!(base.fingerprint(), print(&|s| s.head = Some("def456".into())));
+    assert_ne!(
+        base.fingerprint(),
+        print(&|s| s.head = Some("def456".into()))
+    );
     assert_ne!(base.fingerprint(), print(&|s| s.changed = 2));
     assert_ne!(base.fingerprint(), print(&|s| s.ahead = Some(1)));
 }
