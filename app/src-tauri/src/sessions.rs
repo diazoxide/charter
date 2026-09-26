@@ -285,12 +285,14 @@ impl Sessions {
             .ok_or_else(|| gone(id))
     }
 
-    /// Sends what a pane typed to the program.
-    pub fn input(&self, id: u32, text: &str) -> Result<(), String> {
+    /// Sends what a pane typed to the program: bytes, written to its pty as they are. Text is
+    /// its UTF-8; a mouse report in the default encoding is bytes that are not text at all
+    /// (charter#493).
+    pub fn input(&self, id: u32, bytes: impl AsRef<[u8]>) -> Result<(), String> {
         self.with(id, |running| {
             running
                 .session
-                .write(text.as_bytes())
+                .write(bytes.as_ref())
                 .map_err(|err| err.to_string())
         })
     }
@@ -530,6 +532,28 @@ mod tests {
         sessions.input(id, "hello\r").expect("the input is taken");
 
         until_seen(&seen, "you typed hello");
+    }
+
+    #[test]
+    fn bytes_that_are_not_text_reach_the_program_as_they_are() {
+        let sessions = Sessions::new();
+        let id = sessions
+            .open(
+                None,
+                &opening("stty raw -echo; printf 'raw now'; head -c 3 | od -An -tx1 | tr -s ' '; sleep 600"),
+                &|_| {},
+            )
+            .expect("the session opens");
+        let (_view, seen) = watching(&sessions, id);
+        until_seen(&seen, "raw now");
+
+        // A default-encoding mouse report's column past 95 is one byte above 127, which is no
+        // UTF-8 character on its own (charter#493).
+        sessions
+            .input(id, [0xb7_u8, b'!', b'$'])
+            .expect("the input is taken");
+
+        until_seen(&seen, "b7 21 24");
     }
 
     #[test]

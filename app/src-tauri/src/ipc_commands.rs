@@ -47,6 +47,7 @@ macro_rules! app_commands {
                 close_session,
                 ignore_needs_you,
                 send_input,
+                send_input_bytes,
                 resize_session,
                 watch_session,
                 unwatch_session,
