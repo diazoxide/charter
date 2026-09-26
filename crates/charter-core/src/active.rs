@@ -383,6 +383,19 @@ pub fn workspace(asking: &Asking) -> ActiveWorkspace {
 /// The difference is not cosmetic: `None` means nobody decided, which is the launch worth
 /// interrupting with a picker. One ladder asked twice, never two ladders that agree today.
 pub fn chosen_workspace(asking: &Asking) -> Option<ActiveWorkspace> {
+    if let Some(picked) = picked_workspace(asking) {
+        return Some(picked);
+    }
+    declared_default_workspace(asking.root).map(|name| ActiveWorkspace {
+        name,
+        rung: WorkspaceRung::DeclaredDefault,
+    })
+}
+
+/// The rungs that speak for THIS session — `-w`, `$CHARTER_WORKSPACE`, the tree it stands in,
+/// its own pointer and its terminal's — or `None` when none of them does. Everything under
+/// them is the plane's default, which speaks for nobody in particular.
+fn picked_workspace(asking: &Asking) -> Option<ActiveWorkspace> {
     let at = |name: String, rung| Some(ActiveWorkspace { name, rung });
     if let Some(flag) = asking.flag.filter(|f| !f.is_empty()) {
         return at(flag.to_string(), WorkspaceRung::Flag);
@@ -413,24 +426,148 @@ pub fn chosen_workspace(asking: &Asking) -> Option<ActiveWorkspace> {
     {
         return at(name, WorkspaceRung::TerminalPointer);
     }
-    if let Some(name) = declared_default_workspace(asking.root) {
-        return at(name, WorkspaceRung::DeclaredDefault);
-    }
     None
 }
 
-/// Whether this session is a **plane-root chat**: its launcher set [`PLANE_ROOT_ENV`] to
-/// [`PLANE_ROOT_ON`], and nothing on this command names a workspace instead.
+/// Why a session is at the **plane root**, in no workspace (SI-1). See [`plane_root`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaneRoot {
+    /// Its launcher said so: [`PLANE_ROOT_ENV`] is [`PLANE_ROOT_ON`]. The app's word for where
+    /// it started the chat, so the chat stays there: `charter workspace use` does not move it.
+    Launched,
+    /// It stands in the plane, outside every workspace, and nothing chose one for it. Nothing
+    /// pins it there either, so `charter workspace use` moves it as it always has.
+    Standing,
+}
+
+/// Whether the session `asking` describes is at the plane root, and why — or `None` when it
+/// is in a workspace, and the ladder ([`workspace`]) says which.
 ///
 /// It is asked BEFORE the ladder, by every caller that would otherwise act on the ladder's
-/// answer, because the ladder always ends on a name (`default`) and a plane-root chat is in
-/// no workspace at all. The two things that outrank it are the two that name a workspace for
-/// one command: `-w`, and `$CHARTER_WORKSPACE` set on it — which is how a root chat manages
-/// a workspace without being moved into it. A blank one names nothing and outranks nothing,
-/// the rule the ladder already has (charter#1055).
+/// answer, because the ladder always ends on a name (`default`) and a session at the plane
+/// root is in no workspace at all. **The one source of truth for it**: the CLI, the hooks and
+/// the footer all ask here, so no two of them can put one session in two places.
 ///
-/// Above the tree the caller stands in, as `$CHARTER_WORKSPACE` is: a root chat that `cd`s
-/// into a workspace's clone is still the chat its launcher started.
+/// # [`PlaneRoot::Launched`]
+///
+/// `plane_root_env` is exactly [`PLANE_ROOT_ON`] and nothing on this command names a workspace
+/// instead. Only `-w`, and `$CHARTER_WORKSPACE` set on the command, outrank it: they name a
+/// workspace for one command, which is how a root chat manages a workspace without being moved
+/// into it. A blank one names nothing and outranks nothing (charter#1055). It is above the
+/// tree the caller stands in, as `$CHARTER_WORKSPACE` is: a root chat that `cd`s into a
+/// workspace's clone is still the chat its launcher started.
+///
+/// # [`PlaneRoot::Standing`] (SI-1b)
+///
+/// **Anywhere in the plane that is not a workspace's is the plane root** — the plane's own
+/// directory, `docs/`, `.charter/`, `workspaces/` itself — when no rung that speaks for THIS
+/// session answers: no `-w`, no `$CHARTER_WORKSPACE`, no workspace tree underfoot, and neither
+/// the session's pointer nor its terminal's. The window files every chat standing there on the
+/// plane root's tab; the ladder alone would have put it in `[workspace] default` and asked it
+/// which workspace it was in.
+///
+/// **The plane's two defaults (`workspaces/.default`, `[workspace] default`) do not outrank
+/// it**, and that is the point: they are the plane's answer for a caller that is nowhere —
+/// a script run from outside the plane with `$CHARTER_ROOT` set — and they still answer
+/// there, and still answer [`workspace`] asked alone. A session standing in the plane is
+/// somewhere, and the pointers stay above it so `charter workspace use` keeps moving a session
+/// that is not pinned to the root.
+pub fn plane_root(asking: &Asking, plane_root_env: Option<&str>) -> Option<PlaneRoot> {
+    if at_plane_root(asking.flag, asking.env, plane_root_env) {
+        return Some(PlaneRoot::Launched);
+    }
+    (picked_workspace(asking).is_none() && inside_plane(asking.root, asking.cwd))
+        .then_some(PlaneRoot::Standing)
+}
+
+/// [`plane_root`] for a hook or a renderer, which reads [`PLANE_ROOT_ENV`] from the
+/// environment it was handed rather than from the process.
+pub fn plane_root_in(asking: &Asking, env: &dyn Fn(&str) -> Option<String>) -> Option<PlaneRoot> {
+    plane_root(asking, env(PLANE_ROOT_ENV).as_deref())
+}
+
+/// Where a session works: one of the plane's workspaces, or the plane root (SI-1b).
+///
+/// What a handoff's stamp, a handed-off chat's record of its parent and a kept report say
+/// about where a chat was. **Written as one word on disk and on the wire** ([`Place::word`]):
+/// a workspace's name, or [`Place::PLANE_ROOT`] — two words with a space, which no workspace
+/// name can be ([`contain::workspace_name_ok`]). So every reader that held the field to the
+/// name rule before this existed refuses the plane root rather than joining it onto
+/// `workspaces/` — the failure that changes nothing — and every reader since reads it with
+/// [`Place::read`]. A value of its own in these internal files, where every reader is
+/// charter's, and never in `$CHARTER_WORKSPACE`, which programs charter did not write read
+/// as a name ([`PLANE_ROOT_ENV`] says why that one is a variable of its own).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum Place {
+    Workspace(String),
+    PlaneRoot,
+}
+
+impl Place {
+    /// The plane root, as [`Place::word`] writes it.
+    pub const PLANE_ROOT: &'static str = "plane root";
+
+    /// A workspace's name, or [`Place::PLANE_ROOT`].
+    pub fn word(&self) -> &str {
+        match self {
+            Self::Workspace(name) => name,
+            Self::PlaneRoot => Self::PLANE_ROOT,
+        }
+    }
+
+    /// `word` as [`Place::word`] wrote it, or `None` for anything else — a name that cannot
+    /// be a workspace's is not a place.
+    pub fn read(word: &str) -> Option<Self> {
+        if word == Self::PLANE_ROOT {
+            Some(Self::PlaneRoot)
+        } else {
+            contain::workspace_name_ok(word).then(|| Self::Workspace(word.to_owned()))
+        }
+    }
+
+    /// The workspace, or `None` at the plane root.
+    pub fn workspace(&self) -> Option<&str> {
+        match self {
+            Self::Workspace(name) => Some(name),
+            Self::PlaneRoot => None,
+        }
+    }
+
+    /// How a person reads it in a sentence: `workspace 'alpha'`, or `the plane root`.
+    pub fn said(&self) -> String {
+        match self {
+            Self::Workspace(name) => format!("workspace '{name}'"),
+            Self::PlaneRoot => "the plane root".to_owned(),
+        }
+    }
+}
+
+impl TryFrom<String> for Place {
+    type Error = String;
+
+    fn try_from(word: String) -> Result<Self, Self::Error> {
+        Self::read(&word)
+            .ok_or_else(|| format!("'{word}' is neither a workspace nor the plane root"))
+    }
+}
+
+impl From<Place> for String {
+    fn from(place: Place) -> Self {
+        place.word().to_owned()
+    }
+}
+
+/// Whether `cwd` is the plane's directory or anywhere under it — both sides resolved, for
+/// [`workspace_of_tree`]'s reason.
+pub fn inside_plane(root: &Path, cwd: &Path) -> bool {
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let here = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    here.starts_with(root)
+}
+
+/// Whether the launcher marked this session as started at the plane root and nothing on this
+/// command names a workspace instead — [`PlaneRoot::Launched`], without a directory to ask.
 pub fn at_plane_root(
     flag: Option<&str>,
     workspace_env: Option<&str>,
@@ -440,18 +577,9 @@ pub fn at_plane_root(
     plane_root_env == Some(PLANE_ROOT_ON) && !named(flag) && !named(workspace_env)
 }
 
-/// [`at_plane_root`] for a hook, which carries no `-w`: both variables read from `env`.
-pub fn at_plane_root_in(env: &dyn Fn(&str) -> Option<String>) -> bool {
-    at_plane_root(
-        None,
-        env(WORKSPACE_ENV).as_deref(),
-        env(PLANE_ROOT_ENV).as_deref(),
-    )
-}
-
-/// What a command that needs a workspace says in a plane-root chat, instead of acting on one
-/// charter picked for it.
-pub fn plane_root_refusal(root: &Path) -> String {
+/// What a command that needs a workspace says at the plane root, instead of acting on one
+/// charter picked for it. A session nothing pinned there is also told how to move.
+pub fn plane_root_refusal(root: &Path, by: PlaneRoot) -> String {
     let names = crate::workspaces::Plane::open(root)
         .workspaces()
         .unwrap_or_default();
@@ -464,10 +592,18 @@ pub fn plane_root_refusal(root: &Path) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     };
-    format!(
-        "this chat was started at the plane root, so it is in no workspace and charter will \
-         not pick one for it — name the workspace with -w <workspace> (existing: {existing})."
-    )
+    match by {
+        PlaneRoot::Launched => format!(
+            "this chat was started at the plane root, so it is in no workspace and charter \
+             will not pick one for it — name the workspace with -w <workspace> (existing: \
+             {existing})."
+        ),
+        PlaneRoot::Standing => format!(
+            "this session is at the plane root and has chosen no workspace, so charter will \
+             not pick one for it — name the workspace with -w <workspace> (existing: \
+             {existing}), or move this session into one with `charter workspace use <name>`."
+        ),
+    }
 }
 
 /// The workspace whose directory `cwd` is inside, or `None` — `workspace.from_path`, and the
@@ -1023,15 +1159,7 @@ mod tests {
     #[test]
     fn a_chat_started_at_the_plane_root_is_in_no_workspace() {
         assert!(at_plane_root(None, None, Some(PLANE_ROOT_ON)));
-        // A hook reads both variables from the environment it was handed.
-        let env = |name: &str| (name == PLANE_ROOT_ENV).then(|| PLANE_ROOT_ON.to_string());
-        assert!(at_plane_root_in(&env));
-        let pinned = |name: &str| match name {
-            PLANE_ROOT_ENV => Some(PLANE_ROOT_ON.to_string()),
-            WORKSPACE_ENV => Some("w-env".to_string()),
-            _ => None,
-        };
-        assert!(!at_plane_root_in(&pinned));
+        assert!(!at_plane_root(None, Some("w-env"), Some(PLANE_ROOT_ON)));
     }
 
     #[test]
@@ -1065,12 +1193,164 @@ mod tests {
         let root = rig.root();
         fs::create_dir_all(root.join("workspaces/beta")).unwrap();
 
-        let said = plane_root_refusal(&root);
-        assert!(said.contains("plane root"), "{said}");
-        assert!(said.contains("-w <workspace>"), "{said}");
-        assert!(
-            said.contains("`beta`") && said.contains("`w-cwd`"),
-            "{said}"
+        for by in [PlaneRoot::Launched, PlaneRoot::Standing] {
+            let said = plane_root_refusal(&root, by);
+            assert!(said.contains("plane root"), "{said}");
+            assert!(said.contains("-w <workspace>"), "{said}");
+            assert!(
+                said.contains("`beta`") && said.contains("`w-cwd`"),
+                "{said}"
+            );
+        }
+        // Only a session nothing launched there can be moved, so only its refusal says how.
+        assert!(!plane_root_refusal(&root, PlaneRoot::Launched).contains("workspace use"));
+        assert!(plane_root_refusal(&root, PlaneRoot::Standing).contains("charter workspace use"));
+    }
+
+    #[test]
+    fn a_place_is_a_workspace_name_or_the_plane_root_and_nothing_else() {
+        for place in [Place::Workspace("alpha".into()), Place::PlaneRoot] {
+            assert_eq!(Place::read(place.word()), Some(place.clone()));
+        }
+        // The plane root's word is not a name any reader of the old field would join on.
+        assert!(!contain::workspace_name_ok(Place::PLANE_ROOT));
+        for not_one in [
+            "",
+            "../x",
+            ".default",
+            "Plane root",
+            "plane  root",
+            "plane-root ",
+        ] {
+            assert_eq!(Place::read(not_one), None, "{not_one:?}");
+        }
+        assert_eq!(Place::PlaneRoot.workspace(), None);
+        assert_eq!(Place::Workspace("a".into()).workspace(), Some("a"));
+    }
+
+    // --- standing at the plane root (SI-1b) ------------------------------------------- //
+
+    /// The rig with neither pointer, which is a session nothing has chosen a workspace for.
+    fn unchosen(rig: &Rig) -> PathBuf {
+        let root = rig.root();
+        fs::remove_file(root.join(".charter/sessions/sid.workspace")).unwrap();
+        fs::remove_file(root.join(".charter/terminals/tid.workspace")).unwrap();
+        root
+    }
+
+    #[test]
+    fn standing_anywhere_in_the_plane_outside_every_workspace_is_the_plane_root() {
+        // The defect: a chat started in `docs/` was in no workspace the window drew, and was
+        // quizzed for one. Anywhere under the plane that is not a workspace's is the root.
+        let rig = Rig::new();
+        let root = unchosen(&rig);
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        let ids = rig.ids();
+
+        for cwd in [
+            root.clone(),
+            root.join("docs"),
+            root.join("docs/adr"),
+            root.join(".charter"),
+            root.join("workspaces"),
+        ] {
+            assert_eq!(
+                plane_root(&ask(&root, &cwd, &ids), None),
+                Some(PlaneRoot::Standing),
+                "{cwd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_planes_defaults_do_not_speak_for_a_session_standing_at_its_root() {
+        // `workspaces/.default` and `[workspace] default` are both set in the rig. They answer
+        // for a caller standing nowhere in the plane; a session in it is somewhere.
+        let rig = Rig::new();
+        let root = unchosen(&rig);
+        let ids = rig.ids();
+
+        assert_eq!(
+            plane_root(&ask(&root, &root, &ids), None),
+            Some(PlaneRoot::Standing)
+        );
+        // The ladder itself is unchanged: asked alone it still ends on a default.
+        assert_eq!(
+            workspace(&ask(&root, &root, &ids)).rung,
+            WorkspaceRung::DeclaredDefault
+        );
+    }
+
+    #[test]
+    fn a_session_that_chose_a_workspace_is_not_at_the_plane_root() {
+        let rig = Rig::new();
+        let root = rig.root();
+        let ids = rig.ids();
+
+        // Its own pointer, the terminal's, `-w` and `$CHARTER_WORKSPACE` are each a choice.
+        assert_eq!(plane_root(&ask(&root, &root, &ids), None), None);
+        fs::remove_file(root.join(".charter/sessions/sid.workspace")).unwrap();
+        assert_eq!(plane_root(&ask(&root, &root, &ids), None), None);
+        fs::remove_file(root.join(".charter/terminals/tid.workspace")).unwrap();
+        let mut flagged = ask(&root, &root, &ids);
+        flagged.flag = Some("w-flag");
+        assert_eq!(plane_root(&flagged, None), None);
+        let mut pinned = ask(&root, &root, &ids);
+        pinned.env = Some("w-env");
+        assert_eq!(plane_root(&pinned, None), None);
+        // And a workspace's own tree is that workspace, whatever else is true.
+        let inside = root.join("workspaces/w-cwd/repo");
+        assert_eq!(plane_root(&ask(&root, &inside, &ids), None), None);
+    }
+
+    #[test]
+    fn standing_outside_the_plane_is_not_its_root() {
+        // A script with `$CHARTER_ROOT` set, run from anywhere else: the plane's defaults are
+        // for exactly this caller.
+        let rig = Rig::new();
+        let root = unchosen(&rig);
+        let elsewhere = tempfile::tempdir().unwrap();
+        let ids = rig.ids();
+
+        assert_eq!(plane_root(&ask(&root, elsewhere.path(), &ids), None), None);
+    }
+
+    #[test]
+    fn the_launchers_mark_outranks_every_rung_but_a_named_workspace() {
+        // `$CHARTER_PLANE_ROOT_SESSION=1` is the app's word for where it started the chat, so
+        // a pointer or a tree does not move it; `-w` and `$CHARTER_WORKSPACE` still name one.
+        let rig = Rig::new();
+        let root = rig.root();
+        let ids = rig.ids();
+        let inside = root.join("workspaces/w-cwd/repo");
+
+        for cwd in [&root, &inside] {
+            assert_eq!(
+                plane_root(&ask(&root, cwd, &ids), Some(PLANE_ROOT_ON)),
+                Some(PlaneRoot::Launched)
+            );
+        }
+        let mut flagged = ask(&root, &root, &ids);
+        flagged.flag = Some("w-flag");
+        assert_eq!(plane_root(&flagged, Some(PLANE_ROOT_ON)), None);
+    }
+
+    #[test]
+    fn a_hook_reads_the_launchers_mark_from_its_environment() {
+        let rig = Rig::new();
+        let root = unchosen(&rig);
+        let ids = rig.ids();
+        let marked = |name: &str| (name == PLANE_ROOT_ENV).then(|| PLANE_ROOT_ON.to_string());
+        let none = |_: &str| None;
+
+        let inside = root.join("workspaces/w-cwd/repo");
+        assert_eq!(
+            plane_root_in(&ask(&root, &inside, &ids), &marked),
+            Some(PlaneRoot::Launched)
+        );
+        assert_eq!(
+            plane_root_in(&ask(&root, &root, &ids), &none),
+            Some(PlaneRoot::Standing)
         );
     }
 

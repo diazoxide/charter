@@ -196,9 +196,9 @@ impl Move {
             changed = true;
         }
         if let Some(from) = chat.from.as_mut()
-            && from.workspace == self.old
+            && from.workspace.workspace() == Some(self.old.as_str())
         {
-            from.workspace.clone_from(&self.new);
+            from.workspace = crate::active::Place::Workspace(self.new.clone());
             changed = true;
         }
         changed

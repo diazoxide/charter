@@ -32,6 +32,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use charter_core::active::Place;
 use charter_core::engine::Size;
 use charter_core::hookwire::{Answer, Ask, OpenChat, Tickets};
 use charter_core::reopen::{Chat, HandedFrom, Owed};
@@ -205,7 +206,7 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
             .cwd
             .as_deref()
             .and_then(|cwd| workspace_of(held.root(), cwd))
-            .unwrap_or_else(|| from.workspace.clone()),
+            .map_or_else(|| from.workspace.clone(), Place::Workspace),
         to: to.clone(),
         to_workspace: from.workspace.clone(),
         summary,
@@ -213,7 +214,7 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
     let whose = if parent_open {
         For::Chat(from.chat)
     } else {
-        For::Workspace(&from.workspace)
+        For::Place(&from.workspace)
     };
     handback::leave(held.root(), whose, &report)
         .map_err(|why| format!("the report could not be kept ({why})"))?;
@@ -223,7 +224,8 @@ fn report_it(held: &Held, chat: u32, summary: &str) -> Result<Answer, String> {
     }
     Ok(Answer::Reported {
         to,
-        kept_for: (!parent_open).then(|| from.workspace.clone()),
+        // By `Place::word`: a workspace's name, or the plane root's word (SI-1b).
+        kept_for: (!parent_open).then(|| from.workspace.word().to_owned()),
     })
 }
 
@@ -282,13 +284,14 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
         .chats()
         .shown_name(from)
         .ok_or_else(|| format!("chat {from} is not one this app has open"))?;
-    let left_from = stamp.workspace.to_owned();
-    if !charter_core::contain::workspace_name_ok(&left_from) {
+    // A workspace's name, or the plane root (SI-1b): a chat at the root is in no workspace,
+    // and its stamp says so rather than naming the one the ladder would have picked.
+    let Some(left_from) = stamp.place() else {
         return Err(format!(
             "the stamp names '{}' as the workspace the handoff left from, which cannot be one",
-            charter_core::shown::short(&left_from)
+            charter_core::shown::short(stamp.workspace)
         ));
-    }
+    };
     // The command held the name to this rule already; held again because the request is what
     // arrived here, and a name is drawn on a tab.
     let label = match open.name.as_deref() {
@@ -709,6 +712,25 @@ mod tests {
         name: Option<&str>,
         report: bool,
     ) -> Result<(u32, Arrived), String> {
+        hand_off_with(held, id, tickets, asking, stamped(asking), name, report)
+    }
+
+    /// The stamp `charter handoff` writes for a handoff leaving a chat at the plane root
+    /// (SI-1b), and a brief.
+    fn stamped_at_the_root(chat: u32) -> String {
+        format!("⟨handoff from chat {chat} · plane root · 2026-05-04 11:32⟩\n\n# Ship it\nnow")
+    }
+
+    /// [`hand_off`], with the first message `message`.
+    fn hand_off_with(
+        held: &Held,
+        id: &PlaneId,
+        tickets: &Tickets,
+        asking: u32,
+        message: String,
+        name: Option<&str>,
+        report: bool,
+    ) -> Result<(u32, Arrived), String> {
         let ticket = ticket(held, id, tickets, asking);
         let told = Mutex::new(None);
         match answer(
@@ -716,7 +738,7 @@ mod tests {
             id,
             tickets,
             1,
-            a_named_open(asking, &ticket, stamped(asking), name, report),
+            a_named_open(asking, &ticket, message, name, report),
             &|arrived| *told.lock().unwrap() = Some(arrived),
         ) {
             Answer::Opened { chat } => Ok((chat, told.into_inner().unwrap().expect("told"))),
@@ -906,7 +928,10 @@ mod tests {
         assert_eq!(waiting.len(), 1, "left for its next turn");
         assert_eq!(waiting[0].summary, "Dropped it.");
         assert_eq!(waiting[0].from, "drop commons");
-        assert_eq!(waiting[0].from_workspace, "alpha");
+        assert_eq!(
+            waiting[0].from_workspace,
+            charter_core::active::Place::Workspace("alpha".to_owned())
+        );
     }
 
     #[test]
@@ -1044,10 +1069,116 @@ mod tests {
         );
         let kept = charter_core::handback::take(
             held.root(),
-            charter_core::handback::For::Workspace("default"),
+            charter_core::handback::For::Place(&charter_core::active::Place::Workspace(
+                "default".to_owned(),
+            )),
         );
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].to, "claude 1");
+    }
+
+    // ----- a handoff from the plane root (SI-1b) -----
+
+    #[test]
+    fn a_handoff_from_the_plane_root_opens_in_the_workspace_it_names_and_says_where_it_left() {
+        // The defect: the stamp named the ladder's workspace (the plane's default), because a
+        // stamp had to name one and the app refused anything that was not a workspace's name.
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+
+        let (chat, arrived) = hand_off_with(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            stamped_at_the_root(asking),
+            None,
+            false,
+        )
+        .expect("opened");
+
+        // Where the brief sent it, as from anywhere else.
+        assert_eq!(arrived.workspace, "alpha");
+        let record = held.chats().handed_from(chat).expect("recorded");
+        assert_eq!(record.workspace, charter_core::active::Place::PlaneRoot);
+        assert_eq!(
+            arrived.from.map(|from| from.workspace),
+            Some("plane root".to_owned())
+        );
+        assert!(
+            first_message_of(&plane).starts_with("⟨handoff from claude 1 · plane root · "),
+            "{:?}",
+            plane.runs()
+        );
+    }
+
+    #[test]
+    fn a_report_whose_root_parent_has_closed_is_kept_for_the_plane_root() {
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) = hand_off_with(
+            &held,
+            &id,
+            &tickets,
+            asking,
+            stamped_at_the_root(asking),
+            Some("drop commons"),
+            true,
+        )
+        .expect("opened");
+        held.chats().close(asking).unwrap();
+
+        let said = report(&held, &id, &tickets, child, "Dropped it.");
+
+        assert_eq!(
+            said,
+            Answer::Reported {
+                to: "claude 1".to_owned(),
+                kept_for: Some("plane root".to_owned()),
+            }
+        );
+        let kept = charter_core::handback::take(
+            held.root(),
+            charter_core::handback::For::Place(&charter_core::active::Place::PlaneRoot),
+        );
+        assert_eq!(kept.len(), 1);
+        // The child is in the workspace the brief named, whatever its parent was in.
+        assert_eq!(
+            kept[0].from_workspace,
+            charter_core::active::Place::Workspace("alpha".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_stamp_that_says_workspace_and_then_the_plane_roots_words_is_refused() {
+        // Only the root's own shape says the root; `workspace plane root` is a workspace name
+        // that cannot be one.
+        let plane = Plane::new();
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+
+        let refused = hand_off_with(
+            &held,
+            &id,
+            &Tickets::default(),
+            asking,
+            format!(
+                "⟨handoff from chat {asking} · workspace plane root · 2026-05-04 11:32⟩\n\nbody"
+            ),
+            None,
+            false,
+        )
+        .expect_err("refused");
+        assert!(refused.contains("cannot be one"), "{refused}");
     }
 
     #[test]

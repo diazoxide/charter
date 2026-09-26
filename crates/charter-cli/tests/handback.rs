@@ -21,9 +21,9 @@ fn a_plane() -> tempfile::TempDir {
 fn a_report(summary: &str) -> Handback {
     Handback {
         from: "drop commons".to_owned(),
-        from_workspace: "platform-next".to_owned(),
+        from_workspace: charter_core::active::Place::Workspace("platform-next".to_owned()),
         to: "steward 3".to_owned(),
-        to_workspace: "ops".to_owned(),
+        to_workspace: charter_core::active::Place::Workspace("ops".to_owned()),
         summary: summary.to_owned(),
     }
 }
@@ -123,7 +123,12 @@ fn another_chats_turn_is_not_handed_it() {
 #[test]
 fn a_chat_compacting_in_that_workspace_does_not_take_its_reports() {
     let plane = a_plane();
-    handback::leave(plane.path(), For::Workspace("ops"), &a_report("done")).unwrap();
+    handback::leave(
+        plane.path(),
+        For::Place(&charter_core::active::Place::Workspace("ops".to_owned())),
+        &a_report("done"),
+    )
+    .unwrap();
 
     let out = hook_with(
         plane.path(),
@@ -135,7 +140,11 @@ fn a_chat_compacting_in_that_workspace_does_not_take_its_reports() {
 
     assert!(!out.contains("reported back"), "{out}");
     assert_eq!(
-        handback::take(plane.path(), For::Workspace("ops")).len(),
+        handback::take(
+            plane.path(),
+            For::Place(&charter_core::active::Place::Workspace("ops".to_owned()))
+        )
+        .len(),
         1,
         "still waiting for a chat that starts"
     );
@@ -144,7 +153,12 @@ fn a_chat_compacting_in_that_workspace_does_not_take_its_reports() {
 #[test]
 fn a_report_kept_for_a_workspace_is_learned_by_the_next_chat_that_starts_there() {
     let plane = a_plane();
-    handback::leave(plane.path(), For::Workspace("ops"), &a_report("done")).unwrap();
+    handback::leave(
+        plane.path(),
+        For::Place(&charter_core::active::Place::Workspace("ops".to_owned())),
+        &a_report("done"),
+    )
+    .unwrap();
 
     let out = hook_as(
         plane.path(),
@@ -158,7 +172,43 @@ fn a_report_kept_for_a_workspace_is_learned_by_the_next_chat_that_starts_there()
     assert!(context.contains("has since closed"), "{context}");
     assert!(context.ends_with("> done"), "{context}");
     assert!(
-        handback::take(plane.path(), For::Workspace("ops")).is_empty(),
+        handback::take(
+            plane.path(),
+            For::Place(&charter_core::active::Place::Workspace("ops".to_owned()))
+        )
+        .is_empty(),
         "learned once"
     );
+}
+
+#[test]
+fn a_report_kept_for_the_plane_root_is_learned_by_the_next_chat_started_there_and_no_other() {
+    // SI-1b: a root chat that handed off and closed. Its report waits for the plane root, not
+    // for whichever workspace the ladder would have named.
+    use charter_core::active::Place;
+    let plane = a_plane();
+    let to_root = Handback {
+        to_workspace: Place::PlaneRoot,
+        ..a_report("done at the root")
+    };
+    handback::leave(plane.path(), For::Place(&Place::PlaneRoot), &to_root).unwrap();
+
+    let in_ops = hook_as(
+        plane.path(),
+        "sessionstart",
+        "8",
+        &[("CHARTER_WORKSPACE", "ops")],
+    );
+    assert!(!in_ops.contains("reported back"), "{in_ops}");
+
+    let at_root = hook_as(
+        plane.path(),
+        "sessionstart",
+        "9",
+        &[("CHARTER_PLANE_ROOT_SESSION", "1")],
+    );
+    let context = context_of(&at_root, "SessionStart");
+    assert!(context.contains("a chat at the plane root"), "{context}");
+    assert!(context.ends_with("> done at the root"), "{context}");
+    assert!(handback::take(plane.path(), For::Place(&Place::PlaneRoot)).is_empty());
 }

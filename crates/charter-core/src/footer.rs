@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::active::{self, Asking, Ids, WorkspaceRung};
+use crate::active::{self, Asking, Ids, PlaneRoot, WorkspaceRung};
 use crate::tui::{self, Node};
 
 // ANSI — a status line renders escape codes. Coloured unconditionally, as every line
@@ -248,9 +248,13 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
     // Below zone 2 in charter, and full width: actionable problems with the plane, each with
     // the command that fixes it. Here they follow the line that stands where zone 2 will go,
     // so the order is charter's order with the part not yet drawn named in its place.
+    let workspace = match &active {
+        Session::Workspace(ws) => Some(ws.name.as_str()),
+        Session::PlaneRoot(_) => None,
+    };
     let alerts = crate::alerts::read(&crate::alerts::Asking {
         root: plane,
-        active: Some(&active.name),
+        active: workspace,
         standing: ambient.cwd,
     });
     let mut rows = vec![
@@ -258,7 +262,7 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
         format!("{DIM}{NOT_DRAWN_YET}{R}"),
     ];
     if let Some(config) = ambient.config {
-        rows.extend(badge_rows(plane, config, &active.name, ambient.now));
+        rows.extend(badge_rows(plane, config, workspace, ambient.now));
     }
     rows.extend(alerts.alerts.iter().map(|alert| alert.line(&look)));
     let body = Node::stack(rows).render(width);
@@ -272,12 +276,17 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
 /// **Read through the one reader** ([`crate::extension::facts::gather`]), which starts no
 /// program. A stale value is dimmed whole and carries its age, so an old count never reads as
 /// a current one.
-fn badge_rows(plane: &Path, config: &Path, workspace: &str, now: DateTime<Utc>) -> Vec<String> {
+fn badge_rows(
+    plane: &Path,
+    config: &Path,
+    workspace: Option<&str>,
+    now: DateTime<Utc>,
+) -> Vec<String> {
     use crate::extension::{facts, project::Choices};
     let read = facts::gather(
         config,
         &crate::extension::BuiltIn::none(),
-        || Choices::read_in(plane, Some(workspace)),
+        || Choices::read_in(plane, workspace),
         now,
         facts::Reading::Footer,
     );
@@ -305,12 +314,23 @@ fn badge_rows(plane: &Path, config: &Path, workspace: &str, now: DateTime<Utc>) 
     rows
 }
 
-/// `(workspace, which rung said so)` for the SESSION, not for this process.
+/// Where the session this footer is drawn for works.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Session {
+    /// In a workspace: its name, and which rung said so.
+    Workspace(active::ActiveWorkspace),
+    /// At the plane root, in no workspace (SI-1b): the row says so rather than drawing the
+    /// workspace the ladder would have picked for it, and that workspace's counts with it.
+    PlaneRoot(PlaneRoot),
+}
+
+/// Where the SESSION works, not this process: the plane root ([`active::plane_root`]), or
+/// `(workspace, which rung said so)`.
 ///
 /// The payload's `current_dir` matters because the cwd rung outranks every pointer, so reading
 /// the hook's own directory there does not merely miss a better answer — it overrides the
-/// right one.
-fn active_workspace(plane: &Path, payload: &Value, ambient: &Ambient) -> active::ActiveWorkspace {
+/// right one. It is also where the session stands, which is what puts it at the plane root.
+fn active_workspace(plane: &Path, payload: &Value, ambient: &Ambient) -> Session {
     let sid = payload
         .get("session_id")
         .and_then(Value::as_str)
@@ -331,22 +351,26 @@ fn active_workspace(plane: &Path, payload: &Value, ambient: &Ambient) -> active:
         .filter(|s| !s.is_empty())
         .map_or_else(|| ambient.cwd.to_path_buf(), PathBuf::from);
     let workspace_env = (ambient.env)(active::WORKSPACE_ENV);
-    active::workspace(&Asking {
+    let asking = Asking {
         root: plane,
         cwd: &here,
         flag: None,
         ids: &ids,
         env: workspace_env.as_deref(),
-    })
+    };
+    match active::plane_root_in(&asking, ambient.env) {
+        Some(by) => Session::PlaneRoot(by),
+        None => Session::Workspace(active::workspace(&asking)),
+    }
 }
 
-/// Zone 1: the workspace's name and what is true of that workspace.
-fn identity_row(
-    plane: &Path,
-    active: &active::ActiveWorkspace,
-    look: &Look,
-    ambient: &Ambient,
-) -> String {
+/// Zone 1: the workspace's name and what is true of that workspace — or, at the plane root,
+/// `plane root` and how many workspaces there are, because it is in none of them.
+fn identity_row(plane: &Path, session: &Session, look: &Look, ambient: &Ambient) -> String {
+    let active = match session {
+        Session::Workspace(active) => active,
+        Session::PlaneRoot(by) => return plane_root_row(plane, *by, look),
+    };
     // A `*` for a workspace pinned by the environment, so a session that cannot be moved with
     // `charter ws use` says so where the name is read.
     let pin = if active.rung == WorkspaceRung::Environment {
@@ -374,13 +398,34 @@ fn identity_row(
         parts.push(format!("{DIM}todo{R} {ntodo}"));
     }
     parts.extend(piece_cell(plane, &active.name, look, ambient.now));
-    parts.push(format!(
+    parts.push(workspace_count(plane));
+    parts.join(&format!("{DIM} · {R}"))
+}
+
+/// Zone 1 for a session at the plane root: no workspace's todos, pieces or structure, since
+/// it is in none of them. The pin is the one a workspace gets from `$CHARTER_WORKSPACE`, and
+/// for the same reason: the app put it there, and `charter ws use` does not move it.
+fn plane_root_row(plane: &Path, by: PlaneRoot, look: &Look) -> String {
+    let pin = if by == PlaneRoot::Launched {
+        format!("{}*{R}", look.accent(Role::Warn))
+    } else {
+        String::new()
+    };
+    [
+        format!("{CYAN}⬢{R} {BOLD}{}{R}{pin}", active::Place::PLANE_ROOT),
+        workspace_count(plane),
+    ]
+    .join(&format!("{DIM} · {R}"))
+}
+
+/// `ws N`: how many workspaces the plane has.
+fn workspace_count(plane: &Path) -> String {
+    format!(
         "{DIM}ws{R} {}",
         crate::workspaces::Plane::open(plane)
             .workspaces()
             .map_or(0, |all| all.len())
-    ));
-    parts.join(&format!("{DIM} · {R}"))
+    )
 }
 
 /// The identity row's piece cell — counts, and the oldest silence. `None` when the workspace

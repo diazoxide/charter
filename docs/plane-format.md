@@ -1516,6 +1516,22 @@ on a frame-driven plane sees until then, and the one command that closes it.
   `workspace current` prints nothing and fails, `workspace use` and `workspace create --use` are
   refused, `recall` searches every base but a workspace's, and `status` reports every
   workspace with none marked. Any other value changes nothing. The ladder itself is unchanged.
+- **Standing in the plane outside every workspace is the plane root too** (SI-1b,
+  2026-09-27). A session whose directory is the plane's or anywhere under it that is no
+  workspace's (`docs/`, `.charter/`, `workspaces/` itself), and for which no rung that speaks
+  for THAT session answers — no `--workspace`, no `$CHARTER_WORKSPACE`, no tree, neither its
+  session pointer nor its terminal pointer — is in no workspace, with every answer of the
+  bullet above but one: `workspace use` and `workspace create --use` still work, because
+  nothing pinned it there, and from then on its session pointer answers. **The two committed
+  defaults, `workspaces/.default` and `[workspace] default`, no longer answer for such a
+  session.** They are the plane's answer for a caller that is nowhere — a script run from
+  outside the plane with `$CHARTER_ROOT` set — and they still answer there, and still end the
+  ladder asked on its own (`active::workspace`); a session standing in the plane is somewhere,
+  and the window already filed it on the plane root's tab. The pointers stay above it so a
+  session that was never pinned to the root keeps moving with `workspace use`. Python answered
+  the plane's default here; the recorded scenarios that stood at the plane root with no pointer
+  and needed a workspace hold the new answer, and each says so in its notes.
+  (`active::plane_root`, the one question every command, hook and the footer asks.)
 
 ---
 
@@ -2180,24 +2196,27 @@ before it is stored.
 - **Written by:** `charter_core::handback::leave` (charter-app#259), from the app's answer to a
   report, and from `handback::orphan` when a chat with reports waiting is closed.
 - **Read by:** `charter hook userpromptsubmit` (`chat-<n>/`, `<n>` from `$CHARTER_SESSION_ID`)
-  and `charter hook sessionstart` (`workspace-<ws>/`, the session's workspace), through
+  and `charter hook sessionstart` (`workspace-<ws>/`, the session's workspace, or `plane-root/`
+  for a session at the plane root), through
   `handback::take`, which **removes each file it reads**: a report reaches one turn.
 - **Git:** gitignored (under `/.charter/`).
 - **Layout:** `chat-<n>/` for a report to a chat the app has open, `workspace-<ws>/` for one
-  whose chat has closed. Each file is `<nanoseconds since the epoch, 24 digits>-<uuid>.json`,
+  whose chat has closed, and `plane-root/` for one whose chat worked at the plane root and has
+  closed (SI-1b). Each file is `<nanoseconds since the epoch, 24 digits>-<uuid>.json`,
   so a directory reads in arrival order; it is written as `.<name>` and renamed into place, and a
   reader skips a name starting with `.`. An empty directory is removed by the reader.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `from` | str | the chat that reported, by the name it is shown under |
-| `from_workspace` | str | the workspace that chat works in |
+| `from_workspace` | str | the workspace that chat works in, or `plane root` |
 | `to` | str | the chat that asked, by the name it is shown under |
-| `to_workspace` | str | the workspace that chat handed off from — where the report goes when it is gone |
+| `to_workspace` | str | the workspace that chat handed off from — where the report goes when it is gone — or `plane root` for a chat that handed off from the plane root (SI-1b). Two words with a space, which no workspace name can be, so a reader that holds the field to the name rule drops the report rather than joining the words onto `workspaces/` |
 | `summary` | str | the report: trimmed, at most 4,096 bytes, no control character but `\n` and no invisible one |
 
 **Held again on the way in.** A file whose `summary` breaks the report rule, whose names break
-the chat-name rule, whose workspaces cannot be one, or which is not JSON at all, is removed and
+the chat-name rule, whose workspaces are neither a workspace's name nor `plane root`, or which
+is not JSON at all, is removed and
 handed to nobody. What is handed over is quoted as data: every line of the summary behind `> `.
 
 ---
@@ -3409,7 +3428,7 @@ down rather than read off the code.
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
 | `chats[].footer` | str | default `""` | `"show"` where this chat draws charter's footer in its pane, empty otherwise ([ADR 0029](adr/0029-the-pane-footer-is-blanked-by-default-and-a-chat-may-keep-it.md)). The same word the chat's `$CHARTER_FOOTER` carries, so the record and the launch cannot mean different things by it. **Any other value reads as empty** — a record written before this key existed, and one somebody else wrote, both come back blanked, which is what the app did before the setting existed |
 | `chats[].label` | str | default `""` (absent) | the name the operator gave the chat (charter-app#254), which its tab says instead of the default `<persona> <N>`. Charter's label only: `name` is still what the harness was started with and is resumed under. Written only when one was given, so a plane that never renamed a chat writes the record it always wrote. Held on the way in to the rule a rename is: trimmed, at most 64 characters, and no control or invisible formatting character (`charter_core::panel::undrawable`); a value that breaks it reads as absent and the chat comes back under its default |
-| `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone; `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that cannot be one reads as the whole key absent — the note is not drawn and no report is owed |
+| `chats[].from` | object | absent | the chat a handoff opened this one from (charter-app#258, #259): `{"chat": <n>, "name": "<str>", "workspace": "<str>", "report": "owed" \| "sent"}`. `chat` is the app's number for that chat, the key its reports are left under; `name` is the name it was shown under when it handed off (a copy, so the note still reads once it has closed); `workspace` is where it handed off from, where a report goes once it is gone — a workspace's name, or `plane root` for a chat that handed off from the plane root (SI-1b); `report` is absent for a fire-and-forget handoff, `"owed"` for a `--report` one whose report has not been sent, and `"sent"` after it, for good: a handoff gets one report. Written only for a handed-off chat, so a plane that never handed off writes the record it always wrote. Held on the way in: a `chat` of `0`, a `name` the label rule refuses or a `workspace` that is neither a workspace's name nor `plane root` reads as the whole key absent — the note is not drawn and no report is owed |
 | `chats[].renamed_from` | str | default `""` (absent) | the workspace `charter workspace rename` moved this chat away from, where the rename left it with no conversation its harness can find (charter#367, D10). Claude Code keeps a conversation under the folder it ran in, so the rename clears such a chat's `resume` and writes this instead; a Codex or opencode chat keeps its `resume`. The next start is a new conversation whose pane says why, and the chat is written without this key from then on. Held to the workspace-name rule on the way in; anything else reads as absent |
 | `relaunch_after_update` | bool | default `false`; written only when `true` | the quit that wrote this restarted charter to install an update (charter-app#251, **Restart to update**, the only writer of `true`), so the launch after it says why it is asking ("Reopen all" is the answer in front either way). Every later write is an ordinary one and drops it. **It counts only at the launch that follows the restart**: the restart also leaves an empty `restarted-to-update` file beside the machine store (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), and the next launch removes it whatever it opens. A plane that launch did not open keeps the flag, and it says nothing at any later launch |
 
@@ -3765,7 +3784,7 @@ semantics below.
 | `CLAUDE_CODE_SESSION_ID` | Fallback for the above | `charter/session.py:66` |
 | `TERM_SESSION_ID` / `TMUX_PANE` / `STY` / `SSH_TTY` (then `ttyname`) | Name `terminals/<tid>.*` | `charter/session.py:75`–`:79`, `charter/session.py:111` |
 | `CHARTER_WORKSPACE` | Overrides the resolved workspace **without writing anything**; also the `identity` pin read per chat. **charter-app sets it on every chat it starts in a workspace** (SI-1), and never lets a chat inherit the app's own | `charter/workspace.py:550`, `charter/frame/state.py:1616`; `crates/charter-core/src/start.rs` |
-| `CHARTER_PLANE_ROOT_SESSION` | **charter-app only** (SI-1). `1` on a chat the app started at the plane root: the session is in no workspace (see the workspace resolution order). Any other value is ignored. A variable of its own rather than a value of `CHARTER_WORKSPACE`, so nothing that reads that one as a name ever sees it; set by the app, never inherited, and refused in a profile's `env` like every `CHARTER_` name | `crates/charter-core/src/active.rs` (`PLANE_ROOT_ENV`, `at_plane_root`) |
+| `CHARTER_PLANE_ROOT_SESSION` | **charter-app only** (SI-1). `1` on a chat the app started at the plane root — the plane's own directory or anywhere under it that is no workspace's (SI-1b) — so the session is in no workspace (see the workspace resolution order). Any other value is ignored. A variable of its own rather than a value of `CHARTER_WORKSPACE`, so nothing that reads that one as a name ever sees it; set by the app, never inherited, and refused in a profile's `env` like every `CHARTER_` name | `crates/charter-core/src/active.rs` (`PLANE_ROOT_ENV`, `at_plane_root`) |
 | `CHARTER_PERSONA` | Same, for personas | `charter/persona.py:1260` |
 | `CHARTER_HARNESS` | Which harness the registry reports; stored per chat in `frame/<chat>/identity` | `charter/harness/registry.py:46`, `charter/commands_frame.py:3058` |
 | `CHARTER_WORKTREES` | Moves worktrees (not state) | `charter/config.py:82` |

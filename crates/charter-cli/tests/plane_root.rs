@@ -57,6 +57,10 @@ fn run_in(root: &Path, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Ran {
         "TMUX_PANE",
         "STY",
         "SSH_TTY",
+        // The app's socket and chat number, which a suite run inside a chat the app started
+        // would otherwise inherit — and `statusline` then draws nothing, the app's footer.
+        charter_core::hookwire::SOCKET_ENV,
+        charter_core::hookwire::CHAT_ENV,
     ] {
         command.env_remove(name);
     }
@@ -200,4 +204,68 @@ fn standing_in_a_workspaces_own_directory_is_being_in_it() {
         &[],
     );
     assert_eq!((ran.code, ran.out.as_str()), (0, "beta\n"), "{}", ran.err);
+}
+
+// ---- SI-1b: standing anywhere in the plane outside every workspace ------------------------
+
+#[test]
+fn a_session_standing_in_the_plane_outside_every_workspace_is_at_the_plane_root() {
+    // No launcher mark, no pointer, no `-w`: the plane's default (`alpha`) no longer speaks
+    // for a session that is standing somewhere in the plane.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"));
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+
+    for cwd in [root.clone(), root.join("docs")] {
+        let ran = run_in(&root, &cwd, &["ws", "todo", "Cut the release"], &[]);
+        assert!(
+            ran.code != 0 && ran.err.contains("at the plane root") && ran.err.contains("-w"),
+            "{cwd:?}: {} / {}",
+            ran.code,
+            ran.err
+        );
+        let ran = run_in(&root, &cwd, &["workspace", "current"], &[]);
+        assert!(ran.code != 0 && ran.out.is_empty(), "{cwd:?}: {}", ran.out);
+    }
+    assert!(!root.join("workspaces/alpha/todos").exists());
+}
+
+#[test]
+fn a_session_standing_at_the_root_moves_into_a_workspace_with_workspace_use() {
+    // Nothing pinned it to the root, so `workspace use` works as it always has, and from then
+    // on its own pointer answers.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"));
+    let session = &[("CHARTER_SESSION_ID", "7")];
+
+    let ran = run_in(&root, &root, &["workspace", "use", "beta"], session);
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let ran = run_in(&root, &root, &["workspace", "current"], session);
+    assert_eq!((ran.code, ran.out.as_str()), (0, "beta\n"), "{}", ran.err);
+}
+
+#[test]
+fn the_planes_default_still_answers_for_a_caller_outside_the_plane() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"));
+    let elsewhere = tmp.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    let ran = run_in(&root, &elsewhere, &["workspace", "current"], &[]);
+    assert_eq!((ran.code, ran.out.as_str()), (0, "alpha\n"), "{}", ran.err);
+}
+
+#[test]
+fn the_footer_of_a_root_chat_shows_the_plane_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"));
+    let ran = run_in(
+        &root,
+        &root,
+        &["statusline", "--now", "2026-05-04T11:32:17"],
+        AT_ROOT,
+    );
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    assert!(ran.out.contains("plane root"), "{}", ran.out);
+    assert!(!ran.out.contains("alpha"), "{}", ran.out);
 }

@@ -44,6 +44,60 @@ fn row(root: &Path, payload: &serde_json::Value, env: &dyn Fn(&str) -> Option<St
     identity_row(root, &active, &look, &ambient(env, root))
 }
 
+/// A payload whose session stands in `dir`.
+fn standing_in(dir: &Path) -> serde_json::Value {
+    serde_json::json!({ "workspace": { "current_dir": dir.to_string_lossy() } })
+}
+
+// ---- the plane root (SI-1b) ----------------------------------------------------------------
+
+#[test]
+fn a_chat_the_app_started_at_the_plane_root_shows_the_plane_root_and_not_a_workspace() {
+    let (_held, root) = a_plane("alpha");
+    std::fs::write(
+        root.join("charter.toml"),
+        "[workspace]\ndefault = \"alpha\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("workspaces/alpha/todos/20260302-090000-one.md"),
+        "# one\n",
+    )
+    .unwrap();
+    let env = |name: &str| (name == active::PLANE_ROOT_ENV).then(|| "1".to_string());
+    // The pin: the app put it there, and `charter ws use` does not move it.
+    assert_eq!(
+        row(&root, &serde_json::Value::Null, &env),
+        "\x1b[36m⬢\x1b[0m \x1b[1mplane root\x1b[0m\x1b[33m*\x1b[0m\x1b[2m · \x1b[0m\x1b[2mws\x1b[0m 1"
+    );
+}
+
+#[test]
+fn a_session_standing_in_the_plane_outside_every_workspace_shows_the_plane_root() {
+    // No pin, no pointer, no tree: the ladder would have said `alpha`, the plane's default,
+    // and its todo count with it.
+    let (_held, root) = a_plane("alpha");
+    std::fs::write(
+        root.join("charter.toml"),
+        "[workspace]\ndefault = \"alpha\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(
+        root.join("workspaces/alpha/todos/20260302-090000-one.md"),
+        "# one\n",
+    )
+    .unwrap();
+    let env = |_: &str| None;
+    for dir in [root.clone(), root.join("docs")] {
+        assert_eq!(
+            row(&root, &standing_in(&dir), &env),
+            "\x1b[36m⬢\x1b[0m \x1b[1mplane root\x1b[0m\x1b[2m · \x1b[0m\x1b[2mws\x1b[0m 1",
+            "{dir:?}"
+        );
+    }
+}
+
 #[test]
 fn the_row_names_the_workspace_and_how_many_others_there_are() {
     let (_held, root) = a_plane("alpha");
@@ -66,8 +120,10 @@ fn a_workspace_chosen_by_anything_but_the_environment_carries_no_pin() {
     )
     .unwrap();
     let env = |_: &str| None;
+    // Standing in its tree, which is the cwd rung (the plane root would be no workspace).
+    let payload = standing_in(&root.join("workspaces/alpha"));
     assert_eq!(
-        row(&root, &serde_json::Value::Null, &env),
+        row(&root, &payload, &env),
         "\x1b[36m⬢\x1b[0m \x1b[1malpha\x1b[0m\x1b[2m · \x1b[0m\x1b[2mws\x1b[0m 1"
     );
 }
