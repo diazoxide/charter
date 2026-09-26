@@ -693,6 +693,17 @@ enum WorkspaceCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Rename a workspace: its directory, its clones' worktrees, and every record that names it.
+    ///
+    /// Refused while a chat is running in it, and when the new name is taken or is not one a
+    /// workspace can have. A rename that was interrupted is finished by running it again.
+    #[command(alias = "mv")]
+    Rename {
+        /// The workspace's name now.
+        old: String,
+        /// The name it is to have.
+        new: String,
+    },
     /// Share a workspace's manifest + memory (LIVE), or make it private again (`--off`).
     Live {
         name: String,
@@ -1610,6 +1621,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
     if !matches!(
         verb,
         WorkspaceCommand::Remove { .. }
+            | WorkspaceCommand::Rename { .. }
             | WorkspaceCommand::Live { .. }
             | WorkspaceCommand::Use { .. }
             | WorkspaceCommand::Unlock
@@ -1652,6 +1664,23 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
                 });
             }
             code
+        }
+        WorkspaceCommand::Rename { old, new } => {
+            // The chats the app has open in it, under either name so a rename finished after
+            // a crash is guarded too. A terminal cannot see into the app, so it reads the
+            // record the app keeps of what it has open, while an app is listening.
+            let running = wscmd::rename::open_in_app(&root, &[old.as_str(), new.as_str()]);
+            let config_root = charter_core::machine::config_root();
+            wscmd::rename::rename(
+                &wscmd::rename::Request {
+                    root: &root,
+                    old,
+                    new,
+                    running: &running,
+                    config_root: config_root.as_deref(),
+                },
+                say,
+            )
         }
         WorkspaceCommand::Live { name, off } => wscmd::live::live(&root, name, *off, say),
         WorkspaceCommand::Use {
@@ -1911,6 +1940,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Save { .. }
         | Command::Handoff { .. }
         | Command::Workspace(WorkspaceCommand::Remove { .. })
+        | Command::Workspace(WorkspaceCommand::Rename { .. })
         | Command::Workspace(WorkspaceCommand::Live { .. })
         | Command::Workspace(WorkspaceCommand::Use { .. })
         | Command::Workspace(WorkspaceCommand::Unlock)

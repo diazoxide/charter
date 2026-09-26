@@ -136,7 +136,7 @@ pub fn path_for(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<PathB
 }
 
 /// A plane that moves its worktree root elsewhere is refused by name, not followed.
-fn relocation_refusal(plane: &Path) -> Result<(), Refusal> {
+pub(crate) fn relocation_refusal(plane: &Path) -> Result<(), Refusal> {
     if let Some(declared) = crate::steer::var_os("CHARTER_WORKTREES") {
         return Err(Refusal::Relocated(declared.to_string_lossy().into_owned()));
     }

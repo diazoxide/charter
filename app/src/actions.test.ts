@@ -110,6 +110,7 @@ function doing(): Doing & { calls: string[] } {
     openSaving: note("openSaving"),
     openWorkspaceSettings: note("openWorkspaceSettings"),
     switchLive: note("switchLive"),
+    renameWorkspace: note("renameWorkspace"),
     openPreferences: note("openPreferences"),
     quit: note("quit"),
   };
@@ -327,6 +328,22 @@ describe("the one list of actions", () => {
     // On the workspace tab's own menu, above the line: it opens a tab and ends nothing.
     expect(menuOn({ on: "workspace", workspace: "alpha" }).above).toContain(
       "workspace.settings:alpha",
+    );
+  });
+
+  it("offers to rename each workspace but the chats outside every one, in the palette and its menu", async () => {
+    // charter#367: a row in the palette and on the workspace tab's menu, above the line —
+    // it discards nothing. It opens the dialog; the core refuses what it refuses.
+    const hands = doing();
+    const offers = catalogue(now({ workspaces: ["alpha", OUTSIDE], plane: "/plane" }));
+    const row = by(offers, "workspace.rename:alpha");
+    expect(row?.title).toBe("Rename workspace alpha…");
+    expect(row?.available).toBe(true);
+    await run(offers, "workspace.rename:alpha", hands);
+    expect(hands.calls).toEqual(["renameWorkspace:alpha"]);
+    expect(by(offers, `workspace.rename:${OUTSIDE}`)).toBeUndefined();
+    expect(menuOn({ on: "workspace", workspace: "alpha" }).above).toContain(
+      "workspace.rename:alpha",
     );
   });
 
@@ -962,6 +979,8 @@ describe("carrying out a row", () => {
         "openWorkspaceSettings:beta",
         "switchLive:alpha",
         "switchLive:beta",
+        "renameWorkspace:alpha",
+        "renameWorkspace:beta",
         "quit",
       ]),
     );
@@ -1297,7 +1316,7 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("clone.pick:"))).toHaveLength(10);
     // One settings row per workspace (charter-app#280), and none for the strip outside.
     expect(offers.filter((row) => row.id.startsWith("workspace.settings:"))).toHaveLength(6);
-    // 379 rows: 50 chats four times over, 6 workspaces FIVE times, 50 pieces TWICE, 10
+    // 385 rows: 50 chats four times over, 6 workspaces SIX times, 50 pieces TWICE, 10
     // clones TWICE, 8 personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248),
     // and the sixteen verbs — the sixteenth is Preferences (charter-app#283) — plus the vault picker and New vault…
     // (charter-app#235; this plane has no vaults, so no `vault.open:` rows). It was 118 before the pins, 174 before
@@ -1305,11 +1324,12 @@ describe("the palette at fifty chats", () => {
     // from the window, 183 before the explorer's rows had anything to offer, 291 before
     // the row that puts `charter` on a terminal's PATH, 292 before a queued chat could be
     // ignored, 294 before a chat could be renamed (charter-app#254), 345 before a clone
-    // could be picked from its own menu, 367 before a workspace had settings, and 373 before
-    // a workspace could be made LIVE or LOCAL (charter-app#301). What the
+    // could be picked from its own menu, 367 before a workspace had settings, 373 before
+    // a workspace could be made LIVE or LOCAL (charter-app#301), and 379 before one could be
+    // renamed (charter#367). What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(379);
+    expect(offers).toHaveLength(385);
   });
 
   /**

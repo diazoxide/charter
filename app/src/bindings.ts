@@ -449,6 +449,18 @@ export const commands = {
 	 */
 	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], Refused>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
 	/**
+	 *  Rename a workspace: `charter workspace rename <workspace> <name>` (charter#367).
+	 * 
+	 *  **The core decides and does everything**: which names are refused, the move, the worktree
+	 *  repair, every record that names the workspace — the app's record on disk and this machine's
+	 *  pins included — and the plane save a LIVE workspace's move takes. This layer adds the one
+	 *  thing only the window knows, which chats are running in it: a running chat refuses the
+	 *  rename, named as its tab names it. Once renamed, what the window holds in memory follows
+	 *  ([`crate::chats::Chats::follow`]), or its next write of the record would put the old name
+	 *  back.
+	 */
+	workspaceRename: (plane: PlaneId, workspace: string, name: string) => typedError<string[], string>(__TAURI_INVOKE("workspace_rename", { plane, workspace, name })),
+	/**
 	 *  The operator brought a workspace to the front: tell the extensions that hear it
 	 *  (charter-app#343). It does nothing else and answers nothing — focusing is the window's own
 	 *  state, and this is only the report of it.

@@ -20,6 +20,7 @@
 //! | `workspace reinit` | [`reinit`] |
 //! | `workspace fork` / `duplicate` | [`fork`] |
 //! | `workspace restore` (and `fork --restore`) | [`restore`] |
+//! | `workspace rename` / `mv` | [`rename`] |
 //!
 //! # What is NOT here, and what it would take
 //!
@@ -33,12 +34,6 @@
 //!   stopped declaring from the workspace directory; [`crate::guest::wire`] does not do the
 //!   same inside a checkout, so such a file stays (hidden, and its line kept) until an
 //!   unwire. charter removes it there too.
-//! - **`workspace rename`/`mv`.** The move itself is three lines; what it cannot skip is
-//!   `git worktree repair` for every linked worktree of every clone that moved
-//!   (charter#963 — git calls a live worktree prunable after the move, and `gc` then deletes
-//!   its admin directory while it holds uncommitted work) and the LIVE commit of the tracked
-//!   move. Neither has a port.
-//!
 //! # Where this is stricter than Python, on purpose
 //!
 //! - **Every name is checked before it is joined onto a path**, the pointer files included.
@@ -60,6 +55,7 @@ pub mod fork;
 pub mod live;
 pub mod reinit;
 pub mod remove;
+pub mod rename;
 pub mod restore;
 pub mod select;
 pub mod snapshot;
@@ -262,6 +258,23 @@ pub fn set_live(root: &Path, name: &str, live: bool) -> io::Result<bool> {
         } else {
             names.remove(name);
         }
+        Some(with_block(
+            text,
+            &live_block(names.iter().map(String::as_str)),
+        ))
+    })
+}
+
+/// Move `old`'s LIVE entry to `new`; `true` when the block changed. A LOCAL `old` changes
+/// nothing, so a rename run twice writes the block once. Read and written under one lock, as
+/// [`set_live`] is.
+pub fn rename_live(root: &Path, old: &str, new: &str) -> io::Result<bool> {
+    rewrite_gitignore(root, |text| {
+        let mut names = live_in(text);
+        if !names.remove(old) {
+            return None;
+        }
+        names.insert(new.to_string());
         Some(with_block(
             text,
             &live_block(names.iter().map(String::as_str)),

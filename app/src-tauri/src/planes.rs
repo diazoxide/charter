@@ -1057,6 +1057,12 @@ impl Planes {
         }
     }
 
+    /// Where this machine's store is — the pins a workspace rename moves — or `None` on a
+    /// machine that keeps none.
+    pub fn config(&self) -> Option<&Path> {
+        self.config.as_deref()
+    }
+
     /// Pins or unpins a project, or one of its workspaces, in the machine store.
     ///
     /// **This one refuses rather than shrugging**, unlike `remember` and `record_approval`
@@ -3920,6 +3926,60 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         session
+    }
+
+    /// charter#367: a chat running in a workspace refuses its rename, named as its tab
+    /// names it; once it is closed the rename goes through, and the window's own view tabs
+    /// follow in what the record is written from, so the next write does not put the old name back.
+    #[cfg(unix)]
+    #[test]
+    fn a_rename_waits_for_the_chats_in_the_workspace_and_the_windows_tabs_follow_it() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let mut chat = one_chat_on("/bin/cat").chats.remove(0);
+        chat.cwd = Some(root.join("workspaces/alpha"));
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+
+        let refused = crate::workspaces::rename_in(&held, None, "alpha", "beta")
+            .expect_err("a chat is running in alpha");
+        assert!(
+            refused.contains("a chat is running in it: one"),
+            "{refused}"
+        );
+        assert!(root.join("workspaces/alpha").is_dir());
+
+        held.chats().close(session).expect("it closes");
+        held.chats().hold_views(vec![charter_core::reopen::View {
+            from: None,
+            view: "persona".to_owned(),
+            key: "steward".to_owned(),
+            title: "steward".to_owned(),
+            workspace: Some("alpha".to_owned()),
+            at: 0,
+            active: true,
+            pinned: false,
+        }]);
+        let said = crate::workspaces::rename_in(&held, None, "alpha", "beta").expect("renamed");
+
+        assert!(
+            said.iter()
+                .any(|line| line.contains("Renamed workspace 'alpha' to 'beta'.")),
+            "{said:?}"
+        );
+        assert!(root.join("workspaces/beta").is_dir());
+        assert_eq!(held.chats().views()[0].workspace.as_deref(), Some("beta"));
+        assert_eq!(
+            held.chats().record().views[0].workspace.as_deref(),
+            Some("beta"),
+            "what the next write of the record is made from"
+        );
     }
 
     #[cfg(unix)]

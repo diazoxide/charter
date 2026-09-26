@@ -382,6 +382,52 @@ export function focusedContent(tabs: Tabs): Content | undefined {
 }
 
 /**
+ * Every view tab follows a workspace renamed from `from` to `to` (charter#367): a view on
+ * its strip moves to the new strip, and the workspace's own settings tab is keyed and titled by
+ * the new name. The core does the same to the record (`wscmd::rename::Move::view`), so the two
+ * agree on what comes back at the next launch.
+ *
+ * Answers `tabs` itself when nothing moved, so a caller can tell. A chat needs nothing here:
+ * its strip is where it works, which the plane answers (`FiledIn`).
+ */
+export function followRename(tabs: Tabs, from: string, to: string): Tabs {
+  let moved = false;
+  const oldSettings = viewKey(workspaceSettingsView(from));
+  const follow = (layout: Layout): Layout => {
+    if (layout.kind === "split")
+      return { ...layout, children: layout.children.map(follow) as [Layout, Layout] };
+    const content = layout.content;
+    if (content.kind !== "view") return layout;
+    const strip = content.workspace === from;
+    const settings = viewKey(content.view) === oldSettings;
+    if (!strip && !settings) return layout;
+    moved = true;
+    return {
+      ...layout,
+      content: {
+        ...content,
+        workspace: strip ? to : content.workspace,
+        view: settings ? workspaceSettingsView(to) : content.view,
+      },
+    };
+  };
+  const byId = Object.fromEntries(
+    tabs.order.map((id) => {
+      const tab = tabs.byId[id];
+      const layout = follow(tab.layout);
+      const lead = contents(layout)[0]?.content;
+      const retitle =
+        lead?.kind === "view" &&
+        viewKey(lead.view) === viewKey(workspaceSettingsView(to)) &&
+        tab.name === workspaceSettingsTitle(from);
+      const name = retitle ? workspaceSettingsTitle(to) : tab.name;
+      return [id, { ...tab, layout, name, defaultName: retitle ? name : tab.defaultName }];
+    }),
+  );
+  return moved ? { ...tabs, byId } : tabs;
+}
+
+/**
  * Every view tab whose strip is not a workspace any more, moved to `outside`.
  *
  * A chat's strip is re-read off the plane every time (`FiledIn`), so a workspace that goes takes
