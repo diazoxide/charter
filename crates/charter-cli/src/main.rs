@@ -41,6 +41,7 @@ mod handoff;
 mod hooks;
 mod memory;
 mod piece;
+mod report;
 mod secret;
 mod statusline;
 mod voice;
@@ -326,6 +327,11 @@ enum Command {
         #[command(subcommand)]
         what: Option<VersionCommand>,
     },
+
+    /// File a bug or a feature request on charter's own tracker, under your own `gh` login.
+    /// Shows the draft first and sends nothing without your yes.
+    #[command(subcommand)]
+    Report(report::ReportCommand),
 
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
     /// heredoc on stdin. Your harness asks before it runs.
@@ -1961,6 +1967,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Statusline { .. }
         | Command::Save { .. }
         | Command::Handoff { .. }
+        | Command::Report(_)
         | Command::Workspace(WorkspaceCommand::Remove { .. })
         | Command::Workspace(WorkspaceCommand::Rename { .. })
         | Command::Workspace(WorkspaceCommand::Live { .. })
@@ -2402,6 +2409,10 @@ fn main() -> ExitCode {
             return hooks::list(*json);
         }
         return hook(name.as_deref().unwrap_or_default(), now.as_deref());
+    }
+    // Needs no plane: a chat anywhere can report a charter bug.
+    if let Command::Report(command) = &cli.command {
+        return report::run(command);
     }
     // The three internal words the Python charter's plugin wires beside its hooks. Answered —
     // exit 0, nothing printed, nothing read — so a plugin that still names them can never fail

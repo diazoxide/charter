@@ -93,6 +93,12 @@ pub const FORGE_PROSE: [(&str, &str, &str); 19] = [
 /// the table is a row that drifts the day somebody adds a verb to one of them.
 const CHARTER_NOUN_ALIASES: [(&str, &str); 2] = [("workspace", "ws"), ("worktree", "wt")];
 
+/// `(noun, verb, alias)`: a verb charter's parser answers under a second word. `charter report
+/// feature` is the verb the Rust charter names, and `gap` — the Python's word, and the row's —
+/// is its alias, so both spellings are the same row. Not a row of its own: the table is
+/// the Python's, and the replayed corpus compares it row for row.
+const CHARTER_VERB_ALIASES: [(&str, &str, &str); 1] = [("report", "gap", "feature")];
+
 /// `(noun, verb, what charter does with the text, the file input it accepts)` —
 /// `_CHARTER_PROSE_ROWS`.
 ///
@@ -166,15 +172,13 @@ pub const CHARTER_PROSE_ROWS: [(&str, &str, &str, Option<&str>); 11] = [
     (
         "report",
         "bug",
-        "a report draft, which would be published as a PUBLIC issue on charter's own tracker \
-         (`charter report` is not in this version yet)",
+        "a report draft, which `charter report` files as a PUBLIC issue on charter's own tracker",
         Some("--from-file"),
     ),
     (
         "report",
         "gap",
-        "a report draft, which would be published as a PUBLIC issue on charter's own tracker \
-         (`charter report` is not in this version yet)",
+        "a report draft, which `charter report` files as a PUBLIC issue on charter's own tracker",
         Some("--from-file"),
     ),
 ];
@@ -196,6 +200,12 @@ fn charter_prose() -> &'static ProseTable {
             out.insert((noun, verb), (dest, from_file));
             if let Some((_, alias)) = CHARTER_NOUN_ALIASES.iter().find(|(n, _)| *n == noun) {
                 out.insert((*alias, verb), (dest, from_file));
+            }
+            for (_, _, alias) in CHARTER_VERB_ALIASES
+                .iter()
+                .filter(|(n, v, _)| *n == noun && *v == verb)
+            {
+                out.insert((noun, *alias), (dest, from_file));
             }
         }
         out
@@ -548,6 +558,23 @@ mod tests {
             report.contains("`--from-file <path>` (or `--stdin`)"),
             "{report}"
         );
+    }
+
+    /// `charter report feature` is `report gap` under the word the Rust charter names (#363):
+    /// the same destination and the same remedy, and the denial no longer calls the command
+    /// planned.
+    #[test]
+    fn a_feature_report_is_guarded_as_the_gap_row_is() {
+        let (_s, feature) =
+            charter_substitution_hit("charter report feature \"a `x` b\"").expect("a hit");
+        let (_s, gap) = charter_substitution_hit("charter report gap \"a `x` b\"").expect("a hit");
+        assert_eq!(
+            feature.replace("report feature", "report gap"),
+            gap,
+            "one row, two words"
+        );
+        assert!(feature.contains("--from-file"), "{feature}");
+        assert!(!feature.contains("not in this version yet"), "{feature}");
     }
 
     /// The denial names the SHAPE and never the matched text — the rule #92's `never_says` was

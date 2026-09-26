@@ -67,6 +67,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the new name is taken or is not a valid name. Unpushed or uncommitted work is not a reason to
   refuse, because a rename moves it whole. If a rename is interrupted, running the same command
   again finishes it. ([#367](https://github.com/diazoxide/charter/issues/367))
+- **`charter report bug` and `charter report feature` file an issue on charter's own tracker.**
+  Each run shows the draft and files nothing. To file it, answer `y` at the prompt in a
+  terminal, or run the same command again with `--yes` and the digest the draft printed. If the
+  draft has changed since, nothing is sent. The issue is filed under your own `gh` login, never
+  under a token from the environment. Before you see the draft, charter removes secrets,
+  environment values, your plane's path, home paths and the names of your workspaces, repos,
+  personas and vaults, and says what it removed. It also lists possible duplicates.
+  `charter report bug --panic` drafts the last panic the app saved, with where it happened and
+  the charter version, which panic records now include.
+  ([#363](https://github.com/diazoxide/charter/issues/363))
 - **A project tab can move into a window of its own, and back.** Right-click a project tab, or
   use the palette, and choose *Move project … to a new window*. Its chats keep running. In that
   window, *Move project … to the main window* brings it back, and so does closing the window.
