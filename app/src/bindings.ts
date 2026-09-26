@@ -1443,12 +1443,6 @@ export type Moved = {
 	sequence: number,
 };
 
-/**  One news entry, as the pin's dialog lists it. */
-export type NewsItem = {
-	version: string,
-	headline: string,
-};
-
 /**  One section of the changelog, as the dialog draws it. */
 export type Notes = {
 	/**  The heading's version: `0.1.0`, or `Unreleased`. */
@@ -1748,10 +1742,6 @@ export type PinReport = {
 	pinned: string | null,
 	/**  What `charter version` said, line by line, in its own words. */
 	said: string[],
-	/**  What the news corpus has between the pin and this charter's version — only on drift. */
-	news: NewsItem[],
-	/**  How many more entries there were than `news` carries. */
-	more_news: number,
 };
 
 /**

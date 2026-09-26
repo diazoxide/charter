@@ -3555,7 +3555,9 @@ semantics below.
 - **Format:** plain text, a version string, no newline
 - **Status:** **stable** — it is what the *news* range is computed from across upgrades, i.e.
   a later, different charter reads what an earlier one wrote. Deleted ⇒ the news range
-  degrades, never the update (`charter/commands_update.py:131`).
+  degrades, never the update (`charter/commands_update.py:131`). **The app neither writes nor
+  reads it:** its `charter news` prints the app's own CHANGELOG.md and has no range view
+  (charter #352), so a baseline the Python charter left is history.
 - **Written by:** `charter/commands_update.py:129` (`_stamp_baseline`)
 - **Read by:** `charter/commands_update.py:120` (`read_baseline`)
 - **Git:** gitignored

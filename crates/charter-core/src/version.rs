@@ -2,8 +2,8 @@
 //!
 //! `charter/update.py`'s `version_key`, and the whole of it: every comparison of two charter
 //! versions in Python goes through that one function so they cannot disagree, and the same
-//! rule applies here — [`news`](crate::news) is the only caller today and the pin, the
-//! updater and any version row a later milestone grows are the ones after it.
+//! rule applies here — the pin ([`crate::adopt::pin_verdict`]), the updater and any version row
+//! a later milestone grows all ask it.
 //!
 //! **Why it is not a string compare, and not a split on dots.** The function this replaces in
 //! Python kept the digits of each dot-separated part and dropped the rest, so `0.60.0rc1`

@@ -26,10 +26,9 @@
 //! * **a version the changelog does not list**, which is what a local build of `main` is: said
 //!   plainly, with `## [Unreleased]` beside it as what the build is ahead by.
 //!
-//! **Python charter's news is not read here.** `charter_core::news` is charter's own corpus,
-//! vendored for `charter news` and the differential, and its newest version (0.62.x) is a
-//! different product's number. The plane pin (`crate::pin`) still reads it, because a plane's
-//! `[charter] version` pin is written in that product's numbers.
+//! **`charter news` reads the same file.** It prints every section, or one with `--for`, out of
+//! the copy compiled into `charter_core::news` (#352). The Python charter's news corpus it read
+//! before is gone.
 //!
 //! **Nothing here is about a plane.** This is a fact about the binary, so it lives on the
 //! window's chrome and is asked without one.

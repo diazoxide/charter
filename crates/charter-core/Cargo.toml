@@ -9,6 +9,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# `charter news` prints the app's own CHANGELOG.md sections through the same parser the release
+# workflow and About Charter use (#352), so the three cannot disagree about a version.
+changelog.workspace = true
 alacritty_terminal = "0.26"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # `home_dir`, for the last rung of the config-home ladder `machine` shares with

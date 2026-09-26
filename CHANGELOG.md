@@ -4,7 +4,7 @@ What each release of charter, the desktop app, brought. About Charter shows the 
 version you are running, and the same section is that version's GitHub release notes.
 
 The app has its own version line, starting at 0.1.0. It is not the version of the Python
-`charter` it was rebuilt from, whose news the `charter news` command still reads.
+`charter` it was rebuilt from. `charter news` prints this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`charter news` prints this changelog.** It shows every version of the app, newest first,
+  and `charter news --for <version>` shows one, the same notes as the release page and About
+  Charter. It used to read the Python charter's news and told every plane it had no update
+  baseline. `--since`, `--until` and `--pending` are retired and say what to run instead.
+  `charter update` points at `charter news`, and the pin dialog no longer has an empty news
+  list.
 - **Pinned workspaces stay in the order you pinned them.** The workspace strip draws them in
   that order, and a workspace you pin later goes after the others. Unpinning one leaves the
   rest where they were. Pins from an earlier version keep the order they had.

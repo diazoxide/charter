@@ -10,26 +10,15 @@
 //! **A pin on the Python charter's line is not drift** (ADR 0045). The report names it as an
 //! older charter line and exits 0, so the window shows no drift for it either.
 //!
-//! What this adds is the **news**: the entries between the pin and this charter's version
-//! (`news::between`). The corpus is the Python charter's frozen history and names none of this
-//! app's versions, so for a pin on this app's line the range is empty — which is true: there is
-//! no news about the app's own versions in it.
+//! The dialog used to carry a list of the Python charter's news entries between the pin and
+//! this charter's version. That corpus named none of this app's versions, so the list was always
+//! empty, and it went with the corpus (#352). What a version of the app brought is `charter
+//! news`.
 
+use charter_core::adopt;
 use charter_core::scaffold::Say;
-use charter_core::{adopt, news};
 
 use crate::planes::{PlaneId, Planes};
-
-/// How many news entries the window is handed. A malformed pin keys below every version, so
-/// the range would be the whole corpus; the count of the rest is carried instead.
-const MOST_NEWS: usize = 20;
-
-/// One news entry, as the pin's dialog lists it.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
-pub struct NewsItem {
-    pub version: String,
-    pub headline: String,
-}
 
 /// What the plane's pin says against this charter.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
@@ -42,10 +31,6 @@ pub struct PinReport {
     pub pinned: Option<String>,
     /// What `charter version` said, line by line, in its own words.
     pub said: Vec<String>,
-    /// What the news corpus has between the pin and this charter's version — only on drift.
-    pub news: Vec<NewsItem>,
-    /// How many more entries there were than `news` carries.
-    pub more_news: u32,
 }
 
 /// The pin report for this plane.
@@ -60,13 +45,6 @@ pub(crate) fn report(root: &std::path::Path) -> PinReport {
     let drift = version.code == 1;
     let brought = adopt::app_version().to_owned();
     let pinned = adopt::locked_version(root);
-    // Newest first: the ones furthest from what the plane has are the ones to read first.
-    // Only on drift: a pin on the Python line keys below this app's version on no scale that
-    // means anything, and the entries between them are not news about this app.
-    let range: Vec<news::Entry> = match &pinned {
-        Some(pin) if drift => news::between(pin, &brought).into_iter().rev().collect(),
-        _ => Vec::new(),
-    };
     PinReport {
         drift,
         said: version
@@ -74,15 +52,6 @@ pub(crate) fn report(root: &std::path::Path) -> PinReport {
             .iter()
             .map(|say| match say {
                 Say::Info(s) | Say::Ok(s) | Say::Warn(s) | Say::Err(s) => s.trim().to_owned(),
-            })
-            .collect(),
-        more_news: u32::try_from(range.len().saturating_sub(MOST_NEWS)).unwrap_or(u32::MAX),
-        news: range
-            .into_iter()
-            .take(MOST_NEWS)
-            .map(|e| NewsItem {
-                version: e.version,
-                headline: e.headline,
             })
             .collect(),
         brought,
@@ -109,7 +78,6 @@ mod tests {
 
         assert!(!pin.drift);
         assert_eq!(pin.pinned, None);
-        assert!(pin.news.is_empty());
     }
 
     #[test]
@@ -120,11 +88,10 @@ mod tests {
         let pin = report(&root);
 
         assert!(!pin.drift, "{pin:?}");
-        assert!(pin.news.is_empty());
     }
 
     #[test]
-    fn a_pin_on_the_python_charters_line_is_not_drift_and_carries_no_news() {
+    fn a_pin_on_the_python_charters_line_is_not_drift() {
         let (_d, root) = plane("schema = 1\n[charter]\nversion = \"0.50.0\"\n");
 
         let pin = report(&root);
@@ -138,7 +105,6 @@ mod tests {
             "{:?}",
             pin.said
         );
-        assert!(pin.news.is_empty());
     }
 
     #[test]
@@ -155,27 +121,15 @@ mod tests {
             "{:?}",
             pin.said
         );
-        // The corpus is the Python line's history and names nothing past 0.62.1.
-        assert!(pin.news.is_empty());
     }
 
     #[test]
-    fn a_pin_that_is_not_a_version_drifts_and_is_not_handed_the_whole_corpus() {
-        // A malformed pin keys below every version, so the range from it would be every entry
-        // the corpus has below this charter's version. The corpus is the Python line's history,
-        // and none of it is news about this app.
+    fn a_pin_that_is_not_a_version_drifts() {
         let (_d, root) = plane("schema = 1\n[charter]\nversion = \"banana\"\n");
 
         let pin = report(&root);
 
         assert!(pin.drift);
-        assert!(pin.news.len() <= MOST_NEWS);
-        assert!(
-            pin.news
-                .iter()
-                .all(|n| charter_core::version::version_key(&n.version)
-                    <= charter_core::version::version_key(adopt::app_version())),
-            "{pin:?}"
-        );
+        assert_eq!(pin.pinned.as_deref(), Some("banana"));
     }
 }
