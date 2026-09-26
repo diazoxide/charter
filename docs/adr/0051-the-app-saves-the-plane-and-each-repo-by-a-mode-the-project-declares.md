@@ -70,6 +70,12 @@ and `autosave = false`.
 > - a repo nobody configured is **`off`**: charter never commits, pushes or opens a PR for it
 >   until `[repos.<name>] mode` says how;
 > - each repo row says where its own Save goes before it is pressed.
+>
+> **Amended 2026-09-26, by the operator (ADR 0060, D4).** `off` governs *saves*. It does not
+> cover `charter change push`, which pushes the branches of a cross-repo change's members and
+> opens or updates their requests. That verb is run by hand over repos someone named in the
+> change, it commits nothing, and it prints each repo, branch and destination before it pushes.
+> "Charter never … opens a PR for it" holds for every save, and not for that verb.
 
 - **Why it is keyed by repo, not by workspace:** a repo's rules belong to its remote, not to
   whichever workspace it was cloned into.
