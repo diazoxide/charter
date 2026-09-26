@@ -44,15 +44,16 @@ fn a_terminal_name_and_a_short_value_are_left_alone() {
 fn a_line_secretshape_reads_as_a_credential_goes_whole() {
     let text = format!("first line\nexport X={}\nlast line", a_token());
     let (out, used) = known().scrub(&text);
-    assert!(!out.contains(&a_token()), "{out}");
-    assert_eq!(
-        out,
-        "first line\n[redacted: a line that looks like a token by its forge's prefix]\nlast line"
+    // No failure message prints `out`: a test about secrets does not write one to a log.
+    assert!(!out.contains(&a_token()), "the token survived the scrub");
+    assert!(
+        out == "first line\n[redacted: a line that looks like a token by its forge's prefix]\nlast line",
+        "the credential's line was not replaced whole"
     );
     assert!(used.contains(&"lines that look like a credential".to_string()));
 
     let (out, _) = known().scrub("password = hunter2hunter2");
-    assert!(!out.contains("hunter2"), "{out}");
+    assert!(!out.contains("hunter2"), "the password survived the scrub");
 }
 
 #[test]
@@ -124,8 +125,7 @@ fn a_described_report_is_titled_by_its_first_line_without_a_heading_marker() {
     );
     assert!(
         d.body.ends_with("_Filed with `charter report feature`._"),
-        "{}",
-        d.body
+        "the body does not end with its footer"
     );
 
     let long = "word ".repeat(40);
