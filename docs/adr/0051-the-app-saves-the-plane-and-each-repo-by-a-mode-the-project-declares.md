@@ -155,6 +155,14 @@ and the `MEMORY.md` indexes. Any other conflict makes the plane or repo **blocke
 - the Saving view offers *Resolve in a chat* (a steward session there) or *Open terminal here*;
 - nothing rewrites anyone's history.
 
+The same holds for a tree git has stopped part-way through something (#433): a merge, rebase,
+cherry-pick, revert or bisect left unfinished, or files git still calls unmerged. Every save
+refuses it before anything is staged — `charter save`, the Save button, auto-save and repo
+saves alike — because `git add -A` would stage the conflict markers as the resolution. The
+refusal names the files and the git command that finishes or aborts the operation. The block
+is read from the tree as it is, never from a stored line, so finishing or aborting it by hand
+clears it at once.
+
 **What the window shows.** Work sits at one of four stages:
 
 1. *changed*

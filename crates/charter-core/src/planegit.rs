@@ -700,9 +700,9 @@ pub struct Incoming {
 /// Why a fetch left incoming commits where they are rather than moving the plane onto them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Held {
-    /// A merge or rebase stopped part-way, or files git still calls unmerged. Named first:
+    /// A merge, rebase or bisect stopped part-way, or files git still calls unmerged. First:
     /// it is the one a person has to settle, and a save now would commit the markers.
-    Conflicts(gitstate::Stopped),
+    Stopped(gitstate::Stopped),
     /// Another git command holds the index, or one died holding it.
     IndexLocked,
     /// The plane is checked out on a branch that is not its target branch.
@@ -719,7 +719,7 @@ impl Held {
     /// The reason, as a clause: "N incoming commits left on origin/main: <this>".
     pub fn why(&self) -> String {
         match self {
-            Self::Conflicts(stopped) => stopped.why(),
+            Self::Stopped(stopped) => stopped.why(),
             Self::IndexLocked => "git's index is locked by another git command".into(),
             Self::OffTarget { here, branch } => {
                 format!("the plane is on `{here}`, not its target branch `{branch}`")
@@ -814,7 +814,7 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
 /// remote lacks, and no merge or rebase in progress.
 fn hold(root: &Path, git_dir: &Path, here: &str, branch: &str, mine: u32) -> Option<Held> {
     if let Some(stopped) = gitstate::stopped(root) {
-        return Some(Held::Conflicts(stopped));
+        return Some(Held::Stopped(stopped));
     }
     if crate::gitstate::find(git_dir).is_some() {
         return Some(Held::IndexLocked);
@@ -864,7 +864,7 @@ pub fn pull(root: &Path, say: Sink) -> u8 {
     // Conflicts stop the save even when nothing came in: a save would stage their markers.
     let held = incoming
         .held
-        .or_else(|| gitstate::stopped(root).map(Held::Conflicts));
+        .or_else(|| gitstate::stopped(root).map(Held::Stopped));
     match (&held, incoming.moved) {
         (_, true) => {
             say(Say::Done(format!("Brought in {n} incoming {commits}.")));
@@ -880,7 +880,7 @@ pub fn pull(root: &Path, say: Sink) -> u8 {
             } else {
                 format!("{n} incoming {commits} not brought in: {}.", held.why())
             };
-            if matches!(held, Held::Conflicts(_)) {
+            if matches!(held, Held::Stopped(_)) {
                 say(Say::Fail(line));
                 say(Say::Info(
                     "  Nothing was saved. Settle that, then run `charter save --pull` again."

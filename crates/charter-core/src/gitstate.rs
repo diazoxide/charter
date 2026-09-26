@@ -142,7 +142,7 @@ impl Operation {
 
     /// The operation stopped in `git_dir`, or `None`. A marker counts whatever it is — a
     /// file, a directory, a dangling link — because git's own test is that the name exists.
-    pub fn in_progress(git_dir: &Path) -> Option<Self> {
+    fn in_progress(git_dir: &Path) -> Option<Self> {
         Self::MARKERS
             .into_iter()
             .find(|(marker, _)| std::fs::symlink_metadata(git_dir.join(marker)).is_ok())
@@ -246,7 +246,15 @@ pub fn stopped(tree: &Path) -> Option<Stopped> {
 pub fn unmerged(tree: &Path) -> Vec<String> {
     crate::worktree::git::run(
         tree,
-        &["diff", "--name-only", "--diff-filter=U", "-z"],
+        // `--no-optional-locks`: the title bar asks this every ten seconds, and a `diff` that
+        // refreshed the index would take `index.lock` from under a save's `git add -A`.
+        &[
+            "--no-optional-locks",
+            "diff",
+            "--name-only",
+            "--diff-filter=U",
+            "-z",
+        ],
         crate::worktree::git::READ,
     )
     .map(|r| {

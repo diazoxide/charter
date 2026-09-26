@@ -177,6 +177,7 @@ pub fn save_claimed(request: &Request, trigger: Trigger, _claim: &Claim, say: Si
             "ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             "outcome": attempt.outcome,
             "detail": attempt.detail,
+            "stopped": attempt.stopped,
         }),
     );
     code
@@ -193,6 +194,10 @@ struct Attempt {
     branch: Option<String>,
     pr: Option<String>,
     detail: String,
+    /// Blocked because git stopped part-way through something (#433). [`standing`] reads
+    /// that from the clone as it is, so this line must not keep the repo blocked once the
+    /// operator has finished or aborted it by hand.
+    stopped: bool,
 }
 
 impl Default for Attempt {
@@ -204,6 +209,7 @@ impl Default for Attempt {
             branch: None,
             pr: None,
             detail: String::new(),
+            stopped: false,
         }
     }
 }
@@ -246,6 +252,7 @@ fn commit_push(
         attempt.outcome = "blocked";
         attempt.detail = why;
         attempt.commit = rev(clone, "HEAD");
+        attempt.stopped = true;
         return 1;
     }
     let branch = match &state.head {
@@ -900,7 +907,10 @@ pub fn standing(plane: &Path, workspace: &str, repo: &repos::Repo) -> Standing {
     out.stage = if let Some(stopped) = gitstate::stopped(&repo.path) {
         out.blocked = Some(stopped.why());
         Stage::Blocked
-    } else if current && said("outcome").as_deref() == Some("blocked") {
+    } else if current
+        && said("outcome").as_deref() == Some("blocked")
+        && last.as_ref().and_then(|l| l.get("stopped")) != Some(&serde_json::Value::Bool(true))
+    {
         out.blocked = said("detail").or_else(|| Some("the last save could not finish".into()));
         Stage::Blocked
     } else if out.changed > 0 {

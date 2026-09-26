@@ -716,3 +716,19 @@ fn a_repo_whose_rebase_stopped_part_way_is_told_about_the_rebase_not_the_detache
     assert!(said.contains("git rebase --continue"), "{said}");
     assert_eq!(f.standing().stage, Stage::Blocked);
 }
+
+#[test]
+fn aborting_the_merge_by_hand_clears_the_block_at_once() {
+    // Auto-save waits while a repo is blocked, so nothing but the tree may clear this one.
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    f.diverged();
+    let _ = crate::testgit::run(&f.clone, &["merge", "side"]);
+    let (code, said) = f.save();
+    assert_eq!(code, 1, "{said}");
+
+    run(&f.clone, &["merge", "--abort"]);
+
+    let got = f.standing();
+    assert_ne!(got.stage, Stage::Blocked, "{got:?}");
+    assert_eq!(got.blocked, None, "{got:?}");
+}

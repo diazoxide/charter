@@ -2649,3 +2649,17 @@ fn once_the_merge_is_finished_the_save_goes_ahead() {
     assert_eq!(fixture.head_subject(), "after");
     assert_ne!(standing(&fixture.root).stage, Stage::Blocked);
 }
+
+#[test]
+fn aborting_the_merge_by_hand_clears_the_planes_block_at_once() {
+    let fixture = Fixture::plane();
+    fixture.diverged();
+    let _ = crate::testgit::run(&fixture.root, &["merge", "side"]);
+    fixture.refused("git merge --abort");
+
+    run(&fixture.root, &["merge", "--abort"]);
+
+    let got = standing(&fixture.root);
+    assert_ne!(got.stage, Stage::Blocked, "{got:?}");
+    assert!(got.conflicts.is_empty(), "{got:?}");
+}

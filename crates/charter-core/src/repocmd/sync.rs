@@ -97,10 +97,10 @@ fn sync_one(root: &Path, ws: &str, repo: &repos::Repo, say: Sink) {
         submodules::report(root, d, &label, None, None, say);
         return;
     }
-    // `repos::clones` admits a `.git` that is a directory and nothing else, so this is the
-    // git directory itself.
-    if let Some(what) = gitstate::Operation::in_progress(&d.join(".git")) {
-        let what = what.word();
+    // The same check a save asks (#433). The tree is clean by now, so what stopped is an
+    // operation rather than unmerged files.
+    if let Some(stopped) = gitstate::stopped(d) {
+        let what = stopped.operation.map_or("merge", gitstate::Operation::word);
         say(Say::Warn(format!(
             "{label}: a {what} is in progress — skipping (finish or abort it first; nothing \
              was fetched or moved)."
