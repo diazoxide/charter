@@ -123,6 +123,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and write nothing. They used to write the secrets to wherever the link pointed. Point the
   vault's `file` at the real path instead.
   ([#429](https://github.com/diazoxide/charter/issues/429))
+- **Releases are signed from a protected `release` environment.** The release workflow's
+  signing and publishing jobs now run in a GitHub environment that only `main` and `v*` tags
+  can reach, and the signing keys live there instead of in the repository. A build started by
+  hand from the Actions tab publishes nothing and is now always unsigned for the updater.
+  `docs/updating.md` has the setup.
 - **`charter news` prints this changelog.** It shows every version of the app, newest first,
   and `charter news --for <version>` shows one, the same notes as the release page and About
   Charter. It used to read the Python charter's news and told every plane it had no update
