@@ -1567,6 +1567,20 @@ mod tests {
     }
 
     #[test]
+    fn the_window_is_never_narrower_than_the_title_bar_is_built_for() {
+        // ADR 0054, amended 2026-09-26 (charter#403): 1024 px is the narrowest window, and the
+        // title bar is held to room for two project tabs there (`title-bar.e2e.ts`). A window
+        // the operator could drag narrower would be one nothing promises anything about.
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json is JSON");
+        let main = conf["app"]["windows"]
+            .as_array()
+            .and_then(|windows| windows.iter().find(|one| one["label"] == lifecycle::WINDOW))
+            .expect("tauri.conf.json declares the main window");
+        assert_eq!(main["minWidth"], 1024);
+    }
+
+    #[test]
     fn the_typescript_the_ui_imports_is_the_one_these_commands_generate() {
         let out = tempfile::tempdir().expect("a directory to generate into");
         let generated = out.path().join("bindings.ts");

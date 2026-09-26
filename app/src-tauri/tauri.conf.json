@@ -17,6 +17,7 @@
         "title": "charter",
         "width": 1280,
         "height": 800,
+        "minWidth": 1024,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
       }

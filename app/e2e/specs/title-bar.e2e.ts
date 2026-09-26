@@ -141,8 +141,9 @@ describe("the title bar", () => {
     // The right-hand end never gives way (ADR 0054), so whatever it spends the tabs lose. A
     // save indicator saying a whole sentence once left a 1024 px window room for ONE project
     // tab, and `projects.e2e.ts` failed on the macOS runner; `.save-indicator-words` in
-    // `App.css` has the numbers. Every fixture plane is not a git repository, so the bar here
-    // says that sentence.
+    // `App.css` has the numbers. 1024 px is the narrowest window charter supports (ADR 0054,
+    // amended 2026-09-26). Every fixture plane is not a git repository, so the bar here says
+    // that sentence.
     //
     // **Room, measured the way the strip measures it** (`fits.useRoom`): the strip's width
     // less its own controls, against the floor each tab is drawn at (`--least`). Two tabs fit
