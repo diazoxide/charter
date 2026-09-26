@@ -69,7 +69,10 @@ pub(super) fn workspace_clones(d: &Doctor) -> Row {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                behind.push(format!("{ws}/{name} ({n} behind)"));
+                // A chat can name a directory anything, and a newline in it must not print a
+                // row of its own (#353).
+                let at = super::one_line(&format!("{ws}/{name}"), super::DISPLAY_LIMIT);
+                behind.push(format!("{at} ({n} behind)"));
             }
         }
     }

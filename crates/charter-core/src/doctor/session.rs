@@ -322,9 +322,12 @@ pub(super) fn session_layer(d: &Doctor) -> Row {
             return Row::ok(
                 NAME,
                 format!(
-                    "{} — charter has no record of how {name} finds an in-repo layer, so this \
+                    "{} — charter has no record of how {} finds an in-repo layer, so this \
                      row has nothing to say about it",
-                    here.display()
+                    here.display(),
+                    // The environment named it, and a newline in it must not print a row of
+                    // its own (#353).
+                    super::one_line(&name, super::DISPLAY_LIMIT)
                 ),
             );
         }
