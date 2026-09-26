@@ -45,7 +45,8 @@ When two choices conflict, the higher priority wins.
   UI shows it: its tab, its workspace, its state. **Shell tab**: a chat running the operator's
   own shell, with no harness and no profile (ADR 0062).
 - **Session state**: `running`, `waiting` (on you), `done`, `failed`, `unknown`. Set only by
-  harness hooks, never by reading output.
+  harness hooks, never by reading output. A shell tab draws no state mark until a harness in it
+  reports one: its terminal mark says what it is, and `unknown` there read as a spinner.
 - **Python charter**: the current implementation, frozen, and the reference for differential
   tests until it is retired.
 

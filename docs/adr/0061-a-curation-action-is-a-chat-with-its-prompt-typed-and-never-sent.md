@@ -106,6 +106,12 @@ Codex or opencode chat can follow the prompt, the CLI commands it names and thei
 no skill at all. Closing the gap is one adapter per harness (charter is harness-agnostic), and
 belongs with whichever change teaches those harnesses charter's skills.
 
+**Amended 2026-09-26: the gap is closed** by [ADR 0063](0063-every-harness-a-chat-runs-on-is-handed-charters-skills-by-its-own-route.md).
+An opencode chat the app starts discovers charter's skills as its own, through the shim, and a
+Codex chat is briefed on them at `SessionStart`, with the path to each `SKILL.md`. The prompts
+still say what to do in a sentence as well, because a chat outside the app, or a Codex chat whose
+hooks are not trusted yet, has no skills from charter.
+
 ## The app's side
 
 - **Where it is offered.** A "Curate ▸" submenu on a workspace's, a persona's and the plane

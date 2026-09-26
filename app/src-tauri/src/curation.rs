@@ -216,8 +216,25 @@ fn name_of(root: &Path, subject: &Subject) -> String {
 /// The profile a curation chat starts on: the project's default, or — with none named — the
 /// first the picker lists, which is the row a new chat's picker starts on. Refused when that
 /// profile's harness cannot be typed into on its start.
+///
+/// **A default that cannot start refuses; it never falls back.** The first profile is for a
+/// project that names no default. One that names a default charter will not use — a profile
+/// gone, or `charter.local.toml` refused because git would carry it — would otherwise open the
+/// chat on some other harness or account than the one the operator chose.
 fn launch_profile(root: &Path) -> Result<String, String> {
-    let (set, _) = charter_core::profiles::for_launch(root);
+    let (set, check) = charter_core::profiles::for_launch(root);
+    if let Some(wanted) = &set.default_refused {
+        let why = set
+            .refused
+            .iter()
+            .find(|refused| refused.name == *wanted)
+            .map(|refused| format!(" {}", refused.reason))
+            .or_else(|| (!check.passes()).then(|| format!(" {}", check.fix)))
+            .unwrap_or_default();
+        return Err(format!(
+            "The default profile '{wanted}' cannot start here, so no curation chat was opened.{why}"
+        ));
+    }
     let profile = set
         .default
         .as_deref()
@@ -909,6 +926,23 @@ mod tests {
         assert_eq!(bytes, wanted, "exactly one paste, and no Enter after it");
         assert!(!submits(&bytes));
         held.close_chat(curating.session).unwrap();
+    }
+
+    #[test]
+    fn a_default_profile_that_cannot_start_refuses_rather_than_falling_back() {
+        let plane = Plane::new("claude");
+        std::fs::write(
+            plane.root.join(charter_core::profiles::LOCAL_FILE),
+            "[harness]\ndefault = \"gone\"\n",
+        )
+        .unwrap();
+
+        let said = offers(&plane.root, &["plane".to_owned()]);
+
+        let cannot = said
+            .cannot
+            .expect("a default that is not there is not replaced");
+        assert!(cannot.contains("'gone'"), "{cannot}");
     }
 
     #[cfg(unix)]

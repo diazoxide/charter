@@ -12,10 +12,10 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { OpenChat } from "./bindings";
-import { ChatState } from "./NeedsYou";
+import { ChatMark } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { WorktreeMark } from "./Worktree";
-import { stateOf, type ChatStates } from "./chatState";
+import { isShell, markOf, type ChatStates } from "./chatState";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
@@ -503,7 +503,7 @@ function ChatList({
                 stopped being enough to tell them apart. */}
               <SquareTerminal className="node-icon" />
               <span className="session">{chat.name}</span>
-              <ChatState state={stateOf(states, chat.session)} />
+              <ChatMark state={markOf(states, chat.session, isShell(chat))} />
               {/* The PROFILE where there is one, and the harness otherwise. A profile is what
                 the operator picked and what a relaunch looks up again; the kind is what the
                 plane calls the harness. Showing the profile alone would hide which harness

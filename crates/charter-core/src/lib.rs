@@ -95,6 +95,7 @@ pub mod shellguard;
 pub mod shellseg;
 pub mod shellwrap;
 pub mod shown;
+pub mod skills;
 pub mod skilluse;
 pub mod start;
 pub mod state;

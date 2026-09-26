@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Codex and opencode chats get charter's skills too.** `safe-remove`, `compact`, `handoff`
+  and the other six reached only Claude Code chats. An opencode chat the app starts now finds
+  them as its own skills, beside any `skills.paths` your `opencode.json` names, and a Codex chat
+  is told about each one when it starts, with the file to read, since Codex cannot take a
+  skills folder for one session. Nothing is written into `~/.codex` or `~/.config/opencode`
+  (ADR 0063).
 - **Curation actions: chats that open with their prompt typed, for you to read and send.**
   `charter curation show workspace:<name>` (or `persona:<name>`, or `plane`) lists what that
   subject is offered, who runs each one, where, and the exact prompt. charter ships three:

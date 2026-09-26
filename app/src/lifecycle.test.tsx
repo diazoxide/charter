@@ -249,6 +249,64 @@ describe("what the window does with the chats the core already has", () => {
     );
   });
 
+  it("names the chat that came back new by what its tab says", async () => {
+    // The note once named the chat by its recorded number alone — "5 came back as a new
+    // chat" while the tab read "steward 5". The operator finds the chat by its tab, so the
+    // note says the tab's name, given name included.
+    core([
+      chat({
+        session: 5,
+        name: "5",
+        persona: "steward",
+        harness: "codex",
+        fresh: "no conversation was recorded for it",
+        in_front: true,
+      }),
+      chat({
+        session: 6,
+        name: "6",
+        persona: "steward",
+        label: "billing fix",
+        harness: "codex",
+        fresh: "no conversation was recorded for it",
+      }),
+    ]);
+
+    render(<App />);
+
+    await vi.waitFor(() => expect(tabs()).toEqual(["steward 5", "billing fix"]));
+    expect((await screen.findByText(/new chat/i)).querySelector("strong")).toHaveTextContent(
+      /^steward 5$/,
+    );
+
+    await userEvent.click(
+      within(screen.getByRole("tablist", { name: "Tabs" })).getByRole("tab", {
+        name: /billing fix/,
+      }),
+    );
+    expect((await screen.findByText(/new chat/i)).querySelector("strong")).toHaveTextContent(
+      /^billing fix$/,
+    );
+  });
+
+  it("names the chat that was resumed by what its tab says", async () => {
+    core([
+      chat({
+        session: 5,
+        name: "5",
+        persona: "steward",
+        resumed: "11111111-2222-4333-8444-555555555555",
+        in_front: true,
+      }),
+    ]);
+
+    render(<App />);
+
+    expect((await screen.findByText(/resumed/i)).querySelector("strong")).toHaveTextContent(
+      /^steward 5$/,
+    );
+  });
+
   it("says nothing about a shell that was not resumed", async () => {
     // Every chat is a shell until the harness picker lands, and a shell has no conversation
     // to bring back. Explaining that on every relaunch, forever, is noise about the normal

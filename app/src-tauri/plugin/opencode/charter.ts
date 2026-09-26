@@ -125,7 +125,8 @@ const refusal = (said) => {
 }
 
 // Everything below is per opencode instance: one server may host several directories.
-export const CharterPlugin = async (plugin) => {
+// `options` is what the config that named this file handed it, if anything.
+export const CharterPlugin = async (plugin, options) => {
   const directory = typeof plugin?.directory === "string" ? plugin.directory : process.cwd()
 
   // Sessions this process created, and each sub-agent session's parent: a sub-agent's events are
@@ -196,6 +197,17 @@ export const CharterPlugin = async (plugin) => {
   }
 
   return {
+    // charter's skills, beside every skills path the operator's configs name. opencode hands
+    // this hook its live merged config before it discovers any skill, and scans each path in
+    // `skills.paths` for `SKILL.md` (ADR 0063). Appended, never in their place.
+    config: async (cfg) => {
+      const skills = typeof options?.skills === "string" ? options.skills : ""
+      if (!skills || !cfg || typeof cfg !== "object") return
+      if (!cfg.skills || typeof cfg.skills !== "object") cfg.skills = {}
+      const paths = Array.isArray(cfg.skills.paths) ? cfg.skills.paths : []
+      if (!paths.includes(skills)) cfg.skills.paths = [...paths, skills]
+    },
+
     // `$CHARTER_SESSION_ID` in every shell a tool opens, so a `charter` command run there
     // knows its conversation, as `$CLAUDE_CODE_SESSION_ID` tells it in a Claude Code chat.
     "shell.env": async (input, output) => {
