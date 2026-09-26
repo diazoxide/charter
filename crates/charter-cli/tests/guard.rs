@@ -126,3 +126,52 @@ fn a_pattern_no_rule_can_say_is_refused_and_nothing_is_written() {
         std::fs::read(plane.root.join(".claude/settings.json")).unwrap()
     );
 }
+
+/// The doctor's `ask rules` row, as `--json` prints it.
+fn ask_rules(plane: &Plane) -> serde_json::Value {
+    let out = plane.charter(&["doctor", "--json"]);
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).expect("JSON");
+    rows.into_iter()
+        .find(|r| r["name"] == "ask rules")
+        .expect("an ask rules row")
+}
+
+#[test]
+fn a_plane_that_lost_its_report_rule_gets_it_back_from_guard_report() {
+    // #363 D11: `init` writes it, the doctor names its absence, `guard report` puts it back.
+    let plane = Plane::init();
+    let rule = serde_json::json!("Bash(charter report *--yes*)");
+    let mut settings = plane.settings();
+    assert!(
+        settings["permissions"]["ask"]
+            .as_array()
+            .unwrap()
+            .contains(&rule),
+        "init writes the rule: {settings}"
+    );
+    assert_eq!(ask_rules(&plane)["status"], "ok");
+
+    settings["permissions"]["ask"] = serde_json::json!(["Bash(terraform *)"]);
+    std::fs::write(
+        plane.root.join(".claude/settings.json"),
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+    let lost = ask_rules(&plane);
+    assert_eq!(lost["status"], "warn", "{lost}");
+    assert!(
+        lost["hint"]
+            .as_str()
+            .unwrap()
+            .contains("`charter guard report`"),
+        "{lost}"
+    );
+
+    let out = plane.charter(&["guard", "report"]);
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    assert_eq!(
+        plane.settings()["permissions"]["ask"],
+        serde_json::json!(["Bash(terraform *)", rule])
+    );
+    assert_eq!(ask_rules(&plane)["status"], "ok");
+}

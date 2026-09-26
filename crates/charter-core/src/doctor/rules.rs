@@ -123,7 +123,7 @@ pub(super) fn ask_rules(d: &Doctor) -> Row {
             missing.join(", ")
         ));
         let how = if here == d.root {
-            "`charter doctor --fix` or `charter reinit` adds it"
+            "`charter guard report` or `charter doctor --fix` adds it"
         } else if reinit_reaches(&d.root, &here) {
             "`charter doctor --fix` adds it at the plane root and carries it into the settings a \
              chat started here reads"

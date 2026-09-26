@@ -103,9 +103,10 @@ filing in one turn, is now met by a prompt every plane has, not one a plane has 
   uses (#449), so a chat started in a workspace is asked too.
 - **`charter doctor`'s `ask rules` row warns when it is missing** from the settings a chat
   started in that directory reads, or from `opencode.json`, and names the harnesses that lack
-  it. `charter doctor --fix` adds it through `charter guard ask`'s writer. Removing it stays the
-  operator's choice: the row warns and never fails, and only `reinit` and `--fix` put it back,
-  both of which the operator runs.
+  it. `charter guard report` puts it back, as `charter guard handoff` does for the handoff
+  rule, and `charter doctor --fix` adds it through the same writer. Removing it stays the
+  operator's choice: the row warns and never fails, and only `guard report`, `reinit` and
+  `--fix` put it back, all of which the operator runs.
 - **Codex has no equivalent.** Codex's `.rules` files (`prefix_rule`) match a command's
   arguments as a prefix, in order, so they cannot say "`--yes` anywhere after
   `charter report`". A `prefix_rule(["charter", "report"], decision = "prompt")` would ask

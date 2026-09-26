@@ -561,6 +561,9 @@ enum GuardCommand {
     },
     /// Always prompt before a handoff runs: the rule `charter init` writes, put back.
     Handoff,
+    /// Always prompt before `charter report … --yes` files an issue: the rule `charter init`
+    /// writes, put back (ADR 0059).
+    Report,
     /// Show this plane's ask and allow rules, by the file each lives in.
     List,
 }
@@ -2017,6 +2020,7 @@ fn run(command: Command) -> Result<u8, String> {
                     (pattern.as_str(), Bucket::Allow, *local)
                 }
                 Some(GuardCommand::Handoff) => (guardcmd::HANDOFF_PATTERN, Bucket::Ask, false),
+                Some(GuardCommand::Report) => (guardcmd::REPORT_PATTERN, Bucket::Ask, false),
             };
             let rule = match guardcmd::as_rule(pattern) {
                 Ok(rule) => rule,
@@ -2674,7 +2678,9 @@ fn with_here(f: impl FnOnce(&Here) -> u8) -> ExitCode {
 
 /// `charter doctor`: every check, as a table or as `--json`, and the verdict as the exit.
 ///
-/// `--fix` repairs before it reports, so the report reads as the state after the repair.
+/// `--fix` repairs before it reports, so the report reads as the state after the repair, as
+/// Python's did when it installed the Claude Code plugin first. Its repairs are charter's plugin
+/// (#373) and the plane's ask rule for `charter report --yes` (ADR 0059).
 fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
     use std::io::IsTerminal;
 

@@ -1542,7 +1542,7 @@ mod tests {
     }
 
     /// `InitArgs` as `charter init --forge github --owner acme` builds it.
-    fn plain() -> InitArgs {
+    pub(super) fn plain() -> InitArgs {
         InitArgs {
             forge: "github".to_owned(),
             owner: "acme".to_owned(),
@@ -1651,7 +1651,7 @@ mod tests {
         (dir, root)
     }
 
-    fn at(root: &Path, is_plane: bool) -> Place {
+    pub(super) fn at(root: &Path, is_plane: bool) -> Place {
         Place {
             root: root.to_path_buf(),
             is_plane,
@@ -3035,9 +3035,12 @@ mod tests {
 /// The default ask rule for `charter report --yes` (#363, ADR 0059 amended 2026-09-26).
 #[cfg(test)]
 mod report_ask_tests {
+    use super::tests::{at as place, plain as args};
     use super::*;
     use serde_json::{Value, json};
 
+    /// A directory for a plane, canonical so the workspace writer's containment checks agree
+    /// with it, and the tempdir that keeps it alive.
     fn plane() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("a directory");
         let root = std::fs::canonicalize(dir.path())
@@ -3047,26 +3050,7 @@ mod report_ask_tests {
         (dir, root)
     }
 
-    fn place(root: &Path, is_plane: bool) -> Place {
-        Place {
-            root: root.to_path_buf(),
-            is_plane,
-        }
-    }
-
-    fn args() -> InitArgs {
-        InitArgs {
-            forge: "github".to_owned(),
-            owner: "acme".to_owned(),
-            host: None,
-            clone_this_repo: false,
-            plane_is_this_repo: false,
-            adopt: None,
-            now: None,
-            front_door: None,
-        }
-    }
-
+    /// A settings file as JSON.
     fn read(path: &Path) -> Value {
         serde_json::from_str(&std::fs::read_to_string(path).expect("the file")).expect("json")
     }
