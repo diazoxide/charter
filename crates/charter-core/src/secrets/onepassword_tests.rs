@@ -40,13 +40,9 @@ impl Fake {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
-        std::fs::write(bin.join("op"), FAKE_OP).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(bin.join("op"), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
-        }
+        // Written by `stand_in`, never here: a descriptor this process held on the script would
+        // be copied by any other test's fork, and Linux then refuses to run it (`ETXTBSY`).
+        stand_in::program(&bin, "op", FAKE_OP);
         let path = format!("{}:/usr/bin:/bin", bin.display());
         let d = dir.path().to_string_lossy().into_owned();
         let mut vars = vec![("PATH", path.as_str()), ("FAKE_OP_DIR", d.as_str())];
