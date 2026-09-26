@@ -73,8 +73,8 @@ pub struct Linter<'a> {
 
 impl<'a> Linter<'a> {
     /// A linter for the personas under `root`, whose MCP approvals and vault registry live
-    /// in `state`, looking for skills under `home`'s `.claude` (the process's `$HOME` when
-    /// `None` is not asked for — see [`Linter::with_home`]).
+    /// in `state`. Installed skills are looked for under `$HOME/.claude`; a caller that must
+    /// not read this machine's, such as a test, names another home with [`Linter::with_home`].
     pub fn new(root: &'a Path, state: &'a Path) -> Self {
         Self {
             root,
@@ -299,6 +299,10 @@ impl<'a> Linter<'a> {
             return Vec::new();
         }
         let path = super::agents::agents_dir(self.root).join(format!("{name}.md"));
+        // A committed link out of the plane is not a generated agent charter reads back.
+        if path.exists() && !crate::contain::within_plane(self.root, &path) {
+            return Vec::new();
+        }
         let Ok(current) = std::fs::read_to_string(&path) else {
             return if path.exists() {
                 Vec::new()
@@ -326,11 +330,12 @@ impl<'a> Linter<'a> {
         self.skills
             .get_or_init(|| {
                 let home = self.home.as_ref()?.join(".claude");
-                let roots = [
-                    home.join("plugins"),
-                    home.join("skills"),
-                    self.root.join(".claude").join("skills"),
-                ];
+                let plane_skills = self.root.join(".claude").join("skills");
+                let mut roots = vec![home.join("plugins"), home.join("skills")];
+                // The plane's own folder is committed: a link out of it is not walked.
+                if crate::contain::within_plane(self.root, &plane_skills) {
+                    roots.push(plane_skills);
+                }
                 if !roots[0].exists() {
                     return None;
                 }
@@ -393,10 +398,12 @@ impl<'a> Linter<'a> {
         if plugins.is_empty() {
             return Vec::new();
         }
-        let pattern = regex::Regex::new(r"`([a-z0-9][a-z0-9-]*):([a-z0-9][a-z0-9-]*)`")
-            .expect("the pattern compiles");
+        static SKILL_REF: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r"`([a-z0-9][a-z0-9-]*):([a-z0-9][a-z0-9-]*)`")
+                .expect("the pattern compiles")
+        });
         let mut out = Vec::new();
-        for found in pattern.captures_iter(charter) {
+        for found in SKILL_REF.captures_iter(charter) {
             let (plugin, skill) = (&found[1], &found[2]);
             if !plugins.contains(plugin) {
                 continue;
@@ -532,6 +539,9 @@ fn bin_issues(root: &Path, name: &str) -> Vec<Issue> {
         .join("personas")
         .join(name)
         .join(crate::personagrant::BIN_DIR);
+    if crate::contain::readable(root, &dir).is_err() {
+        return Vec::new();
+    }
     let Ok(reader) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
@@ -627,12 +637,8 @@ fn read_skill(file: &Path) -> Option<(String, bool)> {
 /// error (every finding is, under `--only`).
 pub fn lint_command(linter: &Linter, name: Option<&str>, only: Option<&str>, say: Sink) -> u8 {
     let name = name.filter(|n| !n.is_empty());
-    if let Some(name) = name
-        && !crate::personas::valid_name(name)
-    {
-        say(Say::Fail(
-            crate::personas::name_refusal(linter.root, name).unwrap_or_default(),
-        ));
+    if let Some(refused) = name.and_then(crate::personas::shape_refusal) {
+        say(Say::Fail(refused));
         return 1;
     }
     let names = match name {

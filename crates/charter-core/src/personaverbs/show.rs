@@ -107,11 +107,8 @@ fn memory_summary(root: &Path, name: &str, session: &str, say: Sink) -> bool {
         match std::fs::read_dir(&refs_dir) {
             Ok(entries) => entries
                 .flatten()
-                .filter(|e| {
-                    let n = e.file_name();
-                    let n = n.to_string_lossy();
-                    n != "README.md" && !n.starts_with('.')
-                })
+                // Every entry but the README, as Python counts them: a `.gitkeep` too.
+                .filter(|e| e.file_name() != "README.md")
                 .count()
                 .to_string(),
             Err(e) if crate::memstore::is_absent(&e) => "0".to_string(),

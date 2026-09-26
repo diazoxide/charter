@@ -10,17 +10,25 @@
 //!
 //! # What `create` refuses that Python did not
 //!
-//! A `--role`, `--delegate-when` or `--extends` holding a line break or `---` is refused.
-//! Each is written into the frontmatter as one line, so a line break there writes a key the
-//! operator never typed — `--role $'x\ntools: Bash'` would declare a tool the persona gate
-//! then approves — and a `---` ends the frontmatter early. `--vault` must be a vault name the
-//! registry accepts, or `none`. Python wrote all four as given.
+//! A `--role` or `--delegate-when` holding a line break, a control character or `---` is
+//! refused. Each is written into the frontmatter as one line, so a line break there writes a
+//! key the operator never typed — `--role $'x\ntools: Bash'` would declare a tool the persona
+//! gate then approves — and a `---` ends the frontmatter early. `--vault` must be a vault name
+//! the registry accepts, or `none`. (`--extends` is already held to the persona-name alphabet.)
+//! Python wrote all of them as given.
 //!
 //! # `--with-vault` registers a keyring vault
 //!
 //! Python registered a plain-file vault. This charter keeps a vault in the system keyring by
 //! default (ADR 0047), so `--with-vault` registers what `charter vault add <vault> --persona
-//! <name>` would, and the caller does that registering — this module never touches a vault.
+//! <name>` would. The caller hands that registration in, and this module never touches a
+//! vault itself. As in Python, a registration that fails is said and the persona stays made.
+//!
+//! # `remove` takes a persona that does not load
+//!
+//! Python refused to remove a persona whose definition did not load — the one persona most
+//! likely to need removing. Here `remove` asks only that the name is one a persona could have
+//! and that a definition is there.
 
 use std::path::Path;
 
@@ -34,12 +42,21 @@ pub struct Create<'a> {
     pub delegate_when: Option<&'a str>,
     pub vault: Option<&'a str>,
     pub extends: Option<&'a str>,
-    /// `--with-vault`: the caller registers the vault; this only stops the hint saying how.
-    pub with_vault: bool,
     /// `--use`: select it, for this session and pane, as `charter persona use` would.
     pub select: Option<Selecting<'a>>,
     pub force: bool,
 }
+
+impl Create<'_> {
+    /// The vault the persona names: `--vault`, else the persona's own name.
+    pub fn vault(&self) -> &str {
+        self.vault.filter(|v| !v.is_empty()).unwrap_or(self.name)
+    }
+}
+
+/// Registers a vault for the persona being made, as `charter vault add <vault> --persona
+/// <name>` would, saying what it did.
+pub type RegisterVault<'a> = &'a mut dyn FnMut(&str);
 
 /// Who `--use` selects the new persona for.
 pub struct Selecting<'a> {
@@ -47,31 +64,12 @@ pub struct Selecting<'a> {
     pub env_persona: Option<&'a str>,
 }
 
-/// The scaffold a new persona starts from — `commands_persona._TEMPLATE`.
-const TEMPLATE: &str = "---
-name: {name}
-role: {role}
-vault: {vault}
-draft: true
----
-
-# {role}
-
-You are the **{name}** persona — {role}. When this persona is
-active, adopt this role: its responsibilities, focus, and conventions.
-
-## How to work as this persona
-- Credentials: use `charter persona secret …` (this persona's vault: `{vault}`).
-  Never print secret values.
-- Defer to each repo's own `CLAUDE.md` / `AGENTS.md` and its tooling over general habits.
-- Record durable facts with `charter persona remember {name} \"<fact>\"`. Never store
-  secrets there — those belong in the vault.
-";
-
-/// Appended when the persona states its own routing intent — `_TEMPLATE_DELEGATE`.
-const TEMPLATE_DELEGATE: &str = "\n## When to delegate here\n{delegate_when}\n";
-
-/// The text of a new persona's `persona.md`.
+/// The text of a new persona's `persona.md` — `commands_persona._TEMPLATE`, with
+/// `_TEMPLATE_DELEGATE` appended when the persona states its own routing intent and the
+/// `extends:` line and inheritance sentence when it has a parent.
+///
+/// Built in one pass rather than by substituting into a template: a `--role` holding
+/// `{vault}` or ending in `vault: x` would otherwise be rewritten by the next substitution.
 fn scaffold(
     name: &str,
     role: &str,
@@ -79,29 +77,35 @@ fn scaffold(
     delegate_when: &str,
     extends: Option<&str>,
 ) -> String {
-    let mut text = TEMPLATE
-        .replace("{name}", name)
-        .replace("{role}", role)
-        .replace("{vault}", vault);
-    let vault_line = format!("vault: {vault}\n");
-    if !delegate_when.is_empty() {
-        text = text.replacen(
-            &vault_line,
-            &format!("{vault_line}delegate-when: {delegate_when}\n"),
-            1,
-        );
-        text.push_str(&TEMPLATE_DELEGATE.replace("{delegate_when}", delegate_when));
-    }
+    let mut text = format!("---\nname: {name}\nrole: {role}\nvault: {vault}\n");
     if let Some(parent) = extends {
-        text = text.replacen(&vault_line, &format!("{vault_line}extends: {parent}\n"), 1);
-        text = text.replacen(
-            "active, adopt this role: its responsibilities, focus, and conventions.",
-            &format!(
-                "active, adopt this role. It **inherits from `{parent}`** (that persona's \
-                 charter + tools apply); the sections below are what THIS persona ADDS on top."
-            ),
-            1,
-        );
+        text.push_str(&format!("extends: {parent}\n"));
+    }
+    if !delegate_when.is_empty() {
+        text.push_str(&format!("delegate-when: {delegate_when}\n"));
+    }
+    text.push_str("draft: true\n---\n\n");
+    let adopt = match extends {
+        None => {
+            "active, adopt this role: its responsibilities, focus, and conventions.".to_string()
+        }
+        Some(parent) => format!(
+            "active, adopt this role. It **inherits from `{parent}`** (that persona's charter + \
+             tools apply); the sections below are what THIS persona ADDS on top."
+        ),
+    };
+    text.push_str(&format!(
+        "# {role}\n\nYou are the **{name}** persona — {role}. When this persona is\n{adopt}\n\n\
+         ## How to work as this persona\n\
+         - Credentials: use `charter persona secret …` (this persona's vault: `{vault}`).\n  \
+         Never print secret values.\n\
+         - Defer to each repo's own `CLAUDE.md` / `AGENTS.md` and its tooling over general \
+         habits.\n\
+         - Record durable facts with `charter persona remember {name} \"<fact>\"`. Never store\n  \
+         secrets there — those belong in the vault.\n"
+    ));
+    if !delegate_when.is_empty() {
+        text.push_str(&format!("\n## When to delegate here\n{delegate_when}\n"));
     }
     text
 }
@@ -121,7 +125,13 @@ fn one_line_refusal(flag: &str, value: &str) -> Option<String> {
 }
 
 /// `charter persona create <name>`, and its exit code.
-pub fn create(root: &Path, state: &Path, ask: &Create, say: Sink) -> u8 {
+pub fn create(
+    root: &Path,
+    state: &Path,
+    ask: &Create,
+    register_vault: Option<RegisterVault>,
+    say: Sink,
+) -> u8 {
     let name = ask.name;
     if let Some(refused) = crate::personas::shape_refusal(name) {
         say(Say::Fail(refused));
@@ -157,7 +167,7 @@ pub fn create(root: &Path, state: &Path, ask: &Create, say: Sink) -> u8 {
         .filter(|r| !r.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| super::py_title(name));
-    let vault = ask.vault.filter(|v| !v.is_empty()).unwrap_or(name);
+    let vault = ask.vault();
     for (flag, value) in [
         ("--role", role.as_str()),
         ("--delegate-when", delegate_when),
@@ -175,7 +185,7 @@ pub fn create(root: &Path, state: &Path, ask: &Create, say: Sink) -> u8 {
     // Counted before anything is written, and only for a name that defines nothing yet: a
     // pointer naming a persona `--force` is overwriting was never stale.
     let revived = if existing.exists() {
-        (0, 0, 0)
+        crate::active::Pointers::default()
     } else {
         crate::active::pointers_naming(root, name)
     };
@@ -204,6 +214,19 @@ pub fn create(root: &Path, state: &Path, ask: &Create, say: Sink) -> u8 {
         say(Say::Fail(e.to_string()));
         return 1;
     }
+    // `--force` over a legacy flat `personas/<name>.md`: the new directory layout is the
+    // definition now, and the flat file left beside it would be a second one.
+    if existing.exists()
+        && existing != file
+        && crate::contain::writable(root, &existing).is_ok()
+        && let Err(e) = std::fs::remove_file(&existing)
+    {
+        say(Say::Warn(format!(
+            "the legacy {} is still there ({e}) — personas/{name}/persona.md is what charter \
+             reads; delete the old file.",
+            super::rel(root, &existing)
+        )));
+    }
     say(Say::Done(format!(
         "Created persona '{name}' → personas/{name}/ (persona.md + memory/ + refs/; edit the \
          charter, then commit — personas are shared)."
@@ -220,10 +243,16 @@ pub fn create(root: &Path, state: &Path, ask: &Create, say: Sink) -> u8 {
         ))),
         _ => {}
     }
-    if !ask.with_vault {
-        say(Say::Info(format!(
+    match register_vault {
+        Some(_) if vault == super::NO_VAULT => say(Say::Info(format!(
+            "'{name}' declares `vault: {vault}` — it holds no credentials, so there is no vault \
+             to register."
+        ))),
+        Some(register) => register(vault),
+        None if vault == super::NO_VAULT => {}
+        None => say(Say::Info(format!(
             "Set up its vault locally when ready: charter vault add {vault} --persona {name}"
-        )));
+        ))),
     }
     if let Some(selecting) = &ask.select {
         let scope = super::select::set_active(root, name, selecting.ids);
@@ -238,7 +267,12 @@ pub fn create(root: &Path, state: &Path, ask: &Create, say: Sink) -> u8 {
 
 /// `_say_revived`: the selections a removed persona of this name left behind, which the new
 /// one now is — made by nobody who ran `use` for it.
-fn say_revived(name: &str, (sessions, terminals, active): (usize, usize, usize), say: Sink) {
+fn say_revived(name: &str, revived: crate::active::Pointers, say: Sink) {
+    let crate::active::Pointers {
+        sessions,
+        terminals,
+        active_file,
+    } = revived;
     let mut rungs = Vec::new();
     if sessions > 0 {
         rungs.push(format!("{sessions} session pointer(s)"));
@@ -246,7 +280,7 @@ fn say_revived(name: &str, (sessions, terminals, active): (usize, usize, usize),
     if terminals > 0 {
         rungs.push(format!("{terminals} terminal pointer(s)"));
     }
-    if active > 0 {
+    if active_file {
         rungs.push("the plane-wide .charter/active-persona".to_string());
     }
     if rungs.is_empty() {
@@ -255,7 +289,7 @@ fn say_revived(name: &str, (sessions, terminals, active): (usize, usize, usize),
     say(Say::Warn(format!(
         "{} selection(s) already named '{name}' before it existed, and now select it: {}. \
          Nobody chose it again: those sessions and terminals now resolve to this persona.",
-        sessions + terminals + active,
+        sessions + terminals + usize::from(active_file),
         rungs.join(", ")
     )));
 }
@@ -294,8 +328,14 @@ pub fn remove(
     selection: &crate::active::ActivePersona,
     say: Sink,
 ) -> u8 {
-    if let Some(refused) = crate::personas::name_refusal(root, name) {
+    if let Some(refused) = crate::personas::shape_refusal(name) {
         say(Say::Fail(refused));
+        return 1;
+    }
+    if !crate::personas::def_path(root, name).exists() {
+        say(Say::Fail(format!(
+            "no persona '{name}' (create it: charter persona create {name})"
+        )));
         return 1;
     }
     let dependents = dependents_of(root, name);
@@ -316,17 +356,18 @@ pub fn remove(
         )));
         return 1;
     }
-    let dir = root.join("personas").join(name);
-    let dir_layout = dir.join("persona.md").exists();
+    let definition = crate::personas::def_path(root, name);
+    let dir = definition.parent().unwrap_or(root).to_path_buf();
+    let dir_layout = definition.file_name().is_some_and(|f| f == "persona.md");
     let target = if dir_layout {
         dir.clone()
     } else {
-        crate::personas::def_path(root, name)
+        definition.clone()
     };
     // Both the directory and its definition are asked: a committed link at either would
     // send the delete out of the plane.
     if let Err(refused) = crate::contain::writable(root, &target)
-        .and_then(|()| crate::contain::writable(root, &crate::personas::def_path(root, name)))
+        .and_then(|()| crate::contain::writable(root, &definition))
     {
         say(Say::Fail(refused.to_string()));
         return 1;
@@ -367,11 +408,12 @@ pub fn remove(
     if selection.name.as_deref() == Some(name)
         && selection.rung == crate::active::PersonaRung::ActiveFile
     {
-        let file = root.join(".charter").join("active-persona");
-        if crate::contain::no_link_on_the_way(root, &file).is_ok() {
-            let _ = std::fs::remove_file(&file);
+        let file = crate::active::active_persona_file(root);
+        let dropped = crate::contain::no_link_on_the_way(root, &file).is_ok()
+            && std::fs::remove_file(&file).is_ok();
+        if dropped {
+            say(Say::Info("Active persona cleared.".into()));
         }
-        say(Say::Info("Active persona cleared.".into()));
     }
     0
 }

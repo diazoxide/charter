@@ -663,7 +663,7 @@ pub fn persona_pointers(root: &Path, ids: &Ids) -> Vec<PathBuf> {
             out.push(state_dir(root).join(dir).join(format!("{id}.persona")));
         }
     }
-    out.push(state_dir(root).join("active-persona"));
+    out.push(active_persona_file(root));
     out
 }
 
@@ -672,10 +672,24 @@ pub fn read_pointer(root: &Path, path: &Path) -> Option<String> {
     local_file(root, path)
 }
 
-/// How many selections on this machine name `name`: `(session pointers, terminal pointers,
-/// the plane-wide file)` — `persona.pointers_naming`. Every session's and every pane's, not
-/// this process's: a persona created under a removed one's name becomes each of them.
-pub fn pointers_naming(root: &Path, name: &str) -> (usize, usize, usize) {
+/// The plane-wide selection, `.charter/active-persona` — written by `charter persona use` in a
+/// shell with neither a session nor a pane id.
+pub fn active_persona_file(root: &Path) -> PathBuf {
+    state_dir(root).join("active-persona")
+}
+
+/// How many persona selections on this machine name one persona, by rung.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pointers {
+    pub sessions: usize,
+    pub terminals: usize,
+    pub active_file: bool,
+}
+
+/// Every selection on this machine naming `name` — `persona.pointers_naming`. Every session's
+/// and every pane's, not this process's: a persona created under a removed one's name becomes
+/// each of them.
+pub fn pointers_naming(root: &Path, name: &str) -> Pointers {
     let count = |dir: &str| {
         std::fs::read_dir(state_dir(root).join(dir))
             .map(|entries| {
@@ -688,10 +702,11 @@ pub fn pointers_naming(root: &Path, name: &str) -> (usize, usize, usize) {
             })
             .unwrap_or(0)
     };
-    let active = usize::from(
-        local_file(root, &state_dir(root).join("active-persona")).as_deref() == Some(name),
-    );
-    (count("sessions"), count("terminals"), active)
+    Pointers {
+        sessions: count("sessions"),
+        terminals: count("terminals"),
+        active_file: local_file(root, &active_persona_file(root)).as_deref() == Some(name),
+    }
 }
 
 /// A pointer file's contents, or `None` — `.charter/<dir>/<id>.<ext>`.

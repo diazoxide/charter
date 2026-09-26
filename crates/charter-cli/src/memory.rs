@@ -843,20 +843,25 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
                 delegate_when: delegate_when.as_deref(),
                 vault: vault.as_deref(),
                 extends: extends.as_deref(),
-                with_vault,
                 select: select.then_some(charter_core::personaverbs::define::Selecting {
                     ids: &here.ids,
                     env_persona: here.persona_env.as_deref(),
                 }),
                 force,
             };
+            // A registration that fails says so in the vault command's own words, and the
+            // persona stays made — Python's `create --with-vault` warns and exits 0 too.
+            let mut register = |vault: &str| {
+                crate::secret::add_persona_vault(here, vault, &name);
+            };
             let mut sink = crate::speak;
-            let code = charter_core::personaverbs::define::create(root, &state, &ask, &mut sink);
-            let vault = vault.as_deref().filter(|v| !v.is_empty()).unwrap_or(&name);
-            if code != 0 || !with_vault || vault == charter_core::personaverbs::NO_VAULT {
-                return Ok(code);
-            }
-            Ok(crate::secret::add_persona_vault(here, vault, &name))
+            Ok(charter_core::personaverbs::define::create(
+                root,
+                &state,
+                &ask,
+                with_vault.then_some(&mut register as _),
+                &mut sink,
+            ))
         }
         PersonaCommand::Show { name } => {
             let root = plane.root();

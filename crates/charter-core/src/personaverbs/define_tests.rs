@@ -13,7 +13,6 @@ fn ask<'a>(name: &'a str, delegate_when: Option<&'a str>) -> Create<'a> {
         delegate_when,
         vault: None,
         extends: None,
-        with_vault: false,
         select: None,
         force: false,
     }
@@ -21,7 +20,7 @@ fn ask<'a>(name: &'a str, delegate_when: Option<&'a str>) -> Create<'a> {
 
 fn create_on(plane: &Plane, ask: &Create) -> (u8, Heard) {
     let mut heard = Heard::default();
-    let rc = create(plane.root(), &plane.state(), ask, &mut heard.sink());
+    let rc = create(plane.root(), &plane.state(), ask, None, &mut heard.sink());
     (rc, heard)
 }
 
@@ -207,16 +206,25 @@ fn create_says_which_leftover_selections_it_revives_and_use_selects_it() {
         session: Some("s-9".into()),
         terminal: None,
     };
-    let (rc, heard) = create_on(
-        &plane,
+    let mut registered: Vec<String> = Vec::new();
+    let mut heard = Heard::default();
+    let rc = create(
+        plane.root(),
+        &plane.state(),
         &Create {
-            with_vault: true,
             select: Some(Selecting {
                 ids: &ids,
                 env_persona: None,
             }),
             ..ask("qa", Some("x"))
         },
+        Some(&mut |vault: &str| registered.push(vault.to_string())),
+        &mut heard.sink(),
+    );
+    assert_eq!(
+        registered,
+        ["qa"],
+        "the vault is registered, before --use selects"
     );
     assert_eq!(rc, 0);
     assert!(
@@ -344,6 +352,69 @@ fn remove_takes_its_generated_agent_and_the_plane_wide_selection_with_it() {
     );
     assert!(!plane.path(".claude/agents/steward.md").exists());
     assert!(!plane.path(".charter/active-persona").exists());
+}
+
+#[test]
+fn remove_takes_a_persona_that_does_not_load_and_refuses_one_that_is_not_there() {
+    let plane = Plane::fixture("daily");
+    std::fs::create_dir_all(plane.path("personas/broken")).unwrap();
+    std::fs::write(
+        plane.path("personas/broken/persona.md"),
+        b"---\nrole: \xff\n---\n",
+    )
+    .unwrap();
+    let (rc, heard) = remove_on(&plane, "broken", false, &nothing_selected());
+    assert_eq!(rc, 0, "{}", heard.err);
+    assert!(!plane.path("personas/broken").exists());
+    let (rc, heard) = remove_on(&plane, "ghost", false, &nothing_selected());
+    assert_eq!(
+        (rc, heard.err.as_str()),
+        (
+            1,
+            "✗ no persona 'ghost' (create it: charter persona create ghost)\n"
+        )
+    );
+}
+
+#[test]
+fn create_force_over_a_legacy_flat_definition_leaves_one_definition() {
+    let plane = Plane::fixture("daily");
+    plane.write("personas/legacy.md", "---\nrole: Old\n---\n");
+    let (rc, heard) = create_on(
+        &plane,
+        &Create {
+            force: true,
+            ..ask("legacy", Some("x"))
+        },
+    );
+    assert_eq!(rc, 0, "{}", heard.err);
+    assert!(!plane.path("personas/legacy.md").exists());
+    assert!(
+        plane
+            .read("personas/legacy/persona.md")
+            .contains("role: Legacy\n")
+    );
+}
+
+#[test]
+fn a_role_holding_template_words_is_written_as_typed() {
+    let plane = Plane::fixture("daily");
+    let (rc, _) = create_on(
+        &plane,
+        &Create {
+            role: Some("{vault} keeper vault: qa"),
+            ..ask("qa", Some("x"))
+        },
+    );
+    assert_eq!(rc, 0);
+    let text = plane.read("personas/qa/persona.md");
+    assert!(
+        text.starts_with(
+            "---\nname: qa\nrole: {vault} keeper vault: qa\nvault: qa\ndelegate-when: x\n\
+             draft: true\n---\n"
+        ),
+        "{text}"
+    );
 }
 
 #[test]
