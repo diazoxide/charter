@@ -13,11 +13,11 @@
 //! frame in the crash report is `?`, and the message was on a standard error nobody had.
 //! charter-app#16 is the same shape: the app gone mid-test, no crash report that named it.
 //!
-//! The hook here writes the thread, the place in the source, the message and a backtrace to
-//! standard error, and appends the same to a file, and then hands over to the hook that was
-//! there before it. It runs on the panicking thread, before the abort. The place in the source
-//! survives stripping, which is what makes it worth writing down even where the backtrace is
-//! only addresses.
+//! The hook here writes the charter version, the thread, the place in the source, the message
+//! and a backtrace to standard error, and appends the same to a file, and then hands over to
+//! the hook that was there before it. It runs on the panicking thread, before the abort. The
+//! place in the source survives stripping, which is what makes it worth writing down even where
+//! the backtrace is only addresses.
 
 use std::backtrace::Backtrace;
 use std::fs::OpenOptions;
@@ -81,12 +81,15 @@ fn describe(
         .unwrap_or(0);
     format!(
         "charter-panic pid {pid} at {when} (seconds since 1970)\n\
+         version: {version}\n\
          thread: {thread}\n\
          place: {place}\n\
          message: {message}\n\
          backtrace:\n{backtrace}\n\
          charter-panic end\n",
         pid = std::process::id(),
+        // Which charter panicked: `charter report bug --panic` files it with the report.
+        version = env!("CARGO_PKG_VERSION"),
     )
 }
 
@@ -121,6 +124,10 @@ mod tests {
             &"frame 0\nframe 1",
         );
 
+        assert!(
+            said.contains(concat!("version: ", env!("CARGO_PKG_VERSION"), "\n")),
+            "the record names the charter that panicked: {said}"
+        );
         assert!(said.contains("thread: charter-view"), "{said}");
         assert!(said.contains("place: src/sessions.rs:12:5"), "{said}");
         assert!(said.contains("message: the queue was poisoned"), "{said}");

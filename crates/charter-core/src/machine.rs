@@ -127,8 +127,8 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-/// charter's own directory inside the config home — the same one `charter report` keeps its
-/// publish consent in.
+/// charter's own directory inside the config home — the one the Python `charter report` kept
+/// its publish consent in. The Rust `charter report` keeps none (ADR 0059).
 pub const DIR: &str = "charter";
 
 /// The store, inside [`DIR`].

@@ -562,13 +562,24 @@ pub fn helper_for(forge: &Forge) -> String {
     }
 }
 
+/// The token variables a forge CLI would log in with in place of its own stored login.
+/// [`gh_as_the_operator`] withholds them.
+pub const TOKEN_ENV: [&str; 4] = [
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+];
+
 /// What the CLI child is given: its credential environment, and nothing else of charter's.
 ///
 /// **Unchanged by charter-app#134, deliberately.** `find_cli` above now looks in more places;
 /// what the child is then handed is still the directory that search landed in plus
 /// `git::GIT_DIRS`, and never this process's own `PATH`. Widening a lookup is not the same act
 /// as widening what the program found can reach.
-fn cli_env(cli_dir: Option<&Path>) -> Vec<(String, String)> {
+///
+/// Every credential variable `keep` accepts is passed on; [`call`] keeps them all.
+fn cli_env_keeping(cli_dir: Option<&Path>, keep: impl Fn(&str) -> bool) -> Vec<(String, String)> {
     let mut dirs: Vec<String> = Vec::new();
     if let Some(dir) = cli_dir {
         dirs.push(dir.display().to_string());
@@ -588,7 +599,7 @@ fn cli_env(cli_dir: Option<&Path>) -> Vec<(String, String)> {
     if let Some(home) = std::env::var_os("HOME") {
         env.push(("HOME".to_string(), home.to_string_lossy().into_owned()));
     }
-    for name in git::CREDENTIAL_ENV {
+    for name in git::CREDENTIAL_ENV.into_iter().filter(|name| keep(name)) {
         if let Some(value) = std::env::var_os(name) {
             env.push((name.to_string(), value.to_string_lossy().into_owned()));
         }
@@ -613,6 +624,34 @@ enum NoAnswer {
 
 /// Run the forge's CLI with `args`, under `timeout`.
 fn call(kind: Kind, args: &[String], timeout: Duration) -> Result<Answer, NoAnswer> {
+    call_with(kind, args, timeout, |_| true)
+}
+
+/// `gh` with `args`, logged in as the operator's own `gh` login and never as a token in this
+/// process's environment: it is given none of [`TOKEN_ENV`].
+///
+/// For `charter report`, which files on charter's own tracker under the reporter's own
+/// identity (charter-plane ADR 0001). A chat can hold a plane's or a vault's token in
+/// `GH_TOKEN`, and `gh` prefers that variable to its stored login, so an issue filed with it
+/// would appear under whoever owns the token. Returns stdout on exit 0; anything else is an
+/// error carrying `gh`'s own words, because a write that fails must fail loudly.
+pub fn gh_as_the_operator(args: &[String], timeout: Duration) -> Result<String, ForgeError> {
+    match call_with(Kind::GitHub, args, timeout, |name| {
+        !TOKEN_ENV.contains(&name)
+    }) {
+        Ok(answer) if answer.code == 0 => Ok(answer.out),
+        Ok(answer) => Err(ForgeError(detail(Kind::GitHub, &answer))),
+        Err(NoAnswer::Timeout(why) | NoAnswer::Missing(why)) => Err(ForgeError(why)),
+    }
+}
+
+/// [`call`], passing on only the credential variables `keep` accepts.
+fn call_with(
+    kind: Kind,
+    args: &[String],
+    timeout: Duration,
+    keep: impl Fn(&str) -> bool,
+) -> Result<Answer, NoAnswer> {
     let cli = kind.cli();
     let Some(path) = find_cli(cli) else {
         return Err(NoAnswer::Missing(format!(
@@ -622,7 +661,7 @@ fn call(kind: Kind, args: &[String], timeout: Duration) -> Result<Answer, NoAnsw
     let mut cmd = Command::new(&path);
     cmd.args(args)
         .env_clear()
-        .envs(cli_env(path.parent()))
+        .envs(cli_env_keeping(path.parent(), keep))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1279,6 +1318,15 @@ pub fn py_str(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// `gh_as_the_operator` withholds only credential variables a forge call would pass.
+    #[test]
+    fn every_token_withheld_is_one_a_forge_call_would_pass() {
+        for name in TOKEN_ENV {
+            assert!(git::CREDENTIAL_ENV.contains(&name), "{name}");
+        }
+    }
+
     use super::*;
 
     /// charter-app#100's `PATH` joined with `:`, as it bit on unix: a forge CLI found under a
@@ -1287,7 +1335,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_forge_clis_child_is_never_handed_a_relative_path_entry() {
-        let env = cli_env(Some(Path::new("/home/a:b/.local/bin")));
+        let env = cli_env_keeping(Some(Path::new("/home/a:b/.local/bin")), |_| true);
         let path = &env.iter().find(|(k, _)| k == "PATH").expect("a PATH").1;
         for dir in std::env::split_paths(path) {
             assert!(dir.is_absolute(), "{} in {path}", dir.display());

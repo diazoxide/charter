@@ -89,6 +89,13 @@ readings that follow from them (`hh`, `hcr`, `bh`, `hsp`, `dqs`, `hb`, `hsub`), 
 of the leak guard and A7 (`lr`, `ih`, `hl7`, `hr`, `hrd`, `ssh7`), each now a refusal where the
 Python allowed.
 
+**And where the prose guard's `report` rows stopped calling the command planned (#363).**
+`charter report` exists now, so the `report bug` and `report gap` rows' destination no longer
+ends in "(`charter report` is not in this version yet)". It reads "a report draft, which
+`charter report` files as a PUBLIC issue on charter's own tracker". The wording is the only
+change: 107 `shellseg-oracle.jsonl` rows and 472 generated rows hold it, in the table rotation
+(`tbl`) and in the A6 answers that quote it (`csh`, `cpc`). No verdict moved.
+
 **And where a heredoc has one reading (#359).** The frozen Python found heredoc openers with a
 pattern (`_HEREDOC_RE`) that knew only a delimiter spelled as one identifier in one pair of
 quotes, and ended bodies with bash's header reading; the two disagreed on some lines. The
