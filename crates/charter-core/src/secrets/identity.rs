@@ -466,7 +466,8 @@ pub fn kept_from_chats(name: &std::ffi::OsStr) -> bool {
         && bytes[..KEPT_FROM_CHATS.len()].eq_ignore_ascii_case(KEPT_FROM_CHATS.as_bytes())
 }
 
-#[cfg(test)]
+/// macOS only: off macOS there is nothing here to test.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
