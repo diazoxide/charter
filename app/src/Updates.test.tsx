@@ -385,14 +385,10 @@ describe("the pin item", () => {
     brought: "0.1.0",
     pinned: "9.0.0",
     said: ["drift: this control plane pins 9.0.0, and this charter is 0.1.0."],
-    news: [{ version: "0.2.0", headline: "Something came" }],
-    more_news: 0,
   };
 
   it("draws nothing when charter version says the pin is met", () => {
-    const { container } = render(
-      <PinItem pin={{ ...DRIFT, drift: false, news: [] }} again={() => {}} />,
-    );
+    const { container } = render(<PinItem pin={{ ...DRIFT, drift: false }} again={() => {}} />);
 
     expect(container.textContent).toBe("");
   });
@@ -403,7 +399,7 @@ describe("the pin item", () => {
     expect(container.textContent).toBe("");
   });
 
-  it("names the pin, and its dialog says charter version's own words and what came since", async () => {
+  it("names the pin, and its dialog says charter version's own words", async () => {
     let asked = 0;
     render(<PinItem pin={DRIFT} again={() => (asked += 1)} />);
 
@@ -413,7 +409,6 @@ describe("the pin item", () => {
     await userEvent.click(item);
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(DRIFT.said[0])).toBeInTheDocument();
-    expect(within(dialog).getByText("Something came")).toBeInTheDocument();
     // Opening it asks again, so a pin moved since the project opened is not shown stale.
     expect(asked).toBe(1);
   });

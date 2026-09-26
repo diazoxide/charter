@@ -489,7 +489,7 @@ mod tests {
         // the agent's own error, and every test of this delete goes red for a reason that has
         // nothing to do with it. **CI cannot see it**: a runner has no signing config. charter's
         // Python suite hit exactly this and turned it off everywhere
-        // (`news/0.54.0-the-suite-stops-spending-your-forge-token-and-your-thumb.md`); this
+        // (its 0.54.0 news note, in `diazoxide/charter-plane`); this
         // port carried the helper over without it.
         git(&at, &["config", "commit.gpgsign", "false"]);
         std::fs::write(at.join("README.md"), "one\n").expect("a file");

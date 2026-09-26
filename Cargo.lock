@@ -731,6 +731,7 @@ name = "charter-cli"
 version = "0.3.1"
 dependencies = [
  "base64 0.23.1",
+ "changelog",
  "charter-core",
  "chrono",
  "clap",
@@ -747,6 +748,7 @@ name = "charter-core"
 version = "0.3.1"
 dependencies = [
  "alacritty_terminal",
+ "changelog",
  "charter-core",
  "chrono",
  "dirs 7.0.0",

@@ -1,6 +1,6 @@
 ---
 name: update
-description: Update charter to a newer version and adopt what it brings — the app installs the new version, then this skill walks what this plane has not taken up. Use when asked to update or upgrade charter, whether a newer charter is published, what a version added, or how to adopt a new charter feature.
+description: Update charter to a newer version and say what it brings — the app installs the new version, then this skill relays what `charter news` says each version brought. Use when asked to update or upgrade charter, whether a newer charter is published, what a version added, or how to adopt a new charter feature.
 ---
 
 # Updating charter
@@ -32,37 +32,26 @@ charter update --channel stable    # or: dev
 charter version
 ```
 
-It prints the release this charter comes up to, the build, and the version the plane pins
+It prints this charter's version, which is the app's, and the version the plane pins
 (`[charter] version` in `charter.toml`). Exit 0 means the pin is met or there is none; 1
 means drift. Relay what it says about the pin in its own words. Do not call charter current
 or up to date on your own reading of it. Moving the pin moves every teammate, so it is a
 change to `charter.toml` the operator makes, never one you make unasked.
 
-## Adopt what the version brought
+## Say what the version brought
 
 ```bash
-charter update           # what the versions this plane skipped brought, and what is pending
-charter news --pending   # every entry, any version, this plane has not taken up
+charter news                  # every version of the app, newest first, from its CHANGELOG.md
+charter news --for <version>  # one version: the same notes as its release page and About
 ```
 
-Each line is one entry: its slug, what it gives you, and how to take it up. An entry
-prefixed `security:` is a security fix — take those up first rather than in list order, and
-say so when you offer them.
+Relay the section for the version they are on, or the versions since the one they last knew,
+in your own summary. An entry under **Fixed** that reads as a security fix is worth saying
+first. When a note describes something the plane has to take up by hand, offer to walk them
+through it, one at a time, and ask before each change.
 
-Work them **one at a time**, and ask before each:
-
-1. Say what it is and why it matters — `charter news --for <version>` prints that version's
-   entries.
-2. `adopt: charter <command>` → run it once they say yes.
-3. `adopt: manual` → turn the entry's body into steps they can follow. These are the ones
-   that need a judgement only they can make, and no command can make it for them.
-
-## Report what charter could not check
-
-An entry whose probe could not run is reported as **unchecked** — neither adopted nor
-pending. Say so in those words. charter distinguishes "you do not have this" from "I could
-not tell", and collapsing them turns a probe that quietly broke into a feature the person
-appears to keep declining.
+`charter news --since`, `--until` and `--pending` are retired: the app writes no update
+baseline and ships no adoption probes. They are refused by name.
 
 ## This skill is the version you are running
 

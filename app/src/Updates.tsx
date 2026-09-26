@@ -41,7 +41,7 @@ import { ReleaseNotes } from "./ReleaseNotes";
  * Only when `charter version` says the plane's `[charter] version` is one this charter does not
  * meet — and that verdict is `adopt::version_report`'s exit status (`app/src-tauri/src/pin.rs`),
  * never a comparison made here (ADR 0030, as amended by ADR 0045). Its dialog carries `charter version`'s own
- * sentences and the news between the pin and this charter's version.
+ * sentences.
  */
 
 /** Where the updater is, as the window knows it. */
@@ -481,21 +481,6 @@ export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) 
               </p>
             ))}
           </div>
-          {pin.news.length > 0 && (
-            <section aria-label="What came since the pin">
-              <h3>What came since {pin.pinned}</h3>
-              <ul className="pin-news">
-                {pin.news.map((item) => (
-                  <li key={`${item.version} ${item.headline}`}>
-                    <code>{item.version}</code> {item.headline}
-                  </li>
-                ))}
-              </ul>
-              {pin.more_news > 0 && (
-                <p className="honest">…and {pin.more_news} more — `charter news` lists them all.</p>
-              )}
-            </section>
-          )}
           {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186): the one control
               this dialog has, and WebKit leaves a `<button>` out of the tab sequence unless
               its `tabindex` is written down. */}

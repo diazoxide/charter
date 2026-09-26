@@ -621,8 +621,6 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
           pinned: "0.1.0",
           brought: "0.2.0",
           said: ["the plane pins an older charter"],
-          news: [],
-          more_news: 0,
         }}
         again={() => {}}
       />,

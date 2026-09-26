@@ -23,6 +23,8 @@ serde_json.workspace = true
 # make (charter-app#129). Cargo unifies a dependency's features across the unit graph a test
 # build needs, so naming it here fences the binary as well as the tests that run it.
 charter-core = { workspace = true, features = ["fenced"] }
+# The changelog parser, so `charter news --for` is checked against the section it should print.
+changelog.workspace = true
 stand-in.workspace = true
 tempfile.workspace = true
 # The recorded-behaviour replay (ADR 0046): the scenarios' masks, and the file contents they

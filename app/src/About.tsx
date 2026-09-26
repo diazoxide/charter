@@ -19,8 +19,7 @@ const RELEASES = "https://github.com/diazoxide/charter/releases";
  * updater compares and the GitHub release is named for) and that version's section of the
  * repository's `CHANGELOG.md`, which is compiled into the binary. The release workflow puts the
  * same section on the GitHub release, so this dialog and the release page say the same thing.
- * Python charter's news, which `charter news` still prints, is a different product's history
- * with a different version line, and is not shown here.
+ * `charter news` prints the same file in a terminal.
  *
  * What is drawn follows what the build is (`Build` in the bindings):
  *

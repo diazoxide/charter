@@ -1,19 +1,9 @@
-//! `charter news` and the adoption half of `charter update`, through the binary.
+//! `charter news` and `charter update`, through the binary.
 //!
-//! The rendering of an entry was compared against the Python charter one scenario per version
-//! until the corpus was frozen and that comparison retired (ADR 0045, ADR 0046). What this file
-//! covers is the two things that comparison never could:
-//!
-//! * **`--pending`**, whose Python answer is a function of the MACHINE — the five probes the
-//!   corpus ships run `persona lint` and `frame-probe`, and whether those exit 0 depends on the
-//!   runner's tmux and on what lint makes of a fixture plane. A differential scenario would be
-//!   asserting something about the runner. Here the answer is fixed: this binary has neither
-//!   command, so every probe is unchecked and the report says so instead of ticking — and
-//!   WHICH of charter's three "no answer" sentences each one gets is pinned, because that is
-//!   the part a port can get subtly wrong without anything else noticing.
-//! * **`update`**, which in Python reaches PyPI and runs `uv tool install`. It cannot be run in
-//!   a test harness at all — charter's own suite stubs its installer — and the half of it that
-//!   IS ported is `charter news --since`, which the differential suite does cover.
+//! `charter news` prints the app's own CHANGELOG.md, compiled in (#352): every section newest
+//! first, or one with `--for`. The Python charter's news corpus, its range view and its
+//! `--pending` probes are gone, and each retired flag is refused by name. `update` installs
+//! nothing: it says so, names the channel, and points at `charter news`.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -58,127 +48,92 @@ fn err(o: &Output) -> String {
 }
 
 #[test]
-fn a_probe_this_charter_cannot_run_is_unchecked_and_never_ticked() {
-    // ADR 0013, in the one place it costs something to honour: the absence of information is
-    // not evidence of health. Every entry shipping a `check:` names a command this binary does
-    // not have, so nothing can be reported adopted — and the ✓ line, which claims every probe
-    // reported adopted, must not be printed under the warnings that contradict it.
+fn news_is_the_changelog_this_build_carries_newest_first() {
     let dir = plane();
-    let said = charter(dir.path(), &["news", "--pending"]);
+    let said = charter(dir.path(), &["news"]);
     assert!(said.status.success(), "{said:?}");
     assert_eq!(
-        out(&said),
+        err(&said),
         "",
-        "nothing can be pending when nothing was checked"
+        "the sections are stdout's and nothing else is said"
     );
-    assert!(
-        !err(&said).contains("nothing pending — every entry with a probe reports adopted"),
-        "the green tick was printed over unchecked probes:\n{}",
-        err(&said)
-    );
-    assert!(
-        err(&said).contains("could not be checked — which is not the same as nothing to adopt"),
-        "{}",
-        err(&said)
-    );
-    // And each one says which command it was, so the reader can see it is this CLI's gap.
-    //
-    // **The two sentences are different, and the difference is charter's own rule meeting a
-    // state charter's CLI never reaches.** `news::dispatch` tells apart a first token this
-    // charter does not register (`_NOT_RUN` — "did not run here", a fact about this machine)
-    // from a command path a `check:` may not name (`_UNLISTED` — a defect in the entry).
-    // `frame-probe` is the first kind. `persona lint` is neither, quite: this binary HAS
-    // `persona` and has no `lint` under it, so `command_path` stops at `("persona",)`, which is
-    // not on `PROBEABLE`, and the entry gets the sentence written for an entry that named
-    // something silly. Python's `_command_path` does exactly the same thing — it is only that
-    // charter's own CLI has `persona lint`, so it never lands there.
-    //
-    // Pinned as it is rather than given a fourth sentence of charter-app's own: a reason that
-    // exists in one charter and not the other is a fork, and the differential suite cannot see
-    // this path at all. Reported in the PR instead.
-    assert!(
-        err(&said).contains("`charter frame-probe` did not run here"),
-        "a first token this CLI does not register is news about this machine:\n{}",
-        err(&said)
-    );
-    assert!(
-        err(&said).contains("`charter persona lint` is not a command a `check:` may name"),
-        "a path this CLI does not register falls to the unlisted sentence:\n{}",
-        err(&said)
-    );
-    // Whichever sentence each one got, the slug names the entry the reader has to look at.
-    for slug in [
-        "delegate-when",
-        "lint-sees-project-skills",
-        "persona-bin",
-        "charter-runs-the-harness",
-        "the-charter-a-sub-agent-reads-cannot-drift-from-the-persona",
-    ] {
-        assert!(
-            err(&said).contains(&format!("! {slug}: ")),
-            "{slug} was not named:\n{}",
-            err(&said)
-        );
-    }
+    let text = out(&said);
+    let newest = text
+        .find("## [0.1.1] - 2026-09-24")
+        .expect("0.1.1 is there");
+    let oldest = text
+        .find("## [0.1.0] - 2026-09-23")
+        .expect("0.1.0 is there");
+    assert!(newest < oldest, "newest first:\n{text}");
 }
 
 #[test]
-fn outside_a_plane_the_probes_are_not_run_against_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let said = Command::new(env!("CARGO_BIN_EXE_charter"))
-        .args(["news", "--pending"])
-        .current_dir(dir.path())
-        .env_remove("CHARTER_ROOT")
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("the binary runs");
-    assert!(said.status.success());
-    assert!(
-        String::from_utf8_lossy(&said.stderr).contains("no control plane here"),
-        "{said:?}"
-    );
+fn news_does_not_need_an_update_baseline_and_never_asks_for_one() {
+    // #352: a plane with the Python charter's update baseline, and one without, get the same
+    // answer, and neither is told it has no history.
+    let bare = plane();
+    let stamped = plane();
+    let baseline = stamped.path().join(".charter/cache/update-baseline");
+    std::fs::create_dir_all(baseline.parent().unwrap()).unwrap();
+    std::fs::write(&baseline, "0.61.0\n").unwrap();
+
+    let a = charter(bare.path(), &["news"]);
+    let b = charter(stamped.path(), &["news"]);
+    assert_eq!(out(&a), out(&b));
+    assert!(!err(&a).contains("baseline"), "{}", err(&a));
+    assert!(!out(&a).is_empty());
 }
 
 #[test]
-fn the_release_gate_refuses_before_it_prints_and_prints_nothing_when_it_does() {
+fn news_for_a_version_is_its_release_notes_on_stdout() {
     let dir = plane();
-    // 0.56.0 quotes six headlines. The gate exists because that release published them.
-    let refused = charter(dir.path(), &["news", "--for", "0.56.0"]);
-    assert_eq!(refused.status.code(), Some(1));
-    assert_eq!(out(&refused), "", "a refused body must not also be printed");
-    assert!(err(&refused).contains("quotes a value charter does not unquote"));
-
-    let missing = charter(dir.path(), &["news", "--for", "9.9.9"]);
-    assert_eq!(missing.status.code(), Some(1));
-    assert_eq!(out(&missing), "");
-    assert!(err(&missing).contains("no news entry for 9.9.9."));
-}
-
-#[test]
-fn a_release_body_goes_to_stdout_so_a_workflow_can_redirect_it() {
-    let dir = plane();
-    let body = charter(dir.path(), &["news", "--for", "0.44.1"]);
+    let body = charter(dir.path(), &["news", "--for", "0.1.0"]);
     assert!(body.status.success(), "{body:?}");
     assert_eq!(
         err(&body),
         "",
         "the body is stdout's and nothing else is said"
     );
-    assert!(out(&body).starts_with("### "));
+    let section = charter_core::news::CHANGELOG;
+    let want = changelog::section(section, "0.1.0").unwrap().notes;
+    assert_eq!(out(&body), format!("{want}\n"));
+}
+
+#[test]
+fn news_for_a_version_the_changelog_does_not_have_exits_one_and_prints_nothing() {
+    let dir = plane();
+    let missing = charter(dir.path(), &["news", "--for", "9.9.9"]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert_eq!(out(&missing), "");
     assert!(
-        out(&body).ends_with('\n'),
-        "`print` ends the body with a newline"
+        err(&missing).contains("CHANGELOG.md has no section for 9.9.9."),
+        "{}",
+        err(&missing)
     );
 }
 
 #[test]
-fn the_range_defaults_to_the_newest_version_this_build_ships() {
+fn the_retired_flags_are_refused_by_name_rather_than_as_unknown() {
     let dir = plane();
-    // Not `--version`'s number: this binary carries the workspace's, which is below every entry
-    // in the corpus, and defaulting to it would answer "nothing new" forever.
-    let ranged = charter(dir.path(), &["news", "--since", "0.62.0"]);
-    assert!(ranged.status.success(), "{ranged:?}");
-    assert!(ranged.stdout.starts_with(b"0.62.1  "), "{}", out(&ranged));
+    for args in [
+        &["news", "--since", "0.60.0"][..],
+        &["news", "--until", "0.62.1"][..],
+        &["news", "--pending"][..],
+    ] {
+        let said = charter(dir.path(), args);
+        assert_eq!(said.status.code(), Some(1), "{args:?}: {said:?}");
+        assert_eq!(out(&said), "");
+        assert!(
+            err(&said).contains("is retired"),
+            "{args:?}: {}",
+            err(&said)
+        );
+        assert!(
+            err(&said).contains("charter news --for <version>"),
+            "{}",
+            err(&said)
+        );
+    }
 }
 
 #[test]
@@ -191,21 +146,11 @@ fn update_says_which_half_it_does_and_installs_nothing() {
         "{}",
         err(&said)
     );
-    assert!(
-        err(&said).contains("no update baseline recorded"),
-        "{}",
-        err(&said)
-    );
+    assert!(err(&said).contains("charter news"), "{}", err(&said));
+    assert!(!err(&said).contains("baseline"), "{}", err(&said));
+    assert_eq!(out(&said), "");
     // Nothing was created: this command reads.
     assert!(!dir.path().join(".charter").exists(), "update wrote state");
-
-    // And a baseline a real update left behind becomes the range.
-    let baseline = charter_core::adopt::baseline_file(dir.path());
-    std::fs::create_dir_all(baseline.parent().unwrap()).unwrap();
-    std::fs::write(&baseline, "0.62.0\n").unwrap();
-    let ranged = charter(dir.path(), &["update"]);
-    assert!(ranged.status.success(), "{ranged:?}");
-    assert!(out(&ranged).contains("0.62.1"), "{}", out(&ranged));
 }
 
 #[test]

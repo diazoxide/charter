@@ -1,40 +1,27 @@
-//! Compiles `news/` and `docs/` into the binary.
+//! Compiles `docs/` into the binary.
 //!
-//! A news entry travels with the code that implements it. In Python that is a wheel and a
-//! `force-include` of `docs/news` into `charter/_news`; here it is `include_str!`, and the
-//! property is the same one `charter/news.py` states: *a control plane has no reason to vendor
-//! a copy and every reason not to — a copy drifts from the binary, invisibly and in both
-//! directions.* An app installed from a signed bundle has no checkout to fall back to, so
-//! there is no second source to drift from in the first place.
+//! The documentation pages follow one rule: *the page a user reads should come from the same
+//! install as the behaviour, so `charter docs show secrets` cannot describe a vault the running
+//! CLI does not have.* An app installed from a signed bundle has no checkout to fall back to, so
+//! the pages are `include_str!`ed and there is no second source to drift from. They are this
+//! app's own, written here (M2.21, ADR 0044).
 //!
-//! The documentation pages follow the same rule: *the page a user reads should come from the
-//! same install as the behaviour, so `charter docs show secrets` cannot describe a vault the
-//! running CLI does not have.* This binary has one source and that is `docs/` beside this file
-//! (M2.21). The pages are this app's own, written here (ADR 0044); `news/` is the Python
-//! charter's frozen history (ADR 0045).
+//! **The file list is read from the directory rather than written down.** A checked-in list of
+//! `include_str!` lines would be a second statement of what is in `docs/`, free to disagree with
+//! the directory the day somebody adds a page.
 //!
-//! **The file list is read from the directory rather than written down.** A checked-in list
-//! of 338 `include_str!` lines would be a second statement of what is in `news/`, free to
-//! disagree with the directory the day somebody adds an entry — which is exactly the shape
-//! this whole module is about.
+//! The order is the topic's, sorted: `docsrc.topics()` is `sorted(...)` of the stems, and a stem
+//! differs from its filename only by a suffix every page shares.
 //!
-//! The order is the directory's, sorted, which is `sorted(d.glob("*.md"))` in Python: for one
-//! directory that is the filename's order, and `news::all` re-sorts by version on top of it,
-//! relying on a STABLE sort to leave equal-ranked entries where the filename put them. For
-//! `docs/` the filename order IS the answer, because `docsrc.topics()` is `sorted(...)` of the
-//! stems and a stem differs from its filename only by a suffix every entry shares.
+//! (`news/`, the Python charter's frozen news corpus, was compiled in here too until `charter
+//! news` became the app's own CHANGELOG.md, #352.)
 
 use std::fmt::Write as _;
 use std::path::Path;
 
 fn main() {
-    compile(
-        "news",
-        "news_entries.rs",
-        "FILES",
-        "Every news entry, as `(filename, text)`, in filename order.",
-        |name| name.to_string(),
-    );
+    // `charter news` compiles the repository's CHANGELOG.md in with `include_str!`, which
+    // cargo already tracks; nothing to generate for it.
     compile(
         "docs",
         "docs_pages.rs",
@@ -49,7 +36,7 @@ fn main() {
 
 /// Every `*.md` in `<crate>/<dir>` as a `&[(&str, &str)]` named `konst`, written to `OUT_DIR`.
 ///
-/// `key` is what each entry is looked up by — the filename for news, the topic for docs.
+/// `key` is what each entry is looked up by: the topic, for docs.
 fn compile(dir: &str, out: &str, konst: &str, doc: &str, key: impl Fn(&str) -> String) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
     println!("cargo:rerun-if-changed={}", dir.display());

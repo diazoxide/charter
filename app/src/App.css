@@ -2605,12 +2605,6 @@ h2.sidebar-title .node-icon {
   border-radius: 4px;
 }
 
-.pin-news {
-  margin: 0;
-  padding-left: 1rem;
-  font-size: 0.85rem;
-}
-
 .status-doctor.doctor-tone-fail {
   border-color: var(--state-failed);
 }

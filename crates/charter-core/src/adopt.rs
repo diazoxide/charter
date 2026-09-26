@@ -3,15 +3,12 @@
 //! `charter/commands_update.py` converges three things that all get called "updating charter",
 //! and they have three different blast radii: the **CLI**, one machine-global install shared by
 //! every plane on the machine; the **harness artifact**, per project; and the **pin** in
-//! `charter.toml`, shared with every teammate once it is pushed. After all three it runs one
-//! more phase, `_handoff`, which starts the newly installed binary and asks it `charter news
-//! --since <baseline>`.
-//!
-//! **Only that last phase is ported here, and the reason is not scope.** Every one of the other
-//! three moves a *Python package*: `uv tool install charter-cp==X`, a version PyPI publishes, a
-//! pin naming that version. None of them describes a Rust binary shipped inside a signed app,
-//! which moves as the app moves — through Tauri's updater, in M4 — and cannot be moved by this
-//! command at all. So this command does the half it can do and says plainly which half that is.
+//! `charter.toml`, shared with every teammate once it is pushed. Every one of them moves a
+//! *Python package*: `uv tool install charter-cp==X`, a version PyPI publishes, a pin naming
+//! that version. None of them describes a Rust binary shipped inside a signed app, which moves
+//! as the app moves — through Tauri's updater (ADR 0042) — and cannot be moved by this command
+//! at all. So `update` says which half it cannot do, which channel the app updates from, and
+//! where to read what a version brought: `charter news`, the app's own CHANGELOG.md (#352).
 //!
 //! **That question — what a version means for a binary that is not a Python package — is
 //! answered here too, and it is why `charter version` shares this file.** ADR 0045 settles it,
@@ -21,50 +18,16 @@
 //! fact stated twice is a fact that drifts.
 //!
 //! **A charter that tells an operator to adopt something it cannot install is worse than one
-//! that says which half it does.** So the refusal is the first line of the output, before the
-//! news, rather than a footnote under it.
+//! that says which half it does.** So the refusal is the first line of the output.
 //!
-//! **It reads the baseline and never writes one.** `_stamp_baseline` records the version a
-//! plane updated FROM, before anything moves, so an interrupted update still knows where it
-//! started. Nothing moves here, so there is nothing to stamp — and stamping anyway would
-//! overwrite the mark a real update left and shorten the range the NEXT one reports.
+//! **No update baseline.** The Python charter stamped the version a plane updated FROM and
+//! reported the news range from it. Nothing in this app writes one, and `charter news` no
+//! longer reports a range, so nothing here reads one either (#352).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::news::{self, Dispatch, Report};
+use crate::news::Report;
 use crate::scaffold::Say;
-
-/// Where the version a plane last updated FROM is recorded.
-///
-/// Per developer and gitignored — which version this laptop came from is not a fact about the
-/// plane, and ADR 0011 keeps the committed record to what git cannot know.
-///
-/// **`<root>/.charter`, and charter also honours `$CHARTER_HOME`.** Every reader of the state
-/// directory in this crate hard-codes `.charter` (`profiletrust`, `wiring`, `hookwire`), so
-/// this one does too rather than becoming the single place in charter-app that reads a
-/// different directory from its neighbours. On a plane whose operator has moved their state
-/// home, charter writes the baseline somewhere this does not look and the range comes back
-/// empty — reported in the PR as a plane-wide question rather than answered differently here.
-pub fn baseline_file(root: &Path) -> PathBuf {
-    root.join(".charter").join("cache").join("update-baseline")
-}
-
-/// The version this plane last updated FROM, or `None`.
-///
-/// Gated on the FILE, not on the directory above it: a link at `cache/update-baseline` pointing
-/// out of the plane makes charter read somebody else's file and report a range from it, and a
-/// gate on `.charter` would not see that. (`contain::readable`'s data roots do not cover
-/// `.charter` at all — see `profiletrust::record_launched`, which spells the same rule out for
-/// the same directory.)
-pub fn read_baseline(root: &Path) -> Option<String> {
-    let path = baseline_file(root);
-    if !crate::contain::within_plane(root, &path) {
-        return None;
-    }
-    let text = std::fs::read_to_string(&path).ok()?;
-    let trimmed = crate::memstore::py_strip(&text);
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
-}
 
 /// The fact `charter update` and `charter version` both turn on, written once.
 ///
@@ -82,9 +45,9 @@ fn not_the_installer() -> String {
     format!("charter update does not install anything here. {THE_APP_MOVES_IT}")
 }
 
-/// And what it DOES do, said in the same breath, so the refusal is not the whole message.
-const THE_HALF_IT_DOES: &str = "  the other half is this command's: what the versions this plane skipped brought, and \
-     what it has not taken up.";
+/// Where to read what a version brought, said in the same breath, so the refusal is not the
+/// whole message.
+const WHAT_IT_BROUGHT: &str = "  what each version of the app brought:  charter news";
 
 /// `--to <version>`: a version to install, which is the one thing this command cannot do.
 const NO_TARGET: &str = "--to names a published version to install, and this command installs nothing — the \
@@ -105,41 +68,16 @@ pub struct UpdateArgs {
     pub bump: bool,
 }
 
-/// `charter update`: say what this command cannot do, then do the adoption half.
-///
-/// `root` is the plane, or `None` outside one — the same distinction `news` draws, and for the
-/// same reason: "has this plane adopted it?" has no subject outside a control plane.
-pub fn update_report(root: Option<&Path>, args: &UpdateArgs, d: &dyn Dispatch) -> Report {
+/// `charter update`: say what this command cannot do, and where to read what a version brought.
+pub fn update_report(args: &UpdateArgs) -> Report {
     let mut report = Report::new_public();
     report.said.push(Say::Warn(not_the_installer()));
-    report.said.push(Say::Info(THE_HALF_IT_DOES.to_owned()));
+    report.said.push(Say::Info(WHAT_IT_BROUGHT.to_owned()));
     if !args.to.is_empty() {
         report.said.push(Say::Warn(NO_TARGET.to_owned()));
     }
     if args.bump {
         report.said.push(Say::Warn(NO_BUMP.to_owned()));
-    }
-
-    let baseline = root.and_then(read_baseline);
-    let has_plane = root.is_some();
-    match baseline {
-        // `_handoff`'s news phase, exactly: the range from where this plane last was, up to
-        // what this build ships.
-        Some(since) => {
-            let news = news::range_report(&since, "", d, has_plane);
-            report.absorb(news);
-        }
-        None => {
-            report.said.push(Say::Info(format!(
-                "no update baseline recorded on this plane, so there is no range to report — \
-                 charter stamps one when it moves a plane, and nothing has moved this one \
-                 through {}.",
-                baseline_file(root.unwrap_or(Path::new("."))).display()
-            )));
-            report.said.push(Say::Info(
-                "  what this plane has not adopted:  charter news --pending".to_owned(),
-            ));
-        }
     }
     report
 }
@@ -171,14 +109,11 @@ pub fn locked_version(root: &Path) -> Option<String> {
     (!pinned.is_empty()).then(|| pinned.to_owned())
 }
 
-/// The last release of the Python charter — `charter-cp` on PyPI — and the newest version the
-/// frozen news corpus names (ADR 0045).
+/// The last release of the Python charter — `charter-cp` on PyPI (ADR 0045).
 ///
-/// **A constant, not [`news::history_ends`], though the two are the same string.** The corpus
-/// is history and nothing is added to it, so today they cannot part; but this number is the
-/// boundary a pin is read against, and a boundary that moved whenever somebody added a file to
-/// `news/` would change what every plane's pin means without anybody deciding it. A test holds
-/// the two equal, so the day they part is a red test and a decision rather than a quiet shift.
+/// The boundary a pin is read against: a pin at or below it names the Python line, not this
+/// app. A constant, because a boundary that moved without anybody deciding it would change what
+/// every plane's pin means.
 pub const PYTHON_LINE_LAST: &str = "0.62.1";
 
 /// This charter's version: the app's, which every crate in the workspace shares (ADR 0045).
@@ -244,8 +179,7 @@ pub fn pin_verdict(pinned: Option<&str>) -> PinVerdict {
 /// **ADR 0045, amending ADR 0030.** This charter's version is the app's — [`app_version`] — and
 /// a plane's `[charter] version` means a version of the app. ADR 0030 printed the newest release
 /// the Python news corpus names as "the charter this brought", with the app's own number second
-/// as the build; that corpus is now frozen history, and a number taken from it is not this
-/// charter's.
+/// as the build; that corpus was never this app's, and has since been removed (#352).
 ///
 /// * `charter` — [`app_version`].
 /// * `pinned` — `[charter] version`, verbatim.
@@ -355,27 +289,22 @@ fn channel_line(channel: crate::updates::Channel) -> String {
 ///
 /// `config_root` is `None` on a machine with no config home, which reads as the default — the
 /// same answer the app gives, from the same store.
-pub fn update_report_with_channel(
-    root: Option<&Path>,
-    config_root: Option<&Path>,
-    args: &UpdateArgs,
-    d: &dyn Dispatch,
-) -> Report {
-    let mut report = update_report(root, args, d);
+pub fn update_report_with_channel(config_root: Option<&Path>, args: &UpdateArgs) -> Report {
+    let mut report = update_report(args);
     let channel = config_root
         .map(|at| crate::machine::read(at).store.channel)
         .unwrap_or_default();
     // Second, right under the refusal that names the app as the mover — not at the bottom,
-    // after the news, where it would read as a footnote to a different subject.
+    // where it would read as a footnote to a different subject.
     report.said.insert(1, Say::Info(channel_line(channel)));
     report
 }
 
 /// `charter update --channel <word>`: put this machine on a channel, or refuse the word.
 ///
-/// Only the channel moves. The news half is not run, because an operator switching streams is
-/// not asking what this plane skipped, and a command that did two things at once would bury
-/// the one sentence they typed it for.
+/// Only the channel moves. The pointer to `charter news` is not said, because an operator
+/// switching streams is not asking what a version brought, and a command that said two things
+/// at once would bury the one sentence they typed it for.
 ///
 /// **A word charter does not know exits 1 and changes nothing.** The exact reader
 /// ([`crate::updates::Channel::named`]) is the rule; `Dev` or `nightly` is a typo, and guessing
@@ -422,18 +351,6 @@ pub fn set_channel_report(config_root: Option<&Path>, word: &str) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::news::CommandTree;
-
-    struct NoCommands;
-    impl Dispatch for NoCommands {
-        fn tree(&self) -> &CommandTree {
-            static TREE: std::sync::OnceLock<CommandTree> = std::sync::OnceLock::new();
-            TREE.get_or_init(|| CommandTree::with("charter", vec![]))
-        }
-        fn run(&self, _tokens: &[String]) -> Option<i32> {
-            unreachable!("nothing is probeable against an empty tree")
-        }
-    }
 
     #[test]
     fn this_charters_version_is_the_workspaces_one_as_numbers() {
@@ -463,66 +380,31 @@ mod tests {
     }
 
     #[test]
-    fn it_says_which_half_it_does_before_it_does_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let report = update_report(Some(dir.path()), &UpdateArgs::default(), &NoCommands);
+    fn it_says_which_half_it_does_and_where_to_read_what_a_version_brought() {
+        let report = update_report(&UpdateArgs::default());
         assert!(matches!(report.said.first(), Some(Say::Warn(_))));
         assert!(said(&report).contains("does not install anything here"));
+        assert!(said(&report).contains("charter news"), "{}", said(&report));
+        assert!(report.out.is_empty(), "{}", report.out);
         assert_eq!(report.code, 0);
     }
 
     #[test]
-    fn a_baseline_becomes_the_range_and_its_absence_is_said() {
-        let dir = tempfile::tempdir().unwrap();
-        let bare = update_report(Some(dir.path()), &UpdateArgs::default(), &NoCommands);
-        assert!(said(&bare).contains("no update baseline recorded"));
-        assert!(bare.out.is_empty());
-
-        let file = baseline_file(dir.path());
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, "0.62.0\n").unwrap();
-        let ranged = update_report(Some(dir.path()), &UpdateArgs::default(), &NoCommands);
-        assert_eq!(read_baseline(dir.path()).as_deref(), Some("0.62.0"));
-        // 0.62.1 is the newest entry the corpus ships, so the range is not empty.
-        assert!(ranged.out.contains("0.62.1"), "{}", ranged.out);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_baseline_linked_out_of_the_plane_is_not_read() {
-        // The gate is on the FILE. A link at the exact path charter opens redirects the read,
-        // and a gate one level up — on `.charter`, or on `cache/` — sees a directory that is
-        // exactly where it should be. Six review rounds in this repository were about that one
-        // level.
-        let dir = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let theirs = outside.path().join("someone-elses-baseline");
-        std::fs::write(&theirs, "0.44.0\n").unwrap();
-        let file = baseline_file(dir.path());
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&theirs, &file).unwrap();
-        assert_eq!(
-            read_baseline(dir.path()),
-            None,
-            "a link out of the plane was read"
-        );
-        // And the report does not quietly report a range from it either.
-        let said = said(&update_report(
-            Some(dir.path()),
-            &UpdateArgs::default(),
-            &NoCommands,
-        ));
-        assert!(said.contains("no update baseline recorded"), "{said}");
+    fn a_python_update_baseline_is_not_read_and_not_mentioned() {
+        // #352: the range view is retired, so an update baseline the Python charter left on a
+        // plane is history like its corpus, and no sentence here names one.
+        let report = update_report(&UpdateArgs::default());
+        assert!(!said(&report).contains("baseline"), "{}", said(&report));
+        assert!(!said(&report).contains("--pending"), "{}", said(&report));
     }
 
     #[test]
     fn the_two_flags_that_install_a_charter_are_refused_by_name() {
-        let dir = tempfile::tempdir().unwrap();
         let args = UpdateArgs {
             to: "0.63.0".to_owned(),
             bump: true,
         };
-        let text = said(&update_report(Some(dir.path()), &args, &NoCommands));
+        let text = said(&update_report(&args));
         assert!(text.contains("--to names a published version"));
         assert!(text.contains("--bump moves this plane's `[charter] version` pin"));
     }
@@ -555,11 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn the_python_lines_last_release_is_where_the_frozen_corpus_ends() {
-        // The boundary a pin is read against is a constant, and this holds it to the corpus it
-        // describes. They part only if somebody adds a released entry to the corpus, which is
-        // then a decision about what every plane's pin means — so it has to be a red test.
-        assert_eq!(crate::news::history_ends(), PYTHON_LINE_LAST);
+    fn the_python_lines_last_release_is_not_the_apps_version() {
         assert!(
             crate::version::version_key(app_version())
                 != crate::version::version_key(PYTHON_LINE_LAST),
@@ -713,11 +591,7 @@ mod tests {
         // The constant exists so `update` and `version` cannot drift into two accounts of one
         // artifact. This is what holds that: both outputs carry the same bytes.
         let dir = tempfile::tempdir().unwrap();
-        let update = said(&update_report(
-            Some(dir.path()),
-            &UpdateArgs::default(),
-            &NoCommands,
-        ));
+        let update = said(&update_report(&UpdateArgs::default()));
         let version = said(&version_report(Some(dir.path())));
         assert!(update.contains(THE_APP_MOVES_IT), "{update}");
         assert!(version.contains(THE_APP_MOVES_IT), "{version}");
@@ -727,14 +601,8 @@ mod tests {
 
     #[test]
     fn update_says_which_channel_the_app_takes_charter_from_right_under_the_refusal() {
-        let plane = tempfile::tempdir().unwrap();
         let machine = tempfile::tempdir().unwrap();
-        let report = update_report_with_channel(
-            Some(plane.path()),
-            Some(machine.path()),
-            &UpdateArgs::default(),
-            &NoCommands,
-        );
+        let report = update_report_with_channel(Some(machine.path()), &UpdateArgs::default());
         let Some(Say::Info(line)) = report.said.get(1) else {
             panic!("{:?}", report.said);
         };
@@ -751,12 +619,7 @@ mod tests {
             crate::machine::read(machine.path()).store.channel,
             crate::updates::Channel::Dev
         );
-        let back = update_report_with_channel(
-            None,
-            Some(machine.path()),
-            &UpdateArgs::default(),
-            &NoCommands,
-        );
+        let back = update_report_with_channel(Some(machine.path()), &UpdateArgs::default());
         assert!(
             said(&back).contains("from the dev channel"),
             "{}",

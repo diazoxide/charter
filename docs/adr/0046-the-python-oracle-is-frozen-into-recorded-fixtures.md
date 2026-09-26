@@ -76,7 +76,9 @@ The whole set runs in about ten seconds, so it is not sharded.
 - **The news corpus comparison is gone.** That comparison was the per-version
   `news-for-*-renders-the-same-notes` scenarios and the digest check, and `news/SOURCE` pinned
   the corpus to the oracle only for it. The corpus is frozen history (ADR 0045). The `news`
-  command's own behaviour is still recorded: a refusal, a range, and a plane with no baseline.
+  command's own behaviour was still recorded then: a refusal, a range, and a plane with no
+  baseline. Since #352 the corpus is gone and `news` prints the app's CHANGELOG.md, and its rows
+  record that instead; ADR 0045's amendment of 2026-09-26 lists the rows that moved.
 - **Checks that only ever read the Python side are gone with it.** These were a `Divergence`'s
   `python_stderr_has`, a note that Python "no longer" prints something, and the forge trap. The
   forge trap checked a setup's `origin` before the command, and that setup is now a recorded
