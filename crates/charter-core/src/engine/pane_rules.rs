@@ -16,18 +16,78 @@
 //! **A pending wrap.** After the last column is written, the next character wraps. Deleting,
 //! inserting or erasing characters, and moving down or up a row (`LF`, `IND`, `RI`), end that
 //! in xterm, VTE and xterm.js, and the next character lands in the last column;
-//! `alacritty_terminal` keeps it. Erasing below (`ED 0`) while a wrap is pending erases
-//! nothing of the cursor's row in xterm.js, which has the cursor past the row, where xterm and
-//! VTE step back onto the last column and erase it. This engine follows xterm.js there,
-//! because that is what the pane shows.
+//! `alacritty_terminal` keeps it. A tab (`HT`) leaves the cursor where it is with the wrap
+//! still pending in all three (xterm's `TabToNextStop` in `tabs.c` stops at the last column;
+//! VTE's `move_cursor_tab_forward` returns early), where `alacritty_terminal` wraps.
+//!
+//! **Where xterm.js stands alone.** This engine follows it there, because that is what the
+//! pane shows:
+//!
+//! - Erasing below (`ED 0`) erases nothing of the cursor's row in xterm.js, which has the
+//!   cursor past the row, where xterm and VTE step back onto the last column and erase it.
+//! - Restoring the cursor (`DECRC`, `SCORC`, and leaving the alternate screen) puts it back on
+//!   the last column with no wrap pending; xterm and VTE restore the wrap. xterm.js also saves
+//!   the cursor opening the alternate screen when it is open already, and restores it closing
+//!   the alternate screen when it is not open; `alacritty_terminal` does neither.
+//! - Inserting or deleting lines (`IL`, `DL`) with the cursor outside the scroll region does
+//!   nothing in xterm and VTE, which leave the wrap pending; xterm.js ends it.
+//! - In origin mode, xterm.js places the cursor from the top of the scroll region again after
+//!   every relative move, so moving it by any amount moves it down by as many rows as the
+//!   region starts below the top of the screen. That is a defect in xterm.js, copied here
+//!   because it moves where the next character lands. `alacritty_terminal` has the same
+//!   defect moving up or down; this engine adds it moving left or right.
+//!
+//! A backward tab (`CBT`) while a wrap is pending does nothing in xterm.js;
+//! `alacritty_terminal` moved the cursor back and still wrapped the next character.
+//!
+//! **Lines and the scroll region.** Inserting or deleting lines moves the cursor to the first
+//! column when it is inside the scroll region (xterm's `InsertLine` in `util.c`, VTE, and
+//! xterm.js). Moving the cursor up or down (`CUU`, `CUD`, `CNL`, `CPL`) stops at the top of
+//! the region when it starts at or below the top, and at the bottom when it starts at or above
+//! the bottom (xterm's `CursorUp` and `CursorDown` in `cursor.c`, VTE's `move_cursor_up` and
+//! `move_cursor_down`, and xterm.js). `alacritty_terminal` does neither. All three home the
+//! cursor turning origin mode off as well as on (xterm's `srm_DECOM`, VTE's `eDEC_ORIGIN`);
+//! `alacritty_terminal` homes it only turning it on. Restoring the cursor in origin mode keeps
+//! it inside the region in xterm.js.
+//!
+//! `alacritty_terminal` keeps its scroll region private, so the engine keeps a copy in
+//! [`Beside`], which a snapshot carries. xterm.js keeps a region for each screen and opens the
+//! alternate screen with the whole screen, where `alacritty_terminal` keeps one for both. A
+//! region whose bottom is past the screen ends at the bottom of the screen in xterm.js, which
+//! ignores it when that leaves no rows; `alacritty_terminal` would keep a region with none.
+//!
+//! **Restoring the cursor after the screen scrolled.** xterm.js saves the cursor's row in its
+//! scrollback, not on the screen, so it comes back to a row that has moved up with every line
+//! scrolled into the scrollback since, until the scrollback is full. xterm and VTE save the row
+//! on the screen, and so does `alacritty_terminal`, which also moves the lines that deleting
+//! lines or scrolling up (`SU`) take off the top of the screen, and those erasing the screen
+//! (`ED 2`) erases, into its history, where xterm.js drops them. The engine counts the lines
+//! scrolled into history since the cursor was saved, leaving those out, and moves the cursor
+//! up by as many as it restores it. Once the scrollback is full, the count can be off by as
+//! many lines as were left out. The lines themselves stay in the engine's history (#452).
+//!
+//! **A combining mark with nothing before it.** At the start of a row, xterm.js gives a
+//! zero-width character, such as a combining mark, a cell of its own that it draws nothing in,
+//! and moves the cursor past it; `alacritty_terminal` puts it on the cell under the cursor.
+//! The engine writes a blank.
 //!
 //! **Two plain cases.** `alacritty_terminal` gets two edits wrong that every terminal above
 //! gets right: deleting more characters than the row has left of the cursor also blanks what
 //! is before it, and erasing above the cursor from the second row leaves the first.
 //!
-//! **Not covered.** With wrapping off (`?7l`), xterm.js writes a character over the second
-//! half of a wide character in the last column and leaves the character standing, a state an
-//! `alacritty_terminal` grid cannot hold.
+//! **Not covered.**
+//!
+//! - With wrapping off (`?7l`), xterm.js writes a character over the second half of a wide
+//!   character in the last column and leaves the character standing, a state an
+//!   `alacritty_terminal` grid cannot hold.
+//! - xterm.js joins a zero-width character to the character before it only when nothing but
+//!   printing came between them: after any control or escape sequence, it too takes a cell of
+//!   its own. This engine joins it to the cell before the cursor wherever that is not the start
+//!   of a row, as `alacritty_terminal` does.
+//! - A resize moves the row xterm.js restores the cursor to in ways this engine does not
+//!   follow.
+//! - An escape sequence broken off by a character that is not ASCII is parsed differently by
+//!   vte, below these rules, and by xterm.js.
 //!
 //! [`PaneRules`] sits between the parser and the terminal: it hands every call through, and
 //! repairs the cells around those.
@@ -40,16 +100,152 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::cursor_icon::CursorIcon;
 use alacritty_terminal::vte::ansi::{
     Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
-    KeyboardModesApplyBehavior, LineClearMode, Mode, ModifyOtherKeys, PrivateMode, Rgb,
-    ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode,
+    KeyboardModesApplyBehavior, LineClearMode, Mode, ModifyOtherKeys, NamedPrivateMode,
+    PrivateMode, Rgb, ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode,
 };
 use unicode_width::UnicodeWidthChar;
 
+use std::ops::Range;
+
 /// A terminal that edits as the pane does. Output is parsed into this, never into the
-/// [`Term`] itself.
-pub(super) struct PaneRules<'a, T>(pub(super) &'a mut Term<T>);
+/// [`Term`] itself, along with what the engine keeps beside the terminal.
+pub(super) struct PaneRules<'a, T>(pub(super) &'a mut Term<T>, pub(super) &'a mut Beside);
+
+/// What these rules need to know that `alacritty_terminal` keeps private, or does not keep.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Beside {
+    /// The scroll region of the main screen and of the alternate screen. xterm.js keeps one
+    /// for each, and the alternate screen opens with the whole screen; `alacritty_terminal`
+    /// keeps one for both, and is given the other one whenever the screens change.
+    scroll_regions: [ScrollRegion; 2],
+    /// How many lines of `alacritty_terminal`'s history the pane does not have in its
+    /// scrollback: ones it moved there that xterm.js drops.
+    not_in_pane: usize,
+    /// How many lines the pane had in its scrollback when the cursor was saved, on the main
+    /// screen and on the alternate screen.
+    saved_at: [usize; 2],
+}
+
+impl Beside {
+    /// What a terminal of `rows` rows starts with.
+    pub(super) fn new(rows: usize) -> Self {
+        Self {
+            scroll_regions: [ScrollRegion::whole(rows), ScrollRegion::whole(rows)],
+            not_in_pane: 0,
+            saved_at: [0; 2],
+        }
+    }
+
+    /// The terminal was resized to `rows` rows. `alacritty_terminal` resets its scroll region
+    /// then, as long as the size changed.
+    pub(super) fn resized(&mut self, rows: usize) {
+        self.scroll_regions = [ScrollRegion::whole(rows), ScrollRegion::whole(rows)];
+    }
+
+    /// The scroll regions of the main screen and of the alternate screen, as the rows `DECSTBM`
+    /// takes, counted from 1, or `None` where the region is the whole screen of `term`.
+    pub(super) fn scroll_regions<T>(&self, term: &Term<T>) -> [Option<(i32, i32)>; 2] {
+        let whole = ScrollRegion::whole(term.screen_lines());
+        self.scroll_regions.clone().map(|region| {
+            let Range { start, end } = region.0;
+            (region != whole).then_some((start + 1, end))
+        })
+    }
+
+    /// The row restoring the cursor puts it on in `term`.
+    ///
+    /// xterm.js saves the row in its scrollback, so the row the cursor comes back to has moved
+    /// up with every line scrolled into it since, until the scrollback is full. xterm and VTE
+    /// save the row on the screen.
+    pub(super) fn saved_line<T>(&self, term: &Term<T>) -> Line {
+        let screen = screen(term);
+        let scrolled = self.pane_history(term) as i64 - self.saved_at[screen] as i64;
+        let last = term.screen_lines() as i64 - 1;
+        let saved = i64::from(term.grid().saved_cursor.point.line.0);
+        Line((saved - scrolled).clamp(0, last) as i32)
+    }
+
+    /// How many lines the pane has in its scrollback, as far as the engine can tell: once the
+    /// scrollback is full, lines the pane dropped have made room for others in `term`.
+    fn pane_history<T>(&self, term: &Term<T>) -> usize {
+        term.history_size().saturating_sub(self.not_in_pane)
+    }
+}
+
+/// The rows of a scroll region, from its top row up to, not including, the row below its
+/// bottom, counted from 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScrollRegion(Range<i32>);
+
+impl ScrollRegion {
+    /// A screen of `rows` rows scrolled whole, as a terminal starts, and as it is after a reset
+    /// or a change of size.
+    fn whole(rows: usize) -> Self {
+        Self(0..rows as i32)
+    }
+
+    /// Rows `top` to `bottom`, counted from 1, with `bottom` already on the screen of `rows`
+    /// rows and below `top`.
+    fn set(&mut self, top: usize, bottom: usize) {
+        self.0 = top as i32 - 1..bottom as i32;
+    }
+
+    fn contains(&self, line: Line) -> bool {
+        self.0.contains(&line.0)
+    }
+
+    /// `line`, moved onto the nearest row of the region.
+    fn clamp(&self, line: i32) -> Line {
+        Line(line.clamp(self.0.start, self.0.end - 1))
+    }
+
+    /// How many of `rows` rows up the cursor on `line` moves: it stops at the top of the
+    /// region when it starts at or below it.
+    fn rows_up(&self, line: Line, rows: usize) -> usize {
+        match usize::try_from(line.0 - self.0.start) {
+            Ok(room) => rows.min(room),
+            Err(_) => rows,
+        }
+    }
+
+    /// How many of `rows` rows down the cursor on `line` moves: it stops at the bottom of the
+    /// region when it starts at or above it.
+    fn rows_down(&self, line: Line, rows: usize) -> usize {
+        match usize::try_from(self.0.end - 1 - line.0) {
+            Ok(room) => rows.min(room),
+            Err(_) => rows,
+        }
+    }
+}
+
+/// The main screen and the alternate screen, as indices into what is kept per screen.
+const MAIN: usize = 0;
+const ALTERNATE: usize = 1;
+
+/// Which screen `term` is showing: [`MAIN`] or [`ALTERNATE`].
+fn screen<T>(term: &Term<T>) -> usize {
+    if term.mode().contains(TermMode::ALT_SCREEN) {
+        ALTERNATE
+    } else {
+        MAIN
+    }
+}
+
+/// The mode that opens the alternate screen, saving the cursor, and closes it, restoring it.
+const ALTERNATE_SCREEN: PrivateMode =
+    PrivateMode::Named(NamedPrivateMode::SwapScreenAndSetRestoreCursor);
 
 impl<T> PaneRules<'_, T> {
+    /// Which screen is showing: [`MAIN`] or [`ALTERNATE`].
+    fn screen(&self) -> usize {
+        screen(self.0)
+    }
+
+    /// The scroll region of the screen showing.
+    fn region(&self) -> &ScrollRegion {
+        &self.1.scroll_regions[self.screen()]
+    }
+
     fn cursor(&self) -> (Line, usize) {
         let point = self.0.grid().cursor.point;
         (point.line, point.column.0)
@@ -72,6 +268,28 @@ impl<T> PaneRules<'_, T> {
             .flags
             .contains(Flags::WIDE_CHAR_SPACER)
             && !self.is_second_half(line, column)
+    }
+
+    /// After the cursor moved left or right: in origin mode, xterm.js places the cursor from
+    /// the top of the scroll region again after every relative move, which moves it down by as
+    /// many rows as the region starts below the top of the screen. `alacritty_terminal` does
+    /// the same moving up or down, and not moving left or right.
+    fn moved_across(&mut self) {
+        if self.0.mode().contains(TermMode::ORIGIN) {
+            let region = self.region();
+            let line = region.clamp(self.cursor().0.0 + region.0.start);
+            self.0.grid_mut().cursor.point.line = line;
+        }
+    }
+
+    /// Runs `apply`, an edit that xterm.js makes without touching its scrollback: deleting lines
+    /// or scrolling up from the top of the screen, or erasing the screen. `alacritty_terminal`
+    /// moves the lines it takes off the screen into its history, and this counts them as lines
+    /// the pane does not have.
+    fn dropping_from_history(&mut self, apply: impl FnOnce(&mut Term<T>)) {
+        let before = self.0.history_size();
+        apply(self.0);
+        self.1.not_in_pane += self.0.history_size().saturating_sub(before);
     }
 
     /// Leaves the cursor on the last column with no wrap pending, as xterm, VTE and xterm.js
@@ -113,6 +331,25 @@ impl<T> PaneRules<'_, T> {
 }
 
 impl<T: EventListener> PaneRules<'_, T> {
+    /// Gives `alacritty_terminal` the scroll region of the screen now showing, leaving the
+    /// cursor where it is.
+    fn use_region(&mut self) {
+        let cursor = self.0.grid().cursor.clone();
+        let Range { start, end } = self.region().0.clone();
+        self.0
+            .set_scrolling_region(start as usize + 1, Some(end as usize));
+        self.0.grid_mut().cursor = cursor;
+    }
+
+    /// Leaves the cursor in the first column after lines were inserted or deleted, as xterm,
+    /// VTE and xterm.js do when the cursor is inside the scroll region; outside it, the lines
+    /// are left alone and so is the cursor.
+    fn after_lines_moved(&mut self) {
+        if self.region().contains(self.cursor().0) {
+            self.0.carriage_return();
+        }
+    }
+
     /// Writes one character as xterm.js does. `alacritty_terminal` gets four things about a
     /// wide character wrong here:
     ///
@@ -133,6 +370,9 @@ impl<T: EventListener> PaneRules<'_, T> {
         let Some(width) = c.width() else {
             return self.0.input(c);
         };
+        if width == 0 && self.cursor().1 == 0 && !self.0.grid().cursor.input_needs_wrap {
+            return self.write_alone();
+        }
         let insert = self.0.mode().contains(TermMode::INSERT);
         if width > 0 {
             self.wrap_before(width);
@@ -172,6 +412,21 @@ impl<T: EventListener> PaneRules<'_, T> {
         if insert && self.is_wide(line, columns - 1) {
             self.blank_in_pen(line, columns - 1);
         }
+    }
+
+    /// Writes a zero-width character, such as a combining mark, that has no character before
+    /// it on the row. xterm.js gives it a cell of its own, even in insert mode, and moves the
+    /// cursor past it; `alacritty_terminal` puts it on the cell under the cursor and stays.
+    /// That cell has no width, and xterm.js's DOM renderer skips such a cell, colours and all,
+    /// so what shows is a blank in the default colours.
+    fn write_alone(&mut self) {
+        let (line, column) = self.cursor();
+        let cut = self.is_wide(line, column);
+        self.0.grid_mut()[line][Column(column)] = Cell::default();
+        if cut {
+            self.blank_in_pen(line, column + 1);
+        }
+        self.0.grid_mut().cursor.point.column = Column(column + 1);
     }
 
     /// Moves to the next row before a character `width` cells wide is written, when it
@@ -290,7 +545,13 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
                     self.0.grid_mut().reset_region(..line);
                 }
             }
-            ClearMode::All | ClearMode::Saved => self.0.clear_screen(mode),
+            ClearMode::All => self.dropping_from_history(|term| term.clear_screen(mode)),
+            ClearMode::Saved => {
+                self.0.clear_screen(mode);
+                if self.screen() == MAIN {
+                    self.1.not_in_pane = 0;
+                }
+            }
         }
     }
 
@@ -322,11 +583,16 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
         self.0.goto_col(column)
     }
 
+    // Moving up or down a number of rows stops at the edge of the scroll region in xterm,
+    // VTE and xterm.js; `alacritty_terminal` goes on to the edge of the screen.
+
     fn move_up(&mut self, rows: usize) {
+        let rows = self.region().rows_up(self.cursor().0, rows);
         self.0.move_up(rows)
     }
 
     fn move_down(&mut self, rows: usize) {
+        let rows = self.region().rows_down(self.cursor().0, rows);
         self.0.move_down(rows)
     }
 
@@ -339,22 +605,31 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
     }
 
     fn move_forward(&mut self, columns: usize) {
-        self.0.move_forward(columns)
+        self.0.move_forward(columns);
+        self.moved_across();
     }
 
     fn move_backward(&mut self, columns: usize) {
-        self.0.move_backward(columns)
+        self.0.move_backward(columns);
+        self.moved_across();
     }
 
     fn move_down_and_cr(&mut self, rows: usize) {
+        let rows = self.region().rows_down(self.cursor().0, rows);
         self.0.move_down_and_cr(rows)
     }
 
     fn move_up_and_cr(&mut self, rows: usize) {
+        let rows = self.region().rows_up(self.cursor().0, rows);
         self.0.move_up_and_cr(rows)
     }
 
     fn put_tab(&mut self, count: u16) {
+        // xterm, VTE and xterm.js leave the cursor where it is, with the wrap still pending;
+        // `alacritty_terminal` wraps.
+        if self.0.grid().cursor.input_needs_wrap {
+            return;
+        }
         self.0.put_tab(count)
     }
 
@@ -388,7 +663,7 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
     }
 
     fn scroll_up(&mut self, rows: usize) {
-        self.0.scroll_up(rows)
+        self.dropping_from_history(|term| term.scroll_up(rows))
     }
 
     fn scroll_down(&mut self, rows: usize) {
@@ -396,14 +671,23 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
     }
 
     fn insert_blank_lines(&mut self, rows: usize) {
-        self.0.insert_blank_lines(rows)
+        self.end_pending_wrap();
+        self.0.insert_blank_lines(rows);
+        self.after_lines_moved();
     }
 
     fn delete_lines(&mut self, rows: usize) {
-        self.0.delete_lines(rows)
+        self.end_pending_wrap();
+        self.dropping_from_history(|term| term.delete_lines(rows));
+        self.after_lines_moved();
     }
 
     fn move_backward_tabs(&mut self, count: u16) {
+        // xterm.js leaves the cursor where it is, with the wrap still pending;
+        // `alacritty_terminal` moved it back and kept the wrap pending from the new column.
+        if self.0.grid().cursor.input_needs_wrap {
+            return;
+        }
         self.0.move_backward_tabs(count)
     }
 
@@ -412,11 +696,22 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
     }
 
     fn save_cursor_position(&mut self) {
+        let screen = self.screen();
+        self.1.saved_at[screen] = self.1.pane_history(self.0);
         self.0.save_cursor_position()
     }
 
     fn restore_cursor_position(&mut self) {
-        self.0.restore_cursor_position()
+        self.0.restore_cursor_position();
+        // xterm.js puts the cursor back on the last column when the wrap was pending as it was
+        // saved. xterm and VTE restore the wrap; the pane is xterm.js.
+        self.end_pending_wrap();
+        let mut line = self.1.saved_line(self.0);
+        // In origin mode, xterm.js keeps the cursor inside the scroll region.
+        if self.0.mode().contains(TermMode::ORIGIN) {
+            line = self.region().clamp(line.0);
+        }
+        self.0.grid_mut().cursor.point.line = line;
     }
 
     fn clear_tabs(&mut self, mode: TabulationClearMode) {
@@ -428,7 +723,8 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
     }
 
     fn reset_state(&mut self) {
-        self.0.reset_state()
+        self.0.reset_state();
+        *self.1 = Beside::new(self.0.screen_lines());
     }
 
     fn reverse_index(&mut self) {
@@ -453,11 +749,38 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
     }
 
     fn set_private_mode(&mut self, mode: PrivateMode) {
-        self.0.set_private_mode(mode)
+        // Opening the alternate screen saves the cursor first in xterm.js, even when it is open
+        // already. `alacritty_terminal` saves it only opening it.
+        let opening = mode == ALTERNATE_SCREEN && self.screen() == MAIN;
+        if opening {
+            self.1.saved_at[MAIN] = self.1.pane_history(self.0);
+        } else if mode == ALTERNATE_SCREEN {
+            self.save_cursor_position();
+        }
+        self.0.set_private_mode(mode);
+        if opening {
+            // It opens with a scroll region of the whole screen, whatever it had before.
+            self.1.scroll_regions[ALTERNATE] = ScrollRegion::whole(self.0.screen_lines());
+            self.use_region();
+        }
     }
 
     fn unset_private_mode(&mut self, mode: PrivateMode) {
-        self.0.unset_private_mode(mode)
+        let closing = mode == ALTERNATE_SCREEN && self.screen() != MAIN;
+        self.0.unset_private_mode(mode);
+        if closing {
+            self.use_region();
+        }
+        // Closing the alternate screen restores the cursor in xterm.js, even when it is not
+        // open. `alacritty_terminal` only goes back to the cursor the main screen had.
+        if mode == ALTERNATE_SCREEN {
+            self.restore_cursor_position();
+        }
+        // Turning origin mode off homes the cursor, as turning it on does, in xterm, VTE and
+        // xterm.js; `alacritty_terminal` leaves the cursor where it is.
+        if mode == PrivateMode::Named(NamedPrivateMode::Origin) {
+            self.0.goto(0, 0);
+        }
     }
 
     fn report_private_mode(&mut self, mode: PrivateMode) {
@@ -465,7 +788,17 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
     }
 
     fn set_scrolling_region(&mut self, top: usize, bottom: Option<usize>) {
-        self.0.set_scrolling_region(top, bottom)
+        // xterm.js takes a bottom past the screen for the bottom of the screen, and ignores a
+        // region whose top is not above it then. `alacritty_terminal` would clamp both to the
+        // screen and could keep a region with no rows.
+        let rows = self.0.screen_lines();
+        let bottom = bottom.filter(|&bottom| bottom <= rows).unwrap_or(rows);
+        if top >= bottom {
+            return;
+        }
+        let screen = self.screen();
+        self.1.scroll_regions[screen].set(top, bottom);
+        self.0.set_scrolling_region(top, Some(bottom))
     }
 
     fn set_keypad_application_mode(&mut self) {
@@ -562,6 +895,8 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
 }
 
 #[cfg(test)]
+/// The screens these tests expect are the ones `@xterm/headless` 6.0.0 draws for the same
+/// output on a terminal of the same size.
 mod tests {
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::term::cell::Flags;
@@ -799,5 +1134,296 @@ mod tests {
 
         assert_eq!(background(&term, 0, 11), DEFAULT);
         assert!(!flags(&term, 0, 11).contains(Flags::WIDE_CHAR));
+    }
+
+    #[test]
+    fn a_tab_while_a_wrap_is_pending_leaves_the_wrap_pending() {
+        // xterm, VTE and xterm.js all do; `alacritty_terminal` wraps, and the carriage return
+        // after it went back to the start of the next row.
+        let mut term = fed("abcdefghijkl\t\rX");
+
+        assert_eq!(line(&mut term, 0), "Xbcdefghijkl");
+        assert_eq!(line(&mut term, 1), "");
+    }
+
+    #[test]
+    fn a_backward_tab_while_a_wrap_is_pending_does_nothing() {
+        // In xterm.js; `alacritty_terminal` moved the cursor back and kept the wrap pending.
+        let mut term = fed("abcdefghijkl\x1b[Z\x1b[Px");
+
+        assert_eq!(line(&mut term, 0), "abcdefghijkx");
+    }
+
+    #[test]
+    fn restoring_the_cursor_ends_a_wrap_pending_when_it_was_saved() {
+        // xterm.js keeps the cursor in the last column; xterm and VTE restore the wrap.
+        let mut term = fed("abcdefghijkl\x1b7\x1b[H\x1b8X");
+
+        assert_eq!(line(&mut term, 0), "abcdefghijkX");
+        assert_eq!(line(&mut term, 1), "");
+    }
+
+    #[test]
+    fn restoring_the_cursor_the_sco_way_ends_a_wrap_pending_when_it_was_saved() {
+        let mut term = fed("abcdefghijkl\x1b[s\x1b[H\x1b[uX");
+
+        assert_eq!(line(&mut term, 0), "abcdefghijkX");
+        assert_eq!(line(&mut term, 1), "");
+    }
+
+    #[test]
+    fn inserting_lines_moves_the_cursor_to_the_first_column() {
+        let mut term = fed("abc\x1b[Lx");
+
+        assert_eq!(line(&mut term, 0), "x");
+        assert_eq!(line(&mut term, 1), "abc");
+    }
+
+    #[test]
+    fn deleting_lines_moves_the_cursor_to_the_first_column() {
+        let mut term = fed("abc\x1b[Mx");
+
+        assert_eq!(line(&mut term, 0), "x");
+    }
+
+    #[test]
+    fn inserting_lines_while_a_wrap_is_pending_ends_it() {
+        let mut term = fed("abcdefghijkl\x1b[Lx");
+
+        assert_eq!(line(&mut term, 0), "x");
+        assert_eq!(line(&mut term, 1), "abcdefghijkl");
+    }
+
+    #[test]
+    fn deleting_lines_while_a_wrap_is_pending_ends_it() {
+        let mut term = fed("abcdefghijkl\x1b[Mx");
+
+        assert_eq!(line(&mut term, 0), "x");
+        assert_eq!(line(&mut term, 1), "");
+    }
+
+    #[test]
+    fn inserting_lines_outside_the_scroll_region_leaves_the_cursor_in_its_column() {
+        let mut term = fed("\x1b[2;3rabc\x1b[Lx");
+
+        assert_eq!(line(&mut term, 0), "abcx");
+    }
+
+    #[test]
+    fn inserting_or_deleting_lines_outside_the_scroll_region_ends_a_pending_wrap() {
+        // xterm.js does; xterm and VTE leave the wrap pending, as they do nothing at all.
+        for edit in ["\x1b[L", "\x1b[M"] {
+            let mut term = fed(&format!("\x1b[2;3rabcdefghijkl{edit}x"));
+
+            assert_eq!(line(&mut term, 0), "abcdefghijkx", "after {edit:?}");
+            assert_eq!(line(&mut term, 1), "", "after {edit:?}");
+        }
+    }
+
+    #[test]
+    fn a_scroll_region_that_is_not_one_is_ignored() {
+        let mut term = fed("\x1b[3;2rabc\x1b[Lx");
+
+        assert_eq!(line(&mut term, 0), "x");
+    }
+
+    #[test]
+    fn a_scroll_region_is_undone_by_resetting_it() {
+        let mut term = fed("abc\x1b[2;3r\x1b[r\x1b[1;4H\x1b[Mx");
+
+        assert_eq!(line(&mut term, 0), "x");
+    }
+
+    #[test]
+    fn a_scroll_region_is_undone_by_resetting_the_terminal() {
+        let mut term = fed("\x1b[2;3r\x1bcabc\x1b[Lx");
+
+        assert_eq!(line(&mut term, 0), "x");
+    }
+
+    #[test]
+    fn a_scroll_region_is_undone_by_resizing() {
+        // `alacritty_terminal` resets the region only when the size changes.
+        let mut term = fed("\x1b[2;3r");
+        term.resize(Size {
+            columns: 12,
+            rows: 6,
+        });
+        term.advance(b"abc\x1b[Lx");
+
+        assert_eq!(line(&mut term, 0), "x");
+    }
+
+    #[test]
+    fn moving_up_stops_at_the_top_of_the_scroll_region() {
+        for movement in ["\x1b[A", "\x1b[5A", "\x1b[5F"] {
+            let mut term = fed(&format!("\x1b[2;4r\x1b[3;3H{movement}\rx"));
+
+            assert_eq!(line(&mut term, 1), "x", "after {movement:?}");
+        }
+    }
+
+    #[test]
+    fn moving_down_stops_at_the_bottom_of_the_scroll_region() {
+        for movement in ["\x1b[B", "\x1b[5B", "\x1b[5E"] {
+            let mut term = fed(&format!("\x1b[2;4r\x1b[4;3H{movement}\rx"));
+
+            assert_eq!(line(&mut term, 3), "x", "after {movement:?}");
+        }
+    }
+
+    #[test]
+    fn moving_down_from_above_the_scroll_region_stops_at_its_bottom() {
+        let mut term = fed("\x1b[2;4r\x1b[1;1H\x1b[9Bx");
+
+        assert_eq!(line(&mut term, 3), "x");
+    }
+
+    #[test]
+    fn moving_up_from_below_the_scroll_region_stops_at_its_top() {
+        let mut term = fed("\x1b[2;4r\x1b[5;1H\x1b[9Ax");
+
+        assert_eq!(line(&mut term, 1), "x");
+    }
+
+    #[test]
+    fn restoring_the_cursor_after_lines_scrolled_into_history_follows_them_up() {
+        // xterm.js saves the row in its scrollback; xterm and VTE save the row on the screen.
+        let mut term = fed("\x1b[5;1H\x1b7\n\nx\x1b8y");
+
+        assert_eq!(line(&mut term, 2), "y");
+    }
+
+    #[test]
+    fn restoring_the_cursor_after_the_history_is_erased_stays_on_the_screen() {
+        let mut term = fed("\x1b[5;1H\x1b7\n\n\x1b[3Jx\x1b8y");
+
+        assert_eq!(line(&mut term, 4), "y");
+    }
+
+    #[test]
+    fn leaving_the_alternate_screen_ends_a_wrap_pending_as_it_was_opened() {
+        let mut term = fed("abcdefghijkl\x1b[?1049hx\x1b[?1049ly");
+
+        assert_eq!(line(&mut term, 0), "abcdefghijky");
+        assert_eq!(line(&mut term, 1), "");
+    }
+
+    #[test]
+    fn restoring_the_cursor_after_lines_are_deleted_from_the_top_keeps_its_row() {
+        // `alacritty_terminal` moves the deleted lines into its history; xterm.js drops them.
+        for scroll in ["\x1b[H\x1b[3M", "\x1b[3S"] {
+            let mut term = fed(&format!("\x1b[4;2H\x1b7{scroll}\x1b8x"));
+
+            assert_eq!(line(&mut term, 3), " x", "after {scroll:?}");
+        }
+    }
+
+    #[test]
+    fn a_combining_mark_with_nothing_before_it_on_the_row_takes_a_cell_of_its_own() {
+        // xterm.js draws nothing in that cell and moves the cursor past it.
+        let mut term = fed("\u{301}x");
+
+        assert_eq!(line(&mut term, 0), " x");
+    }
+
+    #[test]
+    fn a_combining_mark_written_at_the_start_of_a_row_replaces_the_character_there() {
+        for row in ["ab", "\u{4e2d}"] {
+            let mut term = fed(&format!("{row}\r\u{301}x"));
+
+            assert_eq!(line(&mut term, 0), " x", "over {row:?}");
+        }
+    }
+
+    #[test]
+    fn a_scroll_region_below_the_screen_is_ignored() {
+        // xterm.js takes the bottom for the bottom of the screen, which leaves no rows.
+        let mut term = fed("abc\x1b[9;10r\x1b[Lx");
+
+        assert_eq!(line(&mut term, 0), "x");
+    }
+
+    #[test]
+    fn turning_origin_mode_off_homes_the_cursor() {
+        let mut term = fed("\x1b[5;3H\x1b[?6lx");
+
+        assert_eq!(line(&mut term, 0), "x");
+    }
+
+    #[test]
+    fn restoring_the_cursor_after_the_screen_is_erased_keeps_its_row() {
+        // `alacritty_terminal` moves the lines erased into its history; xterm.js drops them.
+        let mut term = fed("a\r\nb\r\nc\x1b[4;2H\x1b7\x1b[2J\x1b8x");
+
+        assert_eq!(line(&mut term, 3), " x");
+    }
+
+    #[test]
+    fn restoring_the_cursor_after_the_screen_scrolls_up_and_the_history_is_erased_keeps_its_row() {
+        let mut term = fed("\x1b7\x1b[3S\x1b[3J\x1b8x");
+
+        assert_eq!(line(&mut term, 0), "x");
+    }
+
+    #[test]
+    fn restoring_the_cursor_after_the_history_is_erased_keeps_the_row_it_had_in_the_scrollback() {
+        // xterm.js keeps the saved row in its scrollback, and erasing the scrollback does not
+        // move it: the cursor comes back as many rows lower as the scrollback had lines.
+        let mut term = fed("\n\n\n\n\n\n\n\x1b[2;3H\x1b7\x1b[3J\x1b8x");
+
+        assert_eq!(line(&mut term, 4), "  x");
+    }
+
+    #[test]
+    fn restoring_the_cursor_in_origin_mode_keeps_it_inside_the_scroll_region() {
+        let mut term = fed("\x1b7\x1b[3;5r\x1b[?6h\x1b8x");
+
+        assert_eq!(line(&mut term, 2), "x");
+    }
+
+    #[test]
+    fn moving_left_or_right_in_origin_mode_moves_down_by_where_the_scroll_region_starts() {
+        // xterm.js places the cursor from the top of the region again after a relative move.
+        for movement in ["\x1b[C", "\x1b[D"] {
+            let mut term = fed(&format!("\x1b[?6h\x1b[2;4r{movement}x"));
+
+            assert_eq!(line(&mut term, 2).trim(), "x", "after {movement:?}");
+        }
+    }
+
+    #[test]
+    fn closing_the_alternate_screen_restores_the_cursor_even_when_it_is_not_open() {
+        let mut term = fed("\x1b[3;4H\x1b7\x1b[H\x1b[?1049lx");
+
+        assert_eq!(line(&mut term, 2), "   x");
+    }
+
+    #[test]
+    fn opening_the_alternate_screen_saves_the_cursor_even_when_it_is_open() {
+        let mut term = fed("\x1b[?1049h\x1b[3;4H\x1b[?1049h\x1b[H\x1b8x");
+
+        assert_eq!(line(&mut term, 2), "   x");
+    }
+
+    #[test]
+    fn the_alternate_screen_has_a_scroll_region_of_its_own() {
+        let mut term = fed("\x1b[2;4r\x1b[?1049h\x1b[5Bx");
+
+        assert_eq!(line(&mut term, 4), "x");
+    }
+
+    #[test]
+    fn closing_the_alternate_screen_brings_back_the_scroll_region_of_the_main_one() {
+        let mut term = fed("\x1b[?1049h\x1b[2;4r\x1b[?1049l\x1b[5Bx");
+
+        assert_eq!(line(&mut term, 4), "x");
+    }
+
+    #[test]
+    fn the_alternate_screen_opens_with_a_scroll_region_of_the_whole_screen() {
+        let mut term = fed("\x1b[?1049h\x1b[2;4r\x1b[?1049l\x1b[?1049h\x1b[5Bx");
+
+        assert_eq!(line(&mut term, 4), "x");
     }
 }

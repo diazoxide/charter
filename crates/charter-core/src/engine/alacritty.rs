@@ -10,13 +10,15 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb};
 
-use super::pane_rules::PaneRules;
+use super::pane_rules::{Beside, PaneRules};
 use super::{Engine, Screen, Size};
 
 pub struct AlacrittyEngine {
     term: Term<Replies>,
     parser: Processor,
     replies: Replies,
+    /// What the pane rules need to know that `term` does not show.
+    beside: Beside,
 }
 
 impl AlacrittyEngine {
@@ -32,6 +34,7 @@ impl AlacrittyEngine {
             term: Term::new(config, &Cells(size), replies.clone()),
             parser: Processor::new(),
             replies,
+            beside: Beside::new(size.rows.into()),
         }
     }
 }
@@ -50,7 +53,8 @@ impl AlacrittyEngine {
             .open_update()
             .is_some_and(|deadline| Instant::now() >= deadline);
         if expired {
-            self.parser.stop_sync(&mut PaneRules(&mut self.term));
+            self.parser
+                .stop_sync(&mut PaneRules(&mut self.term, &mut self.beside));
         }
     }
 }
@@ -58,7 +62,8 @@ impl AlacrittyEngine {
 impl Engine for AlacrittyEngine {
     fn advance(&mut self, bytes: &[u8]) {
         self.apply_expired_sync();
-        self.parser.advance(&mut PaneRules(&mut self.term), bytes);
+        self.parser
+            .advance(&mut PaneRules(&mut self.term, &mut self.beside), bytes);
     }
 
     fn open_update(&self) -> Option<Instant> {
@@ -67,7 +72,11 @@ impl Engine for AlacrittyEngine {
 
     fn resize(&mut self, size: Size) {
         let size = size.at_least_min();
+        let (columns, rows) = (self.term.columns(), self.term.screen_lines());
         self.term.resize(Cells(size));
+        if (columns, rows) != (size.columns.into(), size.rows.into()) {
+            self.beside.resized(size.rows.into());
+        }
         self.replies.state().size = size;
     }
 
@@ -112,8 +121,9 @@ impl Engine for AlacrittyEngine {
         // Everything this engine has read has to be in the snapshot, because the view it is
         // for is sent the output that comes after. A synchronized update still open holds
         // bytes back, so it is ended here: half a frame drawn beats a frame lost.
-        self.parser.stop_sync(&mut PaneRules(&mut self.term));
-        super::snapshot::snapshot(&self.term)
+        self.parser
+            .stop_sync(&mut PaneRules(&mut self.term, &mut self.beside));
+        super::snapshot::snapshot(&self.term, &self.beside)
     }
 
     fn take_replies(&mut self) -> Vec<u8> {
@@ -549,12 +559,16 @@ mod snapshot_tests {
                 )
             };
         let modes = *term.term.mode() & !(TermMode::URGENCY_HINTS | TermMode::VI);
+        // The saved cursor as restoring it places it (see `pane_rules`).
+        let mut saved = grid.saved_cursor.clone();
+        saved.point.line = term.beside.saved_line(&term.term);
         format!(
-            "cursor {} wrap-pending={} {:?} | saved {} | {modes:?}",
+            "cursor {} wrap-pending={} {:?} | saved {} | scroll region {:?} | {modes:?}",
             pen(&grid.cursor),
             grid.cursor.input_needs_wrap,
             term.term.cursor_style(),
-            pen(&grid.saved_cursor),
+            pen(&saved),
+            term.beside.scroll_regions(&term.term),
         )
     }
 
@@ -687,6 +701,27 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn a_snapshot_keeps_the_scroll_region() {
+        assert_rebuilt(b"\x1b[2;4r\x1b[3;5Hx");
+    }
+
+    #[test]
+    fn a_snapshot_keeps_the_scroll_region_of_the_main_screen_behind_the_alternate_one() {
+        assert_rebuilt(b"\x1b[2;4r\x1b[?1049h\x1b[3;5r");
+    }
+
+    #[test]
+    fn a_snapshot_places_the_cursor_from_the_top_of_the_scroll_region_in_origin_mode() {
+        assert_rebuilt(b"\x1b[2;4r\x1b[?6h\x1b[2;3Hx");
+    }
+
+    #[test]
+    fn a_snapshot_keeps_where_restoring_the_cursor_puts_it_after_lines_scrolled_into_history() {
+        // The pane saves the row in its scrollback: the row restored moves up with the lines.
+        assert_rebuilt(b"\x1b[5;3H\x1b7\n\n");
+    }
+
+    #[test]
     fn a_snapshot_restores_the_modes_that_change_what_keys_and_the_mouse_send() {
         assert_rebuilt(b"\x1b[?1h\x1b=\x1b[?2004h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?25l\x1b[?7l\x1b[4h\x1b[?1007l");
     }
@@ -735,9 +770,9 @@ mod snapshot_tests {
         assert_rebuilt(b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\ after");
     }
 
-    /// Pieces of output the snapshot must survive. Scroll regions, tab stops and character
-    /// sets are left out: `alacritty_terminal` does not expose them, so a snapshot cannot carry
-    /// them (see `snapshot`).
+    /// Pieces of output the snapshot must survive. Tab stops and character sets are left out:
+    /// `alacritty_terminal` does not expose them, so a snapshot cannot carry them (see
+    /// `snapshot`).
     fn piece() -> impl Strategy<Value = Vec<u8>> {
         prop_oneof![
             "[a-z ]{1,15}".prop_map(String::into_bytes),
@@ -748,6 +783,7 @@ mod snapshot_tests {
             Just(b"\x1b[D".to_vec()),
             Just(b"\x1b[C".to_vec()),
             Just("e\u{301}".as_bytes().to_vec()),
+            Just("\u{301}".as_bytes().to_vec()),
             Just(b"\r\n".to_vec()),
             Just(b"\r".to_vec()),
             Just(b"\n".to_vec()),
@@ -800,6 +836,27 @@ mod snapshot_tests {
                 "\x0b",
                 "\x1b[L",
                 "\x1b[M",
+                "\x1b[2L",
+                "\x1b[3M",
+                "\x1b[20M",
+                "\x1b[s",
+                "\x1b[u",
+                "\x1b[I",
+                "\x1b[Z",
+                "\x1b[2Z",
+                "\x1b[5A",
+                "\x1b[5B",
+                "\x1b[2E",
+                "\x1b[2F",
+                "\x1b[3S",
+                "\x1b[3J",
+                "\x1b[2;4r",
+                "\x1b[3;9r",
+                "\x1b[9;10r",
+                "\x1b[r",
+                "\x1b[?6h",
+                "\x1b[?6l",
+                "\x1bc",
                 "\x1b[S",
                 "\x1b[T",
                 "\x1bM",
