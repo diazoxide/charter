@@ -796,6 +796,19 @@ export const commands = {
 	/**  Forget a todo: it goes, and nothing is journalled. */
 	todoForget: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_forget", { plane, workspace, slug })),
 	/**
+	 *  What each subject the window names is offered (`subjects` in the core's spelling:
+	 *  `workspace:<name>`, `persona:<name>`, `plane`), in the order asked.
+	 */
+	curationOffers: (plane: PlaneId, subjects: string[]) => typedError<Curations, string>(__TAURI_INVOKE("curation_offers", { plane, subjects })),
+	/**
+	 *  Opens a chat for one curation action on one subject, with the action's prompt typed into it
+	 *  once its harness has started, and never sent.
+	 * 
+	 *  The harness is the project's default profile, as a new chat's is; the persona and the
+	 *  directory are the core's answer. A refusal comes back before anything starts.
+	 */
+	curate: (plane: PlaneId, subject: string, action: string, columns: number, rows: number) => typedError<Curating, string>(__TAURI_INVOKE("curate", { plane, subject, action, columns, rows })),
+	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
 	 *  `workspace`, when one is named, that workspace's settings are a layer too (charter-app#280):
@@ -1151,6 +1164,50 @@ export type CommandDoes =
 /**  Runs one of its actions, on nothing in particular. */
 { kind: "run"; action: RowAction };
 
+/**  A curation chat that started: what the window needs to put its tab on the right strip. */
+export type Curating = {
+	session: number,
+	/**  The chat's name, which is its number, as a handed-off chat's is. */
+	name: string,
+	/**  What its tab says: the action and its subject, `Safe remove · smart-ide`. */
+	label: string,
+	persona: string | null,
+	/**  The harness, by the word the plane calls it. */
+	harness: string | null,
+	/**
+	 *  The workspace it is filed under, or none when it works at the plane root or anywhere
+	 *  else outside one.
+	 */
+	workspace: string | null,
+};
+
+/**  One curation action a subject is offered, as the window draws it. */
+export type CurationAction = {
+	/**  `charter/<id>` or `<persona>/<id>` — what the window hands back to [`curate`]. */
+	id: string,
+	label: string,
+	/**  The persona that declared it, or none for one of charter's own. */
+	declared_by: string | null,
+	/**  The persona the chat starts as, or none for no persona. */
+	runner: string | null,
+	/**  The directory the chat starts in. */
+	cwd: string,
+	/**  The prompt, as it would be typed. Shown, never sent from here. */
+	prompt: string,
+};
+
+/**  Every subject the window asked about, and whether any action can be opened right now. */
+export type Curations = {
+	subjects: SubjectCurations[],
+	/**
+	 *  Why no curation chat can be opened in this project right now — its default harness
+	 *  profile cannot be typed into — or none when one can. The menu draws every action
+	 *  disabled with this as its reason, rather than leaving the operator to find out on a
+	 *  click.
+	 */
+	cannot: string | null,
+};
+
 /**  What the doctor said, and what it was asked with. */
 export type DoctorReport = {
 	/**  Every row, in the order `charter doctor` prints them. */
@@ -1502,6 +1559,17 @@ export type Launch = {
 	from: string | null,
 	/**  Why no plane was opened, in the resolver's own words. */
 	why: string | null,
+};
+
+/**
+ *  An action the core left out of a subject's list, and why. Never dropped silently: the menu
+ *  draws it as a row that cannot run, with `why` as its reason.
+ */
+export type LeftOut = {
+	/**  The file it was declared in, where the core's sentence names one. */
+	what: string,
+	/**  The core's whole sentence. */
+	why: string,
 };
 
 /**  What switching a workspace would do, for the confirmation that asks first. */
@@ -2589,6 +2657,21 @@ export type Started = {
 	 *  blank — so the tab draws what the record holds rather than what was typed.
 	 */
 	label: string | null,
+};
+
+/**  What one subject is offered. */
+export type SubjectCurations = {
+	/**  `workspace:<name>`, `persona:<name>` or `plane` — the core's own spelling of a subject. */
+	subject: string,
+	/**
+	 *  The name the operator knows it by: the workspace's or persona's, or the plane's
+	 *  directory.
+	 */
+	name: string,
+	actions: CurationAction[],
+	left_out: LeftOut[],
+	/**  Why this subject has no list at all — a workspace deleted a moment ago, say. */
+	trouble: string | null,
 };
 
 /**  One theme a project may pick, as the Theme select lists it. */

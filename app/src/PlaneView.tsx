@@ -63,6 +63,7 @@ import {
   type Ran,
 } from "./actions";
 import { usePlaneSaving, WAY_OUT, type WayOut } from "./saving";
+import { curationSubjects, useCurations } from "./curations";
 import { LiveDialog, LiveMark } from "./LiveDialog";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { Menued } from "./Menus";
@@ -2144,6 +2145,29 @@ export function PlaneView({
     [ofWorkspace, plane],
   );
 
+  /**
+   * A curation action chosen from a "Curate ▸" menu or the palette (ADR 0061): the core opens
+   * the chat — the default profile, the action's runner, where it runs — and holds its prompt
+   * until the harness reports its start; this puts its tab on the strip it is filed under, in
+   * front, named for the action and its subject. A refusal is the core's sentence, before
+   * anything started.
+   */
+  const curate = useCallback(
+    async (subject: string, action: string): Promise<Ran> => {
+      const started = await commands
+        .curate(plane, subject, action, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (started.status === "error") return { ok: false, refused: started.error };
+      const chat = started.data;
+      setStartedIn((was) => ({ ...was, [chat.session]: chat.workspace ?? OUTSIDE }));
+      change((tabs) =>
+        openTab(tabs, chat.session, chat.name, whoOf(chat.persona, chat.harness), chat.label),
+      );
+      return { ok: true };
+    },
+    [change, plane],
+  );
+
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
@@ -2191,6 +2215,7 @@ export function PlaneView({
       switchLive: (workspace: string) => setLiveAsk(workspace),
       renameWorkspace,
       openPreferences: windowDoes.openPreferences,
+      curate,
       quit: windowDoes.quit,
     }),
     [
@@ -2198,6 +2223,7 @@ export function PlaneView({
       bringToFront,
       close,
       closePane,
+      curate,
       createVault,
       createWorkspace,
       edits.doing,
@@ -2302,6 +2328,13 @@ export function PlaneView({
   const personas = workspaceState.panels?.personas;
   /** The focused workspace's open todos, the same way: one close and one forget row each. */
   const todos = workspaceState.panels?.todos;
+  /** What the plane, its workspaces and its personas are offered to curate (ADR 0061), read
+   *  again when those change and when the plane changes on disk. */
+  const subjects = useMemo(
+    () => curationSubjects(sidebar?.workspaces.map((ws) => ws.name) ?? [], personas ?? []),
+    [personas, sidebar],
+  );
+  const curations = useCurations(plane, subjects, changesOnDisk);
 
   /**
    * Every action this project's window can do, in one list.
@@ -2356,9 +2389,11 @@ export function PlaneView({
             },
             views,
             commands: extensionCommands,
+            curations,
           }),
     [
       clones,
+      curations,
       focused,
       inFront,
       nameOf,

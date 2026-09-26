@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   aim,
   catalogue,
+  catalogued,
+  curateRows,
+  curateSubjectOf,
   ENDS_IT,
   KEEPS_THE_BRANCH,
   matches,
@@ -80,6 +83,10 @@ function doing(): Doing & { calls: string[] } {
     }),
     pinProject: vi.fn(async (plane: string, pinned: boolean) => {
       calls.push(`pinProject:${plane},${pinned}`);
+      return { ok: true as const };
+    }),
+    curate: vi.fn(async (subject: string, action: string) => {
+      calls.push(`curate:${subject},${action}`);
       return { ok: true as const };
     }),
     runAction: vi.fn(async (extension: string, action: RowAction, name: string) => {
@@ -1566,5 +1573,128 @@ describe("what the queue's row claims", () => {
     expect(reason).toBe(
       "Nothing has said it needs you — and 2 chats can be waiting on you without saying so.",
     );
+  });
+});
+
+describe("curation actions (ADR 0061)", () => {
+  /** What the core answers for the plane and workspace `alpha`. */
+  function curations(cannot: string | null = null): NonNullable<Now["curations"]> {
+    const action = (id: string, label: string, by: string | null, runner: string | null) => ({
+      id,
+      label,
+      declared_by: by,
+      runner,
+      cwd: "/plane/workspaces/alpha",
+      prompt: `${label}.`,
+    });
+    return {
+      subjects: [
+        {
+          subject: "plane",
+          name: "plane",
+          actions: [],
+          left_out: [],
+          trouble: null,
+        },
+        {
+          subject: "workspace:alpha",
+          name: "alpha",
+          actions: [
+            action("charter/safe-remove", "Safe remove", null, null),
+            action("ops/tidy", "Tidy", "ops", "ops"),
+          ],
+          left_out: [
+            {
+              what: "personas/qa/curation/x.md",
+              why: "personas/qa/curation/x.md is not offered: no label.",
+            },
+          ],
+          trouble: null,
+        },
+        {
+          subject: "workspace:gone",
+          name: "workspace:gone",
+          actions: [],
+          left_out: [],
+          trouble: "no workspace 'gone'",
+        },
+      ],
+      cannot,
+    };
+  }
+
+  it("lists each action as a palette row named for its subject, in the core's order", () => {
+    const offers = catalogue(now({ plane: "/plane", curations: curations() }));
+
+    const rows = offers.filter((offer) => offer.id.startsWith("curate:"));
+
+    expect(rows.map((row) => [row.id, row.title, row.available])).toEqual([
+      ["curate:workspace:alpha/charter/safe-remove", "Curate alpha: Safe remove", true],
+      ["curate:workspace:alpha/ops/tidy", "Curate alpha: Tidy", true],
+      ["curate:workspace:alpha/!0", "Curate alpha: personas/qa/curation/x.md is left out", false],
+      ["curate:workspace:gone/!", "Curate workspace:gone", false],
+    ]);
+    expect(by(offers, "curate:workspace:alpha/!0")?.reason).toContain("no label");
+    expect(by(offers, "curate:workspace:gone/!")?.reason).toBe("no workspace 'gone'");
+  });
+
+  it("says who runs it and where, and that nothing is sent", () => {
+    const offers = catalogue(now({ plane: "/plane", curations: curations() }));
+
+    expect(by(offers, "curate:workspace:alpha/ops/tidy")?.note).toBe(
+      "Opens a chat as ops in /plane/workspaces/alpha, with its prompt typed and not sent.",
+    );
+    expect(by(offers, "curate:workspace:alpha/charter/safe-remove")?.note).toContain(
+      "with no persona",
+    );
+  });
+
+  it("is found by the palette under the word curate", () => {
+    const offers = catalogue(now({ plane: "/plane", curations: curations() }));
+
+    expect(ids(narrow("curate", offers))).toContain("curate:workspace:alpha/ops/tidy");
+  });
+
+  it("opens the chat through the window's curate, by subject and action id", async () => {
+    const hands = doing();
+    const offers = catalogue(now({ plane: "/plane", curations: curations() }));
+
+    await run(offers, "curate:workspace:alpha/ops/tidy", hands);
+
+    expect(hands.calls).toEqual(["curate:workspace:alpha,ops/tidy"]);
+  });
+
+  it("offers nothing to run when the project's default harness cannot be typed into", async () => {
+    const hands = doing();
+    const offers = catalogue(
+      now({ plane: "/plane", curations: curations("codex says nothing until your first prompt") }),
+    );
+
+    const said = await run(offers, "curate:workspace:alpha/ops/tidy", hands);
+
+    expect(said).toEqual({ ok: false, refused: "codex says nothing until your first prompt" });
+    expect(hands.calls).toEqual([]);
+  });
+
+  it("groups a subject's rows for its submenu: charter's, each persona's, what was left out", () => {
+    const offers = catalogued(catalogue(now({ plane: "/plane", curations: curations() })));
+
+    const rows = curateRows("workspace:alpha", offers);
+
+    expect(ids(rows.charter)).toEqual(["curate:workspace:alpha/charter/safe-remove"]);
+    expect(rows.personas.map((group) => [group.persona, ids(group.rows)])).toEqual([
+      ["ops", ["curate:workspace:alpha/ops/tidy"]],
+    ]);
+    expect(ids(rows.leftOut)).toEqual(["curate:workspace:alpha/!0"]);
+    // A subject whose name starts another's is not mixed into it.
+    expect(curateRows("workspace:alph", offers).charter).toEqual([]);
+  });
+
+  it("is offered on a workspace, a persona and the plane, and not outside every workspace", () => {
+    expect(curateSubjectOf({ on: "workspace", workspace: "alpha" })).toBe("workspace:alpha");
+    expect(curateSubjectOf({ on: "persona", persona: "ops" })).toBe("persona:ops");
+    expect(curateSubjectOf({ on: "plane" })).toBe("plane");
+    expect(curateSubjectOf({ on: "workspace", workspace: OUTSIDE })).toBeUndefined();
+    expect(curateSubjectOf({ on: "chat", tab: 1 })).toBeUndefined();
   });
 });

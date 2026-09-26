@@ -435,6 +435,9 @@ describe("deleting a workspace", () => {
       "workspace_saving",
       "alerts_everywhere",
       "window_holds_planes",
+      // The workspaces changed, so what each subject is offered to curate is asked again
+      // (ADR 0061): a read of the plane.
+      "curation_offers",
     ];
     const during = asked.slice(before).map((one) => one.cmd);
     expect(during.filter((cmd) => !READS.includes(cmd))).toEqual(["workspace_remove"]);

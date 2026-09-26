@@ -19,8 +19,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Safe remove, Compact & improve, and Add curation action, each naming a new skill in charter's
   plugin (`safe-remove`, `compact`, `add-curation-action`). A persona adds its own as
   `personas/<name>/curation/<id>.md`, or with `charter persona curation add`, and
-  `charter persona lint` reports one that is broken or that takes a built-in's name. The app's
-  Curate menu comes in a later release (ADR 0061).
+  `charter persona lint` reports one that is broken or that takes a built-in's name. In the app,
+  right-click a workspace or a persona for **Curate ▸**, or type `curate` in the palette: the
+  chat opens on your default profile as the action's persona, named `<action> · <subject>`, and
+  the prompt appears in its input once the harness has started — never sent. An action a
+  persona's file could not offer is listed, greyed, with why. It needs a Claude Code default
+  profile: Codex and opencode say nothing until your first prompt, so charter has no moment to
+  type into them, and says so on the menu (ADR 0061).
 - **Plain shell tabs, and a warning when a harness starts inside one.** `New shell` sits beside
   `New tab` in the palette, on the panes' menu and on each workspace's menu (`New shell in
   <workspace>`), on ⌘⇧T (Ctrl+Shift+T off a Mac): your own shell, where a new chat would start,

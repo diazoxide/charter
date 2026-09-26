@@ -115,6 +115,12 @@ details:
 - **A row's accessible name is the catalogue's title alone** (`aria-label`), and its note — what
   the row costs — is its `aria-describedby`. Left to the content, every row would announce as a
   paragraph: _"End chat 3 steward Ends the program it runs. There is no undo."_
+- **A group the catalogue decides the length of is a submenu**, Radix's own `ContextMenu.Sub`:
+  "Curate ▸" on a workspace and a persona (ADR 0061). `actions.curateRows` picks that subject's
+  rows out of the catalogue by id — charter's own, then one named `ContextMenu.Label` group per
+  declaring persona, then each action the core left out as a disabled row whose tooltip is the
+  core's sentence — and it runs inside the menu's content, which Radix mounts only while the
+  menu is open, so a strip's fifty tabs do not pay the scan per render.
 - **Shift+F10 and the menu key open it on the element that has the keyboard** (charter-app#174).
   macOS has no keyboard convention for a context menu and its WebView raises no `contextmenu`
   for either key, so `Menued` dispatches the one a right-click would — and only when the
