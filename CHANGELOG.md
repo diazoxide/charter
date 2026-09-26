@@ -36,6 +36,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the chat went to this workspace or another, and whether the handoff created it; the row
   names no workspace, persona or brief. A write that fails is said and never undoes the open.
   ([#372](https://github.com/diazoxide/charter/issues/372))
+- **`charter doctor` quotes a value it read from a file, a folder name or the environment on
+  one line.** The plane root row's memory-push record, the session layer row's harness name,
+  and the workspace and persona names in the clone and memory rows used to be printed as they
+  were, so a value with a line break in it could print a row that looked like one of doctor's
+  own. ([#353](https://github.com/diazoxide/charter/issues/353))
 
 ## [0.3.0] - 2026-09-25
 

@@ -495,13 +495,18 @@ fn stranded_push(d: &Doctor) -> Result<Option<(String, String)>, String> {
     {
         return Ok(None);
     }
-    let landed = rec.get("landed").filter(|v| truthy(v)).map(py_str);
-    let url = rec.get("url").filter(|v| truthy(v)).map(py_str);
-    let branch = rec
-        .get("branch")
-        .filter(|v| truthy(v))
-        .map(py_str)
-        .unwrap_or_else(|| "main".to_owned());
+    // `.charter/` is writable by a chat, so a value this row prints from it is escaped onto
+    // one line: a newline in it must not print a row of its own (#353). `head` above is only
+    // handed to git, never printed.
+    let shown = |key: &str, limit: usize| {
+        rec.get(key)
+            .filter(|v| truthy(v))
+            .map(|v| super::one_line(&py_str(v), limit))
+    };
+    let landed = shown("landed", super::DISPLAY_LIMIT);
+    // A URL is somewhere a reader has to go, so it keeps a path's length.
+    let url = shown("url", super::PATH_DISPLAY_LIMIT);
+    let branch = shown("branch", super::DISPLAY_LIMIT).unwrap_or_else(|| "main".to_owned());
     if rec.get("outcome").and_then(serde_json::Value::as_str) == Some("branched")
         && let Some(landed) = landed
     {

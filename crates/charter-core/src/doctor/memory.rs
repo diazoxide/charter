@@ -101,7 +101,7 @@ fn memory_bases(root: &Path) -> Result<(Vec<Base>, Vec<Unread>), String> {
         .into_iter()
         .map(|name| {
             let dir = personas.join(&name).join("memory");
-            (name, dir)
+            (label(&name), dir)
         })
         .collect();
     bases.push((
@@ -112,9 +112,15 @@ fn memory_bases(root: &Path) -> Result<(Vec<Base>, Vec<Unread>), String> {
         fsx::read_workspaces(root).map_err(|e| fsx::py_os_error(&e, &root.join("workspaces")))?;
     for name in names {
         let dir = root.join("workspaces").join(&name).join("memory");
-        bases.push((format!("ws:{name}"), dir));
+        bases.push((format!("ws:{}", label(&name)), dir));
     }
     Ok((bases, unread))
+}
+
+/// A directory name as a row quotes it: a chat can name a directory anything, and a newline
+/// in it must not print a row of its own (#353).
+fn label(name: &str) -> String {
+    super::one_line(name, super::DISPLAY_LIMIT)
 }
 
 pub(super) fn memory_indexes(d: &Doctor) -> Row {

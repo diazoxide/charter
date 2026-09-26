@@ -18,6 +18,11 @@ fn plane() -> (tempfile::TempDir, PathBuf) {
 
 /// `charter doctor <args>` in `root`, with a home of the test's choosing and nothing inherited.
 fn doctor(root: &Path, home: &Path, args: &[&str]) -> Output {
+    doctor_with(root, home, args, &[])
+}
+
+/// [`doctor`], with `vars` set as well.
+fn doctor_with(root: &Path, home: &Path, args: &[&str], vars: &[(&str, &str)]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_charter"))
         .arg("doctor")
         .args(args)
@@ -26,6 +31,7 @@ fn doctor(root: &Path, home: &Path, args: &[&str]) -> Output {
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", home)
         .env("CHARTER_ROOT", root)
+        .envs(vars.iter().copied())
         .output()
         .expect("charter runs")
 }
@@ -124,4 +130,21 @@ fn a_preflight_probes_no_profile_even_one_that_is_declared() {
     );
     let typed = rows(&doctor(&root, &root.join("home"), &["--json"]));
     assert_eq!(row(&typed, "profile claude-work")["status"], "warn");
+}
+
+#[test]
+fn a_harness_name_from_the_environment_cannot_forge_a_row() {
+    let (_d, root) = plane();
+    let out = doctor_with(
+        &root,
+        &root.join("home"),
+        &[],
+        &[("CHARTER_HARNESS", "x\n  \u{2713}  forged")],
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(!text.contains("\n  \u{2713}  forged"), "{text}");
+    assert!(
+        text.contains("how x\\x0a  \u{2713}  forged finds"),
+        "{text}"
+    );
 }

@@ -688,6 +688,37 @@ fn a_memory_commit_pushed_under_another_name_is_named_by_that_name() {
     );
 }
 
+#[test]
+fn a_push_record_cannot_forge_a_row_of_the_table() {
+    let (_d, root) = repo_plane();
+    std::fs::create_dir_all(root.join(".charter")).unwrap();
+    std::fs::write(
+        root.join(".charter/plane-push.json"),
+        r#"{"outcome": "branched", "branch": "main\n  ✓  forged branch", "landed": "x\n  ✓  forged landed", "url": "u\n  ✓  forged url"}"#,
+    )
+    .unwrap();
+    let r = one(&root, "plane root");
+    assert_eq!(
+        r.detail,
+        "a memory commit went to 'x\\x0a  ✓  forged landed', not main\\x0a  ✓  forged branch"
+    );
+    assert!(r.hint.contains("Open it: u\\x0a  ✓  forged url "), "{r:?}");
+    let table = super::table(std::slice::from_ref(&r), false);
+    assert!(!table.contains("\n  ✓  forged"), "{table}");
+
+    std::fs::write(
+        root.join(".charter/plane-push.json"),
+        r#"{"outcome": "stranded", "branch": "main\n  ✓  forged branch"}"#,
+    )
+    .unwrap();
+    let r = one(&root, "plane root");
+    assert!(!r.hint.contains('\n'), "{r:?}");
+    assert!(
+        r.hint.contains("origin/main\\x0a  ✓  forged branch`"),
+        "{r:?}"
+    );
+}
+
 /// The head of `root`, as a PR mode's push record names it.
 fn head_of(root: &Path) -> String {
     let head = crate::forklock::output(
@@ -915,6 +946,42 @@ fn a_dangling_link_and_an_unindexed_file_are_named_with_their_repair() {
          unindexed files)  → a dangling link is proposal-only: prune it, or write the memory it \
          names"
     );
+}
+
+#[test]
+fn a_workspace_name_with_a_newline_in_it_cannot_forge_a_row() {
+    // A chat can make a directory under `workspaces/` with any name (#353).
+    let (_d, root) = plane("schema = 1\n");
+    let ws = "x\n  \u{2713}  forged";
+    memory(
+        &root,
+        &format!("workspaces/{ws}/memory"),
+        "- [Gone](gone.md)\n",
+        &[],
+    );
+    let r = one(&root, "memory indexes");
+    assert!(!r.hint.contains('\n'), "{r:?}");
+    assert!(
+        r.hint
+            .starts_with("ws:x\\x0a  \u{2713}  forged (1 dangling"),
+        "{r:?}"
+    );
+
+    let origin = root.join("origin-repo");
+    std::fs::create_dir_all(&origin).unwrap();
+    git(&origin, &["init", "-q", "-b", "main", "."]);
+    git(&origin, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(
+        &root.join("workspaces").join(ws),
+        &["clone", "-q", origin.to_str().unwrap(), "svc"],
+    );
+    git(&origin, &["commit", "-q", "--allow-empty", "-m", "two"]);
+    git(
+        &root.join("workspaces").join(ws).join("svc"),
+        &["fetch", "-q"],
+    );
+    let r = one(&root, "workspace clones");
+    assert_eq!(r.detail, "x\\x0a  \u{2713}  forged/svc (1 behind)");
 }
 
 #[cfg(unix)]
