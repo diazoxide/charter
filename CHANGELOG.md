@@ -69,8 +69,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   seconds each and 3 seconds for all of them together. A debug build of `charter` now lets the
   test suite set a different limit, so a test that is not about the limit gives a slow machine
   room, and a test that is about it uses a short limit and a program that never answers.
-  A refusal now also shows a limit under a second correctly, as "0.5 seconds" rather than
-  "0 seconds". ([#422](https://github.com/diazoxide/charter/issues/422))
+  ([#422](https://github.com/diazoxide/charter/issues/422))
 
 - **The dispatch log, the session trace and a memory index refuse to write through a link.**
   They now open the file without following a link, and refuse it when it is one.

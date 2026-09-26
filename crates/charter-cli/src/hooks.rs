@@ -149,7 +149,7 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
                     workspace: workspace.clone(),
                     persona: env(charter_core::active::PERSONA_ENV).filter(|it| !it.is_empty()),
                 },
-                crate::extensions::at_session_start(),
+                crate::extensions::session_start_bounds(),
             );
             parts.extend(briefed.parts);
             for note in briefed.notes {

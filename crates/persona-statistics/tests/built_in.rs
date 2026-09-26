@@ -12,6 +12,11 @@
 use std::path::{Path, PathBuf};
 
 use charter_core::executor::Executor;
+
+/// How long the program is given here (#422): it is copied into a fresh bundle for each test,
+/// and macOS assesses a program file the first time it runs — under a loaded machine, for
+/// longer than the real five seconds. No test here is about the deadline.
+const PATIENT: std::time::Duration = std::time::Duration::from_secs(30);
 use charter_core::extension::{self, BuiltIn, Source, Standing};
 use charter_core::handed;
 use charter_core::panel::Block;
@@ -93,14 +98,16 @@ impl Shipped {
 
     fn ask(&self, focus: Option<&str>) -> Result<charter_core::executor::Answer, String> {
         let plane = self.plane();
-        Executor::with_built_in(self.built_in()).ask(
-            &self.config(),
-            &extension::project::Choices::read(&plane),
-            ID,
-            "statistics",
-            focus,
-            |_| handed::personas(&plane, noon()),
-        )
+        Executor::with_built_in(self.built_in())
+            .with_deadline(PATIENT)
+            .ask(
+                &self.config(),
+                &extension::project::Choices::read(&plane),
+                ID,
+                "statistics",
+                focus,
+                |_| handed::personas(&plane, noon()),
+            )
     }
 }
 
@@ -260,7 +267,7 @@ fn a_workspace_can_turn_it_off_while_the_project_has_it_on() {
     )
     .expect("a workspace turning it off");
     let plane = shipped.plane();
-    let executor = Executor::with_built_in(shipped.built_in());
+    let executor = Executor::with_built_in(shipped.built_in()).with_deadline(PATIENT);
     let ask = |workspace: Option<&str>| {
         executor.ask(
             &shipped.config(),

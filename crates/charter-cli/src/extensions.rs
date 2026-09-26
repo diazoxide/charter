@@ -33,14 +33,17 @@ use charter_core::extension::project::Choices;
 #[cfg(debug_assertions)]
 const DEADLINE_ENV: &str = "CHARTER_TEST_EXTENSION_DEADLINE_MS";
 
-/// The deadline the test suite asked for, in a debug build that was asked for one.
-fn asked_for() -> Option<std::time::Duration> {
+/// The deadline the test suite set, in a debug build it set one in. A value that is not a
+/// whole number of milliseconds panics rather than falling back to the real deadline, which
+/// would bring back the very failure the seam exists to prevent.
+fn test_deadline() -> Option<std::time::Duration> {
     #[cfg(debug_assertions)]
     {
-        std::env::var(DEADLINE_ENV)
-            .ok()
-            .and_then(|ms| ms.parse().ok())
-            .map(std::time::Duration::from_millis)
+        std::env::var(DEADLINE_ENV).ok().map(|ms| {
+            std::time::Duration::from_millis(ms.parse().unwrap_or_else(|_| {
+                panic!("{DEADLINE_ENV} is {ms:?}, not a whole number of milliseconds")
+            }))
+        })
     }
     #[cfg(not(debug_assertions))]
     {
@@ -51,7 +54,7 @@ fn asked_for() -> Option<std::time::Duration> {
 /// The executor this binary starts an extension's program with — for an event it hears, and
 /// for a command run from the command line.
 pub fn executor() -> Executor {
-    match asked_for() {
+    match test_deadline() {
         Some(deadline) => Executor::default().with_deadline(deadline),
         None => Executor::default(),
     }
@@ -60,9 +63,9 @@ pub fn executor() -> Executor {
 /// How long `charter hook sessionstart` waits for extensions: [`Bounds::SESSION_START`], or,
 /// in a test, the deadline it asked for for each, and the wait for all of them together kept
 /// in the same proportion to it.
-pub fn at_session_start() -> Bounds {
+pub fn session_start_bounds() -> Bounds {
     let real = Bounds::SESSION_START;
-    match asked_for() {
+    match test_deadline() {
         Some(each) => Bounds {
             each,
             total: each.mul_f64(real.total.as_secs_f64() / real.each.as_secs_f64()),
