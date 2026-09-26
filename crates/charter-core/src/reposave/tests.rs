@@ -732,3 +732,74 @@ fn aborting_the_merge_by_hand_clears_the_block_at_once() {
     assert_ne!(got.stage, Stage::Blocked, "{got:?}");
     assert_eq!(got.blocked, None, "{got:?}");
 }
+
+// --------------------------------------------------------------------------------------- //
+// the small answers auto-save decides by (#464)                                              //
+// --------------------------------------------------------------------------------------- //
+
+/// A clone in push mode with nothing unsaved, as [`standing`] reads one.
+fn at_rest() -> Standing {
+    Standing {
+        name: "widget".into(),
+        mode: Mode::Push,
+        mode_from: "default",
+        autosave: true,
+        stage: Stage::Saved,
+        branch: Some("main".into()),
+        changed: 0,
+        ahead: Some(0),
+        pr: None,
+        blocked: None,
+        head: Some("abc123".into()),
+        pushes: true,
+    }
+}
+
+#[test]
+fn a_repo_is_worth_saving_for_changed_files_a_block_or_an_unpushed_commit_and_never_when_off() {
+    let with = |f: &dyn Fn(&mut Standing)| {
+        let mut s = at_rest();
+        f(&mut s);
+        s.worth_saving()
+    };
+    assert!(!with(&|_| {}), "nothing unsaved");
+    assert!(with(&|s| s.changed = 1), "one changed file");
+    assert!(with(&|s| s.stage = Stage::Blocked), "a block to retry");
+    assert!(with(&|s| s.stage = Stage::Committed), "a commit to push");
+    assert!(
+        !with(&|s| s.stage = Stage::PrOpen),
+        "a pull request waits on a person, not on a save"
+    );
+    assert!(
+        !with(&|s| {
+            s.mode = Mode::Off;
+            s.changed = 3;
+            s.stage = Stage::Blocked;
+        }),
+        "off is never saved, whatever is unsaved"
+    );
+}
+
+#[test]
+fn the_fingerprint_moves_with_the_head_the_changed_count_and_the_unpushed_count_only() {
+    let base = at_rest();
+    let print = |f: &dyn Fn(&mut Standing)| {
+        let mut s = at_rest();
+        f(&mut s);
+        s.fingerprint()
+    };
+    assert_eq!(base.fingerprint(), print(&|s| s.pr = Some("#7".into())));
+    assert_eq!(base.fingerprint(), print(&|s| s.stage = Stage::Changed));
+    assert_ne!(base.fingerprint(), print(&|s| s.head = Some("def456".into())));
+    assert_ne!(base.fingerprint(), print(&|s| s.changed = 2));
+    assert_ne!(base.fingerprint(), print(&|s| s.ahead = Some(1)));
+}
+
+#[test]
+fn a_generated_message_naming_exactly_as_many_files_as_it_shows_counts_none_as_more() {
+    let files: Vec<String> = (1..=5).map(|n| format!("f{n}")).collect();
+    assert_eq!(
+        summary(&files),
+        "charter save: 5 files (f1, f2, f3, f4, f5)"
+    );
+}

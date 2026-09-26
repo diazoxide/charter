@@ -76,6 +76,9 @@ pub struct Request<'a> {
 }
 
 /// A [`Request::mid_turn`] that says no chat is working: nothing in this process can be.
+///
+/// cargo-mutants' `vec![]` for it is this very body, so `.cargo/mutants.toml` excludes that one
+/// mutant as equivalent.
 pub fn nobody_working() -> Vec<String> {
     Vec::new()
 }

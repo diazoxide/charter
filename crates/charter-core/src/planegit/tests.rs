@@ -951,6 +951,10 @@ fn a_rebase_that_really_conflicts_is_still_called_a_conflict() {
     assert_eq!(pushed.outcome, Outcome::Conflict, "{said}");
     assert!(said.contains("rebase hit a conflict"), "{said}");
     assert_eq!(
+        pushed.detail, "the remote changed the same lines in: theirs.md",
+        "the record says where"
+    );
+    assert_eq!(
         ask(&bare, &["log", "-1", "--format=%s", "main"]).trim(),
         "theirs"
     );
@@ -1115,6 +1119,10 @@ fn a_branch_that_requires_a_pull_request_gets_one_rather_than_a_stranded_commit(
     let record = push_record(&fixture.root).expect("a record");
     assert_eq!(record["outcome"], "branched");
     assert_eq!(record["landed"], branch);
+    assert_eq!(
+        record["url"],
+        format!("https://github.com/acme/plane/compare/{branch}?expand=1")
+    );
 }
 
 #[test]
@@ -1179,6 +1187,11 @@ fn a_push_that_simply_fails_is_reported_and_the_save_is_still_a_success() {
     assert!(said.contains("Check `gh auth status`."), "{said}");
     let record = push_record(&fixture.root).expect("a record");
     assert_eq!(record["outcome"], "failed");
+    let detail = record["detail"].as_str().unwrap_or_default();
+    assert!(
+        !detail.is_empty() && said.contains(detail.lines().next().unwrap_or_default()),
+        "the record carries what git said: {record}"
+    );
 }
 
 #[test]
@@ -1518,6 +1531,7 @@ fn a_commit_left_unpushed_is_pushed_by_the_next_save_even_with_nothing_new_to_co
     run(&fixture.root, &["add", "-A"]);
     run(&fixture.root, &["commit", "-q", "-m", "by an agent"]);
     assert_eq!(standing(&fixture.root).stage, Stage::Committed);
+    let carried = ask(&fixture.root, &["rev-parse", "HEAD"]).trim().to_string();
 
     let (code, said) = fixture.save(Request {
         root: &fixture.root,
@@ -1534,7 +1548,9 @@ fn a_commit_left_unpushed_is_pushed_by_the_next_save_even_with_nothing_new_to_co
         "by an agent",
         "{said}"
     );
-    assert_eq!(journal(&fixture.root).pop().unwrap()["outcome"], "saved");
+    let line = journal(&fixture.root).pop().unwrap();
+    assert_eq!(line["outcome"], "saved");
+    assert_eq!(line["commit"], carried.as_str(), "the journal names the commit carried");
     assert_eq!(standing(&fixture.root).stage, Stage::Saved);
 }
 
@@ -2662,4 +2678,299 @@ fn aborting_the_merge_by_hand_clears_the_planes_block_at_once() {
     let got = standing(&fixture.root);
     assert_ne!(got.stage, Stage::Blocked, "{got:?}");
     assert!(got.conflicts.is_empty(), "{got:?}");
+}
+
+// --------------------------------------------------------------------------------------- //
+// the small answers the rest is built from (#464)                                           //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn a_stage_is_named_by_the_word_the_window_reads() {
+    // `app/src/saving.ts` switches on these strings; a stage the window cannot name is shown
+    // as nothing at all.
+    let words: Vec<&str> = [
+        Stage::Blocked,
+        Stage::Changed,
+        Stage::Committed,
+        Stage::PrOpen,
+        Stage::Saved,
+    ]
+    .into_iter()
+    .map(Stage::word)
+    .collect();
+    assert_eq!(
+        words,
+        ["blocked", "changed", "committed", "pr-open", "saved"]
+    );
+}
+
+#[test]
+fn a_message_naming_every_group_it_has_counts_none_as_more() {
+    let staged: Vec<String> = [
+        "personas/steward/memory/a.md",
+        "personas/_dispatch/b.jsonl",
+        "workspaces/ide/todos/c.md",
+        "README.md",
+    ]
+    .map(String::from)
+    .to_vec();
+    assert_eq!(
+        summary(&staged),
+        "charter save: 4 files (README.md 1, dispatch 1, ide todos 1, steward memory 1)"
+    );
+}
+
+#[test]
+fn the_signers_words_are_kept_and_gits_progress_hints_and_bare_prefixes_are_not() {
+    let err = "Rebasing (1/1)\rerror: gpg failed to sign the data\n\
+               \n\
+               hint: Could not execute the todo command\n\
+               error:\n\
+               error: failed to write commit object\n";
+    assert_eq!(signer_said(err), "gpg failed to sign the data");
+    assert_eq!(
+        signer_said("hint: nothing but a hint\nfailed to write commit object"),
+        "the signer gave no reason"
+    );
+}
+
+#[test]
+fn a_claim_asked_for_within_a_bound_is_had_once_its_holder_lets_go_inside_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let held = Claim::of(&root).expect("nobody holds it yet");
+    assert!(
+        Claim::within(&root, Duration::from_millis(120)).is_none(),
+        "a claim still held when the bound runs out is not had"
+    );
+    let letting_go = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        drop(held);
+    });
+    let started = std::time::Instant::now();
+    let had = Claim::within(&root, Duration::from_secs(10));
+    letting_go.join().unwrap();
+    assert!(had.is_some(), "the holder let go well inside the bound");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "it waited {:?} for a claim let go after 150 ms",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn the_push_record_is_stamped_with_the_time_it_is_now() {
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let stamped = now();
+    assert!(
+        (stamped - before).abs() < 60.0,
+        "stamped {stamped}, and it is {before}"
+    );
+}
+
+// --------------------------------------------------------------------------------------- //
+// what holds incoming commits off, one reason at a time (#464)                              //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn with_nothing_incoming_a_tree_with_work_in_it_is_held_for_nothing() {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    run(
+        &fixture.root,
+        &["push", "-q", &bare.display().to_string(), "HEAD:refs/heads/main"],
+    );
+    std::fs::write(fixture.root.join("mine.md"), "mine").unwrap();
+
+    let got = fetch(&fixture.root, true).expect("fetched");
+
+    assert_eq!(got.behind, 0, "{got:?}");
+    assert!(!got.moved, "{got:?}");
+    assert!(
+        got.held.is_none(),
+        "nothing came in, so nothing was held: {got:?}"
+    );
+}
+
+#[test]
+fn incoming_commits_are_held_off_by_a_commit_of_the_planes_own() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+    std::fs::write(fixture.root.join("mine.md"), "mine").unwrap();
+    run(&fixture.root, &["add", "-A"]);
+    run(&fixture.root, &["commit", "-q", "-m", "mine"]);
+
+    let got = fetch(&fixture.root, true).expect("fetched");
+
+    assert!(matches!(got.held, Some(Held::Ahead(1))), "{got:?}");
+    assert!(!got.moved, "{got:?}");
+}
+
+#[test]
+fn incoming_commits_wait_while_another_git_holds_the_index() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote_that_moved();
+    std::fs::write(fixture.root.join(".git/index.lock"), "").unwrap();
+
+    let got = fetch(&fixture.root, true).expect("fetched");
+
+    assert!(matches!(got.held, Some(Held::IndexLocked)), "{got:?}");
+    assert!(!got.moved, "{got:?}");
+}
+
+#[test]
+fn a_fast_forward_git_itself_refuses_is_said_in_its_words_and_nothing_is_called_moved() {
+    // Their commit adds a file this clone ignores (its own `info/exclude`) and has a copy of:
+    // `status` does not list an ignored file, so nothing holds the fast-forward off, and
+    // `merge --no-overwrite-ignore` then refuses to put their file over it.
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    run(
+        &fixture.root,
+        &["push", "-q", &bare.display().to_string(), "HEAD:refs/heads/main"],
+    );
+    let theirs = fixture.root.parent().unwrap().join("theirs");
+    run(
+        fixture.root.parent().unwrap(),
+        &["clone", "-q", &bare.display().to_string(), &theirs.display().to_string()],
+    );
+    run(&theirs, &["config", "user.name", "Other"]);
+    run(&theirs, &["config", "user.email", "other@example.invalid"]);
+    std::fs::write(theirs.join("local.txt"), "theirs").unwrap();
+    run(&theirs, &["add", "-A"]);
+    run(&theirs, &["commit", "-q", "-m", "theirs"]);
+    run(&theirs, &["push", "-q", "origin", "main"]);
+    std::fs::write(fixture.root.join(".git/info/exclude"), "local.txt\n").unwrap();
+    std::fs::write(fixture.root.join("local.txt"), "mine, ignored").unwrap();
+    let before = ask(&fixture.root, &["rev-parse", "HEAD"]);
+
+    let got = fetch(&fixture.root, true).expect("fetched");
+
+    assert_eq!(got.behind, 1, "{got:?}");
+    assert!(!got.moved, "{got:?}");
+    assert!(matches!(got.held, Some(Held::Refused(_))), "{got:?}");
+    assert_eq!(ask(&fixture.root, &["rev-parse", "HEAD"]), before);
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("local.txt")).unwrap(),
+        "mine, ignored"
+    );
+}
+
+#[test]
+fn a_commit_no_branch_would_take_is_stranded_and_the_record_says_what_the_remote_said() {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote();
+    std::fs::create_dir_all(bare.join("hooks")).unwrap();
+    stand_in::program(
+        &bare,
+        "hooks/pre-receive",
+        "#!/bin/sh\nwhile read _ _ ref; do\n  case \"$ref\" in refs/heads/main)\n    echo \
+         'remote: error: GH006: Protected branch update failed for refs/heads/main.' >&2\n    \
+         exit 1;; esac\ndone\necho 'remote: branch pushes are closed today' >&2\nexit 1\n",
+    );
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+
+    let (_, said) = fixture.just_save();
+
+    assert!(said.contains("also failed"), "{said}");
+    let record = push_record(&fixture.root).expect("a record");
+    assert_eq!(record["outcome"], "stranded", "{record}");
+    assert!(
+        record["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("branch pushes are closed today")),
+        "{record}"
+    );
+}
+
+#[test]
+fn a_journal_line_names_the_commit_a_save_made() {
+    let fixture = Fixture::plane();
+    std::fs::write(fixture.root.join("work.md"), "work").unwrap();
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: Some("a save"),
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+    assert_eq!(code, 0, "{said}");
+    let head = ask(&fixture.root, &["rev-parse", "HEAD"]).trim().to_string();
+    assert_eq!(journal(&fixture.root).pop().unwrap()["commit"], head.as_str());
+}
+
+#[test]
+fn an_empty_message_is_no_message_and_the_save_says_what_changed_itself() {
+    let fixture = Fixture::plane();
+    std::fs::write(fixture.root.join("personas/steward/memory/a.md"), "x").unwrap();
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: Some(""),
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        fixture.head_subject(),
+        "charter save: 1 file (steward memory 1)"
+    );
+}
+
+#[test]
+fn a_file_with_a_one_letter_name_is_work_to_save_like_any_other() {
+    // `git status --porcelain` writes `XY <path>`: a one-letter path is an entry of exactly
+    // four bytes, the shortest there is.
+    let fixture = Fixture::plane();
+    std::fs::write(fixture.root.join("a"), "x").unwrap();
+    assert_eq!(standing(&fixture.root).changed, ["a"]);
+}
+
+#[test]
+fn a_pr_mode_on_a_forge_charter_knows_carries_no_notice() {
+    let fixture = Fixture::plane();
+    fixture.with_a_remote();
+    fixture.with_settings("[plane]\nmode = \"pr\"\n");
+    let got = standing(&fixture.root);
+    assert_eq!(got.notice, None, "{got:?}");
+}
+
+#[test]
+fn a_signed_rebase_that_really_conflicts_is_a_conflict_and_not_the_signers_refusal() {
+    let fixture = Fixture::plane();
+    let bare = fixture.with_a_remote_that_moved();
+    std::fs::write(fixture.root.join("theirs.md"), "mine, not theirs").unwrap();
+    run(&fixture.root, &["add", "-A"]);
+    run(&fixture.root, &["commit", "-q", "-m", "mine"]);
+    run(
+        &fixture.root,
+        &["fetch", "-q", &bare.display().to_string(), "main"],
+    );
+
+    let rebased = rebase_onto_fetched(&fixture.root, true, std::time::Duration::from_secs(30));
+
+    assert!(matches!(rebased, Rebased::Conflict(_)), "{rebased:?}");
+}
+
+#[test]
+fn a_rebase_git_did_not_finish_for_a_reason_of_its_own_is_not_called_out_of_time() {
+    // Killed by a signal that is not charter's — here a filter that kills the git running it —
+    // git has no exit code, and it is still not charter's deadline that stopped it.
+    let fixture = Fixture::plane();
+    let bare = a_remote_no_rebase_can_finish_onto(&fixture);
+    run(
+        &fixture.root,
+        &["config", "filter.slow.smudge", "kill -9 $PPID; cat"],
+    );
+    run(
+        &fixture.root,
+        &["fetch", "-q", &bare.display().to_string(), "main"],
+    );
+
+    let rebased = rebase_onto_fetched(&fixture.root, false, std::time::Duration::from_secs(30));
+
+    assert_ne!(rebased, Rebased::OutOfTime);
 }
