@@ -383,8 +383,9 @@ pub fn restrictive(doc: &serde_json::Value) -> serde_json::Map<String, serde_jso
     out
 }
 
-/// The generated `.claude/settings.json`: the plane's `enabledPlugins` and `env`, and its
-/// shared ask/deny rules. `None` for a plane with nothing to say.
+/// The generated `.claude/settings.json`: the plane's `enabledPlugins` (less any that turns
+/// the retired `charter@charter` on) and `env`, and its shared ask/deny rules. `None` for a
+/// plane with nothing to say.
 ///
 /// The key order is the Python's, because the file is compared byte for byte against it:
 /// `enabledPlugins`, `env`, then `permissions` last.
@@ -398,15 +399,18 @@ pub fn settings_document(plane: &Path) -> Option<String> {
         let Some(value) = settings.get(key) else {
             continue;
         };
-        // The retired Python charter's plugin is left behind: no file charter writes enables
-        // it (#374). A plane that still enables it is its own file, which `charter doctor`
-        // names.
+        // The retired Python charter's plugin is left behind when the plane turns it ON: no
+        // file charter writes enables it (#374). A plane that still enables it is its own
+        // file, which `charter doctor` names. A plane that turns it OFF keeps that `false`,
+        // which is what stops a user-level `true` in a workspace chat.
         if key == "enabledPlugins"
             && let serde_json::Value::Object(plugins) = value
         {
             let kept: serde_json::Map<String, serde_json::Value> = plugins
                 .iter()
-                .filter(|(id, _)| id.as_str() != crate::plugin::SUPERSEDED)
+                .filter(|(id, on)| {
+                    id.as_str() != crate::plugin::SUPERSEDED || !crate::scaffold::text::truthy(on)
+                })
                 .map(|(id, on)| (id.clone(), on.clone()))
                 .collect();
             if !kept.is_empty() {

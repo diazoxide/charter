@@ -106,7 +106,9 @@ either one to one harness.
 (`plugin install`), whether the copy is what this charter would install now (`plugin`),
 whether the `charter` its hooks run still exists (`plugin files`), and names every settings
 file that still enables `charter@charter` (`superseded plugin`). `charter doctor --fix` runs
-`charter plugin install` first, printing each change, and then reports.
+`charter plugin install` first, printing each change, and then reports. That is its only
+repair: it writes this machine's harness settings and never a file in the plane, so a plane
+file that still enables `charter@charter` stays yours to edit.
 
 ## What charter reaches on its own, and how to stop it
 

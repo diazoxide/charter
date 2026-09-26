@@ -341,7 +341,7 @@ impl Doctor {
 
     /// Every row, in the order Python's `doctor._checks` runs them: cheap and local first.
     pub fn run(&self) -> Vec<Row> {
-        let mut rows = vec![deferred::python3(), git::git(), git::identity(self)];
+        let mut rows = vec![python3(), git::git(), git::identity(self)];
         for cli in config::forge_clis(self) {
             rows.push(deferred::row(&cli, deferred::FORGES));
             rows.push(deferred::row(&format!("{cli} auth"), deferred::FORGES));
@@ -385,6 +385,16 @@ impl Doctor {
         rows.push(plugin::superseded_plugin(self));
         rows
     }
+}
+
+/// The Python charter's first row reported its own interpreter. This charter has none and
+/// needs none — a fact about this binary, not a check left undone — so the row is green
+/// (#373), and keeps its place so a script reading `--json` still finds it.
+fn python3() -> Row {
+    Row::ok(
+        "python3",
+        "not needed — the Python charter is retired, and this charter has no Python in it",
+    )
 }
 
 /// `path` with its links resolved, or `path` itself when it cannot be — Python's

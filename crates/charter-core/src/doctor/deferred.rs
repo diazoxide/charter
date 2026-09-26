@@ -27,15 +27,6 @@ pub(crate) fn row(name: &str, why: &str) -> Row {
     Row::warn(name, format!("not checked ({why})"), DEFERRED_HINT)
 }
 
-/// The Python charter's first row reported its own interpreter. This charter has none and
-/// needs none, so there is nothing to warn about (#373); the row keeps its place so a script
-/// reading `--json` still finds it.
-pub(crate) fn python3() -> Row {
-    Row::ok(
-        "python3",
-        "not needed — the Python charter is retired, and this charter has no Python in it",
-    )
-}
 pub(crate) const FORGES: &str = "this version of charter does not check forges yet";
 pub(crate) const HARNESS: &str = "this version of charter does not check the harness \
                                   registry's capability ceilings yet";

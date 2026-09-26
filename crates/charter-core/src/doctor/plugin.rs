@@ -88,13 +88,20 @@ pub(super) fn plugin_install(d: &Doctor) -> Row {
         let names: Vec<String> = on.iter().map(|a| a.harness().to_owned()).collect();
         return Row::ok(NAME, format!("installed for {}", named(&names)));
     }
+    let detail = format!(
+        "not installed for {} — a chat started outside the app runs without charter's hooks \
+         and guard",
+        named(&missing)
+    );
+    // The preflight runs inside a chat, which the app or the plugin has already armed, and a
+    // warning there would be counted in every app chat's status line for a choice about OTHER
+    // chats. The doctor a person types says it as a warning.
+    if d.preflight {
+        return Row::ok(NAME, detail);
+    }
     Row::warn(
         NAME,
-        format!(
-            "not installed for {} — a chat started outside the app runs without charter's \
-             hooks and guard",
-            named(&missing)
-        ),
+        detail,
         format!("{REPAIR} installs it. The chats the app starts are armed by the app either way."),
     )
 }
@@ -112,25 +119,39 @@ pub(super) fn plugin(d: &Doctor) -> Row {
     if on.is_empty() {
         return Row::ok(NAME, "nothing installed to compare");
     }
-    let mut stale: Vec<String> = Vec::new();
+    // Asked as if the charter the hooks already run had installed it: which binary they run is
+    // `plugin files`' question, and a doctor run by another charter — a development build, one
+    // on PATH — must not call a copy stale for naming the app's.
+    let (mut stale, mut current, mut unknown) = (Vec::new(), Vec::new(), Vec::new());
     for a in &on {
-        match a.install(m) {
+        let mut as_installed = m.clone();
+        if let Some(binary) = a.runs(m) {
+            as_installed.binary = binary;
+        }
+        match a.install(&as_installed) {
             Ok(plan) if plan.changes() => stale.push(a.harness().to_owned()),
-            Ok(_) => {}
-            Err(why) => return Row::not_checked(NAME, super::one_line(&why, 1024)),
+            Ok(_) => current.push(a.harness().to_owned()),
+            Err(why) => unknown.push(format!(
+                "{} not compared ({})",
+                a.harness(),
+                super::one_line(&why, 1024)
+            )),
         }
     }
+    let tail: String = unknown.iter().map(|why| format!("; {why}")).collect();
     if stale.is_empty() {
-        let names: Vec<String> = on.iter().map(|a| a.harness().to_owned()).collect();
+        if current.is_empty() {
+            return Row::not_checked(NAME, unknown.join("; "));
+        }
         return Row::ok(
             NAME,
-            format!("current with this charter for {}", named(&names)),
+            format!("current with this charter for {}{tail}", named(&current)),
         );
     }
     Row::warn(
         NAME,
         format!(
-            "installed for {}, but not what this charter would install now",
+            "installed for {}, but not what this charter would install now{tail}",
             named(&stale)
         ),
         format!(
@@ -153,7 +174,7 @@ pub(super) fn plugin_files(d: &Doctor) -> Row {
     if on.is_empty() {
         return Row::ok(NAME, "nothing installed to run");
     }
-    let mut gone: Vec<(String, PathBuf)> = Vec::new();
+    let mut said: Vec<String> = Vec::new();
     let mut runs: Vec<PathBuf> = Vec::new();
     for a in &on {
         match a.runs(m) {
@@ -162,27 +183,22 @@ pub(super) fn plugin_files(d: &Doctor) -> Row {
                     runs.push(binary);
                 }
             }
-            Some(binary) => gone.push((a.harness().to_owned(), binary)),
-            None => gone.push((a.harness().to_owned(), PathBuf::new())),
+            Some(binary) => said.push(format!(
+                "{}'s hooks run {}, which is not there",
+                a.harness(),
+                fsx::path_field(&binary)
+            )),
+            // The setting is there and the copy's hooks file is missing or unreadable.
+            None => said.push(format!(
+                "{} is enabled, but its hooks could not be read to see which charter they run",
+                a.harness()
+            )),
         }
     }
-    if gone.is_empty() {
+    if said.is_empty() {
         let shown: Vec<String> = runs.iter().map(|p| fsx::path_field(p)).collect();
         return Row::ok(NAME, format!("the hooks run {}", named(&shown)));
     }
-    let said: Vec<String> = gone
-        .iter()
-        .map(|(harness, binary)| {
-            if binary.as_os_str().is_empty() {
-                format!("{harness}'s hooks name no charter charter can read")
-            } else {
-                format!(
-                    "{harness}'s hooks run {}, which is not there",
-                    fsx::path_field(binary)
-                )
-            }
-        })
-        .collect();
     Row::warn(
         NAME,
         said.join("; "),
@@ -197,13 +213,40 @@ pub(super) fn plugin_files(d: &Doctor) -> Row {
 pub(super) fn superseded_plugin(d: &Doctor) -> Row {
     const NAME: &str = "superseded plugin";
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut layers = false;
     if d.has_plane {
         files.extend(install::superseded_in_plane(&d.root));
-    }
-    if let Some(m) = &d.machine {
-        for a in install::adapters() {
-            files.extend(a.superseded(m));
+        // A workspace's generated settings, written before charter stopped carrying the
+        // retired plugin into them: `charter workspace reinit` rewrites them without it.
+        if let Ok((names, _)) = fsx::read_workspaces(&d.root) {
+            for ws in names {
+                let layer = d
+                    .root
+                    .join("workspaces")
+                    .join(ws)
+                    .join(".claude/settings.json");
+                if install::enables_superseded(&layer) {
+                    files.push(layer);
+                    layers = true;
+                }
+            }
         }
+    }
+    match &d.machine {
+        Some(m) => {
+            for a in install::adapters() {
+                files.extend(a.superseded(m));
+            }
+        }
+        // It did not look at this machine's own files, so it cannot say none enables it.
+        None if files.is_empty() => {
+            return Row::not_checked(
+                NAME,
+                "the plane's files do not enable it, and charter cannot tell where Claude Code \
+                 and Codex keep this machine's configuration",
+            );
+        }
+        None => {}
     }
     if files.is_empty() {
         return Row::ok(
@@ -224,10 +267,16 @@ pub(super) fn superseded_plugin(d: &Doctor) -> Row {
         ),
         format!(
             "Delete its `{}` entry from each file named — `charter plugin install` turns it off \
-             in your user settings and Codex's config, and a plane's own file is yours to edit. \
-             Chats outside the app get charter's own plugin from `charter plugin install`; the \
-             app's chats turn the old one off themselves.",
-            crate::plugin::SUPERSEDED
+             in your user settings and Codex's config, and a plane's own file is yours to \
+             edit.{} Chats outside the app get charter's own plugin from `charter plugin \
+             install`; the app's chats turn the old one off themselves.",
+            crate::plugin::SUPERSEDED,
+            if layers {
+                " A workspace's generated settings are rewritten without it by `charter \
+                 workspace reinit --all`."
+            } else {
+                ""
+            }
         ),
     )
 }

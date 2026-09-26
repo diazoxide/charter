@@ -222,7 +222,6 @@ fn a_deferred_row_is_told_apart_from_a_check_that_ran_and_could_not_finish() {
     // never goes down. A check that RAN and could not finish is a real warning and has to be
     // counted — so the two answers have to differ.
     assert!(deferred::row("vaults", deferred::VAULTS).deferred());
-    assert!(!deferred::python3().deferred(), "#373: nothing to defer");
     assert!(!Row::not_checked("git", "git timed out").deferred());
     assert!(!Row::warn("x", "y", "z").deferred());
     assert!(!Row::ok("x", "y").deferred());
@@ -1533,7 +1532,7 @@ fn a_machine_without_the_plugin_is_told_how_to_install_it_and_one_with_it_passes
 }
 
 #[test]
-fn a_copy_from_another_charter_is_stale_and_one_whose_charter_is_gone_is_named() {
+fn an_older_copy_is_stale_and_one_whose_charter_is_gone_is_named() {
     let (d, root) = plane("schema = 1\n");
     let mut m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
     crate::plugin_install::run(&m, crate::plugin_install::Verb::Install, &[], false);
@@ -1543,14 +1542,55 @@ fn a_copy_from_another_charter_is_stale_and_one_whose_charter_is_gone_is_named()
     assert!(r.detail.contains("which is not there"), "{r:?}");
     assert!(r.hint.contains("lets the tool call through"), "{r:?}");
 
+    // Another charter asking — a development build, one on PATH — is not a stale copy.
     m.binary = d.path().join("machine/elsewhere");
+    assert_eq!(plugin_row(&root, &m, "plugin").status, Status::Ok);
+
+    // A copy an older app wrote, whose skills differ from this one's, is.
+    std::fs::write(
+        m.charter_dir.join("plugin/skills/handoff/SKILL.md"),
+        "an older skill\n",
+    )
+    .unwrap();
     let r = plugin_row(&root, &m, "plugin");
     assert_eq!(r.status, Status::Warn, "{r:?}");
     assert!(
         r.detail
-            .starts_with("installed for claude and codex, but not what this charter"),
+            .starts_with("installed for claude, but not what this charter would install now"),
         "{r:?}"
     );
+}
+
+#[test]
+fn inside_a_chat_a_missing_install_is_said_without_a_warning() {
+    let (d, root) = plane("schema = 1\n");
+    let m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
+    let rows = Doctor::at(&root, &root, true, true).with_machine(m).run();
+    let r = row(&rows, "plugin install");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert!(
+        r.detail.starts_with("not installed for claude and codex"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_workspace_layer_that_still_carries_the_retired_plugin_is_named_with_its_repair() {
+    let (d, root) = plane("schema = 1\n");
+    let m = plugin_machine(&d.path().canonicalize().unwrap().join("machine"));
+    std::fs::create_dir_all(root.join("workspaces/alpha/.claude")).unwrap();
+    std::fs::write(
+        root.join("workspaces/alpha/.claude/settings.json"),
+        r#"{"enabledPlugins": {"charter@charter": true}}"#,
+    )
+    .unwrap();
+    let r = plugin_row(&root, &m, "superseded plugin");
+    assert_eq!(r.status, Status::Warn, "{r:?}");
+    assert!(
+        r.detail.contains("workspaces/alpha/.claude/settings.json"),
+        "{r:?}"
+    );
+    assert!(r.hint.contains("charter workspace reinit --all"), "{r:?}");
 }
 
 #[test]
@@ -1593,6 +1633,18 @@ fn every_file_that_enables_the_retired_plugin_is_named() {
 #[test]
 fn a_doctor_a_test_names_never_reads_this_machines_harness_config() {
     let (_d, root) = plane("schema = 1\n");
-    let r = one(&root, "plugin install");
-    assert!(r.detail.starts_with("not checked"), "{r:?}");
+    for name in [
+        "plugin install",
+        "plugin",
+        "plugin files",
+        "superseded plugin",
+    ] {
+        let r = one(&root, name);
+        assert!(r.detail.starts_with("not checked"), "{r:?}");
+        assert_eq!(
+            r.status,
+            Status::Warn,
+            "a row that did not look is never green: {r:?}"
+        );
+    }
 }

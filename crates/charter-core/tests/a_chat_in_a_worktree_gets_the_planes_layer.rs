@@ -1118,4 +1118,17 @@ fn a_plugin_the_plane_enables_travels_and_the_retired_one_does_not() {
             "}\n",
         ))
     );
+
+    // A plane that turns it OFF keeps saying so, which is what outranks a user-level `true`.
+    std::fs::write(
+        f.plane.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"charter@charter": false}}"#,
+    )
+    .unwrap();
+    let want = guest::want(&f.plane);
+    assert!(
+        want.get(".claude/settings.json")
+            .is_some_and(|doc| doc.contains("\"charter@charter\": false")),
+        "{want:?}"
+    );
 }

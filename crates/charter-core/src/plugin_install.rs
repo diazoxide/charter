@@ -275,6 +275,11 @@ fn enables(path: &Path, id: &str) -> bool {
     })
 }
 
+/// Whether the Claude Code settings file at `path` turns the retired plugin on.
+pub fn enables_superseded(path: &Path) -> bool {
+    enables(path, crate::plugin::SUPERSEDED)
+}
+
 /// A plane's own settings files that enable the retired plugin: the two a session in the plane
 /// reads. A plane's file is the operator's, and nothing here rewrites it.
 pub fn superseded_in_plane(plane: &Path) -> Vec<PathBuf> {

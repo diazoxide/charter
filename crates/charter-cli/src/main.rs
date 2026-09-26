@@ -218,7 +218,8 @@ enum Command {
         #[arg(long)]
         preflight: bool,
         /// Install charter's plugin for chats started outside the app first — what
-        /// `charter plugin install` does, each change printed on stderr — then report.
+        /// `charter plugin install` does, each change printed on stderr — then report. It
+        /// writes this machine's harness settings only, never a file in the plane.
         #[arg(long)]
         fix: bool,
     },
