@@ -217,6 +217,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A chat's terminal scrolls as far as your fingers move, from the first pixel.** A trackpad
+  or wheel now moves the history one row for every row's height of travel, and a harness in
+  full screen — Claude Code's `"tui": "fullscreen"`, opencode — is sent one wheel report per
+  row, what is left over carried to the next event. Before, a slow start barely moved a
+  full-screen harness (one report per ~50 px) and a flick was cut to one report per event, so
+  scrolling felt slow to start and then fast.
+
 - **The prose guards treat a process substitution as the substitution it is.** A `gh` or
   `glab` command that publishes prose, a charter command that persists it, and `charter
   handoff` now refuse `<(…)` and `>(…)` wherever the shell runs them, and zsh's `=(…)`, exactly
