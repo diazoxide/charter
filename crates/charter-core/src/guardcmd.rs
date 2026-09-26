@@ -349,7 +349,7 @@ pub fn report(root: &Path, rule: &str, bucket: Bucket, local: bool) -> (String, 
 /// force there now (#449) — [`crate::wslayer::wire`], the writer a launch and `charter
 /// workspace reinit` use, with its rule that a file charter did not write is never touched.
 /// What it says: the workspaces it carried the rule into, and the ones it could not.
-fn mirror(root: &Path) -> String {
+pub(crate) fn mirror(root: &Path) -> String {
     let plane = crate::workspaces::Plane::open(root);
     let (names, unread) = match plane.read_workspaces() {
         Ok(listing) => listing,

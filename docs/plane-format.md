@@ -2581,6 +2581,11 @@ same bound.
 (`charter/commands.py:1354`) is written verbatim; an `mcp__…` pattern with a wildcard or
 arguments raises `UnexpressibleRule` and nothing is written.
 
+**Default ask rules** (charter-app): `init` writes two, `Bash(charter handoff *)` and
+`Bash(charter report *--yes*)`. The second is new in charter-app (ADR 0059, amended
+2026-09-26), and `reinit` adds it to a plane that predates it. `opencode.json` gets the same
+two globs.
+
 Measured after `init` + `guard ask 'terraform apply *'`:
 
 ```json

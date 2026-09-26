@@ -61,23 +61,89 @@ fn shadowed(rules: &[String], declared: &BTreeMap<String, BTreeSet<String>>) -> 
     hit
 }
 
-/// `ask rules`: an ask rule that shadows a tool a persona declares. An ask rule outranks a
-/// PreToolUse allow, so charter's persona tool gate cannot pre-approve that tool; the row names
-/// the consequence and never suggests deleting the rule, which is the operator's policy.
+/// Which harnesses lack the ask rule for `charter report --yes` that `charter init` writes by
+/// default (ADR 0059, amended 2026-09-26): Claude Code in the session directory's shared or
+/// local file, opencode in the plane's `opencode.json`. `Err` when a file cannot be read the
+/// way the writer reads it, so a broken file is never called a missing rule.
+pub fn report_rule_missing(root: &Path, here: &Path) -> Result<Vec<&'static str>, String> {
+    let mut claude = false;
+    for rel in [settings::SETTINGS, ".claude/settings.local.json"] {
+        match found(settings::ensure_rule(
+            &here.join(rel),
+            "ask",
+            settings::REPORT_RULE,
+            true,
+        )) {
+            Found::Present => claude = true,
+            Found::Missing => {}
+            Found::Unreadable(why) => return Err(why),
+        }
+    }
+    let opencode = match found(settings::ensure_opencode_rule(
+        root,
+        settings::REPORT_PATTERN,
+        "ask",
+        true,
+    )) {
+        Found::Present => true,
+        Found::Missing => false,
+        Found::Unreadable(why) => return Err(why),
+    };
+    Ok([("claude-code", claude), ("opencode", opencode)]
+        .into_iter()
+        .filter(|(_, has)| !has)
+        .map(|(h, _)| h)
+        .collect())
+}
+
+/// `ask rules`: the plane's default ask rule for filing a report, and an ask rule that
+/// shadows a tool a persona declares. An ask rule outranks a PreToolUse allow, so charter's
+/// persona tool gate cannot pre-approve that tool; the row names the consequence and never
+/// suggests deleting the rule, which is the operator's policy.
 pub(super) fn ask_rules(d: &Doctor) -> Row {
     const NAME: &str = "ask rules";
-    let path = canonical(&d.cwd).join(settings::SETTINGS);
-    match object(&path) {
+    let here = canonical(&d.cwd);
+    let path = here.join(settings::SETTINGS);
+    let exists = match object(&path) {
         Err(why) => return Row::not_checked(NAME, super::one_line(&why, 1024)),
-        Ok(None) => return Row::ok(NAME, "none"),
-        Ok(Some(_)) => {}
+        Ok(found) => found.is_some(),
+    };
+    let missing = if d.has_plane {
+        match report_rule_missing(&d.root, &here) {
+            Ok(missing) => missing,
+            Err(why) => return Row::not_checked(NAME, super::one_line(&why, 1024)),
+        }
+    } else {
+        Vec::new()
+    };
+    let (mut details, mut hints): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    if !missing.is_empty() {
+        details.push(format!(
+            "no ask rule for `charter report --yes` under {}",
+            missing.join(", ")
+        ));
+        let how = if here == d.root {
+            "`charter doctor --fix` or `charter reinit` adds it"
+        } else if reinit_reaches(&d.root, &here) {
+            "`charter doctor --fix` adds it at the plane root and carries it into the settings a \
+             chat started here reads"
+        } else {
+            "No charter command writes the settings a chat started in this directory reads; \
+             start the chat at the plane root or in a workspace, where the rule is in force"
+        };
+        hints.push(format!(
+            "A report files a PUBLIC issue under your own GitHub login; this rule makes the \
+             harness ask you before `charter report … --yes` files one. {how}."
+        ));
     }
-    let rules = guardcmd::rules(&path, "ask");
-    if rules.is_empty() {
-        return Row::ok(NAME, "none");
-    }
+    let rules = if exists {
+        guardcmd::rules(&path, "ask")
+    } else {
+        Vec::new()
+    };
     let mut declared: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    if d.has_plane
+    if !rules.is_empty()
+        && d.has_plane
         && let Ok(personas) = memory::list_personas(&d.root)
     {
         for persona in personas {
@@ -87,30 +153,36 @@ pub(super) fn ask_rules(d: &Doctor) -> Row {
         }
     }
     let hit = shadowed(&rules, &declared);
-    if hit.is_empty() {
-        return Row::ok(
-            NAME,
-            format!("{} rule(s), none shadow a persona tool", rules.len()),
-        );
-    }
-    let who: BTreeSet<&String> = hit.iter().flat_map(|t| &declared[t]).collect();
-    let show = |items: Vec<&String>| {
-        items
-            .iter()
-            .map(|s| super::one_line(s, super::DISPLAY_LIMIT))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    Row::warn(
-        NAME,
-        format!(
+    if !hit.is_empty() {
+        let who: BTreeSet<&String> = hit.iter().flat_map(|t| &declared[t]).collect();
+        let show = |items: Vec<&String>| {
+            items
+                .iter()
+                .map(|s| super::one_line(s, super::DISPLAY_LIMIT))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        details.push(format!(
             "{} prompt(s) despite being declared by {}",
             show(hit.iter().collect()),
             show(who.into_iter().collect())
-        ),
-        "An ask rule outranks a PreToolUse allow, so charter's persona tool-gate cannot \
-         pre-approve these. That may be exactly what you want — this names it so the prompts \
-         are not a mystery.",
+        ));
+        hints.push(
+            "An ask rule outranks a PreToolUse allow, so charter's persona tool-gate cannot \
+             pre-approve these. That may be exactly what you want — this names it so the \
+             prompts are not a mystery."
+                .to_owned(),
+        );
+    }
+    if !details.is_empty() {
+        return Row::warn(NAME, details.join("; "), hints.join(" "));
+    }
+    if rules.is_empty() {
+        return Row::ok(NAME, "none");
+    }
+    Row::ok(
+        NAME,
+        format!("{} rule(s), none shadow a persona tool", rules.len()),
     )
 }
 
@@ -141,7 +213,7 @@ fn found(wrote: settings::Wrote) -> Found {
 /// Whether `charter workspace reinit` writes the settings a chat started in `here` reads: a
 /// workspace directory, or a clone directly inside one. Not `docs/`, a persona's folder, or a
 /// directory deep in a clone, where no charter command writes them.
-fn reinit_reaches(root: &Path, here: &Path) -> bool {
+pub(super) fn reinit_reaches(root: &Path, here: &Path) -> bool {
     let Ok(below) = here.strip_prefix(root.join("workspaces")) else {
         return false;
     };

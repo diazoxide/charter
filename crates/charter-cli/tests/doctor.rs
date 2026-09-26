@@ -123,6 +123,36 @@ fn fix_installs_charters_plugin_says_what_it_did_and_then_reports() {
 }
 
 #[test]
+fn fix_adds_the_ask_rule_a_report_is_filed_behind_and_then_reports_it_present() {
+    // #363 D11: a report files a public issue, so the plane asks before `--yes` files one.
+    let (_d, root) = plane();
+    let home = root.join("home");
+    let vars = [("CHARTER_CONFIG_HOME", root.to_str().unwrap())];
+    let before = rows(&doctor_with(&root, &home, &["--json"], &vars));
+    let ask = row(&before, "ask rules");
+    assert_eq!(ask["status"], "warn", "{ask}");
+    assert_eq!(
+        ask["detail"],
+        "no ask rule for `charter report --yes` under claude-code, opencode"
+    );
+
+    let out = doctor_with(&root, &home, &["--json", "--fix"], &vars);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("claude-code: asking for Bash(charter report *--yes*)"),
+        "{said}"
+    );
+    let after = rows(&out);
+    let ask = row(&after, "ask rules");
+    assert_eq!(ask["status"], "ok", "{ask}");
+    let settings = std::fs::read_to_string(root.join(".claude/settings.json")).unwrap();
+    assert!(
+        settings.contains("\"Bash(charter report *--yes*)\""),
+        "{settings}"
+    );
+}
+
+#[test]
 fn a_preflight_probes_no_profile_even_one_that_is_declared() {
     let (_d, root) = plane();
     std::fs::write(

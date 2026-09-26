@@ -1,7 +1,7 @@
-//! The three things `init` puts in harness settings files the plane commits, each only when
-//! it is absent: `$CHARTER_HARNESS` in `.claude/settings.json`'s `env`, the ask rule for
-//! `charter handoff *` in `.claude/settings.json` and `opencode.json`, and the plane-root
-//! guard hook in `.claude/settings.json`.
+//! The things `init` puts in harness settings files the plane commits, each only when it is
+//! absent: `$CHARTER_HARNESS` in `.claude/settings.json`'s `env`, the ask rules for
+//! `charter handoff *` and `charter report *--yes*` in `.claude/settings.json` and
+//! `opencode.json`, and the plane-root guard hook in `.claude/settings.json`.
 //!
 //! A port of `charter/commands.py`'s `ensure_env_var`, `add_permission_rule`,
 //! `_ensure_guard_hook`, and `harness/opencode.py:_apply_rule`, with the restraint they
@@ -32,6 +32,13 @@ pub const HANDOFF_PATTERN: &str = "charter handoff *";
 
 /// The same pattern as Claude Code's rule syntax (`commands._as_rule`).
 pub const HANDOFF_RULE: &str = "Bash(charter handoff *)";
+
+/// The pattern a report's consent rule names: `charter report` with `--yes` anywhere after
+/// it, which is the only spelling that files (ADR 0059, amended 2026-09-26).
+pub const REPORT_PATTERN: &str = "charter report *--yes*";
+
+/// The same pattern as Claude Code's rule syntax.
+pub const REPORT_RULE: &str = "Bash(charter report *--yes*)";
 
 /// The one hook charter wires itself (`commands._GUARD_HOOK`).
 pub fn guard_hook() -> Value {
