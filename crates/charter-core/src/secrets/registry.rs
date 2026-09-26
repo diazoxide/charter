@@ -56,15 +56,25 @@ pub struct Vault {
 }
 
 /// `_read`: a missing file is an empty registry; one that is not JSON is refused by name.
-fn read(path: &Path) -> Result<Map<String, Value>, VaultError> {
+///
+/// Read from `trust` without following a link (#440), as it is written (#434): a half that is
+/// a link, or reached through one, is refused rather than read — the local half names where
+/// every vault's secrets are read from.
+fn read(trust: &Path, path: &Path) -> Result<Map<String, Value>, VaultError> {
     let mut doc = Map::new();
-    if !path.exists() {
-        doc.insert("vaults".into(), Value::Object(Map::new()));
-        return Ok(doc);
-    }
-    let text = std::fs::read_to_string(path).map_err(|e| {
-        VaultError::new(format!("vault registry {} is corrupt: {e}", path.display()))
-    })?;
+    let text = match crate::contain::read_text_no_link(trust, path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            doc.insert("vaults".into(), Value::Object(Map::new()));
+            return Ok(doc);
+        }
+        Err(e) => {
+            return Err(VaultError::new(format!(
+                "vault registry {} is corrupt: {e}",
+                path.display()
+            )));
+        }
+    };
     let parsed: Value = serde_json::from_str(&text).map_err(|e| {
         VaultError::new(format!(
             "vault registry {} is corrupt: {}",
@@ -98,12 +108,12 @@ pub fn py_json_error(e: &serde_json::Error) -> String {
 
 /// The shared (committed) half.
 pub fn load_shared(ctx: &Ctx) -> Result<Map<String, Value>, VaultError> {
-    read(&ctx.shared_registry())
+    read(&ctx.root, &ctx.shared_registry())
 }
 
 /// The local (this machine's) half.
 pub fn load_local(ctx: &Ctx) -> Result<Map<String, Value>, VaultError> {
-    read(&ctx.local_registry())
+    read(ctx.trust(), &ctx.local_registry())
 }
 
 /// `usable_vaults`: the entries of one half that are objects at all. A committed string where
@@ -238,27 +248,35 @@ pub fn scope_of(ctx: &Ctx, name: &str) -> String {
 
 /// `_write`: the document, replaced whole and never written through a link (#434).
 ///
-/// [`crate::rewrite::replace`], gated from the half's own directory — the file alone, as a
-/// vault is gated — so a link at the registry is refused and a crash leaves the previous
-/// registry whole rather than truncated.
-fn write(path: &Path, doc: &Map<String, Value>, mode: Mode) -> Result<(), VaultError> {
+/// [`crate::rewrite::replace`], gated from `trust` — the plane, or an out-of-plane
+/// `$CHARTER_HOME` ([`Ctx::trust`]) — so a link at the registry, or a `.charter/` that is
+/// itself a link (#440), is refused, and a crash leaves the previous registry whole rather
+/// than truncated.
+fn write(
+    trust: &Path,
+    path: &Path,
+    doc: &Map<String, Value>,
+    mode: Mode,
+) -> Result<(), VaultError> {
     let fail = |e: std::io::Error| VaultError::new(format!("cannot write {}: {e}", path.display()));
     let parent = path.parent().unwrap_or(Path::new("."));
+    // Before the directory is made, so a linked `.charter/` is not made through either.
+    crate::contain::no_link_on_the_way(trust, parent).map_err(fail)?;
     super::make_private_dir(parent).map_err(fail)?;
     let text = crate::pyjson::dumps_indent2_unicode(&Value::Object(doc.clone()));
-    crate::rewrite::replace(parent, path, text.as_bytes(), mode).map_err(fail)
+    crate::rewrite::replace(trust, path, text.as_bytes(), mode).map_err(fail)
 }
 
 /// `save_registry`: the LOCAL half — which names every vault's file and account on this
 /// machine — 0600 before a byte of it lands, or nothing written (`Mode::Secret`).
 pub fn save_local(ctx: &Ctx, doc: &Map<String, Value>) -> Result<(), VaultError> {
-    write(&ctx.local_registry(), doc, Mode::Secret)
+    write(ctx.trust(), &ctx.local_registry(), doc, Mode::Secret)
 }
 
 /// `save_shared`: the SHARED half — committed, and carrying no value by construction, so a
 /// committed file's mode: the one it has, or the umask's for a new one (`Mode::Kept`).
 pub fn save_shared(ctx: &Ctx, doc: &Map<String, Value>) -> Result<(), VaultError> {
-    write(&ctx.shared_registry(), doc, Mode::Kept)
+    write(&ctx.root, &ctx.shared_registry(), doc, Mode::Kept)
 }
 
 fn half_vaults(half: &mut Map<String, Value>) -> &mut Map<String, Value> {

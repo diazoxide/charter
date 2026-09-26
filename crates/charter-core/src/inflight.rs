@@ -88,8 +88,8 @@ pub fn still_running(state: &State, now: f64) -> Vec<String> {
             let _ = state.remove(&path);
             continue;
         }
-        let Some(rec) = std::fs::read_to_string(&path)
-            .ok()
+        let Some(rec) = state
+            .read_text(&path)
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         else {
             continue;
@@ -189,8 +189,8 @@ pub fn finish(state: &State, agent: &str, now: f64) {
             name.starts_with(&prefix) && name.ends_with(".json") && name.len() > prefix.len() + 5
         })
         .filter(|p| {
-            std::fs::read_to_string(p)
-                .ok()
+            state
+                .read_text(p)
                 .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
                 .is_some_and(|rec| kind_of(&rec) == DISPATCH)
         })

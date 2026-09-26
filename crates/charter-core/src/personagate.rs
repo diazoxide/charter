@@ -431,28 +431,42 @@ impl Surface {
 /// `_registered_vault_files(resolve=False)`: each vault's configured `file`, as a path —
 /// `vaults.json` at the root merged under `.charter/vaults.json`. `None` when the registry holds
 /// something charter cannot read as a registry, so the gate declines rather than guess which
-/// files are vaults.
+/// files are vaults — and when a half is a link, or reached through one (#440): what it points
+/// at would otherwise decide what the gate protects.
 fn registered_vault_files(plane: &Path) -> Option<Vec<String>> {
-    fn half(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, ()> {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Ok(serde_json::Map::new());
+    /// `Err` for a half that is not JSON; `Ok(None)` for one charter refuses to read.
+    fn half(
+        trust: &Path,
+        path: &Path,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, ()> {
+        let text = match crate::contain::read_text_no_link(trust, path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Some(serde_json::Map::new()));
+            }
+            // A link, a FIFO, a file charter may not read: nothing it can vouch for.
+            Err(_) => return Ok(None),
         };
         let doc: serde_json::Value = serde_json::from_str(&text).map_err(|_| ())?;
-        Ok(doc
-            .get("vaults")
-            .and_then(|v| v.as_object())
-            .map(|m| {
-                m.iter()
-                    .filter(|(_, e)| e.is_object())
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
-            })
-            .unwrap_or_default())
+        Ok(Some(
+            doc.get("vaults")
+                .and_then(|v| v.as_object())
+                .map(|m| {
+                    m.iter()
+                        .filter(|(_, e)| e.is_object())
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ))
     }
     // A registry that is not JSON is `VaultError` in charter, caught by `_registered_vault_files`
     // as "no registered files" — the state and vault directories are still the surface.
-    let shared = half(&plane.join("vaults.json")).unwrap_or_default();
-    let local = half(&State::of(plane).dir().join("vaults.json")).unwrap_or_default();
+    let state = State::of(plane);
+    let corrupt_is_empty =
+        |read: Result<Option<_>, ()>| read.unwrap_or_else(|()| Some(Default::default()));
+    let shared = corrupt_is_empty(half(plane, &plane.join("vaults.json")))?;
+    let local = corrupt_is_empty(half(state.trust(), &state.dir().join("vaults.json")))?;
     let mut files: BTreeMap<String, Option<String>> = BTreeMap::new();
     for (name, entry) in shared.iter().chain(local.iter()) {
         match entry.get("config") {
@@ -618,7 +632,8 @@ pub fn snapshot(plane: &Path, sid: &str) -> BTreeMap<String, Vec<String>> {
 pub fn frozen_tools(plane: &Path, name: &str, sid: Option<&str>) -> Option<BTreeSet<String>> {
     let sid = sid?;
     let state = State::of(plane);
-    let data: serde_json::Value = match std::fs::read(ceiling_file(&state, sid)) {
+    // Read as it is written, never through a link (#440).
+    let data: serde_json::Value = match state.read(&ceiling_file(&state, sid)) {
         Ok(bytes) => match String::from_utf8(bytes)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -626,6 +641,9 @@ pub fn frozen_tools(plane: &Path, name: &str, sid: Option<&str>) -> Option<BTree
             Some(doc) => doc,
             None => return Some(BTreeSet::new()),
         },
+        // A ceiling that is there but refused — a link, a FIFO — is one charter cannot
+        // confirm, and a grant charter cannot confirm is no grant.
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Some(BTreeSet::new()),
         Err(_) => {
             // `_ceiling_was_taken`: a marker that exists, or cannot even be asked about, means
             // the ceiling was taken and has since gone — which is not permission to take it
@@ -892,6 +910,29 @@ mod tests {
         assert!(!root.join(".charter/sessions/s1.tools").exists());
     }
 
+    /// #440: a ceiling that is a link is never read. Whatever it points at could grant any
+    /// tool; a grant charter cannot confirm is no grant, so nothing runs without a prompt.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_ceiling_that_is_a_link_grants_nothing() {
+        let (_d, root) = plane("gh");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let theirs = elsewhere.path().join("wide.tools");
+        std::fs::write(&theirs, r#"{"ops": ["gh", "rm"]}"#).unwrap();
+        std::fs::create_dir_all(root.join(".charter/sessions")).unwrap();
+        std::os::unix::fs::symlink(&theirs, root.join(".charter/sessions/s1.tools")).unwrap();
+
+        assert_eq!(
+            frozen_tools(&root, "ops", Some("s1")),
+            Some(BTreeSet::new()),
+            "the linked ceiling was read as a grant"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&theirs).unwrap(),
+            r#"{"ops": ["gh", "rm"]}"#
+        );
+    }
+
     #[test]
     fn a_session_with_no_ceiling_yet_takes_one_on_first_ask() {
         let (_d, root) = plane("gh");
@@ -930,6 +971,28 @@ mod tests {
             ask(&root, "cat notes.txt"),
             Some(("ops".into(), "cat".into()))
         );
+    }
+
+    /// #440: a registry half that is a link is never read as the list of vault files. What
+    /// it points at would decide what the gate protects, so the gate declines instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_registry_half_that_is_a_link_makes_the_gate_decline() {
+        let (_d, root) = plane("cat");
+        std::fs::write(root.join("notes.txt"), "x").unwrap();
+        assert!(ask(&root, "cat notes.txt").is_some(), "the honest baseline");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let theirs = elsewhere.path().join("theirs.json");
+        std::fs::write(&theirs, r#"{"vaults": {}}"#).unwrap();
+        for half in ["vaults.json", ".charter/vaults.json"] {
+            std::os::unix::fs::symlink(&theirs, root.join(half)).unwrap();
+            assert_eq!(
+                ask(&root, "cat notes.txt"),
+                None,
+                "{half} was read through its link"
+            );
+            std::fs::remove_file(root.join(half)).unwrap();
+        }
     }
 
     #[test]

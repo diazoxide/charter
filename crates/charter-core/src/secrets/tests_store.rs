@@ -1058,3 +1058,90 @@ fn a_registry_half_that_is_a_link_is_refused_and_its_target_is_untouched() {
         std::fs::remove_file(&at).unwrap();
     }
 }
+
+/// #440: a registry half that is a link is never READ either. The local half names every
+/// vault's file and account, so a linked one would let whatever it points at decide where
+/// secrets are read from.
+#[test]
+fn a_registry_half_that_is_a_link_is_never_read() {
+    let (tmp, ctx) = registry_plane();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join("theirs.json");
+    std::fs::write(
+        &theirs,
+        r#"{"vaults": {"planted": {"provider": "plain-file", "file": "/tmp/x.json"}}}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join(".charter")).unwrap();
+    for half in [".charter/vaults.json", "vaults.json"] {
+        let at = tmp.path().join(half);
+        std::os::unix::fs::symlink(&theirs, &at).unwrap();
+
+        let read = registry::load_registry(&ctx);
+
+        assert!(
+            read.is_err(),
+            "{half} was read through its link: {:?}",
+            read.map(|doc| registry::vaults(&doc).keys().cloned().collect::<Vec<_>>())
+        );
+        std::fs::remove_file(&at).unwrap();
+    }
+}
+
+/// #440: a `.charter/` that is itself a link is refused for the local registry, read and
+/// write: nothing lands where it points and nothing is read from there.
+#[test]
+fn a_state_directory_that_is_a_link_is_refused_for_the_local_registry() {
+    let (tmp, ctx) = registry_plane();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), tmp.path().join(".charter")).unwrap();
+
+    let refused = registry::add_vault(
+        &ctx,
+        "a",
+        "plain-file",
+        cfg(json!({"file": "a.json"})),
+        None,
+        false,
+        false,
+    );
+
+    assert!(
+        refused.is_err(),
+        "the registry was written through .charter"
+    );
+    assert!(!elsewhere.path().join("vaults.json").exists());
+
+    std::fs::write(elsewhere.path().join("vaults.json"), r#"{"vaults": {}}"#).unwrap();
+    assert!(registry::load_local(&ctx).is_err(), "read through .charter");
+}
+
+/// #440: a plain-file vault, and its rotation record, that is a link is never read — as its
+/// writer already refuses to write one (#429).
+#[test]
+fn a_plain_file_vault_that_is_a_link_is_never_read() {
+    let (tmp, ctx) = registry_plane();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join("theirs.json");
+    std::fs::write(&theirs, r#"{"K": "planted"}"#).unwrap();
+    let v = vault("a", "plain-file", json!({"file": "a.json"}));
+    std::os::unix::fs::symlink(&theirs, tmp.path().join("a.json")).unwrap();
+
+    assert!(plain_file::load(&ctx, &v, "secret").is_err());
+    assert!(plain_file::get(&ctx, &v, "K").is_err());
+}
+
+/// #440: a keyring vault's key index that is a link is never read.
+#[test]
+fn a_keyring_index_that_is_a_link_is_never_read() {
+    let (_tmp, ctx) = registry_plane();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join("theirs.json");
+    std::fs::write(&theirs, r#"{"keys": {"PLANTED": {}}}"#).unwrap();
+    let v = vault("k", "keyring", json!({}));
+    let index = keyring::index_path(&ctx, &v);
+    std::fs::create_dir_all(index.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&theirs, &index).unwrap();
+
+    assert!(keyring::load_index(&ctx, &v).is_err());
+}

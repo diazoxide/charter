@@ -142,6 +142,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `charter plugin install`, prints each change, then reports. A workspace or worktree layer no
   longer copies `charter@charter` from the plane's settings.
   ([#373](https://github.com/diazoxide/charter/issues/373))
+- **Charter's private files are read without following a symlink, too.** The fingerprint key,
+  both halves of the vault registry, a plain-file vault and its rotation record, a keyring
+  vault's key index, and the hook bookkeeping (the session's tool ceiling, the commit-gate
+  and memory counters, the sub-agent map and the running-dispatch records) are now refused
+  when they are a symlink or reached through one, where they used to be read from wherever
+  the link pointed. What each does then:
+  - A fingerprint key that is a symlink gives no fingerprint; `secret get` shows only the
+    size band.
+  - A vault registry, vault file or key index that is a symlink is an error that names it.
+  - A session tool ceiling that is a symlink grants nothing, so every tool asks.
+  - When a vault registry half is a symlink, the persona tool gate does not auto-allow a
+    command, since it cannot tell which files are vaults.
+  - Other bookkeeping reads as nothing recorded.
+- **A `.charter/` directory that is a symlink is refused for the vault registry and the
+  fingerprint key.** Neither is read from nor written to where it points. A `$CHARTER_HOME`
+  outside the plane is still used as you set it.
+- **`charter reinit` reports a `workspaces/.gitkeep` that is a symlink.** It used to take it
+  as present when the link stayed inside the plane or pointed at nothing. Now it is an error,
+  as a persona's `.gitkeep` already was.
+- **Temp files an older charter left behind are cleaned up.** An older charter killed
+  mid-write could leave `reopen.json.writing` or a temp of the profile approval record in a
+  plane's `.charter/`, or a `*.writing` temp beside the app's machine store, extension record
+  or window layout. Nothing removed them. The app now deletes them when it opens a plane:
+  only those exact names, only plain files, and only when they are more than ten minutes old.
+  ([#440](https://github.com/diazoxide/charter/issues/440))
 - **A guard that crashes now refuses the tool call instead of letting it run.** If charter hit
   an internal error while checking a tool call, the crash ended the process with a status
   Claude Code and Codex read as a non-blocking error, so the call went ahead unchecked. Any

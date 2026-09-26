@@ -276,7 +276,8 @@ pub fn index_path(ctx: &Ctx, vault: &Vault) -> PathBuf {
 /// The vault's index. A missing file is a vault nothing has been written to.
 pub fn load_index(ctx: &Ctx, vault: &Vault) -> Result<Index, VaultError> {
     let p = index_path(ctx, vault);
-    let text = match std::fs::read_to_string(&p) {
+    // Never through a link, on the way from the plane or at the index (#440).
+    let text = match crate::contain::read_text_no_link(ctx.trust(), &p) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Index::default()),
         Err(e) => {
@@ -344,7 +345,12 @@ fn save_index(ctx: &Ctx, vault: &Vault, index: &Index) -> Result<(), VaultError>
         index.service.clone().map_or(Value::Null, Value::String),
     );
     doc.insert("keys".into(), Value::Object(keys));
-    super::plain_file::write_private(&index_path(ctx, vault), &Value::Object(doc))
+    let p = index_path(ctx, vault);
+    // The index lives in the state directory, so it is gated from the plane (#440): a
+    // `.charter/` that is itself a link is refused, not written through.
+    crate::contain::no_link_on_the_way(ctx.trust(), &p)
+        .map_err(|e| VaultError::new(format!("cannot write {}: {e}", p.display())))?;
+    super::plain_file::write_private(&p, &Value::Object(doc))
 }
 
 /// Whether `service` is one charter wrote for THIS vault: `charter/<vault>/<id>`, and nothing

@@ -609,6 +609,12 @@ impl Planes {
         // It is not an approval: `Store::remember` carries an existing one over and creates
         // none, so opening a plane a hundred times does not become consent to it.
         self.remember(&root);
+        // Temps an older charter was killed in front of, which nothing writing today will
+        // ever rename away (#440). Only its own old names, and only stale ones.
+        charter_core::leftovers::sweep_plane(&root);
+        if let Some(config) = self.config.as_deref() {
+            charter_core::leftovers::sweep_config(config);
+        }
 
         let mut open = self.map();
         if let Some(already) = open.get(&id) {
@@ -2094,6 +2100,31 @@ mod tests {
             socket_of(&planes, &again).is_some_and(|socket| socket.exists()),
             "the plane stopped listening"
         );
+    }
+
+    /// #440: opening a plane removes the temp an older charter left beside its reopen record
+    /// when it was killed mid-write — and leaves the record itself.
+    #[test]
+    fn opening_a_plane_removes_an_older_charters_stale_temp() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let app = root.join(".charter/app");
+        std::fs::create_dir_all(&app).expect("the app's directory");
+        let stale = app.join("reopen.json.writing");
+        std::fs::write(&stale, "{\"half").expect("a leftover");
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .and_then(|file| {
+                file.set_modified(
+                    std::time::SystemTime::now() - 2 * charter_core::leftovers::STALE_AFTER,
+                )
+            })
+            .expect("made old");
+
+        planes().open(&root);
+
+        assert!(!stale.exists(), "the leftover is still there");
     }
 
     #[test]

@@ -203,6 +203,15 @@ impl Ctx {
         }
     }
 
+    /// The directory the state directory's files are gated from (#440), as
+    /// [`crate::hookstate::State::of`] picks it: the plane when the state directory is inside
+    /// it — so a `.charter/` that is itself a link is refused, not followed — and the state
+    /// directory itself when `$CHARTER_HOME` puts it elsewhere, where it is the operator's own
+    /// choice of directory and may be a link honestly.
+    pub fn trust(&self) -> &Path {
+        crate::hookstate::trust_root(&self.root, &self.state)
+    }
+
     /// `config.SHARED_VAULTS` — the committed half, beside `personas/`.
     pub fn shared_registry(&self) -> PathBuf {
         self.root.join("vaults.json")

@@ -527,6 +527,42 @@ pub fn open_no_link(
     leaf_open(path)
 }
 
+/// A file of charter's own read whole: [`open_no_link`], then a plain file or nothing (#440).
+///
+/// The read half of what `rewrite::replace` does for a write. A link on the way or at the
+/// file is refused (`PermissionDenied`), so a secret or a piece of state is never read out of
+/// a file that is not the one charter wrote. Something that is not a plain file — a FIFO, a
+/// directory — is refused too (`InvalidData`), asked of the descriptor the read uses. A file
+/// that is not there is `NotFound`, as `std::fs::read` says it, so a caller's "missing is
+/// empty" rule stays exactly as it was.
+pub fn read_no_link(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut open = open_no_link(root, path)?;
+    if !open.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} is not a plain file", path.display()),
+        ));
+    }
+    let mut bytes = Vec::new();
+    open.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// [`read_no_link`] as UTF-8 text; text that is not UTF-8 is `InvalidData`, worded as
+/// `std::fs::read_to_string` words it, since this is what replaces it.
+pub fn read_text_no_link(
+    root: &std::path::Path,
+    path: &std::path::Path,
+) -> std::io::Result<String> {
+    String::from_utf8(read_no_link(root, path)?).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )
+    })
+}
+
 /// [`open_no_link`]'s twin for a file charter is creating or overwriting.
 ///
 /// `create`/`truncate` and not `create_new`: this replaces `fs::write`, which truncates an
@@ -627,6 +663,48 @@ mod nofollow_tests {
         }
 
         assert_eq!(back, "{}\n");
+    }
+
+    /// #440: the whole-file read refuses a link at the file and on the way, and a FIFO; a
+    /// missing file is `NotFound` and an honest one reads back whole.
+    #[test]
+    fn a_whole_file_read_refuses_a_link_and_a_fifo_and_reads_an_honest_file() {
+        let dir = plane();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("theirs"), b"THEIRS").unwrap();
+        let file = dir.path().join(".charter/app/state");
+
+        assert_eq!(
+            read_no_link(dir.path(), &file).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        std::fs::write(&file, b"ours").unwrap();
+        assert_eq!(read_text_no_link(dir.path(), &file).unwrap(), "ours");
+
+        std::fs::remove_file(&file).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("theirs"), &file).unwrap();
+        assert!(
+            read_no_link(dir.path(), &file).is_err(),
+            "a link at the file"
+        );
+
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(dir.path().join(".charter/app")).unwrap();
+        std::fs::write(outside.path().join("state"), b"THEIRS").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join(".charter/app")).unwrap();
+        assert!(
+            read_no_link(dir.path(), &file).is_err(),
+            "a link on the way"
+        );
+
+        let fifo = dir.path().join(".charter/fifo");
+        let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(&fifo))
+            .expect("mkfifo runs");
+        assert!(made.success(), "a FIFO is made");
+        assert_eq!(
+            read_no_link(dir.path(), &fifo).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
     }
 
     #[test]

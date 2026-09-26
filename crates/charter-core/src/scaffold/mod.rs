@@ -551,10 +551,11 @@ fn baseline_dirs(run: &mut Run, root: &Path) {
 /// LIVE block is spliced in after (#355). Without it an empty `workspaces/` cannot be
 /// committed at all, and the splice point depends on whether it happens to be there.
 ///
-/// Created when absent and never truncated, like the persona `.gitkeep`s. It is part of
-/// making `workspaces/`, so it is named on its own only when a plane that already had the
-/// directory is given it. Something that is not a file at that name is left alone: the
-/// directory still works without it.
+/// Created when absent and never truncated, like the persona `.gitkeep`s, and through the
+/// same [`touch`]: a link at that name — one inside the plane, or a dangling one, which the
+/// gate lets by — is a write failure, as a persona's is (#440). It is part of making
+/// `workspaces/`, so it is named on its own only when a plane that already had the directory
+/// is given it. A directory at that name is left alone: `workspaces/` still works without it.
 fn workspaces_gitkeep(run: &mut Run, root: &Path) {
     const GITKEEP: &str = "workspaces/.gitkeep";
     let dir = root.join("workspaces");
@@ -564,18 +565,13 @@ fn workspaces_gitkeep(run: &mut Run, root: &Path) {
     let Some(path) = run.gate(root, GITKEEP) else {
         return;
     };
-    if occupied(&path) {
-        return;
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    match crate::contain::nofollow(&mut options).open(&path) {
-        Ok(_) => {
+    match touch(&path) {
+        Ok(true) => {
             if !run.created.iter().any(|c| c == "workspaces/") {
                 run.created.push(GITKEEP.to_owned());
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Ok(false) => {}
         Err(e) => write_failed(run, &path, &e),
     }
 }
@@ -597,12 +593,13 @@ fn settings_gate(run: &mut Run, root: &Path) -> bool {
 /// `Path.touch` for a `.gitkeep`: created when absent, never truncated, and never through a
 /// link (#434). `create_new` is `O_EXCL`, which no link survives, so a link planted after the
 /// gate answered meets `AlreadyExists` — and is then refused, because a `.gitkeep` that is a
-/// link is not one charter made. A plain file already there is left as it is.
-fn touch(path: &Path) -> std::io::Result<()> {
+/// link is not one charter made. A plain file already there is left as it is. `true` when it
+/// was created.
+fn touch(path: &Path) -> std::io::Result<bool> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     match crate::contain::nofollow(&mut options).open(path) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             match std::fs::symlink_metadata(path) {
                 Ok(found) if found.file_type().is_symlink() => Err(std::io::Error::new(
@@ -612,7 +609,7 @@ fn touch(path: &Path) -> std::io::Result<()> {
                         path.display()
                     ),
                 )),
-                _ => Ok(()),
+                _ => Ok(false),
             }
         }
         Err(e) => Err(e),
@@ -2187,6 +2184,39 @@ mod tests {
             std::fs::read_to_string(root.join("workspaces/.gitkeep")).expect("read"),
             "mine\n"
         );
+    }
+
+    /// #440: a `workspaces/.gitkeep` that is a link is reported as a write failure, as a
+    /// persona's is (#434) — not taken as present — and what it points at is untouched. A
+    /// link out of the plane was already refused by the gate; these are the two it let by: a
+    /// link that stays inside the plane, and a dangling one.
+    #[cfg(unix)]
+    #[test]
+    fn a_workspaces_gitkeep_that_is_a_link_is_reported_and_its_target_is_untouched() {
+        let (_dir, root) = empty_plane();
+        init(&at(&root, false), &plain());
+        let keep = root.join("workspaces/.gitkeep");
+        let notes = root.join("notes.txt");
+        std::fs::write(&notes, "mine\n").expect("a file inside");
+        for target in [notes.clone(), root.join("gone")] {
+            std::fs::remove_file(&keep).expect("unlink");
+            std::os::unix::fs::symlink(&target, &keep).expect("a link");
+
+            let outcome = reinit(&at(&root, true));
+
+            assert_ne!(outcome.code, 0, "{}: {:?}", target.display(), outcome.said);
+            assert!(
+                outcome.said.iter().any(|said| matches!(
+                    said,
+                    Say::Err(text) if text.contains("workspaces/.gitkeep")
+                )),
+                "{:?}",
+                outcome.said
+            );
+            assert!(keep.is_symlink());
+        }
+        assert_eq!(std::fs::read_to_string(&notes).expect("notes"), "mine\n");
+        assert!(!root.join("gone").exists(), "nothing made where it points");
     }
 
     #[test]
