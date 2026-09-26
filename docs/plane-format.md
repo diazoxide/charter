@@ -1540,6 +1540,12 @@ A persona name is `[a-z0-9][a-z0-9._-]*`, matched with `fullmatch`
 own namespaces (`_shared`, `_dispatch`, `_skills`) and `list_personas` skips any directory
 starting with `_` (`charter/persona.py:234`).
 
+**In charter-app** the name `charter` is reserved too (`crates/charter-core/src/personas.rs`,
+`RESERVED`), because `charter/<id>` names charter's own curation actions (ADR 0061).
+`charter persona create charter` is refused. A persona that already has the name still loads,
+runs and can be removed, but `charter persona lint` reports it as an error and none of its
+curation actions is offered.
+
 ---
 
 ### `personas/`
@@ -1872,10 +1878,15 @@ that runs it.
     shell, and no environment variable, vault or secret is ever read. Any other
     `{word}` — braces around letters, digits, `_`, `.` or `-` — is an error, so a typo is
     caught rather than typed into a chat. Braces around anything else (`{"a": 1}`) are text.
+    `{{` is a literal `{` and `}}` a literal `}`, in the same pass, as in Rust's `format!` and
+    Python's `str.format`: `{{word}}` types `{word}`, and `{{{subject.name}}}` types the name
+    in braces. A single `}` on its own stays text, as it always was.
   - **An action that has an error is not offered**, and the list that leaves it out says so
     with a warning naming the file. So is one whose id or label is one of charter's built-in
     actions' (`charter/safe-remove`, `charter/compact`, `charter/add-curation-action`; labels
-    compared case-insensitively): a built-in cannot be overridden or impersonated.
+    compared case-insensitively): a built-in cannot be overridden or impersonated. Nor is any
+    action of a persona named `charter`, whose ids would read `charter/<id>`; the name is
+    reserved (see [`personas/`](#personas)).
 
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|

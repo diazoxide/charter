@@ -120,6 +120,9 @@ impl<'a> Linter<'a> {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         let mut issues = self.declared_skill_issues(name);
+        if let Some(reserved) = crate::personas::reserved_refusal(name) {
+            issues.push(Issue::error(format!("{reserved}. Rename the persona")));
+        }
         if meta.get("role").is_none_or(|r| r.is_empty()) {
             issues.push(Issue::warn("no role"));
         }

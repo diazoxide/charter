@@ -25,7 +25,11 @@
 //! Four variables and nothing else: `{subject.kind}`, `{subject.name}`, `{subject.path}`,
 //! `{plane.root}`. One plain pass: a substituted value is never scanned again, no shell sees
 //! the text, and no environment variable, vault or secret is read. Any other `{word}` is an
-//! error, so a typo is caught in `lint` rather than typed into a chat.
+//! error, so a typo is caught in `lint` rather than typed into a chat. `{{` and `}}` are a
+//! literal `{` and `}`, in the same pass, so `{{word}}` types `{word}`.
+//!
+//! A persona named `charter` declares nothing: its `charter/<id>` would pass as a built-in, so
+//! the name is reserved ([`crate::personas::RESERVED`]) and [`parse`] refuses its files.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -306,6 +310,9 @@ pub fn parse(persona: &str, id: &str, text: &str) -> Parsed {
             message,
         })
     };
+    if let Some(reserved) = crate::personas::reserved_refusal(persona) {
+        error(&mut issues, format!("{reserved}. Rename the persona"));
+    }
     if !crate::personas::valid_name(id) {
         error(
             &mut issues,
@@ -413,7 +420,8 @@ pub fn parse(persona: &str, id: &str, text: &str) -> Parsed {
             &mut issues,
             format!(
                 "the prompt uses {{{unknown}}}, which is not a variable — only {{subject.kind}}, \
-                 {{subject.name}}, {{subject.path}} and {{plane.root}} are"
+                 {{subject.name}}, {{subject.path}} and {{plane.root}} are; write {{{{ and }}}} \
+                 for a literal brace"
             ),
         );
     }
@@ -435,60 +443,82 @@ pub fn parse(persona: &str, id: &str, text: &str) -> Parsed {
     }
 }
 
-/// A `{word}` in a template: braces around one or more letters, digits, `_`, `.` or `-`.
-/// Braces around anything else are text. Each is yielded as `(start, end, word)`, `end` past
-/// the closing brace.
-fn variables(template: &str) -> impl Iterator<Item = (usize, usize, &str)> {
+/// One piece of a template, as [`pieces`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Piece<'a> {
+    /// Text typed as it is.
+    Text(&'a str),
+    /// A `{word}`: braces around one or more letters, digits, `_`, `.` or `-`.
+    Variable(&'a str),
+}
+
+/// A template, left to right, in one pass: `{{` is a literal `{` and `}}` a literal `}` (as in
+/// Rust's `format!` and Python's `str.format`), `{word}` is a variable, and every other brace
+/// is text.
+fn pieces(template: &str) -> impl Iterator<Item = Piece<'_>> {
     let bytes = template.as_bytes();
     let mut at = 0;
     std::iter::from_fn(move || {
-        while at < bytes.len() {
-            let open = at + template[at..].find('{')?;
-            let word_len = template[open + 1..]
+        if at >= bytes.len() {
+            return None;
+        }
+        let rest = &template[at..];
+        if rest.starts_with("{{") || rest.starts_with("}}") {
+            at += 2;
+            return Some(Piece::Text(&rest[..1]));
+        }
+        if let Some(inside) = rest.strip_prefix('{') {
+            let word_len = inside
                 .bytes()
                 .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
                 .count();
-            let close = open + 1 + word_len;
-            if word_len > 0 && bytes.get(close) == Some(&b'}') {
-                at = close + 1;
-                return Some((open, close + 1, &template[open + 1..close]));
+            if word_len > 0 && inside.as_bytes().get(word_len) == Some(&b'}') {
+                at += word_len + 2;
+                return Some(Piece::Variable(&inside[..word_len]));
             }
-            at = open + 1;
         }
-        None
+        // Text runs to the next brace, and a brace that is none of the above is text by itself.
+        let first = rest.chars().next().map_or(1, char::len_utf8);
+        let len = rest[first..]
+            .find(['{', '}'])
+            .map_or(rest.len(), |i| i + first);
+        at += len;
+        Some(Piece::Text(&rest[..len]))
     })
 }
 
 /// Every `{word}` in `template` that is not one of the four variables, each once, in order.
+/// A word in doubled braces, `{{word}}`, is text and not asked about.
 pub fn template_problems(template: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for (_, _, word) in variables(template) {
-        if !VARIABLES.contains(&word) && !out.iter().any(|w| w == word) {
+    for piece in pieces(template) {
+        if let Piece::Variable(word) = piece
+            && !VARIABLES.contains(&word)
+            && !out.iter().any(|w| w == word)
+        {
             out.push(word.to_string());
         }
     }
     out
 }
 
-/// `template` with the four variables substituted in one pass, or the unknown ones.
+/// `template` with the four variables substituted and `{{` `}}` unescaped, in one pass, or
+/// the unknown variables.
 pub fn render(template: &str, vars: &Vars) -> Result<String, Vec<String>> {
     let unknown = template_problems(template);
     if !unknown.is_empty() {
         return Err(unknown);
     }
     let mut out = String::with_capacity(template.len());
-    let mut from = 0;
-    for (start, end, word) in variables(template) {
-        out.push_str(&template[from..start]);
-        out.push_str(match word {
-            "subject.kind" => vars.kind.as_str(),
-            "subject.name" => &vars.name,
-            "subject.path" => &vars.path,
-            _ => &vars.plane_root,
+    for piece in pieces(template) {
+        out.push_str(match piece {
+            Piece::Text(text) => text,
+            Piece::Variable("subject.kind") => vars.kind.as_str(),
+            Piece::Variable("subject.name") => &vars.name,
+            Piece::Variable("subject.path") => &vars.path,
+            Piece::Variable(_) => &vars.plane_root,
         });
-        from = end;
     }
-    out.push_str(&template[from..]);
     Ok(out)
 }
 
