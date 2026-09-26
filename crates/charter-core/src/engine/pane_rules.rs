@@ -5,9 +5,9 @@
 //! opens late draws this engine's snapshot, so any output the two emulators apply differently
 //! leaves two panes of one session showing different things until the program redraws (#441).
 //!
-//! **Wide characters cut in half.** Deleting (`DCH`), inserting (`ICH`), erasing (`ECH`,
-//! `EL`, `ED`) or writing from a wide character's second half, or up to its first, leaves half
-//! a character. xterm.js blanks the half that is left; so does xterm (`DamagedCells` in
+//! **Wide characters cut in half.** An edit can cut a wide character in half: deleting
+//! (`DCH`), inserting (`ICH`), erasing (`ECH`, `EL`, `ED`) or writing that starts on its second
+//! half, or that ends on its first. xterm.js blanks the half that is left; so does xterm (`DamagedCells` in
 //! `util.c`), and so does VTE (`cleanup_fragments`). `alacritty_terminal` keeps the character
 //! whole when its second half is cut, and keeps the old colours on a second half left behind.
 //! xterm.js blanks in the erase colour for an edit and in the pen for a write, and so does
@@ -25,7 +25,7 @@
 //! gets right: deleting more characters than the row has left of the cursor also blanks what
 //! is before it, and erasing above the cursor from the second row leaves the first.
 //!
-//! What stays apart: with wrapping off (`?7l`), xterm.js writes a character over the second
+//! **Not covered.** With wrapping off (`?7l`), xterm.js writes a character over the second
 //! half of a wide character in the last column and leaves the character standing, a state an
 //! `alacritty_terminal` grid cannot hold.
 //!
@@ -66,6 +66,14 @@ impl<T> PaneRules<'_, T> {
         column > 0 && self.is_wide(line, column - 1)
     }
 
+    /// Whether the cell at `column` is a second half whose character is gone.
+    fn is_left_behind(&self, line: Line, column: usize) -> bool {
+        self.0.grid()[line][Column(column)]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+            && !self.is_second_half(line, column)
+    }
+
     /// Leaves the cursor on the last column with no wrap pending, as xterm, VTE and xterm.js
     /// do before deleting, inserting or erasing characters.
     fn end_pending_wrap(&mut self) {
@@ -88,13 +96,13 @@ impl<T> PaneRules<'_, T> {
         self.0.grid_mut()[line][Column(column)] = cell;
     }
 
-    /// Erases cells from `start` up to, not including, `end` with `erase`, blanking a wide
+    /// Erases cells from `start` up to, not including, `end` with `apply`, blanking a wide
     /// character that `start` cuts into and the second half of one that `end` cuts.
-    fn erase(&mut self, start: usize, end: usize, erase: impl FnOnce(&mut Term<T>)) {
+    fn erase(&mut self, start: usize, end: usize, apply: impl FnOnce(&mut Term<T>)) {
         let (line, _) = self.cursor();
         let cut_on_the_left = self.is_second_half(line, start);
         let cut_on_the_right = end < self.0.columns() && self.is_second_half(line, end);
-        erase(self.0);
+        apply(self.0);
         if cut_on_the_left {
             self.blank(line, start - 1);
         }
@@ -157,11 +165,7 @@ impl<T: EventListener> PaneRules<'_, T> {
             return;
         }
         let (line, next) = self.cursor();
-        let left_behind = self.0.grid()[line][Column(next)]
-            .flags
-            .contains(Flags::WIDE_CHAR_SPACER)
-            && !self.is_second_half(line, next);
-        if left_behind {
+        if self.is_left_behind(line, next) {
             self.blank_in_pen(line, next);
         }
         // A wide character pushed into the last column has no room for its second half.
@@ -225,11 +229,7 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
             self.blank(line, column - 1);
         }
         // What shifted under the cursor may be a second half whose character was deleted.
-        if self.0.grid()[line][Column(column)]
-            .flags
-            .contains(Flags::WIDE_CHAR_SPACER)
-            && !self.is_second_half(line, column)
-        {
+        if self.is_left_behind(line, column) {
             self.blank(line, column);
         }
     }

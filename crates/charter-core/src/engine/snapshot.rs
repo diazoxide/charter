@@ -204,7 +204,7 @@ impl Out {
     /// A wide character is drawn as the blank its colours surround when the cell after it is
     /// not its second half: in the last column, pushed there by cells being inserted, printing
     /// it would wrap it onto the next row, or scroll the screen from the bottom row. The engine
-    /// blanks both as the pane does (see `pane_rules`), so neither is expected here.
+    /// blanks both as the pane does (see `pane_rules`), so this is a fallback.
     fn drawable_cell(&mut self, row: &Row<Cell>, column: Column) {
         let cell = &row[column];
         let whole = !cell.flags.contains(Flags::WIDE_CHAR)
