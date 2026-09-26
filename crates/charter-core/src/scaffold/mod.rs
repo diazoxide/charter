@@ -1383,6 +1383,17 @@ mod merge_rules_tests {
     use super::*;
 
     #[test]
+    fn a_gitattributes_charter_cannot_read_is_refused_rather_than_written_over_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitattributes");
+        // Not UTF-8: there, and unreadable as text.
+        std::fs::write(&path, b"*.bin binary \xff\xfe\n").unwrap();
+
+        assert!(ensure_gitattributes(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"*.bin binary \xff\xfe\n");
+    }
+
+    #[test]
     fn the_merge_rules_are_written_once_kept_beside_anyone_elses_and_brought_up_to_date() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".gitattributes");

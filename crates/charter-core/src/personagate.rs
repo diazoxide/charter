@@ -1110,4 +1110,67 @@ mod tests {
             vec!["--in=@x=y", "@x=y", "x=y", "y"]
         );
     }
+
+    /// Set on the re-run child: what [`writes_through_an_extension`] should answer there, for
+    /// the extension record its `CHARTER_CONFIG_HOME` holds.
+    const EXPECTED: &str = "PERSONAGATE_EXTENSION_RECORD";
+
+    /// The child half of the test below: nothing unless it was re-run with [`EXPECTED`] set.
+    #[test]
+    fn an_extension_command_answers_from_the_config_home_the_child_was_given() {
+        let Some(expected) = std::env::var_os(EXPECTED) else {
+            return;
+        };
+        let words = |line: &str| line.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        let installed = expected == "installed";
+        assert_eq!(
+            writes_through_an_extension("charter", &words("probe list")),
+            !installed,
+            "a command the installed manifest says only reads, with the record {expected:?}"
+        );
+        for line in ["probe push", "probe", "other list"] {
+            assert!(
+                writes_through_an_extension("charter", &words(line)),
+                "`charter {line}` read as one that only reads"
+            );
+        }
+        assert!(!writes_through_an_extension("gh", &words("probe list")));
+    }
+
+    #[test]
+    fn an_extension_command_is_a_write_unless_its_installed_manifest_says_it_only_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().canonicalize().unwrap();
+        let ext = top.join("probe");
+        std::fs::create_dir_all(ext.join("bin")).unwrap();
+        std::fs::write(ext.join("bin/probe"), "#!/bin/sh\n").unwrap();
+        std::fs::write(
+            ext.join(crate::extension::MANIFEST),
+            r#"{"version": 2, "id": "probe", "name": "Probe", "capabilities": ["cli"],
+                "contributes": {"runs": "bin/probe",
+                                "cli": [{"name": "list", "title": "List", "writes": false}]}}"#,
+        )
+        .unwrap();
+        let config = top.join("config");
+        crate::extension::install(&config, &crate::extension::BuiltIn::none(), &ext).unwrap();
+        let child = [
+            "personagate::tests::an_extension_command_answers_from_the_config_home_the_child_was_given",
+        ];
+
+        crate::testrun::rerun(
+            &child,
+            &[
+                (crate::machine::HOME_VAR, config.as_os_str()),
+                (EXPECTED, "installed".as_ref()),
+            ],
+        );
+        // No config home there at all: charter cannot say it only reads.
+        crate::testrun::rerun(
+            &child,
+            &[
+                (crate::machine::HOME_VAR, top.join("nowhere").as_os_str()),
+                (EXPECTED, "missing".as_ref()),
+            ],
+        );
+    }
 }

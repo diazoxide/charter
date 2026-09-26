@@ -233,3 +233,98 @@ fn a_repo_with_auto_save_on_is_saved_after_its_own_quiet_period() {
         Decision::Wait
     );
 }
+
+// -- a workspace repo at quit (charter-app#299) ------------------------------------------ //
+
+/// A plane saying `toml`, and a clone `alpha/widget` on `main` with one commit and no remote.
+fn quitting_clone(toml: &str) -> (tempfile::TempDir, std::path::PathBuf, crate::repos::Repo) {
+    let dir = tempfile::tempdir().unwrap();
+    let plane = dir.path().canonicalize().unwrap().join("plane");
+    std::fs::create_dir_all(&plane).unwrap();
+    std::fs::write(plane.join("charter.toml"), toml).unwrap();
+    let clone = plane.join("workspaces/alpha/widget");
+    std::fs::create_dir_all(&clone).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main", "."][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+    ] {
+        assert!(crate::testgit::run(&clone, args).ok(), "git {args:?}");
+    }
+    std::fs::write(clone.join("README.md"), "one\n").unwrap();
+    for args in [&["add", "-A"][..], &["commit", "-q", "-m", "one"]] {
+        assert!(crate::testgit::run(&clone, args).ok(), "git {args:?}");
+    }
+    let repo = crate::repos::Repo {
+        name: "widget".into(),
+        path: clone,
+    };
+    (dir, plane, repo)
+}
+
+fn head_of(clone: &std::path::Path) -> String {
+    crate::testgit::run(clone, &["rev-parse", "HEAD"]).out
+}
+
+const COMMIT_ON: &str = "[repos.widget]\nmode = \"commit\"\nautosave = true\n";
+
+#[test]
+fn quitting_commits_what_a_repo_with_auto_save_on_had_changed() {
+    let (_dir, plane, repo) = quitting_clone(COMMIT_ON);
+    std::fs::write(repo.path.join("a.md"), "a").unwrap();
+    let before = head_of(&repo.path);
+
+    let got = repo_at_quit(&plane, "alpha", &repo, &[], Duration::from_secs(20));
+
+    assert_eq!(got, AtQuit::Committed);
+    assert_ne!(head_of(&repo.path), before, "the change was not committed");
+    let tracked = crate::testgit::run(&repo.path, &["ls-files", "a.md"]).out;
+    assert_eq!(tracked.trim(), "a.md");
+}
+
+#[test]
+fn quitting_does_nothing_to_a_repo_with_auto_save_on_and_nothing_to_save() {
+    let (_dir, plane, repo) = quitting_clone(COMMIT_ON);
+    let before = head_of(&repo.path);
+
+    let got = repo_at_quit(&plane, "alpha", &repo, &[], Duration::from_secs(20));
+
+    assert_eq!(got, AtQuit::Nothing);
+    assert_eq!(head_of(&repo.path), before);
+}
+
+#[test]
+fn quitting_with_only_commits_to_push_pushes_them_without_a_commit_attempt_first() {
+    let (dir, plane, repo) = quitting_clone("[repos.widget]\nmode = \"push\"\nautosave = true\n");
+    // `origin` in the SSH form charter recognises, mapped by the clone's own config onto a
+    // local bare repository — the way `reposave`'s tests reach theirs, never the network.
+    let bare = dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("forge/acme/widget.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    assert!(crate::testgit::run(&bare, &["init", "-q", "--bare", "-b", "main", "."]).ok());
+    let base = format!("file://{}/", bare.parent().unwrap().display());
+    for args in [
+        vec!["remote", "add", "origin", "git@github.com:acme/widget.git"],
+        vec![
+            "config",
+            &format!("url.{base}.insteadOf"),
+            "https://github.com/acme/",
+        ],
+    ] {
+        assert!(crate::testgit::run(&repo.path, &args).ok(), "git {args:?}");
+    }
+    let head = head_of(&repo.path);
+
+    let got = repo_at_quit(&plane, "alpha", &repo, &[], Duration::from_secs(20));
+
+    assert_eq!(got, AtQuit::Pushed);
+    let pushed = crate::testgit::run(&bare, &["rev-parse", "main"]).out;
+    assert_eq!(pushed.trim(), head.trim());
+    // One save, the push: a clean tree is not first put through a commit that has nothing
+    // to commit.
+    let lines = crate::planegit::journal(&plane);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+}

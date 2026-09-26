@@ -49,6 +49,11 @@ pub(crate) fn var_os(name: &str) -> Option<OsString> {
 
 /// [`var_os`], as a `String`; a value that is not UTF-8 reads as unset, as `std::env::var`'s
 /// callers here already treated it.
+///
+/// Every caller reads an empty value as unset (`doctor::session::current` filters it out and
+/// `wscmd::select::warn_env_override` falls back to `""`), so cargo-mutants' `Some(String::new())`
+/// is this function's `None`: `.cargo/mutants.toml` excludes it as equivalent. A caller that
+/// tells the two apart retires that entry.
 pub(crate) fn var(name: &str) -> Option<String> {
     var_os(name).and_then(|v| v.into_string().ok())
 }

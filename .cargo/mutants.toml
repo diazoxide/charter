@@ -16,9 +16,15 @@
 exclude_globs = ["crates/charter-core/src/testrun.rs"]
 
 exclude_re = [
+    # `steer::var`'s `Some(String::new())` against `None`: every caller reads an empty steering
+    # variable as unset (`doctor::session::current` filters it, `warn_env_override` falls back
+    # to `""`), so no input tells them apart. The site says so.
+    'src/steer\.rs:\d+:\d+: replace var -> Option<String> with Some\(String::new\(\)\)$',
     # `now() < deadline` against `now() <= deadline` differs only at the one instant equal to
-    # the deadline; the loop polls every 10 ms and no test can land on it.
-    'src/profiles\.rs:\d+:\d+: replace < with <= in git_path_state$',
+    # the deadline; the loop polls every 10 ms and no test can land on it. The loop is
+    # `git_answer`'s since it was split out of `git_path_state`, which left this entry naming a
+    # function the mutant was no longer in.
+    'src/profiles\.rs:\d+:\d+: replace < with <= in git_answer$',
     # `commit_at`'s `sha.ok()` guard against `true`: `git rev-parse --short HEAD` writes nothing
     # to stdout when it fails (measured on an unborn branch, where plain `rev-parse HEAD`
     # would echo `HEAD`), so a failed run's first line is the same `""` the other arm returns.
