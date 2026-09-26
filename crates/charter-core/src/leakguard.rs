@@ -53,20 +53,21 @@
 //!   only to be thrown away, which let a flag do exactly what the `cd` branch had been written
 //!   to stop.
 //!
-//! # Three defects this port found in the frozen Python, and REPRODUCES
+//! # Three defects this port found in the frozen Python
 //!
 //! The Python was the differential's oracle, so a port that was right where the oracle was wrong
-//! was a port that failed its own test. Each was filed upstream and each has a row in
+//! was a port that failed its own test. Each was filed upstream and each has rows in
 //! `fixtures/corpora/shellseg-oracle.jsonl` pinning the answer. The oracle is frozen now (ADR
-//! 0046), so a fix upstream no longer shows up here by itself: fixing one in this port is a
-//! decision to change that row, made on purpose:
+//! 0046), so fixing one in this port is a decision to change those rows, made on purpose. Two
+//! are fixed here, and the corpus rows were changed with them:
 //!
-//! * **charter#1164** — `_file_operands` skips the value of `-f`/`--file`, and for `sed`, `awk`,
-//!   `grep`, `rg` and `ag` that value is a file the program OPENS. `awk` quotes the offending
-//!   source text back on stderr, so it reaches the transcript. See [`file_operands`].
-//! * **charter#1165** — `_excluded_names` reads `rg`'s `--glob`/`-g`/`--iglob` as an exclusion
-//!   whatever the value says, and for that tool a value WITHOUT a leading `!` is an inclusion.
-//!   See [`excluded_names`].
+//! * **charter#1164, fixed (#351)** — `_file_operands` skipped the value of `-f`/`--file`, and
+//!   for `sed`, `awk`, `grep` and `rg` that value is a file the program OPENS. `awk` quotes the
+//!   offending source text back on stderr, so it reached the transcript. See [`file_operands`],
+//!   which also reads the option grammar the way getopt does now.
+//! * **charter#1165, fixed (#350)** — `_excluded_names` read `rg`'s `--glob`/`-g`/`--iglob` as
+//!   an exclusion whatever the value said, and for that tool a value WITHOUT a leading `!` is an
+//!   inclusion. See [`excluded_names`].
 //! * **charter#1166** — `_walk_into_guarded_state` resolves with `Path.resolve()` and guards it
 //!   with `except OSError`, which is not every exception that call raises. An operand holding a
 //!   **NUL** raises `ValueError`; a **symlink loop** raises `RuntimeError` on CPython 3.11 and
@@ -147,31 +148,58 @@ const TREE_WALKERS: [(&str, Option<&[&str]>); 3] = [
 /// `-R`.
 const CLUSTER_STOPS: [(&str, &str); 1] = [("grep", "efmABCd")];
 
-/// Options whose value EXCLUDES a directory from the walk — `_EXCLUDE_OPTS`.
+/// Options whose value EXCLUDES a directory from the walk — `_EXCLUDE_OPTS`, less the three
+/// in [`SIGNED_GLOB_OPTS`].
 ///
 /// Read so that the fix the denial prints actually runs: a guard that refuses the command it
 /// recommends is one people learn to route around. Deliberately permissive and NOT a security
 /// boundary — it takes any of these values as a real exclusion without checking that the
 /// program would honour it there.
-const EXCLUDE_OPTS: [&str; 6] = [
-    "--exclude-dir",
-    "--exclude",
-    "--ignore-dir",
-    "-g",
-    "--glob",
-    "--iglob",
-];
+const EXCLUDE_OPTS: [&str; 3] = ["--exclude-dir", "--exclude", "--ignore-dir"];
+
+/// `rg`'s glob options, whose value carries its own SIGN (#350): `!x` excludes `x` and `x`
+/// *selects* it. So only a `!` value is an exclusion. And rg lets a later glob override an
+/// earlier one, so an inclusion also cancels every exclusion glob before it.
+const SIGNED_GLOB_OPTS: [&str; 3] = ["-g", "--glob", "--iglob"];
 
 /// Readers whose FIRST non-flag operand is a program or pattern rather than a file, and the
-/// flags that supply it instead — `_SCRIPT_OPERAND`. Kept to the three tools where the operand
-/// is unambiguous, because getting this wrong in the permissive direction costs a false
-/// negative.
+/// flags that supply it INLINE instead — half of `_SCRIPT_OPERAND`. Kept to the tools where
+/// the operand is unambiguous, because getting this wrong in the permissive direction costs a
+/// false negative. A flag here takes a value that is only a mention, so the value is skipped.
+///
+/// A row here also means [`file_operands`] reads the tool's options as getopt does: clusters
+/// and attached values. gawk's `-e`/`--source` is its inline program; an awk that does not know
+/// the flag only makes the next word look like the program here, and the word after it a file.
 const SCRIPT_OPERAND: [(&str, &[&str]); 5] = [
-    ("sed", &["-e", "--expression", "-f", "--file"]),
-    ("awk", &["-f", "--file"]),
-    ("grep", &["-e", "--regexp", "-f", "--file"]),
-    ("rg", &["-e", "--regexp", "-f", "--file"]),
-    ("ag", &["-e", "--regexp", "-f", "--file"]),
+    ("sed", &["-e", "--expression"]),
+    ("awk", &["-e", "--source"]),
+    ("grep", &["-e", "--regexp"]),
+    ("rg", &["-e", "--regexp"]),
+    ("ag", &["-e", "--regexp"]),
+];
+
+/// The other half of `_SCRIPT_OPERAND`: flags that supply the program or pattern FROM A FILE,
+/// whose value is therefore a file the program opens (#351).
+///
+/// The Python lumped these in with the inline flags and skipped the value, so `awk -f <vault>`
+/// was allowed, and awk quotes a program that does not parse back on stderr. Here the value is
+/// a file operand like any other. `ag` is absent on purpose: its `-f` is `--follow` and takes
+/// no value. gawk's `-E`/`--exec` is `-f` that also ends the options. Another awk that does not
+/// know it only makes the next word look like a file here, which is the direction that denies.
+const SCRIPT_FILE: [(&str, &[&str]); 4] = [
+    ("sed", &["-f", "--file"]),
+    ("awk", &["-f", "--file", "-E", "--exec"]),
+    ("grep", &["-f", "--file"]),
+    ("rg", &["-f", "--file"]),
+];
+
+/// Flags whose value is a file the tool opens for something other than its program: a file of
+/// ignore rules. The value is an operand, and the program still comes from the first
+/// positional.
+const FILE_VALUE: [(&str, &[&str]); 3] = [
+    ("grep", &["--exclude-from"]),
+    ("rg", &["--ignore-file"]),
+    ("ag", &["-p", "--path-to-ignore"]),
 ];
 
 /// Flags whose VALUE is a separate token and is never a path — `_TAKES_VALUE`.
@@ -179,6 +207,14 @@ const SCRIPT_OPERAND: [(&str, &[&str]); 5] = [
 /// Per tool, because the same spelling differs: `head -n 5` takes a count, `sed -n` is "quiet"
 /// and takes nothing, and treating sed's `-n` as consuming a value swallows the script operand
 /// — which would let `sed -n 1p .charter/active-persona` through, a real read.
+///
+/// **A walker's missing entry is a fail-open, not a false deny.** The Python listed only the
+/// count flags. Every other value-taking flag of `grep`, `rg` and `ag` then had its VALUE read as
+/// the pattern and the real pattern read as the one file operand. So `rg -t json TOKEN` was a
+/// search of a directory named `TOKEN`, and the cwd walk it really does was never asked about.
+/// Only flags whose value is REQUIRED on every implementation are listed: an optional value
+/// (BSD grep's `--context[=num]`, `--color[=when]`) is never a separate word, and listing one
+/// would swallow a real operand.
 const TAKES_VALUE: [(&str, &[&str]); 7] = [
     ("head", &["-n", "-c", "--lines", "--bytes"]),
     ("tail", &["-n", "-c", "--lines", "--bytes"]),
@@ -192,10 +228,81 @@ const TAKES_VALUE: [(&str, &[&str]); 7] = [
             "--max-count",
             "--after-context",
             "--before-context",
+            "--include",
+            "--include-dir",
+            "--exclude",
+            "--exclude-dir",
+            "--label",
+            "-d",
+            "--directories",
+            "-D",
+            "--devices",
+            "--binary-files",
+            "--group-separator",
         ],
     ),
-    ("rg", &["-m", "-A", "-B", "-C", "--max-count"]),
-    ("ag", &["-m", "-A", "-B", "-C", "--max-count"]),
+    (
+        "rg",
+        &[
+            "-m",
+            "-A",
+            "-B",
+            "-C",
+            "--max-count",
+            "--after-context",
+            "--before-context",
+            "--context",
+            "-g",
+            "--glob",
+            "--iglob",
+            "-t",
+            "--type",
+            "-T",
+            "--type-not",
+            "--type-add",
+            "--type-clear",
+            "-d",
+            "--max-depth",
+            "-j",
+            "--threads",
+            "-M",
+            "--max-columns",
+            "-E",
+            "--encoding",
+            "-r",
+            "--replace",
+            "--sort",
+            "--sortr",
+            "--max-filesize",
+            "--color",
+            "--colors",
+            "--engine",
+            "--pre",
+            "--pre-glob",
+            "--path-separator",
+            "--context-separator",
+            "--dfa-size-limit",
+            "--regex-size-limit",
+        ],
+    ),
+    (
+        "ag",
+        &[
+            "-m",
+            "-A",
+            "-B",
+            "-C",
+            "--max-count",
+            "-G",
+            "--file-search-regex",
+            "--ignore",
+            "--ignore-dir",
+            "--depth",
+            "-W",
+            "--width",
+            "--workers",
+        ],
+    ),
     ("od", &["-N", "-j", "-t"]),
     ("xxd", &["-l", "-s", "-c"]),
 ];
@@ -362,15 +469,28 @@ pub fn is_charter(prog: &str, args: &[String]) -> bool {
 /// behind a flag — while the file that follows stays an operand, so hiding a real read behind
 /// `-e` does not work.
 ///
-/// **charter#1164, reproduced on purpose.** [`SCRIPT_OPERAND`] lumps `-f`/`--file` in with
-/// `-e`/`--regexp`/`--expression`, and only the second group supplies the pattern INLINE: `-f`
-/// names a file the program really opens, and `awk` quotes that file's text back on stderr when
-/// it does not parse. So `awk -f <vault> data` is allowed here, as it is in the Python. The
-/// frozen Python is this port's oracle and the fix belongs there; the corpus pins today's
-/// answer so it cannot change on one side alone.
+/// **A script read from a FILE is an operand** (#351, upstream charter#1164). The Python lumped
+/// `-f`/`--file` in with `-e`/`--regexp`/`--expression` and skipped the value of both, but only
+/// the second group supplies the pattern inline. `-f` names a file the program really opens,
+/// and `awk` quotes that file's text back on stderr when it does not parse. So [`SCRIPT_FILE`]'s
+/// values are operands here.
+///
+/// **The option grammar is getopt's, not the Python's exact-match.** For the script tools,
+/// a flag is recognised however getopt accepts it: `--regexp=x`, `-ex`, as the last letter of a
+/// cluster (`-rf <file>`), and, for a from-file flag only, as a prefix of its long name
+/// (`--fil`, which getopt takes for `--file` when nothing else starts that way). An EXACT name
+/// always wins first, so `--binary` is never read as `--binary-files`, and only a from-file flag
+/// is matched by prefix, because a wrong match there only turns more words into operands, which
+/// denies. The Python matched
+/// only the bare spelling, and every other spelling left the pattern "untaken", so the FILE
+/// after it was read as the pattern and never asked about. `--` ends the options for every
+/// reader, so a `-e` after it is an operand. Both changes moved recorded answers in
+/// `fixtures/corpora/shellseg-*.jsonl*` on purpose (ADR 0046).
 pub fn file_operands(prog: &str, args: &[String]) -> Vec<String> {
     let base = base_lower(prog);
-    let flags = table(&SCRIPT_OPERAND, &base);
+    let inline = table(&SCRIPT_OPERAND, &base);
+    let from_file: &[&str] = table(&SCRIPT_FILE, &base).unwrap_or(&[]);
+    let file_value: &[&str] = table(&FILE_VALUE, &base).unwrap_or(&[]);
     // `split_env_chdir` hands back argv WITH the program still at [0]; dropping it here is what
     // makes "the first positional is the script" mean the first real operand.
     let argv: &[String] = if args.first().is_some_and(|a| a == prog) {
@@ -379,38 +499,100 @@ pub fn file_operands(prog: &str, args: &[String]) -> Vec<String> {
         args
     };
     let takes: &[&str] = table(&TAKES_VALUE, &base).unwrap_or(&[]);
+    // Only the script tools are read as getopt reads them. `xxd` spells long options with ONE
+    // dash (`-ps`, `-seek`), so a cluster reading there would swallow a real operand.
+    let getopt = inline.is_some();
+    let kind = |flag: &str, long: bool| -> Option<ValueKind> {
+        let exact = [
+            (from_file, ValueKind::ScriptFile),
+            (inline.unwrap_or(&[]), ValueKind::Script),
+            (file_value, ValueKind::File),
+            (takes, ValueKind::NotAPath),
+        ]
+        .into_iter()
+        .find_map(|(list, k)| list.contains(&flag).then_some(k));
+        exact.or_else(|| {
+            (getopt && long && flag.len() > 2 && from_file.iter().any(|f| f.starts_with(flag)))
+                .then_some(ValueKind::ScriptFile)
+        })
+    };
     let mut out = Vec::new();
-    let mut skip_next = false;
-    let mut script_taken = flags.is_none();
+    // What the NEXT word is, when a flag left its value there.
+    let mut pending: Option<ValueKind> = None;
+    let mut script_taken = inline.is_none();
+    let mut options_ended = false;
     for a in argv {
-        if skip_next {
-            skip_next = false;
+        match pending.take() {
+            Some(ValueKind::ScriptFile | ValueKind::File) => {
+                out.push(a.clone());
+                continue;
+            }
+            Some(_) => continue,
+            None => {}
+        }
+        if options_ended || !a.starts_with('-') {
+            if !script_taken {
+                script_taken = true; // this positional IS the script/pattern
+                continue;
+            }
+            out.push(a.clone());
+            continue;
+        }
+        if a == "--" {
+            options_ended = true;
             continue;
         }
         // Python's `a.startswith("-")`: a BARE `-` is a flag here, unlike in `walks_directories`
         // where it is named as an exception. Faithful, and the direction is a missed operand.
-        if a.starts_with('-') {
-            if let Some(flags) = flags
-                && flags.contains(&a.as_str())
-            {
-                script_taken = true; // the pattern/program came from this flag
-                // `!a.contains('=')` is **inert**, here and in the Python: this arm is reached
-                // only on exact equality with a table entry, and no entry spells an `=`. Mutated
-                // to an unconditional `true` and measured against the oracle: zero answers
-                // changed, over the fuzz and over the recording. Kept because it is the Python's.
-                skip_next = !a.contains('=');
-            } else if !a.contains('=') && takes.contains(&a.as_str()) {
-                skip_next = true; // its value is a count, never a path
+        let (found, attached) = if a.starts_with("--") {
+            match a.split_once('=') {
+                Some((name, val)) => (kind(name, true), Some(val)),
+                None => (kind(a, true), None),
             }
-            continue;
+        } else if getopt {
+            // A cluster: the first letter that takes a value takes the rest of the word, or
+            // the next word when nothing is left.
+            let body = &a[1..];
+            body.char_indices()
+                .find_map(|(i, ch)| {
+                    kind(&format!("-{ch}"), false).map(|k| {
+                        let rest = &body[i + ch.len_utf8()..];
+                        (Some(k), (!rest.is_empty()).then_some(rest))
+                    })
+                })
+                .unwrap_or((None, None))
+        } else if a.contains('=') {
+            (None, None)
+        } else {
+            (kind(a, false), None)
+        };
+        let Some(k) = found else { continue };
+        if matches!(k, ValueKind::Script | ValueKind::ScriptFile) {
+            script_taken = true; // the pattern/program came from this flag
         }
-        if !script_taken {
-            script_taken = true; // this positional IS the script/pattern
-            continue;
+        match attached {
+            Some(val) if matches!(k, ValueKind::ScriptFile | ValueKind::File) => {
+                out.push(val.to_string())
+            }
+            Some(_) => {}
+            None => pending = Some(k),
         }
-        out.push(a.clone());
     }
     out
+}
+
+/// What a flag's value is, to [`file_operands`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ValueKind {
+    /// The pattern or program itself: a mention, never opened.
+    Script,
+    /// A file the pattern or program is read FROM: opened, so an operand.
+    ScriptFile,
+    /// Another file the tool opens, such as a file of ignore rules: an operand, and the program
+    /// still comes from the first positional.
+    File,
+    /// A count, a type name, a glob: never a path.
+    NotAPath,
 }
 
 /// `operands`, plus each ADJACENT PAIR joined — the word a substitution splices back.
@@ -549,35 +731,56 @@ pub fn lines_a_command_could_run(cmd: &str) -> Vec<(String, bool)> {
 /// spelled to a glob that matches whole paths. The punctuation comes off and the name stays,
 /// and the two prefix strips are CHAINED rather than alternatives, so `**/*/x` loses both.
 ///
-/// **charter#1165, reproduced on purpose.** Stripping the `!` throws away the one character
-/// that tells `rg`'s two meanings apart: `--glob '!x'` excludes `x` and `--glob 'x'` *selects*
-/// it. A glob aimed AT the state directory therefore reads here as an exclusion of it, and the
-/// walk is allowed. The Python is this port's oracle and the fix belongs there; the corpus pins
-/// today's answer so it cannot change on one side alone.
+/// **The sign of a glob is read** (#350, upstream charter#1165). The Python stripped the `!` off
+/// every value of `--glob`/`-g`/`--iglob`, which threw away the one character that tells `rg`'s
+/// two meanings apart: `--glob '!x'` excludes `x` and `--glob 'x'` *selects* it. So a glob aimed
+/// AT the state directory read as an exclusion of it, and the walk was allowed. Here only a `!`
+/// value of those options is an exclusion. An inclusion glob excludes nothing, and it cancels
+/// the exclusion globs before it, because rg lets the later glob win. The directory options
+/// ([`EXCLUDE_OPTS`]) have no sign and are unchanged. This moved recorded answers in
+/// `fixtures/corpora/shellseg-oracle.jsonl` on purpose (ADR 0046).
 pub fn excluded_names(prog: &str, args: &[String]) -> Vec<String> {
     let argv: &[String] = if args.first().is_some_and(|a| a == prog) {
         &args[1..]
     } else {
         args
     };
-    let mut raw: Vec<String> = Vec::new();
-    let mut take_next = false;
+    // Each excluding value, with the kind of option that gave it.
+    let mut raw: Vec<(String, ExcludeOpt)> = Vec::new();
+    let mut value_next: Option<ExcludeOpt> = None;
+    let read_value = |raw: &mut Vec<(String, ExcludeOpt)>, val: &str, opt: ExcludeOpt| {
+        if opt == ExcludeOpt::Directory || val.starts_with('!') {
+            raw.push((val.to_string(), opt));
+        } else {
+            // An inclusion: it excludes nothing, and it overrides every glob before it.
+            raw.retain(|(_, from)| *from != ExcludeOpt::SignedGlob);
+        }
+    };
     for a in argv {
-        if take_next {
-            take_next = false;
-            raw.push(a.clone());
+        if let Some(opt) = value_next.take() {
+            read_value(&mut raw, a, opt);
             continue;
         }
         // Python's `partition("=")`: no `=` gives the whole token as the name and an empty
         // separator, which is how "the value is the NEXT token" is told from "it is attached".
-        match a.split_once('=') {
-            Some((name, val)) if EXCLUDE_OPTS.contains(&name) => raw.push(val.to_string()),
-            Some(_) => {}
-            None if EXCLUDE_OPTS.contains(&a.as_str()) => take_next = true,
-            None => {}
+        let (name, val) = match a.split_once('=') {
+            Some((name, val)) => (name, Some(val)),
+            None => (a.as_str(), None),
+        };
+        let opt = if SIGNED_GLOB_OPTS.contains(&name) {
+            ExcludeOpt::SignedGlob
+        } else if EXCLUDE_OPTS.contains(&name) {
+            ExcludeOpt::Directory
+        } else {
+            continue;
+        };
+        match val {
+            Some(val) => read_value(&mut raw, val, opt),
+            None => value_next = Some(opt),
         }
     }
     raw.into_iter()
+        .map(|(p, _)| p)
         // Python's `if p` filters the ORIGINAL token, before any stripping: a pattern that is
         // empty only once the punctuation is off is kept as `""`.
         .filter(|p| !p.is_empty())
@@ -591,6 +794,15 @@ pub fn excluded_names(prog: &str, args: &[String]) -> Vec<String> {
             p.to_string()
         })
         .collect()
+}
+
+/// Which kind of option gave [`excluded_names`] a value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExcludeOpt {
+    /// [`EXCLUDE_OPTS`]: the value is always an exclusion.
+    Directory,
+    /// [`SIGNED_GLOB_OPTS`]: an exclusion only with a leading `!`.
+    SignedGlob,
 }
 
 /// True when `prog` would descend into subdirectories of the operands it is given —
@@ -1061,6 +1273,17 @@ mod tests {
         leak_reason(cmd, "", Path::new("/nonexistent-plane-state"))
     }
 
+    /// A plane root whose state directory holds one vault file, so a walk from the root reaches
+    /// it: the directory (kept alive by the caller), the root as a cwd, and the state directory.
+    fn plane_with_a_vault() -> (tempfile::TempDir, String, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join(".charter");
+        std::fs::create_dir_all(state.join("vaults")).unwrap();
+        std::fs::write(state.join("vaults/db.json"), "{}").unwrap();
+        let at = dir.path().to_string_lossy().into_owned();
+        (dir, at, state)
+    }
+
     #[test]
     fn the_vault_path_pattern_is_asked_as_written() {
         assert!(vault_path_matches(".charter/vaults/db.json"));
@@ -1258,6 +1481,188 @@ mod tests {
             excluded_names("rg", &words("rg --glob=!vaults -g !browser* x")),
             ["vaults", "browser*"]
         );
+    }
+
+    /// `rg`'s `--glob`/`-g`/`--iglob` carry their SIGN in the value (#350): `!x` excludes `x`,
+    /// and `x` selects it. A glob aimed INTO the state directory is a narrowing onto it, and
+    /// reading it as an exclusion let the walk through.
+    #[test]
+    fn an_rg_glob_without_a_bang_is_an_inclusion_and_excludes_nothing() {
+        for line in [
+            "rg -g .charter x .",
+            "rg --glob **/.charter/** x .",
+            "rg --glob=.charter x .",
+            "rg --iglob .CHARTER x .",
+            "rg -g=vaults x .",
+        ] {
+            assert!(excluded_names("rg", &words(line)).is_empty(), "{line}");
+        }
+        assert_eq!(
+            excluded_names("rg", &words("rg -g !.charter --iglob=!vaults x .")),
+            [".charter", "vaults"]
+        );
+        // The directory options have no sign: their value is always an exclusion, even one
+        // spelled with a `!`, and a later inclusion glob does not cancel it.
+        assert_eq!(
+            excluded_names("rg", &words("rg --ignore-dir .charter x .")),
+            [".charter"]
+        );
+        assert_eq!(
+            excluded_names("rg", &words("rg --exclude-dir=!odd -g .charter x .")),
+            ["odd"]
+        );
+        // rg lets a later glob override an earlier one, so an inclusion after an exclusion
+        // glob cancels it, and one before it does not.
+        assert!(excluded_names("rg", &words("rg -g !.charter -g .charter x .")).is_empty());
+        assert_eq!(
+            excluded_names("rg", &words("rg -g *.rs -g !.charter x .")),
+            [".charter"]
+        );
+
+        let (_dir, at, state) = plane_with_a_vault();
+        for cmd in [
+            "rg --glob '**/.charter/**' TOKEN .",
+            "rg -g '.charter/**' secret",
+            "rg -g .charter -g vaults TOKEN .",
+            "rg -g '!.charter' -g '.charter/**' TOKEN .",
+        ] {
+            assert!(leak_reason(cmd, &at, &state).is_some(), "{cmd}");
+        }
+        for cmd in [
+            "rg --glob '!.charter' TOKEN .",
+            "rg -g '*.rs' -g '!.charter' TOKEN .",
+        ] {
+            assert_eq!(leak_reason(cmd, &at, &state), None, "{cmd}");
+        }
+    }
+
+    /// `-f`/`--file` names a file the program OPENS (#351): awk quotes a program that does not
+    /// parse back on stderr, and grep turns the file's lines into patterns. The inline flags
+    /// (`-e`, `--regexp`, `--expression`) still supply a pattern that is only a mention.
+    #[test]
+    fn a_script_read_from_a_file_is_an_operand() {
+        let vault = ".charter/vaults/db.json";
+        for cmd in [
+            format!("awk -f {vault} data"),
+            format!("awk --file {vault} data"),
+            format!("awk --file={vault} data"),
+            format!("awk -f{vault} data"),
+            format!("sed -f {vault} data"),
+            format!("sed --file={vault} data"),
+            format!("sed -n -f {vault} data"),
+            format!("grep -f {vault} f"),
+            format!("grep --file={vault} f"),
+            format!("grep -f{vault} f"),
+            format!("grep -rf {vault} src"),
+            format!("rg -f {vault} f"),
+            format!("rg --file {vault} f"),
+        ] {
+            assert_eq!(reason(&cmd).as_deref(), Some(READ_REASON), "{cmd}");
+        }
+        for cmd in [
+            format!("grep -e {vault} f"),
+            format!("grep --regexp={vault} f"),
+            format!("sed -e s|{vault}|x| f"),
+            format!("sed --expression=s|{vault}|x| f"),
+            format!("rg -e {vault} f"),
+            "awk -f prog.awk data".to_string(),
+        ] {
+            assert_eq!(reason(&cmd), None, "{cmd}");
+        }
+        // The program came from the file, so the first positional is a data file.
+        assert_eq!(
+            file_operands("awk", &words("awk -f prog.awk data")),
+            ["prog.awk", "data"]
+        );
+    }
+
+    /// The pattern flag in every spelling getopt accepts: with `=`, attached, and as the last
+    /// letter of a cluster. Each one used to leave the pattern "untaken", so the FILE after it
+    /// was read as the pattern and never asked about. And `--` ends the options, so a `-e`
+    /// after it is the pattern itself.
+    #[test]
+    fn a_pattern_flag_is_read_however_it_is_spelled() {
+        let vault = ".charter/vaults/db.json";
+        for cmd in [
+            format!("grep --regexp=x {vault}"),
+            format!("sed --expression=p {vault}"),
+            format!("grep -ex {vault}"),
+            format!("grep -iex {vault}"),
+            format!("grep -ie x {vault}"),
+            format!("sed -ne p {vault}"),
+            format!("rg --regexp=x {vault}"),
+            format!("grep -- -e {vault}"),
+            format!("head -n5 {vault}"),
+            format!("tail --lines=5 {vault}"),
+            // A unique prefix of a long name is that name to getopt.
+            format!("sed --fil {vault} x"),
+            format!("awk --fi={vault} x"),
+            format!("grep --reg x {vault}"),
+            // `xxd` spells long options with one dash, so `-ps` is not `-p -s <value>`.
+            format!("xxd -ps {vault}"),
+            // An exact option name is that option, even when it is also the start of a longer
+            // one: `--binary` takes no value, whatever `--binary-files` does.
+            format!("grep --binary TOKEN {vault}"),
+            format!("rg --binary TOKEN {vault}"),
+            // gawk's inline program flags.
+            format!("awk -e{{print}} {vault}"),
+            format!("awk --source={{print}} {vault}"),
+            format!("awk -e {{print}} {vault}"),
+            // A file of ignore rules is a file the tool opens.
+            format!("rg --ignore-file {vault} TOKEN src"),
+            format!("grep -r --exclude-from={vault} TOKEN src"),
+            format!("ag --path-to-ignore {vault} TOKEN src"),
+        ] {
+            assert_eq!(reason(&cmd).as_deref(), Some(READ_REASON), "{cmd}");
+        }
+        assert_eq!(
+            file_operands("grep", &words("grep -rn -m 2 -A1 -e x -- -v a b")),
+            ["-v", "a", "b"]
+        );
+        assert_eq!(file_operands("head", &words("head -n 5 -c3 a")), ["a"]);
+    }
+
+    /// A walker's value-taking flag that the guard does not know as one turns its VALUE into
+    /// the pattern and the real pattern into the walk's root. So `rg -t json TOKEN` was read as
+    /// a search of a directory named `TOKEN`, and the cwd walk it really does was never asked
+    /// about.
+    #[test]
+    fn a_walkers_value_flag_does_not_move_the_walk_off_the_cwd() {
+        let (_dir, at, state) = plane_with_a_vault();
+        for cmd in [
+            "rg -t json TOKEN",
+            "rg --type json TOKEN",
+            "rg -T md TOKEN",
+            "rg --max-depth 9 TOKEN",
+            "rg -j 2 TOKEN",
+            "rg --sort path TOKEN",
+            "grep -r --include '*.json' TOKEN",
+            "grep -r --exclude-dir .git TOKEN",
+            "grep -r --exclude '*.md' TOKEN",
+            "ag --depth 9 TOKEN",
+            "ag --ignore-dir .git TOKEN",
+        ] {
+            assert!(leak_reason(cmd, &at, &state).is_some(), "{cmd}");
+        }
+        // ...and the recommended fix still runs with the value spelled as its own word.
+        assert_eq!(
+            leak_reason("grep -r --exclude-dir .charter TOKEN", &at, &state),
+            None
+        );
+        assert_eq!(
+            leak_reason("rg -t json -g '!.charter' TOKEN", &at, &state),
+            None
+        );
+    }
+
+    /// `ag`'s `-f` is `--follow` and takes no value, so the word after it is the PATTERN and
+    /// the file after that is a file ag prints.
+    #[test]
+    fn ags_follow_flag_takes_no_value() {
+        let vault = ".charter/vaults/db.json";
+        assert!(reason(&format!("ag -f TOKEN {vault}")).is_some());
+        assert!(reason(&format!("ag --follow TOKEN {vault}")).is_some());
+        assert_eq!(file_operands("ag", &words("ag -f TOKEN a.txt")), ["a.txt"]);
     }
 
     proptest! {

@@ -68,6 +68,15 @@ were recorded on a filesystem that folds case; on one that does not, the replay 
 `@B@/PLANE` to the root so the recorded answer holds on both. The keys that moved are the verdicts (`bra`,
 `rst`, `fsh`, `csh`) and what the walk found on the way (`prg`, `rga`, `cb`, `gt`).
 
+**And in the shell-reader corpora (#348, #350, #351):**
+
+- The release floor (`rfr`): a `git tag` read clears only its own segment (#348).
+- The leak guard (`lr` and `gseg`): an `rg` glob without `!` is an inclusion (#350), and a
+  script or pattern read with `-f`/`--file` is a file operand (#351). With those, the leak guard
+  reads the options of `grep`, `rg`, `ag`, `sed` and `awk` the way getopt does: values after
+  `=`, in clusters and after long-name prefixes; `--` ending the options; and the other flags
+  that take a value.
+
 ## The session recording
 
 Re-record with:
