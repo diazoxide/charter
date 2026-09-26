@@ -336,7 +336,8 @@ describe("a pinned project", () => {
     const other = "/home/dev/other";
     mockIPC((cmd, args) => {
       if (cmd === "plane_at_launch") return { plane: null, from: null, why: null };
-      if (cmd === "planes_to_restore") return { planes: [PLANE, other], active: 0, dropped: [] };
+      if (cmd === "planes_to_restore")
+        return { windows: [{ planes: [PLANE, other], active: 0 }], dropped: [] };
       if (cmd === "open_plane") return { plane: (args as { path: string }).path, ask: null };
       if (cmd === "plane_sidebar") return sidebar([]);
       if (cmd === "opened_chats") return [];

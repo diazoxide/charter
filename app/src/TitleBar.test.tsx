@@ -430,7 +430,8 @@ describe("the title bar in the window, which holds the project strip (ADR 0054)"
       }
       const plane = (given.plane as string | undefined) ?? "";
       if (cmd === "plane_at_launch") return { plane: null, from: null, why: null };
-      if (cmd === "planes_to_restore") return { planes: [ONE, TWO], active: 0, dropped: [] };
+      if (cmd === "planes_to_restore")
+        return { windows: [{ planes: [ONE, TWO], active: 0 }], dropped: [] };
       if (cmd === "open_plane") return { plane: given.path, ask: null };
       if (cmd === "plane_sidebar")
         return {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "./here";
 
 import type { PlaneChanged, PlaneId } from "./bindings";
 

@@ -127,7 +127,8 @@ function core(question: RelaunchQuestion | null) {
     if (cmd === "plugin:event|listen") return 1;
     if (cmd === "plane_at_launch") return { plane: ONE, from: ONE, why: null };
     if (cmd === "relaunch_ask") return question;
-    if (cmd === "planes_to_restore") return { planes: [TWO], active: null, dropped: [] };
+    if (cmd === "planes_to_restore")
+      return { windows: [{ planes: [TWO], active: null }], dropped: [] };
     if (cmd === "open_plane") return { plane: given.path, ask: null };
     if (cmd === "plane_sidebar")
       return { root: given.plane, workspaces: [], personas: [], persona: null, unfiled: [] };

@@ -17,6 +17,7 @@ mod tests {
     use tauri::webview::InvokeRequest;
 
     use crate::lifecycle::WINDOW;
+    use crate::windows::{SPLIT_GLOB, split_label};
 
     /// The permission set, and the capability granting it, for the commands that put a
     /// secret's value where the window can reach it. Spelled as `build.rs` spells it.
@@ -148,19 +149,91 @@ mod tests {
     }
 
     #[test]
-    fn no_other_window_may_invoke_any_listed_command() {
-        // The app has one window today. A second one starts with nothing and is granted what
-        // it needs by name; above all it is never handed a vault's reveal or copy by default.
+    fn a_second_window_may_invoke_the_allow_listed_commands() {
+        // A project tab split into its own window (charter#126) runs the same page as the main
+        // window, so it is granted the same commands: every listed one, the vault's reveal and
+        // copy included, because a vault's tab can be in front there too (ADR 0052, amended
+        // 2026-09-26). The same as the main window, and no more.
         let app = app();
-        let other = window(&app, "another-window");
-        let allowed: Vec<_> = every_listed()
-            .into_iter()
-            .filter(|command| invoke(&other, command).is_ok())
-            .collect();
-        assert!(
-            allowed.is_empty(),
-            "a window other than the main one may invoke {allowed:?}"
-        );
+        for label in [split_label(1), split_label(27)] {
+            let split = window(&app, &label);
+            let refused: Vec<_> = every_listed()
+                .into_iter()
+                .filter(|command| invoke(&split, command).is_err())
+                .collect();
+            assert!(
+                refused.is_empty(),
+                "listed but not granted to {label}: {refused:?}"
+            );
+            assert!(invoke(&split, "a_command_nobody_listed").is_err());
+        }
+    }
+
+    #[test]
+    fn the_windows_the_grant_reaches_are_the_windows_charter_calls_its_own() {
+        // The capabilities grant a glob, and `windows.rs` decides which labels are charter's
+        // windows. Two answers to one question would be a window with half the app, or a grant
+        // reaching a window charter does not treat as its own.
+        let app = app();
+        for label in [
+            "main",
+            "window-1",
+            "window-27",
+            "window-1a",
+            "window-",
+            "window-x",
+            "windows-1",
+            "another-window",
+            "mainly",
+            "Main",
+        ] {
+            let there = window(&app, label);
+            assert_eq!(
+                invoke(&there, "open_planes").is_ok(),
+                crate::windows::is_charter_window(label),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_window_but_charters_own_may_invoke_any_listed_command() {
+        // A window charter did not make starts with nothing, and is granted what it needs by
+        // name; above all it is never handed a vault's reveal or copy by default. The split
+        // windows' grant is a pattern, so the labels nearest to it are tried too.
+        let app = app();
+        for label in [
+            "another-window",
+            "window-",
+            "window-x",
+            "windows-1",
+            "mainly",
+        ] {
+            let other = window(&app, label);
+            let allowed: Vec<_> = every_listed()
+                .into_iter()
+                .filter(|command| invoke(&other, command).is_ok())
+                .collect();
+            assert!(
+                allowed.is_empty(),
+                "{label}, which is not one of charter's windows, may invoke {allowed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_capability_grants_the_main_window_and_the_split_windows_alike() {
+        // The two capability files are one decision: a split window gets exactly what the main
+        // window gets. One naming a window the other does not would be a window with half the
+        // app, or a vault's values granted somewhere the ordinary commands are not.
+        for capability in capability_files() {
+            assert_eq!(
+                capability["windows"],
+                serde_json::json!([WINDOW, SPLIT_GLOB]),
+                "{}",
+                capability["identifier"]
+            );
+        }
     }
 
     fn src_tauri() -> PathBuf {
@@ -215,7 +288,8 @@ mod tests {
     }
 
     #[test]
-    fn only_the_vault_values_capability_grants_the_value_bearing_commands_and_only_to_main() {
+    fn only_the_vault_values_capability_grants_the_value_bearing_commands_and_only_to_charters_windows()
+     {
         let (_, values) = listed();
         let value_permissions: Vec<String> = values
             .iter()
@@ -234,10 +308,13 @@ mod tests {
         assert_eq!(granting.len(), 1, "granted by: {granting:?}");
         let capability = &granting[0];
         assert_eq!(capability["identifier"], VAULT_VALUES);
-        assert_eq!(capability["windows"], serde_json::json!([WINDOW]));
+        assert_eq!(
+            capability["windows"],
+            serde_json::json!([WINDOW, SPLIT_GLOB])
+        );
         assert!(
             capability.get("webviews").is_none() && capability.get("remote").is_none(),
-            "the vault-values capability reaches past the main window: {capability}"
+            "the vault-values capability reaches past charter's own windows: {capability}"
         );
         assert_eq!(grants(capability), [VAULT_VALUES]);
     }

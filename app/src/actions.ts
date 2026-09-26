@@ -27,6 +27,7 @@
  * decided to say about it.
  */
 import type { ChatWorktree, ExtensionCommand, ExtensionView, RowAction } from "./bindings";
+import { MAIN } from "./here";
 import {
   chatOf,
   contentsOf,
@@ -213,6 +214,10 @@ export type Does =
   /** Lets go of one project, which ends its chats and takes its tab out. Nothing of the
    *  project on disk goes. */
   | { verb: "closeProject"; plane: string }
+  /** Moves a project into another OS window — a new one when `to` is null, the main window
+   *  when it is `"main"` (charter#126). Nothing is closed and nothing is started: its chats go
+   *  on running, and the window it arrives in draws them. */
+  | { verb: "moveProject"; plane: string; to: string | null }
   /** Opens that project's Project settings tab (charter-app#252) — bringing the project to the
    *  front first when it is not. It writes nothing by itself: a save is the tab's, through the
    *  core's own checks. */
@@ -342,6 +347,9 @@ export type Now = {
    * pointer, and at eight projects the palette is faster than the strip.
    */
   projects?: readonly Project[];
+  /** Whether this window is a split window — a project tab moved into a window of its own
+   *  (charter#126) — and so offers to move its projects back to the main window. */
+  split?: boolean;
   /**
    * The ROW whose refusal the operator has not answered yet, by id.
    *
@@ -432,6 +440,8 @@ export type Doing = {
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
+  /** Moves that project into another window, or a new one. The core can refuse. */
+  moveProject: (plane: string, to: string | null) => Promise<Ran>;
   /** Brings that project to the front and opens its Project settings tab. */
   openSettings: (plane: string) => void;
   /** Brings that project to the front and opens its Saving tab. */
@@ -488,6 +498,8 @@ export function projectRows(
   front: string | undefined,
   /** The projects this operator has pinned, by root. */
   pinned: readonly string[] = [],
+  /** Whether this window is a split window, which offers to move a project back (charter#126). */
+  split = false,
 ): {
   open: Offer;
   create: Offer;
@@ -495,6 +507,10 @@ export function projectRows(
   pin: Offer[];
   settings: Offer[];
   saving: Offer[];
+  /** Into a new window of its own, one row per project (charter#126). */
+  window: Offer[];
+  /** Back to the main window — only in a split window, so empty in the main one. */
+  back: Offer[];
   close: Offer[];
 } {
   return {
@@ -553,6 +569,40 @@ export function projectRows(
       }),
       note: `${project.name}: what is not saved yet, and the save button.`,
     })),
+    // **A project tab can be split into a window of its own, and moved back** (ADR 0033: planes
+    // merge into one window and split back out of it). A window holding one project has
+    // nothing to split it from, so the row says so rather than making a second window the same
+    // as the first.
+    window: projects.map((project) => {
+      const title = `Move project ${project.name} to a new window`;
+      return projects.length < 2
+        ? cannot(
+            `project.window:${project.plane}`,
+            title,
+            "It is the only project in this window.",
+            project.name,
+          )
+        : {
+            ...can(
+              `project.window:${project.plane}`,
+              title,
+              { verb: "moveProject", plane: project.plane, to: null },
+              project.name,
+            ),
+            note: "Its chats go on running. Closing that window moves it back.",
+          };
+    }),
+    back: split
+      ? projects.map((project) => ({
+          ...can(
+            `project.main:${project.plane}`,
+            `Move project ${project.name} to the main window`,
+            { verb: "moveProject", plane: project.plane, to: MAIN },
+            project.name,
+          ),
+          note: "Its chats go on running.",
+        }))
+      : [],
     close: projects.map((project) => ({
       ...can(
         `project.close:${project.plane}`,
@@ -821,7 +871,7 @@ export function catalogue(now: Now): Offer[] {
   // change — the project left behind keeps every chat it had running — so these sit up here
   // with the tabs and the workspaces. Letting go of one is below the line, with the tab
   // closes it is the bigger version of.
-  const projects = projectRows(now.projects ?? [], now.plane, pinned.projects);
+  const projects = projectRows(now.projects ?? [], now.plane, pinned.projects, now.split);
   offers.push(
     projects.open,
     projects.create,
@@ -829,6 +879,8 @@ export function catalogue(now: Now): Offer[] {
     ...projects.pin,
     ...projects.settings,
     ...projects.saving,
+    ...projects.window,
+    ...projects.back,
   );
   // **This machine's preferences, beside the projects' settings** (charter-app#283): the text
   // sizes are the machine's and not a project's, so the row is there with no project open too,
@@ -1235,6 +1287,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "closeProject":
       return doing.closeProject(does.plane);
+    case "moveProject":
+      return doing.moveProject(does.plane, does.to);
     case "openSettings":
       doing.openSettings(does.plane);
       return DID;
@@ -1534,6 +1588,8 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `project.pin:${what.plane}`,
           `project.settings:${what.plane}`,
           `project.saving:${what.plane}`,
+          `project.window:${what.plane}`,
+          `project.main:${what.plane}`,
           "project.create",
           "project.open",
         ],

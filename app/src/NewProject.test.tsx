@@ -101,6 +101,8 @@ describe("making a project", () => {
       "Pin project plane",
       "Project settings…",
       "Saving…",
+      // Greyed: it is the only project in this window (charter#126).
+      "Move project plane to a new window",
       "New project…",
       "Open a project…",
       "Close project plane",

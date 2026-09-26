@@ -7,7 +7,7 @@
  * from a hook.
  */
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "./here";
 
 import { commands, type Moved, type OpenChat, type PlaneId } from "./bindings";
 

@@ -121,7 +121,16 @@ async function remembers(
   let back = { planes: [] as string[], active: null as number | null, dropped: [] as string[] };
   await browser.waitUntil(
     async () => {
-      back = await ask("planes_to_restore");
+      // The main window's share: every scenario here holds its projects in one window.
+      const raw = await ask<{
+        windows: { planes: string[]; active: number | null }[];
+        dropped: string[];
+      }>("planes_to_restore");
+      back = {
+        planes: raw.windows[0]?.planes ?? [],
+        active: raw.windows[0]?.active ?? null,
+        dropped: raw.dropped,
+      };
       return JSON.stringify(back.planes) === JSON.stringify(want);
     },
     {

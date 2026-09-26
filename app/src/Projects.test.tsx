@@ -118,8 +118,15 @@ function core(
       return over.launch === undefined || over.launch === null
         ? { plane: null, from: null, why: null }
         : { plane: over.launch, from: over.launch, why: null };
-    if (cmd === "planes_to_restore")
-      return over.restore ?? { planes: [], active: null, dropped: [] };
+    // One remembered window, as every test here remembers it; a second window is
+    // `Windows.test.tsx`'s.
+    if (cmd === "planes_to_restore") {
+      const back = over.restore ?? { planes: [], active: null, dropped: [] };
+      return {
+        windows: back.planes.length > 0 ? [{ planes: back.planes, active: back.active }] : [],
+        dropped: back.dropped,
+      };
+    }
     if (cmd === "open_plane") return { plane: given.path, ask: null };
     if (cmd === "plane_sidebar") return sidebarOf(plane ?? "");
     if (cmd === "opened_chats") return chats[plane ?? ""] ?? [];
