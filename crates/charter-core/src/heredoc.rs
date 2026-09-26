@@ -281,6 +281,90 @@ pub struct Opener {
     pub start: usize,
     /// The header bash reads after it.
     pub header: Header,
+    /// The `<<` stands inside a bracket where a shell may read it as a shift or as plain text
+    /// and open no heredoc at all ([`ShiftContext`]). A caller reads such an opener BOTH ways:
+    /// [`heredoc_layout`] drops no body from there on and reads every one as lines a shell
+    /// runs, and [`crate::livesub::live_substitution`] walks the text once as each reading.
+    pub maybe_shift: bool,
+}
+
+/// The brackets a walk is inside where a `<<` may be a shift or plain text rather than a
+/// heredoc opener: `(( … ))` and `$(( … ))` arithmetic, `$[ … ]`, `${ … }` and an assignment's
+/// subscript `name[ … ]`.
+///
+/// Checked against GNU bash 3.2.57 and zsh 5.9: with `(( 1<<"2" ))`, `$[1<<"2"]`,
+/// `$((1<<"2"))`, `${v:-1<<"2"}`, `x=((1<<"2"))` or `a[1<<"2"]=x` on a line, one or both
+/// shells run the lines after it, where a heredoc reading makes them a body delimited by `2`.
+///
+/// **Where it stands is not asked, on purpose.** Whether `((` opens arithmetic depends on
+/// position (command position does; inside `[[ … ]]`, a zsh glob or `${…}` it may not), and
+/// bash re-reads a `((` or `$((` whose parentheses do not close as `))` as two groups, where the
+/// `<<` is a heredoc after all. A walk of characters cannot settle every one of those, and a
+/// wrong guess either way hides lines. So nothing here decides "shift" or "heredoc": inside any
+/// of these brackets the `<<` is read both ways ([`Opener::maybe_shift`]), which only ever reads
+/// more lines than either reading alone. A bracket that never closes keeps the rest of the line
+/// inside it, which errs the same way.
+///
+/// One type, stepped by [`heredoc_openers`] (the leak guard and A7) and by
+/// [`crate::livesub::live_substitution`] (A5 and A6), so the two cannot disagree about where a
+/// bracket opens or closes. Each steps only UNQUOTED characters; quoting is theirs to read.
+#[derive(Clone, Debug, Default)]
+pub struct ShiftContext {
+    /// The closer each open bracket waits for, innermost last, and whether a `<<` inside it may
+    /// be a shift.
+    open: Vec<(char, bool)>,
+}
+
+impl ShiftContext {
+    /// Whether a `<<` here may be a shift or plain text.
+    pub fn may_shift(&self) -> bool {
+        self.open.iter().any(|&(_, shift)| shift)
+    }
+
+    /// Read the unquoted character at `i` and answer how many characters that took.
+    ///
+    /// A closer closes the innermost bracket waiting for it and every bracket opened inside
+    /// that one; a closer nothing waits for is text (`case x in a)`).
+    pub fn step(&mut self, chars: &[char], i: usize) -> usize {
+        let next = chars.get(i + 1).copied();
+        match chars[i] {
+            '\\' => 2, // an escaped character opens and closes nothing
+            '$' if next == Some('[') => {
+                self.open.push((']', true));
+                2
+            }
+            '$' if next == Some('{') => {
+                self.open.push(('}', true));
+                2
+            }
+            '(' if next == Some('(') => {
+                self.open.push((')', true));
+                self.open.push((')', true));
+                2
+            }
+            '(' => {
+                self.open.push((')', false));
+                1
+            }
+            '{' => {
+                self.open.push(('}', false));
+                1
+            }
+            '[' => {
+                // `a[…]`: a subscript. `[[` and `[` in command position are tests.
+                let subscript = i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+                self.open.push((']', subscript));
+                1
+            }
+            c @ (')' | ']' | '}') => {
+                if let Some(k) = self.open.iter().rposition(|&(want, _)| want == c) {
+                    self.open.truncate(k);
+                }
+                1
+            }
+            _ => 1,
+        }
+    }
 }
 
 /// The heredocs `line` opens, left to right — `_heredoc_openers`, read the way bash reads them.
@@ -293,10 +377,21 @@ pub struct Opener {
 /// of the input and the REAL opener after it is never consulted. A `<<<` is stepped over whole,
 /// because the last two of its characters are no opener.
 ///
-/// A `<<` in a `#` comment or in `$(( … ))` arithmetic is still counted. The lexer counts
-/// neither, so the counts disagree, the strip plan is unknown, and every body on the line stays
-/// visible, which only ever shows a guard more text.
+/// A `<<` in a `#` comment is still counted. The lexer does not count it, so the counts
+/// disagree, the strip plan is unknown, and every body on the line stays visible, which only
+/// ever shows a guard more text.
+///
+/// A `<<` inside arithmetic, `${…}` or a subscript is counted too, and marked
+/// [`Opener::maybe_shift`]: the shell may read it as a shift, and then the lines after it are
+/// commands. Its header is read as text rather than skipped, because that is what it is then.
 pub fn heredoc_openers(line: &Line) -> Vec<Opener> {
+    openers_after(line, &mut ShiftContext::default())
+}
+
+/// [`heredoc_openers`] for a line that begins inside whatever brackets `ctx` holds open, and
+/// leaves `ctx` holding what is open at its end. Arithmetic and `${…}` may span lines, and a
+/// `<<` on the second line of `(( 1 +` is as much a shift as one on the first.
+fn openers_after(line: &Line, ctx: &mut ShiftContext) -> Vec<Opener> {
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < line.len() {
@@ -306,13 +401,20 @@ pub fn heredoc_openers(line: &Line) -> Vec<Opener> {
             match heredoc_header(line, i) {
                 Some(header) => {
                     let start = i;
-                    i = header.end;
-                    out.push(Opener { start, header });
+                    let maybe_shift = ctx.may_shift();
+                    i = if maybe_shift { i + 2 } else { header.end };
+                    out.push(Opener {
+                        start,
+                        header,
+                        maybe_shift,
+                    });
                 }
                 None => i += 2,
             }
-        } else {
+        } else if line.quoted(i) {
             i += 1;
+        } else {
+            i += ctx.step(&line.chars, i);
         }
     }
     out
@@ -798,7 +900,12 @@ pub fn line_runs_text(line: &str) -> bool {
     let line = Line::of(line);
     let mut blanked = String::new();
     let mut i = 0usize;
-    for m in heredoc_openers(&line) {
+    // A `<<` that may be a shift keeps its "delimiter": that word may be an operand the shell
+    // reads, and reading it errs toward the over-match.
+    for m in heredoc_openers(&line)
+        .into_iter()
+        .filter(|m| !m.maybe_shift)
+    {
         blanked.push_str(&line.slice(i, m.start));
         blanked.push(' ');
         i = m.header.end;
@@ -1290,13 +1397,25 @@ pub fn pipeline_continues(line: &str) -> bool {
         .is_some_and(|t| t.bare && (t.text == "|" || t.text == "|&"))
 }
 
-/// The `(open, close)` character spans of every `$( … )` and backtick substitution that opens
-/// AND closes on `line`.
+/// Whether the unquoted `(` at `i` opens a process substitution: `<(…)` or `>(…)`, or zsh's
+/// `=(…)` where [`shellseg::equals_ends_a_name`] says zsh runs it. A backslash-newline
+/// between the two is not looked through here, which only leaves a body where it was.
+fn opens_process_substitution(chars: &[char], i: usize) -> bool {
+    match i.checked_sub(1).map(|k| chars[k]) {
+        Some('<' | '>') => true,
+        Some('=') => !shellseg::equals_ends_a_name(chars, i - 1),
+        _ => false,
+    }
+}
+
+/// The `(open, close)` character spans of every `$( … )`, backtick and process substitution
+/// (`<( … )`, `>( … )`, zsh's `=( … )`) that opens AND closes on `line`.
 ///
 /// A heredoc opened inside one of those has no body inside it, and the shells disagree about
 /// where its body is then. Measured with `x=$( cat <<'EOF' )`, a line, then `EOF`: GNU bash
 /// 5.2.15 and 5.3 read the line as the heredoc's body, while GNU bash 3.2.57 and zsh 5.9 run it
-/// as a command; with backticks all four run it. So such a body is read both ways: never
+/// as a command; with backticks all four run it, and with `<( … )` and `>( … )` GNU bash 3.2.57
+/// and zsh 5.9 run it too (zsh alone for `=( … )`). So such a body is read both ways: never
 /// dropped, and searched as a shell would run it. A subshell `( … )` or group `{ …; }` is not
 /// this: every one of those shells reads the body after the line.
 ///
@@ -1357,6 +1476,8 @@ fn closed_substitutions(line: &Line) -> Vec<(usize, usize)> {
             i = k;
         } else if c == '"' {
             stack.push((Frame::DoubleQuoted, i));
+        } else if c == '(' && opens_process_substitution(chars, i) {
+            stack.push((Frame::Sub, i));
         } else if c == '(' {
             stack.push((Frame::Paren, i));
         } else if c == ')' {
@@ -1409,10 +1530,22 @@ pub struct LayoutLine {
 /// - a body opened in a substitution closed on its own line (`closed_substitutions`) is not
 ///   dropped either, and is read as lines a shell runs, because the shells disagree about
 ///   whether those lines are a body at all.
+/// - nor is a body opened by a `<<` that may be a shift ([`Opener::maybe_shift`]), nor any body
+///   after one: a shell may run every one of those lines as a command, and the two readings
+///   do not agree again about which lines are bodies.
 pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
     let lines: Vec<&str> = cmd.split('\n').collect();
     let n = lines.len();
     let mut layout: Vec<LayoutLine> = Vec::new();
+    // The brackets open at the end of the command text read so far: a bracket opened on one
+    // command line is still open on the next, and heredoc bodies between them are not read.
+    let mut ctx = ShiftContext::default();
+    // Once a `<<` that may be a shift has been read, the lines after it have two structures —
+    // the shift's, where they are commands with heredocs of their own, and the heredoc's, where
+    // they are its body — and the two part company for the rest of the text. So from there on
+    // no body is dropped and every body is read as lines a shell runs: what either reading runs
+    // is then read.
+    let mut shifted = false;
     let mut i = 0usize;
     while i < n {
         // One LOGICAL command: command-text lines folded for the plan, heredoc bodies buffered as
@@ -1470,11 +1603,15 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
                 HashSet::new()
             };
             let closed = closed_substitutions(&folded_line);
-            for (h, m) in heredoc_openers(&folded_line).into_iter().enumerate() {
+            for (h, m) in openers_after(&folded_line, &mut ctx)
+                .into_iter()
+                .enumerate()
+            {
                 let idx = body_count;
                 body_count += 1;
                 // Closed on the header's own line: a newline kept in `folded` for an open quote
                 // puts the close on a later line, where the body is inside the substitution.
+                shifted |= m.maybe_shift;
                 if m.header.shells_disagree
                     || closed.iter().any(|&(lo, hi)| {
                         lo < m.start
@@ -1532,15 +1669,14 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
             // what every delimiter disagreement in this walk has looked like, and keeping it only
             // shows the guard more text.
             let unterminated = idx.is_some_and(|k| !ended.get(&k).copied().unwrap_or(true));
+            let both_ways = |k: usize| shifted || read_both_ways.contains(&k);
             layout.push(LayoutLine {
                 text,
                 body: idx.is_some(),
-                drop: idx.is_some_and(|k| {
-                    drop.get(&k).copied().unwrap_or(false) && !read_both_ways.contains(&k)
-                }) && !unterminated,
-                executed: idx.is_some_and(|k| {
-                    executed.get(&k).copied().unwrap_or(false) || read_both_ways.contains(&k)
-                }),
+                drop: idx.is_some_and(|k| drop.get(&k).copied().unwrap_or(false) && !both_ways(k))
+                    && !unterminated,
+                executed: idx
+                    .is_some_and(|k| executed.get(&k).copied().unwrap_or(false) || both_ways(k)),
             });
         }
     }
