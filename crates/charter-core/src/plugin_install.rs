@@ -70,8 +70,9 @@
 //!
 //! Takes back what install writes: the two user-settings keys, Claude Code's own record of the
 //! marketplace, the copy, and every Codex guard group in the shape install writes — whichever
-//! `charter` it names, since install replaces those too rather than adding a second. A Codex
-//! trust record for the hook stays in Codex's `[hooks.state]`; it names a hook that is gone.
+//! `charter` it names, since install replaces those too rather than adding a second — and
+//! Codex's trust record for each guard it takes out of `[hooks.state]`, which would otherwise
+//! name a hook that is gone (#449).
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -391,6 +392,66 @@ pub fn run(m: &Machine, verb: Verb, named: &[String], dry_run: bool) -> Vec<Outc
         });
     }
     out
+}
+
+/// What the app does at launch (#449): bring each installed copy up to date with this charter,
+/// and nothing else.
+///
+/// An app update replaces the bundled plugin and the binary, and the copy `charter plugin
+/// install` made keeps the old hooks and skills until somebody re-runs it; `charter doctor`
+/// says so in its `plugin` row, and this is that repair made without being asked. A harness is
+/// refreshed only when all of these hold:
+///
+/// - its config folder exists and charter's plugin is installed there — a refresh never
+///   installs for a harness the operator did not install for;
+/// - the installed hooks run this charter, or a charter that is no longer there — a copy that
+///   runs another charter still on disk (a release on `PATH`, a development build) is that
+///   charter's to refresh, and pointing it at this one would be a choice nobody made;
+/// - what is installed is not what installing now would write.
+///
+/// Only the harnesses it wrote for come back, so an empty answer means there was nothing to do.
+pub fn refresh(m: &Machine) -> Vec<Outcome> {
+    let same = |a: &Path, b: &Path| {
+        a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
+    };
+    let mut out = Vec::new();
+    for a in adapters() {
+        if !a.home(m).is_dir() || !matches!(a.installed(m), Ok(true)) {
+            continue;
+        }
+        if a.runs(m)
+            .is_some_and(|runs| runs.is_file() && !same(&runs, &m.binary))
+        {
+            continue;
+        }
+        let plan = a.install(m);
+        if plan.as_ref().is_ok_and(|p| !p.changes()) {
+            continue;
+        }
+        let (applied, failed) = match &plan {
+            Ok(plan) => apply(plan),
+            Err(_) => (0, None),
+        };
+        out.push(Outcome {
+            harness: a.harness(),
+            plan,
+            skipped: None,
+            failed,
+            applied,
+        });
+    }
+    out
+}
+
+/// Whether a launch of the app runs [`refresh`] on its own.
+///
+/// **Neither a test build nor a development build does.** The scenario suite starts a fenced
+/// app dozens of times a run, and a harness's own configuration is outside any fixture tree; a
+/// debug build's `charter` is the developer's, and a copy whose charter has gone would be
+/// pointed at a build in `target/`. Handed its two facts, as
+/// [`crate::updates::checks_on_its_own`] is, so the rule is testable in both directions.
+pub fn refreshes_on_its_own(fenced: bool, debug_build: bool) -> bool {
+    !fenced && !debug_build
 }
 
 /// What the command prints.
@@ -917,6 +978,80 @@ fn is_charters_guard(group: &toml_edit::Table) -> bool {
         })
 }
 
+/// Codex's name for the event charter's guard is on, in a `[hooks.state]` key.
+const TRUST_EVENT: &str = "pre_tool_use";
+
+/// Take Codex's trust records for the `PreToolUse` groups at `removed` out of `hooks.state`,
+/// and move the records of the groups after them down to where those groups now stand.
+///
+/// Codex 0.147.0 keys a record `<config file>:<event>:<group>:<hook>` — by position, beside a
+/// hash of the hook. Left in place, a record for a removed guard names a hook that is gone, and
+/// the record of the operator's own group that moved up into its place no longer matches, so
+/// Codex asks them to trust a hook they already trusted. Only records keyed to `config` and to
+/// `PreToolUse` are touched, and an emptied `hooks.state` goes. Whether anything changed.
+fn forget_trust(doc: &mut toml_edit::DocumentMut, config: &Path, removed: &[usize]) -> bool {
+    if removed.is_empty() {
+        return false;
+    }
+    let Some(state) = doc
+        .get_mut("hooks")
+        .and_then(|h| h.as_table_like_mut())
+        .and_then(|h| h.get_mut("state"))
+        .and_then(toml_edit::Item::as_table_like_mut)
+    else {
+        return false;
+    };
+    let same_file = |source: &str| {
+        let source = Path::new(source);
+        source == config
+            || matches!(
+                (source.canonicalize(), config.canonicalize()),
+                (Ok(a), Ok(b)) if a == b
+            )
+    };
+    // `<source>:pre_tool_use:<group>:<hook>`, read from the right: a path may hold a colon.
+    let parse = |key: &str| -> Option<(usize, String, String)> {
+        let mut parts = key.rsplitn(4, ':');
+        let hook = parts.next()?;
+        let group = parts.next()?.parse::<usize>().ok()?;
+        let event = parts.next()?;
+        let source = parts.next()?;
+        (event == TRUST_EVENT && hook.parse::<usize>().is_ok() && same_file(source))
+            .then(|| (group, source.to_owned(), hook.to_owned()))
+    };
+    let ours: Vec<(String, usize, String, String)> = state
+        .iter()
+        .filter_map(|(key, _)| {
+            parse(key).map(|(group, source, hook)| (key.to_owned(), group, source, hook))
+        })
+        .collect();
+    let mut moved: Vec<(String, toml_edit::Item)> = Vec::new();
+    let mut changed = false;
+    for (key, group, source, hook) in ours {
+        let below = removed.iter().filter(|&&r| r < group).count();
+        if removed.contains(&group) {
+            state.remove(&key);
+            changed = true;
+        } else if below > 0
+            && let Some(item) = state.remove(&key)
+        {
+            let to = group - below;
+            moved.push((format!("{source}:{TRUST_EVENT}:{to}:{hook}"), item));
+            changed = true;
+        }
+    }
+    for (key, item) in moved {
+        state.insert(&key, item);
+    }
+    if state.is_empty() {
+        doc["hooks"]
+            .as_table_like_mut()
+            .expect("read above")
+            .remove("state");
+    }
+    changed
+}
+
 impl Codex {
     fn config(m: &Machine) -> PathBuf {
         m.codex_home.join("config.toml")
@@ -1019,7 +1154,7 @@ impl Adapter for Codex {
                     })
             });
         if !current {
-            for i in ours.into_iter().rev() {
+            for &i in ours.iter().rev() {
                 groups.remove(i);
             }
             groups.push(want_group);
@@ -1048,6 +1183,10 @@ impl Adapter for Codex {
                 ),
                 true,
             );
+        }
+        // A replaced guard's trust record names a hook that is gone, as after an uninstall.
+        if !current && forget_trust(&mut doc, &path, &ours) {
+            plan.step(&path, "forget Codex's trust in the guard it replaces", true);
         }
         if !current || retired {
             plan.settle(0, Write::File(path, doc.to_string().into_bytes()));
@@ -1095,21 +1234,33 @@ impl Adapter for Codex {
             return Ok(plan);
         }
         let mut doc = Self::read(&path)?;
-        let mut removed = false;
+        let mut gone: Vec<usize> = Vec::new();
         if let Some(groups) = Self::guard_groups(&mut doc, &path, false)? {
-            let before = groups.len();
-            groups.retain(|g| !is_charters_guard(g));
-            removed = groups.len() != before;
-            let empty = groups.is_empty();
-            if removed && empty {
+            gone = (0..groups.len())
+                .filter(|&i| groups.get(i).is_some_and(is_charters_guard))
+                .collect();
+            for &i in gone.iter().rev() {
+                groups.remove(i);
+            }
+            if !gone.is_empty() && groups.is_empty() {
                 let hooks = doc["hooks"].as_table_like_mut().expect("read above");
                 hooks.remove("PreToolUse");
-                if hooks.is_empty() {
-                    doc.remove("hooks");
-                }
             }
         }
+        let removed = !gone.is_empty();
         plan.step(&path, "remove charter's Bash guard", removed);
+        let forgot = forget_trust(&mut doc, &path, &gone);
+        if forgot {
+            plan.step(&path, "forget Codex's trust in that guard", true);
+        }
+        if removed
+            && doc
+                .get("hooks")
+                .and_then(toml_edit::Item::as_table_like)
+                .is_some_and(|h| h.is_empty())
+        {
+            doc.remove("hooks");
+        }
         if removed {
             plan.settle(0, Write::File(path, doc.to_string().into_bytes()));
         }

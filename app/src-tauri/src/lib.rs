@@ -84,6 +84,41 @@ pub(crate) struct Shipped {
     pub plugin: Option<PathBuf>,
 }
 
+/// Re-run `charter plugin install` for each harness whose installed copy runs this app's
+/// `charter` and is out of date (`charter_core::plugin_install::refresh` has the rule), on a
+/// thread of its own. Said on standard error, as `charter plugin install` says it; a harness
+/// with nothing to do says nothing.
+fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
+    use charter_core::plugin_install as install;
+    if !install::refreshes_on_its_own(charter_core::fence::FENCED, cfg!(debug_assertions)) {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("charter-plugin-refresh".into())
+        .spawn(move || {
+            // Resolved, as the `charter` that installed the copy named itself: a hook's path
+            // compared with an unresolved one would call every copy somebody else's.
+            let binary = binary.canonicalize().unwrap_or(binary);
+            let machine = match install::Machine::from_env(binary, Some(plugin)) {
+                Ok(machine) => machine,
+                Err(why) => {
+                    eprintln!("charter: the installed plugin was not checked: {why}");
+                    return;
+                }
+            };
+            let outcomes = install::refresh(&machine);
+            if !outcomes.is_empty() {
+                let said = if install::failed(&outcomes) {
+                    "could not bring the installed plugin fully up to date with this app; \
+                     `charter plugin install` says why"
+                } else {
+                    "brought the installed plugin up to date with this app"
+                };
+                eprint!("charter: {said}\n{}", install::render(&outcomes, false));
+            }
+        });
+}
+
 /// Where the bundled plugin is, or none when this build has none.
 ///
 /// Tauri's resource directory: `Contents/Resources` in a macOS bundle, `/usr/lib/charter` in a
@@ -1396,6 +1431,12 @@ pub fn run() {
                     "charter: no plugin in the app's resources, so a Claude Code chat is started \
                      without charter's hooks, guard or skills; every one will show as unknown"
                 );
+            }
+            // The copy `charter plugin install` made for chats started outside the app, brought
+            // up to date with this build (#449). Off the main thread: it reads and writes a few
+            // files, and nothing on screen waits for it.
+            if let (Some(binary), Some(plugin)) = (binary.clone(), plugin.clone()) {
+                refresh_installed_plugin(binary, plugin);
             }
             // The registry is managed BEFORE a plane is opened, because opening one starts
             // programs, and a program that dies at once tells the board, which tells the

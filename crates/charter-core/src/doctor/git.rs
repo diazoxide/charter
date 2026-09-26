@@ -19,7 +19,7 @@ pub(super) fn git_in(dir: &Path, args: &[&str]) -> Result<Run, String> {
         Ok(run) if run.code.is_none() => Err(format!(
             "timed out after {}s: git -C {} {}",
             CHECK_TIMEOUT.as_secs(),
-            dir.display(),
+            super::fsx::path_field(dir),
             args.join(" ")
         )),
         Ok(run) => Ok(run),
@@ -50,7 +50,15 @@ pub(super) fn git() -> Row {
 /// lost.
 pub(super) fn identity(d: &Doctor) -> Row {
     const NAME: &str = "git identity";
-    let ask = |key: &str| git_in(&d.cwd, &["config", "--get", key]).map(|run| first_line(&run.out));
+    // The whole value, quoted onto one line (#353, #449): a `\n`, a `\r` or an escape sequence
+    // in a name a repo's own config sets is shown escaped, never dropped or drawn. Only the
+    // newline git ends its answer with is taken off first.
+    let ask = |key: &str| {
+        git_in(&d.cwd, &["config", "--get", key]).map(|run| {
+            let value = run.out.strip_suffix('\n').unwrap_or(&run.out);
+            super::one_line(value, super::DISPLAY_LIMIT)
+        })
+    };
     let (name, email) = match (ask("user.name"), ask("user.email")) {
         (Ok(name), Ok(email)) => (name, email),
         // Not "not set": charter could not ask, and an unset identity is a claim about git's
@@ -251,7 +259,7 @@ pub(super) fn plane_root(d: &Doctor) -> Row {
             findings.push("detached HEAD".to_owned());
             actions.push(format!(
                 "Put the root back on a branch: git -C {} checkout {}.",
-                root.display(),
+                super::fsx::path_field(root),
                 default
                     .as_deref()
                     .filter(|d| !d.is_empty())
@@ -262,7 +270,7 @@ pub(super) fn plane_root(d: &Doctor) -> Row {
             findings.push(format!("on {branch}, not {default}"));
             actions.push(format!(
                 "Put the root back: git -C {} checkout {default}.",
-                root.display()
+                super::fsx::path_field(root)
             ));
         }
         _ => {}
@@ -528,8 +536,8 @@ fn stranded_push(d: &Doctor) -> Result<Option<(String, String)>, String> {
             "Push it with `charter save` before anything runs `git reset --hard \
              origin/{branch}` in {}, which would delete it silently. What the remote said is \
              in {}.",
-            d.root.display(),
-            path.display()
+            super::fsx::path_field(&d.root),
+            super::fsx::path_field(&path)
         ),
     )))
 }
@@ -637,7 +645,7 @@ pub(super) fn index_lock(d: &Doctor) -> Row {
         NAME,
         format!(
             "{} — {size} byte(s), {} old",
-            path.display(),
+            super::fsx::path_field(&path),
             age_phrase(age)
         ),
         format!(
@@ -645,7 +653,7 @@ pub(super) fn index_lock(d: &Doctor) -> Row {
              `git add` in this plane will refuse until it is gone. Check nothing holds it (ps \
              -eo pid,lstart,command | grep '[g]it'), then remove it yourself: rm -f {}  — \
              charter never removes a lock.",
-            path.display()
+            super::fsx::path_field(&path)
         ),
     )
 }

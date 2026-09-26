@@ -127,7 +127,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "Discard that work and remove the worktree anyway", in the window) would discard. A merge refused over uncommitted changes no
   longer tells you to remove or force.
   ([#368](https://github.com/diazoxide/charter/issues/368))
-
+- **The app keeps the plugin you installed for terminal chats up to date.** When it starts,
+  it re-runs `charter plugin install` for each harness (Claude Code, Codex, opencode) whose
+  installed copy runs the app's own `charter` and is older than what the app ships. It never
+  installs for a harness you did not install for, and leaves a copy that runs another
+  `charter` alone. ([#449](https://github.com/diazoxide/charter/issues/449))
+- **`charter guard ask` puts a new rule into your workspaces straight away.** It rewrites the
+  generated settings of every workspace, as a launch or `charter workspace reinit` would,
+  and names any workspace whose settings it could not rewrite. Before, the rule reached a
+  workspace only after `charter workspace reinit --all`.
+  ([#449](https://github.com/diazoxide/charter/issues/449))
 - **A vault file that is a symlink is refused.** `charter secret set` and `charter secret rm`
   on a plain-file or reference vault whose file is a link now stop with a message saying so,
   and write nothing. They used to write the secrets to wherever the link pointed. Point the
@@ -167,7 +176,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   long as today's, so two of them ran out of time. The run now uses smaller shards and a longer
   per-mutant limit. It also stops reporting slow survivors as timeouts. New tests now cover the
   extension, executor, secrets, save and settings behaviour the run found untested.
-
+- **`charter plugin uninstall --harness codex` no longer leaves Codex's trust record for the
+  guard behind** in `[hooks.state]`. A record for a hook of yours that sat after the guard is
+  moved to its new position, so Codex does not ask you to trust it again.
+  ([#449](https://github.com/diazoxide/charter/issues/449))
+- **`charter doctor` quotes every path and your git identity on one line.** A newline, a
+  carriage return or a terminal escape in the plane's path, the working directory,
+  `$CLAUDE_CONFIG_DIR` or your git `user.name` and `user.email` is shown escaped instead of
+  reaching your terminal. ([#449](https://github.com/diazoxide/charter/issues/449))
 - **Every guard reads a heredoc the same way, and the way the shell does.** The secret-leak
   guard used a second, narrower reading of where a heredoc starts than the one that decides
   where its body ends, and on some lines the two disagreed, so a command after the heredoc could

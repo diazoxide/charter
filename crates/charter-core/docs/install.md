@@ -93,14 +93,18 @@ charter plugin install            # --dry-run first to see each change
 ```
 
 once. It prints every change it makes and changes nothing that is already so, so running it
-again after moving or updating the app is safe. For Claude Code it keeps a copy of the app's
+again after moving or updating the app is safe. After an update you do not have to: when the
+app starts, it brings an installed copy that runs its own `charter` up to date. It never
+installs for a harness you did not install for, and it leaves alone a copy that runs another
+`charter` that is still there. For Claude Code it keeps a copy of the app's
 plugin in `~/.config/charter/plugin/` whose hooks name this `charter` by its path, and
 registers it in your user `settings.json` as `charter@charter-app`. A chat the app starts
 still loads the app's own copy instead. For Codex it adds only charter's Bash guard to
 `~/.codex/config.toml`, because the app already gives its own Codex chats the rest and Codex
 would run both. Codex asks you to trust that hook the next time it starts. It never enables
 the retired `charter@charter` plugin, and turns it off in the files it writes.
-`charter plugin uninstall` takes back what it wrote. `--harness claude|codex` limits
+`charter plugin uninstall` takes back what it wrote, including Codex's record that you trusted
+the guard. `--harness claude|codex` limits
 either one to one harness.
 
 `charter doctor` says whether it is installed for each harness set up on the machine
@@ -119,7 +123,9 @@ the file that harness reads: `permissions` in `.claude/settings.json` for Claude
 `permission.bash` in `opencode.json` for opencode. Codex has no command-pattern
 permissions, and the command says so. If one of those files cannot be read, nothing is
 written anywhere. `--local` writes `.claude/settings.local.json`, which is not committed,
-so the rule is yours alone. An allow rule reaches a chat at the plane root only: a
+so the rule is yours alone. An ask rule is written into every workspace's generated
+settings at once, and the command names the workspaces it reached and any whose settings it
+could not rewrite. An allow rule reaches a chat at the plane root only: a
 workspace's and a clone's settings carry ask and deny rules and never allow.
 `charter guard handoff` puts back the handoff consent rule that `charter init` writes.
 `charter guard` on its own lists the rules, grouped by the file each one is in.

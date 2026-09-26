@@ -508,3 +508,170 @@ fn a_stale_opencode_guard_is_rewritten_for_this_charter() {
     assert_eq!(needed(&out), 1);
     assert_eq!(Opencode.runs(&m), Some(m.binary.clone()));
 }
+
+/// Codex's trust record for the hook in `config` at `group`, as Codex 0.147.0 writes it.
+fn trust(config: &Path, group: usize, hash: &str) -> String {
+    format!(
+        "\n[hooks.state.\"{}:pre_tool_use:{group}:0\"]\ntrusted_hash = \"sha256:{hash}\"\n",
+        config.display()
+    )
+}
+
+#[test]
+fn uninstall_takes_codexs_trust_record_for_the_guard_and_renumbers_the_ones_after_it() {
+    let (_d, m) = machine();
+    let config = m.codex_home.join("config.toml");
+    run(&m, Verb::Install, &["codex".to_owned()], false);
+    // The operator adds a hook of their own after the guard, and Codex records trusting both,
+    // keyed by position: the guard is group 0, theirs group 1.
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(
+        "\n[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \
+         \"command\"\ncommand = \"my-own-check\"\n",
+    );
+    text.push_str(&trust(&config, 0, "ours"));
+    text.push_str(&trust(&config, 1, "mine"));
+    text.push_str(&format!(
+        "\n[hooks.state.\"{}:session_start:0:0\"]\ntrusted_hash = \"sha256:start\"\n\
+         \n[hooks.state.\"other@x:hooks/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \
+         \"sha256:plugin\"\n",
+        config.display()
+    ));
+    std::fs::write(&config, text).unwrap();
+
+    let out = run(&m, Verb::Uninstall, &["codex".to_owned()], false);
+    assert!(!failed(&out), "{}", render(&out, false));
+    let after = std::fs::read_to_string(&config).unwrap();
+    let doc: toml::Table = toml::from_str(&after).unwrap();
+    let groups = doc["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "{after}");
+    assert_eq!(
+        groups[0]["hooks"][0]["command"].as_str(),
+        Some("my-own-check")
+    );
+    let state = doc["hooks"]["state"].as_table().unwrap();
+    let key = |event: &str, group: usize| format!("{}:{event}:{group}:0", config.display());
+    // Their hook is group 0 now, and keeps the trust Codex gave it.
+    assert_eq!(
+        state[&key("pre_tool_use", 0)]["trusted_hash"].as_str(),
+        Some("sha256:mine"),
+        "{after}"
+    );
+    assert!(!state.contains_key(&key("pre_tool_use", 1)), "{after}");
+    assert!(!after.contains("sha256:ours"), "{after}");
+    // Nothing else Codex trusts is touched.
+    assert_eq!(
+        state[&key("session_start", 0)]["trusted_hash"].as_str(),
+        Some("sha256:start")
+    );
+    assert_eq!(
+        state["other@x:hooks/hooks.json:pre_tool_use:0:0"]["trusted_hash"].as_str(),
+        Some("sha256:plugin")
+    );
+}
+
+#[test]
+fn uninstall_leaves_no_empty_trust_table_behind() {
+    let (_d, m) = machine();
+    let config = m.codex_home.join("config.toml");
+    std::fs::write(&config, "model = \"o3\"\n").unwrap();
+    run(&m, Verb::Install, &["codex".to_owned()], false);
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(&trust(&config, 0, "ours"));
+    std::fs::write(&config, text).unwrap();
+    let out = run(&m, Verb::Uninstall, &["codex".to_owned()], false);
+    assert!(!failed(&out), "{}", render(&out, false));
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "model = \"o3\"\n"
+    );
+}
+
+#[test]
+fn a_replaced_guard_takes_its_trust_record_with_it() {
+    let (_d, mut m) = machine();
+    let config = m.codex_home.join("config.toml");
+    run(&m, Verb::Install, &["codex".to_owned()], false);
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(&trust(&config, 0, "ours"));
+    std::fs::write(&config, text).unwrap();
+    m.binary = PathBuf::from("/elsewhere/charter");
+    let out = run(&m, Verb::Install, &["codex".to_owned()], false);
+    assert!(!failed(&out), "{}", render(&out, false));
+    let after = std::fs::read_to_string(&config).unwrap();
+    assert!(!after.contains("sha256:ours"), "{after}");
+    assert!(
+        after.contains("'/elsewhere/charter' hook pretooluse"),
+        "{after}"
+    );
+}
+
+// ---- #449: the app brings an installed copy up to date at launch -----------------------------
+
+/// Make every harness's installed copy stale: an older copy lacks a skill, an older Codex guard
+/// a timeout, an older opencode shim a line.
+fn age(m: &Machine) {
+    std::fs::remove_dir_all(plugin_dir(m).join("skills/handoff")).unwrap();
+    let config = m.codex_home.join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, text.replace("timeout = 10", "timeout = 3")).unwrap();
+    let shim = opencode_shim(m);
+    let mut text = std::fs::read_to_string(&shim).unwrap();
+    text.push_str("// an older charter's line\n");
+    std::fs::write(&shim, text).unwrap();
+}
+
+#[test]
+fn a_stale_copy_that_runs_this_charter_is_brought_up_to_date() {
+    let (_d, m) = machine();
+    assert!(!failed(&run(&m, Verb::Install, &[], false)));
+    age(&m);
+    let out = refresh(&m);
+    let harnesses: Vec<&str> = out.iter().map(|o| o.harness).collect();
+    assert_eq!(harnesses, ["claude", "codex", "opencode"]);
+    assert!(!failed(&out), "{}", render(&out, false));
+    assert!(plugin_dir(&m).join("skills/handoff/SKILL.md").is_file());
+    assert_eq!(needed(&run(&m, Verb::Install, &[], true)), 0);
+    // And a copy already current is left alone, with nothing to say.
+    assert!(refresh(&m).is_empty());
+}
+
+#[test]
+fn nothing_is_installed_by_a_refresh_where_nothing_was() {
+    let (_d, m) = machine();
+    assert!(refresh(&m).is_empty());
+    assert!(!m.claude_config.join("settings.json").exists());
+    assert!(!m.codex_home.join("config.toml").exists());
+    assert!(!opencode_shim(&m).exists());
+    assert!(!plugin_dir(&m).exists());
+}
+
+#[test]
+fn a_copy_that_runs_another_charter_still_there_is_that_charters_to_refresh() {
+    let (d, mut m) = machine();
+    let other = d.path().canonicalize().unwrap().join("other-charter");
+    std::fs::write(&other, "").unwrap();
+    let app = m.binary.clone();
+    m.binary = other.clone();
+    assert!(!failed(&run(&m, Verb::Install, &[], false)));
+    age(&m);
+    m.binary = app;
+    assert!(refresh(&m).is_empty());
+    assert!(!plugin_dir(&m).join("skills/handoff").exists());
+
+    // Once that charter is gone, its hooks cannot start, and the app's is the one to run.
+    std::fs::remove_file(&other).unwrap();
+    let out = refresh(&m);
+    assert_eq!(out.len(), 3, "{}", render(&out, false));
+    assert_eq!(ClaudeCode.runs(&m), Some(m.binary.clone()));
+    assert_eq!(Codex.runs(&m), Some(m.binary.clone()));
+    assert_eq!(Opencode.runs(&m), Some(m.binary.clone()));
+}
+
+#[test]
+fn only_a_release_build_refreshes_on_its_own() {
+    assert!(refreshes_on_its_own(false, false));
+    assert!(!refreshes_on_its_own(true, false));
+    assert!(!refreshes_on_its_own(false, true));
+    assert!(!refreshes_on_its_own(true, true));
+}
