@@ -113,8 +113,8 @@ Where unsaved work sits. It is *changed* (not committed), *committed* (not pushe
 _Avoid_: status, sync state
 
 **Blocked**:
-A save that can't go further without a person: a conflict, a refused push, a secret the scan
-caught, a mode the remote can't take. Auto-save pauses until it's cleared.
+A save that can't go further without a person: a conflict or a merge or rebase git stopped
+part-way, a refused push, a secret the scan caught, a mode the remote can't take. Auto-save pauses until it's cleared.
 _Avoid_: failed, error, stuck
 
 **Incoming**:

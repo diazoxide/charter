@@ -462,7 +462,8 @@ pub struct Standing {
     /// Why the last push did not land, when it failed rather than conflicted — offline, a
     /// token, the forge down. Not blocked: auto-save tries again later.
     pub push_failed: Option<String>,
-    /// The files the last rebase conflicted in, when that is why it is blocked.
+    /// The files to settle, when conflicts are why it is blocked: those a merge or rebase
+    /// stopped part-way left unmerged, else those the last save's rebase conflicted in.
     pub conflicts: Vec<String>,
     /// What a save cannot do here that is not a block — a PR mode on a remote no forge adapter
     /// serves, where a save still commits and goes no further.
@@ -601,6 +602,10 @@ pub fn standing(root: &Path) -> Standing {
             })
             .then(|| SECRET_REFUSED.to_owned())
     });
+    // Git stopped part-way through a merge or rebase, asked of the tree now (#433): named
+    // before any other block, since a save refuses it first and auto-save waits while it is.
+    let stopped = gitstate::stopped(root);
+    let blocked = stopped.as_ref().map(gitstate::Stopped::why).or(blocked);
     // A PR mode's pull request carries the commit it was last pushed at; a commit made since
     // is not in it yet.
     let waiting = match outcome.as_deref() {
@@ -630,7 +635,11 @@ pub fn standing(root: &Path) -> Standing {
         pushes,
         behind,
         push_failed,
-        conflicts,
+        // The files a stopped merge or rebase left unmerged are the ones to settle now.
+        conflicts: match stopped {
+            Some(stopped) if !stopped.unmerged.is_empty() => stopped.unmerged,
+            _ => conflicts,
+        },
         notice,
     }
 }
@@ -691,9 +700,9 @@ pub struct Incoming {
 /// Why a fetch left incoming commits where they are rather than moving the plane onto them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Held {
-    /// A merge or rebase stopped part-way, or files git still calls unmerged. Named first:
+    /// A merge, rebase or bisect stopped part-way, or files git still calls unmerged. First:
     /// it is the one a person has to settle, and a save now would commit the markers.
-    Conflicts(Vec<String>),
+    Stopped(gitstate::Stopped),
     /// Another git command holds the index, or one died holding it.
     IndexLocked,
     /// The plane is checked out on a branch that is not its target branch.
@@ -710,15 +719,7 @@ impl Held {
     /// The reason, as a clause: "N incoming commits left on origin/main: <this>".
     pub fn why(&self) -> String {
         match self {
-            Self::Conflicts(files) if files.is_empty() => {
-                "a merge or rebase is stopped part-way; settle its conflicts first".into()
-            }
-            Self::Conflicts(files) => {
-                format!(
-                    "the tree has conflicts to settle first: {}",
-                    files.join(", ")
-                )
-            }
+            Self::Stopped(stopped) => stopped.why(),
             Self::IndexLocked => "git's index is locked by another git command".into(),
             Self::OffTarget { here, branch } => {
                 format!("the plane is on `{here}`, not its target branch `{branch}`")
@@ -812,8 +813,8 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
 /// cannot (charter-app#296): a clean tree, on the target branch, with nothing of its own the
 /// remote lacks, and no merge or rebase in progress.
 fn hold(root: &Path, git_dir: &Path, here: &str, branch: &str, mine: u32) -> Option<Held> {
-    if let Some(conflicts) = conflicts(root, git_dir) {
-        return Some(conflicts);
+    if let Some(stopped) = gitstate::stopped(root) {
+        return Some(Held::Stopped(stopped));
     }
     if crate::gitstate::find(git_dir).is_some() {
         return Some(Held::IndexLocked);
@@ -831,21 +832,6 @@ fn hold(root: &Path, git_dir: &Path, here: &str, branch: &str, mine: u32) -> Opt
         return Some(Held::Unsaved);
     }
     None
-}
-
-/// A merge, rebase or cherry-pick stopped part-way, or files git still calls unmerged.
-fn conflicts(root: &Path, git_dir: &Path) -> Option<Held> {
-    let stopped = [
-        "MERGE_HEAD",
-        "REBASE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "rebase-merge",
-        "rebase-apply",
-    ]
-    .iter()
-    .any(|marker| git_dir.join(marker).exists());
-    let unmerged = unmerged(root);
-    (stopped || !unmerged.is_empty()).then_some(Held::Conflicts(unmerged))
 }
 
 /// The repository's own directory, which is a file's target for a worktree plane.
@@ -876,7 +862,9 @@ pub fn pull(root: &Path, say: Sink) -> u8 {
     let n = incoming.behind;
     let commits = if n == 1 { "commit" } else { "commits" };
     // Conflicts stop the save even when nothing came in: a save would stage their markers.
-    let held = incoming.held.or_else(|| conflicts(root, &git_dir_of(root)));
+    let held = incoming
+        .held
+        .or_else(|| gitstate::stopped(root).map(Held::Stopped));
     match (&held, incoming.moved) {
         (_, true) => {
             say(Say::Done(format!("Brought in {n} incoming {commits}.")));
@@ -892,11 +880,10 @@ pub fn pull(root: &Path, say: Sink) -> u8 {
             } else {
                 format!("{n} incoming {commits} not brought in: {}.", held.why())
             };
-            if matches!(held, Held::Conflicts(_)) {
+            if matches!(held, Held::Stopped(_)) {
                 say(Say::Fail(line));
                 say(Say::Info(
-                    "  Nothing was saved. Settle the conflicts, then run `charter save --pull` \
-                     again."
+                    "  Nothing was saved. Settle that, then run `charter save --pull` again."
                         .into(),
                 ));
                 1
@@ -1126,29 +1113,8 @@ fn rebase_onto_fetched(root: &Path, sign: bool, deadline: Duration) -> Rebased {
         Ok(run) if run.ok() => Rebased::Replayed,
         Ok(run) if run.code.is_none() && started.elapsed() >= deadline => Rebased::OutOfTime,
         Ok(run) if sign && run.err.contains(UNWRITTEN) => Rebased::Unsigned(signer_said(&run.err)),
-        _ => Rebased::Conflict(unmerged(root)),
+        _ => Rebased::Conflict(gitstate::unmerged(root)),
     }
-}
-
-/// The files a stopped rebase left unmerged, before it is undone — what the Saving view names.
-fn unmerged(root: &Path) -> Vec<String> {
-    git::run(
-        root,
-        &["diff", "--name-only", "--diff-filter=U", "-z"],
-        git::READ,
-    )
-    .map(|r| {
-        let mut out: Vec<String> = r
-            .out
-            .split('\0')
-            .filter(|l| !l.trim().is_empty())
-            .map(str::to_string)
-            .collect();
-        out.sort();
-        out.dedup();
-        out
-    })
-    .unwrap_or_default()
 }
 
 /// The `-c` that decides signing for one git command, beating the operator's own
@@ -2001,6 +1967,24 @@ fn commit_push(
     // rather than `<root>/.git` — the tree whose index this call is about.
     let named = found.line().trim();
     let git_dir = root.join(if named.is_empty() { ".git" } else { named });
+
+    // Before anything is staged (#433): `git add -A` in a tree git has stopped part-way
+    // through a merge or rebase stages the conflict markers as the resolution, and the commit
+    // lands them. Refused whatever started the save — this command, the window's button,
+    // auto-save — and the Saving view reads the same check as Blocked ([`standing`]).
+    if let Some(stopped) = gitstate::stopped(root) {
+        let why = stopped.why();
+        say(Say::Fail(format!(
+            "Not saved: in {}, {why}.",
+            root.display()
+        )));
+        say(Say::Info(
+            "  Nothing was staged or committed. Settle that, then save again.".into(),
+        ));
+        attempt.outcome = "blocked";
+        attempt.detail = why;
+        return 1;
+    }
 
     // **The add's exit status is the whole fix.** Under a held `.git/index.lock` it exits 128
     // and stages nothing, and the probe below then answers 0 — because there is no difference

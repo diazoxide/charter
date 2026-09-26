@@ -47,6 +47,7 @@
 use std::path::Path;
 
 use crate::forge::{self, Forge, pr};
+use crate::gitstate;
 use crate::planegit::{self, Claim, Stage, Trigger};
 use crate::planesave::{self, Mode};
 use crate::repocmd::{Say, Sink};
@@ -176,6 +177,7 @@ pub fn save_claimed(request: &Request, trigger: Trigger, _claim: &Claim, say: Si
             "ms": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             "outcome": attempt.outcome,
             "detail": attempt.detail,
+            "stopped": attempt.stopped,
         }),
     );
     code
@@ -192,6 +194,10 @@ struct Attempt {
     branch: Option<String>,
     pr: Option<String>,
     detail: String,
+    /// Blocked because git stopped part-way through something (#433). [`standing`] reads
+    /// that from the clone as it is, so this line must not keep the repo blocked once the
+    /// operator has finished or aborted it by hand.
+    stopped: bool,
 }
 
 impl Default for Attempt {
@@ -203,6 +209,7 @@ impl Default for Attempt {
             branch: None,
             pr: None,
             detail: String::new(),
+            stopped: false,
         }
     }
 }
@@ -234,6 +241,20 @@ fn commit_push(
             return 1;
         }
     };
+    // Before the branch is asked for, since a rebase stopped part-way is on no branch, and
+    // before anything is staged: `git add -A` would stage the conflict markers (#433).
+    if let Some(stopped) = gitstate::stopped(clone) {
+        let why = format!("in {at}, {}", stopped.why());
+        say(Say::Fail(format!("Not saved: {why}.")));
+        say(Say::Info(
+            "  Nothing was staged or committed. Settle that, then save again.".into(),
+        ));
+        attempt.outcome = "blocked";
+        attempt.detail = why;
+        attempt.commit = rev(clone, "HEAD");
+        attempt.stopped = true;
+        return 1;
+    }
     let branch = match &state.head {
         Head::Branch(branch) | Head::Unborn(branch) => branch.clone(),
         Head::Detached(sha) => {
@@ -882,7 +903,14 @@ pub fn standing(plane: &Path, workspace: &str, repo: &repos::Repo) -> Standing {
     };
     // A journal line speaks for the clone only while HEAD is still the commit it names.
     let current = said("commit").is_none_or(|sha| Some(sha) == out.head);
-    out.stage = if current && said("outcome").as_deref() == Some("blocked") {
+    // Git stopped part-way through a merge or rebase, asked of the clone now (#433).
+    out.stage = if let Some(stopped) = gitstate::stopped(&repo.path) {
+        out.blocked = Some(stopped.why());
+        Stage::Blocked
+    } else if current
+        && said("outcome").as_deref() == Some("blocked")
+        && last.as_ref().and_then(|l| l.get("stopped")) != Some(&serde_json::Value::Bool(true))
+    {
         out.blocked = said("detail").or_else(|| Some("the last save could not finish".into()));
         Stage::Blocked
     } else if out.changed > 0 {

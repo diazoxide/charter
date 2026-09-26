@@ -176,6 +176,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unquoted delimiter it is. A shell named in capitals (`BASH -c`) is recognised when it runs a
   string, as it is on a filesystem that ignores case. A git alias that runs through the shell
   is read with the same rules.
+- **A save no longer commits unresolved conflicts.** When git has stopped part-way through a
+  merge, rebase, cherry-pick, revert or bisect, or files still have conflicts, every save now
+  refuses and stages nothing: `charter save`, the Save button, auto-save and repo saves alike.
+  It says which files conflict and the git command that finishes or aborts the operation. The
+  Saving tab shows the plane or repo as Blocked until you do, and auto-save waits.
+  ([#433](https://github.com/diazoxide/charter/issues/433))
 - **The dispatch log, the session trace and a memory index refuse to write through a link.**
   They now open the file without following a link, and refuse it when it is one.
   ([#420](https://github.com/diazoxide/charter/issues/420))

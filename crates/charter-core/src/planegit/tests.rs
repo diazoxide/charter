@@ -2524,3 +2524,142 @@ fn a_block_resolved_by_hand_clears_without_a_save() {
     run(&fixture.root, &["checkout", "-q", "-b", "trunk"]);
     assert_ne!(standing(&fixture.root).stage, Stage::Blocked);
 }
+
+// --------------------------------------------------------------------------------------- //
+// a tree git stopped part-way through something is never saved (#433)                       //
+// --------------------------------------------------------------------------------------- //
+
+impl Fixture {
+    /// README.md changed on `side` and on `main` both, with HEAD on `main`.
+    fn diverged(&self) {
+        run(&self.root, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(self.root.join("README.md"), "side\n").unwrap();
+        run(&self.root, &["commit", "-q", "-am", "side"]);
+        run(&self.root, &["checkout", "-q", "main"]);
+        std::fs::write(self.root.join("README.md"), "main\n").unwrap();
+        run(&self.root, &["commit", "-q", "-am", "main"]);
+    }
+
+    /// Save, and assert it was refused as blocked with nothing staged or committed.
+    fn refused(&self, words: &str) -> String {
+        let head = ask(&self.root, &["rev-parse", "HEAD"]);
+        let staged = ask(&self.root, &["diff", "--cached", "--name-only"]);
+        let unmerged = ask(&self.root, &["diff", "--name-only", "--diff-filter=U"]);
+
+        let (code, said) = self.just_save();
+
+        assert_eq!(code, 1, "{said}");
+        assert!(said.contains("Not saved"), "{said}");
+        assert!(said.contains(words), "{said}");
+        assert_eq!(ask(&self.root, &["rev-parse", "HEAD"]), head, "{said}");
+        assert_eq!(
+            ask(&self.root, &["diff", "--cached", "--name-only"]),
+            staged,
+            "nothing staged: {said}"
+        );
+        assert_eq!(
+            ask(&self.root, &["diff", "--name-only", "--diff-filter=U"]),
+            unmerged,
+            "a conflict is still one: {said}"
+        );
+        let last = journal(&self.root).pop().expect("journalled");
+        assert_eq!(last["outcome"], "blocked", "{last}");
+        assert!(
+            last["detail"].as_str().unwrap_or("").contains(words),
+            "{last}"
+        );
+        let got = standing(&self.root);
+        assert_eq!(got.stage, Stage::Blocked, "{got:?}");
+        assert!(
+            got.blocked.as_deref().unwrap_or("").contains(words),
+            "{got:?}"
+        );
+        said
+    }
+}
+
+#[test]
+fn a_save_in_a_conflicted_merge_is_refused_and_commits_no_markers() {
+    let fixture = Fixture::plane();
+    fixture.diverged();
+    std::fs::write(fixture.root.join("mine.md"), "mine\n").unwrap();
+    let _ = crate::testgit::run(&fixture.root, &["merge", "side"]);
+    assert!(fixture.root.join(".git/MERGE_HEAD").exists());
+
+    let said = fixture.refused("git merge --abort");
+
+    assert!(said.contains("README.md"), "{said}");
+    assert_eq!(
+        standing(&fixture.root).conflicts,
+        vec!["README.md".to_string()]
+    );
+    let committed = ask(&fixture.root, &["show", "HEAD:README.md"]);
+    assert!(!committed.contains("<<<<<<<"), "{committed}");
+}
+
+#[test]
+fn a_save_while_a_rebase_is_stopped_part_way_is_refused() {
+    let fixture = Fixture::plane();
+    fixture.diverged();
+    let _ = crate::testgit::run(&fixture.root, &["rebase", "side"]);
+
+    fixture.refused("git rebase --continue");
+}
+
+#[test]
+fn a_save_while_a_revert_is_stopped_is_refused() {
+    let fixture = Fixture::plane();
+    fixture.diverged();
+    // Reverting `main~1` ("one") conflicts with `main`, which changed the line it added.
+    let _ = crate::testgit::run(&fixture.root, &["revert", "--no-edit", "main~1"]);
+    assert!(fixture.root.join(".git/REVERT_HEAD").exists());
+
+    fixture.refused("git revert --abort");
+}
+
+#[test]
+fn a_save_during_a_bisect_is_refused() {
+    let fixture = Fixture::plane();
+    run(&fixture.root, &["bisect", "start"]);
+    std::fs::write(fixture.root.join("work.md"), "work\n").unwrap();
+
+    fixture.refused("git bisect reset");
+}
+
+#[test]
+fn once_the_merge_is_finished_the_save_goes_ahead() {
+    let fixture = Fixture::plane();
+    fixture.diverged();
+    let _ = crate::testgit::run(&fixture.root, &["merge", "side"]);
+    fixture.refused("git merge --abort");
+    std::fs::write(fixture.root.join("README.md"), "both\n").unwrap();
+    run(&fixture.root, &["add", "README.md"]);
+    run(&fixture.root, &["commit", "-q", "--no-edit"]);
+    std::fs::write(fixture.root.join("work.md"), "work\n").unwrap();
+
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: Some("after"),
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(fixture.head_subject(), "after");
+    assert_ne!(standing(&fixture.root).stage, Stage::Blocked);
+}
+
+#[test]
+fn aborting_the_merge_by_hand_clears_the_planes_block_at_once() {
+    let fixture = Fixture::plane();
+    fixture.diverged();
+    let _ = crate::testgit::run(&fixture.root, &["merge", "side"]);
+    fixture.refused("git merge --abort");
+
+    run(&fixture.root, &["merge", "--abort"]);
+
+    let got = standing(&fixture.root);
+    assert_ne!(got.stage, Stage::Blocked, "{got:?}");
+    assert!(got.conflicts.is_empty(), "{got:?}");
+}

@@ -664,3 +664,71 @@ fn a_protected_feature_branch_in_pr_mode_names_the_fix_that_applies() {
     );
     assert!(!said.contains("mode = \"pr\""), "{said}");
 }
+
+// A tree git stopped part-way through something is never saved (#433).
+
+impl Fixture {
+    /// README.md changed on `side` and on `main` both, with HEAD on `main`.
+    fn diverged(&self) {
+        run(&self.clone, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(self.clone.join("README.md"), "side\n").unwrap();
+        run(&self.clone, &["commit", "-q", "-am", "side"]);
+        run(&self.clone, &["checkout", "-q", "main"]);
+        std::fs::write(self.clone.join("README.md"), "main\n").unwrap();
+        run(&self.clone, &["commit", "-q", "-am", "main"]);
+    }
+}
+
+#[test]
+fn a_repo_in_a_conflicted_merge_is_blocked_and_nothing_is_committed() {
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    f.diverged();
+    let _ = crate::testgit::run(&f.clone, &["merge", "side"]);
+    let head = f.head();
+
+    let (code, said) = f.save();
+
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("Not saved"), "{said}");
+    assert!(said.contains("git merge --abort"), "{said}");
+    assert_eq!(f.head(), head);
+    // Nothing was staged: git still calls the file unmerged, as `git add` would not.
+    let unmerged = run(&f.clone, &["diff", "--name-only", "--diff-filter=U"]);
+    assert_eq!(unmerged.trim(), "README.md", "{said}");
+    assert_eq!(f.journal()[0]["outcome"], "blocked");
+    let got = f.standing();
+    assert_eq!(got.stage, Stage::Blocked, "{got:?}");
+    assert!(
+        got.blocked.as_deref().unwrap_or("").contains("README.md"),
+        "{got:?}"
+    );
+}
+
+#[test]
+fn a_repo_whose_rebase_stopped_part_way_is_told_about_the_rebase_not_the_detached_head() {
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    f.diverged();
+    let _ = crate::testgit::run(&f.clone, &["rebase", "side"]);
+
+    let (code, said) = f.save();
+
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("git rebase --continue"), "{said}");
+    assert_eq!(f.standing().stage, Stage::Blocked);
+}
+
+#[test]
+fn aborting_the_merge_by_hand_clears_the_block_at_once() {
+    // Auto-save waits while a repo is blocked, so nothing but the tree may clear this one.
+    let f = Fixture::new("[repos.widget]\nmode = \"commit\"\n");
+    f.diverged();
+    let _ = crate::testgit::run(&f.clone, &["merge", "side"]);
+    let (code, said) = f.save();
+    assert_eq!(code, 1, "{said}");
+
+    run(&f.clone, &["merge", "--abort"]);
+
+    let got = f.standing();
+    assert_ne!(got.stage, Stage::Blocked, "{got:?}");
+    assert_eq!(got.blocked, None, "{got:?}");
+}
