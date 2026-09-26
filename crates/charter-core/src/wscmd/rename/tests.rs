@@ -42,6 +42,7 @@ fn chat(cwd: &Path, name: &str) -> Chat {
         number: None,
         label: None,
         from: None,
+        renamed_from: None,
     }
 }
 
@@ -606,4 +607,129 @@ fn a_move_the_journal_cannot_record_is_put_back() {
     assert!(plane.root.join("workspaces/alpha/svc").is_dir());
     assert!(!plane.root.join("workspaces/beta").exists());
     assert!(!plane.root.join(JOURNAL).exists());
+}
+
+const CONVERSATION: &str = "11111111-2222-4333-8444-555555555555";
+
+/// charter#367, D10: the record `a_plane` makes, with a chat of each kind a rename could
+/// touch — so exactly the ones Claude Code will not find again are named.
+fn a_plane_with_a_chat_of_each_harness() -> Plane {
+    let plane = a_plane();
+    let root = &plane.root;
+    // A profile whose command is a wrapper: its declared kind decides the harness.
+    std::fs::write(
+        root.join("charter.local.toml"),
+        "[harness.work]\nkind = \"claude\"\ncommand = [\"ccs\", \"work\"]\n",
+    )
+    .unwrap();
+    let alpha = root.join("workspaces/alpha");
+    let with = |program: &str, cwd: &Path, name: &str, resume: bool| Chat {
+        program: program.into(),
+        persona: None,
+        resume: resume.then(|| crate::harness::SessionId::new(CONVERSATION).unwrap()),
+        ..chat(cwd, name)
+    };
+    let mut steward = chat(&alpha.join("svc"), "1");
+    steward.resume = Some(crate::harness::SessionId::new(CONVERSATION).unwrap());
+    let mut on_profile = with("ccs", &alpha, "6", true);
+    on_profile.profile = Some("work".into());
+    on_profile.label = Some("billing bug".into());
+    let record = Record {
+        chats: vec![
+            steward,                                                   // named
+            with("claude", &alpha, "2", false),                        // nothing to resume
+            with("codex", &alpha, "3", true),                          // resumes by id
+            with("opencode", &alpha, "4", true),                       // resumes by id
+            with("claude", &root.join("workspaces/other"), "5", true), // not in alpha
+            on_profile,                                                // named
+        ],
+        ..crate::reopen::read_or_refusal(root).unwrap()
+    };
+    crate::reopen::write(root, &record).unwrap();
+    plane
+}
+
+#[test]
+fn the_rename_names_first_exactly_the_chats_that_will_start_a_fresh_conversation() {
+    let plane = a_plane_with_a_chat_of_each_harness();
+
+    assert_eq!(
+        starts_fresh_on_disk(&plane.root, "alpha"),
+        vec!["steward 1".to_string(), "billing bug".to_string()]
+    );
+    let (code, said) = run(&plane, "alpha", "beta");
+
+    assert_eq!(code, 0, "{said:?}");
+    assert_eq!(
+        said[0],
+        "! These chats will start a fresh conversation after the rename: steward 1, billing \
+         bug. Claude Code keeps their conversations under the folder it ran in, and charter \
+         does not move that folder.",
+        "{said:?}"
+    );
+    assert!(
+        !said
+            .iter()
+            .any(|l| l.contains("codex") || l.contains("opencode")),
+        "{said:?}"
+    );
+}
+
+#[test]
+fn a_chat_claude_code_will_not_find_again_comes_back_fresh_and_the_others_resume() {
+    let plane = a_plane_with_a_chat_of_each_harness();
+
+    assert_eq!(run(&plane, "alpha", "beta").0, 0);
+
+    let record = crate::reopen::read_or_refusal(&plane.root).unwrap();
+    let by_name = |name: &str| {
+        record
+            .chats
+            .iter()
+            .find(|chat| chat.name == name)
+            .unwrap()
+            .clone()
+    };
+    for renamed in ["1", "6"] {
+        let chat = by_name(renamed);
+        assert_eq!(chat.resume, None, "chat {renamed}");
+        assert_eq!(
+            chat.renamed_from.as_deref(),
+            Some("alpha"),
+            "chat {renamed}"
+        );
+    }
+    let fresh = by_name("1").launch();
+    assert_eq!(
+        fresh.how,
+        crate::reopen::Reopened::Fresh(crate::reopen::Fresh::WorkspaceRenamed)
+    );
+    assert!(
+        !fresh.args.iter().any(|arg| arg == "--resume"),
+        "{:?}",
+        fresh.args
+    );
+    for kept in ["3", "4", "5"] {
+        let chat = by_name(kept);
+        assert_eq!(
+            chat.resume.as_ref().map(|id| id.as_str()),
+            Some(CONVERSATION),
+            "chat {kept}"
+        );
+        assert_eq!(chat.renamed_from, None, "chat {kept}");
+    }
+    assert_eq!(by_name("2").renamed_from, None);
+}
+
+#[test]
+fn a_rename_with_no_chat_to_lose_warns_about_none() {
+    let plane = a_plane();
+
+    let (code, said) = run(&plane, "alpha", "beta");
+
+    assert_eq!(code, 0);
+    assert!(
+        !said.iter().any(|l| l.contains("fresh conversation")),
+        "{said:?}"
+    );
 }

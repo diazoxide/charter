@@ -13,6 +13,9 @@ import * as Dialog from "@radix-ui/react-dialog";
  */
 export function RenameWorkspace({
   workspace,
+  /** The chats that will start a fresh conversation after the rename, by the name each tab
+   *  shows (charter#367, D10). Said before the answer; the rename still goes ahead. */
+  startsFresh = [],
   /** Why the last attempt renamed nothing — **the core's sentence, unchanged**. */
   trouble,
   /** Whether charter is renaming it right now, so the answer cannot be given twice. */
@@ -21,6 +24,7 @@ export function RenameWorkspace({
   onCancel,
 }: {
   workspace: string;
+  startsFresh?: readonly string[];
   trouble?: string;
   renaming: boolean;
   onRename: (name: string) => void;
@@ -75,6 +79,14 @@ export function RenameWorkspace({
               Its folder under <code>workspaces/</code> moves, its clones&apos; worktrees are
               repaired, and everything that names it follows. Not while a chat is running in it.
             </p>
+            {startsFresh.length > 0 && (
+              <p className="came-back" aria-label="Chats that will start fresh">
+                {startsFresh.length === 1 ? "This chat" : "These chats"} will start a fresh
+                conversation after the rename: <strong>{startsFresh.join(", ")}</strong>. Claude
+                Code keeps {startsFresh.length === 1 ? "its conversation" : "their conversations"}{" "}
+                under the folder it ran in, and charter does not move that folder.
+              </p>
+            )}
             {/* Verbatim, beside the box: the operator is still answering. */}
             {trouble && (
               <p className="trouble" role="alert">

@@ -91,6 +91,7 @@ fn one_chat() -> Record {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         }],
     }
 }

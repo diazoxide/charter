@@ -25,6 +25,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a change record charter cannot read, naming the file and what is wrong with it, and on a
   change's branch sitting in a clone that is a member of no change. It reads only this disk and
   says which `changes/` directory it could not look at.
+
+
+- **Renaming a workspace names the chats that will start a fresh conversation.** Claude Code
+  keeps a conversation under the folder it ran in, and charter does not move that folder. So
+  `charter workspace rename`, and the Rename dialog before you confirm, list by name each
+  Claude Code chat in the workspace that will start fresh. The rename then goes ahead. When
+  you reopen one of those chats, it starts a new conversation and says why once, instead of
+  failing to resume. Codex and opencode chats resume as before and are not listed.
+  ([#367](https://github.com/diazoxide/charter/issues/367))
+
 - **charter's plugin teaches personas, vaults and the browser again.** It now ships the
   `charter:persona`, `charter:secrets` and `charter:browser` skills beside `handoff`,
   `update` and `working-in-a-clone`, rewritten for this charter's commands. `charter browser

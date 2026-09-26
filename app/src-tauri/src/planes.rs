@@ -2196,6 +2196,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             }],
             dealt: 0,
             relaunch_after_update: false,
@@ -2228,6 +2229,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             })
             .collect();
         reopen::write(

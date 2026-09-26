@@ -2212,6 +2212,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         }
     }
 
@@ -2592,6 +2593,7 @@ mod tests {
                     number: None,
                     label: None,
                     from: None,
+                    renamed_from: None,
                 }],
             },
         )

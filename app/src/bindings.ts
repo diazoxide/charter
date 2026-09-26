@@ -461,6 +461,14 @@ export const commands = {
 	 */
 	workspaceRename: (plane: PlaneId, workspace: string, name: string) => typedError<string[], string>(__TAURI_INVOKE("workspace_rename", { plane, workspace, name })),
 	/**
+	 *  The chats that will start a fresh conversation if `workspace` is renamed, by the name each
+	 *  tab shows — what the Rename dialog says before it is answered (charter#367, D10).
+	 * 
+	 *  Asked of what the window holds, which is what the record is written from: a Claude Code
+	 *  chat in the workspace with a conversation to resume. The rename itself still goes ahead.
+	 */
+	workspaceStartsFresh: (plane: PlaneId, workspace: string) => typedError<string[], string>(__TAURI_INVOKE("workspace_starts_fresh", { plane, workspace })),
+	/**
 	 *  The operator brought a workspace to the front: tell the extensions that hear it
 	 *  (charter-app#343). It does nothing else and answers nothing — focusing is the window's own
 	 *  state, and this is only the report of it.

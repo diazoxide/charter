@@ -358,6 +358,8 @@ export function PlaneView({
     workspace: string;
     busy: boolean;
     trouble?: string;
+    /** The chats that will start a fresh conversation after it, named before it is answered. */
+    startsFresh?: string[];
   }>();
   /** The same, for the pins: a pin is written by the core, so the window asks what the core
    *  now says rather than assuming its own write landed as it expected. */
@@ -1604,9 +1606,21 @@ export function PlaneView({
   );
 
   /** Asks for a workspace's new name. Nothing is renamed until the dialog is answered. */
-  const renameWorkspace = useCallback((workspace: string) => {
-    setRenamingWs({ workspace, busy: false });
-  }, []);
+  const renameWorkspace = useCallback(
+    (workspace: string) => {
+      setRenamingWs({ workspace, busy: false });
+      // Which chats will start fresh (charter#367, D10): asked of the core, which knows which
+      // harness finds a conversation by its folder. A question that fails names nobody.
+      void commands
+        .workspaceStartsFresh(plane, workspace)
+        .then((answer) => {
+          const startsFresh = answer.status === "ok" ? (answer.data ?? []) : [];
+          setRenamingWs((now) => (now?.workspace === workspace ? { ...now, startsFresh } : now));
+        })
+        .catch(() => undefined);
+    },
+    [plane],
+  );
 
   /**
    * Renames it, through `workspace_rename` — which is `charter workspace rename` — and nothing
@@ -2870,6 +2884,7 @@ export function PlaneView({
       {renamingWs && (
         <RenameWorkspace
           workspace={renamingWs.workspace}
+          startsFresh={renamingWs.startsFresh}
           trouble={renamingWs.trouble}
           renaming={renamingWs.busy}
           onRename={(name) => void doRename(renamingWs.workspace, name)}

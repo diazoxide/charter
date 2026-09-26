@@ -80,6 +80,7 @@ macro_rules! app_commands {
                 workspaces::workspace_at_risk,
                 workspaces::workspace_remove,
                 workspaces::workspace_rename,
+                workspaces::workspace_starts_fresh,
                 workspaces::workspace_focused,
                 workspaces::reachable_repos,
                 workspaces::take_repos,
