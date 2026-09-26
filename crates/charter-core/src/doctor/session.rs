@@ -84,10 +84,12 @@ static HARNESSES: [Harness; 3] = [
         name: "codex",
         layer: &[],
         note: "charter has not measured Codex's discovery rules, so this row cannot say what a \
-               session here would find — the layer arrives from `~/.codex/config.toml` and the \
-               plugin, and a project `.codex/config.toml` is ignored. Codex DOES read an \
-               in-repo `.codex/skills/` (measured, 0.147.0); charter mirrors the plane's copy \
-               of that into a workspace's checkouts",
+               session here would find — the app arms charter's hooks on each Codex chat's \
+               command line (`-c hooks.*`), so no file in a directory carries them. Codex also \
+               reads `~/.codex/config.toml` and, once the project is trusted, a project \
+               `.codex/config.toml`, which charter does not write. Codex DOES read an in-repo \
+               `.codex/skills/` (measured, 0.147.0); charter mirrors the plane's copy of that \
+               into a workspace's checkouts",
         trust_gate: "",
     },
 ];

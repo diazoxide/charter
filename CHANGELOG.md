@@ -61,6 +61,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   write it first and restrict its permissions afterwards; it now sets them before any content,
   as plain-file vaults already did.
   ([#356](https://github.com/diazoxide/charter/issues/356))
+- **`charter doctor` describes Codex correctly.** Its session layer row said Codex ignores a
+  project `.codex/config.toml` and gets charter's layer from a plugin. The app arms Codex with
+  flags on each chat's command line, and Codex reads a project's `.codex/config.toml` once you
+  trust the project. The harness guide says the same.
+  ([#354](https://github.com/diazoxide/charter/issues/354))
 
 ## [0.3.0] - 2026-09-25
 

@@ -86,7 +86,7 @@ offer:**
 | | how charter reaches a chat | how it updates | what it cannot carry |
 | --- | --- | --- | --- |
 | Claude Code | the app's own plugin, `charter`, loaded into each chat it starts with `--plugin-dir` — nothing installed | with the app | — |
-| Codex | charter's hooks, armed on each chat's command line as `-c hooks.<Event>=…` — nothing installed; Codex asks once to trust them | with the app | no status bar; no command-pattern permissions, so `guard ask` rules stay in charter's own hook; no project-level config *file*, so no per-workspace config (a project `.codex/skills/` **is** read — a skills surface, not config); no prompt in front of `charter handoff` — charter's hook still refuses a handoff from a sub-agent or from a run reporting `permission_mode: bypassPermissions`, and an attended chat's handoff runs without asking; no word when it stops mid-turn for your approval |
+| Codex | charter's hooks, armed on each chat's command line as `-c hooks.<Event>=…` — nothing installed; Codex asks once to trust them | with the app | no status bar; no command-pattern permissions, so `guard ask` rules stay in charter's own hook; no per-workspace config — Codex reads a project `.codex/config.toml` only once the project is trusted, and charter writes none (a project `.codex/skills/` **is** read — a skills surface, not config); no prompt in front of `charter handoff` — charter's hook still refuses a handoff from a sub-agent or from a run reporting `permission_mode: bypassPermissions`, and an attended chat's handoff runs without asking; no word when it stops mid-turn for your approval |
 
 Claude Code's row is empty because nothing charter offers is out of reach there, not
 because charter fills every surface it has: the app sets Claude Code's `statusLine` for a
@@ -157,8 +157,10 @@ fact, and the row names which part is missing and which rule decided.
 
 Codex gets nothing here and says why: a workspace **directory** is not a config scope for it,
 so two workspaces on one machine cannot be made to differ. It does read something from a
-project — `.codex/skills/` — and ignores a project `.codex/config.toml` (codex-cli 0.147.0).
-Charter writes nothing machine-global on the operator's behalf.
+project — `.codex/skills/` — and, once the project is trusted, a project `.codex/config.toml`
+(codex-cli 0.147.0), which charter does not write. The app arms charter's hooks on each Codex
+chat's command line (`-c hooks.*`) instead, so no file in a directory carries them. Charter
+writes nothing machine-global on the operator's behalf.
 
 **A clone gets the same layer, plus what the walk-up could not carry there.**
 `workspaces/<ws>/<repo>/` is a repo of its own, so a session inside it loses the settings
@@ -191,8 +193,10 @@ deliberately absent:
   file at the git root (measured on 2.1.267), which a workspace directory shares with the
   plane and a clone does not — see [workspaces.md](workspaces.md) for how charter keeps that
   file hidden once Claude Code writes its own approvals into it.
-- **A project `.codex/config.toml`**, because Codex ignores it — writing it would look like
-  wiring while being inert.
+- **A project `.codex/config.toml`**. Codex reads it only once the project is trusted, and
+  then it can carry hooks, sandbox and MCP settings — so copying one would put config in force
+  in a repository nobody granted it in, the same reason as above. The app arms charter's hooks
+  on each Codex chat's command line (`-c hooks.*`) instead.
 - **`CLAUDE.md` or any equivalent**, because a guest hides its own files and does not
   narrate the host's.
 
