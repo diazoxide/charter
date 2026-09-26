@@ -512,8 +512,16 @@ fn a_plane_root_chat_is_never_nudged_toward_a_workspaces_memory() {
     )
     .unwrap();
     let said = twelfth(&p).unwrap();
-    assert!(!said.contains("workspace remember"), "{said}");
-    assert!(said.contains("`charter persona remember ops"), "{said}");
+    // Asserted without echoing the nudge: its text passes through the hook's secret scan,
+    // and a failure message that printed it would be a log line CodeQL rightly flags.
+    assert!(
+        !said.contains("workspace remember"),
+        "the nudge sent a root chat to a workspace's memory"
+    );
+    assert!(
+        said.contains("`charter persona remember ops"),
+        "the nudge did not name the plane's default persona"
+    );
 }
 
 #[test]
