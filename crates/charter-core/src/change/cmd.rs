@@ -21,7 +21,6 @@ use super::record::{
     Exclusion, Member, Record, TEXT_LIMIT, branch_refusal, default_branch, name_ok,
 };
 use super::store::{self, WriteError};
-use crate::forge::pr::State;
 use crate::repocmd::Say;
 use crate::shown;
 use crate::tui::{self, Align};
@@ -533,14 +532,7 @@ pub fn observed_lines(record: &Record, observation: &Observation) -> Vec<String>
             Ok(None) => row.push_str(&format!("no request from {}", cell(&m.branch))),
             Ok(Some(req)) => {
                 let short = |sha: &str| -> String { cell(sha).chars().take(7).collect() };
-                let state = match &req.state {
-                    State::Open => "open".to_string(),
-                    State::Merged { commit: Some(c) } => format!("merged as {}", short(c)),
-                    State::Merged { commit: None } => "merged".to_string(),
-                    // The spec's word: a member whose request was closed unmerged was refused,
-                    // and its dependents cannot land.
-                    State::Closed => "REJECTED".to_string(),
-                };
+                let state = super::observe::standing(&req.state);
                 row.push_str(&format!(
                     "#{} {state}  head {}",
                     req.number,

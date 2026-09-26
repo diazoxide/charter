@@ -17,6 +17,7 @@ pub mod cmd;
 pub mod observe;
 mod record;
 pub mod store;
+pub mod view;
 
 pub use record::{
     EXCLUSION_KEYS, Exclusion, KEYS, MEMBER_KEYS, Member, Record, RecordError, TEXT_LIMIT,

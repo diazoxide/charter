@@ -548,6 +548,23 @@ describe("the one list of actions", () => {
     });
   });
 
+  it("offers the focused workspace's changes as a view tab, and none outside every workspace", () => {
+    // charter#470: a view tab keyed by the workspace, opened from the palette.
+    const offers = catalogue(now({ plane: "/plane", workspaces: ["alpha"], focused: "alpha" }));
+
+    expect(by(offers, "workspace.changes:alpha")).toMatchObject({
+      title: "Open changes",
+      available: true,
+      does: {
+        verb: "openView",
+        view: { from: null, view: "changes", key: "alpha" },
+        title: "Changes · alpha",
+      },
+    });
+    const outside = catalogue(now({ plane: "/plane", workspaces: [OUTSIDE], focused: OUTSIDE }));
+    expect(outside.some((offer) => offer.id.startsWith("workspace.changes:"))).toBe(false);
+  });
+
   it("offers a row per vault that opens its tab, a picker, and a way to make one", () => {
     // charter-app#235. The panel's rows run `vault.open:<name>`, and so does the picker.
     const offers = catalogue(now({ plane: "/plane", vaults: ["ops", "team"] }));
@@ -966,6 +983,7 @@ describe("carrying out a row", () => {
         "declareWorktreeDone:svc/fix-it",
         "openView:charter/persona/steward,steward",
         "openView:charter/vault/ops,ops",
+        "openView:charter/changes/alpha,Changes · alpha",
         "pickVault",
         "createVault",
         "sendKey:F2",
@@ -1338,7 +1356,9 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("clone.pick:"))).toHaveLength(10);
     // One settings row per workspace (charter-app#280), and none for the strip outside.
     expect(offers.filter((row) => row.id.startsWith("workspace.settings:"))).toHaveLength(6);
-    // 435 rows: 50 chats four times over, 6 workspaces SIX times, 50 pieces THRICE, 10
+    // One changes row, for the focused workspace only (charter#470).
+    expect(offers.filter((row) => row.id.startsWith("workspace.changes:"))).toHaveLength(1);
+    // 436 rows: 50 chats four times over, 6 workspaces SIX times, 50 pieces THRICE, 10
     // clones TWICE, 8 personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248),
     // and the sixteen verbs — the sixteenth is Preferences (charter-app#283) — plus the vault picker and New vault…
     // (charter-app#235; this plane has no vaults, so no `vault.open:` rows). It was 118 before the pins, 174 before
@@ -1348,10 +1368,11 @@ describe("the palette at fifty chats", () => {
     // ignored, 294 before a chat could be renamed (charter-app#254), 345 before a clone
     // could be picked from its own menu, 367 before a workspace had settings, 373 before
     // a workspace could be made LIVE or LOCAL (charter-app#301), 379 before one could be
-    // renamed (charter#367), and 385 before a piece could be marked done (charter#368). What the
+    // renamed (charter#367), 385 before a piece could be marked done (charter#368), and 435 before
+    // the focused workspace's changes had a row (charter#470). What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(435);
+    expect(offers).toHaveLength(436);
   });
 
   /**
