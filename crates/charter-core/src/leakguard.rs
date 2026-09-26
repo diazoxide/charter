@@ -1284,6 +1284,29 @@ mod tests {
         (dir, at, state)
     }
 
+    /// A heredoc the shell reads one way and the strip plan another hid a real read (#359). The
+    /// here-string's `<<'x'` looked like a heredoc to the old opener pattern and `<<'A B'` did
+    /// not, so the counts matched and the reader body ran on to a line `x`, taking the `cat` of
+    /// the vault with it. bash and zsh both end the body at `A B` and run that `cat`.
+    #[test]
+    fn a_heredoc_is_read_where_the_shell_reads_it_before_its_body_is_dropped() {
+        let cmd = "cat <<'A B'; cat <<<'x'\njunk\nA B\ncat .charter/vaults/x.json\nx";
+        assert!(reason(cmd).is_some(), "{cmd:?}");
+    }
+
+    /// A heredoc in a substitution closed on its own line: GNU bash 3.2.57 and zsh 5.9 run the
+    /// next lines as commands, so they are never dropped as its body (#359).
+    #[test]
+    fn a_heredoc_in_a_substitution_closed_on_its_line_keeps_the_next_lines() {
+        for cmd in [
+            "x=$( cat <<'EOF' )\ncat .charter/vaults/x.json\nEOF",
+            "x=`cat <<'EOF'`\ncat .charter/vaults/x.json\nEOF",
+            "echo \"$(cat <<'EOF')\"\ncat .charter/vaults/x.json\nEOF",
+        ] {
+            assert!(reason(cmd).is_some(), "{cmd:?}");
+        }
+    }
+
     #[test]
     fn the_vault_path_pattern_is_asked_as_written() {
         assert!(vault_path_matches(".charter/vaults/db.json"));

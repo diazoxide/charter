@@ -199,7 +199,7 @@ fn the_recorded_python_answer_is_the_answer_this_module_gives() {
             &row["ho"],
             openers
                 .iter()
-                .map(|m| serde_json::json!([m.start, m.end, m.delim, m.dash, m.backslash, m.quote]))
+                .map(|m| serde_json::json!([m.start, header_json(Some(m.header.clone()))]))
                 .collect(),
         );
         check(
@@ -229,7 +229,12 @@ fn the_recorded_python_answer_is_the_answer_this_module_gives() {
                 Some(plan) => plan
                     .into_iter()
                     .map(|e| {
-                        serde_json::json!([e.delim, e.drop, header_json(e.header), e.executor])
+                        serde_json::json!([
+                            e.header.delim.clone(),
+                            e.drop,
+                            header_json(Some(e.header)),
+                            e.executor
+                        ])
                     })
                     .collect(),
             },
@@ -1006,4 +1011,91 @@ fn a_backslash_newline_in_a_heredoc_delimiter_is_not_quoting() {
     let line = Line::of("cat <<E\\\nOF");
     let h = heredoc::heredoc_header(&line, 4).expect("a header");
     assert_eq!((h.delim.as_str(), h.expands), ("EOF", true));
+}
+
+/// The delimiter bash builds from each quoting form, checked against GNU bash 3.2.57 and zsh
+/// 5.9 by feeding each header a body and seeing which line ended it (#359).
+#[test]
+fn a_heredoc_delimiter_is_the_word_the_shell_makes_of_it() {
+    charter_core::unsteered!();
+    for (header, delim) in [
+        // Inside "…" a backslash-newline goes, and `\` is removed before $ ` " and \ only.
+        ("cat <<\"EO\\\nF\"", "EOF"),
+        ("cat <<\"E\\\"F\"", "E\"F"),
+        ("cat <<\"E\\$F\"", "E$F"),
+        ("cat <<\"E\\\\F\"", "E\\F"),
+        ("cat <<\"E\\xF\"", "E\\xF"),
+        // ANSI-C quoting is decoded; `$"…"` is the double-quoted word, as bash reads it.
+        ("cat <<$'E\\x4fF'", "EOF"),
+        ("cat <<$\"EOF\"", "EOF"),
+        // A quoted word may hold a blank, and the word runs to a metacharacter.
+        ("cat <<'A B'", "A B"),
+        ("cat <<EOF.x", "EOF.x"),
+    ] {
+        let h = heredoc::heredoc_header(&Line::of(header), 4).expect(header);
+        assert_eq!(h.delim, delim, "{header:?}");
+        let quoted = header.contains(['\'', '"', '\\']);
+        assert_eq!(h.expands, !quoted, "{header:?}");
+    }
+}
+
+/// Which `<<` open a heredoc is one reading, the header's: every opener has a header, and a
+/// here-string is none. The Python's pattern missed `<<'A B'` and found a heredoc inside
+/// `<<<'x'` (#359).
+#[test]
+fn the_openers_are_the_headers_the_shell_reads() {
+    charter_core::unsteered!();
+    let starts = |cmd: &str| -> Vec<(usize, String)> {
+        heredoc::heredoc_openers(&Line::of(cmd))
+            .into_iter()
+            .map(|m| (m.start, m.header.delim))
+            .collect()
+    };
+    assert_eq!(starts("cat <<'A B'"), vec![(4, "A B".to_owned())]);
+    assert_eq!(starts("cat <<<'x'"), vec![]);
+    assert_eq!(starts("cat <<<x <<Y"), vec![(9, "Y".to_owned())]);
+    assert_eq!(starts("echo '<<X' \"<<Y\""), vec![]);
+    assert_eq!(
+        starts("cat <<A <<-'B'"),
+        vec![(4, "A".to_owned()), (8, "B".to_owned())]
+    );
+}
+
+/// A reader's quoted body is data however its delimiter is quoted, and it ends where bash ends
+/// it, so the command after it is read.
+#[test]
+fn a_reader_body_is_dropped_up_to_the_terminator_the_shell_reads() {
+    charter_core::unsteered!();
+    for (cmd, kept) in [
+        ("cat <<'A B'\nsecret\nA B\nls", "cat <<'A B'\nls"),
+        ("cat <<\\EOF\nsecret\nEOF\nls", "cat <<\\EOF\nls"),
+        (
+            "cat <<\"EO\\\nF\"\nsecret\nEOF\nls",
+            "cat <<\"EO\\\nF\"\nls",
+        ),
+        ("cat <<$'E\\x4fF'\nsecret\nEOF\nls", "cat <<$'E\\x4fF'\nls"),
+        // Unquoted: the body expands, so it is kept.
+        ("cat <<EOF\n$(id)\nEOF\nls", "cat <<EOF\n$(id)\nEOF\nls"),
+    ] {
+        assert_eq!(heredoc::strip_reader_heredocs(cmd), kept, "{cmd:?}");
+    }
+}
+
+/// A brief is the body of `charter handoff` in any case: `CHARTER` is charter on a filesystem
+/// that folds case, and neither spelling's body is run.
+#[test]
+fn a_brief_is_a_brief_in_any_case() {
+    charter_core::unsteered!();
+    for cmd in [
+        "charter handoff b <<'B'",
+        "CHARTER handoff b <<'B'",
+        "Charter HANDOFF b <<'B'",
+    ] {
+        assert_eq!(
+            heredoc::brief_heredocs(&Line::of(cmd)),
+            HashSet::from([0]),
+            "{cmd:?}"
+        );
+    }
+    assert!(heredoc::brief_heredocs(&Line::of("'charter' handoff b <<'B'")).is_empty());
 }

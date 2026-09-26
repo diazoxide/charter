@@ -35,8 +35,10 @@
 //!   very commands the guard exists to read. So `has_executor` is per PIPELINE and not per
 //!   command, and a pipeline can span physical lines.
 //! - **a body that ends where the guard thinks it does and not where BASH does.** For `<<EO'F'`
-//!   bash's terminator is `EOF` while the regex reads `EO`; dropping on the regex's reading finds
-//!   no terminator, runs to the end of the input, and takes real commands with it.
+//!   bash's terminator is `EOF`, while the Python's opener pattern read `EO`; dropping on that
+//!   reading found no terminator, ran to the end of the input, and took real commands with it.
+//!   So there is one reading of a heredoc, bash's ([`heredoc_openers`], [`heredoc_header`],
+//!   [`body_extent`]), and every guard asks it (#359).
 //! - **a line the whole-line pass cannot attribute at all** — a `<<` in a comment, in a group, in
 //!   a substitution. One default for every body on such a line is what let a canonical handoff
 //!   inside `bash <<'EOF'` reach the host with no prompt, so the fallback is **per heredoc**.
@@ -265,119 +267,55 @@ pub fn is_executor(name: &str) -> bool {
     EXECUTORS.contains(&base.as_str()) || versioned_re().is_match(&base)
 }
 
-/// One `_HEREDOC_RE` match: `<<(-?)\s*(\\?)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\3`.
+/// One heredoc a line opens: where its `<<` stands, and bash's reading of the header after it.
 ///
-/// `<<\EOF` is matched — and the backslash spelling is why: it quotes the delimiter and makes the
-/// body literal exactly as `<<'EOF'` does, so this pattern and [`heredoc_header`] must agree on
-/// how many heredocs a line opens. A spelling only one of them sees makes every plan on that line
-/// unknown, and missing it also let a body be read as top-level commands, which is how a handoff
-/// inside `bash <<\EOF` reached the host with no prompt.
+/// **The one reading of a heredoc.** Every guard that asks which heredocs a line opens, where a
+/// body ends or whether it expands asks [`heredoc_openers`], [`heredoc_header`] and
+/// [`body_extent`], and nothing else. The frozen Python had a second reading, the `_HEREDOC_RE`
+/// pattern, which knew only a delimiter spelled as one identifier inside one pair of quotes.
+/// Where the two disagreed about one line, the strip plan paired one reading's opener with the
+/// other's body, and a real command after a heredoc was dropped as body text (#359).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opener {
     /// The CHARACTER offset of the `<`.
     pub start: usize,
-    /// One past the last character of the header.
-    pub end: usize,
-    /// The `<<-` flag, which strips leading tabs from the terminator.
-    pub dash: bool,
-    /// A `\` in front of the delimiter, which quotes it.
-    pub backslash: bool,
-    /// The quote the delimiter is written in, if any.
-    pub quote: Option<char>,
-    /// The regex's reading of the delimiter — `EO` for `<<EO'F'`, where bash reads `EOF`.
-    pub delim: String,
+    /// The header bash reads after it.
+    pub header: Header,
 }
 
-/// The pattern at `i`, or `None`.
+/// The heredocs `line` opens, left to right — `_heredoc_openers`, read the way bash reads them.
 ///
-/// **No backtracking is needed and the reason is worth writing down**, because the oracle's
-/// engine does backtrack. `-?`, `\s*` and `\\?` are each greedy over a character class that
-/// overlaps nothing that may follow them, and the delimiter's own run is `[A-Za-z0-9_]` while the
-/// closing backreference is a quote, which is outside that class — so the maximal run is the only
-/// run whose successor can be the quote. Every shorter reading fails on its first character.
-fn opener_at(chars: &[char], i: usize) -> Option<Opener> {
-    let n = chars.len();
-    if !(i + 1 < n && chars[i] == '<' && chars[i + 1] == '<') {
-        return None;
-    }
-    let mut j = i + 2;
-    let dash = j < n && chars[j] == '-';
-    if dash {
-        j += 1;
-    }
-    // `\s` is CPython's, which counts U+001C–U+001F and is exactly `str.isspace()`. Note this is
-    // NOT the `" \t"` that `heredoc_header` skips — the two readings of the same header
-    // deliberately differ, and where they disagree the plan is unknown.
-    while j < n && is_python_space(chars[j]) {
-        j += 1;
-    }
-    let backslash = j < n && chars[j] == '\\';
-    if backslash {
-        j += 1;
-    }
-    let quote = match chars.get(j) {
-        Some(&c) if c == '\'' || c == '"' => {
-            j += 1;
-            Some(c)
-        }
-        _ => None,
-    };
-    let from = j;
-    match chars.get(j) {
-        Some(&c) if c.is_ascii_alphabetic() || c == '_' => j += 1,
-        _ => return None,
-    }
-    while j < n && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
-        j += 1;
-    }
-    let delim: String = chars[from..j].iter().collect();
-    if let Some(q) = quote {
-        if chars.get(j) != Some(&q) {
-            return None;
-        }
-        j += 1;
-    }
-    Some(Opener {
-        start: i,
-        end: j,
-        dash,
-        backslash,
-        quote,
-        delim,
-    })
-}
-
-/// `_HEREDOC_RE.finditer`: the non-overlapping matches, left to right.
-fn heredoc_matches(chars: &[char]) -> Vec<Opener> {
+/// An opener is an unquoted `<<` that is not part of a here-string's `<<<` and has a delimiter
+/// word after it ([`heredoc_header`]). A `<<` inside quotes opens nothing: `echo "use <<EOF for
+/// heredocs"` is a sentence and `rg -n '<<\w' docs/` is a pattern. Counting one costs twice —
+/// the count stops agreeing with the lexer's, which makes every plan on the line unknown, and
+/// the phantom becomes a heredoc whose terminator never arrives, so its "body" swallows the rest
+/// of the input and the REAL opener after it is never consulted. A `<<<` is stepped over whole,
+/// because the last two of its characters are no opener.
+///
+/// A `<<` in a `#` comment or in `$(( … ))` arithmetic is still counted. The lexer counts
+/// neither, so the counts disagree, the strip plan is unknown, and every body on the line stays
+/// visible, which only ever shows a guard more text.
+pub fn heredoc_openers(line: &Line) -> Vec<Opener> {
     let mut out = Vec::new();
     let mut i = 0usize;
-    while i < chars.len() {
-        match opener_at(chars, i) {
-            Some(m) => {
-                i = m.end;
-                out.push(m);
+    while i < line.len() {
+        if line.starts_with(i, "<<<") {
+            i += 3;
+        } else if line.starts_with(i, "<<") && !line.quoted(i) {
+            match heredoc_header(line, i) {
+                Some(header) => {
+                    let start = i;
+                    i = header.end;
+                    out.push(Opener { start, header });
+                }
+                None => i += 2,
             }
-            None => i += 1,
+        } else {
+            i += 1;
         }
     }
     out
-}
-
-/// `_HEREDOC_RE`'s matches on `line`, minus every one that falls inside QUOTES —
-/// `_heredoc_openers`.
-///
-/// A `<<` inside quotes opens nothing: `echo "use <<EOF for heredocs"` is a sentence and
-/// `rg -n '<<\w' docs/` is a pattern. Counting them costs twice — the count stops agreeing with
-/// the lexer's, which makes every plan on the line unknown, and the phantom becomes a heredoc
-/// whose terminator never arrives, so its "body" swallows the rest of the input and the REAL
-/// opener after it is never consulted.
-///
-/// Only phantoms are removed, so this can refuse strictly less and never more.
-pub fn heredoc_openers(line: &Line) -> Vec<Opener> {
-    heredoc_matches(&line.chars)
-        .into_iter()
-        .filter(|m| !line.quoted(m.start))
-        .collect()
 }
 
 /// What [`heredoc_header`] read: `(delimiter, it expands, `<<-` strips tabs, index past the
@@ -399,9 +337,25 @@ pub struct Header {
 /// `_heredoc_header`: bash's own reading of the `<<` at `i`, or `None` when no delimiter word
 /// follows.
 ///
-/// This is the ONLY safe source for where a body ENDS. `_HEREDOC_RE` stops at the first quote
-/// (`<<'EO'F` reads as `EO`), so its terminator is never found, the "body" runs to the end of the
-/// input, and the commands after the heredoc go with it — a vault read among them.
+/// The ONLY source for where a body ENDS. The Python's other reading, `_HEREDOC_RE`, stopped at
+/// the first quote (`<<'EO'F` read as `EO`), so its terminator was never found, the "body" ran to
+/// the end of the input, and the commands after the heredoc went with it.
+///
+/// Quote removal is bash's, checked against GNU bash 3.2.57 and zsh 5.9, which agree on every
+/// form here but one:
+///
+/// - `'…'` is literal, and `\x` outside quotes is `x`;
+/// - inside `"…"` a backslash is removed before `$`, `` ` ``, `"` and `\`, and a
+///   backslash-newline goes altogether (`<<"EO\<newline>F"` is `EOF`); before anything else the
+///   backslash stays (`"E\xF"` is `E\xF`);
+/// - `$'…'` is ANSI-C quoting and is decoded (`<<$'E\x4fF'` is `EOF`), by the same
+///   [`shellseg::ansi_c_decode`] every guard's word reader uses;
+/// - `$"…"` is read as bash reads it, the double-quoted word (`<<$"EOF"` is `EOF`). zsh reads
+///   `$EOF` there. Bash's is the shorter reading, so the lines between the two terminators are
+///   read as commands rather than hidden as body, which only shows a guard more text; and it is
+///   the reading the word reader takes for `$"…"` everywhere else.
+/// - a backslash-newline outside quotes is removed before the header is read, so it is neither
+///   a blank nor quoting: `<<E\<newline>OF` is the unquoted delimiter `EOF`, whose body expands.
 pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
     let chars = &line.chars;
     let n = chars.len();
@@ -411,10 +365,7 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
         dash = true;
         j += 1;
     }
-    // `" \t"`, not `\s`: bash's header skips a blank but not a newline, and the difference from
-    // `_HEREDOC_RE`'s `\s*` is exactly the kind of disagreement that makes a plan unknown.
-    // A backslash-newline is removed before the shell reads the header at all, so it is neither
-    // a blank nor quoting: `<<E\<newline>OF` is the unquoted delimiter `EOF`, whose body expands.
+    // `" \t"`, not `\s`: bash's header skips a blank but not a newline.
     let continuation = |j: usize| j + 1 < n && chars[j] == '\\' && chars[j + 1] == '\n';
     while j < n && (chars[j] == ' ' || chars[j] == '\t' || continuation(j)) {
         j += if continuation(j) { 2 } else { 1 };
@@ -423,6 +374,7 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
     let mut quoted = false;
     while j < n {
         let c = chars[j];
+        let next = chars.get(j + 1).copied();
         if " \t\n;&|<>()".contains(c) {
             break;
         }
@@ -430,18 +382,66 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
             j += 2;
         } else if c == '\\' {
             quoted = true;
-            if j + 1 < n {
-                parts.push(chars[j + 1]);
+            if let Some(x) = next {
+                parts.push(x);
             }
             j += 2;
-        } else if c == '\'' || c == '"' {
-            let Some(off) = chars[j + 1..].iter().position(|&x| x == c) else {
+        } else if c == '$' && next == Some('$') {
+            // The PID, never the `$` of a quotation after it: `$$'x'` is `$$` and then `'x'`.
+            parts.push_str("$$");
+            j += 2;
+        } else if c == '$' && next == Some('\'') {
+            // ANSI-C: the quotation ends at the first `'` no backslash escapes.
+            let mut k = j + 2;
+            let mut raw: Vec<char> = Vec::new();
+            while k < n && chars[k] != '\'' {
+                if chars[k] == '\\' && k + 1 < n {
+                    raw.extend([chars[k], chars[k + 1]]);
+                    k += 2;
+                } else {
+                    raw.push(chars[k]);
+                    k += 1;
+                }
+            }
+            if k >= n {
+                return None; // unterminated: a shell errors, nothing runs
+            }
+            quoted = true;
+            parts.push_str(&shellseg::ansi_c_decode(&raw));
+            j = k + 1;
+        } else if c == '$' && next == Some('"') {
+            j += 1; // `$"…"` is the double-quoted word; the `"` is read next
+        } else if c == '\'' {
+            let Some(off) = chars[j + 1..].iter().position(|&x| x == '\'') else {
                 return None; // unterminated: a shell errors, nothing runs
             };
             let end = j + 1 + off;
             quoted = true;
             parts.extend(chars[j + 1..end].iter());
             j = end + 1;
+        } else if c == '"' {
+            let mut k = j + 1;
+            loop {
+                let Some(&x) = chars.get(k) else {
+                    return None; // unterminated: a shell errors, nothing runs
+                };
+                if x == '"' {
+                    break;
+                }
+                match (x, chars.get(k + 1).copied()) {
+                    ('\\', Some('\n')) => k += 2,
+                    ('\\', Some(e)) if "$`\"\\".contains(e) => {
+                        parts.push(e);
+                        k += 2;
+                    }
+                    _ => {
+                        parts.push(x);
+                        k += 1;
+                    }
+                }
+            }
+            quoted = true;
+            j = k + 1;
         } else {
             parts.push(c);
             j += 1;
@@ -460,6 +460,34 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
         dash,
         end: j,
     })
+}
+
+/// Where the body of a heredoc ends in `lines`, the lines that follow its command line:
+/// `(how many of them are body, whether the terminator line comes next)`.
+///
+/// Bash ends a body on a line EQUAL to the delimiter — a `<<-` ignoring only leading TABS. Not
+/// `.strip()`: a lenient match ends a KEPT (shell) body early, and the real read that spills
+/// past it is then read as the next heredoc's body and, if that one is a reader's, stripped
+/// away. In a body that EXPANDS, a trailing backslash splices the next line onto it, so that
+/// line cannot be the terminator and bash reads on past it (GNU bash 3.2.57 and zsh 5.9 both
+/// run the `$(…)` in `cat <<EOF`, `a\`, `EOF`, `$(…)`, `EOF`).
+///
+/// The one body walk: [`heredoc_layout`] (the leak guard and A7) and
+/// [`crate::livesub::heredoc_bodies`] (A5 and A6) both end a body here.
+pub fn body_extent(lines: &[&str], delim: &str, expands: bool, dash: bool) -> (usize, bool) {
+    let mut spliced = false;
+    for (k, line) in lines.iter().enumerate() {
+        let compared = if dash {
+            line.trim_start_matches('\t')
+        } else {
+            line
+        };
+        if !spliced && compared == delim {
+            return (k, true);
+        }
+        spliced = expands && ends_in_line_continuation(line);
+    }
+    (lines.len(), false)
 }
 
 /// `cmd` with each unquoted ANSI-C `$'…'` rewritten as an ordinary shell-quoted token —
@@ -632,7 +660,7 @@ pub fn line_pipelines(line: &Line) -> Option<Vec<Pipeline>> {
                     .map(|c| shellwrap::split_env(c.as_slice()))
                     .collect();
                 // The count is over token TEXT, quoted or not, because it is compared against
-                // `_HEREDOC_RE`'s count and a disagreement is what makes the plan unknown.
+                // the openers' count and a disagreement is what makes the plan unknown.
                 let hcounts = cmds
                     .iter()
                     .map(|c| c.iter().filter(|tk| tk.as_str() == "<<").count())
@@ -754,24 +782,19 @@ pub fn opener_program(words: Option<&[String]>) -> Option<String> {
 /// Over-matching is the safe direction and is deliberate: an argument that happens to read `bash`
 /// costs one over-refusal on a line nothing could attribute anyway, while a missed executor would
 /// call a body data that a shell runs. The one over-match worth removing is the heredoc's own
-/// DELIMITER — `cat <<'PYTHON'` opens no interpreter — so the headers are cut out first.
+/// DELIMITER — `cat <<'PYTHON'` opens no interpreter — so the headers are cut out first, as
+/// [`heredoc_openers`] reads them.
 pub fn line_runs_text(line: &str) -> bool {
-    let chars: Vec<char> = line.chars().collect();
-    // `_HEREDOC_RE.sub(" ", line)`.
+    // Each heredoc header, `<<` to the end of its delimiter word, becomes one blank.
+    let line = Line::of(line);
     let mut blanked = String::new();
     let mut i = 0usize;
-    let matches = heredoc_matches(&chars);
-    let mut next = 0usize;
-    while i < chars.len() {
-        if next < matches.len() && matches[next].start == i {
-            blanked.push(' ');
-            i = matches[next].end;
-            next += 1;
-            continue;
-        }
-        blanked.push(chars[i]);
-        i += 1;
+    for m in heredoc_openers(&line) {
+        blanked.push_str(&line.slice(i, m.start));
+        blanked.push(' ');
+        i = m.header.end;
     }
+    blanked.push_str(&line.slice(i, line.len()));
     for word in blanked.split(|c: char| is_python_space(c) || ";&|()<>{}\"'`".contains(c)) {
         let word = word.trim_matches(|c| c == '$' || c == '\\');
         // The oracle asks `_is_executor(word) or _is_executor(basename(word).lower())`, and the
@@ -948,9 +971,14 @@ pub fn segments_of(toks: &[Tok]) -> Vec<(Vec<Tok>, String)> {
 /// ever runs. Read as commands, every line of it reaches the leak guard, and a brief that names a
 /// vault path in prose — or carries a single apostrophe — is refused as a read of it.
 ///
-/// **The exact spelling, and that command alone.** `charter handoff b && bash <<'EOF'` opens
+/// **Two bare words, and that command alone.** `charter handoff b && bash <<'EOF'` opens
 /// `bash`'s heredoc, not a brief, and `python3 -m charter handoff` is a spelling A7 refuses
 /// outright. Both fall through to "not a brief", which only ever shows the guard more text.
+///
+/// **In any case.** `CHARTER handoff` runs charter on a filesystem that folds case, and A7
+/// reads it as the handoff it is and refuses its spelling; `charter HANDOFF` names a
+/// subcommand charter does not have, so charter exits before it reads stdin. Neither body is
+/// ever run, so neither is a command for the leak guard to read.
 pub fn brief_heredocs(line: &Line) -> HashSet<usize> {
     let headers = heredoc_openers(line);
     if headers.is_empty() {
@@ -961,9 +989,9 @@ pub fn brief_heredocs(line: &Line) -> HashSet<usize> {
     };
     let toks = shellseg::split_punctuation(toks);
     let opens = |ts: &[Tok]| ts.iter().filter(|t| t.is_op(&["<<"])).count();
-    // The count bail is `heredoc_strip_plan`'s, for its reason: an index space the lexer and the
-    // regex disagree about is one no caller can act on.
-    if opens(&toks) != headers.len() {
+    // The bail is `heredoc_strip_plan`'s, for its reason: an index space the lexer and the
+    // header reader disagree about is one no caller can act on.
+    if !lexer_agrees(line, &headers) {
         return HashSet::new();
     }
     let mut briefs = HashSet::new();
@@ -974,8 +1002,8 @@ pub fn brief_heredocs(line: &Line) -> HashSet<usize> {
             && seg.len() >= 2
             && seg[0].bare
             && seg[1].bare
-            && seg[0].text == "charter"
-            && seg[1].text == "handoff"
+            && seg[0].text.eq_ignore_ascii_case("charter")
+            && seg[1].text.eq_ignore_ascii_case("handoff")
         {
             briefs.extend(k..k + opened);
         }
@@ -1106,20 +1134,28 @@ fn without_redirections(argv: &[String]) -> Vec<String> {
 /// One heredoc's entry in [`heredoc_strip_plan`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanEntry {
-    /// `_HEREDOC_RE`'s reading of the delimiter, which is what a KEPT body's terminator lines are
-    /// matched against. It differs from [`Header::delim`] where quoting splits a word: for
-    /// `<<EO'F'` the regex reads `EO` while bash reads `EOF`. Acting on the shorter reading is the
-    /// safe direction *here* — a terminator that is never found keeps the body visible — so the
-    /// verdicts stay keyed on it; a caller that would DROP a body must use `header` instead.
-    pub delim: String,
+    /// The heredoc's header, as [`heredoc_openers`] read it: where its body ends and whether it
+    /// expands.
+    pub header: Header,
     /// The verdict: this body is stdin DATA and may be dropped.
     pub drop: bool,
-    /// **Decides nothing here.** [`heredoc_header`]'s answer for the same `<<`, carried so a
-    /// second caller has the bash-accurate facts without re-parsing the line.
-    pub header: Option<Header>,
     /// Whether a program in this body's pipeline runs text — what A7 asks before it reads a body
     /// as commands.
     pub executor: bool,
+}
+
+/// Whether the lexer's bare `<<` tokens on `line` stand exactly where `openers` are — the same
+/// heredocs, not merely as many of them.
+fn lexer_agrees(line: &Line, openers: &[Opener]) -> bool {
+    let Ok(toks) = shellseg::lex(&line.text()) else {
+        return false;
+    };
+    let at: Vec<isize> = shellseg::split_punctuation(toks)
+        .iter()
+        .filter(|t| t.is_op(&["<<"]))
+        .map(|t| t.start)
+        .collect();
+    at.len() == openers.len() && at.iter().zip(openers).all(|(&a, m)| a == m.start as isize)
 }
 
 /// The heredocs opened on `line`, in the order their bodies follow — or `None` when nothing on
@@ -1129,7 +1165,8 @@ pub struct PlanEntry {
 /// runs no executor**. Each clause earns its place:
 ///
 /// - *quoted* — an unquoted `<<EOF` is expanded before the reader sees it, so a `$( … )` in the
-///   body RUNS. Only `<<'EOF'` / `<<"EOF"` are inert.
+///   body RUNS. A delimiter with any quoting in it (`<<'EOF'`, `<<"EOF"`, `<<\EOF`, `<<EO'F'`)
+///   is inert, which is [`Header::expands`].
 /// - *reader* — the program that OPENS the `<<` (its segment's, via [`shellwrap::split_env`]), so
 ///   `env cat <<'X'` is a reader behind a wrapper. A `git commit` taking its message from stdin
 ///   counts as one, and so does a `gh pr|issue create|comment` taking its body from stdin.
@@ -1137,10 +1174,12 @@ pub struct PlanEntry {
 ///   whether the LINE began with a reader, so `cat x && bash <<'EOF'`, `… | bash`, `… || bash`,
 ///   `… & bash` and `cat x; bash <<'EOF'` each dropped a body a shell ran.
 ///
-/// When [`line_pipelines`] and `_HEREDOC_RE` disagree on how many heredocs the line opens — a
-/// here-string `<<<x`, a `<<` inside quotes or a comment, which the regex counts and the lexer
-/// does not — the answer is `None`: the line is not one this pre-pass can take apart, so it strips
-/// nothing and the bodies stay visible.
+/// The lexer's `<<` tokens must stand exactly where [`heredoc_openers`] found openers, or the
+/// answer is `None`: a `<<` in a comment or in `$(( … ))`, which the header reader counts and the
+/// lexer does not, makes a line this pre-pass cannot take apart, so it strips nothing and the
+/// bodies stay visible. Positions and not only a count, because with a count alone one opener
+/// only the lexer saw and one only the header reader saw paired each body with the wrong
+/// program.
 ///
 /// A **brief** is data by the other route ([`brief_heredocs`]): charter reads that body as stdin
 /// rather than running it.
@@ -1155,7 +1194,7 @@ pub fn heredoc_strip_plan(line: &Line) -> Option<Vec<PlanEntry>> {
         .flat_map(|p| p.hcounts.iter())
         .copied()
         .sum();
-    if counted != headers.len() {
+    if counted != headers.len() || !lexer_agrees(line, &headers) {
         return None;
     }
     let briefs = brief_heredocs(line);
@@ -1178,14 +1217,12 @@ pub fn heredoc_strip_plan(line: &Line) -> Option<Vec<PlanEntry>> {
                 let m = headers
                     .get(k)
                     .expect("the count guard above makes k < headers.len()");
-                let quoted = m.quote.is_some();
                 // A brief is data for the same reason a reader's body is, and by a different
                 // route: nobody runs it, because it is charter's stdin.
-                let data = (reader && quoted && !p.executor) || briefs.contains(&k);
+                let data = (reader && !m.header.expands && !p.executor) || briefs.contains(&k);
                 plan.push(PlanEntry {
-                    delim: m.delim.clone(),
+                    header: m.header.clone(),
                     drop: data,
-                    header: heredoc_header(line, m.start),
                     executor: p.executor,
                 });
                 k += 1;
@@ -1245,6 +1282,78 @@ pub fn pipeline_continues(line: &str) -> bool {
         .is_some_and(|t| t.bare && (t.text == "|" || t.text == "|&"))
 }
 
+/// The `(open, close)` character spans of every `$( … )` and backtick substitution that opens
+/// AND closes on `line`.
+///
+/// A heredoc opened inside one of those has no body inside it, and the shells disagree about
+/// where its body is then. Measured with `x=$( cat <<'EOF' )`, a line, then `EOF`: GNU bash
+/// 5.2.15 and 5.3 read the line as the heredoc's body, while GNU bash 3.2.57 and zsh 5.9 run it
+/// as a command; with backticks all four run it. So such a body is read both ways: never
+/// dropped, and searched as a shell would run it. A subshell `( … )` or group `{ …; }` is not
+/// this: every one of those shells reads the body after the line.
+///
+/// Read with its own small walk, because a backtick's pairing is what matters here and the
+/// quote map marks the two backticks of a pair differently inside `"…"`.
+fn closed_substitutions(line: &Line) -> Vec<(usize, usize)> {
+    #[derive(PartialEq)]
+    enum Frame {
+        Sub,
+        Tick,
+        Paren,
+        Dq,
+    }
+    let chars = &line.chars;
+    let n = chars.len();
+    let mut stack: Vec<(Frame, usize)> = Vec::new();
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+    while i < n {
+        let c = chars[i];
+        let in_dq = stack.last().is_some_and(|(f, _)| *f == Frame::Dq);
+        if c == '\\' {
+            i += 2;
+            continue;
+        }
+        if line.starts_with(i, "$(") {
+            stack.push((Frame::Sub, i));
+            i += 2;
+            continue;
+        }
+        if c == '`' {
+            if stack.last().is_some_and(|(f, _)| *f == Frame::Tick) {
+                let (_, open) = stack.pop().expect("just checked");
+                spans.push((open, i));
+            } else {
+                stack.push((Frame::Tick, i));
+            }
+        } else if in_dq {
+            if c == '"' {
+                stack.pop();
+            }
+        } else if c == '\'' {
+            // Literal to the next `'`; a `$'…'` ends at the first `'` no backslash escapes.
+            let ansi = i > 0 && chars[i - 1] == '$';
+            let mut k = i + 1;
+            while k < n && chars[k] != '\'' {
+                k += if ansi && chars[k] == '\\' { 2 } else { 1 };
+            }
+            i = k;
+        } else if c == '"' {
+            stack.push((Frame::Dq, i));
+        } else if c == '(' {
+            stack.push((Frame::Paren, i));
+        } else if c == ')' {
+            match stack.pop() {
+                Some((Frame::Sub, open)) => spans.push((open, i)),
+                Some((Frame::Paren, _)) | None => {}
+                Some(other) => stack.push(other), // a `)` inside a backtick is a word
+            }
+        }
+        i += 1;
+    }
+    spans
+}
+
 /// One line of [`heredoc_layout`]'s answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutLine {
@@ -1274,12 +1383,15 @@ pub struct LayoutLine {
 ///
 /// Two things are about a body that gets DROPPED:
 ///
-/// - it ends where BASH ends it, at [`heredoc_header`]'s delimiter rather than `_HEREDOC_RE`'s.
-///   For `<<BRIEF'X'` bash's terminator is `BRIEFX`; dropping on `BRIEF` finds no terminator, runs
+/// - it ends where BASH ends it ([`body_extent`], at [`heredoc_header`]'s delimiter). For
+///   `<<BRIEF'X'` bash's terminator is `BRIEFX`; dropping on `BRIEF` finds no terminator, runs
 ///   to the end of the input, and takes the commands after the heredoc with it;
 /// - a body whose terminator never arrives is **not dropped at all**, whoever opened it. Bash
 ///   reads an unterminated body to the end of the input, so a drop there would hide everything
-///   after it if the delimiter was misread.
+///   after it if the delimiter was misread;
+/// - a body opened in a substitution closed on its own line (`closed_substitutions`) is not
+///   dropped either, and is read as lines a shell runs, because the shells disagree about
+///   whether those lines are a body at all.
 pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
     let lines: Vec<&str> = cmd.split('\n').collect();
     let n = lines.len();
@@ -1293,6 +1405,9 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
         let mut ended: HashMap<usize, bool> = HashMap::new();
         let mut fallback: HashMap<usize, bool> = HashMap::new();
         let mut body_count = 0usize;
+        // Bodies whose opener sits in a substitution closed on its own line: which lines are
+        // body there depends on the shell, so they are read both ways.
+        let mut either: HashSet<usize> = HashSet::new();
         let mut plan_text = String::new();
         let mut join = ""; // separator carried from the previous stage
         loop {
@@ -1337,48 +1452,30 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
             } else {
                 HashSet::new()
             };
+            let closed = closed_substitutions(&folded_line);
             for (h, m) in heredoc_openers(&folded_line).into_iter().enumerate() {
-                let header = heredoc_header(&folded_line, m.start);
                 let idx = body_count;
                 body_count += 1;
+                // Closed on the header's own line: a newline kept in `folded` for an open quote
+                // puts the close on a later line, where the body is inside the substitution.
+                if closed.iter().any(|&(lo, hi)| {
+                    lo < m.start && m.start < hi && !folded_line.chars[m.start..hi].contains(&'\n')
+                }) {
+                    either.insert(idx);
+                }
                 if unknown {
                     fallback.insert(
                         idx,
                         crowded.contains(&h) || heredoc_could_run(&folded_line, m.start),
                     );
                 }
-                // The header is bash's own reading of the delimiter, and the ONLY safe source for
-                // where a body ends: the regex stops at the first quote (`<<'EO'F` reads as `EO`),
-                // so its terminator is never found and the "body" runs to the end of the input,
-                // taking real commands with it. The regex is the fallback only for a header bash's
-                // parser here cannot read.
-                let (delim, expands, dash) = match &header {
-                    Some(h) => (h.delim.clone(), h.expands, h.dash),
-                    None => (m.delim.clone(), !(m.quote.is_some() || m.backslash), m.dash),
-                };
-                // Bash ends the body on a line EQUAL to the delimiter — a `<<-` ignoring only
-                // leading TABS. Not `.strip()`: a lenient match ends a KEPT (shell) body early,
-                // and the real read that spills past it is then read as the next heredoc's body
-                // and, if that one is a reader's, stripped away. In an UNQUOTED body a trailing
-                // backslash splices the next line, so that line cannot be the terminator — bash
-                // runs the body on past it.
-                let mut spliced = false;
-                let mut found = false;
-                while i < n {
-                    let body_line = lines[i];
-                    let compared = if dash {
-                        body_line.trim_start_matches('\t')
-                    } else {
-                        body_line
-                    };
-                    if !spliced && compared == delim {
-                        found = true;
-                        break;
-                    }
-                    chunks.push((Some(idx), body_line.to_string()));
-                    spliced = expands && ends_in_line_continuation(body_line);
-                    i += 1;
+                // Where bash ends the body, from the one header reading and the one body walk.
+                let h = &m.header;
+                let (len, found) = body_extent(&lines[i..], &h.delim, h.expands, h.dash);
+                for body_line in &lines[i..i + len] {
+                    chunks.push((Some(idx), (*body_line).to_string()));
                 }
+                i += len;
                 ended.insert(idx, found);
                 if i < n {
                     // the terminator line itself
@@ -1417,8 +1514,12 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
             layout.push(LayoutLine {
                 text,
                 body: idx.is_some(),
-                drop: idx.is_some_and(|k| drop.get(&k).copied().unwrap_or(false)) && !unterminated,
-                executed: idx.is_some_and(|k| executed.get(&k).copied().unwrap_or(false)),
+                drop: idx.is_some_and(|k| {
+                    drop.get(&k).copied().unwrap_or(false) && !either.contains(&k)
+                }) && !unterminated,
+                executed: idx.is_some_and(|k| {
+                    executed.get(&k).copied().unwrap_or(false) || either.contains(&k)
+                }),
             });
         }
     }

@@ -93,9 +93,15 @@ rule while one who reads a bare refusal files an issue.
   reader (`cat <<'EOF'`) is stdin data: its body is dropped, so a document naming these paths
   is not refused as a read of them.
   That body ends where bash ends it: `<<'EO'F`, `<<"EO"F` and `<<E\OF` are all heredocs whose
-  delimiter is `EOF`, because quotes are removed per character and the pieces join. A body whose
-  terminator never arrives is not dropped at all, since that is what a misread delimiter looks
-  like.
+  delimiter is `EOF`, because quotes are removed per character and the pieces join. So are
+  `<<$'E\x4fF'` (ANSI-C quoting is decoded) and a `"…"` delimiter split by a backslash-newline,
+  and `<<'A B'` is a heredoc whose delimiter holds a blank. Every guard reads a heredoc this one
+  way — which `<<` opens one, where its body ends, whether it expands — so no two guards read
+  the same heredoc differently. A body whose terminator never arrives is not dropped at all,
+  since that is what a misread delimiter looks like. Nor is the body of a heredoc opened inside
+  a `$( … )` or backticks that close on the same line (`x=$( cat <<'EOF' )`): bash 3.2 and zsh
+  run the lines after it as commands where bash 5 reads them as the body, so they are read as
+  commands a shell runs.
   A **commit message on stdin** is the same data on the same terms: the quoted body of
   `git commit -F -`, `-F-`, `--file=-` or `--file -`, git's global options before `commit`
   included, is dropped when no executor is in its pipeline, so a message describing charter's
