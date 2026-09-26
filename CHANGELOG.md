@@ -88,6 +88,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Every guard reads a heredoc the same way, and the way the shell does.** The secret-leak
+  guard used a second, narrower reading of where a heredoc starts than the one that decides
+  where its body ends, and on some lines the two disagreed, so a command after the heredoc could
+  be taken for part of its body. There is now one reading. It also understands delimiters it
+  used to miss: one with a blank in it (`<<'A B'`), one in ANSI-C quoting (`<<$'…'`), and one in
+  double quotes that holds an escape or a backslash-newline. In a heredoc that expands, a line
+  joined to the one before by a trailing backslash no longer ends the body. The lines after a
+  heredoc opened inside a `$( … )` or backticks that close on the same line are read as
+  commands too, because bash 3.2 and zsh run them. The body of `charter handoff` spelled in
+  other letter cases (`CHARTER handoff`) is read as its brief, as it is for the plain spelling.
+  ([#359](https://github.com/diazoxide/charter/issues/359))
 - **A terminal pane that opens late no longer adds a line when a wide character sits in the
   last column.** If a program had pushed a wide character, such as a CJK character, into the
   last column with wrapping turned off, the catch-up redraw printed that character again. That

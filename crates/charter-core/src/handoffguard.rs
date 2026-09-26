@@ -899,6 +899,27 @@ mod tests {
         assert_eq!(reason(cmd), None, "a commit message is not a handoff");
     }
 
+    /// A heredoc opened in a substitution that closes on its own line has no body there, and
+    /// the shells disagree about the lines after it: GNU bash 3.2.57 and zsh 5.9 run them as
+    /// commands, GNU bash 5.2.15 and 5.3 read them as the body, and with backticks all four run
+    /// them. So they are searched as lines a shell runs (#359).
+    #[test]
+    fn a_heredoc_in_a_substitution_closed_on_its_line_does_not_hide_the_next_lines() {
+        for cmd in [
+            "x=$( cat <<'EOF' )\ncharter handoff beta\nEOF",
+            "x=`cat <<EOF`\ncharter handoff beta\nEOF",
+            "echo \"$(cat <<EOF)\"\ncharter handoff beta\nEOF",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_SHELL_STRING), "{cmd:?}");
+        }
+        // `<<$"EOF"` ends at `$EOF` in zsh 5.9, so the handoff after it runs there.
+        let cmd = "cat <<$\"EOF\"\n$EOF\ncharter handoff beta\nEOF";
+        assert!(reason(cmd).is_some(), "{cmd:?}");
+        // Closed on a later line, the body is inside the substitution, as every shell reads it.
+        let cmd = "git commit -m \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"";
+        assert_eq!(reason(cmd), None, "a commit message is not a handoff");
+    }
+
     #[test]
     fn a_disguised_first_or_second_word_is_a_spelling_refusal() {
         for cmd in [

@@ -89,6 +89,34 @@ readings that follow from them (`hh`, `hcr`, `bh`, `hsp`, `dqs`, `hb`, `hsub`), 
 of the leak guard and A7 (`lr`, `ih`, `hl7`, `hr`, `hrd`, `ssh7`), each now a refusal where the
 Python allowed.
 
+**And where a heredoc has one reading (#359).** The frozen Python found heredoc openers with a
+pattern (`_HEREDOC_RE`) that knew only a delimiter spelled as one identifier in one pair of
+quotes, and ended bodies with bash's header reading; the two disagreed on some lines. The
+openers now come from the header reading alone, so `ho` records each opener as
+`[start, [delim, expands, dash, end]]` instead of the pattern's match. That shape change is the
+only change on 100 rows of `shellseg-oracle.jsonl` and 403 generated rows. The other rows moved
+because the header reading sees `<<''`, `<<""`, `<<'A B'`, `<<EO'F'`, `<<\EOF` and `<<$'…'` as
+the heredocs they are, and no heredoc inside a here-string's `<<<`:
+`shellseg-oracle.jsonl` rows 84, 85, 86, 88, 89, 93, 98 and 403 to 407, and 227 generated rows.
+Those keys are the openers and what is asked of each (`how`, `op`, `ps`, `hcr`), the header at
+a `<<` (`hh`), the strip plan and layout (`hsp`, `bh`, `hl`, `srh`, `gseg`, `lacr`), and A5's
+body walk (`hb`), where an expanding body no longer ends on a line spliced onto the one before
+it. No leak-guard (`lr`), A5 or A6 verdict moved. A7 (`hr`, `hrd`, `hl7`) moved on 16 generated
+rows:
+
+- rows 957, 1356, 1640, 1740 and 1747 now refuse where the Python allowed, and rows 95, 793,
+  1111 and 1968 refuse for the shell-string reason instead of the brief-source one. Each opens a
+  heredoc inside a `$( … )` that closes on the same line. GNU bash 3.2.57 runs the lines after
+  it as commands, and so does zsh 5.9 on all of them but row 1356; the `charter handoff` among
+  them ran. GNU bash 5.2.15 and 5.3 read those lines as the body instead.
+- rows 453, 1593, 1787 and 1822 still refuse, for the brief-source reason instead of the
+  shell-string one. They hold only a here-string `<<<EOF`, in which the Python's pattern saw a
+  heredoc, so the lines after them are commands.
+- rows 177, 1606 and 2007 now allow what the Python refused. Their `charter handoff` line is
+  inside the body of a `<<""` or `<<EO'F'` heredoc that runs to the end of the input, and it ran
+  in none of GNU bash 3.2.57, 5.2.15 and 5.3 and zsh 5.9. The Python refused it only because
+  its pattern did not see that heredoc. Rows 177 and 1606 are still refused by the leak guard.
+
 ## The session recording
 
 Re-record with:

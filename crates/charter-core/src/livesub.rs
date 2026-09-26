@@ -180,7 +180,9 @@ type Pending = (String, bool, bool);
 ///
 /// In order, because a line may open several (``cat <<'A' <<B``) and their bodies follow in the
 /// order the headers appeared — checked against bash, since getting the order wrong would read
-/// an expanding body as a literal one.
+/// an expanding body as a literal one. Each body ends where [`heredoc::body_extent`] ends it,
+/// the walk the leak guard and A7 use too: a body read two ways is how the text after it gets
+/// read as the wrong thing.
 pub fn heredoc_bodies(
     chars: &[char],
     mut i: usize,
@@ -188,30 +190,21 @@ pub fn heredoc_bodies(
 ) -> (Option<&'static str>, usize) {
     let n = chars.len();
     for (delim, expands, strip) in pending {
-        let mut lines: Vec<String> = Vec::new();
-        while i < n {
-            // `text.find("\n", i)`, in characters.
-            let end = chars[i..].iter().position(|&c| c == '\n').map(|k| i + k);
-            let line: String = match end {
-                None => chars[i..].iter().collect(),
-                Some(e) => chars[i..e].iter().collect(),
-            };
-            i = match end {
-                None => n,
-                Some(e) => e + 1,
-            };
-            // `line.lstrip("\t")` — TABS only, which is all `<<-` strips.
-            let compared = if *strip {
-                line.trim_start_matches('\t')
-            } else {
-                line.as_str()
-            };
-            if compared == delim {
-                break;
-            }
-            lines.push(line);
+        if i >= n {
+            // Nothing left: every remaining body is empty and unterminated.
+            continue;
         }
-        if *expands && let Some(hit) = heredoc_substitution(&lines.join("\n")) {
+        let rest: String = chars[i..].iter().collect();
+        let lines: Vec<&str> = rest.split('\n').collect();
+        let (len, found) = heredoc::body_extent(&lines, delim, *expands, *strip);
+        let taken = if found { len + 1 } else { len };
+        // Each line taken, and the newline after it; past the end is the end.
+        i = (i + lines[..taken]
+            .iter()
+            .map(|l| l.chars().count() + 1)
+            .sum::<usize>())
+        .min(n);
+        if *expands && let Some(hit) = heredoc_substitution(&lines[..len].join("\n")) {
             return (Some(hit), i);
         }
     }
@@ -294,6 +287,9 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
                 // `i + 2` anyway. Written as `+= 2` because that is what the Python writes and
                 // what the construct means, not because the walk needs it.
                 None => i += 2,
+                // Where the shells end the body at different lines, it is read as commands:
+                // the body is literal, so that reading only finds more.
+                Some(h) if h.shells_disagree => i = h.end,
                 Some(h) => {
                     i = h.end;
                     pending.push((h.delim, h.expands, h.dash));
@@ -390,6 +386,41 @@ mod tests {
         // A space before the terminator is NOT a terminator, so the body runs on and the
         // backtick after it is still inside an expanding body.
         assert_eq!(live_substitution("cat <<-'EOF'\nq\n EOF\n`x`\nEOF\n"), None);
+    }
+
+    /// A body ends where the leak guard's walk ends it, because it is the same walk (#359). In
+    /// an expanding body a trailing backslash splices the next line on, so an `EOF` there ends
+    /// nothing, and the `'$(x)'` after it is body text where quotes are literal: GNU bash 3.2.57
+    /// and zsh 5.9 both run it. Ending the body early read it as a quoted word.
+    #[test]
+    fn a_line_spliced_onto_an_expanding_body_does_not_end_it() {
+        assert_eq!(
+            live_substitution("cat <<EOF\na\\\nEOF\n'$(x)'\nEOF\n"),
+            Some("$(")
+        );
+        // Quoted, the body is literal and a backslash splices nothing.
+        assert_eq!(live_substitution("cat <<'EOF'\na\\\nEOF\n'$(x)'\n"), None);
+    }
+
+    /// A delimiter in ANSI-C quoting is the word it decodes to, so the body ends at `EOF` and a
+    /// substitution after it is a command's (#359). Read as the literal `$E\x4fF`, the body ran
+    /// to the end of the input and hid it.
+    /// `<<$"EOF"` ends at `EOF` in bash and at `$EOF` in zsh 5.9, so the body is read as the
+    /// commands zsh runs after `$EOF` too (#359).
+    #[test]
+    fn a_delimiter_the_shells_read_differently_does_not_hide_a_substitution() {
+        assert_eq!(
+            live_substitution("cat <<$\"EOF\"\n$EOF\necho $(x)\nEOF\n"),
+            Some("$(")
+        );
+    }
+
+    #[test]
+    fn an_ansi_c_delimiter_ends_its_body_where_the_shell_does() {
+        assert_eq!(
+            live_substitution("cat <<$'E\\x4fF'\nx\nEOF\necho $(x)\n"),
+            Some("$(")
+        );
     }
 
     /// `$'…'` has its own escape rule: `$'a\'b'` ends at the LAST quote. Reading it as a plain
