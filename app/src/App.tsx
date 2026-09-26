@@ -298,18 +298,35 @@ function App() {
     };
   }, [planes]);
 
-  /** Pins or unpins one project. The core's refusal travels back whole — the store is
-   *  bounded, and "unpin one first" is a sentence the operator can act on. */
-  const pinProject = useCallback(async (plane: string, pinned: boolean): Promise<Ran> => {
-    const answer = await commands
-      .pinProject(plane, pinned)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    if (answer.status === "error") return { ok: false, refused: answer.error };
-    setPinnedProjects((was) =>
-      pinned ? (was.includes(plane) ? was : [...was, plane]) : was.filter((one) => one !== plane),
-    );
-    return { ok: true };
-  }, []);
+  /**
+   * Pins or unpins one project. The core's refusal travels back whole — the store is
+   * bounded, and "unpin one first" is a sentence the operator can act on.
+   *
+   * **`early` draws the pin before the core has written it**, and takes it back if the core
+   * refuses. A drop across the pinned boundary asks for it (SI-6b): the strip's order changes
+   * with the drop, and a pin that waited for the core would draw the tab in its old group
+   * until the answer came — a jump under the pointer. Every other way in waits, so a mark is
+   * never drawn that the store does not have.
+   */
+  const pinProject = useCallback(
+    async (plane: string, pinned: boolean, { early = false } = {}): Promise<Ran> => {
+      const mark = (on: boolean) =>
+        setPinnedProjects((was) =>
+          on ? (was.includes(plane) ? was : [...was, plane]) : was.filter((one) => one !== plane),
+        );
+      if (early) mark(pinned);
+      const answer = await commands
+        .pinProject(plane, pinned)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (answer.status === "error") {
+        if (early) mark(!pinned);
+        return { ok: false, refused: answer.error };
+      }
+      mark(pinned);
+      return { ok: true };
+    },
+    [],
+  );
 
   /**
    * Takes a project into this window, as a tab.
@@ -1023,7 +1040,7 @@ function App() {
       if (made === undefined) return;
       setPlanes(made.order as PlaneId[]);
       if (made.pinned === undefined) return;
-      void pinProject(moved, made.pinned).then((ran) => {
+      void pinProject(moved, made.pinned, { early: true }).then((ran) => {
         if (!ran.ok) setReport({ from: "project.drag", refused: true, words: ran.refused });
       });
     },
