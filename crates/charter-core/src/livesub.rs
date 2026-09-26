@@ -801,4 +801,19 @@ mod tests {
             assert_eq!(live_substitution(cmd), None, "{cmd:?}");
         }
     }
+
+    /// A heredoc can only be opened inside a substitution the walk has already passed, so a
+    /// heredoc in a substitution that spans lines is never where a walk first looks: the
+    /// substitution around it is the live one, whichever lines the shells then read as its body.
+    #[test]
+    fn a_heredoc_in_a_substitution_spanning_lines_is_behind_a_live_one() {
+        for (cmd, want) in [
+            ("x=$(\ncat <<\"2\"\n)\necho $(y)\n2", "$("),
+            ("x=`\ncat <<\"2\"\n`\necho $(y)\n2", "`"),
+            ("cat <(\ncat <<\"2\"\n)\necho $(y)\n2", "<("),
+            ("x=\"$(\ncat <<'2'\n)\"\necho $(y)\n2", "$("),
+        ] {
+            assert_eq!(live_substitution(cmd), Some(want), "{cmd:?}");
+        }
+    }
 }
