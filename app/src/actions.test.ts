@@ -82,6 +82,10 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`mergeWorktree:${cut.repo}/${cut.piece}`);
       return { ok: true as const };
     }),
+    declareWorktreeDone: vi.fn(async (cut: Cut) => {
+      calls.push(`declareWorktreeDone:${cut.repo}/${cut.piece}`);
+      return { ok: true as const };
+    }),
     pickClone: note("pickClone"),
     newChatIn: note("newChatIn"),
     sendKey: vi.fn(async (key: string) => {
@@ -454,6 +458,21 @@ describe("the one list of actions", () => {
     await run(offers, "worktree.discard", hands);
 
     expect(hands.calls).toEqual(["removeWorktree:svc/fix-it,true"]);
+  });
+
+  it("offers to mark each piece of the focused workspace done, above the line", () => {
+    // charter#368: a declaration is one line in the piece log. It names its piece, as the
+    // merge beside it does, and it is not destructive, so nothing asks first.
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
+
+    const done = by(offers, "worktree.done:svc/fix-it");
+    expect(done?.title).toBe("Mark worktree fix-it done");
+    expect(done?.does).toEqual({ verb: "declareWorktreeDone", cut });
+    expect(done?.note).toBeUndefined();
+
+    const planeless = catalogue(now({ plane: undefined, pieces: [cut] }));
+    expect(by(planeless, "worktree.done:svc/fix-it")?.available).toBe(false);
   });
 
   it("names one merge and one remove per piece of the focused workspace", () => {
@@ -944,6 +963,7 @@ describe("carrying out a row", () => {
         "removeWorktree:svc/fix-it,false",
         "removeWorktree:svc/fix-it,true",
         "mergeWorktree:svc/fix-it",
+        "declareWorktreeDone:svc/fix-it",
         "openView:charter/persona/steward,steward",
         "openView:charter/vault/ops,ops",
         "pickVault",
@@ -1308,6 +1328,8 @@ describe("the palette at fifty chats", () => {
     // beside them, which is cheap: a plane has a handful.
     expect(offers.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
+    // And a third (charter#368): mark it done, so a finished piece stops reading as silent.
+    expect(offers.filter((row) => row.id.startsWith("worktree.done:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
     // Two rows per clone (charter-app#174, the second half): a new tab in it and the pick.
     // Ten clones is twenty rows, on the shape above; `narrow` is held to the same rank with
@@ -1316,7 +1338,7 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("clone.pick:"))).toHaveLength(10);
     // One settings row per workspace (charter-app#280), and none for the strip outside.
     expect(offers.filter((row) => row.id.startsWith("workspace.settings:"))).toHaveLength(6);
-    // 385 rows: 50 chats four times over, 6 workspaces SIX times, 50 pieces TWICE, 10
+    // 435 rows: 50 chats four times over, 6 workspaces SIX times, 50 pieces THRICE, 10
     // clones TWICE, 8 personas, 2 in the queue TWICE (show it, and ignore it — charter-app#248),
     // and the sixteen verbs — the sixteenth is Preferences (charter-app#283) — plus the vault picker and New vault…
     // (charter-app#235; this plane has no vaults, so no `vault.open:` rows). It was 118 before the pins, 174 before
@@ -1325,11 +1347,11 @@ describe("the palette at fifty chats", () => {
     // the row that puts `charter` on a terminal's PATH, 292 before a queued chat could be
     // ignored, 294 before a chat could be renamed (charter-app#254), 345 before a clone
     // could be picked from its own menu, 367 before a workspace had settings, 373 before
-    // a workspace could be made LIVE or LOCAL (charter-app#301), and 379 before one could be
-    // renamed (charter#367). What the
+    // a workspace could be made LIVE or LOCAL (charter-app#301), 379 before one could be
+    // renamed (charter#367), and 385 before a piece could be marked done (charter#368). What the
     // hundred buys is the surface the operator asked for and the menu system could not reach;
     // what it costs is measured on `narrow` two tests up and on `menuRows` below.
-    expect(offers).toHaveLength(385);
+    expect(offers).toHaveLength(435);
   });
 
   /**

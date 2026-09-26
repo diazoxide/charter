@@ -355,6 +355,14 @@ export function Explorer({
                                 stale: piece.stale,
                               }}
                             />
+                            {/* What the piece said about itself — `done`, `abandoned: <why>` or
+                          `silent 3d` — so a finished piece and a quiet one do not look alike
+                          (charter#368). An age, never a verdict. */}
+                            {piece.said && (
+                              <span className="label said" data-testid="piece-said">
+                                {piece.said}
+                              </span>
+                            )}
                             <ChatList
                               chats={working}
                               states={states}

@@ -102,6 +102,14 @@ not carry that. History is a genuine want, but it is a plane-format write, and a
 write needs its own differential test and its own entry in `docs/plane-format.md`. Riding it
 in on a milestone about worktrees is how a second registry gets created by accident.
 
+**Amended 2026-09-26 (charter#368): the Rust core now carries it, on the terms above.** The
+log was already in `docs/plane-format.md`, and the briefing and the footer already read it;
+what was missing was a writer, so every piece read as silent. `charter worktree add` appends
+`claimed`, and `done` and `abandon` append the worker's declaration. The line is Python's
+`pieces.record` byte for byte, which `pieces::tests::a_recorded_line_is_the_one_pythons_pieces_record_wrote`
+holds. It is still not a registry: which pieces exist is asked of git every time, and the log
+only puts a name and a word on what git found. `remove` writes nothing to it.
+
 **The base branch is the hard case.** Merging back targets the branch a piece was cut from
 (see the design doc), and something must remember which that was. Inferring it later does not
 work: `git merge-base` yields a commit, and a commit that two branches both reach names

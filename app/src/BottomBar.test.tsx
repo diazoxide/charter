@@ -53,6 +53,7 @@ function piece(name: string, on: Partial<Piece> = {}): Piece {
     branch: name,
     wired: true,
     stale: false,
+    said: "",
     ...on,
   };
 }

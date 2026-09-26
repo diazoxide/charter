@@ -32,6 +32,14 @@ A clone of a code repository that a workspace holds. It has its own remote and i
 and it is never part of the plane's commits.
 _Avoid_: clone (as a noun in UI text), guest checkout, project
 
+**Piece**:
+A git worktree of a workspace's repo, at `workspaces/<ws>/.worktrees/<repo>/<piece>`, where
+one chat works on its own branch. Git says which pieces exist. The piece log says what git
+cannot: that charter cut it (`claimed`), and whether its worker declared it `done` or
+`abandoned`. A piece that declared nothing is **silent**, reported as an age and never as a
+failure.
+_Avoid_: task, slot, branch (for the directory)
+
 **Inventory**:
 The plane's list of repos it can clone (`inventory/repos.json`), committed and shared. It only
 grows: `discover` and the repo picker add to it, and a repo leaves it only through an exclude.

@@ -95,11 +95,15 @@ When two choices conflict, the higher priority wins.
      `unwired` marks a tree the layer is not in yet.
    - Merging back is an explicit action on the piece's row. `merge` lands it locally,
      fast-forward only, into the branch the piece was cut from. `remove` refuses to discard
-     uncommitted changes or commits no other ref reaches unless the operator forces it.
-   - **Not shipped yet** (charter#368): cutting a piece from the window or the command line, a
-     new chat getting one by default, `publish`, and the piece log's `claimed`, `done` and
-     `abandoned` events. The session briefing and the footer read that log, and nothing writes
-     it, so a piece reads as silent there.
+     uncommitted changes or commits no other ref reaches unless the operator forces it, and
+     names the files and commits it would discard.
+   - `charter worktree` (alias `wt`) is the command line for a chat (charter#368): `add` cuts
+     a piece and logs `claimed`, `done` and `abandon "<why>"` declare the piece the chat
+     stands in, and `list`, `history` and `remove` read and clear them. Each piece's row in
+     the window shows what it declared, or how long it has been silent, and its menu can mark
+     it done.
+   - **Not shipped yet:** cutting a piece from the window, a new chat getting one by default,
+     and `publish`.
 
    Neither `merge` nor `publish` takes `--all` (ADR 0020). Git is the only registry, reached
    through the git binary: **ADR 0027**. The design is charter-plane's

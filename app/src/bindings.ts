@@ -584,6 +584,15 @@ export const commands = {
 	worktreeRemove: (plane: PlaneId, workspace: string, repo: string, piece: string, force: boolean) => typedError<null, string>(__TAURI_INVOKE("worktree_remove", { plane, workspace, repo, piece, force })),
 	/**  Land a piece in its clone, fast-forward only. Never pushes. */
 	worktreeMerge: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<Merged, string>(__TAURI_INVOKE("worktree_merge", { plane, workspace, repo, piece })),
+	/**
+	 *  Declare a piece done, from its row (charter#368).
+	 * 
+	 *  The operator speaking for the piece, which is theirs to call: the worker's own `charter
+	 *  worktree done` writes the same line from inside it. Recorded with no session or persona —
+	 *  the window is neither — and this machine's name, so the listing's claimant reads as the
+	 *  host. Refused, in the core's words, for a piece git no longer has.
+	 */
+	worktreeDone: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<null, string>(__TAURI_INVOKE("worktree_done", { plane, workspace, repo, piece })),
 	/**  Which channel this machine takes charter from: `stable` or `dev`. */
 	updateChannel: () => __TAURI_INVOKE<string>("update_channel"),
 	/**  Put this machine on a channel. A word charter does not know is refused, not guessed at. */
@@ -1788,6 +1797,11 @@ export type Piece = {
 	wired: boolean,
 	/**  Set when git still has a registration whose directory is gone. */
 	stale: boolean,
+	/**
+	 *  What the piece has said: `done`, `abandoned: <reason>`, `silent <age>` for a piece
+	 *  charter cut that has declared nothing, or empty (charter#368). An age, never a verdict.
+	 */
+	said: string,
 };
 
 /**  What the plane's pin says against this charter. */

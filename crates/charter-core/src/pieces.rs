@@ -1,10 +1,10 @@
 //! What a workspace's **pieces** — its linked worktrees — have said about themselves.
 //!
-//! A port of the read half of `charter/pieces.py`: the append-only event log, the heartbeat
-//! store beside it, and the two questions the footer asks of them — and of the ONE writer the
-//! hooks need, [`seen`], the heartbeat itself. Without it every piece a Rust-only session
-//! worked in would read as silent in the footer, because nothing else records that a worker
-//! is alive.
+//! A port of `charter/pieces.py`: the append-only event log, the heartbeat store beside it,
+//! and the questions the footer and the briefing ask of them. Two writers: [`seen`], the
+//! heartbeat the hooks keep, and [`record`], the log itself — `claimed` when `charter
+//! worktree add` cuts a piece, and the worker's own `done` or `abandoned` through [`declare`]
+//! (charter#368).
 //!
 //! # The vocabulary is closed, and it has no verdict in it
 //!
@@ -44,6 +44,193 @@ pub const DECLARATIONS: [&str; 2] = ["done", "abandoned"];
 /// `workspaces/<ws>/pieces`.
 pub fn dir_for(plane: &Path, ws: &str) -> PathBuf {
     plane.join("workspaces").join(ws).join(DIR_NAME)
+}
+
+/// One of the three things the log can say — the closed vocabulary [`EVENTS`] spells, as a
+/// type, so a caller cannot invent a fourth. There is no `failed`: see the module's heading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    /// charter cut the worktree. An observation, not a declaration.
+    Claimed,
+    /// The worker says the piece is finished.
+    Done,
+    /// The worker says it gave the piece up. Always carries a reason.
+    Abandoned,
+}
+
+impl Event {
+    /// The word written into the log.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Event::Claimed => "claimed",
+            Event::Done => "done",
+            Event::Abandoned => "abandoned",
+        }
+    }
+}
+
+/// Who a line in the log is from: the session, the persona and the machine.
+///
+/// Passed in rather than read here, so this module never reads the process environment and
+/// a test names exactly who it is recording as.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Who {
+    pub session: Option<String>,
+    pub persona: Option<String>,
+    /// The filename-safe host ([`crate::dispatch::host`]). The log is one file per machine.
+    pub host: String,
+}
+
+/// `workspaces/<ws>/pieces/<host>.jsonl` — this machine's log.
+pub fn log_path(plane: &Path, ws: &str, host: &str) -> PathBuf {
+    dir_for(plane, ws).join(format!("{host}.jsonl"))
+}
+
+/// Append one event — `pieces.record`. `None` when it could not be written.
+///
+/// The line carries `ts`, `event`, `repo`, `piece`, `session`, `host`, `persona` and, when
+/// there is one, `reason` — Python's closed `FIELDS`, and nothing git could answer: no
+/// branch, no path, no dirty flag (ADR 0011). Appended `O_APPEND` and `O_NOFOLLOW` through
+/// [`crate::dispatch::append`], so parallel workers need no lock and a link planted at the
+/// log is refused.
+#[allow(clippy::too_many_arguments)]
+pub fn record(
+    plane: &Path,
+    ws: &str,
+    event: Event,
+    repo: &str,
+    piece: &str,
+    reason: Option<&str>,
+    who: &Who,
+    when: DateTime<Utc>,
+) -> Option<PathBuf> {
+    let text = |v: &Option<String>| v.clone().map_or(Value::Null, Value::String);
+    let mut line = serde_json::Map::new();
+    line.insert("ts".into(), Value::String(iso_seconds(when)));
+    line.insert("event".into(), Value::String(event.word().into()));
+    line.insert("repo".into(), Value::String(repo.into()));
+    line.insert("piece".into(), Value::String(piece.into()));
+    line.insert("session".into(), text(&who.session));
+    line.insert("host".into(), Value::String(who.host.clone()));
+    line.insert("persona".into(), text(&who.persona));
+    if let Some(reason) = reason.filter(|r| !r.is_empty()) {
+        line.insert("reason".into(), Value::String(reason.into()));
+    }
+    crate::dispatch::append(&log_path(plane, ws, &who.host), plane, &Value::Object(line))
+}
+
+/// What a worker declares about the piece it stands in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Declaration<'a> {
+    Done,
+    /// The reason is required: it is what whoever picks the piece up reads first.
+    Abandoned {
+        reason: &'a str,
+    },
+}
+
+/// A declaration, written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declared {
+    pub event: Event,
+    /// The declaration this one was recorded over, as [`outcome`] reads it. It stays in the
+    /// log; only the latest counts.
+    pub over: Option<String>,
+}
+
+/// Why a declaration was not written.
+#[derive(Debug, thiserror::Error)]
+pub enum NotDeclared {
+    #[error("abandon needs a reason — it is what whoever picks this up reads first.")]
+    NoReason,
+    #[error(
+        "'{piece}' is not a worktree git has for {repo} in workspace '{ws}', so there is \
+         nothing to declare. `charter worktree list` shows what exists."
+    )]
+    NoSuchPiece {
+        ws: String,
+        repo: String,
+        piece: String,
+    },
+    #[error(transparent)]
+    Worktree(#[from] crate::worktree::Refusal),
+    #[error("could not write the piece log for workspace '{ws}', so nothing was declared")]
+    NotWritten { ws: String },
+}
+
+/// Record that the piece `(ws, repo, piece)` is done or abandoned — `commands_worktree._declare`.
+///
+/// **The piece must be one git has**, with its directory still there: a declaration about a
+/// worktree that does not exist would be a line every reader skips, and the worker would
+/// believe it had said something. Unlike [`record`] for a claim, a declaration that could not
+/// be written is an error, because the declaration IS the command's whole effect.
+pub fn declare(
+    plane: &Path,
+    ws: &str,
+    repo: &str,
+    piece: &str,
+    what: Declaration<'_>,
+    who: &Who,
+    when: DateTime<Utc>,
+) -> Result<Declared, NotDeclared> {
+    let (event, reason) = match what {
+        Declaration::Done => (Event::Done, None),
+        Declaration::Abandoned { reason } => {
+            let reason = reason.trim();
+            if reason.is_empty() {
+                return Err(NotDeclared::NoReason);
+            }
+            (Event::Abandoned, Some(reason))
+        }
+    };
+    let there = crate::worktree::list(plane, ws, repo)?
+        .into_iter()
+        .any(|p| p.piece == piece && p.prunable.is_none());
+    if !there {
+        return Err(NotDeclared::NoSuchPiece {
+            ws: ws.to_string(),
+            repo: repo.to_string(),
+            piece: piece.to_string(),
+        });
+    }
+    let over = declarations(plane, ws)
+        .get(&(repo.to_string(), piece.to_string()))
+        .map(|e| outcome(Some(e)));
+    record(plane, ws, event, repo, piece, reason, who, when)
+        .ok_or(NotDeclared::NotWritten { ws: ws.to_string() })?;
+    Ok(Declared { event, over })
+}
+
+/// How a claim reads in a listing — `pieces.claimant`: the persona, else the session, else the
+/// host. `unknown` when nobody claimed it: a worktree made by hand with plain git is
+/// first-class and simply has no claim.
+pub fn claimant(entry: Option<&Value>) -> String {
+    let field = |k: &str| {
+        entry
+            .and_then(|e| e.get(k))
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    field("persona")
+        .or_else(|| field("session"))
+        .or_else(|| field("host"))
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// What a piece has said, in one cell: its declaration ([`outcome`]), or `silent <age>` when
+/// it declared nothing and charter claimed it, or empty. An age, never a verdict: whether
+/// `silent 3d` is a problem is the reader's call.
+pub fn said(plane: &Path, ws: &str, repo: &str, piece: &str, now: DateTime<Utc>) -> String {
+    let declared = declarations(plane, ws);
+    let spoken = outcome(declared.get(&(repo.to_string(), piece.to_string())));
+    if !spoken.is_empty() {
+        return spoken;
+    }
+    match silence(plane, ws, repo, piece, now) {
+        Ok(Some(age)) => format!("silent {age}"),
+        _ => String::new(),
+    }
 }
 
 /// Where a tree's heartbeat lives.

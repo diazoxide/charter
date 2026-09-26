@@ -320,15 +320,16 @@ fn a_skills_code_block_line_is_a_suggestion_and_prose_outside_one_is_not() {
 
 #[test]
 fn the_scan_sees_a_suggestion_and_a_planned_one_is_let_through() {
-    let src = "fn f() { say(\"Fix it: charter wt add x\"); say(\"`charter change` is not in \\\n    this version yet\"); }\n// \"`charter nope`\"\n#[cfg(test)]\nmod t { \"`charter nope`\" }";
+    let src = "fn f() { say(\"Fix it: charter frob add x\"); say(\"`charter change` is not in \\\n    this version yet\"); }\n// \"`charter nope`\"\n#[cfg(test)]\nmod t { \"`charter nope`\" }";
     let found = literals(src);
     assert_eq!(found.len(), 2, "{found:?}");
     assert_eq!(
         suggestions(&found[0]),
-        vec![("wt".to_owned(), Some("add".to_owned()))]
+        vec![("frob".to_owned(), Some("add".to_owned()))]
     );
     assert!(found[1].contains(PLANNED), "the continuation is applied");
-    assert!(!exists("wt", Some("add")));
+    assert!(!exists("frob", Some("add")));
+    assert!(exists("wt", Some("add")), "charter#368 made this one real");
     assert!(exists("workspace", Some("live")));
     assert!(
         exists("ws", Some("todo")),

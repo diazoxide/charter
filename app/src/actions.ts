@@ -179,6 +179,9 @@ export type Does =
    *  the piece it means, the same way `tab.close:<id>` spells out its tab. */
   | { verb: "removeWorktree"; cut: Cut; force: boolean }
   | { verb: "mergeWorktree"; cut: Cut }
+  /** Records the piece `done` in its log, as `charter worktree done` run inside it would
+   *  (charter#368). Not destructive: the tree and the branch are left as they are. */
+  | { verb: "declareWorktreeDone"; cut: Cut }
   /** Makes a clone the spot the next chat starts in — the explorer's pick, one level up from a
    *  piece (charter-app#174). It starts nothing: the picker still asks, and the core still
    *  decides whether that directory can be started in. The path is the one the core spelled. */
@@ -431,6 +434,7 @@ export type Doing = {
    *  meant by looking at what happens to be in front (charter-app#174). */
   removeWorktree: (cut: Cut, force: boolean) => Promise<Ran>;
   mergeWorktree: (cut: Cut) => Promise<Ran>;
+  declareWorktreeDone: (cut: Cut) => Promise<Ran>;
   /** Makes that clone where the next chat starts. It starts nothing, so it answers no `Ran`. */
   pickClone: (repo: string, path: string) => void;
   /** Opens the picker for a new tab whose chat starts in that directory, and nowhere else. */
@@ -1050,6 +1054,14 @@ export function catalogue(now: Now): Offer[] {
         ? can(`worktree.merge:${idOf(cut)}`, title, { verb: "mergeWorktree", cut }, cut.piece)
         : cannot(`worktree.merge:${idOf(cut)}`, title, noPlane, cut.piece),
     );
+    // Beside the merge, above the line: a declaration writes one line to the piece log and
+    // touches neither the tree nor the branch (charter#368).
+    const done = `Mark worktree ${cut.piece} done`;
+    offers.push(
+      noPlane === undefined
+        ? can(`worktree.done:${idOf(cut)}`, done, { verb: "declareWorktreeDone", cut }, cut.piece)
+        : cannot(`worktree.done:${idOf(cut)}`, done, noPlane, cut.piece),
+    );
   }
 
   // ----- destructive, and therefore last -----
@@ -1280,6 +1292,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.removeWorktree(does.cut, does.force);
     case "mergeWorktree":
       return doing.mergeWorktree(does.cut);
+    case "declareWorktreeDone":
+      return doing.declareWorktreeDone(does.cut);
     case "pickClone":
       doing.pickClone(does.repo, does.path);
       return DID;

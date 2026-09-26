@@ -724,9 +724,11 @@ pub fn piece_announcement(root: &Path, payload: &Value, now: DateTime<Utc>) -> O
             ));
         }
         None => lines.push(format!(
-            "⬢ You hold piece **{piece}** of `{repo}` (workspace `{ws}`). Declaring a piece \
-             done or abandoned is not in this version yet, so a piece that declares nothing \
-             is reported as silent."
+            "⬢ You hold piece **{piece}** of `{repo}` (workspace `{ws}`). When you finish, \
+             declare it — nothing else will: `charter worktree done`, or `charter worktree \
+             abandon \"<why you stopped>\"` if you cannot. A piece that declares nothing is \
+             reported as silent, which is how a fleet that finished 7 of 8 stops reading as \
+             success."
         )),
     }
     let sid = payload.get("session_id").and_then(Value::as_str);
