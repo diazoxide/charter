@@ -174,9 +174,26 @@ fn lint_warns_about_the_draft_and_fails_on_a_dangling_reference() {
 #[test]
 fn the_doctor_runs_the_lint_for_the_personas_and_persona_grant_rows() {
     let tmp = daily();
+    // Nothing inherited, as `doctor.rs` runs it: a CI runner's environment is not the plane's.
     let json = |tmp: &tempfile::TempDir| -> serde_json::Value {
-        let doctor = charter(tmp, &["doctor", "--json"]);
-        serde_json::from_slice(&doctor.stdout).expect("doctor --json is JSON")
+        let root = std::fs::canonicalize(root(tmp)).unwrap();
+        let doctor = Command::new(env!("CARGO_BIN_EXE_charter"))
+            .args(["doctor", "--json"])
+            .current_dir(&root)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", tmp.path().join("home"))
+            .env("CHARTER_ROOT", &root)
+            .env("CHARTER_SESSION_ID", "fixture-session-1")
+            .output()
+            .expect("the binary runs");
+        serde_json::from_slice(&doctor.stdout).unwrap_or_else(|e| {
+            panic!(
+                "doctor --json is not JSON ({e}), exit {:?}:\n{}",
+                doctor.status.code(),
+                err(&doctor)
+            )
+        })
     };
     let row = |doc: &serde_json::Value, name: &str| -> serde_json::Value {
         doc.as_array()
