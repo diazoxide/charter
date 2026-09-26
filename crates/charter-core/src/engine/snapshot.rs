@@ -5,7 +5,12 @@
 //!
 //! A wide character pushed into the last column, where the terminal has no room for the
 //! second half it needs, is drawn as a blank in its colours: printing it there would wrap it
-//! onto the next row.
+//! onto the next row. That holds for the cell reprinted to leave a wrap pending as well.
+//!
+//! The second half of a wide character is written in the character's own pen. In the original
+//! it can hold another character's pen, after cells deleted beside it shifted that one in.
+//! The pane never holds such a pen: xterm.js writes the second half in the pen of the write
+//! that makes it, and writes it again whenever either half is overwritten.
 //!
 //! A wrap mark is carried only where wrapping can put it back: not on the bottom row, which
 //! has nothing below it to continue onto, and not on the row the cursor waits to wrap from,
@@ -63,14 +68,9 @@ pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
                 continue;
             }
             let cell = &row[column];
-            if column.0 + 1 == columns && cell.flags.contains(Flags::WIDE_CHAR) {
-                // A wide character with no room for its second half, pushed into the last
-                // column by cells being inserted. Printing it here would wrap it onto the
-                // next row instead, so its colours are drawn as the blank they surround.
-                out.blank(cell);
+            if !out.drawable_cell(cell, column, columns) {
                 continue;
             }
-            out.cell(cell);
             if cell.flags.contains(Flags::WIDE_CHAR)
                 && !(column.0 + 1 < columns
                     && row[column + 1].flags.contains(Flags::WIDE_CHAR_SPACER))
@@ -143,7 +143,7 @@ pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
             column -= 1;
         }
         out.move_to_point(cursor.point.line, column);
-        out.cell(&row[column]);
+        out.drawable_cell(&row[column], column, columns);
     } else {
         out.move_to(cursor);
     }
@@ -214,6 +214,22 @@ impl Out {
                 None => self.bytes.push_str("\x1b]8;;\x1b\\"),
             }
             self.link = link;
+        }
+    }
+
+    /// `cell` in `column` of a row `columns` wide, as it can be drawn there. Returns whether
+    /// the cell was drawn as itself.
+    ///
+    /// A wide character pushed into the last column by cells being inserted has no room for
+    /// its second half. Printed there, it would wrap onto the next row instead, or scroll the
+    /// screen from the bottom row. So its colours are drawn as the blank they surround.
+    fn drawable_cell(&mut self, cell: &Cell, column: Column, columns: usize) -> bool {
+        if column.0 + 1 == columns && cell.flags.contains(Flags::WIDE_CHAR) {
+            self.blank(cell);
+            false
+        } else {
+            self.cell(cell);
+            true
         }
     }
 

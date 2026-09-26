@@ -491,6 +491,19 @@ mod snapshot_tests {
                         {
                             flags &= !Flags::WRAPLINE;
                         }
+                        if flags.contains(Flags::WIDE_CHAR_SPACER) {
+                            // The second half of the wide character to its left. Cells
+                            // deleted beside it can leave it with another character's pen.
+                            // The pane, xterm.js, never holds such a pen: it writes the second
+                            // half in the pen of the write that makes it, and writes it again
+                            // in the current pen when either half is overwritten. So its own
+                            // colours, attributes and link are not compared. Whether the line
+                            // wraps after it still is.
+                            return format!(
+                                "second half of the wide character to its left {:?}",
+                                flags & (Flags::WIDE_CHAR_SPACER | Flags::WRAPLINE)
+                            );
+                        }
                         // A cell that once carried a combining character keeps an empty
                         // place for one, which is not a difference anything can see.
                         let zerowidth = cell.zerowidth().filter(|marks| !marks.is_empty());
@@ -619,6 +632,23 @@ mod snapshot_tests {
     #[test]
     fn a_snapshot_keeps_wide_and_combining_characters() {
         assert_rebuilt("e\u{301} \u{4e2d}\u{6587}\r\n0123456789a\u{4e2d}".as_bytes());
+    }
+
+    #[test]
+    fn a_snapshot_draws_a_wide_character_whose_second_half_came_from_another_one() {
+        // Deleting cells at the second half of a wide character shifts the second half of
+        // the next one into its place, in a different pen. Nothing draws a second half, and a
+        // terminal writes it in the pen of the character it belongs to.
+        assert_rebuilt("\u{4e2d}\u{4e2d}\x1b[7m\r\u{4e2d}\x08\x1b[2P".as_bytes());
+    }
+
+    #[test]
+    fn a_snapshot_keeps_a_wide_character_pushed_into_the_last_column_while_a_wrap_is_pending() {
+        // Inserting a character pushes the wide one into the last column, where it has no
+        // room for its second half. With wrapping off, the next wide character is dropped
+        // there and leaves a wrap pending on that cell. Printed again as it is, the wide
+        // character wraps onto a new line and scrolls the screen.
+        assert_rebuilt("\x1b[1;11H\u{4e2d}\x1b[4h\ra\x1b[?7l\x1b[1;12H\u{4e2d}".as_bytes());
     }
 
     #[test]
