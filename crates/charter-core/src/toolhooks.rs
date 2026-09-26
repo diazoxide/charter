@@ -481,8 +481,9 @@ fn memnudge_bump(hook: &Hook) -> u64 {
     let Some(file) = memnudge_file(hook) else {
         return 0;
     };
-    let n = std::fs::read_to_string(&file)
-        .ok()
+    let n = hook
+        .state()
+        .read_text(&file)
         .and_then(|t| crate::memstore::py_strip(&t).parse::<u64>().ok())
         .unwrap_or(0)
         + 1;
@@ -712,8 +713,9 @@ fn agent_id() -> &'static Regex {
 /// `_agent_map_remember`.
 fn agent_map_remember(hook: &Hook, agent_id: &str, persona: &str) {
     let file = agent_map_file(hook);
-    let mut data = std::fs::read_to_string(&file)
-        .ok()
+    let mut data = hook
+        .state()
+        .read_text(&file)
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| match v {
             Value::Object(map) => Some(map),
@@ -730,7 +732,7 @@ fn agent_map_remember(hook: &Hook, agent_id: &str, persona: &str) {
 
 /// `_agent_map_lookup`.
 fn agent_map_lookup(hook: &Hook, target: &str) -> Option<String> {
-    let text = std::fs::read_to_string(agent_map_file(hook)).ok()?;
+    let text = hook.state().read_text(&agent_map_file(hook))?;
     let data: Value = serde_json::from_str(&text).ok()?;
     let found = data.get(target)?;
     truthy(Some(found)).then(|| crate::pyrepr::str_json(found))

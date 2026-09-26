@@ -63,6 +63,20 @@ impl State {
         self.dir.join("vaults")
     }
 
+    /// A state file's text, read as it is written: never through a link at the file or on
+    /// the way from the trust root, and only a plain file (#440). `None` for a file that is
+    /// missing, refused, or not UTF-8 — every hook reader already treats "cannot read it" as
+    /// "nothing recorded".
+    pub fn read_text(&self, path: &Path) -> Option<String> {
+        crate::contain::read_text_no_link(&self.trust, path).ok()
+    }
+
+    /// [`State::read_text`] as the IO answer, for a reader that tells "not there" (a record
+    /// never made) from "there but refused" (a record it must not trust).
+    pub fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        crate::contain::read_no_link(&self.trust, path)
+    }
+
     /// `config.private_mkdir`.
     pub fn mkdir(&self, dir: &Path) -> io::Result<()> {
         crate::plane::private_dir(&self.trust, dir)
@@ -201,6 +215,41 @@ mod tests {
         state.remove(&file).unwrap();
         state.remove(&file).unwrap();
         assert!(!file.exists());
+    }
+
+    /// #440: state is read as it is written — never through a link at the file or on the way.
+    #[cfg(unix)]
+    #[test]
+    fn state_is_never_read_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let state = State {
+            dir: root.join(".charter"),
+            trust: root.clone(),
+        };
+        let file = state.sessions().join("s.memnudge");
+        state.write(&file, b"3").unwrap();
+        assert_eq!(state.read_text(&file).as_deref(), Some("3"));
+
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::write(elsewhere.path().join("theirs"), b"7").unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path().join("theirs"), &file).unwrap();
+        assert_eq!(
+            state.read_text(&file),
+            None,
+            "read through a link at the file"
+        );
+
+        std::fs::remove_dir_all(root.join(".charter")).unwrap();
+        std::fs::create_dir_all(elsewhere.path().join("sessions")).unwrap();
+        std::fs::write(elsewhere.path().join("sessions/s.memnudge"), b"7").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.join(".charter")).unwrap();
+        assert_eq!(
+            state.read_text(&file),
+            None,
+            "read through a linked .charter"
+        );
     }
 
     #[cfg(unix)]

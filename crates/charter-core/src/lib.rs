@@ -44,6 +44,7 @@ pub mod instructions;
 pub mod inventory;
 pub mod layer;
 pub mod leakguard;
+pub mod leftovers;
 pub mod livesub;
 pub mod machine;
 pub mod manifest;

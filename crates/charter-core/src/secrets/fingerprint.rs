@@ -33,26 +33,34 @@ pub fn key_path(ctx: &Ctx) -> PathBuf {
 
 /// `_key`: the plane's key, generating it on first use; `None` when it can be neither read
 /// nor made.
-fn key(p: &Path) -> Option<Vec<u8>> {
-    if let Ok(existing) = std::fs::read(p)
-        && existing.len() == KEY_BYTES
-    {
-        return Some(existing);
+///
+/// Read and written from `trust` ([`Ctx::trust`]), never through a link (#440): a key that is
+/// a link, or a `.charter/` that is one, gives no key at all — a linked file of the right
+/// length would otherwise BE the key — and no new key is written there either.
+fn key(trust: &Path, p: &Path) -> Option<Vec<u8>> {
+    match crate::contain::read_no_link(trust, p) {
+        Ok(existing) if existing.len() == KEY_BYTES => return Some(existing),
+        // A key of the wrong length is regenerated, never used short.
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return None,
     }
     let parent = p.parent()?;
+    // Gated before the directory is made, so a linked `.charter/` is not made through either.
+    crate::contain::no_link_on_the_way(trust, parent).ok()?;
     super::make_private_dir(parent).ok()?;
     let mut new = [0u8; KEY_BYTES];
     getrandom::fill(&mut new).ok()?;
     // Replaced whole, 0600 before a byte of the key lands, and never through a link (#434):
     // a link at the key is refused, and a crash leaves the old key rather than a short one
     // the next run would silently regenerate.
-    crate::rewrite::replace(parent, p, &new, crate::rewrite::Mode::Secret).ok()?;
+    crate::rewrite::replace(trust, p, &new, crate::rewrite::Mode::Secret).ok()?;
     Some(new.to_vec())
 }
 
 /// `fingerprint`: 12 hex characters of `HMAC-SHA256(key, value)`, or `None` with no key.
 pub fn fingerprint(ctx: &Ctx, value: &str) -> Option<String> {
-    let k = key(&key_path(ctx))?;
+    let k = key(ctx.trust(), &key_path(ctx))?;
     let mut mac = Hmac::<Sha256>::new_from_slice(&k).ok()?;
     mac.update(value.as_bytes());
     let digest = mac.finalize().into_bytes();

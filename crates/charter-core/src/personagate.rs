@@ -618,7 +618,8 @@ pub fn snapshot(plane: &Path, sid: &str) -> BTreeMap<String, Vec<String>> {
 pub fn frozen_tools(plane: &Path, name: &str, sid: Option<&str>) -> Option<BTreeSet<String>> {
     let sid = sid?;
     let state = State::of(plane);
-    let data: serde_json::Value = match std::fs::read(ceiling_file(&state, sid)) {
+    // Read as it is written, never through a link (#440).
+    let data: serde_json::Value = match state.read(&ceiling_file(&state, sid)) {
         Ok(bytes) => match String::from_utf8(bytes)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -626,6 +627,9 @@ pub fn frozen_tools(plane: &Path, name: &str, sid: Option<&str>) -> Option<BTree
             Some(doc) => doc,
             None => return Some(BTreeSet::new()),
         },
+        // A ceiling that is there but refused — a link, a FIFO — is one charter cannot
+        // confirm, and a grant charter cannot confirm is no grant.
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Some(BTreeSet::new()),
         Err(_) => {
             // `_ceiling_was_taken`: a marker that exists, or cannot even be asked about, means
             // the ceiling was taken and has since gone — which is not permission to take it
@@ -890,6 +894,29 @@ mod tests {
         std::fs::remove_file(root.join(".charter/sessions/s1.tools")).unwrap();
         assert_eq!(asking("gh pr list"), None);
         assert!(!root.join(".charter/sessions/s1.tools").exists());
+    }
+
+    /// #440: a ceiling that is a link is never read. Whatever it points at could grant any
+    /// tool; a grant charter cannot confirm is no grant, so nothing runs without a prompt.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_ceiling_that_is_a_link_grants_nothing() {
+        let (_d, root) = plane("gh");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let theirs = elsewhere.path().join("wide.tools");
+        std::fs::write(&theirs, r#"{"ops": ["gh", "rm"]}"#).unwrap();
+        std::fs::create_dir_all(root.join(".charter/sessions")).unwrap();
+        std::os::unix::fs::symlink(&theirs, root.join(".charter/sessions/s1.tools")).unwrap();
+
+        assert_eq!(
+            frozen_tools(&root, "ops", Some("s1")),
+            Some(BTreeSet::new()),
+            "the linked ceiling was read as a grant"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&theirs).unwrap(),
+            r#"{"ops": ["gh", "rm"]}"#
+        );
     }
 
     #[test]

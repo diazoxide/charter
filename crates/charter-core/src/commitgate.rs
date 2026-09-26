@@ -207,8 +207,9 @@ impl Cooldown {
 
     /// Whether the gate is still quiet — and if it is, one prompt fewer to wait.
     fn counting_down(&self) -> bool {
-        let left: u32 = std::fs::read_to_string(&self.file)
-            .ok()
+        let left: u32 = self
+            .state
+            .read_text(&self.file)
             .and_then(|text| text.trim().parse().ok())
             .unwrap_or(0);
         if left == 0 {

@@ -144,3 +144,63 @@ fn a_key_that_is_a_link_is_refused_and_its_target_is_untouched() {
     assert_eq!(std::fs::read(&theirs).unwrap(), b"THEIRS");
     assert!(key_path(&ctx).is_symlink());
 }
+
+/// #440: a key that is a link to a file of the right length is never READ either — a linked
+/// 32-byte file would otherwise be used as the key. No fingerprint is printed, and the file
+/// it points at is untouched.
+#[cfg(unix)]
+#[test]
+fn a_key_that_links_to_a_32_byte_file_is_never_used_as_the_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = plane(&tmp);
+    std::fs::create_dir_all(&ctx.state).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join("theirs");
+    let known: Vec<u8> = (0u8..32).collect();
+    std::fs::write(&theirs, &known).unwrap();
+    std::os::unix::fs::symlink(&theirs, key_path(&ctx)).unwrap();
+
+    assert_ne!(
+        fingerprint(&ctx, "hunter2").as_deref(),
+        Some(KNOWN_KEY_HUNTER2),
+        "the linked file was used as the key"
+    );
+    assert_eq!(fingerprint(&ctx, "hunter2"), None);
+    assert_eq!(std::fs::read(&theirs).unwrap(), known);
+    assert!(key_path(&ctx).is_symlink());
+}
+
+/// #440: a `.charter/` that is itself a link is refused for the key: no key is read from
+/// where it points, and none is written there.
+#[cfg(unix)]
+#[test]
+fn a_state_directory_that_is_a_link_is_neither_read_nor_written_for_the_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = plane(&tmp);
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), &ctx.state).unwrap();
+
+    assert_eq!(fingerprint(&ctx, "hunter2"), None, "no key is made there");
+    assert!(!elsewhere.path().join(KEY_FILE).exists());
+
+    let known: Vec<u8> = (0u8..32).collect();
+    std::fs::write(elsewhere.path().join(KEY_FILE), &known).unwrap();
+    assert_eq!(
+        fingerprint(&ctx, "hunter2"),
+        None,
+        "no key is read from there"
+    );
+}
+
+/// A `$CHARTER_HOME` outside the plane is the operator's own choice of directory: its key is
+/// read and made there as before.
+#[test]
+fn a_charter_home_outside_the_plane_still_keeps_its_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("state").to_string_lossy().into_owned();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[("CHARTER_HOME", &state)]));
+    let first = fingerprint(&ctx, "hunter2").expect("a key is made");
+    assert_eq!(fingerprint(&ctx, "hunter2"), Some(first));
+    assert!(home.path().join("state").join(KEY_FILE).is_file());
+}

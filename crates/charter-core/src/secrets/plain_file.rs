@@ -31,11 +31,18 @@ pub fn file_path(ctx: &Ctx, vault: &Vault) -> Result<PathBuf, VaultError> {
 /// `_load`: the vault's JSON object. **Never writes.** A missing file is an empty vault.
 pub fn load(ctx: &Ctx, vault: &Vault, what: &str) -> Result<Map<String, Value>, VaultError> {
     let p = file_path(ctx, vault)?;
-    if !p.exists() {
-        return Ok(Map::new());
-    }
-    let text = std::fs::read_to_string(&p)
-        .map_err(|e| VaultError::new(format!("vault file {} cannot be read: {e}", p.display())))?;
+    // Gated from the vault's own directory — the file alone — as its writer is (#429): a
+    // vault that is a link is refused, never read (#440).
+    let text = match crate::contain::read_text_no_link(beside(&p), &p) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
+        Err(e) => {
+            return Err(VaultError::new(format!(
+                "vault file {} cannot be read: {e}",
+                p.display()
+            )));
+        }
+    };
     let text = if text.is_empty() { "{}" } else { text.as_str() };
     let data: Value = serde_json::from_str(text).map_err(|e| {
         VaultError::new(format!(
@@ -155,9 +162,16 @@ fn meta_path(p: &Path) -> PathBuf {
     p.with_file_name(format!("{stem}.meta.json"))
 }
 
+/// The directory `p` is in, which a vault file is gated from: the operator chose where the
+/// vault lives, and the directories above it may be links honestly.
+fn beside(p: &Path) -> &Path {
+    p.parent().unwrap_or(Path::new("."))
+}
+
 fn load_meta(p: &Path) -> Map<String, Value> {
     let mp = meta_path(p);
-    std::fs::read_to_string(&mp)
+    // A rotation record that is a link reads as no record (#440).
+    crate::contain::read_text_no_link(beside(&mp), &mp)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(if t.is_empty() { "{}" } else { &t }).ok())
         .and_then(|v| v.as_object().cloned())
