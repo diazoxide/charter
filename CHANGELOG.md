@@ -25,8 +25,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Safe remove, Compact & improve, and Add curation action, each naming a new skill in charter's
   plugin (`safe-remove`, `compact`, `add-curation-action`). A persona adds its own as
   `personas/<name>/curation/<id>.md`, or with `charter persona curation add`, and
-  `charter persona lint` reports one that is broken or that takes a built-in's name. The app's
-  Curate menu comes in a later release (ADR 0061).
+  `charter persona lint` reports one that is broken or that takes a built-in's name. A prompt
+  types a literal brace as `{{` or `}}`, so `{{word}}` types `{word}`. `charter` is now a
+  reserved persona name, because its actions would read `charter/<id>` like the built-ins:
+  `charter persona create charter` is refused, and a persona that already has the name is
+  reported by `charter persona lint` and offers no curation actions. The app's Curate menu
+  comes in a later release (ADR 0061).
 - **The plane root is the first tab of the workspace strip.** It is always there, drawn as an
   icon (its tooltip: *Plane — chats here start at the plane root*), and it cannot be dragged,
   pinned, renamed or deleted. Its menu starts a chat or a shell at the plane root, and so do

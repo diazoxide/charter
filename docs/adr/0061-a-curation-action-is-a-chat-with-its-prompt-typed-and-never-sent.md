@@ -116,8 +116,9 @@ hooks are not trusted yet, has no skills from charter.
 
 - A persona's `extends:` does not carry its curation actions. Each persona offers only its own
   files, so an action meant for a family is declared once per persona or on the parent alone.
-- `{word}` in a prompt is always a variable. A prompt that needs literal braces around a word
-  (a template language, say) cannot have them.
+- ~~`{word}` in a prompt is always a variable. A prompt that needs literal braces around a word
+  (a template language, say) cannot have them.~~ Lifted by the amendment of 2026-09-26 below:
+  `{{word}}` types `{word}`.
 - Every persona's actions on persona subjects are offered on every persona. A persona cannot
   scope an action to "only personas I own".
 
@@ -129,3 +130,35 @@ hooks are not trusted yet, has no skills from charter.
 - **`steward` as the built-ins' runner.** It is one plane's persona name, not charter's.
 - **YAML frontmatter.** `persona.md` has line-based frontmatter, and a second parser for the
   same shape of file would be a second answer to what a key means.
+
+## Amendment, 2026-09-26: the name `charter` is reserved, and `{{` `}}` escape a brace
+
+Two gaps this decision left open, closed the day it was accepted.
+
+**A persona named `charter` could pass its own action off as a built-in.** Its ids read
+`charter/<id>`, the built-ins' namespace, so a file with an id no built-in uses looked like one
+in every menu. The id and label checks above cannot see it, because nothing about the file
+clashes; the persona's name does. So `charter` is a reserved persona name, beside the leading
+`_` charter already keeps for its own namespaces (`personas::RESERVED`, one function,
+`reserved_refusal`, asked by all three readers):
+
+- `charter persona create charter` is refused with a sentence saying why.
+- A persona that already has the name is not made unusable: it still loads, runs and can be
+  removed, because the reservation is not part of the name grammar every command checks
+  (`shape_refusal`). `charter persona lint` reports it as an error.
+- `curation::parse` refuses every file under `personas/charter/curation/`, so `resolve` leaves
+  each out with the usual warning naming the file, and `charter persona curation add charter`
+  writes nothing.
+
+The comparison ignores case, though the persona alphabet is lowercase and already refuses
+`Charter`.
+
+**A literal `{word}` could not be typed.** Now `{{` is a literal `{` and `}}` a literal `}`, the
+convention of Rust's `format!` and Python's `str.format`, read in the same single pass as the
+variables: nothing is expanded twice, and a substituted value is still never scanned, so a
+value holding `{{` is typed as it is. `{{word}}` types `{word}` and is not a variable, so lint
+accepts it; `{{{subject.name}}}` types the name in braces. A lone `}` stays text, as it was,
+rather than becoming an error the way it is in `format!`, so no prompt that parsed before stops
+parsing. What moves: `{{subject.name}}` used to type the name in braces and now types
+`{subject.name}`, and `}}` used to type two braces and now types one. Curation actions shipped
+in no release before this, so no plane holds a prompt that relied on either.

@@ -137,6 +137,10 @@ pub fn create(
         say(Say::Fail(refused));
         return 1;
     }
+    if let Some(reserved) = crate::personas::reserved_refusal(name) {
+        say(Say::Fail(format!("{reserved}. Choose another name")));
+        return 1;
+    }
     let existing = crate::personas::def_path(root, name);
     if existing.exists() && !ask.force {
         say(Say::Fail(format!(

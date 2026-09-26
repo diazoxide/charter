@@ -177,6 +177,27 @@ pub fn valid_name(name: &str) -> bool {
     name != SHARED && crate::contain::persona_name_ok(name)
 }
 
+/// Persona names charter keeps for itself. `charter` is one because `charter/<id>` is how its
+/// own curation actions are named (ADR 0061): a persona called that could declare
+/// `charter/<id>` for an id no built-in uses and pass it off as one.
+pub const RESERVED: [&str; 1] = ["charter"];
+
+/// Why `name` is one of [`RESERVED`], or `None`. Not part of [`shape_refusal`]: a persona that
+/// already has the name must still load, lint and be removed, so only `persona create` refuses
+/// it outright; `persona lint` reports it and curation drops its actions. Compared without
+/// regard to case, though [`valid_name`] already admits lowercase only.
+pub fn reserved_refusal(name: &str) -> Option<String> {
+    RESERVED
+        .iter()
+        .find(|r| r.eq_ignore_ascii_case(name))
+        .map(|r| {
+            format!(
+                "the persona name '{r}' is reserved — `{r}/<id>` names charter's own actions, \
+                 so this one would pass as a built-in"
+            )
+        })
+}
+
 /// The definition file: `personas/<name>/persona.md`, else the legacy flat
 /// `personas/<name>.md`, else the first — where a writer would create one.
 pub fn def_path(root: &Path, name: &str) -> PathBuf {

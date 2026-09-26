@@ -384,3 +384,16 @@ fn a_plane_with_no_personas_has_nothing_to_lint() {
     let (rc, heard) = run(&p, None, None);
     assert_eq!((rc, heard.err.as_str()), (0, "• No personas to lint.\n"));
 }
+
+#[test]
+fn a_persona_named_charter_is_an_error_because_the_name_is_reserved() {
+    let p = plane(&[("charter", &clean("charter"))]);
+    assert_eq!(
+        messages(&linter(&p).definition("charter")),
+        vec![(
+            Level::Error,
+            "the persona name 'charter' is reserved — `charter/<id>` names charter's own \
+             actions, so this one would pass as a built-in. Rename the persona"
+        )]
+    );
+}

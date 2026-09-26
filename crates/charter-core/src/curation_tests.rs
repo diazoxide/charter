@@ -142,9 +142,11 @@ fn an_unknown_template_variable_is_an_error_naming_it() {
         errors(&parsed),
         vec![
             "the prompt uses {vault.token}, which is not a variable — only {subject.kind}, \
-             {subject.name}, {subject.path} and {plane.root} are",
+             {subject.name}, {subject.path} and {plane.root} are; write {{ and }} for a literal \
+             brace",
             "the prompt uses {env.HOME}, which is not a variable — only {subject.kind}, \
-             {subject.name}, {subject.path} and {plane.root} are",
+             {subject.name}, {subject.path} and {plane.root} are; write {{ and }} for a literal \
+             brace",
         ]
     );
 }
@@ -281,6 +283,101 @@ fn rendering_refuses_an_unknown_variable() {
     assert_eq!(
         render("hi {subject.owner}", &vars()),
         Err(vec!["subject.owner".to_string()])
+    );
+}
+
+// ------------------------------------------------------------------------------------------
+// Escaping: `{{` is a literal `{` and `}}` a literal `}`, in the same one pass
+
+#[test]
+fn a_doubled_brace_renders_as_one_literal_brace() {
+    let out = render("a set is {{}} and a map is {{\"k\": 1}}", &vars()).unwrap();
+    assert_eq!(out, "a set is {} and a map is {\"k\": 1}");
+}
+
+#[test]
+fn a_word_in_doubled_braces_is_literal_text_and_not_a_variable() {
+    assert_eq!(
+        template_problems("write {{word}} and {{subject.name}}"),
+        Vec::<String>::new()
+    );
+    let out = render("write {{word}} and {{subject.name}}", &vars()).unwrap();
+    assert_eq!(out, "write {word} and {subject.name}");
+}
+
+#[test]
+fn a_variable_inside_escaped_braces_is_still_substituted() {
+    // As in Rust's `format!` and Python's `str.format`: `{{` `{subject.name}` `}}`.
+    let out = render("{{{subject.name}}}", &vars()).unwrap();
+    assert_eq!(out, "{web}");
+}
+
+#[test]
+fn text_that_is_not_ascii_renders_around_braces_unchanged() {
+    let out = render("é {subject.name} — ü}}ï{{ö", &vars()).unwrap();
+    assert_eq!(out, "é web — ü}ï{ö");
+}
+
+#[test]
+fn a_lone_closing_brace_stays_text_as_it_always_was() {
+    let out = render("a } b }}} c", &vars()).unwrap();
+    assert_eq!(out, "a } b }} c");
+}
+
+#[test]
+fn an_escaped_brace_in_a_substituted_value_is_never_unescaped() {
+    // One pass: a value holding `{{` is typed as it is.
+    let mut v = vars();
+    v.name = "{{x}}".into();
+    assert_eq!(render("{subject.name}", &v).unwrap(), "{{x}}");
+}
+
+#[test]
+fn a_file_whose_prompt_escapes_a_word_in_braces_is_an_action() {
+    let parsed = parse(
+        "ops",
+        "x",
+        "---\nlabel: X\non: workspace\n---\n\nFill in {{placeholder}} for {subject.name}.\n",
+    );
+    assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+    assert!(parsed.action.is_some());
+}
+
+// ------------------------------------------------------------------------------------------
+// The persona name `charter` is reserved: its `charter/<id>` would pass as a built-in
+
+#[test]
+fn a_file_declared_by_a_persona_named_charter_is_an_error_and_not_an_action() {
+    let parsed = parse("charter", "lookalike", REVIEW);
+    assert!(parsed.action.is_none());
+    assert_eq!(
+        errors(&parsed),
+        vec![
+            "the persona name 'charter' is reserved — `charter/<id>` names charter's own \
+             actions, so this one would pass as a built-in. Rename the persona"
+        ]
+    );
+}
+
+#[test]
+fn a_persona_named_charter_has_its_actions_dropped_with_a_warning_that_names_them() {
+    let dir = plane(&["charter", "ops"], &["web"], None);
+    let root = dir.path();
+    declare(root, "charter", "lookalike", REVIEW);
+    declare(root, "ops", "review", REVIEW);
+    let got = resolve(root, &ws("web")).unwrap();
+    assert_eq!(
+        ids(&got),
+        vec!["charter/safe-remove", "charter/compact", "ops/review"]
+    );
+    assert_eq!(
+        got.warnings,
+        vec![
+            "personas/charter/curation/lookalike.md is not offered: the persona name 'charter' \
+             is reserved — `charter/<id>` names charter's own actions, so this one would pass \
+             as a built-in. Rename the persona. `charter persona lint charter` lists every \
+             problem"
+        ]
     );
 }
 
