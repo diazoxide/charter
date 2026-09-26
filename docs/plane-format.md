@@ -902,7 +902,9 @@ Two rules hold for the whole area and are not repeated per file:
   Commands: `workspace create`/`use`/`clone` (through `ensure`),
   `workspace snapshot` (`charter/commands_workspace.py:942`),
   `workspace fork` (`charter/commands_workspace.py:1719`),
-  `workspace rename` (`charter/workspace.py:1488`),
+  `workspace rename` (`charter/workspace.py:1488`; in charter-app `wscmd::rename`, which
+  rewrites `name` and keeps the owner: a manifest charter stamped is stamped again, one a hand
+  wrote stays unstamped),
   `workspace reinit` (backfill, `charter/workspace.py:4645`).
 - **Read by:** `workspace.read_manifest` (`charter/workspace.py:1500`), `manifest_owner`
   (`charter/workspace.py:1556`), `restore` (`charter/commands_workspace.py:955`), `fork`
@@ -1477,6 +1479,7 @@ a command acts on, or record workspace state.
 | `.charter/workspace-tab-order` | one workspace name per line, the tab strip's order | stable — the frame and the palette read the order another process wrote; deleting it costs the order, which the next launch recomputes (`charter/workspace.py:1066`) | `charter/workspace.py:978`, written `charter/workspace.py:1023` |
 | `.charter/workspace-arrivals/<name>` | empty file; its existence marks "a handoff landed here" | stable — one process records the arrival, another reads it; deleting it clears the mark only | `charter/workspace.py:1113`, `charter/workspace.py:1127` |
 | `.charter/unrecorded/<sha256(realpath(tree))[:32]>.json` | `{"errno": …, "says": …}` for a marker publish that failed | stable — `doctor` reads it in another process; recomputed on the next failed publish | `charter/workspace.py:2960`, written `charter/workspace.py:2977` |
+| `.charter/workspace-rename.json` | **charter-app only** (charter#367). `{"from": <old>, "to": <new>, "moved": <bool>}`, JSON, 0600, replaced whole by `rewrite::replace`: the journal of a `charter workspace rename` in progress. Written before `workspaces/<old>` is renamed, marked `moved` right after (the commit point), and removed once every record that names the workspace has followed. While one that got past the commit point is there, every other rename is refused and the same rename finishes it. One that never moved is stale and the next rename replaces it | stable — a second process (the next rename) reads what the first wrote; deleting it after the move leaves the records the rename had not reached yet naming the old name | `crates/charter-core/src/wscmd/rename.rs` |
 | `.charter/ws-autosave/<ws>` | debounce marker (mtime + a float) for the Stop-hook autosave | internal — deleting it costs one extra commit attempt | `charter/commands_workspace.py:1171`, written `charter/commands_workspace.py:1179` |
 
 Resolution order (`workspace.chosen`, `charter/workspace.py:615`–`649`, and `resolve`
@@ -3483,7 +3486,7 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Fields:**
   - `at`: epoch seconds
   - `target`: `plane`, or `repo:<workspace>/<name>`
-  - `trigger`: one of `manual`, `quiet`, `session-end`, `quit`, `launch`, `cli`, `live`
+  - `trigger`: one of `manual`, `quiet`, `session-end`, `quit`, `launch`, `cli`, `live`, `rename`
   - `mode`
   - `files`: a count
   - `commit`: a sha or null. For a repo, HEAD once the save was done with it — the commit it

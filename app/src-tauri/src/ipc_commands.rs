@@ -79,6 +79,7 @@ macro_rules! app_commands {
                 live::workspace_live,
                 workspaces::workspace_at_risk,
                 workspaces::workspace_remove,
+                workspaces::workspace_rename,
                 workspaces::workspace_focused,
                 workspaces::reachable_repos,
                 workspaces::take_repos,

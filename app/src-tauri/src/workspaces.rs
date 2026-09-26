@@ -296,6 +296,72 @@ fn remove_in(root: &Path, workspace: &str, force: bool) -> Result<Vec<String>, R
     })
 }
 
+/// Rename a workspace: `charter workspace rename <workspace> <name>` (charter#367).
+///
+/// **The core decides and does everything**: which names are refused, the move, the worktree
+/// repair, every record that names the workspace — the app's record on disk and this machine's
+/// pins included — and the plane save a LIVE workspace's move takes. This layer adds the one
+/// thing only the window knows, which chats are running in it: a running chat refuses the
+/// rename, named as its tab names it. Once renamed, what the window holds in memory follows
+/// ([`crate::chats::Chats::follow`]), or its next write of the record would put the old name
+/// back.
+// Its plane is a `PlaneId` the registry vouches for; see `workspace_create`.
+#[tauri::command]
+#[specta::specta]
+pub async fn workspace_rename(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    name: String,
+) -> Result<Vec<String>, String> {
+    let held = planes.held(&plane)?;
+    let config = planes.config().map(Path::to_path_buf);
+    tauri::async_runtime::spawn_blocking(move || {
+        rename_in(&held, config.as_deref(), &workspace, &name)
+    })
+    .await
+    .map_err(|err| format!("the rename did not finish: {err}"))?
+}
+
+/// The rename itself, against a plane the registry holds.
+pub(crate) fn rename_in(
+    held: &crate::planes::Held,
+    config_root: Option<&Path>,
+    workspace: &str,
+    name: &str,
+) -> Result<Vec<String>, String> {
+    let root = held.root().to_path_buf();
+    let chats = held.chats();
+    let on_disk = charter_core::workspaces::Plane::open(&root);
+    // Under either name, so a rename finished after a crash is guarded as well.
+    let running: Vec<String> = chats
+        .open_now()
+        .into_iter()
+        .filter(|one| {
+            one.cwd
+                .as_deref()
+                .and_then(|cwd| on_disk.workspace_of(cwd))
+                .is_some_and(|ws| ws == workspace || ws == name)
+        })
+        .filter_map(|one| chats.shown_name(one.session))
+        .collect();
+    let mut said = Vec::new();
+    let code = wscmd::rename::rename(
+        &wscmd::rename::Request {
+            root: &root,
+            old: workspace,
+            new: name,
+            running: &running,
+            config_root,
+        },
+        &mut |line: Say| said.push(line),
+    );
+    if code == 0 {
+        chats.follow(&wscmd::rename::Move::in_plane(&root, workspace, name));
+    }
+    ran(code, said)
+}
+
 /// One repo the picker offers: what the operator reads to choose it.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct ReachableRepo {

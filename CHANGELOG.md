@@ -40,6 +40,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `charter plugin install --harness opencode` installs the guard for opencode chats you start
   in a terminal, and replaces the retired Python charter's opencode plugin if it is there.
   ([#371](https://github.com/diazoxide/charter/issues/371))
+- **A workspace can be renamed.** `charter workspace rename <old> <new>` (or `mv`), or *Rename
+  workspace…* on the workspace tab's menu and in the palette. The folder moves, every git
+  worktree of its clones is repaired so it keeps working, and everything that names the
+  workspace follows: its manifest, the LIVE list, the default and each session's choice, the
+  app's open tabs and what a relaunch reopens, and your pins. A LIVE workspace is saved once
+  afterwards. It is refused while a chat is running in the workspace, naming the chats, and when
+  the new name is taken or is not a valid name. Unpushed or uncommitted work is not a reason to
+  refuse, because a rename moves it whole. If a rename is interrupted, running the same command
+  again finishes it. ([#367](https://github.com/diazoxide/charter/issues/367))
 - **A project tab can move into a window of its own, and back.** Right-click a project tab, or
   use the palette, and choose *Move project … to a new window*. Its chats keep running. In that
   window, *Move project … to the main window* brings it back, and so does closing the window.

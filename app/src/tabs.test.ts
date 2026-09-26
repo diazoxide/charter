@@ -23,7 +23,11 @@ import {
   openView,
   putViewBack,
   refileViews,
+  followRename,
+  contentsOf,
   renameTab,
+  workspaceSettingsTitle,
+  workspaceSettingsView,
   stopWaiting,
   viewKey,
   type ViewRef,
@@ -708,5 +712,26 @@ describe("a tab that shows a view (ADR 0043, as amended 2026-09-23)", () => {
     expect(workspaceOf(refiled, front(refiled), filed)).toBe("outside");
     // And nothing at all when every view's workspace is still there, so a caller can tell.
     expect(refileViews(refiled, () => true, "outside")).toBe(refiled);
+  });
+
+  it("follows its workspace to its new name, and the workspace's settings tab is renamed with it", () => {
+    // charter#367.
+    let tabs = openView(noTabs(), STEWARD, "steward", "alpha");
+    tabs = openView(tabs, workspaceSettingsView("alpha"), workspaceSettingsTitle("alpha"), "alpha");
+    tabs = openView(tabs, workspaceSettingsView("other"), workspaceSettingsTitle("other"), "other");
+
+    const moved = followRename(tabs, "alpha", "beta");
+
+    const [first, settings, other] = moved.order.map((id) => moved.byId[id]);
+    expect(workspaceOf(moved, first.id, filed)).toBe("beta");
+    expect(workspaceOf(moved, settings.id, filed)).toBe("beta");
+    expect(settings.name).toBe("Workspace settings · beta");
+    expect(contentsOf(moved, settings.id)[0].content).toMatchObject({
+      kind: "view",
+      view: workspaceSettingsView("beta"),
+    });
+    expect(workspaceOf(moved, other.id, filed)).toBe("other");
+    // Nothing at all when the workspace has no tab, so a caller can tell.
+    expect(followRename(moved, "alpha", "beta")).toBe(moved);
   });
 });

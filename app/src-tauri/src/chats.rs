@@ -527,6 +527,28 @@ impl Chats {
         lock(&self.views).clone()
     }
 
+    /// Follows a workspace rename in everything held here that names it (charter#367): a
+    /// chat's directory, the workspace a handed-off chat came from, and each view tab's strip —
+    /// and writes the record once if any of it moved.
+    ///
+    /// The core has already rewritten the record on disk; without this the next write would put
+    /// the old name back, because this is what the record is written from.
+    pub fn follow(&self, moved: &charter_core::wscmd::rename::Move) {
+        let mut changed = false;
+        for one in lock(&self.open).values_mut() {
+            changed |= moved.chat(&mut one.chat);
+        }
+        for (chat, _) in lock(&self.would_not_start).iter_mut() {
+            changed |= moved.chat(chat);
+        }
+        for view in lock(&self.views).iter_mut() {
+            changed |= moved.view(view);
+        }
+        if changed {
+            self.write_it_down();
+        }
+    }
+
     /// Says which chat is in front, so the record knows which one to bring back in front.
     pub fn bring_to_front(&self, session: Option<u32>) {
         let changed = std::mem::replace(&mut *lock(&self.front), session) != session;

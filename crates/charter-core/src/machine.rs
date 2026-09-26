@@ -935,6 +935,35 @@ impl Store {
         Ok(entry.pinned_workspaces.len() != had)
     }
 
+    /// Moves a workspace's pin to the name it was renamed to (charter#367), keeping its
+    /// place in the order, and answers whether anything changed.
+    ///
+    /// A pin under the old name would otherwise dangle, which [`Self::pinned_workspaces`] then
+    /// names as gone, and the renamed workspace would drop off the strip. Nothing is pinned
+    /// that was not: a workspace nobody pinned is renamed unpinned.
+    pub fn rename_workspace(&mut self, plane: &Path, old: &str, new: &str) -> bool {
+        if usable_workspace(new).is_err() {
+            return false;
+        }
+        let Some(entry) = self.recents.iter_mut().find(|one| one.plane == plane) else {
+            return false;
+        };
+        let already = entry.pinned_workspaces.iter().any(|one| one == new);
+        let mut changed = false;
+        entry.pinned_workspaces.retain_mut(|one| {
+            if one != old {
+                return true;
+            }
+            changed = true;
+            if already {
+                return false;
+            }
+            new.clone_into(one);
+            true
+        });
+        changed
+    }
+
     /// The workspaces pinned in `plane` that **still exist**, and the pins that no longer name
     /// one.
     ///

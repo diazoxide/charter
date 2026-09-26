@@ -63,6 +63,7 @@ import { LiveDialog, LiveMark } from "./LiveDialog";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { Menued } from "./Menus";
 import { NewWorkspace } from "./NewWorkspace";
+import { RenameWorkspace } from "./RenameWorkspace";
 import { cloneRepos } from "./repoClones";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
@@ -93,6 +94,7 @@ import {
   panesOf,
   putViewBack,
   refileViews,
+  followRename,
   PREFERENCES_TITLE,
   PREFERENCES_VIEW,
   SAVING_TITLE,
@@ -349,6 +351,13 @@ export function PlaneView({
     unreadable?: string;
     refusal?: Refused;
     busy: boolean;
+  }>();
+  /** The workspace being renamed, while its dialog is up: whether charter is renaming it now,
+   *  and why the last attempt renamed nothing, in the core's words (charter#367). */
+  const [renamingWs, setRenamingWs] = useState<{
+    workspace: string;
+    busy: boolean;
+    trouble?: string;
   }>();
   /** The same, for the pins: a pin is written by the core, so the window asks what the core
    *  now says rather than assuming its own write landed as it expected. */
@@ -1594,6 +1603,52 @@ export function PlaneView({
     [plane],
   );
 
+  /** Asks for a workspace's new name. Nothing is renamed until the dialog is answered. */
+  const renameWorkspace = useCallback((workspace: string) => {
+    setRenamingWs({ workspace, busy: false });
+  }, []);
+
+  /**
+   * Renames it, through `workspace_rename` — which is `charter workspace rename` — and nothing
+   * else (charter#367).
+   *
+   * **The core decides and moves everything on disk**: the refusals (a taken or invalid name, a
+   * chat running in it), the folder, the worktrees, every record, the pins and the save. What
+   * the window follows is its own: the view tabs on the workspace's strip, the settings tab
+   * keyed by its name and its pin, and the workspace it has picked. Then it reads the plane
+   * again, as after any change to what workspaces there are.
+   */
+  const doRename = useCallback(
+    async (workspace: string, name: string) => {
+      setRenamingWs((now) => (now?.workspace === workspace ? { ...now, busy: true } : now));
+      const answer = await commands
+        .workspaceRename(plane, workspace, name)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (answer.status === "error") {
+        setRenamingWs((now) =>
+          now?.workspace === workspace ? { ...now, busy: false, trouble: answer.error } : now,
+        );
+        return;
+      }
+      setRenamingWs(undefined);
+      setTabs((was) => followRename(was, workspace, name));
+      const oldSettings = viewKey(workspaceSettingsView(workspace));
+      setPinnedViews((was) =>
+        was.map((key) => (key === oldSettings ? viewKey(workspaceSettingsView(name)) : key)),
+      );
+      setPicked((was) => (was === workspace ? name : was));
+      setPickedSpot((was) => (was?.workspace === workspace ? undefined : was));
+      setReport({
+        from: `workspace.rename:${workspace}`,
+        refused: false,
+        words: answer.data.join(" "),
+      });
+      setPinning((asked) => asked + 1);
+      setReplan((asked) => asked + 1);
+    },
+    [plane],
+  );
+
   /**
    * Deletes it — **through `workspace_remove` and through nothing else**.
    *
@@ -1861,6 +1916,7 @@ export function PlaneView({
       openSaving: windowDoes.openSaving,
       openWorkspaceSettings,
       switchLive: (workspace: string) => setLiveAsk(workspace),
+      renameWorkspace,
       openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),
@@ -1883,6 +1939,7 @@ export function PlaneView({
       pinWorkspace,
       removeWorkspace,
       removeWorktree,
+      renameWorkspace,
       runAction,
       sendKey,
       showChat,
@@ -2791,6 +2848,16 @@ export function PlaneView({
             // Read the plane again: the marks come from what is on disk, not from this press.
             setReplan((asked) => asked + 1);
           }}
+        />
+      )}
+
+      {renamingWs && (
+        <RenameWorkspace
+          workspace={renamingWs.workspace}
+          trouble={renamingWs.trouble}
+          renaming={renamingWs.busy}
+          onRename={(name) => void doRename(renamingWs.workspace, name)}
+          onCancel={() => setRenamingWs(undefined)}
         />
       )}
 

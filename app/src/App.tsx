@@ -906,6 +906,7 @@ function App() {
       // A workspace is a project's, and there is no project here to have one.
       openWorkspaceSettings: () => undefined,
       switchLive: () => undefined,
+      renameWorkspace: () => undefined,
       openPreferences: windowDoes.openPreferences,
       quit: windowDoes.quit,
     }),

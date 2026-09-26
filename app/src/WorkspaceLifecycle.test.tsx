@@ -88,6 +88,7 @@ function core(
   const refuses = over.refuses ?? true;
   const refusesOver = over.refusesOver ?? atRisk;
   const gone: string[] = [];
+  const made: string[] = [];
   mockIPC((cmd, args) => {
     const got = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: got });
@@ -111,7 +112,7 @@ function core(
         personas: ["steward"],
         persona: "steward",
         unfiled: [],
-        workspaces: (over.workspaces ?? ["alpha", "beta"])
+        workspaces: [...(over.workspaces ?? ["alpha", "beta"]), ...made]
           .filter((name) => !gone.includes(name))
           .map((name) => ({
             name,
@@ -163,6 +164,14 @@ function core(
       const fails = over.cloneFails?.[String(got.repo)];
       if (fails !== undefined) throw fails;
       return [`✓ ${String(got.repo)} cloned`];
+    }
+    if (cmd === "workspace_rename") {
+      const name = String(got.name);
+      if (name === "beta")
+        throw "workspace 'beta' already exists — pick another name or remove it first.";
+      gone.push(String(got.workspace));
+      made.push(name);
+      return [`✓ Renamed workspace '${String(got.workspace)}' to '${name}'.`];
     }
     if (cmd === "workspace_create") {
       const name = String(got.name);
@@ -220,6 +229,7 @@ describe("deleting a workspace", () => {
       expect.stringContaining("Pin workspace alpha"),
       expect.stringContaining("Workspace settings…"),
       expect.stringContaining("Make alpha live…"),
+      expect.stringContaining("Rename workspace alpha…"),
       "New workspace…",
       expect.stringContaining("Delete workspace alpha"),
     ]);
@@ -686,5 +696,52 @@ describe("a workspace's settings (charter-app#280)", () => {
         workspace: "beta",
       }),
     );
+  });
+});
+
+describe("renaming a workspace (charter#367)", () => {
+  it("asks for the name from the workspace's menu, shows the core's refusal, and lands on the new name", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+
+    await menuOn("alpha");
+    await userEvent.click(screen.getByRole("menuitem", { name: /Rename workspace alpha/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename workspace alpha" });
+    const box = within(dialog).getByLabelText("New name");
+
+    // A taken name: refused by the core, in its words, and the dialog stays for another.
+    await userEvent.clear(box);
+    await userEvent.type(box, "beta");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename workspace" }));
+    expect(
+      await within(dialog).findByText(
+        "workspace 'beta' already exists — pick another name or remove it first.",
+      ),
+    ).toBeInTheDocument();
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "gamma");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename workspace" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls("workspace_rename").map((one) => one.args)).toEqual([
+      { plane: PLANE, workspace: "alpha", name: "beta" },
+      { plane: PLANE, workspace: "alpha", name: "gamma" },
+    ]);
+    // The window was in alpha, so it is in gamma now.
+    await waitFor(() => expect(strip()).toEqual(["beta", "gamma"]));
+  });
+
+  it("does not offer to rename a workspace to the name it already has", async () => {
+    core();
+    render(<App />);
+    await settled();
+
+    await menuOn("alpha");
+    await userEvent.click(screen.getByRole("menuitem", { name: /Rename workspace alpha/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename workspace alpha" });
+
+    expect(within(dialog).getByRole("button", { name: "Rename workspace" })).toBeDisabled();
   });
 });

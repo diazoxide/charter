@@ -1622,6 +1622,8 @@ pub enum Trigger {
     Cli,
     /// A workspace going LIVE or LOCAL.
     Live,
+    /// A workspace renamed (`charter workspace rename`), whose tracked files moved.
+    Rename,
 }
 
 impl Trigger {
@@ -1634,6 +1636,7 @@ impl Trigger {
             Self::Launch => "launch",
             Self::Cli => "cli",
             Self::Live => "live",
+            Self::Rename => "rename",
         }
     }
 }

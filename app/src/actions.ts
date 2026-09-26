@@ -231,6 +231,10 @@ export type Does =
   /** Asks whether to make that workspace LIVE or LOCAL (charter-app#301): a confirmation that
    *  says what it publishes and where. Nothing changes until it is answered. */
   | { verb: "switchLive"; workspace: string }
+  /** Asks for a workspace's new name. It renames nothing by itself: the name, the refusals and
+   *  the move are the core's (`workspace_rename`, `wscmd::rename`), as they are for
+   *  `charter workspace rename` (charter#367). */
+  | { verb: "renameWorkspace"; workspace: string }
   /** Opens the Preferences tab (charter-app#283) — this machine's text sizes — on the project
    *  in front. It writes nothing by itself: a size is changed on the tab, or by its keys. */
   | { verb: "openPreferences" }
@@ -450,6 +454,8 @@ export type Doing = {
   openWorkspaceSettings: (workspace: string) => void;
   /** Asks whether to make that workspace LIVE or LOCAL, in a confirmation. */
   switchLive: (workspace: string) => void;
+  /** Opens the rename dialog for one workspace. Nothing is renamed until it is answered. */
+  renameWorkspace: (workspace: string) => void;
   /** Opens the Preferences tab, or brings forward the one already open. */
   openPreferences: () => void;
   quit: () => void;
@@ -848,6 +854,17 @@ export function catalogue(now: Now): Offer[] {
       note: live
         ? "Stop publishing its charter, memory and todos with the plane."
         : "Publish its charter, memory and todos with the plane.",
+    });
+    // A new name (charter#367). It asks first, in a dialog that takes the name; the core
+    // refuses a taken or invalid one, and a chat running in it, in its own words.
+    offers.push({
+      ...can(
+        `workspace.rename:${workspace}`,
+        `Rename workspace ${workspace}…`,
+        { verb: "renameWorkspace", workspace },
+        workspace,
+      ),
+      note: "Its folder, its clones' worktrees and everything that names it. Not while a chat runs in it.",
     });
   }
 
@@ -1301,6 +1318,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "switchLive":
       doing.switchLive(does.workspace);
       return DID;
+    case "renameWorkspace":
+      doing.renameWorkspace(does.workspace);
+      return DID;
     case "openPreferences":
       doing.openPreferences();
       return DID;
@@ -1577,6 +1597,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
           `workspace.pin:${what.workspace}`,
           `workspace.settings:${what.workspace}`,
           `workspace.live:${what.workspace}`,
+          `workspace.rename:${what.workspace}`,
           "workspace.create",
         ],
         below: [`workspace.remove:${what.workspace}`],
