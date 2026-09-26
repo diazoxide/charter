@@ -1073,25 +1073,41 @@ impl Planes {
     /// (`Unsupported`, which on Windows is ADR 0031's refusal and is the honest answer to
     /// "pin this": charter cannot, here, and says so).
     pub fn pin(&self, root: &Path, workspace: Option<&str>, pinned: bool) -> Result<(), String> {
+        let plane = root.to_path_buf();
+        self.arranging(|store| match workspace {
+            Some(name) => store.pin_workspace(&plane, name, pinned).map(drop),
+            None => store.pin(&plane, pinned).map(drop),
+        })
+    }
+
+    /// Puts a project's pinned workspaces in the order the operator dragged them into (SI-6),
+    /// in the machine store beside the pins themselves — refusing as [`Self::pin`] does, for
+    /// the same reason: it is a drag the operator just finished.
+    pub fn arrange_workspaces(&self, root: &Path, order: &[String]) -> Result<(), String> {
+        let plane = root.to_path_buf();
+        let order: Vec<&str> = order.iter().map(String::as_str).collect();
+        self.arranging(|store| store.arrange_workspaces(&plane, &order).map(drop))
+    }
+
+    /// Changes how the operator arranged things in the machine store, and hands back the
+    /// store's own refusal whole: the one path [`Self::pin`] and [`Self::arrange_workspaces`]
+    /// both take, so a store that cannot be written says the same sentence for either.
+    fn arranging(
+        &self,
+        act: impl FnOnce(&mut machine::Store) -> Result<(), String>,
+    ) -> Result<(), String> {
         let Some(config) = self.config.as_deref() else {
             return Err(
                 "charter has no config home on this machine, so it cannot remember a pin."
                     .to_owned(),
             );
         };
-        let plane = root.to_path_buf();
-        let workspace = workspace.map(str::to_owned);
         // The store's own refusal, out of the closure: `update` answers an `io::Error`, and
         // wrapping a bound the operator can act on ("unpin one first") in one would turn a
         // sentence they can follow into a sentence about a file.
         let mut refused = None;
-        machine::update(config, |store| {
-            refused = match &workspace {
-                Some(name) => store.pin_workspace(&plane, name, pinned).err(),
-                None => store.pin(&plane, pinned).err(),
-            };
-        })
-        .map_err(|why| format!("charter could not write the pin down: {why}"))?;
+        machine::update(config, |store| refused = act(store).err())
+            .map_err(|why| format!("charter could not write the pin down: {why}"))?;
         match refused {
             Some(why) => Err(why),
             None => Ok(()),

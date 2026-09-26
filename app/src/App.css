@@ -257,6 +257,16 @@ body {
   border-inline-end: 1px solid var(--layer-divider);
 }
 
+/* A tab being dragged along its strip (SI-6) passes over its neighbours rather than under them.
+   It keeps its own look: where it will land is the gap the others open for it, which says
+   enough, and a second look for "being dragged" is one more thing to theme. */
+.projects .project[data-dragging],
+.workspaces-strip [role="tab"][data-dragging],
+.tabs .tab[data-dragging] {
+  z-index: 1;
+  cursor: grabbing;
+}
+
 /* A cap, so a strip with two chats on it does not draw two tabs half a window wide. The
    projects have none: the operator asked for *"large full-width segments across the top, each
    taking an equal share"*, and a cap is the one thing that would stop them filling the row. */

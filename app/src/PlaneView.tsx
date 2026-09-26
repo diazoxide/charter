@@ -16,6 +16,8 @@ import { MAIN, thisWindow } from "./windows";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
+import { closestCenter, DndContext } from "@dnd-kit/core";
+import { horizontalListSortingStrategy, SortableContext } from "@dnd-kit/sortable";
 import {
   ChevronDown,
   FolderOpen,
@@ -62,6 +64,14 @@ import { usePlaneSaving, WAY_OUT, type WayOut } from "./saving";
 import { LiveDialog, LiveMark } from "./LiveDialog";
 import { DeleteWorkspace } from "./DeleteWorkspace";
 import { Menued } from "./Menus";
+import { afterDrop, reslotted } from "./reorder";
+import {
+  ALONG_THE_STRIP,
+  keepsTheFocus,
+  SortableTab,
+  stripAccessibility,
+  useStripSensors,
+} from "./sortable";
 import { NewWorkspace } from "./NewWorkspace";
 import { RenameWorkspace } from "./RenameWorkspace";
 import { cloneRepos } from "./repoClones";
@@ -596,6 +606,27 @@ export function PlaneView({
     lastViewsSaid.current = text;
     void commands.windowViews(plane, said).catch(() => undefined);
   }, [pinnedViews, plane, tabs, viewsHeard]);
+
+  /**
+   * The order the chats are in across every strip, told to the core whenever it changes — so
+   * the record lists them in it, and the next launch and a reloaded window put them back in it
+   * (SI-6). A tab's chats in its panes' order, each once.
+   *
+   * **After the record is heard, and only when it differs**, for the view tabs' two reasons
+   * above: an order said before the adoption would be the empty strip's, and most changes to
+   * `tabs` are not to the order.
+   */
+  const lastOrderSaid = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!viewsHeard) return;
+    const sessions = [
+      ...new Set(tabs.order.flatMap((id) => panesOf(tabs, id).map((pane) => pane.session))),
+    ];
+    const text = JSON.stringify(sessions);
+    if (text === lastOrderSaid.current) return;
+    lastOrderSaid.current = text;
+    void commands.chatOrder(plane, sessions).catch(() => undefined);
+  }, [plane, tabs, viewsHeard]);
 
   // A chat a handoff opened (charter-app#204): the core has started it, and this puts it on
   // its workspace's strip. **Behind whatever is in front** (`openTabBehind`), and the window is
@@ -1840,6 +1871,91 @@ export function PlaneView({
   );
 
   /**
+   * A chat or view tab dragged onto another on the chat strip (SI-6): moved to where it was put
+   * down, and pinned or unpinned when it crossed from one group to the other (`reorder.ts`).
+   *
+   * **The order is the window's at once and the pin follows**, because the pin is written by
+   * the core and a tab that waited for it would hang in the air under the pointer. A pin the
+   * core refuses is said, as the tab's menu would say it, and the tab is drawn where its pin
+   * says it goes.
+   */
+  const dragTab = useCallback(
+    (moved: number, onto: number) => {
+      const made = afterDrop({ whole: onStrip, drawn: shown, moved, onto, isPinned });
+      if (made === undefined) return;
+      change((tabs) => ({ ...tabs, order: reslotted(tabs.order, made.order) }));
+      if (made.pinned === undefined) return;
+      void pinTab(moved, made.pinned).then((ran) => {
+        if (!ran.ok) setReport({ from: "tab.drag", refused: true, words: ran.refused });
+      });
+    },
+    [change, isPinned, onStrip, pinTab, shown],
+  );
+
+  /**
+   * A workspace tab dragged onto another on the workspace strip (SI-6): its pins put in the new
+   * order in the machine store (ADR 0040), after pinning or unpinning it when it crossed.
+   *
+   * **Drawn in the new order at once**, from `pinnedWorkspaces`, which is what the strip is
+   * drawn from; and then asked again of the store, which is the answer. A refusal is said, and
+   * the store's own order comes back with the re-read.
+   *
+   * **Outside every workspace is fixed**: it is not a directory, so it cannot be pinned (the
+   * store refuses a name with a `/` in it), and nothing is put down in its place. A later
+   * change draws it first; `reorder.ts` already keeps a fixed tab where it is.
+   */
+  const dragWorkspace = useCallback(
+    (moved: string, onto: string) => {
+      const pinnedNow = (name: string) => pinnedWorkspaces.includes(name);
+      const made = afterDrop({
+        whole: onWorkspaceStrip,
+        drawn: workspacesShown.shown,
+        moved,
+        onto,
+        isPinned: pinnedNow,
+        isFixed: (name) => name === OUTSIDE,
+      });
+      if (made === undefined) return;
+      const pins = made.order.filter((name) =>
+        name === moved && made.pinned !== undefined ? made.pinned : pinnedNow(name),
+      );
+      setPinnedWorkspaces(pins);
+      /** The core's refusal of one write, or nothing when it was written. */
+      const refusal = (asking: Promise<{ status: "ok" } | { status: "error"; error: string }>) =>
+        asking.then(
+          (said) => (said.status === "error" ? said.error : undefined),
+          (err: unknown) => String(err),
+        );
+      void (async () => {
+        // The pin first, when the drop crossed: arranging never pins (`Store::arrange_workspaces`).
+        const failed =
+          (made.pinned === undefined
+            ? undefined
+            : await refusal(commands.pinWorkspace(plane, moved, made.pinned))) ??
+          (await refusal(commands.arrangeWorkspacePins(plane, pins)));
+        if (failed !== undefined)
+          setReport({ from: "workspace.drag", refused: true, words: failed });
+        setPinning((asked) => asked + 1);
+      })();
+    },
+    [onWorkspaceStrip, pinnedWorkspaces, plane, workspacesShown.shown],
+  );
+
+  /** What a screen reader hears while a tab is dragged on the chat and workspace strips. */
+  const chatDragWords = useMemo(
+    () => stripAccessibility("tab", (id) => tabs.byId[Number(id)]?.name ?? String(id)),
+    [tabs.byId],
+  );
+  const workspaceDragWords = useMemo(
+    () =>
+      stripAccessibility("workspace", (id) =>
+        String(id) === OUTSIDE ? OUTSIDE_TITLE : String(id),
+      ),
+    [],
+  );
+  const dragSensors = useStripSensors();
+
+  /**
    * Ignores a queued chat's request until it asks again (charter-app#248).
    *
    * **Nothing is changed here.** The ignore is the core's, and the core answers it with a
@@ -2403,52 +2519,81 @@ export function PlaneView({
           made, so a strip that waited for a workspace hid the way to make one. */}
       {sidebar !== undefined && (
         <div className="workspaces">
-          <RovingFocusGroup.Root asChild orientation="horizontal" {...workspaceStop}>
-            <div
-              className="workspaces-strip"
-              role="tablist"
-              aria-label="Workspaces"
-              ref={workspaceStrip}
-              style={{ "--least": `${workspaceLeast}px` } as CSSProperties}
-            >
-              {workspacesShown.shown.map((workspace) => {
-                const offer = by(`workspace.focus:${workspace}`);
-                return (
-                  /* Right-click is the third reader of the catalogue (`Menus.tsx`): focus, pin,
-                   make one, and — under the line — delete this one. `asChild`, so the strip
-                   gains no wrapper: the trigger IS the tab, which is what #171's `flex: 1 1 0`
-                   cells require. */
-                  <Menued
-                    key={workspace}
-                    on={{ on: "workspace", workspace }}
-                    offers={found}
-                    onPress={press}
-                  >
-                    <RovingFocusGroup.Item
-                      asChild
-                      tabStopId={workspace}
-                      active={workspace === focused}
-                    >
-                      <button
-                        role="tab"
-                        aria-selected={workspace === focused}
-                        title={offer?.title}
-                        // Its own colour, in front or not (charter-app#281): its shade and its
-                        // mark are its tint, set on the tab and nowhere else.
-                        data-colour={colourOf(workspace) ?? undefined}
-                        style={tintOf(workspace)}
-                        onClick={() => {
-                          if (offer?.available) press(offer);
-                        }}
-                      >
-                        {workspaceMarks(workspace)}
-                      </button>
-                    </RovingFocusGroup.Item>
-                  </Menued>
-                );
-              })}
-            </div>
-          </RovingFocusGroup.Root>
+          {/* Draggable along the strip (SI-6, `sortable.tsx`): a drop moves a pinned workspace
+              among the pins, and one carried across the boundary pins or unpins it. */}
+          <DndContext
+            sensors={dragSensors}
+            collisionDetection={closestCenter}
+            modifiers={ALONG_THE_STRIP}
+            accessibility={workspaceDragWords}
+            onDragEnd={({ active, over }) => {
+              if (over) dragWorkspace(String(active.id), String(over.id));
+            }}
+          >
+            <SortableContext items={workspacesShown.shown} strategy={horizontalListSortingStrategy}>
+              <RovingFocusGroup.Root asChild orientation="horizontal" {...workspaceStop}>
+                <div
+                  className="workspaces-strip"
+                  role="tablist"
+                  aria-label="Workspaces"
+                  ref={workspaceStrip}
+                  style={{ "--least": `${workspaceLeast}px` } as CSSProperties}
+                >
+                  {workspacesShown.shown.map((workspace) => {
+                    const offer = by(`workspace.focus:${workspace}`);
+                    return (
+                      <SortableTab key={workspace} id={workspace} fixed={workspace === OUTSIDE}>
+                        {({ sortable, style }) => (
+                          /* Right-click is the third reader of the catalogue (`Menus.tsx`):
+                             focus, pin, make one, and — under the line — delete this one.
+                             `asChild`, so the strip gains no wrapper: the trigger IS the tab,
+                             which is what #171's `flex: 1 1 0` cells require. */
+                          <Menued
+                            on={{ on: "workspace", workspace }}
+                            offers={found}
+                            onPress={press}
+                          >
+                            <RovingFocusGroup.Item
+                              asChild
+                              tabStopId={workspace}
+                              active={workspace === focused}
+                            >
+                              <button
+                                ref={sortable.setNodeRef}
+                                role="tab"
+                                aria-selected={workspace === focused}
+                                aria-describedby={
+                                  workspace === OUTSIDE
+                                    ? undefined
+                                    : sortable.attributes["aria-describedby"]
+                                }
+                                data-dragging={sortable.isDragging || undefined}
+                                title={offer?.title}
+                                // Its own colour, in front or not (charter-app#281): its shade and its
+                                // mark are its tint, set on the tab and nowhere else.
+                                data-colour={colourOf(workspace) ?? undefined}
+                                style={{ ...tintOf(workspace), ...style }}
+                                {...sortable.listeners}
+                                onKeyDown={(event) => {
+                                  keepsTheFocus(event, sortable.isDragging);
+                                  sortable.listeners?.onKeyDown?.(event);
+                                }}
+                                onClick={() => {
+                                  if (offer?.available) press(offer);
+                                }}
+                              >
+                                {workspaceMarks(workspace)}
+                              </button>
+                            </RovingFocusGroup.Item>
+                          </Menued>
+                        )}
+                      </SortableTab>
+                    );
+                  })}
+                </div>
+              </RovingFocusGroup.Root>
+            </SortableContext>
+          </DndContext>
           {/* This strip's own controls, in the shape the project strip above already has
               (`App.tsx`): the `+` that makes one more of what the strip lists, then what the
               strip is not drawing. `.strip-doing` and not a `.more` of its own, because the
@@ -2493,83 +2638,114 @@ export function PlaneView({
             sessions-under-a-workspace was. Named, because the projects and the workspaces
             above are tablists too and a query for `role="tab"` across the whole window
             would mix all three. */}
-        <RovingFocusGroup.Root asChild orientation="horizontal" {...chatStop}>
-          <div
-            className="tabs"
-            role="tablist"
-            aria-label="Tabs"
-            ref={strip}
-            style={{ "--least": `${chatLeast}px` } as CSSProperties}
-          >
-            {shown.map((id) => (
-              /* Right-click is the third reader of the catalogue (`Menus.tsx`). `asChild`, so
-               the strip gains no wrapper element: the trigger IS the tab.
+        {/* Draggable along the strip (SI-6, `sortable.tsx`): a drop moves a tab within its
+            group, and one carried across the pinned boundary pins or unpins it. */}
+        <DndContext
+          sensors={dragSensors}
+          collisionDetection={closestCenter}
+          modifiers={ALONG_THE_STRIP}
+          accessibility={chatDragWords}
+          onDragEnd={({ active, over }) => {
+            if (over) dragTab(Number(active.id), Number(over.id));
+          }}
+        >
+          <SortableContext items={shown.map(String)} strategy={horizontalListSortingStrategy}>
+            <RovingFocusGroup.Root asChild orientation="horizontal" {...chatStop}>
+              <div
+                className="tabs"
+                role="tablist"
+                aria-label="Tabs"
+                ref={strip}
+                style={{ "--least": `${chatLeast}px` } as CSSProperties}
+              >
+                {shown.map((id) => (
+                  <SortableTab key={id} id={String(id)}>
+                    {({ sortable, style }) => (
+                      /* Right-click is the third reader of the catalogue (`Menus.tsx`).
+                         `asChild`, so the strip gains no wrapper element: the trigger IS the
+                         tab.
 
-               No `data-tab` and no scroll-into-view ref any more: #171 deleted `offscreen.ts`
-               and the strip collapses rather than scrolls, so there is nothing to scroll a
-               tab into and nothing measuring tabs through the markup. */
-              <Menued key={id} on={{ on: "chat", tab: id }} offers={found} onPress={press}>
-                <span className="tab">
-                  {renaming === id ? (
-                    // The name, open for editing in the tab's place (charter-app#254). Not
-                    // inside the tab's button: an input inside a button is two controls in one.
-                    <TabRename
-                      name={tabs.byId[id].name}
-                      onSave={(typed) => saveName(id, typed)}
-                      onDone={endRename}
-                    />
-                  ) : (
-                    <RovingFocusGroup.Item
-                      asChild
-                      tabStopId={String(id)}
-                      active={id === tabs.inFront}
-                    >
-                      <button
-                        role="tab"
-                        aria-selected={id === tabs.inFront}
-                        // Where a handed-off chat came from, by its parent's name (charter-app#258).
-                        title={handedFrom[chatOf(tabs, id) ?? -1]}
-                        // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
-                        // tab that has a rename row — a chat's, and never a view's.
-                        {...(by(`tab.rename:${id}`) ? { [RENAMES_ON_F2]: "" } : {})}
-                        onKeyDown={(event) => {
-                          closeOnDelete(event, by(`tab.close:${id}`), press);
-                          renameOnF2(event, by(`tab.rename:${id}`), press);
-                        }}
-                        // The catalogue's row, not a second copy of it. The tab already in front
-                        // has a row that says so and cannot run — a tab is never disabled, because
-                        // the selected tab is the one a keyboard has to be able to land on.
-                        onClick={() => {
-                          const offer = by(`tab.select:${id}`);
-                          if (offer?.available) press(offer);
-                        }}
-                        // A double-click on the name renames it — the same row again.
-                        onDoubleClick={() => {
-                          const offer = by(`tab.rename:${id}`);
-                          if (offer?.available) press(offer);
-                        }}
-                      >
-                        <TabMarks
-                          tabs={tabs}
-                          id={id}
-                          states={states}
-                          updates={planeUpdates}
-                          pin={
-                            <Pin
-                              held={isPinned(id)}
-                              what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
+                         No `data-tab` and no scroll-into-view ref any more: #171 deleted
+                         `offscreen.ts` and the strip collapses rather than scrolls, so there is
+                         nothing to scroll a tab into and nothing measuring tabs through the
+                         markup. */
+                      <Menued on={{ on: "chat", tab: id }} offers={found} onPress={press}>
+                        <span
+                          className="tab"
+                          ref={sortable.setNodeRef}
+                          style={style}
+                          data-dragging={sortable.isDragging || undefined}
+                        >
+                          {renaming === id ? (
+                            // The name, open for editing in the tab's place (charter-app#254). Not
+                            // inside the tab's button: an input inside a button is two controls in one.
+                            <TabRename
+                              name={tabs.byId[id].name}
+                              onSave={(typed) => saveName(id, typed)}
+                              onDone={endRename}
                             />
-                          }
-                        />
-                      </button>
-                    </RovingFocusGroup.Item>
-                  )}
-                  <Closer offer={by(`tab.close:${id}`)} onPress={press} />
-                </span>
-              </Menued>
-            ))}
-          </div>
-        </RovingFocusGroup.Root>
+                          ) : (
+                            <RovingFocusGroup.Item
+                              asChild
+                              tabStopId={String(id)}
+                              active={id === tabs.inFront}
+                            >
+                              <button
+                                role="tab"
+                                aria-selected={id === tabs.inFront}
+                                aria-describedby={sortable.attributes["aria-describedby"]}
+                                // Where a handed-off chat came from, by its parent's name (charter-app#258).
+                                title={handedFrom[chatOf(tabs, id) ?? -1]}
+                                // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
+                                // tab that has a rename row — a chat's, and never a view's.
+                                {...(by(`tab.rename:${id}`) ? { [RENAMES_ON_F2]: "" } : {})}
+                                {...sortable.listeners}
+                                onKeyDown={(event) => {
+                                  // A tab that is up is being carried: its keys are the drag's.
+                                  keepsTheFocus(event, sortable.isDragging);
+                                  sortable.listeners?.onKeyDown?.(event);
+                                  if (sortable.isDragging) return;
+                                  closeOnDelete(event, by(`tab.close:${id}`), press);
+                                  renameOnF2(event, by(`tab.rename:${id}`), press);
+                                }}
+                                // The catalogue's row, not a second copy of it. The tab already in front
+                                // has a row that says so and cannot run — a tab is never disabled, because
+                                // the selected tab is the one a keyboard has to be able to land on.
+                                onClick={() => {
+                                  const offer = by(`tab.select:${id}`);
+                                  if (offer?.available) press(offer);
+                                }}
+                                // A double-click on the name renames it — the same row again.
+                                onDoubleClick={() => {
+                                  const offer = by(`tab.rename:${id}`);
+                                  if (offer?.available) press(offer);
+                                }}
+                              >
+                                <TabMarks
+                                  tabs={tabs}
+                                  id={id}
+                                  states={states}
+                                  updates={planeUpdates}
+                                  pin={
+                                    <Pin
+                                      held={isPinned(id)}
+                                      what={chatOf(tabs, id) === undefined ? "tab" : "chat"}
+                                    />
+                                  }
+                                />
+                              </button>
+                            </RovingFocusGroup.Item>
+                          )}
+                          <Closer offer={by(`tab.close:${id}`)} onPress={press} />
+                        </span>
+                      </Menued>
+                    )}
+                  </SortableTab>
+                ))}
+              </div>
+            </RovingFocusGroup.Root>
+          </SortableContext>
+        </DndContext>
         {/* The affordance that says the strip is not showing everything (ADR 0039). It is
             the first thing on the strip that says how many tabs there are past the edge —
             a scroller never did, which is the premise ADR 0036 was missing. It is absent

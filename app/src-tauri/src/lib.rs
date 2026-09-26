@@ -1046,6 +1046,20 @@ fn pin_workspace(
     planes.pin(&root, Some(&workspace), pinned)
 }
 
+/// Puts a project's pinned workspaces in the order the operator dragged them into on the
+/// workspace strip (SI-6). Only the order moves: a name that is not pinned is passed over, and
+/// pinning stays [`pin_workspace`]'s.
+#[tauri::command]
+#[specta::specta]
+fn arrange_workspace_pins(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspaces: Vec<String>,
+) -> Result<(), String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    planes.arrange_workspaces(&root, &workspaces)
+}
+
 /// Pins or unpins one chat.
 ///
 /// Its own command rather than a third case of the two above, because it is written
@@ -1060,6 +1074,24 @@ fn pin_chat(
     pinned: bool,
 ) -> Result<(), String> {
     planes.held(&plane)?.chats().pin(session, pinned)
+}
+
+/// The order the chat strip draws this project's chats in, by session, so the record lists
+/// them in it and the next launch — or a reloaded window — puts them back in it (SI-6).
+///
+/// **In the plane's own `.charter/app/reopen.json`, beside each chat's pin**, and never in the
+/// machine store, for [`pin_chat`]'s reason: a chat is numbered per plane, and ADR 0034 keeps
+/// its number out of a file every plane shares. That file is out of git, so the order is this
+/// machine's as a pin is.
+#[tauri::command]
+#[specta::specta]
+fn chat_order(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    sessions: Vec<u32>,
+) -> Result<(), String> {
+    planes.held(&plane)?.chats().hold_order(sessions);
+    Ok(())
 }
 
 /// Gives one chat a name, or takes the one it was given off with a blank — and answers the name
