@@ -360,3 +360,45 @@ fn the_age_falls_back_to_the_claim_and_then_to_a_question_mark() {
         Some("2h")
     );
 }
+
+/// #434: the presence record is replaced whole, so a crash between the write and the rename
+/// leaves the previous record rather than an empty one.
+#[test]
+fn a_presence_write_that_dies_before_its_rename_leaves_the_old_record_whole() {
+    let (_d, root) = a_canonical_plane();
+    let p = seen_path(&root, "alpha", "svc", None);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "{\"session\": null, \"ts\": \"old\"}\n").unwrap();
+    let _killed = crate::rewrite::hook::set(|_, _| Err(std::io::Error::other("killed")));
+
+    assert_eq!(seen(&root, "alpha", "svc", None, None, None, now()), None);
+
+    assert_eq!(
+        std::fs::read_to_string(&p).unwrap(),
+        "{\"session\": null, \"ts\": \"old\"}\n"
+    );
+}
+
+/// #434: a link at the presence record is refused, and what it points at is untouched.
+#[cfg(unix)]
+#[test]
+fn a_presence_record_that_is_a_link_is_refused_and_its_target_is_untouched() {
+    let (d, root) = a_canonical_plane();
+    let theirs = d.path().join("theirs");
+    std::fs::write(&theirs, "THEIRS\n").unwrap();
+    let p = seen_path(&root, "alpha", "svc", None);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&theirs, &p).unwrap();
+    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen_it = std::rc::Rc::clone(&fired);
+    let _hook = crate::rewrite::hook::set(move |_, _| {
+        seen_it.set(true);
+        Ok(())
+    });
+
+    assert_eq!(seen(&root, "alpha", "svc", None, None, None, now()), None);
+
+    assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "THEIRS\n");
+    assert!(p.is_symlink());
+    assert!(!fired.get(), "refused before any temp was written");
+}

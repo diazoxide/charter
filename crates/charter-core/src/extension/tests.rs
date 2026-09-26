@@ -1295,76 +1295,37 @@ fn the_record_is_0600_in_a_0700_directory() {
 
 #[cfg(unix)]
 #[test]
-fn a_link_at_the_temp_file_the_write_lands_on_is_refused_by_the_walk() {
-    // The gate is on the path the write ACTUALLY lands on, which is the temp file and not the
-    // record. Guarding the destination of a rename while the bytes go somewhere unguarded is
-    // the mistake this repo has had six review rounds on, and a test that plants its link at
-    // the record's own path would pass against exactly that defect.
-    //
-    // **`PermissionDenied` exactly, not "either of two kinds".** Two guards refuse this — the
-    // containment walk, and `O_CREAT|O_EXCL` on a symlink — and accepting either kind made
-    // this test pass with the walk deleted, crediting it with a refusal `O_EXCL` had made.
-    // Measured: it was one of four mutations nothing held. The walk answers first and answers
-    // `PermissionDenied`; `create_new` answers `AlreadyExists` and has its own test below.
+fn a_record_that_is_a_link_is_refused_and_what_it_points_at_is_untouched() {
+    // #434: the record is written by `machine::write_beside`, which is `rewrite::replace`.
+    // A link at the record used to be replaced by the rename; it is now refused. The temp
+    // file the bytes land on is gated by the same walk (`rewrite`'s own tests plant there).
     let made = Made::new();
     let dir = crate::machine::dir(&made.config());
     std::fs::create_dir_all(&dir).expect("the directory");
-    let outside = made.dir.path().join("outside.json");
-    let temp = dir.join("extensions.json.planted.writing");
-    std::os::unix::fs::symlink(&outside, &temp).expect("a link at the temp path");
+    let theirs = made.dir.path().join("theirs.json");
+    std::fs::write(&theirs, "THEIRS\n").expect("a file outside");
+    std::os::unix::fs::symlink(&theirs, dir.join(RECORD)).expect("a link at the record");
 
-    let why = write_through(&made.config(), &dir.join(RECORD), &temp, b"{}")
-        .expect_err("a link at the temp path is refused");
-    assert_eq!(why.kind(), io::ErrorKind::PermissionDenied, "{why}");
-    assert!(
-        !outside.exists(),
-        "charter wrote through a link out of its own directory"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn a_link_on_the_way_to_the_temp_file_is_refused_where_only_the_walk_can_see_it() {
-    // `O_NOFOLLOW` answers for the LAST component and for nothing above it, so a link at an
-    // intermediate directory is the walk's alone. Without the walk this write lands in a tree
-    // outside the config home and reports success.
-    let made = Made::new();
-    let dir = crate::machine::dir(&made.config());
-    std::fs::create_dir_all(&dir).expect("the directory");
-    let outside = made.dir.path().join("outside");
-    std::fs::create_dir_all(&outside).expect("a directory outside");
-    std::os::unix::fs::symlink(&outside, dir.join("through")).expect("a link on the way");
-    let temp = dir.join("through").join("extensions.json.writing");
-
-    let why = write_through(&made.config(), &dir.join(RECORD), &temp, b"{}")
-        .expect_err("a link on the way is refused");
-    assert_eq!(why.kind(), io::ErrorKind::PermissionDenied, "{why}");
-    assert!(
-        !outside.join("extensions.json.writing").exists(),
-        "charter wrote through a link at a directory the walk was the only guard on"
-    );
-}
-
-#[test]
-fn a_file_already_at_the_temp_path_is_refused_rather_than_written_through() {
-    // `create_new` and not `create`+`truncate`, which is what tells this guard apart from the
-    // walk: a plain file is not a link, so the walk passes it and only `O_EXCL` refuses. It is
-    // the right refusal because a `create_new` that fails failed because something was ALREADY
-    // there, and unlinking that something is charter deleting a file it did not make
-    // (`machine::write_through`'s rule, and this is the same directory).
-    let made = Made::new();
-    let dir = crate::machine::dir(&made.config());
-    std::fs::create_dir_all(&dir).expect("the directory");
-    let temp = dir.join("extensions.json.someone-elses.writing");
-    std::fs::write(&temp, "somebody else was here").expect("a file at the temp path");
-
-    let why = write_through(&made.config(), &dir.join(RECORD), &temp, b"{}")
-        .expect_err("an existing file at the temp path is refused");
-    assert_eq!(why.kind(), io::ErrorKind::AlreadyExists, "{why}");
+    write(&made.config(), &Registry::default()).expect_err("a linked record is refused");
     assert_eq!(
-        std::fs::read_to_string(&temp).expect("still there"),
-        "somebody else was here",
-        "charter wrote through a file it did not make"
+        std::fs::read_to_string(&theirs).expect("theirs"),
+        "THEIRS\n"
+    );
+    assert!(dir.join(RECORD).is_symlink());
+}
+
+#[test]
+fn a_record_write_that_dies_before_its_rename_leaves_the_old_record_whole() {
+    let made = Made::new();
+    let dir = crate::machine::dir(&made.config());
+    std::fs::create_dir_all(&dir).expect("the directory");
+    std::fs::write(dir.join(RECORD), "old\n").expect("an old record");
+    let _killed = crate::rewrite::hook::set(|_, _| Err(io::Error::other("killed")));
+
+    write(&made.config(), &Registry::default()).expect_err("killed before the rename");
+    assert_eq!(
+        std::fs::read_to_string(dir.join(RECORD)).expect("kept"),
+        "old\n"
     );
 }
 

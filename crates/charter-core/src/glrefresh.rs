@@ -496,8 +496,7 @@ fn private_dir(plane: &Path, dir: &Path) -> io::Result<()> {
     crate::plane::private_dir(plane, dir)
 }
 
-/// Write charter's own state at 0600 — [`crate::plane::write_private`], which is where the
-/// ordering of the chmod and the truncate is argued.
+/// Write charter's own state at 0600, replaced whole — [`crate::plane::write_private`].
 fn write_private(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     crate::plane::write_private(plane, path, bytes)
 }
@@ -689,10 +688,10 @@ mod tests {
         // and the write side is the same path with the arrow reversed. `.charter/cache/` here
         // is an ordinary directory; only the file is a link.
         //
-        // It is held by TWO things at once, deliberately: the walk in `write_private` and the
-        // `O_NOFOLLOW` on the open. That is `contain::open_no_link`'s own pairing — the walk
-        // answers about a path and does not hold it, and the flag moves the last component's
-        // answer to the instant of the open — so neither alone going missing shows up here.
+        // It is held by TWO things at once, deliberately: the walk in `rewrite::replace` and
+        // the rename, which replaces a name rather than following it (#434). The walk answers
+        // about a path and does not hold it; a link that arrives after it is replaced, never
+        // written through — so neither alone going missing shows up here.
         // What this pins is the property, and what a mutation of ONE of them proves is only
         // that the other is still there.
         let dir = tempfile::tempdir().unwrap();
@@ -710,6 +709,24 @@ mod tests {
             std::fs::read_to_string(outside.join("theirs.json")).unwrap(),
             "NOT CHARTER'S\n",
             "the cache was written through the link"
+        );
+    }
+
+    #[test]
+    fn a_cache_write_that_dies_before_its_rename_leaves_the_old_cache_whole() {
+        // #434: the cache and the lock are replaced whole, not truncated and refilled in
+        // place, so a refresh killed mid-write leaves the previous cache readable.
+        let dir = tempfile::tempdir().unwrap();
+        let plane = dir.path().to_path_buf();
+        std::fs::create_dir_all(plane.join(".charter/cache")).unwrap();
+        std::fs::write(plane.join(CACHE), "{\"old\": 1}").unwrap();
+        let _killed = crate::rewrite::hook::set(|_, _| Err(io::Error::other("killed")));
+
+        assert!(save(&plane, &Map::new()).is_err());
+
+        assert_eq!(
+            std::fs::read_to_string(plane.join(CACHE)).unwrap(),
+            "{\"old\": 1}"
         );
     }
 }

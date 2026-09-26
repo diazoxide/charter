@@ -505,7 +505,9 @@ pub fn seen(
     crate::contain::writable(plane, &path).ok()?;
     std::fs::create_dir_all(path.parent()?).ok()?;
     let text = format!("{}\n", crate::pyjson::dumps_sorted(&Value::Object(blob)));
-    std::fs::write(&path, text).ok()?;
+    // Replaced whole, through the walk from the plane (#434): a link planted at the record
+    // after the gate above answered is refused or replaced, never written through.
+    crate::rewrite::replace(plane, &path, text.as_bytes(), crate::rewrite::Mode::Kept).ok()?;
     Some(path)
 }
 

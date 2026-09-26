@@ -14,6 +14,7 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use super::{Ctx, VaultError};
+use crate::rewrite::Mode;
 
 /// Provider ids this charter implements — `registry.PROVIDERS`.
 pub const PROVIDERS: [&str; 4] = ["1password", "keyring", "plain-file", "reference"];
@@ -235,41 +236,29 @@ pub fn scope_of(ctx: &Ctx, name: &str) -> String {
     .to_string()
 }
 
-/// `_write`: the document at `mode`, settled on the descriptor before the content lands.
-fn write(ctx: &Ctx, path: &Path, doc: &Map<String, Value>, mode: u32) -> Result<(), VaultError> {
+/// `_write`: the document, replaced whole and never written through a link (#434).
+///
+/// [`crate::rewrite::replace`], gated from the half's own directory — the file alone, as a
+/// vault is gated — so a link at the registry is refused and a crash leaves the previous
+/// registry whole rather than truncated.
+fn write(path: &Path, doc: &Map<String, Value>, mode: Mode) -> Result<(), VaultError> {
     let fail = |e: std::io::Error| VaultError::new(format!("cannot write {}: {e}", path.display()));
-    if let Some(parent) = path.parent() {
-        super::make_private_dir(parent).map_err(fail)?;
-    }
-    let _ = ctx;
+    let parent = path.parent().unwrap_or(Path::new("."));
+    super::make_private_dir(parent).map_err(fail)?;
     let text = crate::pyjson::dumps_indent2_unicode(&Value::Object(doc.clone()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(mode);
-    }
-    let mut file = options.open(path).map_err(fail)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = file.set_permissions(std::fs::Permissions::from_mode(mode));
-    }
-    #[cfg(not(unix))]
-    let _ = mode;
-    file.set_len(0).map_err(fail)?;
-    std::io::Write::write_all(&mut file, text.as_bytes()).map_err(fail)
+    crate::rewrite::replace(parent, path, text.as_bytes(), mode).map_err(fail)
 }
 
-/// `save_registry`: the LOCAL half, 0600.
+/// `save_registry`: the LOCAL half — which names every vault's file and account on this
+/// machine — 0600 before a byte of it lands, or nothing written (`Mode::Secret`).
 pub fn save_local(ctx: &Ctx, doc: &Map<String, Value>) -> Result<(), VaultError> {
-    write(ctx, &ctx.local_registry(), doc, 0o600)
+    write(&ctx.local_registry(), doc, Mode::Secret)
 }
 
-/// `save_shared`: the SHARED half, 0644 — committed, and carrying no value by construction.
+/// `save_shared`: the SHARED half — committed, and carrying no value by construction, so a
+/// committed file's mode: the one it has, or the umask's for a new one (`Mode::Kept`).
 pub fn save_shared(ctx: &Ctx, doc: &Map<String, Value>) -> Result<(), VaultError> {
-    write(ctx, &ctx.shared_registry(), doc, 0o644)
+    write(&ctx.shared_registry(), doc, Mode::Kept)
 }
 
 fn half_vaults(half: &mut Map<String, Value>) -> &mut Map<String, Value> {

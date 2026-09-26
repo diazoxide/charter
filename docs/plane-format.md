@@ -2237,7 +2237,11 @@ literal `fixture-not-a-secret`.
   sorted. Mode **0644**, set on the descriptor with `fchmod` before the truncate
   (`charter/secrets/registry.py:188`-`193`, `charter/secrets/registry.py:215`). Not atomic
   (no tmp+rename), no locking. Parent created with `config.private_mkdir`
-  (`charter/secrets/registry.py:187`).
+  (`charter/secrets/registry.py:187`). **charter-app diverges (#434):** both halves are
+  replaced whole through `rewrite::replace` (a temp file beside, fsync, rename), and a half
+  that is a symlink is refused rather than written through. This half is a committed file, so
+  it keeps the mode it has; a new one gets the umask's (0644 under the usual `022`) rather
+  than a forced 0644.
 
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|
@@ -2278,6 +2282,8 @@ Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepass
 - **Git:** gitignored via the `/.charter/` line in `_GITIGNORE_BASELINE`
   (`charter/commands.py:1094`, written by `_ensure_gitignore`, `charter/commands.py:1116`).
 - **Encoding:** identical writer, mode **0600** (`charter/secrets/registry.py:209`).
+  charter-app (#434) replaces it whole, 0600 read back before a byte lands, or refuses the
+  write — on a filesystem that cannot hold the mode as well as at a symlink.
 - **Merge rule (the app must reproduce it):** shared is the base, local is layered **per
   field**; `config` is dict-updated key by key, other fields overwrite when not `None`
   (`charter/secrets/registry.py:104`-`116`). A `--share` publish REDUCES the local entry to

@@ -109,3 +109,38 @@ fn a_plane_whose_key_can_be_neither_read_nor_made_prints_only_the_size_band() {
     assert_eq!(masked(&ctx, "hunter2"), "1–15 bytes");
     assert_eq!(masked(&ctx, ""), "empty");
 }
+
+/// #434: the key is replaced whole, so a write killed before its rename leaves the old file
+/// byte for byte and no fingerprint is printed from a key that was never stored.
+#[test]
+fn a_key_write_that_dies_before_its_rename_leaves_the_old_file_whole() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = plane(&tmp);
+    std::fs::create_dir_all(&ctx.state).unwrap();
+    std::fs::write(key_path(&ctx), b"short").unwrap();
+    let _killed = crate::rewrite::hook::set(|_, _| Err(std::io::Error::other("killed")));
+
+    assert_eq!(fingerprint(&ctx, "hunter2"), None);
+
+    assert_eq!(std::fs::read(key_path(&ctx)).unwrap(), b"short");
+    assert_eq!(std::fs::read_dir(&ctx.state).unwrap().count(), 1, "no temp");
+}
+
+/// #434: a key that is a link is refused — the key is never written through it — and what it
+/// points at is untouched.
+#[cfg(unix)]
+#[test]
+fn a_key_that_is_a_link_is_refused_and_its_target_is_untouched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = plane(&tmp);
+    std::fs::create_dir_all(&ctx.state).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join("theirs");
+    std::fs::write(&theirs, b"THEIRS").unwrap();
+    std::os::unix::fs::symlink(&theirs, key_path(&ctx)).unwrap();
+
+    assert_eq!(fingerprint(&ctx, "hunter2"), None);
+
+    assert_eq!(std::fs::read(&theirs).unwrap(), b"THEIRS");
+    assert!(key_path(&ctx).is_symlink());
+}

@@ -226,16 +226,9 @@ pub fn write_layout(config_root: &Path, text: &str) -> io::Result<()> {
         ));
     }
     let dir = crate::machine::private_dir(config_root)?;
-    let target = dir.join(LAYOUT);
-    // The store's own temp-name rule: a pid for two processes and a tag for two threads.
-    let temp = dir.join(format!(
-        "{LAYOUT}.{}.{}.writing",
-        std::process::id(),
-        crate::workspaces::scratch_tag()
-    ));
     let pretty = serde_json::to_string_pretty(&document)
         .expect("a document that was just parsed can always be written");
-    crate::machine::write_through(config_root, &target, &temp, (pretty + "\n").as_bytes())
+    crate::machine::write_beside(config_root, &dir.join(LAYOUT), (pretty + "\n").as_bytes())
 }
 
 /// Writes the layout **only when there is no file yet**, and says whether it did.

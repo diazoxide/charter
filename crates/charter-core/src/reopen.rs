@@ -531,6 +531,14 @@ pub(crate) fn refuse_unusable(file: &Path, found: &std::fs::Metadata) -> std::io
 ///
 /// The file is written beside itself and renamed over, so a launch that reads it never sees
 /// half of one — the app can be killed at any moment, and quitting is exactly when it is.
+///
+/// That is [`crate::rewrite::replace`] with [`crate::rewrite::Mode::Private`] (#434): the
+/// record names programs to run, so it is charter's own state at 0600. The walk from the
+/// plane's root gates the temp file the bytes actually land on as well as the record — guarding
+/// only the renamed-onto name once left a committed `reopen.json.writing -> outside` writing
+/// the whole record out of the plane — and the temp is opened `O_NOFOLLOW`, so a link planted
+/// after the walk answered is refused by the kernel (ADR 0028). A record that is itself a link
+/// is refused.
 pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     // Belt as well as braces. A root gets here from [`crate::plane::resolve`], which a
     // fenced build has already held — but also from a caller that was handed one, and this
@@ -543,27 +551,12 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(&OnDisk::from(record))
         .expect("the record is plain data serde can always write");
-
-    // Beside itself, then renamed over: a rename is atomic on every platform charter runs
-    // on, so a launch reading this file sees the whole of one record or the whole of the
-    // one before it. Quitting is when the app is most likely to be killed halfway.
-    // The write lands HERE, so this is the path that has to be checked. Guarding only the
-    // file renamed onto left a committed `reopen.json.writing -> outside` writing the whole
-    // record out of the plane, with no race at all — the same "gate one level shallower than
-    // the write" this guard exists to stop.
-    //
-    // `contain::create_no_link` and not `no_link_on_the_way` + `fs::write`: the walk answers
-    // about a name and the write opens that name again, and a link planted in between put
-    // the whole record outside the plane 7600 times per 20,000 writes when it was measured
-    // (ADR 0028). The flag makes the kernel answer the last component at the instant
-    // of the create instead.
-    let beside = file.with_extension("json.writing");
-    {
-        use std::io::Write;
-        let mut out = crate::contain::create_no_link(plane_root, &beside)?;
-        out.write_all((text + "\n").as_bytes())?;
-    }
-    std::fs::rename(&beside, &file)
+    crate::rewrite::replace(
+        plane_root,
+        &file,
+        (text + "\n").as_bytes(),
+        crate::rewrite::Mode::Private,
+    )
 }
 
 /// What was open, or nothing, with every refusal swallowed.
@@ -1387,25 +1380,51 @@ mod tests {
     }
 
     #[test]
-    fn a_link_at_the_path_the_write_actually_lands_on_is_refused() {
-        // The record is written beside itself and renamed over, so the `.json.writing` path
-        // is where the bytes land — guarding only the renamed-onto name left this open.
+    fn a_record_that_is_a_link_is_refused_and_what_it_points_at_is_untouched() {
+        // #434. The temp file the bytes land on is gated by `rewrite`'s walk, and its own
+        // tests plant links there; this is the record's own name.
         let held = tempfile::tempdir().unwrap();
         let plane = held.path().join("plane");
         let outside = held.path().join("outside");
         std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        let captured = outside.join("captured.json");
-        std::os::unix::fs::symlink(&captured, plane.join(".charter/app/reopen.json.writing"))
-            .unwrap();
+        let theirs = outside.join("theirs.json");
+        std::fs::write(&theirs, "THEIRS\n").unwrap();
+        std::os::unix::fs::symlink(&theirs, path(&plane)).unwrap();
 
-        let refused = write(&plane, &one_chat());
-
-        assert!(refused.is_err(), "the temp path was written through");
         assert!(
-            !captured.exists(),
-            "the record was written outside the plane"
+            write(&plane, &one_chat()).is_err(),
+            "a linked record was written"
         );
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "THEIRS\n");
+        assert!(path(&plane).is_symlink());
+    }
+
+    #[test]
+    fn a_record_write_that_dies_before_its_rename_leaves_the_old_record_whole() {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        write(&plane, &one_chat()).unwrap();
+        let before = std::fs::read(path(&plane)).unwrap();
+        let _killed = crate::rewrite::hook::set(|_, _| Err(std::io::Error::other("killed")));
+
+        assert!(write(&plane, &Record::default()).is_err());
+
+        assert_eq!(std::fs::read(path(&plane)).unwrap(), before);
+        assert_eq!(read(&plane), one_chat());
+    }
+
+    #[test]
+    fn the_record_is_private() {
+        // #434: it names programs to run, so it is charter's own state at 0600.
+        use std::os::unix::fs::PermissionsExt;
+        let held = tempfile::tempdir().unwrap();
+        write(held.path(), &one_chat()).unwrap();
+        let mode = std::fs::metadata(path(held.path()))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

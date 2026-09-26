@@ -203,12 +203,17 @@ fn the_window_each_gate_leaves() {
 }
 
 #[test]
-fn a_racer_at_the_temp_file_never_gets_the_record_written_outside_the_plane() {
+fn a_racer_at_the_record_never_gets_it_written_outside_the_plane() {
     charter_core::unsteered!();
+    // The record is replaced through `rewrite::replace` (#434), whose temp file carries a pid
+    // and a per-call tag no racer can predict, and is opened `O_NOFOLLOW` through the walk
+    // (`rewrite`'s own tests plant links at it). What is left to race is the record's own
+    // name, between the walk answering and the rename — which replaces a link, never follows
+    // one.
     let (plane, outside) = a_plane_and_somewhere_outside();
-    let beside = plane.path().join(".charter/app/reopen.json.writing");
+    let record = plane.path().join(".charter/app/reopen.json");
     let captured = outside.path().join("captured");
-    let (stop, racer) = a_racer_planting(beside, captured.clone());
+    let (stop, racer) = a_racer_planting(record, captured.clone());
 
     let record = one_chat();
     for _ in 0..ROUNDS {
