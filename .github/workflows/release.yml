@@ -555,7 +555,8 @@ jobs:
             echo; echo "ldd of the app:"; ldd target/release/charter-app || true
           fi
 
-      # The plugin every Claude Code chat loads (`charter_core::plugin`). A bundle without it
+      # The plugin every Claude Code chat loads (`charter_core::plugin`), and the shim every
+      # opencode chat loads from inside it (`charter_core::opencode`). A bundle without it
       # starts every chat unarmed — no state, no guard, no skills — so its absence fails the
       # build rather than reaching anyone.
       - name: The bundle carries charter's own plugin
@@ -566,6 +567,7 @@ jobs:
             ls -R "$plugin"
             test -f "$plugin/.claude-plugin/plugin.json"
             test -f "$plugin/hooks/hooks.json"
+            test -f "$plugin/opencode/charter.ts"
           else
             # Listed ONCE into a variable, then searched. `dpkg -c … | grep -q` failed the first
             # dev publish after #221 with the plugin present: `grep -q` exits at its first
@@ -575,6 +577,7 @@ jobs:
             grep -E 'plugin/' <<<"$listing" || true
             grep -q 'plugin/.claude-plugin/plugin.json' <<<"$listing"
             grep -q 'plugin/hooks/hooks.json' <<<"$listing"
+            grep -q 'plugin/opencode/charter.ts' <<<"$listing"
           fi
 
       # The built-in extensions (charter-app#339). A bundle without them has no persona

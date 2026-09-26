@@ -44,10 +44,11 @@
 //!   own plugin and loads it into each chat it starts, for that session alone
 //!   (`crate::plugin`).
 //! - **It writes nothing outside the plane.** Python's `init` puts opencode's plugin, command
-//!   and instructions into `~/.config/opencode` (`OpenCodeHarness.wire`). charter-app v1
-//!   does not start opencode (`wiring::refusal`), and a shim whose every hook reaches a
-//!   binary that refuses opencode's tool hooks would block opencode on the whole machine.
-//!   The plane's own `opencode.json` ask rule IS written: it is part of the plane.
+//!   and instructions into `~/.config/opencode` (`OpenCodeHarness.wire`). The app loads its
+//!   own opencode shim into each opencode chat it starts, for that session alone
+//!   (`crate::opencode`), and `charter plugin install` is the one command that writes the
+//!   guard into `~/.config/opencode` for a terminal chat (ADR 0058). The plane's own
+//!   `opencode.json` ask rule IS written: it is part of the plane.
 //!
 //! # The other half of ADR 0035's default: adopting the repo
 //!

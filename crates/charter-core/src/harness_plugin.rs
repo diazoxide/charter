@@ -426,8 +426,9 @@ impl Adapter for Opencode {
 
     fn support(&self) -> Support {
         Support::NotYet(
-            "charter does not start opencode chats yet, and opencode has no switch that turns \
-             one plugin off: it loads every plugin from every config and plugin directory",
+            "opencode has no switch that turns one plugin off: it loads every plugin from every \
+             config and plugin directory together, and a project's `\"plugin\": []` did not \
+             remove one another config named (measured, opencode 1.18.23)",
         )
     }
 }

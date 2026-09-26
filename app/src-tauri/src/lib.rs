@@ -1558,6 +1558,37 @@ mod tests {
         );
     }
 
+    /// The bundled opencode shim, in the repository.
+    fn opencode_shim_file() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(PLUGIN_DIR)
+            .join(charter_core::opencode::SHIM_IN_BUNDLE)
+    }
+
+    /// Writes the bundled opencode shim from `charter_core::opencode`, for when it changes:
+    /// `cargo test -p charter-app -- --ignored`.
+    #[test]
+    #[ignore = "writes the opencode shim instead of checking it"]
+    fn regenerate_the_bundled_opencode_shim() {
+        std::fs::write(
+            opencode_shim_file(),
+            charter_core::opencode::shim(charter_core::opencode::Arming::Session),
+        )
+        .expect("the shim is written");
+    }
+
+    #[test]
+    fn the_bundled_opencode_shim_is_the_one_the_core_generates() {
+        // One source, as for the hooks file: the routing and the words are the core's, so a
+        // tool cannot be sent to a word `charter hook` does not answer (#371).
+        assert_eq!(
+            std::fs::read_to_string(opencode_shim_file()).unwrap_or_default(),
+            charter_core::opencode::shim(charter_core::opencode::Arming::Session),
+            "{} is out of date: run `cargo test -p charter-app -- --ignored`",
+            opencode_shim_file().display()
+        );
+    }
+
     #[test]
     fn the_bundled_plugin_is_called_what_the_app_loads_it_as() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

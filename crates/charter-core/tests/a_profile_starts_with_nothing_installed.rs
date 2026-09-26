@@ -117,65 +117,61 @@ fn a_profile_charter_may_not_run_a_command_for_is_refused_and_never_run() {
 }
 
 #[test]
-fn a_kind_this_app_does_not_start_is_refused_by_that_name() {
+fn an_opencode_profile_needs_nothing_in_its_config_either() {
     charter_core::unsteered!();
-    // Parsing is not launching. `profiles` knows all three kinds, including opencode, because
-    // the Python charter accepts one and an operator must not get two answers about their own
-    // file. What this app will not do is START one (spec decision 6).
+    // #371: the app arms an opencode chat with its own shim through the chat's environment,
+    // so an empty `~/.config/opencode` is one a chat can start from, and opencode is asked
+    // nothing on the way.
     let stand = Stand::new();
-    stand.declares("opencode", "opencode");
+    stand.declares("opencode", &stand.bin().display().to_string());
     let p = stand.approved();
 
-    assert_eq!(
-        wiring::refusal(&p, stand.root()).as_deref(),
-        Some(
-            "profile 'work' runs opencode, which this app does not start — charter-app v1 \
-             starts Claude Code and Codex, and opencode follows."
-        )
-    );
+    assert_eq!(wiring::refusal(&p, stand.root()), None);
+    let w = wiring::detect(&p, stand.root());
+    assert_eq!(w.state, State::Wired, "{w:?}");
+    assert!(w.detail.contains("opencode plugin"), "{w:?}");
+    assert!(!stand.was_run());
 }
 
 #[test]
-fn the_kind_refusal_comes_before_every_gate_that_would_ask_anything() {
+fn an_opencode_profile_that_loads_no_plugin_is_refused_before_it_is_asked_about() {
     charter_core::unsteered!();
-    // A profile that can never start is not worth approving, and the sentence an operator
-    // wants is the one about v1 rather than one about consent.
+    // `--pure` loads no plugin, charter's guard included (measured, opencode 1.18.23). A
+    // profile that can never start guarded is not worth approving, so this is said first.
     let stand = Stand::new();
-    stand.declares("opencode", "opencode");
+    fs::write(
+        stand.root().join(profiles::LOCAL_FILE),
+        format!(
+            "[harness.work]\nkind = \"opencode\"\ncommand = [{:?}, \"--pure\"]\n",
+            stand.bin().display().to_string()
+        ),
+    )
+    .unwrap();
     // Deliberately NOT approved, which is the gate that would otherwise answer first.
     let p = stand.declared();
 
     let why = wiring::refusal(&p, stand.root()).expect("refused");
-    assert!(why.contains("which this app does not start"), "{why}");
-}
-
-#[test]
-fn both_kinds_this_app_does_start_are_taken_by_their_declared_word() {
-    charter_core::unsteered!();
-    for kind in ["claude", "codex"] {
-        assert!(
-            charter_core::harness::Harness::of_kind(kind).is_some(),
-            "{kind} is a v1 harness and was not recognised by its declared word"
-        );
-    }
-    assert_eq!(charter_core::harness::Harness::of_kind("opencode"), None);
-}
-
-#[test]
-fn detect_says_a_kind_is_not_startable_rather_than_that_it_could_not_look() {
-    charter_core::unsteered!();
-    // `doctor` reaches `detect` directly, so the v1 decision has to be its sentence too.
-    let stand = Stand::new();
-    stand.declares("opencode", "opencode");
-
+    assert!(why.contains("without charter's guard"), "{why}");
+    assert!(why.contains("--pure"), "{why}");
     let w = wiring::detect(&stand.approved(), stand.root());
-
     assert_eq!(
         w.state,
         State::Unknown,
-        "a kind this app cannot start is not a pass"
+        "an unguarded chat is not a pass: {w:?}"
     );
-    assert!(w.detail.contains("which this app does not start"), "{w:?}");
+    assert!(!stand.was_run());
+}
+
+#[test]
+fn every_kind_the_profiles_read_is_one_this_app_starts() {
+    charter_core::unsteered!();
+    for kind in profiles::KINDS {
+        assert!(
+            charter_core::harness::Harness::of_kind(kind.word).is_some(),
+            "{} is read and was not recognised by its declared word",
+            kind.word
+        );
+    }
 }
 
 #[test]

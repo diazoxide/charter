@@ -199,7 +199,9 @@ this, never a charter extension. charter's own is one too: the Claude Code plugi
 bundles, named `charter` (`charter@inline`, skills `charter:<skill>`), always on in the chats
 the app starts. It is not the Python charter's `charter@charter`, which is always off there.
 `charter plugin install` puts a copy of it, `charter@charter-app`, in front of the chats the
-operator starts outside the app (ADR 0057).
+operator starts outside the app (ADR 0057). For opencode, charter's own is the **opencode
+shim**, a script the app loads into each opencode chat it starts, and whose guard-only variant
+`charter plugin install` writes into opencode's plugin directory (ADR 0058).
 _Avoid_: extension (for this); "charter plugin" for anything but charter's own
 
 **Vault**:

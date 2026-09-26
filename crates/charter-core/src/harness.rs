@@ -66,6 +66,8 @@ const MOST: usize = 128;
 pub enum Harness {
     ClaudeCode,
     Codex,
+    /// Armed through a plugin the app ships ([`crate::opencode`], ADR 0058).
+    Opencode,
 }
 
 impl Harness {
@@ -77,6 +79,7 @@ impl Harness {
         match std::path::Path::new(program).file_name()?.to_str()? {
             "claude" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
+            "opencode" => Some(Self::Opencode),
             _ => None,
         }
     }
@@ -91,11 +94,12 @@ impl Harness {
     /// words in `charter.local.toml` and charter's own validator already refused anything
     /// else. So this answer IS knowable, and a launch may refuse on it.
     ///
-    /// `opencode` is a kind `profiles` reads and this app does not start (spec decision 6).
+    /// All three kinds `profiles` reads are started since #371, when opencode joined.
     pub fn of_kind(kind: &str) -> Option<Self> {
         match kind {
             "claude" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
+            "opencode" => Some(Self::Opencode),
             _ => None,
         }
     }
@@ -105,6 +109,7 @@ impl Harness {
         match self {
             Self::ClaudeCode => "claude",
             Self::Codex => "codex",
+            Self::Opencode => "opencode",
         }
     }
 
@@ -114,11 +119,12 @@ impl Harness {
     /// what tells `/clear` (a new conversation from the same process, ADR 0024 C6) from a
     /// `claude` started inside the chat's own shell (a new conversation from a different
     /// one, C5). Codex names no such variable, so it gets the narrower rule: the first
-    /// report of a chat is adopted and a later different id is ignored.
+    /// report of a chat is adopted and a later different id is ignored. opencode names none
+    /// either, and gets the same rule.
     pub fn reports_its_process(self) -> bool {
         match self {
             Self::ClaudeCode => true,
-            Self::Codex => false,
+            Self::Codex | Self::Opencode => false,
         }
     }
 
@@ -132,6 +138,9 @@ impl Harness {
             // Codex names no flag to choose an id (openai/codex#14482), so its id is only
             // ever what it reports itself — through a hook, inside its first turn (X1).
             Self::Codex => false,
+            // opencode has no flag that takes an id for a new session: `-s` resumes one that
+            // exists. Its id is what its plugin reports, at the first prompt (ADR 0058).
+            Self::Opencode => false,
         }
     }
 
@@ -140,7 +149,7 @@ impl Harness {
     pub fn new_session_argv(self, id: &SessionId, name: &str) -> Vec<String> {
         match self {
             Self::ClaudeCode => words(["--session-id", id.as_str(), "--name", name]),
-            Self::Codex => Vec::new(),
+            Self::Codex | Self::Opencode => Vec::new(),
         }
     }
 
@@ -176,6 +185,8 @@ impl Harness {
                 "--fork-session",
             ],
             Self::Codex => &["resume", "fork"],
+            // `opencode --help` on 1.18.23: `-s/--session <id>` and `-c/--continue`.
+            Self::Opencode => &["-s", "--session", "-c", "--continue"],
         }
     }
 
@@ -185,6 +196,8 @@ impl Harness {
         Some(match self {
             Self::ClaudeCode => words(["--resume", id.as_str(), "--name", name]),
             Self::Codex => words(["resume", id.as_str()]),
+            // `opencode -s <id>`; opencode has no flag that names a session.
+            Self::Opencode => words(["-s", id.as_str()]),
         })
     }
 }
@@ -212,7 +225,8 @@ pub enum StateHooks {
 pub struct Kit<'a> {
     /// The `charter` every hook runs.
     pub binary: &'a std::path::Path,
-    /// The bundled Claude Code plugin ([`crate::plugin`]), where the app found it.
+    /// The bundled Claude Code plugin ([`crate::plugin`]), where the app found it. Its
+    /// [`crate::opencode::SHIM_IN_BUNDLE`] is the plugin an opencode chat loads.
     pub plugin: Option<&'a std::path::Path>,
 }
 
@@ -318,6 +332,72 @@ impl Harness {
                 env: Vec::new(),
                 cannot_report: vec!["notification"],
             },
+            // **The bundled shim, loaded for this session alone** ([`crate::opencode`] has the
+            // measurements, opencode 1.18.23). opencode reads a whole config from
+            // `OPENCODE_CONFIG_CONTENT` and concatenates its `plugin` list with every other
+            // config's, so naming the shim there loads it beside whatever the operator loads,
+            // writes nothing, and a project file cannot take it out. It runs the binary the
+            // environment names, as the Claude Code plugin's hooks do. `OPENCODE_PURE=0`
+            // because `1` would load no plugin at all; the flag that does the same is refused
+            // before the chat starts ([`crate::opencode::disarmed_by`]).
+            //
+            // No plugin choice: opencode has no switch that turns one plugin off.
+            //
+            // It cannot report `SessionEnd`: quitting opencode fires no event and runs no exit
+            // handler in a plugin (measured). The app sees the process end.
+            Self::Opencode => {
+                let Some(shim) = kit
+                    .plugin
+                    .map(|plugin| plugin.join(crate::opencode::SHIM_IN_BUNDLE))
+                    .filter(|shim| shim.is_file())
+                else {
+                    return StateHooks::None;
+                };
+                StateHooks::ThisSessionOnly {
+                    args: Vec::new(),
+                    env: vec![
+                        (
+                            crate::plugin::BINARY_ENV.to_owned(),
+                            kit.binary.display().to_string(),
+                        ),
+                        (
+                            crate::opencode::CONFIG_ENV.to_owned(),
+                            crate::opencode::session_config(&shim),
+                        ),
+                        (crate::opencode::PURE_ENV.to_owned(), "0".to_owned()),
+                    ],
+                    cannot_report: vec!["sessionend"],
+                }
+            }
+        }
+    }
+
+    /// Why a chat of this harness started with `command` and `env` would run without charter's
+    /// hooks — `None` when it would not. Only opencode has such a switch charter can see
+    /// ([`crate::opencode::disarmed_by`]): Claude Code loads `--plugin-dir` whatever else it is
+    /// told, and Codex's session flags are charter's own.
+    pub fn disarmed_by(self, command: &[String], env: &[(String, String)]) -> Option<String> {
+        match self {
+            Self::ClaudeCode | Self::Codex => None,
+            Self::Opencode => crate::opencode::disarmed_by(command, env),
+        }
+    }
+
+    /// What the app arms a chat of this harness with, as `charter doctor` says it.
+    pub fn armed_with(self) -> String {
+        match self {
+            Self::ClaudeCode => format!(
+                "the app arms each chat with its own plugin, {}",
+                crate::plugin::LOADED_AS
+            ),
+            Self::Codex => {
+                "the app arms each Codex chat with charter's hooks; Codex asks once to trust them"
+                    .to_owned()
+            }
+            Self::Opencode => {
+                "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
+                    .to_owned()
+            }
         }
     }
 
@@ -335,6 +415,11 @@ impl Harness {
                 "Codex says nothing until your first prompt, and nothing at all until you \
                  trust charter's hooks when Codex asks; it never says when it stops mid-turn \
                  for your approval.",
+            ),
+            Self::Opencode => Some(
+                "opencode says nothing until your first prompt, and nothing when it quits; once \
+                 you answer its permission prompt, the chat reads waiting until the turn ends, \
+                 and a session you open inside it with /new is not followed.",
             ),
         }
     }
@@ -599,10 +684,17 @@ mod tests {
 
     #[test]
     fn a_program_that_is_not_a_measured_harness_is_not_one() {
-        // A shell is the app's own default program, and opencode is a harness the Python
-        // charter measured but this one has not — both answer "no harness" rather than a guess.
+        // A shell is the app's own default program: "no harness" rather than a guess.
         assert_eq!(Harness::of_command("/bin/zsh"), None);
-        assert_eq!(Harness::of_command("opencode"), None);
+        assert_eq!(Harness::of_command("opencode-something"), None);
+    }
+
+    #[test]
+    fn opencode_is_recognised_by_the_name_its_command_is_invoked_under() {
+        assert_eq!(
+            Harness::of_command("/Users/o/.opencode/bin/opencode"),
+            Some(Harness::Opencode)
+        );
     }
 
     #[test]
@@ -994,6 +1086,101 @@ mod tests {
         assert_eq!(
             stop[0]["hooks"][0]["command"].as_str(),
             Some(r#"'/home/o'\''brien/char"ter' hook stop"#)
+        );
+    }
+
+    /// An opencode chat's arming, with the bundled shim at `<plugin>/opencode/charter.ts`.
+    fn opencode_hooks(binary: &str) -> (tempfile::TempDir, StateHooks) {
+        let plugin = tempfile::tempdir().expect("a plugin directory");
+        let shim = plugin.path().join(crate::opencode::SHIM_IN_BUNDLE);
+        std::fs::create_dir_all(shim.parent().expect("a parent")).expect("opencode/");
+        std::fs::write(
+            &shim,
+            crate::opencode::shim(crate::opencode::Arming::Session),
+        )
+        .expect("the shim");
+        let hooks = Harness::Opencode.state_hooks(
+            Kit {
+                binary: std::path::Path::new(binary),
+                plugin: Some(plugin.path()),
+            },
+            None,
+            &BTreeMap::from([("some-plugin".to_owned(), false)]),
+        );
+        (plugin, hooks)
+    }
+
+    #[test]
+    fn an_opencode_chat_loads_the_bundled_shim_for_this_session_alone() {
+        // Measured on opencode 1.18.23: `OPENCODE_CONFIG_CONTENT` naming the shim loads it for
+        // that process, beside every plugin the operator has, and writes nothing.
+        let (plugin, hooks) = opencode_hooks("/usr/local/bin/charter");
+        let StateHooks::ThisSessionOnly {
+            args,
+            env,
+            cannot_report,
+        } = hooks
+        else {
+            panic!("opencode is armed per session");
+        };
+        assert!(args.is_empty(), "nothing on the command line: {args:?}");
+        let env: BTreeMap<String, String> = env.into_iter().collect();
+        assert_eq!(env["CHARTER_HOOK_BINARY"], "/usr/local/bin/charter");
+        assert_eq!(env["OPENCODE_PURE"], "0", "`1` would load no plugin at all");
+        let config: serde_json::Value =
+            serde_json::from_str(&env["OPENCODE_CONFIG_CONTENT"]).expect("JSON");
+        let shim = plugin.path().join("opencode/charter.ts");
+        assert_eq!(
+            config,
+            serde_json::json!({ "plugin": [format!("file://{}", shim.display())] }),
+            "the shim, and no plugin choice: opencode cannot turn one plugin off"
+        );
+        assert_eq!(cannot_report, ["sessionend"]);
+    }
+
+    #[test]
+    fn without_the_shim_an_opencode_chat_is_armed_with_nothing() {
+        let plugin = tempfile::tempdir().expect("a plugin directory with no shim");
+        let hooks = Harness::Opencode.state_hooks(
+            Kit {
+                binary: std::path::Path::new("/bin/charter"),
+                plugin: Some(plugin.path()),
+            },
+            None,
+            &BTreeMap::new(),
+        );
+        assert_eq!(hooks, StateHooks::None);
+    }
+
+    #[test]
+    fn opencode_resumes_by_its_session_flag_and_is_given_no_id_to_start() {
+        let id = SessionId::new("ses_f232c39feffecxEyWLvftyLSYU").expect("opencode's id shape");
+        assert!(!Harness::Opencode.chooses_session_id());
+        assert!(!Harness::Opencode.reports_its_process());
+        assert!(Harness::Opencode.new_session_argv(&id, "ide.7").is_empty());
+        assert_eq!(
+            Harness::Opencode.resume_argv(&id, "ide.7"),
+            Some(vec!["-s".to_owned(), id.to_string()])
+        );
+        for word in ["-s", "--session", "-c", "--continue", "--session=x"] {
+            assert!(
+                Harness::Opencode.session_named_in(&[word.to_owned()]),
+                "{word}"
+            );
+        }
+        assert!(!Harness::Opencode.session_named_in(&["--prompt".to_owned()]));
+    }
+
+    #[test]
+    fn opencode_is_the_kind_and_the_command_of_the_same_harness() {
+        assert_eq!(Harness::of_kind("opencode"), Some(Harness::Opencode));
+        assert_eq!(Harness::Opencode.name(), "opencode");
+        let said = Harness::Opencode
+            .unreported()
+            .expect("it says what it cannot report");
+        assert!(
+            said.contains("first prompt") && said.contains("quits"),
+            "{said}"
         );
     }
 }

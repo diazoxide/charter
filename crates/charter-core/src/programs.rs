@@ -60,7 +60,7 @@ use std::path::{Path, PathBuf};
 /// - `bin` — the oldest convention there is, and still what a distribution's default
 ///   `~/.profile` adds.
 /// - `.opencode/bin` — opencode's installer. charter's registry knows the kind, so charter
-///   knows where it lands. (charter-app v1 does not *start* opencode; it still lists it.)
+///   knows where it lands.
 /// - `.bun/bin`, `.volta/bin`, `.npm-global/bin` — the three JavaScript installers that make
 ///   one stable directory. All three harnesses are installable through them.
 ///
