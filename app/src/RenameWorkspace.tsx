@@ -13,6 +13,10 @@ import * as Dialog from "@radix-ui/react-dialog";
  */
 export function RenameWorkspace({
   workspace,
+  /** The core's sentence naming the chats that will start a fresh conversation after the
+   *  rename (charter#367, D10), `null` for none, and `undefined` while it is being asked —
+   *  the answer waits for it, so it is always read first. The rename still goes ahead. */
+  startsFresh,
   /** Why the last attempt renamed nothing — **the core's sentence, unchanged**. */
   trouble,
   /** Whether charter is renaming it right now, so the answer cannot be given twice. */
@@ -21,6 +25,7 @@ export function RenameWorkspace({
   onCancel,
 }: {
   workspace: string;
+  startsFresh?: string | null;
   trouble?: string;
   renaming: boolean;
   onRename: (name: string) => void;
@@ -30,7 +35,7 @@ export function RenameWorkspace({
   const nameId = useId();
   const box = useRef<HTMLInputElement>(null);
   const next = name.trim();
-  const ready = next !== "" && next !== workspace && !renaming;
+  const ready = next !== "" && next !== workspace && !renaming && startsFresh !== undefined;
   const rename = () => {
     if (ready) onRename(next);
   };
@@ -75,6 +80,12 @@ export function RenameWorkspace({
               Its folder under <code>workspaces/</code> moves, its clones&apos; worktrees are
               repaired, and everything that names it follows. Not while a chat is running in it.
             </p>
+            {/* The core's sentence, unchanged, as `trouble` is. */}
+            {startsFresh && (
+              <p className="came-back" aria-label="Chats that will start fresh">
+                {startsFresh}
+              </p>
+            )}
             {/* Verbatim, beside the box: the operator is still answering. */}
             {trouble && (
               <p className="trouble" role="alert">

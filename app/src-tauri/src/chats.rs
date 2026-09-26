@@ -294,6 +294,12 @@ impl Chats {
             },
             root,
         )?;
+        // The core's start knows no chat, so it says "nothing recorded"; this chat may know
+        // better — a workspace rename left it without its conversation (charter#367).
+        let ready = charter_core::start::Ready {
+            how: chat.told(ready.how.clone()),
+            ..ready
+        };
         self.start_ready(chat, &ready, size)
     }
 
@@ -394,10 +400,13 @@ impl Chats {
         // Under the id it was actually given, not the one it was recorded with: a chat
         // started fresh is under an id the app just chose, and that is what has to be
         // written down for the next launch to resume it.
+        // And no longer as a chat a workspace rename left without its conversation: it has
+        // said so once, at this start, and is under a conversation of its own now.
         let under = Chat {
             resume: conversation
                 .as_deref()
                 .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
+            renamed_from: None,
             ..chat.clone()
         };
         lock(&self.open).insert(
@@ -764,6 +773,7 @@ mod tests {
                     number: None,
                     label: None,
                     from: None,
+                    renamed_from: None,
                 },
                 Size {
                     columns: 80,
@@ -828,6 +838,7 @@ mod tests {
                     number: None,
                     label: None,
                     from: None,
+                    renamed_from: None,
                 },
                 Size {
                     columns: 80,
@@ -877,6 +888,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             },
             Size {
                 columns: 80,
@@ -927,6 +939,7 @@ mod tests {
                     number: None,
                     label: None,
                     from: None,
+                    renamed_from: None,
                 },
                 Size {
                     columns: 80,
@@ -990,6 +1003,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         }
     }
 
@@ -1564,6 +1578,46 @@ mod tests {
         );
 
         assert_eq!(open[0].how, Reopened::Fresh(Fresh::NoConversationRecorded));
+    }
+
+    #[test]
+    fn a_claude_chat_reopened_after_its_workspace_was_renamed_starts_fresh_and_says_so_once() {
+        // charter#367, D10: Claude Code keeps the conversation under the old folder, so the
+        // rename dropped it from the record. The reopen starts a new conversation instead of a
+        // `--resume` that would fail, says why, and records the chat as an ordinary one.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("plane");
+        std::fs::create_dir_all(root.join("workspaces/beta")).unwrap();
+        let mut record = Record {
+            views: Vec::new(),
+            chats: vec![Chat {
+                cwd: Some(root.join("workspaces/alpha")),
+                ..chat(&a_claude(dir.path()), "ide.7", Some(ID))
+            }],
+            dealt: 0,
+            relaunch_after_update: false,
+        };
+        // What `charter workspace rename alpha beta` does to the record.
+        assert!(
+            charter_core::wscmd::rename::Move::in_plane(&root, "alpha", "beta").record(&mut record)
+        );
+        let chats = Chats::new();
+
+        let open = chats.put_back_here(&record, SIZE);
+
+        assert_eq!(open[0].how, Reopened::Fresh(Fresh::WorkspaceRenamed));
+        let printed = until_printed(&chats, open[0].session, "--session-id");
+        assert!(!printed.contains("--resume"), "{printed:?}");
+        let recorded = &chats.record().chats[0];
+        assert_eq!(
+            recorded.renamed_from, None,
+            "it would say so again next time"
+        );
+        assert!(
+            recorded.resume.is_some(),
+            "the new conversation is not recorded"
+        );
+        assert_ne!(recorded.resume, Some(SessionId::new(ID).unwrap()));
     }
 
     #[test]
@@ -2150,6 +2204,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
 
         let session = chats
@@ -2191,6 +2246,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2260,6 +2316,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
         assert_eq!(
             chat.harness(),
@@ -2369,6 +2426,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
         let session = chats.start_ready(&chat, &ready, SIZE).expect("it runs");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

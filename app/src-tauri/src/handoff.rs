@@ -410,6 +410,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
                 Owed::Nothing
             },
         }),
+        renamed_from: None,
     };
     let session = held
         .chats()
@@ -569,6 +570,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
         held.chats()
             .start_ready(&chat, &ready, STARTING)
@@ -591,6 +593,7 @@ mod tests {
             number: None,
             label: None,
             from: None,
+            renamed_from: None,
         };
         held.chats().start(&chat, STARTING).expect("it runs")
     }

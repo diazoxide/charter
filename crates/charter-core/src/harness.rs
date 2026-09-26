@@ -144,6 +144,24 @@ impl Harness {
         }
     }
 
+    /// Whether this harness finds a conversation by the directory it ran in, so a chat whose
+    /// directory moves can no longer be resumed by its id (charter#367, D10).
+    ///
+    /// - **Claude Code** files each transcript under `~/.claude/projects/<encoded cwd>/`, and
+    ///   `--resume <id>` looks there, under the directory it is started in. After
+    ///   `charter workspace rename` the chat starts in the new directory and its conversation
+    ///   stays under the old one. charter does not move the harness's files (ADR 0050).
+    /// - **Codex** keeps its rollouts by date under `~/.codex/sessions/`, and
+    ///   `codex resume <id>` finds one by its id from any directory.
+    /// - **opencode** keys a session by its project, which is the repository's first commit
+    ///   (or `global` outside git), not by a path, and `-s <id>` names the session itself.
+    pub fn keeps_conversations_by_directory(self) -> bool {
+        match self {
+            Self::ClaudeCode => true,
+            Self::Codex | Self::Opencode => false,
+        }
+    }
+
     /// The arguments that start a new session under `id`, or none for a harness that
     /// chooses its own id.
     pub fn new_session_argv(self, id: &SessionId, name: &str) -> Vec<String> {
@@ -603,6 +621,15 @@ mod tests {
                 "ide.7".to_owned(),
             ])
         );
+    }
+
+    #[test]
+    fn only_claude_code_loses_a_conversation_when_its_directory_moves() {
+        // charter#367, D10: Claude Code files a transcript under the directory it ran in;
+        // Codex and opencode find a session by its id from anywhere.
+        assert!(Harness::ClaudeCode.keeps_conversations_by_directory());
+        assert!(!Harness::Codex.keeps_conversations_by_directory());
+        assert!(!Harness::Opencode.keeps_conversations_by_directory());
     }
 
     #[test]

@@ -832,6 +832,7 @@ fn start_chat(
         number: None,
         label: label.clone(),
         from: None,
+        renamed_from: None,
     };
     let session = held
         .chats()
@@ -885,6 +886,7 @@ fn open_session(
         number: None,
         label: None,
         from: None,
+        renamed_from: None,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
@@ -1145,6 +1147,11 @@ impl From<chats::Open> for OpenChat {
                 Reopened::Fresh(Fresh::SessionNamedByTheOperator) => {
                     Some("its own arguments name a session, so charter added none".to_owned())
                 }
+                Reopened::Fresh(Fresh::WorkspaceRenamed) => Some(
+                    "its workspace was renamed, and Claude Code keeps a conversation under the \
+                     folder it ran in"
+                        .to_owned(),
+                ),
             },
         }
     }

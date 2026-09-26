@@ -358,6 +358,9 @@ export function PlaneView({
     workspace: string;
     busy: boolean;
     trouble?: string;
+    /** The core's sentence naming the chats that will start a fresh conversation after it,
+     *  `null` for none, `undefined` until the core has answered. */
+    startsFresh?: string | null;
   }>();
   /** The same, for the pins: a pin is written by the core, so the window asks what the core
    *  now says rather than assuming its own write landed as it expected. */
@@ -1604,9 +1607,26 @@ export function PlaneView({
   );
 
   /** Asks for a workspace's new name. Nothing is renamed until the dialog is answered. */
-  const renameWorkspace = useCallback((workspace: string) => {
-    setRenamingWs({ workspace, busy: false });
-  }, []);
+  const renameWorkspace = useCallback(
+    (workspace: string) => {
+      setRenamingWs({ workspace, busy: false });
+      // Which chats will start fresh (charter#367, D10): asked of the core, which knows which
+      // harness finds a conversation by its folder. A question that fails names nobody.
+      void commands
+        .workspaceStartsFresh(plane, workspace)
+        .then((answer) => {
+          const startsFresh = answer.status === "ok" ? answer.data : null;
+          setRenamingWs((now) => (now?.workspace === workspace ? { ...now, startsFresh } : now));
+        })
+        // A question that fails names nobody, and does not hold the answer back.
+        .catch(() =>
+          setRenamingWs((now) =>
+            now?.workspace === workspace ? { ...now, startsFresh: null } : now,
+          ),
+        );
+    },
+    [plane],
+  );
 
   /**
    * Renames it, through `workspace_rename` — which is `charter workspace rename` — and nothing
@@ -2870,6 +2890,7 @@ export function PlaneView({
       {renamingWs && (
         <RenameWorkspace
           workspace={renamingWs.workspace}
+          startsFresh={renamingWs.startsFresh}
           trouble={renamingWs.trouble}
           renaming={renamingWs.busy}
           onRename={(name) => void doRename(renamingWs.workspace, name)}

@@ -2196,6 +2196,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             }],
             dealt: 0,
             relaunch_after_update: false,
@@ -2228,6 +2229,7 @@ mod tests {
                 number: None,
                 label: None,
                 from: None,
+                renamed_from: None,
             })
             .collect();
         reopen::write(
@@ -3980,6 +3982,44 @@ mod tests {
             Some("beta"),
             "what the next write of the record is made from"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_dialog_names_no_chat_that_is_running_because_that_one_refuses_the_rename() {
+        // charter#367, D10: a running Claude Code chat with a conversation would be named as
+        // starting fresh, and then the rename would be refused over it. It is named by the
+        // refusal alone.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+        let claude = dir.path().join("bin/claude");
+        std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
+        std::fs::write(&claude, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let mut chat = one_chat_on(&claude.display().to_string()).chats.remove(0);
+        // The plane as the registry holds it, which is how the app spells a chat's directory.
+        chat.cwd = Some(held.root().join("workspaces/alpha"));
+        chat.resume = Some(
+            charter_core::harness::SessionId::new("11111111-2222-4333-8444-555555555555").unwrap(),
+        );
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+        assert_eq!(
+            charter_core::wscmd::rename::starts_fresh(held.root(), "alpha", &held.chats().record())
+                .len(),
+            1,
+            "the premise: the record would name it"
+        );
+
+        assert_eq!(crate::workspaces::starts_fresh_in(&held, "alpha"), None);
+        held.chats().close(session).expect("it closes");
     }
 
     #[cfg(unix)]
