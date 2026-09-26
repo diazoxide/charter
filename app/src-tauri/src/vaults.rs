@@ -543,6 +543,29 @@ pub(crate) fn create(
     open(ctx, name)
 }
 
+/// What deleting a vault took away: its provider, and the secrets deleted from the keyring by
+/// name. Never a value.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct VaultRemoved {
+    pub name: String,
+    pub provider: String,
+    /// Deleted from the system keyring: empty for every provider but `keyring`, whose file or
+    /// 1Password item is left where it is.
+    pub destroyed: Vec<String>,
+}
+
+/// Delete the vault `name` ([`vaultcmd::destroy`]): a keyring vault's secrets are deleted from
+/// the keyring one by one, then the vault is unregistered. An entry the keyring will not delete
+/// stops it with the vault still registered.
+pub(crate) fn remove(ctx: &Ctx, name: &str) -> Result<VaultRemoved, String> {
+    let gone = vaultcmd::destroy(ctx, name).map_err(message_of)?;
+    Ok(VaultRemoved {
+        name: name.to_owned(),
+        provider: gone.provider,
+        destroyed: gone.destroyed,
+    })
+}
+
 // ---------------------------------------------------------------------------------------
 // The commands. Each resolves its plane on the thread that asked and does the work on a
 // blocking one: a 1Password vault's health and keys run `op`, which can take seconds.
@@ -611,6 +634,18 @@ pub(crate) async fn vault_create(
         create(ctx, &vault, provider.as_deref(), op_vault.as_deref())
     })
     .await
+}
+
+/// Delete a vault and, for a keyring vault, every secret it holds ([`remove`]). No value
+/// crosses.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_remove(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    vault: String,
+) -> Result<VaultRemoved, String> {
+    blocking(ctx_of(&planes, &plane)?, move |ctx| remove(ctx, &vault)).await
 }
 
 /// Store a new secret. The value comes in here and goes nowhere but the vault.
@@ -1540,5 +1575,47 @@ mod tests {
 
         assert!(err.contains("NOT gitignored"), "{err}");
         assert!(!dir.path().join("secrets.json").exists());
+    }
+
+    #[test]
+    fn deleting_a_keyring_vault_destroys_its_secrets_and_answers_with_their_names_only() {
+        let (dir, ctx) = plane();
+        add(&ctx, "ops", "B", &SecretValue::from("removed-value-b-7f2")).unwrap();
+        add(&ctx, "ops", "A", &SecretValue::from("removed-value-a-3e1")).unwrap();
+
+        let gone = remove(&ctx, "ops").unwrap();
+
+        assert_eq!(
+            gone,
+            VaultRemoved {
+                name: "ops".into(),
+                provider: "keyring".into(),
+                destroyed: vec!["A".into(), "B".into()],
+            }
+        );
+        let answer = wire(&Ok::<_, String>(gone));
+        assert!(!answer.contains("removed-value"), "{answer}");
+        let stub = std::fs::read_to_string(dir.path().join(".charter/keyring-stub.json"))
+            .unwrap_or_default();
+        assert!(
+            !stub.contains("removed-value"),
+            "the keyring still holds a value"
+        );
+        assert_eq!(
+            list(&ctx)
+                .unwrap()
+                .iter()
+                .map(|v| v.name.as_str())
+                .collect::<Vec<_>>(),
+            ["files"]
+        );
+    }
+
+    #[test]
+    fn deleting_a_vault_the_plane_does_not_register_is_refused() {
+        let (_dir, ctx) = plane();
+        let err = remove(&ctx, "nope").unwrap_err();
+        assert!(err.contains("nope"), "{err}");
+        assert_eq!(list(&ctx).unwrap().len(), 2);
     }
 }

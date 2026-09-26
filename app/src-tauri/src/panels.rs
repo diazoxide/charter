@@ -1,5 +1,7 @@
 //! The right-hand panels for the focused workspace: its repos, their branches, CI, its
-//! todos and the plane's personas (spec decision 1). Read-only, as M1 says panels are.
+//! todos and the plane's personas (spec decision 1). This module only reads: what the panels
+//! write — a todo recorded, closed or forgotten, a persona made or deleted (SI-3) — goes through
+//! `todos.rs` and `personas.rs`, and the panels are read again from the disk afterwards.
 //!
 //! # Two answers, and that is the design
 //!

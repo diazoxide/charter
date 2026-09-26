@@ -720,6 +720,11 @@ export const commands = {
 	 *  with it opened. No value crosses.
 	 */
 	vaultCreate: (plane: PlaneId, vault: string, provider: string | null, opVault: string | null) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_create", { plane, vault, provider, opVault })),
+	/**
+	 *  Delete a vault and, for a keyring vault, every secret it holds ([`remove`]). No value
+	 *  crosses.
+	 */
+	vaultRemove: (plane: PlaneId, vault: string) => typedError<VaultRemoved, string>(__TAURI_INVOKE("vault_remove", { plane, vault })),
 	/**  Store a new secret. The value comes in here and goes nowhere but the vault. */
 	vaultSecretAdd: (plane: PlaneId, vault: string, key: string, value: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_secret_add", { plane, vault, key, value })),
 	/**  Replace a held secret's value. The value comes in here and goes nowhere but the vault. */
@@ -741,6 +746,39 @@ export const commands = {
 	 *  the window, never an error. The preferred path (#271 review, U3).
 	 */
 	vaultIdentityPut: (plane: PlaneId, vault: string, token: SecretValue) => typedError<VaultContents, string>(__TAURI_INVOKE("vault_identity_put", { plane, vault, token })),
+	/**
+	 *  Make a persona: `charter persona create <name> [--role …] [--delegate-when …] [--extends …]`,
+	 *  where `parent` is `--extends` (a word TypeScript keeps for itself).
+	 * 
+	 *  Empty boxes are flags not given, so the core's defaults apply: the role is the name,
+	 *  title-cased; the vault is the persona's own name. The core refuses a taken name, a name
+	 *  outside the alphabet, a routing line that is missing when nothing is inherited, and any
+	 *  value that would break persona.md's frontmatter — in its own sentences.
+	 */
+	personaCreate: (plane: PlaneId, name: string, role: string | null, delegateWhen: string | null, parent: string | null) => typedError<string[], string>(__TAURI_INVOKE("persona_create", { plane, name, role, delegateWhen, parent })),
+	/**
+	 *  Delete a persona: `charter persona remove <name>`, never forced.
+	 * 
+	 *  The core refuses one another persona still `extends:` or `uses:`, naming them. What it
+	 *  deletes is the persona's directory — definition, memory and refs — and its generated agent;
+	 *  its vault is left alone, and the answer says so. When the plane-wide selection
+	 *  (`.charter/active-persona`) names it, that selection goes too, as it does from a terminal
+	 *  that has no session or pane of its own.
+	 */
+	personaRemove: (plane: PlaneId, name: string) => typedError<string[], string>(__TAURI_INVOKE("persona_remove", { plane, name })),
+	/**
+	 *  Open a persona's definition in whatever the operating system opens a `.md` file with.
+	 * 
+	 *  The path is found and checked here, from the persona's name: the window names a persona,
+	 *  never a file, so no path it sends can be opened.
+	 */
+	personaEdit: (plane: PlaneId, name: string) => typedError<null, string>(__TAURI_INVOKE("persona_edit", { plane, name })),
+	/**  Record a todo in `workspace`, and answer with what was said. */
+	todoAdd: (plane: PlaneId, workspace: string, text: string) => typedError<string, string>(__TAURI_INVOKE("todo_add", { plane, workspace, text })),
+	/**  Close a todo as done: the journal records it, then the todo goes. */
+	todoDone: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_done", { plane, workspace, slug })),
+	/**  Forget a todo: it goes, and nothing is journalled. */
+	todoForget: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_forget", { plane, workspace, slug })),
 	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
@@ -2584,6 +2622,20 @@ export type VaultHealth = {
 export type VaultIdentity = {
 	variable: string,
 	held: IdentityHeld,
+};
+
+/**
+ *  What deleting a vault took away: its provider, and the secrets deleted from the keyring by
+ *  name. Never a value.
+ */
+export type VaultRemoved = {
+	name: string,
+	provider: string,
+	/**
+	 *  Deleted from the system keyring: empty for every provider but `keyring`, whose file or
+	 *  1Password item is left where it is.
+	 */
+	destroyed: string[],
 };
 
 /**  One secret, as a vault's table shows it: its name, and what the keys index knows. */
