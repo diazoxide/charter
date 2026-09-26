@@ -20,6 +20,7 @@
 //! WARN that says it was not checked and why ([`deferred`]). The differential test holds the
 //! list of them, so a row that becomes ported has to say so there.
 
+mod changes;
 mod clones;
 mod config;
 mod deferred;
@@ -381,7 +382,7 @@ impl Doctor {
         rows.push(plane::nested(self));
         rows.push(clones::workspace_clones(self));
         rows.push(deferred::row("workspace layer", deferred::WORKSPACE_LAYER));
-        rows.push(deferred::row("changes", deferred::CHANGES));
+        rows.push(changes::changes(self));
         rows.push(inventory::inventory(self));
         rows.push(deferred::row("vaults", deferred::VAULTS));
         rows.push(deferred::row("vault registry", deferred::VAULTS));

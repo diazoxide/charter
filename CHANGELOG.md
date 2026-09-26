@@ -21,6 +21,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   workspace is LIVE. An unknown change, a repo with no clone, a repo added twice or an order
   that cannot be true is refused with exit 2. Pushing, landing and reverting come later
   (ADR 0060).
+- **`charter doctor` checks cross-repo changes in every workspace.** Its `changes` row fails on
+  a change record charter cannot read, naming the file and what is wrong with it, and on a
+  change's branch sitting in a clone that is a member of no change. It reads only this disk and
+  says which `changes/` directory it could not look at.
 - **charter's plugin teaches personas, vaults and the browser again.** It now ships the
   `charter:persona`, `charter:secrets` and `charter:browser` skills beside `handoff`,
   `update` and `working-in-a-clone`, rewritten for this charter's commands. `charter browser
