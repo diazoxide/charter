@@ -67,6 +67,27 @@ export function stateOf(states: ChatStates, session: number): State {
 }
 
 /**
+ * Whether a chat is a **shell tab** (SI-5): the operator's own shell, on no profile, running no
+ * harness. The one answer the strip's mark, the explorer and the record all ask.
+ */
+export function isShell(chat: Pick<OpenChat, "harness" | "profile">): boolean {
+  return chat.harness === null && chat.profile === null;
+}
+
+/**
+ * The state mark a chat draws, or none.
+ *
+ * **A shell tab draws none until something reports a state for it.** Its terminal mark
+ * already says what it is, and `unknown` beside it — a dashed ring — read as a spinner on a
+ * tab that is not waiting for anything. A harness started by hand in it whose hook report the
+ * board adopts has said something, and the mark shows it as on any chat. A harness chat keeps
+ * `unknown`: there it is the honest word for a harness that has not reported yet.
+ */
+export function markOf(states: ChatStates, session: number, shell: boolean): State | undefined {
+  return states.bySession[session] ?? (shell ? undefined : "unknown");
+}
+
+/**
  * When a chat last moved, as the core counts moves across every plane. Bigger is more recent.
  *
  * `0` for a chat nothing has been heard about — which sorts last, and is honest: a window

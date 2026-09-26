@@ -134,7 +134,7 @@ import {
   type Tabs,
   type ViewRef,
 } from "./tabs";
-import { ChatState, type Asking } from "./NeedsYou";
+import { ChatMark, type Asking } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
@@ -153,7 +153,15 @@ import { projectThemeChanged } from "./projectTheme";
 import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
-import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
+import {
+  isShell,
+  markOf,
+  movedAt,
+  quietOnes,
+  stateOf,
+  useChatStates,
+  type ChatStates,
+} from "./chatState";
 import { fitting, LEAST, LEAST_ROOT, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
@@ -565,13 +573,7 @@ export function PlaneView({
           // A pinned chat comes back pinned: the pin rides the record it came back from.
           setPinnedChats(open.filter((chat) => chat.pinned).map((chat) => chat.session));
           // A shell comes back a shell: on no profile, running no harness.
-          setShells(
-            new Set(
-              open
-                .filter((chat) => chat.harness === null && chat.profile === null)
-                .map((chat) => chat.session),
-            ),
-          );
+          setShells(new Set(open.filter(isShell).map((chat) => chat.session)));
         }
         setPinnedViews(back.filter((view) => view.pinned).map((view) => viewKey(refOf(view))));
         // The persona comes with the chat, so a tab put back reads `steward 3` from its first
@@ -2996,18 +2998,21 @@ export function PlaneView({
 
       {/* What happened to the chat in front when it was put back. Only a chat that came from
           the record has either, so a chat the operator just opened says nothing. */}
-      {frontChat?.resumed && (
+      {/* Both notes name the chat by what its tab says — `frontTab.name`, the one field the
+          strip prints — and not by its recorded number, which the operator never reads
+          ("5 came back" beside a tab that says "steward 5"). */}
+      {frontTab && frontChat?.resumed && (
         <p className="came-back">
-          <strong>{frontChat.name}</strong> was resumed — conversation{" "}
+          <strong>{frontTab.name}</strong> was resumed — conversation{" "}
           <code>{frontChat.resumed}</code>
         </p>
       )}
       {/* Only for a harness. Every chat is a shell until the harness picker lands, and a
           shell has no conversation to bring back — saying so on every relaunch, forever,
           is noise about the normal case. */}
-      {frontChat?.fresh && frontChat.harness && (
+      {frontTab && frontChat?.fresh && frontChat.harness && (
         <p className="came-back">
-          <strong>{frontChat.name}</strong> came back as a new chat: {frontChat.fresh}
+          <strong>{frontTab.name}</strong> came back as a new chat: {frontChat.fresh}
         </p>
       )}
 
@@ -3957,7 +3962,7 @@ function TabMarks({
       {/* The first pane's session is the tab's own chat. Its own element, so what a tab IS
           stays separate from what it is DOING — a tab whose text changed every time a turn
           began would be unreadable, and untestable. */}
-      <ChatState state={stateOf(states, chatOf(tabs, id) ?? -1)} />
+      <ChatMark state={markOf(states, chat ?? -1, chat !== undefined && shells.has(chat))} />
     </>
   );
 }
