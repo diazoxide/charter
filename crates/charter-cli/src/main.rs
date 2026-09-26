@@ -97,6 +97,11 @@ enum Command {
     #[command(subcommand)]
     Harness(HarnessCommand),
 
+    /// charter's plugin for a `claude` or `codex` started outside the app: its hooks, the Bash
+    /// guard and its skills. The app arms its own chats; this is for the others.
+    #[command(subcommand)]
+    Plugin(PluginCommand),
+
     /// Add what the plane's forges list to inventory/repos.json, then regenerate docs.
     Discover {
         /// Skip per-repo stack detection (faster).
@@ -486,6 +491,35 @@ fn place() -> Result<charter_core::plane::Place, String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
     Ok(charter_core::plane::place(&cwd))
+}
+
+#[derive(Subcommand)]
+enum PluginCommand {
+    /// Register charter's plugin with each harness on this machine, so a chat started in a
+    /// terminal runs charter's hooks and guard. Prints each change; running it again changes
+    /// nothing that is already so.
+    Install {
+        /// Only this harness (`claude` or `codex`); repeat for more. Default: each one whose
+        /// config folder exists.
+        #[arg(long, value_parser = ["claude", "codex"])]
+        harness: Vec<String>,
+        /// Print what would change, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// The plugin folder to install from, instead of the one the app ships beside this
+        /// binary.
+        #[arg(long, hide = true)]
+        plugin_from: Option<std::path::PathBuf>,
+    },
+    /// Take back what `install` wrote, and nothing else.
+    Uninstall {
+        /// Only this harness (`claude` or `codex`); repeat for more.
+        #[arg(long, value_parser = ["claude", "codex"])]
+        harness: Vec<String>,
+        /// Print what would change, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1854,6 +1888,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Workspace(WorkspaceCommand::Autosave)
         | Command::GitPolicy { .. }
         | Command::Secret(_)
+        | Command::Plugin(_)
         | Command::Vault(_) => {
             unreachable!("answered before run")
         }
@@ -2131,6 +2166,44 @@ fn todo(
     }
 }
 
+/// `charter plugin install|uninstall`: needs no plane, and acts on this machine's harnesses.
+fn plugin(verb: &PluginCommand) -> ExitCode {
+    use charter_core::plugin_install::{self as install, Machine, Verb};
+    let (verb, harness, dry_run, from) = match verb {
+        PluginCommand::Install {
+            harness,
+            dry_run,
+            plugin_from,
+        } => (Verb::Install, harness, *dry_run, plugin_from.clone()),
+        PluginCommand::Uninstall { harness, dry_run } => (Verb::Uninstall, harness, *dry_run, None),
+    };
+    let binary = match std::env::current_exe().and_then(|p| p.canonicalize()) {
+        Ok(binary) => binary,
+        Err(e) => {
+            eprintln!("charter: cannot tell where this charter is, so no hook could name it: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let bundle = match from {
+        Some(dir) => dir.canonicalize().ok(),
+        None => install::bundle_beside(&binary),
+    };
+    let machine = match Machine::from_env(binary, bundle) {
+        Ok(machine) => machine,
+        Err(why) => {
+            eprintln!("charter: {why}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let outcomes = install::run(&machine, verb, harness, dry_run);
+    print!("{}", install::render(&outcomes, dry_run));
+    if install::failed(&outcomes) {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 fn main() -> ExitCode {
     // FIRST, before anything that could panic, argv and clap included: a guard that crashed
     // must refuse the tool call, not allow it (#349).
@@ -2258,6 +2331,7 @@ fn main() -> ExitCode {
             preflight,
             fix,
         } => return doctor(*json, *preflight, *fix),
+        Command::Plugin(verb) => return plugin(verb),
         // A background refresh and a footer: neither is a plane write, and both choose their
         // own exit status as their Python counterparts do.
         Command::GlRefresh {

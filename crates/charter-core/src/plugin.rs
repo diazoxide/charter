@@ -170,6 +170,17 @@ pub fn grouped<'a>(hooks: impl Iterator<Item = &'a Handler>) -> Vec<Event<'a>> {
 /// The file in the bundle is this, byte for byte — the app crate's test fails on any drift and
 /// its ignored twin rewrites it.
 pub fn hooks_json() -> String {
+    hooks_json_running(
+        plugin_command,
+        "Generated from charter_core::hookreg (charter hook --list --json). Do not edit: \
+         `cargo test -p charter-app -- --ignored` rewrites it.",
+    )
+}
+
+/// [`hooks_json`], with each hook running `command(word)` — how `charter plugin install`
+/// writes the copy a chat outside the app loads, whose hooks name the binary by its path
+/// because nothing outside the app sets [`BINARY_ENV`].
+pub fn hooks_json_running(command: impl Fn(&str) -> String, description: &str) -> String {
     let events: serde_json::Map<String, serde_json::Value> =
         grouped(crate::hookreg::HANDLERS.iter())
             .into_iter()
@@ -182,7 +193,7 @@ pub fn hooks_json() -> String {
                             .map(|hook| {
                                 serde_json::json!({
                                     "type": "command",
-                                    "command": plugin_command(hook.name),
+                                    "command": command(hook.name),
                                     "timeout": hook.timeout,
                                 })
                             })
@@ -199,8 +210,7 @@ pub fn hooks_json() -> String {
             })
             .collect();
     let doc = serde_json::json!({
-        "description": "Generated from charter_core::hookreg (charter hook --list --json). Do not edit: \
-                        `cargo test -p charter-app -- --ignored` rewrites it.",
+        "description": description,
         "hooks": events,
     });
     let mut text = serde_json::to_string_pretty(&doc).expect("a JSON value serialises");

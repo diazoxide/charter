@@ -62,7 +62,8 @@ were separated on purpose.
 
 To use them, work in a chat rooted in the repo — the supported way. In the charter app, ask
 the operator to start a new chat in that clone (or in a worktree of it) from the chat picker;
-in a terminal, `cd workspaces/<workspace>/<repo> && claude`. There the repo's full
+in a terminal, `cd workspaces/<workspace>/<repo> && claude` — which runs charter's guard
+only once the operator has run `charter plugin install` on this machine. There the repo's full
 configuration loads natively, and `charter` still works from inside it when the control plane
 is needed.
 

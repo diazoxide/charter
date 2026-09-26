@@ -31,6 +31,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   questions, for work with nothing to ask about, for slash commands and for unattended runs,
   and for the three prompts after it fires.
   ([#369](https://github.com/diazoxide/charter/issues/369))
+- **`charter plugin install` guards the `claude` and `codex` chats you start in a terminal.**
+  The app arms only the chats it starts, so a terminal chat ran charter's guard only if the
+  retired Python charter's plugin happened to still be installed. `charter plugin install`
+  registers the app's own plugin with Claude Code, and charter's Bash guard with Codex, for
+  every chat on this machine. It prints each change, `--dry-run` shows them without writing,
+  and a second run changes nothing. It never turns on the retired `charter@charter` plugin,
+  and turns it off where it writes. `charter plugin uninstall` takes it back.
+  ([#374](https://github.com/diazoxide/charter/issues/374))
 
 ### Changed
 
