@@ -912,6 +912,9 @@ mod tests {
         ] {
             assert_eq!(reason(cmd), Some(REASON_SHELL_STRING), "{cmd:?}");
         }
+        // `<<$"EOF"` ends at `$EOF` in zsh 5.9, so the handoff after it runs there.
+        let cmd = "cat <<$\"EOF\"\n$EOF\ncharter handoff beta\nEOF";
+        assert!(reason(cmd).is_some(), "{cmd:?}");
         // Closed on a later line, the body is inside the substitution, as every shell reads it.
         let cmd = "git commit -m \"$(cat <<'EOF'\ncharter handoff beta\nEOF\n)\"";
         assert_eq!(reason(cmd), None, "a commit message is not a handoff");

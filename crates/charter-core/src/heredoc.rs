@@ -332,6 +332,10 @@ pub struct Header {
     pub dash: bool,
     /// One past the header.
     pub end: usize,
+    /// The shells end this body at different lines — a `$"…"` in the delimiter, which bash reads
+    /// as the double-quoted word and zsh as a `$` before it. `delim` is bash's reading; a caller
+    /// must not let either reading hide a line the other runs.
+    pub shells_disagree: bool,
 }
 
 /// `_heredoc_header`: bash's own reading of the `<<` at `i`, or `None` when no delimiter word
@@ -350,10 +354,11 @@ pub struct Header {
 ///   backslash stays (`"E\xF"` is `E\xF`);
 /// - `$'…'` is ANSI-C quoting and is decoded (`<<$'E\x4fF'` is `EOF`), by the same
 ///   [`shellseg::ansi_c_decode`] every guard's word reader uses;
-/// - `$"…"` is read as bash reads it, the double-quoted word (`<<$"EOF"` is `EOF`). zsh reads
-///   `$EOF` there. Bash's is the shorter reading, so the lines between the two terminators are
-///   read as commands rather than hidden as body, which only shows a guard more text; and it is
-///   the reading the word reader takes for `$"…"` everywhere else.
+/// - `$"…"` is read as bash reads it, the double-quoted word (`<<$"EOF"` is `EOF`), which is the
+///   reading the word reader takes for `$"…"` everywhere else. zsh 5.9 reads `$EOF` there, so
+///   the two shells end the body at different lines, and [`Header::shells_disagree`] says so:
+///   the layout then drops nothing and reads the body as a shell would run it, and A5 reads it
+///   as commands.
 /// - a backslash-newline outside quotes is removed before the header is read, so it is neither
 ///   a blank nor quoting: `<<E\<newline>OF` is the unquoted delimiter `EOF`, whose body expands.
 pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
@@ -372,6 +377,7 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
     }
     let mut parts = String::new();
     let mut quoted = false;
+    let mut shells_disagree = false;
     while j < n {
         let c = chars[j];
         let next = chars.get(j + 1).copied();
@@ -410,6 +416,7 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
             parts.push_str(&shellseg::ansi_c_decode(&raw));
             j = k + 1;
         } else if c == '$' && next == Some('"') {
+            shells_disagree = true;
             j += 1; // `$"…"` is the double-quoted word; the `"` is read next
         } else if c == '\'' {
             let Some(off) = chars[j + 1..].iter().position(|&x| x == '\'') else {
@@ -459,6 +466,7 @@ pub fn heredoc_header(line: &Line, i: usize) -> Option<Header> {
         expands: !quoted,
         dash,
         end: j,
+        shells_disagree,
     })
 }
 
@@ -783,7 +791,8 @@ pub fn opener_program(words: Option<&[String]>) -> Option<String> {
 /// costs one over-refusal on a line nothing could attribute anyway, while a missed executor would
 /// call a body data that a shell runs. The one over-match worth removing is the heredoc's own
 /// DELIMITER — `cat <<'PYTHON'` opens no interpreter — so the headers are cut out first, as
-/// [`heredoc_openers`] reads them.
+/// [`heredoc_openers`] reads them. A `<<` inside quotes is no header and is not cut: in
+/// `echo "<<PYTHON"` the word `PYTHON` is read, which errs toward the over-match.
 pub fn line_runs_text(line: &str) -> bool {
     // Each heredoc header, `<<` to the end of its delimiter word, becomes one blank.
     let line = Line::of(line);
@@ -991,7 +1000,7 @@ pub fn brief_heredocs(line: &Line) -> HashSet<usize> {
     let opens = |ts: &[Tok]| ts.iter().filter(|t| t.is_op(&["<<"])).count();
     // The bail is `heredoc_strip_plan`'s, for its reason: an index space the lexer and the
     // header reader disagree about is one no caller can act on.
-    if !lexer_agrees(line, &headers) {
+    if !lexer_agrees(&toks, &headers) {
         return HashSet::new();
     }
     let mut briefs = HashSet::new();
@@ -1144,13 +1153,11 @@ pub struct PlanEntry {
     pub executor: bool,
 }
 
-/// Whether the lexer's bare `<<` tokens on `line` stand exactly where `openers` are — the same
+/// Whether the lexer's bare `<<` tokens (`toks`, the line split by [`shellseg::split_punctuation`])
+/// stand exactly where `openers` are — the same
 /// heredocs, not merely as many of them.
-fn lexer_agrees(line: &Line, openers: &[Opener]) -> bool {
-    let Ok(toks) = shellseg::lex(&line.text()) else {
-        return false;
-    };
-    let at: Vec<isize> = shellseg::split_punctuation(toks)
+fn lexer_agrees(toks: &[Tok], openers: &[Opener]) -> bool {
+    let at: Vec<isize> = toks
         .iter()
         .filter(|t| t.is_op(&["<<"]))
         .map(|t| t.start)
@@ -1194,7 +1201,8 @@ pub fn heredoc_strip_plan(line: &Line) -> Option<Vec<PlanEntry>> {
         .flat_map(|p| p.hcounts.iter())
         .copied()
         .sum();
-    if counted != headers.len() || !lexer_agrees(line, &headers) {
+    let toks = shellseg::split_punctuation(shellseg::lex(&line.text()).ok()?);
+    if counted != headers.len() || !lexer_agrees(&toks, &headers) {
         return None;
     }
     let briefs = brief_heredocs(line);
@@ -1300,7 +1308,7 @@ fn closed_substitutions(line: &Line) -> Vec<(usize, usize)> {
         Sub,
         Tick,
         Paren,
-        Dq,
+        DoubleQuoted,
     }
     let chars = &line.chars;
     let n = chars.len();
@@ -1309,7 +1317,7 @@ fn closed_substitutions(line: &Line) -> Vec<(usize, usize)> {
     let mut i = 0usize;
     while i < n {
         let c = chars[i];
-        let in_dq = stack.last().is_some_and(|(f, _)| *f == Frame::Dq);
+        let in_dq = stack.last().is_some_and(|(f, _)| *f == Frame::DoubleQuoted);
         if c == '\\' {
             i += 2;
             continue;
@@ -1317,6 +1325,16 @@ fn closed_substitutions(line: &Line) -> Vec<(usize, usize)> {
         if line.starts_with(i, "$(") {
             stack.push((Frame::Sub, i));
             i += 2;
+            continue;
+        }
+        if !in_dq && line.starts_with(i, "$'") {
+            // ANSI-C: ends at the first `'` no backslash escapes. This `$` is unescaped, since
+            // an escaped one was stepped over with its backslash above.
+            let mut k = i + 2;
+            while k < n && chars[k] != '\'' {
+                k += if chars[k] == '\\' { 2 } else { 1 };
+            }
+            i = k + 1;
             continue;
         }
         if c == '`' {
@@ -1331,15 +1349,14 @@ fn closed_substitutions(line: &Line) -> Vec<(usize, usize)> {
                 stack.pop();
             }
         } else if c == '\'' {
-            // Literal to the next `'`; a `$'…'` ends at the first `'` no backslash escapes.
-            let ansi = i > 0 && chars[i - 1] == '$';
+            // Literal to the next `'`.
             let mut k = i + 1;
             while k < n && chars[k] != '\'' {
-                k += if ansi && chars[k] == '\\' { 2 } else { 1 };
+                k += 1;
             }
             i = k;
         } else if c == '"' {
-            stack.push((Frame::Dq, i));
+            stack.push((Frame::DoubleQuoted, i));
         } else if c == '(' {
             stack.push((Frame::Paren, i));
         } else if c == ')' {
@@ -1407,7 +1424,7 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
         let mut body_count = 0usize;
         // Bodies whose opener sits in a substitution closed on its own line: which lines are
         // body there depends on the shell, so they are read both ways.
-        let mut either: HashSet<usize> = HashSet::new();
+        let mut read_both_ways: HashSet<usize> = HashSet::new();
         let mut plan_text = String::new();
         let mut join = ""; // separator carried from the previous stage
         loop {
@@ -1458,10 +1475,14 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
                 body_count += 1;
                 // Closed on the header's own line: a newline kept in `folded` for an open quote
                 // puts the close on a later line, where the body is inside the substitution.
-                if closed.iter().any(|&(lo, hi)| {
-                    lo < m.start && m.start < hi && !folded_line.chars[m.start..hi].contains(&'\n')
-                }) {
-                    either.insert(idx);
+                if m.header.shells_disagree
+                    || closed.iter().any(|&(lo, hi)| {
+                        lo < m.start
+                            && m.start < hi
+                            && !folded_line.chars[m.start..hi].contains(&'\n')
+                    })
+                {
+                    read_both_ways.insert(idx);
                 }
                 if unknown {
                     fallback.insert(
@@ -1515,10 +1536,10 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
                 text,
                 body: idx.is_some(),
                 drop: idx.is_some_and(|k| {
-                    drop.get(&k).copied().unwrap_or(false) && !either.contains(&k)
+                    drop.get(&k).copied().unwrap_or(false) && !read_both_ways.contains(&k)
                 }) && !unterminated,
                 executed: idx.is_some_and(|k| {
-                    executed.get(&k).copied().unwrap_or(false) || either.contains(&k)
+                    executed.get(&k).copied().unwrap_or(false) || read_both_ways.contains(&k)
                 }),
             });
         }

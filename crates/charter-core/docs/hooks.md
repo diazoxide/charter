@@ -101,7 +101,8 @@ rule while one who reads a bare refusal files an issue.
   since that is what a misread delimiter looks like. Nor is the body of a heredoc opened inside
   a `$( … )` or backticks that close on the same line (`x=$( cat <<'EOF' )`): bash 3.2 and zsh
   run the lines after it as commands where bash 5 reads them as the body, so they are read as
-  commands a shell runs.
+  commands a shell runs. The same goes for a `$"…"` delimiter, which bash ends at `EOF` and zsh
+  at `$EOF`.
   A **commit message on stdin** is the same data on the same terms: the quoted body of
   `git commit -F -`, `-F-`, `--file=-` or `--file -`, git's global options before `commit`
   included, is dropped when no executor is in its pipeline, so a message describing charter's

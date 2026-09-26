@@ -1294,6 +1294,18 @@ mod tests {
         assert!(reason(cmd).is_some(), "{cmd:?}");
     }
 
+    /// `<<$"EOF"` ends at `EOF` in bash and at `$EOF` in zsh, so neither reading may hide a line
+    /// the other runs: the body is never dropped (#359).
+    #[test]
+    fn a_delimiter_the_shells_read_differently_hides_nothing() {
+        for cmd in [
+            "cat <<$\"EOF\"\n$EOF\ncat .charter/vaults/x.json\nEOF",
+            "cat <<$\"EOF\"\nEOF\ncat .charter/vaults/x.json\n$EOF",
+        ] {
+            assert!(reason(cmd).is_some(), "{cmd:?}");
+        }
+    }
+
     /// A heredoc in a substitution closed on its own line: GNU bash 3.2.57 and zsh 5.9 run the
     /// next lines as commands, so they are never dropped as its body (#359).
     #[test]

@@ -287,6 +287,9 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
                 // `i + 2` anyway. Written as `+= 2` because that is what the Python writes and
                 // what the construct means, not because the walk needs it.
                 None => i += 2,
+                // Where the shells end the body at different lines, it is read as commands:
+                // the body is literal, so that reading only finds more.
+                Some(h) if h.shells_disagree => i = h.end,
                 Some(h) => {
                     i = h.end;
                     pending.push((h.delim, h.expands, h.dash));
@@ -402,6 +405,16 @@ mod tests {
     /// A delimiter in ANSI-C quoting is the word it decodes to, so the body ends at `EOF` and a
     /// substitution after it is a command's (#359). Read as the literal `$E\x4fF`, the body ran
     /// to the end of the input and hid it.
+    /// `<<$"EOF"` ends at `EOF` in bash and at `$EOF` in zsh 5.9, so the body is read as the
+    /// commands zsh runs after `$EOF` too (#359).
+    #[test]
+    fn a_delimiter_the_shells_read_differently_does_not_hide_a_substitution() {
+        assert_eq!(
+            live_substitution("cat <<$\"EOF\"\n$EOF\necho $(x)\nEOF\n"),
+            Some("$(")
+        );
+    }
+
     #[test]
     fn an_ansi_c_delimiter_ends_its_body_where_the_shell_does() {
         assert_eq!(
