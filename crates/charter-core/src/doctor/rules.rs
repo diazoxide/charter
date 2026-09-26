@@ -19,11 +19,19 @@ fn object(path: &Path) -> Result<Option<serde_json::Value>, String> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{} could not be read ({e})", path.display())),
+        Err(e) => {
+            return Err(format!(
+                "{} could not be read ({e})",
+                super::fsx::path_field(path)
+            ));
+        }
     };
     match crate::pyjson::loads_strict(&raw) {
         Some(doc) if doc.is_object() => Ok(Some(doc)),
-        _ => Err(format!("{} is not a JSON object", path.display())),
+        _ => Err(format!(
+            "{} is not a JSON object",
+            super::fsx::path_field(path)
+        )),
     }
 }
 
@@ -119,12 +127,14 @@ fn found(wrote: settings::Wrote) -> Found {
         settings::Wrote::Present => Found::Present,
         settings::Wrote::Created => Found::Missing,
         settings::Wrote::Malformed(what) => Found::Unreadable(format!("{what} is not valid")),
-        settings::Wrote::Blocked(dir) => {
-            Found::Unreadable(format!("{} is not a directory", dir.display()))
-        }
-        settings::Wrote::Failed(path, e) => {
-            Found::Unreadable(format!("{} could not be read ({e})", path.display()))
-        }
+        settings::Wrote::Blocked(dir) => Found::Unreadable(format!(
+            "{} is not a directory",
+            super::fsx::path_field(&dir)
+        )),
+        settings::Wrote::Failed(path, e) => Found::Unreadable(format!(
+            "{} could not be read ({e})",
+            super::fsx::path_field(&path)
+        )),
     }
 }
 

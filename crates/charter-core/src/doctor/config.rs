@@ -236,12 +236,18 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
     if !d.has_plane {
         return Row::warn(
             NAME,
-            format!("no control plane found (cwd: {})", d.root.display()),
+            format!(
+                "no control plane found (cwd: {})",
+                super::fsx::path_field(&d.root)
+            ),
             "`charter init` here, or cd into a plane, or set $CHARTER_ROOT. Every check below \
              is reporting on a plane that does not exist.",
         );
     }
-    Row::ok(NAME, format!("parsed cleanly ({})", d.root.display()))
+    Row::ok(
+        NAME,
+        format!("parsed cleanly ({})", super::fsx::path_field(&d.root)),
+    )
 }
 
 /// Every setting in `cfg` that charter reads as absent, each as the `charter.toml` row's

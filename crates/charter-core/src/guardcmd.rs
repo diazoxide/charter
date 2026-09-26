@@ -15,6 +15,9 @@
 //! - **An `allow` rule reaches the plane root only.** A workspace's and a clone's generated
 //!   settings carry the plane's `ask` and `deny`, never `allow` ([`crate::layer`]), because a
 //!   grant copied sideways is a permission nobody clicked for. The command says so.
+//! - **An `ask` rule reaches them at once.** Every workspace layer that exists is rewritten
+//!   through [`crate::wslayer::wire`] after the write (#449), so the rule is in force where
+//!   the guarded command gets typed without waiting for a launch or `workspace reinit`.
 
 use std::path::{Path, PathBuf};
 
@@ -307,13 +310,18 @@ pub fn report(root: &Path, rule: &str, bucket: Bucket, local: bool) -> (String, 
             ),
             (Bucket::Ask, false) => out.push_str(
                 "  These files are committed, so the rule applies to everyone on this repo \
-                 (ADR 0014). A workspace carries it once `charter workspace reinit --all` \
-                 rewrites its settings.\n",
+                 (ADR 0014).\n",
             ),
             (Bucket::Allow, false) => out.push_str(
                 "! COMMITTED — this stops the prompt for everyone on this repo, not just you. \
                  Use --local for a rule that is yours alone.\n",
             ),
+        }
+        // An ask rule travels into the layers charter generates — a workspace's settings, and
+        // a checkout's shared and machine-local ones — so they are rewritten now, as a launch
+        // or `charter workspace reinit` would, rather than left without it until one runs.
+        if bucket == Bucket::Ask {
+            out.push_str(&mirror(root));
         }
         if bucket == Bucket::Allow {
             out.push_str(
@@ -335,6 +343,55 @@ pub fn report(root: &Path, rule: &str, bucket: Bucket, local: bool) -> (String, 
         }
     }
     (out, code)
+}
+
+/// Rewrite the generated layer of every workspace that has one, so the plane's ask rules are in
+/// force there now (#449) — [`crate::wslayer::wire`], the writer a launch and `charter
+/// workspace reinit` use, with its rule that a file charter did not write is never touched.
+/// What it says: the workspaces it carried the rule into, and the ones it could not.
+fn mirror(root: &Path) -> String {
+    let plane = crate::workspaces::Plane::open(root);
+    let Ok((names, unread)) = plane.read_workspaces() else {
+        return String::new();
+    };
+    let mut carried: Vec<String> = Vec::new();
+    let mut out = String::new();
+    for name in names {
+        let Ok(workspace) = plane.workspace(&name) else {
+            continue;
+        };
+        let dir = workspace.dir();
+        // A workspace charter set up — stamped, or holding a layer it wrote. One it never did is
+        // `reinit`'s to set up, with the rest of its baseline.
+        if crate::wslayer::stamp(dir).0 == 0 && crate::layer::read_record(dir).is_empty() {
+            continue;
+        }
+        let rows = crate::wslayer::wire(root, dir);
+        let shown = crate::shown::one_line(&name, crate::shown::DISPLAY_LIMIT);
+        if rows.iter().any(|r| r.did.is_unresolved()) {
+            out.push_str(&format!(
+                "! '{shown}': part of its generated layer is not charter's to rewrite or could \
+                 not be written, so the rule may not be in force there. `charter workspace \
+                 reinit {shown}` says which file.\n"
+            ));
+        } else if rows.iter().any(|r| r.did.is_repair()) {
+            carried.push(shown);
+        }
+    }
+    if !unread.is_empty() {
+        out.push_str(&format!(
+            "! {} workspace director(ies) could not be read, so the rule was not carried into \
+             them.\n",
+            unread.len()
+        ));
+    }
+    if carried.is_empty() {
+        return out;
+    }
+    format!(
+        "  Carried into the generated settings of workspace(s) {}.\n{out}",
+        carried.join(", ")
+    )
 }
 
 /// The string rules in `permissions.<bucket>` of the settings file at `path`, tolerating

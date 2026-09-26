@@ -171,7 +171,10 @@ impl Config {
         let text = match String::from_utf8(raw) {
             Ok(text) => text,
             Err(e) => {
-                return Self::Malformed(format!("{} is not valid TOML: {e}", path.display()));
+                return Self::Malformed(format!(
+                    "{} is not valid TOML: {e}",
+                    fsx::path_field(path)
+                ));
             }
         };
         let table = match text.parse::<toml::Table>() {
@@ -179,7 +182,7 @@ impl Config {
             Err(e) => {
                 return Self::Malformed(format!(
                     "{} is not valid TOML: {}",
-                    path.display(),
+                    fsx::path_field(path),
                     toml_error(&e)
                 ));
             }
@@ -193,13 +196,13 @@ impl Config {
             Some(toml::Value::Integer(found)) => Self::Refused(format!(
                 "{} declares schema {found}, but this charter understands {SCHEMA}. Upgrade \
                  charter: update the app.",
-                path.display()
+                fsx::path_field(path)
             )),
             Some(other) => Self::Refused(format!(
                 "{} declares schema {}, which is not a plane format version this charter can \
                  compare against {SCHEMA}. charter will not operate on a plane whose format it \
                  cannot place. Fix the `schema` line, or upgrade charter: update the app.",
-                path.display(),
+                fsx::path_field(path),
                 config::toml_repr(other)
             )),
         }
@@ -421,23 +424,25 @@ pub(crate) fn canonical(path: &Path) -> PathBuf {
 /// `util.short_path`: `~/…` for a path under the home directory, the path otherwise — and
 /// never `~` for a path that has a segment starting with one, which a shell would read as a
 /// home it does not name.
+///
+/// Quoted onto one line as [`fsx::path_field`] quotes a path (#449): `$CLAUDE_CONFIG_DIR` and
+/// a plane's own location are set by hand or by a chat, and a newline in one must not print a
+/// row of its own.
 pub(crate) fn short_path(path: &Path) -> String {
     let tilde = path
         .components()
         .any(|c| c.as_os_str().to_string_lossy().starts_with('~'));
     if tilde {
-        return std::path::absolute(path)
-            .unwrap_or_else(|_| path.to_path_buf())
-            .display()
-            .to_string();
+        return fsx::path_field(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
     }
     if let Some(home) = crate::profiles::home()
         && let Ok(rest) = path.strip_prefix(&home)
     {
         let rest = rest.display().to_string();
-        return format!("~/{}", if rest.is_empty() { "." } else { &rest });
+        let shown = format!("~/{}", if rest.is_empty() { "." } else { &rest });
+        return one_line(&shown, PATH_DISPLAY_LIMIT);
     }
-    path.display().to_string()
+    fsx::path_field(path)
 }
 
 /// Python's `_first_line`: the text stripped, then its first line.

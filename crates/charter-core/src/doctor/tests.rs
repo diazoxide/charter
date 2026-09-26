@@ -1742,3 +1742,69 @@ fn outside_the_plane_root_and_its_workspaces_no_command_is_named() {
             .contains("charter workspace reinit --all")
     );
 }
+
+// ---- #449: a path or a git value cannot forge or overdraw a row ------------------------------
+
+/// A plane whose own directory name carries a newline and a forged row after it.
+fn forged_plane() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let root = base.join("p\n  \u{2713}  forged");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
+    for d in ["personas", "inventory", "workspaces"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    (dir, root)
+}
+
+#[test]
+fn a_plane_path_with_a_newline_in_it_is_quoted_on_every_row_that_names_it() {
+    let (_d, root) = forged_plane();
+    let cwd = root.join("workspaces/alpha");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let rows = Doctor::at(&root, &cwd, true, true).run();
+    for name in ["session root", "session layer", "charter.toml"] {
+        let r = row(&rows, name);
+        assert!(!r.detail.contains("\n  \u{2713}  forged"), "{r:?}");
+        assert!(r.detail.contains("p\\x0a  \u{2713}  forged"), "{r:?}");
+    }
+    let at_root = Doctor::at(&root, &root, false, true).run();
+    let r = row(&at_root, "session root");
+    assert!(r.detail.ends_with("forged — the plane"), "{r:?}");
+    assert!(!r.detail.contains('\n'), "{r:?}");
+}
+
+#[test]
+fn a_plane_whose_manifest_will_not_parse_names_it_on_one_line() {
+    let (_d, root) = forged_plane();
+    std::fs::write(root.join("charter.toml"), "schema = [\n").unwrap();
+    let r = one(&root, "charter.toml");
+    assert_eq!(r.status, Status::Fail);
+    assert!(r.detail.contains("p\\x0a  \u{2713}  forged"), "{r:?}");
+}
+
+#[test]
+fn a_short_path_is_quoted_on_one_line() {
+    assert_eq!(
+        short_path(Path::new("/nowhere/a\nb\u{1b}[2K")),
+        "/nowhere/a\\x0ab\\x1b[2K"
+    );
+}
+
+#[test]
+fn a_git_identity_with_a_carriage_return_or_an_escape_is_quoted_on_one_line() {
+    let (_d, root) = plane("schema = 1\n");
+    git(&root, &["init", "-q", "-b", "main", "."]);
+    git(&root, &["config", "user.name", "Ann\r  \u{2713}  forged"]);
+    git(
+        &root,
+        &["config", "user.email", "a@example.invalid\u{1b}[2K"],
+    );
+    let r = one(&root, "git identity");
+    assert_eq!(r.status, Status::Ok, "{r:?}");
+    assert_eq!(
+        r.detail,
+        "Ann\\x0d  \u{2713}  forged <a@example.invalid\\x1b[2K>"
+    );
+}

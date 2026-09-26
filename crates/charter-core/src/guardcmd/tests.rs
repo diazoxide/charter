@@ -192,3 +192,80 @@ fn a_claude_folder_linked_out_of_the_plane_is_written_through_by_nothing() {
         "all or nothing: {said}"
     );
 }
+
+// ---- #449: a new ask rule reaches the workspaces' generated settings ------------------------
+
+fn workspace(root: &Path, name: &str) -> PathBuf {
+    std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
+    crate::wscmd::ensure::ensure(
+        root,
+        name,
+        "2026-05-04T11:32:17Z".parse().unwrap(),
+        "fixture",
+    )
+    .unwrap();
+    root.join("workspaces").join(name)
+}
+
+#[test]
+fn a_new_ask_rule_is_carried_into_every_workspaces_generated_settings() {
+    let (_d, root) = plane();
+    std::fs::write(root.join(".claude/settings.json"), "{}\n").unwrap();
+    let alpha = workspace(&root, "alpha");
+    let beta = workspace(&root, "beta");
+    let (said, code) = report(&root, "Bash(terraform apply *)", Bucket::Ask, false);
+    assert_eq!(code, 0, "{said}");
+    for ws in [&alpha, &beta] {
+        assert_eq!(
+            json(&ws.join(".claude/settings.json"))["permissions"]["ask"],
+            serde_json::json!(["Bash(terraform apply *)"]),
+            "{said}"
+        );
+    }
+    assert!(said.contains("alpha, beta"), "{said}");
+    assert!(!said.contains("reinit --all"), "{said}");
+
+    // Asked again, every layer already has it and nothing is said about them.
+    let (said, code) = report(&root, "Bash(terraform apply *)", Bucket::Ask, false);
+    assert_eq!(code, 0, "{said}");
+    assert!(!said.contains("alpha"), "{said}");
+}
+
+#[test]
+fn a_workspace_whose_settings_are_not_charters_is_named_and_left_alone() {
+    let (_d, root) = plane();
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        r#"{"env": {"CHARTER_HARNESS": "claude-code"}}"#,
+    )
+    .unwrap();
+    let alpha = workspace(&root, "alpha");
+    let theirs = "{\"mine\": true}\n";
+    std::fs::write(alpha.join(".claude/settings.json"), theirs).unwrap();
+    let (said, code) = report(&root, "Bash(terraform apply *)", Bucket::Ask, false);
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        std::fs::read_to_string(alpha.join(".claude/settings.json")).unwrap(),
+        theirs
+    );
+    assert!(said.contains("'alpha'"), "{said}");
+    assert!(said.contains("charter workspace reinit alpha"), "{said}");
+}
+
+#[test]
+fn an_allow_rule_is_never_carried_into_a_workspace() {
+    let (_d, root) = plane();
+    std::fs::write(
+        root.join(".claude/settings.json"),
+        r#"{"env": {"CHARTER_HARNESS": "claude-code"}}"#,
+    )
+    .unwrap();
+    let alpha = workspace(&root, "alpha");
+    let before = std::fs::read_to_string(alpha.join(".claude/settings.json")).unwrap();
+    let (said, code) = report(&root, "Bash(git status *)", Bucket::Allow, false);
+    assert_eq!(code, 0, "{said}");
+    assert_eq!(
+        std::fs::read_to_string(alpha.join(".claude/settings.json")).unwrap(),
+        before
+    );
+}

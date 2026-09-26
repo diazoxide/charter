@@ -155,8 +155,9 @@ pub(super) fn plugin(d: &Doctor) -> Row {
             named(&stale)
         ),
         format!(
-            "An older copy lacks this charter's newer hooks and skills. {REPAIR} brings it up \
-             to date; `charter plugin install --dry-run` says what differs."
+            "An older copy lacks this charter's newer hooks and skills. The app brings a copy \
+             that runs its own charter up to date when it starts; {REPAIR} does it now, and \
+             `charter plugin install --dry-run` says what differs."
         ),
     )
 }

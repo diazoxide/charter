@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Doctor, Row, canonical, short_path};
+use super::{Doctor, Row, canonical, fsx, short_path};
 
 /// One artefact of charter's in-repo layer and the rule a harness finds it by —
 /// `harness.base.LayerPart`.
@@ -202,10 +202,13 @@ pub(super) fn session_root(d: &Doctor) -> Row {
     const NAME: &str = "session root";
     let here = here(d);
     if !d.has_plane {
-        return Row::ok(NAME, format!("{} — no control plane found", here.display()));
+        return Row::ok(
+            NAME,
+            format!("{} — no control plane found", fsx::path_field(&here)),
+        );
     }
     if here == d.root {
-        return Row::ok(NAME, format!("{} — the plane", here.display()));
+        return Row::ok(NAME, format!("{} — the plane", fsx::path_field(&here)));
     }
     let (cwd_only, walking): (Vec<&str>, Vec<&str>) = match answering(current().as_deref()) {
         Err(_) => (Vec::new(), Vec::new()),
@@ -222,8 +225,11 @@ pub(super) fn session_root(d: &Doctor) -> Row {
             (cwd_only, walking)
         }
     };
-    let shown = here.display();
-    let mut lines = vec![format!("{shown} — not the plane ({})", d.root.display())];
+    let shown = fsx::path_field(&here);
+    let mut lines = vec![format!(
+        "{shown} — not the plane ({})",
+        fsx::path_field(&d.root)
+    )];
     let user_folder = format!("{}/", short_path(&claude_config_home()));
     if cwd_only.is_empty() {
         lines.push(format!(
@@ -247,7 +253,7 @@ pub(super) fn session_root(d: &Doctor) -> Row {
     lines.push(format!(
         "the plane is still this session's identity: personas, the vault, memory and \
          workspaces resolve to {} from anywhere inside it",
-        d.root.display()
+        fsx::path_field(&d.root)
     ));
     Row::ok(NAME, lines.join(MORE))
 }
@@ -315,7 +321,10 @@ pub(super) fn session_layer(d: &Doctor) -> Row {
     const NAME: &str = "session layer";
     let here = here(d);
     if !d.has_plane {
-        return Row::ok(NAME, format!("{} — no control plane found", here.display()));
+        return Row::ok(
+            NAME,
+            format!("{} — no control plane found", fsx::path_field(&here)),
+        );
     }
     let current = current();
     let harnesses = match answering(current.as_deref()) {
@@ -326,7 +335,7 @@ pub(super) fn session_layer(d: &Doctor) -> Row {
                 format!(
                     "{} — charter has no record of how {} finds an in-repo layer, so this \
                      row has nothing to say about it",
-                    here.display(),
+                    fsx::path_field(&here),
                     // The environment named it, and a newline in it must not print a row of
                     // its own (#353).
                     super::one_line(&name, super::DISPLAY_LIMIT)
@@ -341,7 +350,7 @@ pub(super) fn session_layer(d: &Doctor) -> Row {
     let own_repo = bound.is_some() && bound != plane_bound;
     let mut lines = vec![format!(
         "{} — what a session started here would find in the repo",
-        here.display()
+        fsx::path_field(&here)
     )];
     let mut gates: Vec<&str> = Vec::new();
     for h in &harnesses {
@@ -379,9 +388,9 @@ pub(super) fn session_layer(d: &Doctor) -> Row {
              until that is given, {} do not run here whatever any settings file declares. \
              `guard seen` cannot answer it: that state lives under {}, so it is per PLANE and \
              a sighting there says nothing about this directory",
-            bound.display(),
+            fsx::path_field(bound),
             gates.join(" / "),
-            super::git::state_dir(&d.root).display()
+            fsx::path_field(&super::git::state_dir(&d.root))
         ));
     }
     Row::ok(NAME, lines.join(MORE))

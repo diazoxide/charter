@@ -132,7 +132,10 @@ pub(super) fn front_door(d: &Doctor) -> Row {
             if !meta.is_dir() && (!meta.is_file() || meta.len() > LEGACY_LIMIT) {
                 return Row::not_checked(
                     NAME,
-                    format!("{} is not a file charter reads", legacy.display()),
+                    format!(
+                        "{} is not a file charter reads",
+                        super::fsx::path_field(&legacy)
+                    ),
                 );
             }
             match std::fs::read_to_string(&legacy) {
