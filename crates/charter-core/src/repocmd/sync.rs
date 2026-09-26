@@ -22,6 +22,7 @@ use std::path::Path;
 
 use super::{Say, Sink, banner, submodules};
 use crate::forge;
+use crate::gitstate;
 use crate::repos::{self, Head};
 use crate::workspaces::Plane;
 use crate::worktree::git;
@@ -69,22 +70,6 @@ pub fn sync(root: &Path, scope: Scope, say: Sink) -> u8 {
     0
 }
 
-/// An operation git has stopped in the middle of, by the marker it leaves in the git
-/// directory.
-fn in_progress(git_dir: &Path) -> Option<&'static str> {
-    [
-        ("rebase-merge", "rebase"),
-        ("rebase-apply", "rebase"),
-        ("MERGE_HEAD", "merge"),
-        ("CHERRY_PICK_HEAD", "cherry-pick"),
-        ("REVERT_HEAD", "revert"),
-        ("BISECT_LOG", "bisect"),
-    ]
-    .into_iter()
-    .find(|(marker, _)| std::fs::symlink_metadata(git_dir.join(marker)).is_ok())
-    .map(|(_, what)| what)
-}
-
 /// Whether a remote URL goes over SSH: `ssh://…`, or scp-style `host:path`.
 fn is_ssh(url: &str) -> bool {
     if url.starts_with("ssh://") || url.starts_with("git+ssh://") || url.starts_with("ssh+git://") {
@@ -114,7 +99,8 @@ fn sync_one(root: &Path, ws: &str, repo: &repos::Repo, say: Sink) {
     }
     // `repos::clones` admits a `.git` that is a directory and nothing else, so this is the
     // git directory itself.
-    if let Some(what) = in_progress(&d.join(".git")) {
+    if let Some(what) = gitstate::Operation::in_progress(&d.join(".git")) {
+        let what = what.word();
         say(Say::Warn(format!(
             "{label}: a {what} is in progress — skipping (finish or abort it first; nothing \
              was fetched or moved)."

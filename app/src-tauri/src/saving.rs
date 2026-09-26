@@ -58,7 +58,8 @@ pub struct PlaneSaving {
     pub push_failed: Option<String>,
     /// The LIVE workspaces, whose charter, memory and todos a save publishes (charter-app#301).
     pub live: Vec<String>,
-    /// The files the last rebase conflicted in, when that is why the save is blocked.
+    /// The files to settle, when conflicts are why the save is blocked: a merge or rebase
+    /// stopped part-way, or the last save's own rebase.
     pub conflicts: Vec<String>,
     /// What a save cannot do here that is not a block (a PR mode with no forge to open it on).
     pub notice: Option<String>,

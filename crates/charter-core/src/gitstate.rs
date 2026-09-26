@@ -1,5 +1,6 @@
 //! The third answer: charter asked git and git could not say. A port of the part of
-//! `charter/gitstate.py` that `save` needs.
+//! `charter/gitstate.py` that `save` needs — and the one place charter asks whether git has
+//! stopped part-way through something ([`stopped`]).
 //!
 //! A `git add` that failed stages nothing, so the `git diff --cached --quiet` after it says
 //! there is no difference. The value that means *charter could not tell* is byte for byte the
@@ -112,6 +113,154 @@ pub fn find(git_dir: &Path) -> Option<IndexLock> {
         size: meta.len(),
         age,
     })
+}
+
+/// An operation git stopped in the middle of, by the marker it leaves in the git directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    Merge,
+    Rebase,
+    /// `git am`, which stops in the same `rebase-apply` directory a rebase does.
+    Am,
+    CherryPick,
+    Revert,
+    Bisect,
+}
+
+impl Operation {
+    /// The markers, in the order they are asked for. One list for every caller (#433): the
+    /// save, the pull and `charter sync` each kept their own, and they had drifted apart.
+    const MARKERS: [(&'static str, Self); 7] = [
+        ("rebase-merge", Self::Rebase),
+        ("rebase-apply", Self::Rebase),
+        ("REBASE_HEAD", Self::Rebase),
+        ("MERGE_HEAD", Self::Merge),
+        ("CHERRY_PICK_HEAD", Self::CherryPick),
+        ("REVERT_HEAD", Self::Revert),
+        ("BISECT_LOG", Self::Bisect),
+    ];
+
+    /// The operation stopped in `git_dir`, or `None`. A marker counts whatever it is — a
+    /// file, a directory, a dangling link — because git's own test is that the name exists.
+    pub fn in_progress(git_dir: &Path) -> Option<Self> {
+        Self::MARKERS
+            .into_iter()
+            .find(|(marker, _)| std::fs::symlink_metadata(git_dir.join(marker)).is_ok())
+            .map(|(marker, op)| {
+                // `git am` leaves `rebase-apply/applying`; a rebase never does.
+                if marker == "rebase-apply" && git_dir.join(marker).join("applying").exists() {
+                    Self::Am
+                } else {
+                    op
+                }
+            })
+    }
+
+    /// The word for it: "a merge is stopped part-way".
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Rebase => "rebase",
+            Self::Am => "`git am`",
+            Self::CherryPick => "cherry-pick",
+            Self::Revert => "revert",
+            Self::Bisect => "bisect",
+        }
+    }
+
+    /// How to finish it, or back out of it, in git's own commands.
+    fn way_out(self) -> &'static str {
+        match self {
+            Self::Merge => "`git commit` to finish the merge, or `git merge --abort`",
+            Self::Rebase => "`git rebase --continue`, or `git rebase --abort`",
+            Self::Am => "`git am --continue`, or `git am --abort`",
+            Self::CherryPick => "`git cherry-pick --continue`, or `git cherry-pick --abort`",
+            Self::Revert => "`git revert --continue`, or `git revert --abort`",
+            Self::Bisect => "`git bisect reset` once you are done bisecting",
+        }
+    }
+}
+
+/// A tree git has stopped part-way through something in: an [`Operation`] left unfinished,
+/// files it still calls unmerged, or both. **A save refuses while there is one** (#433):
+/// `git add -A` would stage the conflict markers as if they were the resolution, and the
+/// commit would land them — or land a half-replayed rebase on a detached HEAD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stopped {
+    /// `None` when only unmerged files are left — a `git stash pop` that conflicted.
+    pub operation: Option<Operation>,
+    /// The files git calls unmerged, sorted.
+    pub unmerged: Vec<String>,
+}
+
+impl Stopped {
+    /// What is wrong and how to get out of it, as one clause — the Blocked line, the
+    /// journal's detail and the refusal all say this.
+    pub fn why(&self) -> String {
+        let files = (!self.unmerged.is_empty())
+            .then(|| format!(" with conflicts in {}", self.unmerged.join(", ")));
+        let settle = if self.unmerged.is_empty() {
+            ""
+        } else {
+            "settle the conflicts and `git add` the files, then "
+        };
+        match self.operation {
+            Some(op) => format!(
+                "a {} is stopped part-way{}; {settle}{}",
+                op.word(),
+                files.unwrap_or_default(),
+                op.way_out()
+            ),
+            None => format!(
+                "the tree has conflicts to settle first in {}; settle them and `git add` the \
+                 files",
+                self.unmerged.join(", ")
+            ),
+        }
+    }
+}
+
+/// Whether git has stopped part-way through something in the work tree at `tree` — the one
+/// check every save, the pull and `charter sync` ask (#433). `None` when it has not, and when
+/// git cannot say: a caller that cannot read the tree refuses on that, in its own words.
+pub fn stopped(tree: &Path) -> Option<Stopped> {
+    // Asked of git, not joined onto `.git`: a linked worktree keeps its merge and rebase
+    // markers in `<main>/.git/worktrees/<name>`.
+    let git_dir = crate::worktree::git::run(
+        tree,
+        &["rev-parse", "--absolute-git-dir"],
+        crate::worktree::git::READ,
+    )
+    .ok()
+    .filter(Run::ok)
+    .map_or_else(|| tree.join(".git"), |r| PathBuf::from(r.line().trim()));
+    let operation = Operation::in_progress(&git_dir);
+    let unmerged = unmerged(tree);
+    (operation.is_some() || !unmerged.is_empty()).then_some(Stopped {
+        operation,
+        unmerged,
+    })
+}
+
+/// The files git calls unmerged in `tree`, sorted.
+pub fn unmerged(tree: &Path) -> Vec<String> {
+    crate::worktree::git::run(
+        tree,
+        &["diff", "--name-only", "--diff-filter=U", "-z"],
+        crate::worktree::git::READ,
+    )
+    .map(|r| {
+        let mut out: Vec<String> = r
+            .out
+            .split('\0')
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    })
+    .unwrap_or_default()
 }
 
 /// The first line git actually wrote, or `""`.
@@ -241,5 +390,120 @@ mod tests {
         let found = find(dir.path()).expect("the lock");
         assert_eq!(age_phrase(found.age), "1h", "{}", found.age);
         assert_eq!(found.size, 1);
+    }
+
+    // ----------------------------------------------------------------------------------- //
+    // `stopped`: one check for every save, the pull and `charter sync` (#433)               //
+    // ----------------------------------------------------------------------------------- //
+
+    fn git(dir: &Path, args: &[&str]) -> Run {
+        crate::testgit::run(dir, args)
+    }
+
+    /// A repo on `main` whose README.md was changed on `side` and on `main` both, so a
+    /// merge, rebase, cherry-pick or revert of the one onto the other conflicts in it.
+    fn diverged() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for args in [
+            &["init", "-q", "-b", "main", "."][..],
+            &["config", "user.name", "Fixture"],
+            &["config", "user.email", "fixture@example.invalid"],
+        ] {
+            assert!(git(root, args).ok());
+        }
+        let commit = |text: &str| {
+            std::fs::write(root.join("README.md"), text).unwrap();
+            assert!(git(root, &["add", "-A"]).ok());
+            assert!(git(root, &["commit", "-q", "-m", text.trim()]).ok());
+        };
+        commit("one\n");
+        assert!(git(root, &["checkout", "-q", "-b", "side"]).ok());
+        commit("side\n");
+        assert!(git(root, &["checkout", "-q", "main"]).ok());
+        commit("main\n");
+        dir
+    }
+
+    #[test]
+    fn a_clean_tree_has_stopped_nowhere() {
+        let dir = diverged();
+        assert_eq!(stopped(dir.path()), None);
+    }
+
+    #[test]
+    fn a_conflicted_merge_is_stopped_with_its_file_and_its_way_out() {
+        let dir = diverged();
+        assert!(!git(dir.path(), &["merge", "side"]).ok());
+
+        let got = stopped(dir.path()).expect("stopped");
+
+        assert_eq!(got.operation, Some(Operation::Merge));
+        assert_eq!(got.unmerged, vec!["README.md".to_string()]);
+        let why = got.why();
+        assert!(why.contains("a merge is stopped part-way"), "{why}");
+        assert!(why.contains("README.md"), "{why}");
+        assert!(why.contains("git merge --abort"), "{why}");
+    }
+
+    #[test]
+    fn a_rebase_stopped_part_way_is_a_rebase() {
+        let dir = diverged();
+        assert!(!git(dir.path(), &["rebase", "side"]).ok());
+
+        let got = stopped(dir.path()).expect("stopped");
+
+        assert_eq!(got.operation, Some(Operation::Rebase));
+        assert!(got.why().contains("git rebase --abort"), "{}", got.why());
+    }
+
+    #[test]
+    fn a_revert_that_conflicted_is_a_revert() {
+        let dir = diverged();
+        // Reverting `one` on top of `main` conflicts: `main` changed the line `one` added.
+        assert!(!git(dir.path(), &["revert", "--no-edit", "main~1"]).ok());
+        assert!(dir.path().join(".git/REVERT_HEAD").exists());
+
+        let got = stopped(dir.path()).expect("stopped");
+
+        assert_eq!(got.operation, Some(Operation::Revert));
+        assert!(got.why().contains("git revert --abort"), "{}", got.why());
+    }
+
+    #[test]
+    fn a_bisect_under_way_is_stopped_even_with_nothing_unmerged() {
+        let dir = diverged();
+        assert!(git(dir.path(), &["bisect", "start"]).ok());
+        assert!(dir.path().join(".git/BISECT_LOG").exists());
+
+        let got = stopped(dir.path()).expect("stopped");
+
+        assert_eq!(got.operation, Some(Operation::Bisect));
+        assert!(got.unmerged.is_empty());
+        assert!(got.why().contains("git bisect reset"), "{}", got.why());
+    }
+
+    #[test]
+    fn every_marker_git_leaves_is_one_operation() {
+        let dir = tempfile::tempdir().unwrap();
+        for (marker, op) in [
+            ("MERGE_HEAD", Operation::Merge),
+            ("rebase-merge", Operation::Rebase),
+            ("rebase-apply", Operation::Rebase),
+            ("REBASE_HEAD", Operation::Rebase),
+            ("CHERRY_PICK_HEAD", Operation::CherryPick),
+            ("REVERT_HEAD", Operation::Revert),
+            ("BISECT_LOG", Operation::Bisect),
+        ] {
+            let git_dir = dir.path().join(marker.to_lowercase());
+            std::fs::create_dir_all(&git_dir).unwrap();
+            assert_eq!(Operation::in_progress(&git_dir), None, "{marker}");
+            std::fs::write(git_dir.join(marker), "").unwrap();
+            assert_eq!(Operation::in_progress(&git_dir), Some(op), "{marker}");
+        }
+        let am = dir.path().join("am");
+        std::fs::create_dir_all(am.join("rebase-apply")).unwrap();
+        std::fs::write(am.join("rebase-apply/applying"), "").unwrap();
+        assert_eq!(Operation::in_progress(&am), Some(Operation::Am));
     }
 }

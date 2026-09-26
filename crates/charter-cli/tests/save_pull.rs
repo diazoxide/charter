@@ -1,4 +1,5 @@
-//! `charter save --pull`, asked of the binary (#375).
+//! `charter save --pull`, asked of the binary (#375) — and plain `charter save` over conflicts
+//! (#433).
 //!
 //! A chat the app did not start has no auto-save and no incoming loop: outside the app the
 //! plane is saved only through `charter save`. `--pull` is that loop's fetch-and-fast-forward
@@ -165,24 +166,31 @@ fn save_pull_in_a_plane_with_unsaved_work_leaves_what_came_in_and_still_saves() 
     assert_eq!(world.git(&world.root, &["status", "--porcelain"]), "");
 }
 
+impl World {
+    /// README.md changed on `side` and on `main` both, and a merge of `side` stopped on it.
+    fn conflicted(&self) {
+        let root = &self.root;
+        self.git(root, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(root.join("README.md"), "side\n").unwrap();
+        self.git(root, &["commit", "-q", "-am", "side"]);
+        self.git(root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("README.md"), "main\n").unwrap();
+        self.git(root, &["commit", "-q", "-am", "main"]);
+        let merge = Command::new("git")
+            .args(["merge", "side"])
+            .current_dir(root)
+            .env("HOME", &self.home)
+            .envs(IDENTITY)
+            .output()
+            .unwrap();
+        assert!(!merge.status.success(), "the merge stops on its conflict");
+    }
+}
+
 #[test]
 fn save_pull_in_a_plane_with_conflicts_refuses_and_saves_nothing() {
     let world = World::new();
-    let root = &world.root;
-    world.git(root, &["checkout", "-q", "-b", "side"]);
-    std::fs::write(root.join("README.md"), "side\n").unwrap();
-    world.git(root, &["commit", "-q", "-am", "side"]);
-    world.git(root, &["checkout", "-q", "main"]);
-    std::fs::write(root.join("README.md"), "main\n").unwrap();
-    world.git(root, &["commit", "-q", "-am", "main"]);
-    let merge = Command::new("git")
-        .args(["merge", "side"])
-        .current_dir(root)
-        .env("HOME", &world.home)
-        .envs(IDENTITY)
-        .output()
-        .unwrap();
-    assert!(!merge.status.success(), "the merge stops on its conflict");
+    world.conflicted();
     let before = world.head();
 
     let (code, said) = world.charter(&["save", "--pull", "--no-push"]);
@@ -192,4 +200,25 @@ fn save_pull_in_a_plane_with_conflicts_refuses_and_saves_nothing() {
     assert!(said.contains("README.md"), "{said}");
     assert!(said.contains("Nothing was saved"), "{said}");
     assert_eq!(world.head(), before, "no commit: {said}");
+}
+
+/// Plain `charter save`, no `--pull`: it staged the conflict markers and committed them (#433).
+#[test]
+fn a_plain_save_in_a_plane_with_conflicts_refuses_and_commits_no_markers() {
+    let world = World::new();
+    world.conflicted();
+    let before = world.head();
+
+    let (code, said) = world.charter(&["save", "--no-push"]);
+
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("a merge is stopped part-way"), "{said}");
+    assert!(said.contains("README.md"), "{said}");
+    assert!(said.contains("git merge --abort"), "{said}");
+    assert_eq!(world.head(), before, "no commit: {said}");
+    assert_eq!(
+        world.git(&world.root, &["diff", "--name-only", "--diff-filter=U"]),
+        "README.md",
+        "nothing staged over the conflict: {said}"
+    );
 }
