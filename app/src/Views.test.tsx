@@ -4,6 +4,8 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ViewPane } from "./Views";
+import { catalogue, catalogued, type Offer } from "./actions";
+import { noTabs } from "./tabs";
 import type { ActionAnswer, ExtensionView, PanelBlock, RowAction, ViewAnswer } from "./bindings";
 import type { ViewRef } from "./tabs";
 
@@ -125,6 +127,8 @@ function draw(
     onAsk?: () => void;
     strict?: boolean;
     workspace?: string;
+    offerFor?: (id: string) => Offer | undefined;
+    onPress?: (offer: Offer) => void;
   } = {},
 ) {
   const pane = (
@@ -138,6 +142,8 @@ function draw(
       onOpenView={on.onOpenView ?? (() => {})}
       onAsk={on.onAsk ?? (() => {})}
       onVaultChanged={() => {}}
+      offerFor={on.offerFor}
+      onPress={on.onPress}
     />
   );
   render(on.strict ? <StrictMode>{pane}</StrictMode> : pane);
@@ -545,5 +551,41 @@ describe("a workspace's changes", () => {
 
     expect(await screen.findByText(read)).toBeInTheDocument();
     expect(opened).toHaveLength(2);
+  });
+});
+
+describe("a persona's tab heading (SI-3)", () => {
+  const offers = catalogued(
+    catalogue({
+      tabs: noTabs(),
+      workspaces: [],
+      plane: PLANE,
+      personas: ["steward"],
+      needsYou: [],
+      nameOf: String,
+    }),
+  );
+
+  it("offers the persona's persona.md to the editor, and its deletion, as the catalogue's rows", async () => {
+    core(() => PERSONA);
+    const pressed: Offer[] = [];
+    draw(STEWARD, { offerFor: (id) => offers.get(id), onPress: (offer) => pressed.push(offer) });
+
+    const head = screen.getByRole("heading", { name: /steward/ }).closest("header");
+    if (head === null) throw new Error("the view has no heading");
+    await userEvent.click(within(head).getByRole("button", { name: "Edit steward's persona.md" }));
+    await userEvent.click(within(head).getByRole("button", { name: "Delete persona steward…" }));
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      { verb: "editPersona", persona: "steward" },
+      { verb: "removePersona", persona: "steward" },
+    ]);
+  });
+
+  it("draws neither when the window hands it no catalogue", () => {
+    core(() => PERSONA);
+    draw(STEWARD);
+
+    expect(screen.queryByRole("button", { name: /persona\.md/ })).toBeNull();
   });
 });

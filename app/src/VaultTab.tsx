@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type Ref } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Menu from "@radix-ui/react-dropdown-menu";
@@ -57,11 +66,14 @@ export function VaultTab({
   plane,
   vault,
   onChanged,
+  actions,
 }: {
   plane: PlaneId;
   vault: string;
   /** A write changed the vault: the window reads its vault list again. */
   onChanged: () => void;
+  /** Buttons for the heading — Delete vault… (SI-3), the catalogue's row drawn by the view. */
+  actions?: ReactNode;
 }) {
   const [said, setSaid] = useState<{ contents?: VaultContents; trouble?: string }>();
   const [query, setQuery] = useState("");
@@ -223,6 +235,7 @@ export function VaultTab({
             <span className="panel-from">{` · ${contents.provider} · ${counted(contents.count)}`}</span>
           )}
         </h2>
+        {actions}
       </header>
       <div className="view-body">
         {said === undefined ? (

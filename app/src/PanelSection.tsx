@@ -1,4 +1,6 @@
+import { Plus } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
+import type { Offer } from "./actions";
 
 /**
  * One section of the Attention region: **its heading, and whatever it holds under it.**
@@ -47,5 +49,38 @@ export function PanelSection({
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * A `+` on a section's heading: **the catalogue's row that makes one more of what the section
+ * lists** — `vault.create` on the Vaults section, `persona.create` on the Personas panel (SI-3).
+ *
+ * The row is the catalogue's, so the palette and the heading cannot disagree about what it does
+ * or whether it can run; a row the catalogue does not offer draws no button. Its mark alone, with
+ * the row's title as its accessible name — the one exception `docs/design-system.md` makes for a
+ * glyph without words, and the operator's own ask for a `+` here.
+ */
+export function HeadingOffer({
+  offer,
+  onPress,
+}: {
+  offer?: Offer;
+  onPress: (offer: Offer) => void;
+}) {
+  if (!offer) return null;
+  return (
+    <button
+      type="button"
+      className="panel-view"
+      // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+      tabIndex={0}
+      aria-label={offer.title}
+      title={offer.available ? (offer.note ?? offer.title) : offer.reason}
+      disabled={!offer.available}
+      onClick={() => onPress(offer)}
+    >
+      <Plus className="node-icon" aria-hidden="true" />
+    </button>
   );
 }

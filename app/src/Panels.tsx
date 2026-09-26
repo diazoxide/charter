@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   ChartColumn,
   Circle,
   CircleDashed,
+  Plus,
   FileText,
   FolderGit2,
   GitBranch,
@@ -13,7 +14,7 @@ import {
 } from "lucide-react";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
-import { PanelSection } from "./PanelSection";
+import { HeadingOffer, PanelSection } from "./PanelSection";
 import { Vaults, type VaultsSaid } from "./Vaults";
 import { Chart, Facts } from "./Views";
 import { commands, type ExtensionView, type PanelView } from "./bindings";
@@ -56,6 +57,7 @@ export function Panels({
   shownRow,
   onShowRow,
   vaults,
+  onAddTodo,
 }: {
   /** The focused workspace, whose todos these are. */
   workspace: string | undefined;
@@ -84,6 +86,12 @@ export function Panels({
   /** The plane's vaults, drawn under the workspace's panels (`useVaults`, which the window
    *  holds). A vault is the plane's, so they are drawn with no workspace focused too. */
   vaults?: Pick<VaultsSaid, "vaults" | "trouble">;
+  /**
+   * Record a todo in the named workspace, answering the core's refusal or `undefined` (SI-3).
+   * The workspace is named on every call, never implied: the box says which workspace it
+   * writes to, and it sends that one.
+   */
+  onAddTodo?: (workspace: string, text: string) => Promise<string | undefined>;
 }) {
   const { panels, trouble } = state;
 
@@ -125,6 +133,8 @@ export function Panels({
               <Contributed
                 key={panel.key}
                 panel={panel}
+                workspace={workspace}
+                onAddTodo={onAddTodo}
                 offers={offers}
                 onPress={onPress}
                 shownRow={shownRow}
@@ -197,6 +207,8 @@ const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
  */
 function Contributed({
   panel,
+  workspace,
+  onAddTodo,
   offers,
   onPress,
   shownRow,
@@ -204,6 +216,9 @@ function Contributed({
   views,
 }: {
   panel: PanelView;
+  /** The focused workspace, which charter's todos panel writes to. */
+  workspace: string;
+  onAddTodo?: (workspace: string, text: string) => Promise<string | undefined>;
   offers: Catalogued;
   onPress: (offer: Offer) => void;
   shownRow: string | undefined;
@@ -223,14 +238,27 @@ function Contributed({
       mark={Mark}
       title={panel.title}
       provenance={panel.from ?? undefined}
-      actions={views.map((view) => (
-        <ViewButton
-          key={`${view.extension}/${view.id}`}
-          offer={offers.get(`view.open:${view.extension}/${view.id}`)}
-          onPress={onPress}
-        />
-      ))}
+      actions={
+        <>
+          {views.map((view) => (
+            <ViewButton
+              key={`${view.extension}/${view.id}`}
+              offer={offers.get(`view.open:${view.extension}/${view.id}`)}
+              onPress={onPress}
+            />
+          ))}
+          {/* charter's own panels are about things charter can make (SI-3): the heading's `+`
+              is the catalogue's row for one more. By key, as the menus below are — the one
+              place this file says what a panel is about. */}
+          {panel.key === PERSONAS && (
+            <HeadingOffer offer={offers.get("persona.create")} onPress={onPress} />
+          )}
+        </>
+      }
     >
+      {panel.key === TODOS && onAddTodo !== undefined && (
+        <AddTodo workspace={workspace} onAdd={onAddTodo} />
+      )}
       {panel.blocks.map((block, at) =>
         block.kind === "chart" ? (
           <Chart key={at} chart={block} />
@@ -265,7 +293,18 @@ function Contributed({
               if (offer) onPress(offer);
             }}
             wrap={(row, item) =>
-              panel.key === "charter/personas" ? (
+              panel.key === TODOS ? (
+                /* Mark done, and forget (SI-3): the catalogue's rows for this todo in the
+                   focused workspace, which is the one this panel is about. */
+                <Menued
+                  key={row.key}
+                  on={{ on: "todo", slug: row.key }}
+                  offers={offers}
+                  onPress={onPress}
+                >
+                  {item}
+                </Menued>
+              ) : panel.key === PERSONAS ? (
                 /* Right-click is the third reader of the catalogue (`Menus.tsx`), and on a
                    persona it has exactly one honest row: what the plane says this persona is.
                    `asChild`, so the list gains no element. */
@@ -285,6 +324,71 @@ function Contributed({
         ),
       )}
     </PanelSection>
+  );
+}
+
+/** charter's own panels, by the key `charter_core::panel::Panel::key` gives them. */
+const TODOS = "charter/todos";
+const PERSONAS = "charter/personas";
+
+/**
+ * The Todos panel's box: **a todo typed here goes to the focused workspace, and the box says
+ * which** (SI-3). Its accessible name and its placeholder both name the workspace, because a todo
+ * recorded in the wrong one is a list that lies about what is left in both.
+ *
+ * The core decides what is recorded (`todo_add`, which is `Workspace::record_todo`): a todo with
+ * no words, or one about work already on the list, is refused in its words, drawn under the box,
+ * and the box keeps what was typed so the operator can change it. The list itself is redrawn
+ * from the plane — the write changes the disk, and the window reads the disk again.
+ */
+function AddTodo({
+  workspace,
+  onAdd,
+}: {
+  workspace: string;
+  onAdd: (workspace: string, text: string) => Promise<string | undefined>;
+}) {
+  const [text, setText] = useState("");
+  const [trouble, setTrouble] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const refusal = useId();
+  const add = async () => {
+    const words = text.trim();
+    if (words === "" || busy) return;
+    setBusy(true);
+    const refused = await onAdd(workspace, words);
+    setBusy(false);
+    setTrouble(refused);
+    if (refused === undefined) setText("");
+  };
+  return (
+    <>
+      <form
+        className="panel-search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void add();
+        }}
+      >
+        <Plus className="node-icon" aria-hidden="true" />
+        <input
+          value={text}
+          aria-label={`New todo in ${workspace}`}
+          aria-describedby={trouble === undefined ? undefined : refusal}
+          placeholder={`Add a todo to ${workspace}…`}
+          autoComplete="off"
+          // Read-only rather than disabled while it is sent: a disabled box drops the keyboard,
+          // and the next todo is typed into the same box.
+          readOnly={busy}
+          onChange={(event) => setText(event.target.value)}
+        />
+      </form>
+      {trouble !== undefined && (
+        <p className="trouble" role="alert" id={refusal}>
+          {trouble}
+        </p>
+      )}
+    </>
   );
 }
 
