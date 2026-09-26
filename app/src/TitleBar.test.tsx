@@ -7,7 +7,7 @@ import App from "./App";
 import { LEAST, leastAt } from "./fits";
 import { DEFAULT_TEXT } from "./textSize";
 import { TitleBar } from "./TitleBar";
-import type { About, Moved, OpenChat, PlaneSaving } from "./bindings";
+import type { About, Moved, OpenChat, PlaneSaving, RepoSaving } from "./bindings";
 
 /**
  * **The title bar's own rules**, on the component, and **what the bar holds in the window**
@@ -266,6 +266,25 @@ describe("the save indicator (charter-app#294)", () => {
     };
   }
 
+  /** A workspace repo at `stage`, with everything not under test left plain. */
+  function repo(name: string, stage: string): RepoSaving {
+    return {
+      name,
+      mode: "pr",
+      modeFrom: "charter.toml",
+      autosave: false,
+      stage,
+      branch: "feature",
+      changed: 0,
+      ahead: 0,
+      pr: null,
+      blocked: null,
+      pushes: true,
+      target: "main",
+      ownBranch: false,
+    };
+  }
+
   it("says where the project's unsaved work sits, and opens the Saving tab when pressed", async () => {
     const opened: string[] = [];
     render(
@@ -309,6 +328,62 @@ describe("the save indicator (charter-app#294)", () => {
     );
     expect(screen.getByRole("button", { name: "Saving: Saved" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save the project" })).toBeNull();
+  });
+
+  it("shows what came in as its own ↓N, outside the words the cap cuts (charter#403)", () => {
+    // The operator's ruling: the words keep their 12rem cap, and the incoming count is never
+    // cut with them. A blocked stage is a whole sentence, which is exactly what the cap cuts.
+    const blocked = "this plane is not a git repository, so there is nothing to commit to";
+    render(
+      <TitleBar
+        save={{
+          saving: saving({ stage: "blocked", blocked, changed: [], behind: 12 }),
+          busy: false,
+          onOpen: () => {},
+          onSave: () => {},
+        }}
+      />,
+    );
+
+    // Said in full to whoever reads the button's name or its tooltip.
+    const where = screen.getByRole("button", {
+      name: `Saving: Blocked: ${blocked} · 12 incoming`,
+    });
+    const incoming = within(where).getByText("↓12");
+    expect(incoming.closest(".save-indicator-words")).toBeNull();
+    const words = where.querySelector(".save-indicator-words");
+    expect(words?.textContent).toBe(`Blocked: ${blocked}`);
+  });
+
+  it("carries the same ↓N when the furthest-back stage is a repo's", () => {
+    render(
+      <TitleBar
+        save={{
+          saving: saving({ stage: "saved", changed: [], behind: 3 }),
+          repos: [repo("svc", "pr-open"), repo("web", "pr-open")],
+          busy: false,
+          onOpen: () => {},
+          onSave: () => {},
+        }}
+      />,
+    );
+
+    const where = screen.getByRole("button", {
+      name: "Saving: 2 repos waiting on their pull requests · 3 incoming",
+    });
+    expect(within(where).getByText("↓3").closest(".save-indicator-words")).toBeNull();
+    expect(where.querySelector(".save-indicator-words")?.textContent).toBe(
+      "2 repos waiting on their pull requests",
+    );
+  });
+
+  it("draws no ↓ while nothing has come in", () => {
+    render(
+      <TitleBar
+        save={{ saving: saving({ behind: 0 }), busy: false, onOpen: () => {}, onSave: () => {} }}
+      />,
+    );
+    expect(screen.queryByText(/^↓/)).toBeNull();
   });
 
   it("draws nothing without a project to save", () => {

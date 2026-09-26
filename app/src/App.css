@@ -4399,14 +4399,24 @@ h2.sidebar-title .node-icon {
    what it spends the project tabs lose. A stage can be a whole sentence — a plane that is not a
    git repository says *"Blocked: this plane is not a git repository, so there is nothing to
    commit to"*, 437 px of it — and in a 1024 px window that left the strip room for one project
-   tab. The short stages ("Saved", "2 repos changed · 3 incoming") fit whole; a sentence is cut
-   with an ellipsis, and is read in full from the button's `title` or the Saving view it opens.
-   `title-bar.e2e.ts` holds the window to room for two tabs. */
+   tab. The short stages ("Saved", "2 repos changed") fit whole; a sentence is cut with an
+   ellipsis, and is read in full from the button's `title` or the Saving view it opens.
+   `title-bar.e2e.ts` holds a 1024 px window, the narrowest there is (ADR 0054), to room for two
+   tabs. */
 .save-indicator-words {
   max-width: 12rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* **What came in is never cut** (charter#403, ADR 0054). It is its own `↓N` after the words
+   rather than the end of them, where the ellipsis took it first; ADR 0051 wants the count
+   seen. It does not shrink, and it is short enough that it never starves the tabs. */
+.save-indicator-incoming {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* The Saving view (charter-app#294). */

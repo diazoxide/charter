@@ -527,7 +527,7 @@ export function SaveIndicator({
   onOpen: () => void;
   onSave: () => void;
 }) {
-  const { stage, said } = furthestBack(saving, repos ?? []);
+  const { stage, said, words, incoming } = furthestBack(saving, repos ?? []);
   const Mark = stage === "blocked" ? CircleAlert : stage === "saved" ? CircleCheck : CircleDot;
   return (
     <span className="save-indicator" data-stage={stage}>
@@ -540,7 +540,14 @@ export function SaveIndicator({
         onClick={onOpen}
       >
         <Mark aria-hidden="true" />
-        <span className="save-indicator-words">{said}</span>
+        <span className="save-indicator-words">{words}</span>
+        {/* What came in, as its own element the words' cap never cuts (charter#403). Its
+            meaning is in the button's name and title, which say "N incoming" in full. */}
+        {incoming > 0 && (
+          <span className="save-indicator-incoming" aria-hidden="true">
+            ↓{incoming}
+          </span>
+        )}
       </button>
       {savable(saving) && (
         <button
@@ -567,29 +574,35 @@ export function SaveIndicator({
  * The furthest-back stage across the plane and its repos (ADR 0051), and how the title bar
  * says it: the plane's own words when the plane is that far back, else how many repos are.
  * A repo charter never saves (`off`) is not counted.
+ *
+ * `words` is the stage alone and `incoming` how many commits came in and were not pulled, so
+ * the bar can draw the count as its own `↓N` beside words it caps (charter#403, ADR 0054).
+ * `said` is both together, for the button's name and title.
  */
 export function furthestBack(
   saving: PlaneSaving,
   repos: readonly RepoSaving[],
-): { stage: string; said: string } {
+): { stage: string; said: string; words: string; incoming: number } {
+  const incoming = saving.behind ?? 0;
   const counted = repos.filter((repo) => repo.stage !== "off");
   const stage = counted.reduce(
     (far, repo) => (behindness(repo.stage) < behindness(far) ? repo.stage : far),
     saving.stage,
   );
-  if (behindness(saving.stage) <= behindness(stage)) return { stage, said: stageText(saving) };
+  if (behindness(saving.stage) <= behindness(stage)) {
+    const words = stageWords(saving);
+    return { stage, said: withIncoming(words, incoming), words, incoming };
+  }
   const n = counted.filter((repo) => repo.stage === stage).length;
-  const words: Record<string, [string, string]> = {
+  const phrases: Record<string, [string, string]> = {
     blocked: ["blocked", "blocked"],
     changed: ["changed", "changed"],
     committed: ["committed, not pushed", "committed, not pushed"],
     "pr-open": ["waiting on its pull request", "waiting on their pull requests"],
   };
-  const [one, many] = words[stage] ?? [stage, stage];
-  const said = n === 1 ? `1 repo ${one}` : `${n} repos ${many}`;
-  const incoming =
-    saving.behind !== null && saving.behind > 0 ? ` · ${saving.behind} incoming` : "";
-  return { stage, said: `${said}${incoming}` };
+  const [one, many] = phrases[stage] ?? [stage, stage];
+  const words = n === 1 ? `1 repo ${one}` : `${n} repos ${many}`;
+  return { stage, said: withIncoming(words, incoming), words, incoming };
 }
 
 /** Whether pressing Save could do anything: files to commit, a blocked save to try again, or
@@ -605,8 +618,12 @@ export function savable(saving: PlaneSaving): boolean {
 
 /** The stage, as the view and the title bar say it, and what came in and was not pulled. */
 export function stageText(saving: PlaneSaving): string {
-  const said = stageWords(saving);
-  return saving.behind !== null && saving.behind > 0 ? `${said} · ${saving.behind} incoming` : said;
+  return withIncoming(stageWords(saving), saving.behind ?? 0);
+}
+
+/** A stage's words and what came in, as one sentence: the one place "N incoming" is phrased. */
+function withIncoming(words: string, incoming: number): string {
+  return incoming > 0 ? `${words} · ${incoming} incoming` : words;
 }
 
 function stageWords(saving: PlaneSaving): string {

@@ -22,9 +22,10 @@ import { closeProject } from "../opening.js";
 const PROJECTS = '[role="tablist"][aria-label="Projects"]';
 const BAR = '[data-testid="title-bar"]';
 
-/** git in the fixture: never the machine's own config, so never its signer. */
-function git(dir: string, args: string[]): void {
-  execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+/** git in the fixture: never the machine's own config, so never its signer. Answers what it
+ *  printed, trimmed. */
+function git(dir: string, args: string[]): string {
+  return execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
     cwd: dir,
     env: {
       ...process.env,
@@ -35,8 +36,9 @@ function git(dir: string, args: string[]): void {
       GIT_COMMITTER_NAME: "fixture",
       GIT_COMMITTER_EMAIL: "fixture@example.invalid",
     },
-    stdio: "ignore",
-  });
+    stdio: ["ignore", "pipe", "ignore"],
+    encoding: "utf8",
+  }).trim();
 }
 
 /** The words the bar's indicator carries, or `null` while it draws none. */
@@ -117,5 +119,73 @@ describe("saving the project from the title bar", function () {
     // and there is nothing left for the button to take.
     await untilTheBarSays("Saving: Saved", "the bar never said the saved plane was saved");
     expect(await $(`${BAR} button[aria-label="Save the project"]`).isExisting()).toBe(false);
+  });
+
+  it("shows what came in as its own ↓N, drawn whole (charter#403)", async () => {
+    // One commit the plane has not pulled: a child of HEAD that only the remote-tracking ref
+    // holds, which is what a fetch leaves behind. There is no remote, so nothing pulls it.
+    const tree = git(plane, ["rev-parse", "HEAD^{tree}"]);
+    const incoming = git(plane, ["commit-tree", tree, "-p", "HEAD", "-m", "from elsewhere"]);
+    git(plane, ["update-ref", "refs/remotes/origin/main", incoming]);
+    await browser.execute(() => window.dispatchEvent(new Event("focus")));
+
+    await untilTheBarSays("Saving: Saved · 1 incoming", "the bar never said a commit came in");
+
+    // Its own element, outside the words the 12rem cap cuts, and not cut itself.
+    const seen = await browser.execute((bar: string) => {
+      const count = document.querySelector<HTMLElement>(`${bar} .save-indicator-incoming`);
+      return {
+        text: count?.textContent ?? null,
+        inWords: count?.closest(".save-indicator-words") !== null,
+        width: count?.clientWidth ?? 0,
+        needs: count?.scrollWidth ?? 0,
+      };
+    }, BAR);
+    expect(seen.text).toBe("↓1");
+    expect(seen.inWords).toBe(false);
+    expect(seen.width).toBeGreaterThan(0);
+    expect(seen.needs).toBeLessThanOrEqual(seen.width);
+  });
+
+  it("keeps ↓N whole when a blocked stage's words are cut (charter#403)", async () => {
+    // A `[plane] branch` the plane is not on blocks it with a sentence long enough for the
+    // 12rem cap to cut. `charter.local.toml` is ignored by git, so it is read and changes
+    // nothing a save would take. What came in is counted against the target branch's
+    // remote-tracking ref, so the incoming commit is put there too.
+    const target = "a-branch-this-plane-is-not-on-with-a-name-long-enough-to-be-cut";
+    const incoming = git(plane, ["rev-parse", "refs/remotes/origin/main"]);
+    git(plane, ["update-ref", `refs/remotes/origin/${target}`, incoming]);
+    writeFileSync(join(plane, "charter.local.toml"), `[plane]\nbranch = "${target}"\n`);
+    await browser.execute(() => window.dispatchEvent(new Event("focus")));
+
+    await untilTheBarSays(
+      `Saving: Blocked: this plane is on main, and [plane] branch is ${target} · 1 incoming`,
+      "the bar never said the plane was blocked with a commit incoming",
+    );
+
+    const seen = await browser.execute((bar: string) => {
+      const where = document.querySelector<HTMLElement>(`${bar} button[aria-label^="Saving:"]`);
+      const words = where?.querySelector<HTMLElement>(".save-indicator-words");
+      const count = where?.querySelector<HTMLElement>(".save-indicator-incoming");
+      const box = where?.getBoundingClientRect();
+      const drawn = count?.getBoundingClientRect();
+      return {
+        text: count?.textContent ?? null,
+        wordsCut: (words?.scrollWidth ?? 0) > (words?.clientWidth ?? 0),
+        countWidth: count?.clientWidth ?? 0,
+        countNeeds: count?.scrollWidth ?? 0,
+        countInside:
+          box !== undefined &&
+          drawn !== undefined &&
+          drawn.left >= box.left &&
+          drawn.right <= box.right,
+      };
+    }, BAR);
+    // The words are what the cap cuts; what came in is drawn whole, inside the button.
+    expect(seen.wordsCut).toBe(true);
+    expect(seen.text).toBe("↓1");
+    expect(seen.countWidth).toBeGreaterThan(0);
+    expect(seen.countNeeds).toBeLessThanOrEqual(seen.countWidth);
+    expect(seen.countInside).toBe(true);
   });
 });

@@ -26,6 +26,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The project strip's show-more menu lists the most recently active projects first**, after
   the ones that need you. It used to list them in the strip's order.
   ([#401](https://github.com/diazoxide/charter/issues/401))
+- **The title bar shows incoming commits as their own `↓N`.** It sits after the save
+  indicator's words and is never cut off when the words are. A long stage is still cut short
+  in the bar and read in full from its tooltip or the Saving view. The window can no longer be
+  made narrower than 1024 px; at that width the title bar keeps room for two project tabs.
+  ([#403](https://github.com/diazoxide/charter/issues/403))
 
 ### Fixed
 
