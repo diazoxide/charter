@@ -49,7 +49,8 @@
 //! - the app's socket received `sessionstart` (`freshly`), `userpromptsubmit`, `notification`
 //!   when a `"bash": "ask"` rule made opencode ask, and `stop`, each naming opencode's session;
 //! - with `CHARTER_HOOK_BINARY` naming a program that is not there, the same call was refused
-//!   ("a guard that could not answer does not allow");
+//!   ("a guard that could not answer does not allow"), and a `read` of the vault file through
+//!   opencode's own `read` tool (`filePath`) was refused by `pretooluse-read`;
 //! - `charter plugin install --harness opencode` wrote the guard-only variant, and an opencode
 //!   started with none of the app's variables refused the same read; `uninstall` removed it;
 //! - `opencode -s <id>` continued that session: no `session.created`, and `chat.message` named
@@ -62,7 +63,8 @@
 //! shim can replace the globals it calls. The shim takes its own references to the few it
 //! needs when it loads ([`shim`]), which closes the plain monkey-patch of a later plugin and
 //! not a determined one. charter reports what else opencode loads (the settings tab's plugin
-//! list, `charter doctor`) rather than claiming a containment it does not have. This is the
+//! list; `charter doctor` for the Python charter's shim) rather than claiming a containment it
+//! does not have. ADR 0058 lists what else is not covered. This is the
 //! limit the Python charter's `foreign_plugins` named, and it is the same class as a project
 //! `.claude/settings.json` that runs its own hook: guard rails, not guarantees.
 
@@ -70,7 +72,10 @@ use std::path::{Path, PathBuf};
 
 /// Where the shim sits inside the bundled plugin directory ([`crate::plugin`]). Claude Code
 /// reads only the directories it knows in a plugin, so this one rides beside them unread.
-pub const SHIM: &str = "opencode/charter.ts";
+pub const SHIM_IN_BUNDLE: &str = "opencode/charter.ts";
+
+/// The shim's file name, in the bundle and in opencode's plugin directory alike.
+pub const FILE_NAME: &str = "charter.ts";
 
 /// The variable opencode reads a whole config from, merged over every other config it reads.
 pub const CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
@@ -191,14 +196,18 @@ pub enum Arming<'a> {
 /// The shim, as the bundle carries it ([`Arming::Session`]) or as `charter plugin install`
 /// writes it ([`Arming::GuardOnly`]).
 pub fn shim(arming: Arming<'_>) -> String {
-    let (binary, variant) = match arming {
+    let (binary, variant, hooks, missing) = match arming {
         Arming::Session => (
             format!("process.env.{} || \"\"", crate::plugin::BINARY_ENV),
             "// The app loads this file for one chat, and names its own `charter` in the chat's environment.",
+            SESSION_HOOKS,
+            "refuses",
         ),
         Arming::GuardOnly(path) => (
             serde_json::Value::from(path.display().to_string()).to_string(),
             "// `charter plugin install` put this here: the guards alone, for opencode started outside the app.",
+            GUARD_HOOKS,
+            "allows",
         ),
     };
     let routes: serde_json::Map<String, serde_json::Value> = TOOLS
@@ -214,14 +223,12 @@ pub fn shim(arming: Arming<'_>) -> String {
         .iter()
         .map(|h| (h.name.to_owned(), h.timeout.into()))
         .collect();
-    let hooks = match arming {
-        Arming::Session => SESSION_HOOKS,
-        Arming::GuardOnly(_) => GUARD_HOOKS,
-    };
     TEMPLATE
         .replace("{{MARK}}", MARK)
         .replace("{{VARIANT}}", variant)
         .replace("{{BINARY}}", &binary)
+        .replace("{{BINARY_ENV}}", crate::plugin::BINARY_ENV)
+        .replace("{{DEADLINE}}", &DEADLINE.to_string())
         .replace(
             "{{ROUTES}}",
             &serde_json::to_string_pretty(&routes).expect("JSON"),
@@ -239,6 +246,7 @@ pub fn shim(arming: Arming<'_>) -> String {
             &serde_json::to_string(&EFFECTFUL).expect("JSON"),
         )
         .replace("{{HOOKS}}", hooks)
+        .replace("{{MISSING}}", missing)
 }
 
 /// The `charter` a shim [`Arming::GuardOnly`] wrote runs, read back out of its text.
@@ -266,13 +274,23 @@ pub fn session_config(shim: &Path) -> String {
     serde_json::json!({ "plugin": [url] }).to_string()
 }
 
+/// Seconds a hook the registry does not name is given — the Bash guard's own.
+const DEADLINE: u32 = 10;
+
 /// Why a chat started with `command` and `env` would run without charter's plugin — `None`
 /// when it would not.
 ///
-/// `command` is the profile's whole argv. Only the literal flag is seen: a wrapper script that
-/// adds `--pure` itself is past what charter can read, as a wrapper that adds any flag is.
+/// `command` is the profile's whole argv. The flag is seen bare or with a value attached
+/// (`--pure=true`), as opencode's parser takes it. A wrapper script that adds it itself is past
+/// what charter can read, as a wrapper that adds any flag is.
 pub fn disarmed_by(command: &[String], env: &[(String, String)]) -> Option<String> {
-    if command.iter().any(|word| word == PURE_FLAG) {
+    let pure = |word: &String| {
+        word == PURE_FLAG
+            || word
+                .strip_prefix(PURE_FLAG)
+                .is_some_and(|rest| rest.starts_with('='))
+    };
+    if command.iter().any(pure) {
         return Some(format!(
             "its command passes {PURE_FLAG}, which makes opencode load no plugin — charter's \
              guard included"
@@ -406,9 +424,12 @@ const TEMPLATE: &str = r#"{{MARK}}
 // the payload a Claude Code hook gets, and every decision is charter's. A tool call is
 // refused by throwing: opencode then runs nothing and hands the model the message.
 //
-// A guard that cannot answer does not allow. A `charter` that is missing, crashed, timed out
-// or said something this cannot read refuses the call, as charter's own guard refuses when
-// it crashes.
+// A guard that cannot answer does not allow. A `charter` that crashed, timed out or said
+// something this cannot read refuses the call, as charter's own guard refuses when it crashes.
+// A `charter` that is not there at all {{MISSING}} it: the app's own chat refuses, and the copy
+// `charter plugin install` wrote allows, as a Claude Code or Codex hook whose program is gone
+// does, because it would otherwise refuse every tool call in every opencode on the machine
+// once that charter moved. `charter doctor` names a copy whose charter is gone.
 
 const BINARY = {{BINARY}}
 
@@ -419,6 +440,9 @@ const TIMEOUTS = {{TIMEOUTS}}
 const DEFAULT_PRE = {{DEFAULT_PRE}}
 
 const EFFECTFUL = {{EFFECTFUL}}
+
+// What a `charter` that is not there does to a tool call.
+const MISSING = "{{MISSING}}"
 
 // Taken when this file loads, so a plugin loaded after it that replaces one of these does not
 // reach the guard. opencode loads every plugin into one realm; this narrows that and does not
@@ -459,6 +483,7 @@ const context = (said) => {
 
 // Why a tool call is refused, or null when it may run.
 const refusal = (said) => {
+  if (said.missing && MISSING === "allows") return null
   if (said.code === 2) return said.err.trim() || "charter refused this tool call"
   if (said.code !== 0) {
     return `charter's guard could not answer (${said.err.trim() || `exit ${said.code}`}), and a guard that could not answer does not allow`
@@ -490,7 +515,7 @@ export const CharterPlugin = async (plugin) => {
 
   // `charter hook <word>` with `payload` on stdin: its exit status, stdout and stderr.
   const run = async (word, payload, sid) => {
-    if (!BINARY) return { code: -1, out: "", err: "no charter to run (CHARTER_HOOK_BINARY is not set)" }
+    if (!BINARY) return { code: -1, out: "", err: "no charter to run ({{BINARY_ENV}} is not set)", missing: true }
     let child
     try {
       child = spawn([BINARY, "hook", word], {
@@ -501,19 +526,28 @@ export const CharterPlugin = async (plugin) => {
         stderr: "pipe",
       })
     } catch (e) {
-      return { code: -1, out: "", err: `could not start charter: ${e}` }
+      return { code: -1, out: "", err: `could not start charter: ${e}`, missing: true }
     }
-    const seconds = hasOwn(TIMEOUTS, word) ? TIMEOUTS[word] : 10
-    const timer = setTimeout(() => child.kill(), seconds * 1000)
+    // The deadline races the answer rather than waiting on the kill: a program that ignores
+    // the signal, or leaves a child holding the pipe open, must not hold the tool call.
+    const seconds = hasOwn(TIMEOUTS, word) ? TIMEOUTS[word] : {{DEADLINE}}
+    let timer
+    const late = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        child.kill(9)
+        resolve({ code: -1, out: "", err: `no answer within ${seconds}s` })
+      }, seconds * 1000)
+    })
+    const answered = Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]).then(
+      ([out, err, code]) => ({ code, out, err }),
+      (e) => ({ code: -1, out: "", err: String(e) }),
+    )
     try {
-      const [out, err, code] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-      ])
-      return { code, out, err }
-    } catch (e) {
-      return { code: -1, out: "", err: String(e) }
+      return await Promise.race([answered, late])
     } finally {
       clearTimeout(timer)
     }

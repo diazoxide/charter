@@ -5,9 +5,12 @@
 // the payload a Claude Code hook gets, and every decision is charter's. A tool call is
 // refused by throwing: opencode then runs nothing and hands the model the message.
 //
-// A guard that cannot answer does not allow. A `charter` that is missing, crashed, timed out
-// or said something this cannot read refuses the call, as charter's own guard refuses when
-// it crashes.
+// A guard that cannot answer does not allow. A `charter` that crashed, timed out or said
+// something this cannot read refuses the call, as charter's own guard refuses when it crashes.
+// A `charter` that is not there at all refuses it: the app's own chat refuses, and the copy
+// `charter plugin install` wrote allows, as a Claude Code or Codex hook whose program is gone
+// does, because it would otherwise refuse every tool call in every opencode on the machine
+// once that charter moved. `charter doctor` names a copy whose charter is gone.
 
 const BINARY = process.env.CHARTER_HOOK_BINARY || ""
 
@@ -65,6 +68,9 @@ const DEFAULT_PRE = "pretooluse"
 
 const EFFECTFUL = ["bash","edit","write"]
 
+// What a `charter` that is not there does to a tool call.
+const MISSING = "refuses"
+
 // Taken when this file loads, so a plugin loaded after it that replaces one of these does not
 // reach the guard. opencode loads every plugin into one realm; this narrows that and does not
 // close it (charter reports the other plugins opencode loads).
@@ -104,6 +110,7 @@ const context = (said) => {
 
 // Why a tool call is refused, or null when it may run.
 const refusal = (said) => {
+  if (said.missing && MISSING === "allows") return null
   if (said.code === 2) return said.err.trim() || "charter refused this tool call"
   if (said.code !== 0) {
     return `charter's guard could not answer (${said.err.trim() || `exit ${said.code}`}), and a guard that could not answer does not allow`
@@ -135,7 +142,7 @@ export const CharterPlugin = async (plugin) => {
 
   // `charter hook <word>` with `payload` on stdin: its exit status, stdout and stderr.
   const run = async (word, payload, sid) => {
-    if (!BINARY) return { code: -1, out: "", err: "no charter to run (CHARTER_HOOK_BINARY is not set)" }
+    if (!BINARY) return { code: -1, out: "", err: "no charter to run (CHARTER_HOOK_BINARY is not set)", missing: true }
     let child
     try {
       child = spawn([BINARY, "hook", word], {
@@ -146,19 +153,28 @@ export const CharterPlugin = async (plugin) => {
         stderr: "pipe",
       })
     } catch (e) {
-      return { code: -1, out: "", err: `could not start charter: ${e}` }
+      return { code: -1, out: "", err: `could not start charter: ${e}`, missing: true }
     }
+    // The deadline races the answer rather than waiting on the kill: a program that ignores
+    // the signal, or leaves a child holding the pipe open, must not hold the tool call.
     const seconds = hasOwn(TIMEOUTS, word) ? TIMEOUTS[word] : 10
-    const timer = setTimeout(() => child.kill(), seconds * 1000)
+    let timer
+    const late = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        child.kill(9)
+        resolve({ code: -1, out: "", err: `no answer within ${seconds}s` })
+      }, seconds * 1000)
+    })
+    const answered = Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]).then(
+      ([out, err, code]) => ({ code, out, err }),
+      (e) => ({ code: -1, out: "", err: String(e) }),
+    )
     try {
-      const [out, err, code] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-      ])
-      return { code, out, err }
-    } catch (e) {
-      return { code: -1, out: "", err: String(e) }
+      return await Promise.race([answered, late])
     } finally {
       clearTimeout(timer)
     }

@@ -69,15 +69,12 @@ fn not_startable(p: &Profile) -> Option<String> {
             shown::short(&p.kind),
         ));
     };
-    let disarmed = match harness {
-        crate::harness::Harness::Opencode => crate::opencode::disarmed_by(&p.command, &p.env),
-        crate::harness::Harness::ClaudeCode | crate::harness::Harness::Codex => None,
-    };
-    disarmed.map(|why| {
+    harness.disarmed_by(&p.command, &p.env).map(|why| {
         format!(
-            "profile '{}' would start opencode without charter's guard: {why}. Nothing was \
-             started — take it out of the profile in charter.local.toml.",
+            "profile '{}' would start {} without charter's guard: {why}. Nothing was started \
+             — take it out of the profile in charter.local.toml.",
             shown::short(&p.name),
+            harness.name(),
         )
     })
 }
@@ -170,18 +167,9 @@ pub fn detect(p: &Profile, root: &Path) -> Wiring {
             // sentence is the part a reader acts on.
             detail: format!(
                 "{} — {}",
-                match p.kind.as_str() {
-                    "codex" =>
-                        "the app arms each Codex chat with charter's hooks; Codex asks once to trust them"
-                            .to_owned(),
-                    "opencode" =>
-                        "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
-                            .to_owned(),
-                    _ => format!(
-                        "the app arms each chat with its own plugin, {}",
-                        crate::plugin::LOADED_AS
-                    ),
-                },
+                crate::harness::Harness::of_kind(&p.kind)
+                    .map(crate::harness::Harness::armed_with)
+                    .unwrap_or_default(),
                 whole(found.first().map(String::as_str).unwrap_or_default()),
             ),
             fix: String::new(),

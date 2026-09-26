@@ -1138,8 +1138,10 @@ enum Author {
 
 impl Opencode {
     /// `<opencode config>/plugin/charter.ts`.
-    fn shim(m: &Machine) -> PathBuf {
-        m.opencode_config.join("plugin").join("charter.ts")
+    fn installed_path(m: &Machine) -> PathBuf {
+        m.opencode_config
+            .join("plugin")
+            .join(crate::opencode::FILE_NAME)
     }
 
     fn author(path: &Path) -> Result<Author, String> {
@@ -1172,7 +1174,7 @@ impl Adapter for Opencode {
 
     fn install(&self, m: &Machine) -> Result<Plan, String> {
         let mut plan = Plan::default();
-        let path = Self::shim(m);
+        let path = Self::installed_path(m);
         let want = crate::opencode::shim(crate::opencode::Arming::GuardOnly(&m.binary));
         let what = "charter's guard as an opencode plugin that runs this charter";
         match Self::author(&path)? {
@@ -1203,11 +1205,14 @@ impl Adapter for Opencode {
     }
 
     fn installed(&self, m: &Machine) -> Result<bool, String> {
-        Ok(matches!(Self::author(&Self::shim(m))?, Author::Charter(_)))
+        Ok(matches!(
+            Self::author(&Self::installed_path(m))?,
+            Author::Charter(_)
+        ))
     }
 
     fn runs(&self, m: &Machine) -> Option<PathBuf> {
-        match Self::author(&Self::shim(m)).ok()? {
+        match Self::author(&Self::installed_path(m)).ok()? {
             Author::Charter(text) => crate::opencode::binary_in(&text),
             _ => None,
         }
@@ -1216,7 +1221,7 @@ impl Adapter for Opencode {
     /// The Python charter's shim, which guards and briefs every opencode chat by whichever
     /// `charter` is on `PATH`.
     fn superseded(&self, m: &Machine) -> Vec<PathBuf> {
-        let path = Self::shim(m);
+        let path = Self::installed_path(m);
         if Self::author(&path) == Ok(Author::Python) {
             vec![path]
         } else {
@@ -1226,7 +1231,7 @@ impl Adapter for Opencode {
 
     fn uninstall(&self, m: &Machine) -> Result<Plan, String> {
         let mut plan = Plan::default();
-        let path = Self::shim(m);
+        let path = Self::installed_path(m);
         let ours = matches!(Self::author(&path)?, Author::Charter(_));
         plan.step(&path, "remove charter's opencode guard", ours);
         if ours {

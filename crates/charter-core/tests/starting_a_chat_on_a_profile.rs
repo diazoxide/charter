@@ -380,7 +380,7 @@ fn an_opencode_chat_is_armed_through_its_environment_and_nothing_on_its_line() {
     let shim = plane
         .root()
         .join("plugin")
-        .join(charter_core::opencode::SHIM);
+        .join(charter_core::opencode::SHIM_IN_BUNDLE);
     fs::create_dir_all(shim.parent().unwrap()).unwrap();
     fs::write(
         &shim,

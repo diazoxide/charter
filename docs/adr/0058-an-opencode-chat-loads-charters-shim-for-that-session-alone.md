@@ -67,10 +67,15 @@ sent to is wired to that tool's Claude Code name in `hookreg`. A bash call is ju
 `workdir`, where it will run. A sub-agent's session is followed to its parent. Its question is
 the chat's, while its prompts and its idle are not.
 
-**A guard that cannot answer does not allow.** A `charter` that is missing, crashed, timed out
-or printed something unreadable refuses the tool call. Claude Code would let a hook that cannot
-start through. The shim is charter's own code, so it takes the stricter side, the same side
-charter's own guard takes when it crashes (#349). A `permissionDecision` of `ask` is allowed,
+**A guard that cannot answer does not allow.** A `charter` that crashed, timed out or printed
+something unreadable refuses the tool call, the side charter's own guard takes when it crashes
+(#349). A `charter` that is not there at all refuses in an app chat, where the program is the
+app's own and its absence is a fault. Claude Code would let such a hook through. The copy
+`charter plugin install` writes lets it through, as a Claude Code or Codex hook whose program is
+gone does. That copy names a path, so it would otherwise refuse every tool call in every opencode
+on the machine, app chats included, once that charter moved. `charter doctor`'s `plugin files`
+row names a copy whose charter is gone. The deadline races the answer, so a `charter` that
+ignores the kill cannot hold a tool call. A `permissionDecision` of `ask` is allowed,
 as the Python shim allowed it: opencode's plugin API has no way to ask. Those answers are
 charter's routing nudges and never its refusals.
 
@@ -85,7 +90,7 @@ permission prompt, the chat reads *waiting* until the turn ends. Only `userpromp
 put it back to running, and that call hands the chat its queued reports.
 
 **A profile that would load no plugin is not started.** An opencode profile whose command passes
-`--pure`, or whose `env` sets `OPENCODE_PURE` or `OPENCODE_CONFIG_CONTENT`, is refused by
+`--pure` (or `--pure=<value>`), or whose `env` sets `OPENCODE_PURE` or `OPENCODE_CONFIG_CONTENT`, is refused by
 `wiring::refusal` before it is approved, with the reason. A wrapper script that adds `--pure`
 itself cannot be seen, as with every other flag a wrapper adds.
 
@@ -115,9 +120,24 @@ globals the shim calls. The shim takes its own references to the few it uses whe
 which stops a plain later monkey-patch and not a determined one. This is the limit the Python
 charter's `foreign_plugins` named. It is the same class as a project `.claude/settings.json`
 that runs its own hook: a file a chat can write that runs code at the next start. charter
-reports what else opencode loads (the settings tab's harness-plugin list, `charter doctor`'s
-`superseded plugin` row for the Python shim) rather than claiming a containment it does not
-have. Guard rails, not guarantees.
+reports what else opencode loads rather than claiming a containment it does not have: the
+settings tab's harness-plugin list names every script in the global plugin directory and every
+npm plugin the global `opencode.json` names, and `charter doctor`'s `superseded plugin` row names
+the Python shim. A project's own `.opencode/plugin/` is not listed yet. Guard rails, not
+guarantees.
+
+Also not covered, and said here so nobody reads the table above as complete:
+
+- **A tool charter has no route for goes to the Bash guard alone.** That is the right guard
+  for any tool carrying a `command`, and no guard for one that does not. opencode gives some
+  models `apply_patch`, whose edits carry their paths inside `patchText`, and an MCP tool may
+  read or write files by its own argument names. Claude Code's matchers leave the same tools
+  unguarded; the Bash guard's reach over them is what charter has on either harness.
+- **`/new` is not followed.** A second session opened in the same opencode reports an id the
+  chat did not adopt, and it is ignored (the Codex rule, above).
+- **A sub-agent is known from `session.created`**, an event the shim does not wait for. On
+  1.18.23 it always arrived before the sub-agent's first prompt; if it ever arrives after, that
+  prompt is briefed as the operator's would be, and its report is ignored as another id.
 
 ## What was rejected
 
@@ -127,9 +147,9 @@ have. Guard rails, not guarantees.
 - **`OPENCODE_CONFIG_DIR`, or `OPENCODE_CONFIG` pointing at a file.** Either would work. A
   directory or a file would have to exist somewhere per chat, or be shared and kept current. The
   whole config fits in a variable.
-- **Failing open, as the Python shim did** ("a guard that cannot run must not block the
-  session"). In the app the binary is the app's own, so a guard that cannot answer is a fault
-  worth seeing, not a state to live in.
+- **Failing open whenever the guard cannot answer, as the Python shim did** ("a guard that
+  cannot run must not block the session"). In the app the binary is the app's own, so a guard
+  that cannot answer is a fault worth seeing, not a state to live in.
 - **Mapping `permission.replied` to `userpromptsubmit`** to clear *waiting*. That hook takes the
   chat's queued handback reports, and the shim would then deliver them in the middle of a turn
   or drop them.

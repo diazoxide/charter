@@ -226,7 +226,7 @@ pub struct Kit<'a> {
     /// The `charter` every hook runs.
     pub binary: &'a std::path::Path,
     /// The bundled Claude Code plugin ([`crate::plugin`]), where the app found it. Its
-    /// [`crate::opencode::SHIM`] is the plugin an opencode chat loads.
+    /// [`crate::opencode::SHIM_IN_BUNDLE`] is the plugin an opencode chat loads.
     pub plugin: Option<&'a std::path::Path>,
 }
 
@@ -348,7 +348,7 @@ impl Harness {
             Self::Opencode => {
                 let Some(shim) = kit
                     .plugin
-                    .map(|plugin| plugin.join(crate::opencode::SHIM))
+                    .map(|plugin| plugin.join(crate::opencode::SHIM_IN_BUNDLE))
                     .filter(|shim| shim.is_file())
                 else {
                     return StateHooks::None;
@@ -372,6 +372,35 @@ impl Harness {
         }
     }
 
+    /// Why a chat of this harness started with `command` and `env` would run without charter's
+    /// hooks — `None` when it would not. Only opencode has such a switch charter can see
+    /// ([`crate::opencode::disarmed_by`]): Claude Code loads `--plugin-dir` whatever else it is
+    /// told, and Codex's session flags are charter's own.
+    pub fn disarmed_by(self, command: &[String], env: &[(String, String)]) -> Option<String> {
+        match self {
+            Self::ClaudeCode | Self::Codex => None,
+            Self::Opencode => crate::opencode::disarmed_by(command, env),
+        }
+    }
+
+    /// What the app arms a chat of this harness with, as `charter doctor` says it.
+    pub fn armed_with(self) -> String {
+        match self {
+            Self::ClaudeCode => format!(
+                "the app arms each chat with its own plugin, {}",
+                crate::plugin::LOADED_AS
+            ),
+            Self::Codex => {
+                "the app arms each Codex chat with charter's hooks; Codex asks once to trust them"
+                    .to_owned()
+            }
+            Self::Opencode => {
+                "the app arms each opencode chat with charter's opencode plugin, for that chat alone"
+                    .to_owned()
+            }
+        }
+    }
+
     /// What a chat on this harness cannot tell charter, in a sentence the chat shows — or
     /// none, where it can tell charter everything the board asks.
     ///
@@ -389,7 +418,8 @@ impl Harness {
             ),
             Self::Opencode => Some(
                 "opencode says nothing until your first prompt, and nothing when it quits; once \
-                 you answer its permission prompt, the chat reads waiting until the turn ends.",
+                 you answer its permission prompt, the chat reads waiting until the turn ends, \
+                 and a session you open inside it with /new is not followed.",
             ),
         }
     }
@@ -657,6 +687,10 @@ mod tests {
         // A shell is the app's own default program: "no harness" rather than a guess.
         assert_eq!(Harness::of_command("/bin/zsh"), None);
         assert_eq!(Harness::of_command("opencode-something"), None);
+    }
+
+    #[test]
+    fn opencode_is_recognised_by_the_name_its_command_is_invoked_under() {
         assert_eq!(
             Harness::of_command("/Users/o/.opencode/bin/opencode"),
             Some(Harness::Opencode)
@@ -1058,7 +1092,7 @@ mod tests {
     /// An opencode chat's arming, with the bundled shim at `<plugin>/opencode/charter.ts`.
     fn opencode_hooks(binary: &str) -> (tempfile::TempDir, StateHooks) {
         let plugin = tempfile::tempdir().expect("a plugin directory");
-        let shim = plugin.path().join(crate::opencode::SHIM);
+        let shim = plugin.path().join(crate::opencode::SHIM_IN_BUNDLE);
         std::fs::create_dir_all(shim.parent().expect("a parent")).expect("opencode/");
         std::fs::write(
             &shim,

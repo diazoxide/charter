@@ -127,3 +127,36 @@ fn a_profile_that_turns_plugins_off_is_named() {
         None
     );
 }
+
+#[test]
+fn a_missing_charter_refuses_in_an_app_chat_and_allows_through_the_installed_copy() {
+    // The app's chat runs the app's own binary, so its absence is a fault. The installed copy
+    // names a path that can move, and refusing then would stop every opencode on the machine.
+    assert!(shim(Arming::Session).contains("const MISSING = \"refuses\""));
+    assert!(
+        shim(Arming::GuardOnly(Path::new("/bin/charter"))).contains("const MISSING = \"allows\"")
+    );
+}
+
+#[test]
+fn the_deadline_races_the_answer_rather_than_waiting_on_the_kill() {
+    let text = shim(Arming::Session);
+    assert!(text.contains("Promise.race([answered, late])"), "{text}");
+    assert!(
+        text.contains(": 10\n"),
+        "the default deadline is the Bash guard's"
+    );
+}
+
+#[test]
+fn the_pure_flag_is_seen_with_a_value_attached() {
+    let words = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(disarmed_by(&words(&["opencode", "--pure=true"]), &[]).is_some());
+    assert!(disarmed_by(&words(&["opencode", "--pure=1"]), &[]).is_some());
+    assert_eq!(disarmed_by(&words(&["opencode", "--purely"]), &[]), None);
+}
+
+#[test]
+fn the_shim_file_is_named_the_same_in_the_bundle_and_in_opencodes_directory() {
+    assert!(SHIM_IN_BUNDLE.ends_with(&format!("/{FILE_NAME}")));
+}

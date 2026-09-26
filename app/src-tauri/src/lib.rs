@@ -1562,7 +1562,7 @@ mod tests {
     fn opencode_shim_file() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(PLUGIN_DIR)
-            .join(charter_core::opencode::SHIM)
+            .join(charter_core::opencode::SHIM_IN_BUNDLE)
     }
 
     /// Writes the bundled opencode shim from `charter_core::opencode`, for when it changes:
