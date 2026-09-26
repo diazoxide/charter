@@ -629,6 +629,215 @@ mod tests {
     }
 
     #[test]
+    fn each_store_and_a_value_debug_print_as_what_they_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("k.json");
+        assert_eq!(format!("{:?}", Secret::new(VALUE.into())), "Secret(***)");
+        assert_eq!(format!("{OsStore:?}"), "OsStore");
+        assert_eq!(
+            format!("{:?}", FileStore::at(path.clone())),
+            format!("FileStore {{ path: {path:?} }}")
+        );
+    }
+
+    #[test]
+    fn each_keyring_failure_says_the_operation_the_service_and_the_stores_reason() {
+        let said = |e: ::keyring::Error| failure("write", "charter/ops/x", &e).message;
+        let head = "charter could not write 'charter/ops/x' in the system keyring: ";
+        let platform = || -> Box<dyn std::error::Error + Send + Sync> {
+            "User interaction is not allowed.".into()
+        };
+        for (e, why) in [
+            (
+                ::keyring::Error::BadEncoding(VALUE.as_bytes().to_vec()),
+                "the stored entry is not UTF-8 text",
+            ),
+            (
+                ::keyring::Error::NoStorageAccess(platform()),
+                "User interaction is not allowed.",
+            ),
+            (
+                ::keyring::Error::PlatformFailure(platform()),
+                "User interaction is not allowed.",
+            ),
+            (
+                ::keyring::Error::NoDefaultStore,
+                "this platform has no keyring charter can use",
+            ),
+            (
+                ::keyring::Error::TooLong("service".into(), 255),
+                "the service is longer than the store allows",
+            ),
+            (
+                ::keyring::Error::Invalid("account".into(), "is empty".into()),
+                "the account is empty",
+            ),
+            (::keyring::Error::NoEntry, "the store refused it"),
+        ] {
+            assert_eq!(said(e), format!("{head}{why}"));
+        }
+    }
+
+    #[test]
+    fn a_stub_keyring_that_cannot_be_read_is_an_error_and_never_an_empty_one() {
+        // A directory where the file belongs: read fails, and not with "not found".
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileStore::at(dir.path().to_path_buf());
+        let err = store.get("charter/ops/x", "K").unwrap_err();
+        assert!(err.message.contains("cannot be read"), "{}", err.message);
+        // A missing file is an empty keyring.
+        let missing = FileStore::at(dir.path().join("none.json"));
+        assert!(missing.get("charter/ops/x", "K").unwrap().is_none());
+    }
+
+    #[test]
+    fn deleting_from_the_stub_keyring_says_whether_there_was_an_entry_and_drops_only_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileStore::at(dir.path().join("k.json"));
+        store.set("charter/ops/x", "K", VALUE).unwrap();
+        store.set("charter/ops/x", "L", "other").unwrap();
+        assert!(store.delete("charter/ops/x", "K").unwrap());
+        assert!(!store.delete("charter/ops/x", "K").unwrap());
+        assert!(store.get("charter/ops/x", "K").unwrap().is_none());
+        assert_eq!(
+            store
+                .get("charter/ops/x", "L")
+                .unwrap()
+                .unwrap()
+                .into_inner(),
+            "other"
+        );
+    }
+
+    #[test]
+    fn a_vault_service_is_charters_for_that_vault_with_one_plain_segment_after_it() {
+        assert!(service_ok_for("charter/ops/3f9a2c1b", "ops"));
+        for bad in [
+            "charter/ops/",
+            "charter/ops/a/b",
+            "charter/ops/a\nb",
+            "charter/other/3f9a2c1b",
+            "charter/identity",
+            "someone-else/ops/3f9a2c1b",
+        ] {
+            assert!(!service_ok_for(bad, "ops"), "{bad:?}");
+        }
+    }
+
+    /// A keyring vault `ops` in a fresh plane.
+    fn plane() -> (tempfile::TempDir, Ctx, Vault) {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::new(dir.path(), Env::of(&[]));
+        (dir, ctx, vault("ops"))
+    }
+
+    fn write_index(ctx: &Ctx, v: &Vault, doc: &str) {
+        let p = index_path(ctx, v);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, doc).unwrap();
+    }
+
+    #[test]
+    fn an_index_naming_another_vaults_service_is_refused_as_corrupt() {
+        let (_dir, ctx, ops) = plane();
+        write_index(
+            &ctx,
+            &ops,
+            r#"{"service": "charter/other/3f9a2c1b", "keys": {}}"#,
+        );
+        let err = load_index(&ctx, &ops).unwrap_err();
+        assert!(err.message.contains("is corrupt"), "{}", err.message);
+        let (ok, detail) = health(&ctx, &ops);
+        assert!(!ok);
+        assert_eq!(detail, err.message);
+    }
+
+    #[test]
+    fn an_index_that_cannot_be_read_is_an_error_and_never_an_empty_vault() {
+        let (_dir, ctx, ops) = plane();
+        // A directory where the index belongs.
+        std::fs::create_dir_all(index_path(&ctx, &ops)).unwrap();
+        let err = load_index(&ctx, &ops).unwrap_err();
+        assert!(err.message.contains("cannot be read"), "{}", err.message);
+    }
+
+    #[test]
+    fn a_keyring_vault_lists_each_key_with_its_size_band_and_when_it_was_written() {
+        let (dir, ctx, ops) = plane();
+        let store = FileStore::at(dir.path().join("k.json"));
+        set_with(&store, &ctx, &ops, "B", VALUE, "2026-09-20T10:00:00Z").unwrap();
+        set_with(&store, &ctx, &ops, "A", "x", "2026-09-24T00:00:00Z").unwrap();
+        assert_eq!(
+            listed(&ctx, &ops).unwrap(),
+            [
+                Listed {
+                    key: "A".into(),
+                    size: "1–15 bytes".into(),
+                    updated: "2026-09-24T00:00:00Z".into(),
+                },
+                Listed {
+                    key: "B".into(),
+                    size: "16–31 bytes".into(),
+                    updated: "2026-09-20T10:00:00Z".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_keys_age_is_whole_days_since_it_was_written_and_none_when_the_time_is_unreadable() {
+        let (dir, ctx, ops) = plane();
+        let store = FileStore::at(dir.path().join("k.json"));
+        set_with(&store, &ctx, &ops, "OLD", VALUE, "2026-09-20T23:59:59Z").unwrap();
+        set_with(&store, &ctx, &ops, "TODAY", VALUE, "2026-09-24T00:00:00Z").unwrap();
+        set_with(&store, &ctx, &ops, "UNDATED", VALUE, "not a time").unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap();
+        assert_eq!(
+            ages(&ctx, &ops, today).unwrap(),
+            [
+                ("OLD".to_string(), Some(4)),
+                ("TODAY".to_string(), Some(0)),
+                ("UNDATED".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_keyring_vaults_health_counts_its_keys_and_names_its_service_from_the_index() {
+        let (dir, ctx, ops) = plane();
+        assert_eq!(
+            health(&ctx, &ops),
+            (true, "no secrets yet in the system keyring".to_string())
+        );
+        let store = FileStore::at(dir.path().join("k.json"));
+        set_with(&store, &ctx, &ops, "A", VALUE, "t").unwrap();
+        set_with(&store, &ctx, &ops, "B", VALUE, "t").unwrap();
+        let service = load_index(&ctx, &ops).unwrap().service.unwrap();
+        assert_eq!(
+            health(&ctx, &ops),
+            (
+                true,
+                format!("2 secret(s) in the system keyring, service '{service}'")
+            )
+        );
+    }
+
+    #[test]
+    fn a_write_through_the_builds_own_store_is_stamped_with_the_time_it_was_made() {
+        let (_dir, ctx, ops) = plane();
+        let before = chrono::Utc::now().timestamp();
+        set(&ctx, &ops, "A", VALUE).unwrap();
+        let after = chrono::Utc::now().timestamp();
+        let updated = &listed(&ctx, &ops).unwrap()[0].updated;
+        assert_eq!(updated.len(), "2026-09-24T11:32:17Z".len(), "{updated}");
+        assert!(updated.ends_with('Z'), "{updated}");
+        let at = chrono::DateTime::parse_from_rfc3339(updated)
+            .unwrap()
+            .timestamp();
+        assert!((before..=after).contains(&at), "{updated}");
+    }
+
+    #[test]
     fn a_keyring_failure_never_quotes_the_bytes_the_store_returned() {
         let e = ::keyring::Error::BadEncoding(VALUE.as_bytes().to_vec());
         let said = failure("read", "charter/ops/x", &e).message;

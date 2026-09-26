@@ -1275,6 +1275,8 @@ impl<'a> Running<'a> {
         else {
             return false;
         };
+        // Three single, distinct bits: `^` for either `|` builds the same options, and
+        // `.cargo/mutants.toml` excludes it as equivalent.
         let asking = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
         loop {
             match waitid(WaitId::Pid(pid), asking) {
@@ -1527,6 +1529,8 @@ fn drain(
         if stopped_at.is_none() && stop.load(Ordering::Relaxed) {
             stopped_at = Some(Instant::now());
         }
+        // `<` against `<=` differs only at the one instant equal to the deadline, which no test
+        // can land on (`.cargo/mutants.toml`).
         let waiting = whole_by.is_some_and(|by| Instant::now() < by);
         // `>` against `>=` differs at one instant of a clock no test can land on.
         if stopped_at.is_some_and(|at| at.elapsed() > STDERR_AFTER_STOP) && !waiting {
@@ -1539,7 +1543,11 @@ fn drain(
             }
             Ok(got) => {
                 kept.extend_from_slice(&chunk[..got]);
-                // At exactly the bound the cut is 0, so `>=` here changes nothing.
+                // At exactly the bound the cut is 0, but `>=` would still set `overflowed`, and a
+                // command's stderr of exactly `most` bytes would be refused: that is pinned by
+                // `a_command_s_stderr_of_exactly_the_most_charter_passes_on_is_passed_and_one_byte_more_is_not`.
+                // `.cargo/mutants.toml` still excludes it, because a pattern cannot tell it from
+                // the clock's `>` above, which is equivalent.
                 if kept.len() > most {
                     overflowed = true;
                     let cut = kept.len() - most;

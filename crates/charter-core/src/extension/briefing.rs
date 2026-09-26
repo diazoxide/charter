@@ -401,3 +401,326 @@ fn quoted(
     }
     Ok(Some(part))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asking() -> Asking {
+        Asking {
+            id: "prs".into(),
+            name: "Pull requests".into(),
+            title: Some("Open PRs".into()),
+            hears_start: false,
+        }
+    }
+
+    /// What `text` quotes to, starting from `spent`, and what is spent after it.
+    fn quote(text: &str, spent: usize) -> (Result<Option<String>, String>, usize) {
+        let mut spent = spent;
+        let part = quoted(&asking(), "Open PRs", text, &mut spent);
+        (part, spent)
+    }
+
+    // ---- what a manifest may declare ----------------------------------------------------
+
+    #[test]
+    fn a_briefing_title_of_exactly_the_most_bytes_is_drawn_and_one_more_is_not() {
+        let most = "x".repeat(MOST_TITLE_BYTES);
+        let declared =
+            declared_of(&serde_json::json!({ "title": most })).expect("the most is drawn");
+        assert_eq!(declared.title, most);
+        for title in [format!("{most}x"), "Open\u{202e}PRs".to_owned()] {
+            let why = declared_of(&serde_json::json!({ "title": title })).expect_err(&title);
+            assert!(why.contains("a title charter will not draw"), "{why}");
+        }
+    }
+
+    #[test]
+    fn a_briefing_title_of_only_spaces_is_no_title() {
+        let why = declared_of(&serde_json::json!({ "title": "   " })).expect_err("spaces");
+        assert!(why.contains("with no title"), "{why}");
+        let declared = declared_of(&serde_json::json!({ "title": " Open PRs " })).expect("a title");
+        assert_eq!(declared.title, "Open PRs");
+    }
+
+    #[test]
+    fn a_briefing_declaring_more_than_its_title_is_refused() {
+        let why = declared_of(&serde_json::json!({ "title": "Open PRs", "when": "always" }))
+            .expect_err("a key it may not say");
+        assert!(why.contains("carrying \"when\""), "{why}");
+    }
+
+    // ---- what a program's section becomes ------------------------------------------------
+
+    #[test]
+    fn a_section_is_quoted_line_by_line_under_the_extension_s_name_and_counted() {
+        let (part, spent) = quote("  first\nsecond  ", 100);
+        let part = part.expect("quoted").expect("a section");
+        assert!(
+            part.starts_with("⬡ **From the extension “Pull requests” (`prs`) — Open PRs**\n"),
+            "{part}"
+        );
+        assert!(part.ends_with("⟩\n> first\n> second"), "{part}");
+        assert_eq!(spent, 100 + "first\nsecond".chars().count());
+    }
+
+    #[test]
+    fn an_empty_section_adds_nothing_and_spends_nothing() {
+        let (part, spent) = quote(" \n ", 7);
+        assert_eq!(part, Ok(None));
+        assert_eq!(spent, 7);
+    }
+
+    #[test]
+    fn a_section_holding_a_character_that_draws_as_nothing_is_refused_whole() {
+        for text in ["a\rb", "a\u{7}b", "a\u{202e}b"] {
+            let (part, spent) = quote(text, 0);
+            let why = part.expect_err(text);
+            assert!(why.contains("control or invisible"), "{text:?}: {why}");
+            assert_eq!(spent, 0);
+        }
+    }
+
+    #[test]
+    fn a_section_of_exactly_its_limit_is_whole_and_one_character_more_is_cut() {
+        let most = "é".repeat(MOST_SECTION_CHARS);
+        let (part, spent) = quote(&most, 0);
+        let part = part.expect("quoted").expect("a section");
+        assert!(!part.contains("charter cut it"), "cut at exactly the limit");
+        assert_eq!(spent, MOST_SECTION_CHARS);
+
+        let (part, spent) = quote(&format!("{most}é"), 0);
+        let part = part.expect("quoted").expect("a section");
+        assert!(
+            part.ends_with(&format!(
+                "⟨charter cut it at {MOST_SECTION_CHARS} characters; the extension wrote {}.⟩",
+                MOST_SECTION_CHARS + 1
+            )),
+            "{part}"
+        );
+        assert_eq!(spent, MOST_SECTION_CHARS);
+    }
+
+    #[test]
+    fn a_section_is_cut_to_what_the_sections_before_it_left() {
+        let (part, spent) = quote(&"x".repeat(50), MOST_TOTAL_CHARS - 10);
+        let part = part.expect("quoted").expect("a section");
+        assert!(
+            part.ends_with("⟨charter cut it at 10 characters; the extension wrote 50.⟩"),
+            "{part}"
+        );
+        assert_eq!(spent, MOST_TOTAL_CHARS);
+
+        let (part, spent) = quote("more", MOST_TOTAL_CHARS);
+        let why = part.expect_err("nothing left");
+        assert!(why.contains("already came to the"), "{why}");
+        assert_eq!(spent, MOST_TOTAL_CHARS);
+    }
+
+    // ---- who is asked, and what they answer -------------------------------------------------
+
+    /// Unix only: the programs here are written by `stand_in`, which is.
+    #[cfg(unix)]
+    mod asked_at_the_start {
+        use super::*;
+
+        /// A config root with extensions installed in it, each approved or not.
+        struct Machine {
+            dir: tempfile::TempDir,
+        }
+
+        impl Machine {
+            fn new() -> Self {
+                Self {
+                    dir: tempfile::tempdir().expect("a directory"),
+                }
+            }
+
+            fn config(&self) -> PathBuf {
+                self.dir.path().join("config")
+            }
+
+            /// Install `id`, asking for `capabilities` and contributing a view besides
+            /// `contributes`, and approve it when `approved`.
+            fn install(&self, id: &str, capabilities: &str, contributes: &str, approved: bool) {
+                self.install_running(id, capabilities, contributes, "#!/bin/sh\n", approved);
+            }
+
+            /// [`Self::install`], with `script` as its program.
+            fn install_running(
+                &self,
+                id: &str,
+                capabilities: &str,
+                contributes: &str,
+                script: &str,
+                approved: bool,
+            ) {
+                let at = self.dir.path().join(id);
+                std::fs::create_dir_all(at.join("bin")).expect("the directory");
+                std::fs::write(
+                    at.join(crate::extension::MANIFEST),
+                    format!(
+                        r#"{{"version":2,"id":"{id}","name":"Name of {id}",
+                            "capabilities":{capabilities},"contributes":{{"runs":"bin/run",
+                            "views":[{{"id":"v","title":"V","about":"personas"}}]{contributes}}}}}"#
+                    ),
+                )
+                .expect("the manifest");
+                // Written by a child, never by this process: a program written here and then started
+                // on another thread can be refused as busy (`stand_in`'s module docs).
+                stand_in::program(&at.join("bin"), "run", script);
+                let found = crate::extension::install(
+                    &self.config(),
+                    &crate::extension::BuiltIn::none(),
+                    &at,
+                )
+                .expect("installed");
+                if approved {
+                    crate::extension::approve(&self.config(), id, &found.path, &found.fingerprint)
+                        .expect("approved");
+                }
+            }
+
+            /// Who a chat's start asks, as (id, title, hears the start).
+            fn asked(&self) -> Vec<(String, Option<String>, bool)> {
+                who(
+                    &self.config(),
+                    &crate::extension::BuiltIn::none(),
+                    &Choices::default(),
+                )
+                .into_iter()
+                .map(|it| (it.id, it.title, it.hears_start))
+                .collect()
+            }
+        }
+
+        const BRIEFS: &str = r#","briefing":{"title":"Open PRs"}"#;
+        const HEARS_THE_START: &str = r#","events":{"hears":["session-started"]}"#;
+        const HEARS_ANOTHER: &str = r#","events":{"hears":["plane-saved"]}"#;
+
+        #[test]
+        fn a_chat_start_asks_every_approved_extension_that_briefs_or_hears_it_and_no_other() {
+            let machine = Machine::new();
+            machine.install("a-briefs", r#"["briefing"]"#, BRIEFS, true);
+            machine.install("b-hears", r#"["events"]"#, HEARS_THE_START, true);
+            machine.install("c-hears-another", r#"["events"]"#, HEARS_ANOTHER, true);
+            machine.install("d-only-a-view", "[]", "", true);
+            machine.install(
+                "e-both",
+                r#"["briefing","events"]"#,
+                &format!("{BRIEFS}{HEARS_THE_START}"),
+                true,
+            );
+            assert_eq!(
+                machine.asked(),
+                [
+                    ("a-briefs".to_owned(), Some("Open PRs".to_owned()), false),
+                    ("b-hears".to_owned(), None, true),
+                    ("e-both".to_owned(), Some("Open PRs".to_owned()), true),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_chat_start_asks_nothing_of_an_extension_the_operator_has_not_approved() {
+            let machine = Machine::new();
+            machine.install("a-briefs", r#"["briefing"]"#, BRIEFS, false);
+            machine.install("b-hears", r#"["events"]"#, HEARS_THE_START, false);
+            assert_eq!(machine.asked(), []);
+            assert_eq!(
+                at_session_start(
+                    &machine.config(),
+                    &crate::extension::BuiltIn::none(),
+                    &Choices::default(),
+                    &Asked {
+                        workspace: "alpha".into(),
+                        persona: None,
+                    },
+                    Bounds::SESSION_START,
+                ),
+                AtSessionStart::default()
+            );
+        }
+
+        /// Bounds for a test whose subject is not the bound: a program written fresh is one
+        /// macOS assesses before its first run, which on a busy machine takes longer than
+        /// [`Bounds::SESSION_START`] allows (as the extension probe's own tests found).
+        const ROOMY: Bounds = Bounds {
+            each: Duration::from_secs(20),
+            total: Duration::from_secs(25),
+        };
+
+        #[test]
+        fn a_chat_start_quotes_each_section_and_tells_the_operator_what_went_wrong_telling_the_rest()
+         {
+            let machine = Machine::new();
+            let plane = machine.dir.path().join("plane");
+            std::fs::create_dir_all(&plane).expect("a plane");
+            std::fs::write(plane.join("charter.toml"), "").expect("a manifest");
+            // A git repository, as a plane is: what charter watches while a program answers is
+            // what git sees.
+            let init = crate::testgit::run(&plane, &["init", "-q"]);
+            assert!(init.ok(), "git init failed: {init:?}");
+
+            machine.install_running(
+                "a-briefs",
+                r#"["briefing"]"#,
+                BRIEFS,
+                "#!/bin/sh\nread line\nprintf '%s\\n' '{\"charter\":2,\"section\":\"two open\"}'\n",
+                true,
+            );
+            machine.install_running(
+                "b-refuses",
+                r#"["events"]"#,
+                HEARS_THE_START,
+                "#!/bin/sh\nread line\nprintf '%s\\n' '{\"charter\":2,\"error\":\"not today\"}'\n",
+                true,
+            );
+            machine.install_running(
+                "c-strays",
+                r#"["events"]"#,
+                HEARS_THE_START,
+                &format!(
+                    "#!/bin/sh\nread line\ntouch '{}'\nprintf '%s\\n' '{{\"charter\":2}}'\n",
+                    plane.join("stray.md").display()
+                ),
+                true,
+            );
+
+            let briefed = at_session_start(
+                &machine.config(),
+                &crate::extension::BuiltIn::none(),
+                &Choices::read(&plane),
+                &Asked {
+                    workspace: "alpha".into(),
+                    persona: None,
+                },
+                ROOMY,
+            );
+
+            let [part] = briefed.parts.as_slice() else {
+                panic!("one section: {briefed:#?}")
+            };
+            assert!(
+                part.starts_with("⬡ **From the extension “Name of a-briefs” (`a-briefs`)"),
+                "{briefed:#?}"
+            );
+            assert!(part.ends_with("\n> two open"), "{part}");
+            let [refused, strayed] = briefed.notes.as_slice() else {
+                panic!("two notes: {:#?}", briefed.notes)
+            };
+            assert!(
+                refused
+                    .starts_with("Name of b-refuses missed a chat starting in workspace 'alpha': "),
+                "{refused}"
+            );
+            assert!(refused.contains("not today"), "{refused}");
+            assert!(
+                strayed.starts_with("While 'c-strays' was answering, charter saw"),
+                "{strayed}"
+            );
+            assert!(strayed.contains("stray.md"), "{strayed}");
+        }
+    }
+}

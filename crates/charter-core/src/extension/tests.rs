@@ -2303,3 +2303,792 @@ fn a_built_in_s_installed_namesake_is_set_aside_and_said() {
         loaded.dropped
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// What the nightly mutation run found nothing pinning (#318)
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_text_setting_takes_one_short_drawable_line_and_nothing_else() {
+    let made = Made::new();
+    let longest = "t".repeat(MOST_SETTING_BYTES);
+    let found = with_settings(
+        &made,
+        &format!(r#"[{{"key":"label","type":"text","default":"{longest}"}}]"#),
+    )
+    .expect("a default of exactly the most bytes");
+    let setting = &found.manifest.settings[0];
+    assert_eq!(setting.kind, SettingKind::Text);
+    assert_eq!(setting.default, SettingValue::Text(longest.clone()));
+
+    assert_eq!(
+        setting.accepts(&toml::Value::String("weekly".into())),
+        Ok(SettingValue::Text("weekly".into()))
+    );
+    for refused in [
+        toml::Value::String(format!("{longest}t")),
+        toml::Value::String("a\u{202e}b".into()),
+        toml::Value::String("two\nlines".into()),
+        toml::Value::Boolean(true),
+    ] {
+        let why = setting.accepts(&refused).expect_err("not one line of text");
+        assert!(why.contains("one line of text"), "{refused:?}: {why}");
+    }
+
+    let made = Made::new();
+    let why = with_settings(
+        &made,
+        &format!(r#"[{{"key":"label","type":"text","default":"{longest}t"}}]"#),
+    )
+    .expect_err("a default one byte too long");
+    assert!(why.contains("a default it would not accept"), "{why}");
+}
+
+#[test]
+fn a_bool_setting_s_declared_default_is_the_one_it_starts_from() {
+    let made = Made::new();
+    let found = with_settings(
+        &made,
+        r#"[{"key":"on","type":"bool","default":true},{"key":"off","type":"bool","default":false}]"#,
+    )
+    .expect("read");
+    let defaults: Vec<&SettingValue> = found
+        .manifest
+        .settings
+        .iter()
+        .map(|it| &it.default)
+        .collect();
+    assert_eq!(
+        defaults,
+        [&SettingValue::Bool(true), &SettingValue::Bool(false)]
+    );
+}
+
+#[test]
+fn exactly_the_most_settings_are_drawn_and_one_more_is_refused() {
+    let settings = |count: usize| -> String {
+        let listed: Vec<String> = (0..count)
+            .map(|n| format!(r#"{{"key":"s{n}","type":"bool"}}"#))
+            .collect();
+        format!("[{}]", listed.join(","))
+    };
+    let made = Made::new();
+    let found = with_settings(&made, &settings(MOST_SETTINGS)).expect("exactly the most");
+    assert_eq!(found.manifest.settings.len(), MOST_SETTINGS);
+
+    let made = Made::new();
+    let why = with_settings(&made, &settings(MOST_SETTINGS + 1)).expect_err("one too many");
+    assert!(
+        why.contains(&format!("declares {} settings", MOST_SETTINGS + 1)),
+        "{why}"
+    );
+}
+
+#[test]
+fn exactly_the_most_actions_and_palette_commands_are_offered_and_one_more_is_refused() {
+    let actions = |count: usize| -> String {
+        let listed: Vec<String> = (0..count)
+            .map(|n| format!(r#"{{"id":"a{n}","title":"A","confirm":false}}"#))
+            .collect();
+        format!("[{}]", listed.join(","))
+    };
+    let commands = |count: usize| -> String {
+        let listed: Vec<String> = (0..count)
+            .map(|n| format!(r#"{{"id":"p{n}","title":"P","view":"v"}}"#))
+            .collect();
+        format!("[{}]", listed.join(","))
+    };
+    let made = Made::new();
+    let most = 16;
+    let found = acting(
+        &made,
+        r#"["actions","palette"]"#,
+        &format!(
+            r#","actions":{},"palette":{}"#,
+            actions(most),
+            commands(most)
+        ),
+    )
+    .expect("exactly the most of each");
+    assert_eq!(found.manifest.actions.len(), most);
+    assert_eq!(found.manifest.palette.len(), most);
+
+    let why = acting(
+        &made,
+        r#"["actions"]"#,
+        &format!(r#","actions":{}"#, actions(most + 1)),
+    )
+    .expect_err("one action too many");
+    assert!(why.contains("declares 17 actions"), "{why}");
+    let why = acting(
+        &made,
+        r#"["palette"]"#,
+        &format!(r#","palette":{}"#, commands(most + 1)),
+    )
+    .expect_err("one palette command too many");
+    assert!(why.contains("declares 17 palette commands"), "{why}");
+}
+
+#[test]
+fn the_prompt_says_what_each_palette_command_does_by_the_action_s_own_title() {
+    let made = Made::new();
+    let found = acting(
+        &made,
+        r#"["actions","palette"]"#,
+        r#","actions":[{"id":"sync","title":"Sync now","confirm":false},
+                       {"id":"wipe","title":"Wipe it","confirm":true,"deletes":true}],
+           "palette":[{"id":"p","title":"Go","view":"v"},
+                      {"id":"q","title":"Clean","action":"wipe"}]"#,
+    )
+    .expect("an extension");
+    let declares = prompt(&found, Standing::New).declares;
+    for line in [
+        "an action on its rows, “Sync now” — it runs when you press it, without asking",
+        "an action on its rows, “Wipe it” — it deletes, so charter always asks you first",
+        "a palette command, “x: Go” — opens its view 'v'",
+        "a palette command, “x: Clean” — runs its action “Wipe it”",
+    ] {
+        assert!(
+            declares.iter().any(|it| it == line),
+            "{line}\nnot in {declares:#?}"
+        );
+    }
+}
+
+#[test]
+fn an_approved_extension_offers_its_palette_and_its_actions_and_an_unapproved_one_neither() {
+    let made = Made::new();
+    acting(
+        &made,
+        r#"["actions","palette"]"#,
+        r#","actions":[{"id":"a","title":"A","confirm":false}],
+           "palette":[{"id":"p","title":"P","action":"a"}]"#,
+    )
+    .expect("an extension");
+    let found = install(&made.config(), &BuiltIn::none(), &made.at()).expect("installed");
+    let seen = survey(&made.config(), &BuiltIn::none());
+    assert!(seen.installed[0].palette_in_force().is_empty());
+    assert!(seen.installed[0].actions_in_force().is_empty());
+
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    let seen = survey(&made.config(), &BuiltIn::none());
+    let ids: Vec<&str> = seen.installed[0]
+        .palette_in_force()
+        .iter()
+        .map(|it| it.id.as_str())
+        .collect();
+    assert_eq!(ids, ["p"]);
+    let ids: Vec<&str> = seen.installed[0]
+        .actions_in_force()
+        .iter()
+        .map(|it| it.id.as_str())
+        .collect();
+    assert_eq!(ids, ["a"]);
+}
+
+#[test]
+fn a_command_that_writes_is_read_beside_the_paths_it_writes_and_named_in_the_prompt() {
+    let made = Made::new();
+    let found = acting(
+        &made,
+        r#"["cli","writes"]"#,
+        r#","writes":["notes/"],"cli":[{"name":"sync","title":"Syncs the notes","writes":true},
+                                        {"name":"list","title":"Lists them","writes":false}]"#,
+    )
+    .expect("a writing command beside its write paths");
+    assert_eq!(found.manifest.cli.len(), 2);
+
+    let said = prompt(&found, Standing::New).declares.join("\n");
+    assert!(
+        said.contains("a command that writes, `charter x sync` — Syncs the notes"),
+        "{said}"
+    );
+    assert!(!said.contains("`charter x list`"), "{said}");
+
+    let why = acting(
+        &made,
+        r#"["cli"]"#,
+        r#","cli":[{"name":"sync","title":"Syncs the notes","writes":true}]"#,
+    )
+    .expect_err("a writing command with nowhere it writes");
+    assert!(why.contains("declares no plane paths it writes"), "{why}");
+}
+
+#[test]
+fn a_program_a_command_line_starts_is_not_said_to_start_only_from_the_window() {
+    let made = Made::new();
+    let found = acting(
+        &made,
+        r#"["cli"]"#,
+        r#","cli":[{"name":"list","title":"Lists","writes":false}]"#,
+    )
+    .expect("an extension");
+    let said = prompt(&found, Standing::New).declares.join("\n");
+    assert!(
+        said.contains("when you or a chat run one of its commands (`charter x <command>`)"),
+        "{said}"
+    );
+    assert!(!said.contains(crate::executor::HOW_IT_RUNS), "{said}");
+}
+
+#[test]
+fn a_briefing_section_or_an_event_with_no_program_to_ask_is_refused() {
+    for (capability, contributes) in [
+        ("briefing", r#""briefing":{"title":"B"}"#),
+        ("events", r#""events":{"hears":["plane-saved"]}"#),
+    ] {
+        let made = Made::new();
+        made.ordinary();
+        made.manifest(&format!(
+            r#"{{"version":2,"id":"solarized","capabilities":["{capability}"],
+                "contributes":{{"themes":[{{"name":"Solarized Dark","file":"dark.json"}}],
+                {contributes}}}}}"#
+        ));
+        let why = read_at(&made.at()).expect_err(capability);
+        assert!(
+            why.contains("declares no program ('runs') to ask"),
+            "{capability}: {why}"
+        );
+    }
+}
+
+#[test]
+fn a_repo_column_with_no_state_directory_to_fill_it_from_is_refused() {
+    let made = Made::new();
+    made.ordinary();
+    made.manifest(
+        r#"{"version":1,"id":"solarized","capabilities":["repo-columns"],
+            "contributes":{"themes":[{"name":"Solarized Dark","file":"dark.json"}],
+            "repo-columns":[{"id":"ci","title":"CI","fresh_seconds":60}]}}"#,
+    );
+    let why = read_at(&made.at()).expect_err("a column with no facts file");
+    assert!(why.contains("names no state directory"), "{why}");
+}
+
+#[test]
+fn a_built_in_is_approved_at_its_place_in_the_bundle_and_offers_its_views() {
+    let made = Made::new();
+    let built_in = bundle(&made);
+    assert_eq!(
+        built_in.root(),
+        Some(made.dir.path().join("bundle").as_path())
+    );
+    assert_eq!(BuiltIn::none().root(), None);
+
+    let found = read_at(&made.dir.path().join("bundle/stats")).expect("the built-in");
+    assert_eq!(
+        read(&made.config(), &built_in).standing(&found),
+        Standing::Approved
+    );
+    let seen = survey(&made.config(), &built_in);
+    let row = seen
+        .installed
+        .iter()
+        .find(|row| row.id == "stats")
+        .expect("listed");
+    assert_eq!(row.views_in_force().len(), 1);
+}
+
+#[test]
+fn the_prompt_says_a_briefing_section_is_quoted_as_data_and_bounded() {
+    let made = Made::new();
+    let found = acting(
+        &made,
+        r#"["briefing"]"#,
+        r#","briefing":{"title":"Open PRs"}"#,
+    )
+    .expect("an extension");
+    let declares = prompt(&found, Standing::New).declares;
+    let line = format!(
+        "a briefing section, “Open PRs” — adds text to every chat's first message, quoted as \
+         data under this extension's name, at most {} characters; it can never add a \
+         permission, a hook or a setting",
+        briefing::MOST_SECTION_CHARS
+    );
+    assert!(declares.contains(&line), "{line}\nnot in {declares:#?}");
+}
+
+// ---------------------------------------------------------------------------------------
+// Commands on the `charter` command line (charter-app#342)
+// ---------------------------------------------------------------------------------------
+
+/// A protocol-2 manifest with the id `id` whose `contributes.cli` is `cli`, beside a program and,
+/// when `writes` is, the plane paths it declares it writes.
+fn commanding(made: &Made, id: &str, cli: &str, writes: bool) -> Result<Extension, String> {
+    let (capabilities, paths) = if writes {
+        (r#"["cli","writes"]"#, r#","writes":["notes/"]"#)
+    } else {
+        (r#"["cli"]"#, "")
+    };
+    made.manifest(&format!(
+        r#"{{"version":2,"id":"{id}","name":"Commander","capabilities":{capabilities},
+            "contributes":{{"runs":"bin/run","cli":{cli}{paths}}}}}"#
+    ));
+    made.file("bin/run", "#!/bin/sh\n");
+    read_at(&made.at())
+}
+
+/// One command's declaration.
+fn a_command(name: &str, writes: bool) -> String {
+    format!(r#"{{"name":"{name}","title":"Do {name}","writes":{writes}}}"#)
+}
+
+#[test]
+fn a_command_that_reads_and_one_that_writes_are_read_as_declared() {
+    let made = Made::new();
+    let cli = format!(
+        "[{},{}]",
+        a_command("look", false),
+        a_command("change", true)
+    );
+    let found = commanding(&made, "commander", &cli, true).expect("an extension");
+    assert_eq!(
+        found.manifest.cli,
+        [
+            CliCommand {
+                name: "look".into(),
+                title: "Do look".into(),
+                writes: false,
+            },
+            CliCommand {
+                name: "change".into(),
+                title: "Do change".into(),
+                writes: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_command_that_only_reads_needs_no_plane_paths_declared() {
+    let made = Made::new();
+    let found = commanding(
+        &made,
+        "commander",
+        &format!("[{}]", a_command("look", false)),
+        false,
+    )
+    .expect("a reading command with nowhere declared to write");
+    assert_eq!(found.manifest.cli.len(), 1);
+}
+
+#[test]
+fn a_command_that_writes_with_no_plane_paths_declared_is_refused() {
+    let made = Made::new();
+    let why = commanding(
+        &made,
+        "commander",
+        &format!("[{}]", a_command("change", true)),
+        false,
+    )
+    .expect_err("a write the prompt could not say where");
+    assert!(why.contains("declares no plane paths it writes"), "{why}");
+}
+
+#[test]
+fn exactly_the_most_commands_are_added_and_one_more_is_refused() {
+    let made = Made::new();
+    let list = |count: usize| {
+        let each: Vec<String> = (0..count)
+            .map(|at| a_command(&format!("c{at}"), false))
+            .collect();
+        format!("[{}]", each.join(","))
+    };
+    let found = commanding(&made, "commander", &list(16), false).expect("sixteen commands");
+    assert_eq!(found.manifest.cli.len(), 16);
+    let why = commanding(&made, "commander", &list(17), false).expect_err("seventeen");
+    assert!(why.contains("declares 17 commands"), "{why}");
+}
+
+#[test]
+fn a_command_carrying_a_key_it_may_not_say_is_refused() {
+    let made = Made::new();
+    let why = commanding(
+        &made,
+        "commander",
+        r#"[{"name":"look","title":"Look","writes":false,"runs":"elsewhere"}]"#,
+        false,
+    )
+    .expect_err("an unknown key");
+    assert!(why.contains("carrying \"runs\""), "{why}");
+}
+
+#[test]
+fn a_command_whose_name_is_not_one_plain_word_is_refused() {
+    let made = Made::new();
+    let why = commanding(
+        &made,
+        "commander",
+        &format!("[{}]", a_command("a/b", false)),
+        false,
+    )
+    .expect_err("a path for a name");
+    assert!(why.contains("a command's name is letters"), "{why}");
+}
+
+#[test]
+fn two_commands_with_one_name_are_refused() {
+    let made = Made::new();
+    let cli = format!(
+        "[{},{}]",
+        a_command("look", false),
+        a_command("look", false)
+    );
+    let why = commanding(&made, "commander", &cli, false).expect_err("two of one name");
+    assert!(
+        why.contains("declares two commands called \"look\""),
+        "{why}"
+    );
+}
+
+#[test]
+fn an_extension_whose_id_is_a_core_command_is_refused() {
+    let made = Made::new();
+    let why = commanding(
+        &made,
+        "status",
+        &format!("[{}]", a_command("look", false)),
+        false,
+    )
+    .expect_err("an extension standing where `charter status` stands");
+    assert!(why.contains("has the id \"status\""), "{why}");
+}
+
+#[test]
+fn the_prompt_names_each_command_that_writes_and_no_command_that_only_reads() {
+    let made = Made::new();
+    let cli = format!(
+        "[{},{}]",
+        a_command("look", false),
+        a_command("change", true)
+    );
+    let found = commanding(&made, "commander", &cli, true).expect("an extension");
+    let asked = prompt(&found, Standing::New).declares;
+    let commands: Vec<&String> = asked
+        .iter()
+        .filter(|line| line.starts_with("a command that writes"))
+        .collect();
+    assert_eq!(
+        commands,
+        [
+            "a command that writes, `charter commander change` — Do change; it writes to the \
+             plane paths listed here"
+        ]
+    );
+}
+
+#[test]
+fn only_a_command_the_installed_manifest_says_only_reads_is_one_that_only_reads() {
+    let made = Made::new();
+    let cli = format!(
+        "[{},{}]",
+        a_command("look", false),
+        a_command("change", true)
+    );
+    let found = commanding(&made, "commander", &cli, true).expect("an extension");
+    install(&made.config(), &BuiltIn::none(), &found.path).expect("installed");
+
+    assert!(cli::only_reads(&made.config(), "commander", "look"));
+    assert!(!cli::only_reads(&made.config(), "commander", "change"));
+    assert!(!cli::only_reads(&made.config(), "commander", "undeclared"));
+    assert!(!cli::only_reads(&made.config(), "nobody", "look"));
+}
+
+#[test]
+fn a_core_owned_alias_is_found_by_its_leading_words_and_by_nothing_shorter() {
+    // A build carrying the fence — every test build — has the two probe aliases.
+    let echo = cli::alias_of(&["ws", "probe-echo"]).expect("the echo alias");
+    assert_eq!((echo.extension, echo.command), ("extension-probe", "echo"));
+    let fail = cli::alias_of(&["ws", "probe-fail", "and", "more"]).expect("the fail alias");
+    assert_eq!((fail.extension, fail.command), ("extension-probe", "fail"));
+    assert_eq!(cli::alias_of(&["ws"]), None);
+    assert_eq!(cli::alias_of(&["ws", "list"]), None);
+    assert_eq!(cli::alias_of::<&str>(&[]), None);
+}
+
+#[test]
+fn a_command_line_runs_an_extension_command_only_through_an_alias_or_a_word_that_is_not_core() {
+    assert_eq!(
+        cli::extension_command(&["ws", "probe-echo", "hi"]),
+        Some(("extension-probe", "echo"))
+    );
+    assert_eq!(
+        cli::extension_command(&["todos", "list", "--all"]),
+        Some(("todos", "list"))
+    );
+    assert_eq!(cli::extension_command(&["todos"]), Some(("todos", "")));
+    assert_eq!(cli::extension_command(&["status"]), None);
+    assert_eq!(cli::extension_command(&["ws", "list"]), None);
+    assert_eq!(cli::extension_command(&["--version"]), None);
+    assert_eq!(cli::extension_command::<&str>(&[]), None);
+}
+
+// ---------------------------------------------------------------------------------------
+// Events (charter-app#343)
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn an_event_names_the_workspace_it_happened_in_and_a_fork_the_one_it_came_from() {
+    use events::Event;
+    let created = Event::WorkspaceCreated {
+        workspace: "alpha".into(),
+    };
+    assert_eq!(created.workspace(), Some("alpha"));
+    assert_eq!(created.from(), None);
+    let forked = Event::WorkspaceForked {
+        workspace: "beta".into(),
+        from: "alpha".into(),
+    };
+    assert_eq!(forked.workspace(), Some("beta"));
+    assert_eq!(forked.from(), Some("alpha"));
+    assert_eq!(Event::PlaneSaved.workspace(), None);
+    assert_eq!(Event::PlaneSaved.from(), None);
+}
+
+#[test]
+fn every_event_charter_has_is_heard_by_its_word_in_charters_order() {
+    let mut words: Vec<&str> = events::Kind::EVERY.iter().map(|it| it.as_str()).collect();
+    assert_eq!(
+        words,
+        [
+            "workspace-focused",
+            "workspace-created",
+            "workspace-forked",
+            "workspace-removed",
+            "handoff-created",
+            "session-started",
+            "plane-saved",
+        ]
+    );
+    words.reverse();
+    let declared = events::declared_of(&serde_json::json!({ "hears": words })).expect("heard");
+    assert_eq!(declared.hears, events::Kind::EVERY);
+    assert_eq!(declared.workspace_folder, None);
+}
+
+#[test]
+fn events_that_say_anything_but_what_they_hear_and_their_folder_are_refused() {
+    let why = events::declared_of(&serde_json::json!({
+        "hears": ["plane-saved"], "workspace_folder": "notes", "also": 1
+    }))
+    .expect_err("an unknown key");
+    assert!(why.contains("carrying \"also\""), "{why}");
+    let why =
+        events::declared_of(&serde_json::json!({ "hears": [] })).expect_err("hearing nothing");
+    assert!(
+        why.contains("without a list of the events it hears"),
+        "{why}"
+    );
+    let why = events::declared_of(&serde_json::json!({ "hears": ["plane-exploded"] }))
+        .expect_err("an event charter does not have");
+    assert!(
+        why.contains("\"plane-exploded\", which charter does not have"),
+        "{why}"
+    );
+}
+
+#[test]
+fn a_workspace_folder_is_one_plain_name_of_at_most_sixty_four_bytes_and_none_of_charters() {
+    let folder = |name: &str| {
+        events::declared_of(&serde_json::json!({
+            "hears": ["workspace-forked"], "workspace_folder": name
+        }))
+        .map(|declared| declared.workspace_folder)
+    };
+    for plain in ["notes", "todos-ext", "todo_ext", "7", &"a".repeat(64)] {
+        assert_eq!(folder(plain), Ok(Some(plain.to_owned())), "{plain}");
+    }
+    for not_plain in [".notes", "a b", "a.b", "a/b", "..", &"a".repeat(65)] {
+        let why = folder(not_plain).expect_err(not_plain);
+        assert!(
+            why.contains("a workspace folder is one plain name"),
+            "{why}"
+        );
+    }
+    let why = folder("todos").expect_err("charter's own");
+    assert!(why.contains("one of charter's own in a workspace"), "{why}");
+}
+
+/// A protocol-2 extension `teller` that hears `hears` and keeps `folder` in each workspace,
+/// with `script` as its program.
+fn teller(made: &Made, hears: &str, folder: &str, script: &str) -> Extension {
+    made.manifest(&format!(
+        r#"{{"version":2,"id":"teller","name":"Teller","capabilities":["events"],
+            "contributes":{{"runs":"bin/run",
+                            "events":{{"hears":{hears},"workspace_folder":"{folder}"}}}}}}"#
+    ));
+    std::fs::create_dir_all(made.at().join("bin")).expect("the directory");
+    stand_in::program(&made.at().join("bin"), "run", script);
+    read_at(&made.at()).expect("an extension")
+}
+
+#[test]
+fn the_prompt_says_each_event_heard_and_the_folder_a_fork_copies() {
+    let made = Made::new();
+    let found = teller(
+        &made,
+        r#"["plane-saved","workspace-created"]"#,
+        "teller-notes",
+        "#!/bin/sh\n",
+    );
+    assert_eq!(
+        events::declares(&found.manifest),
+        [
+            "events it hears: a workspace being created, the plane being saved — charter starts \
+             its program once for each, after it has happened; what it answers never changes \
+             what happened",
+            "a folder in each workspace, “teller-notes/” — a fork copies it into the new \
+             workspace, whether or not this extension is on there",
+        ]
+    );
+    let said: Vec<&str> = events::Kind::EVERY.iter().map(|it| it.said()).collect();
+    assert_eq!(
+        said,
+        [
+            "a workspace being focused",
+            "a workspace being created",
+            "a workspace being forked",
+            "a workspace being removed",
+            "a handoff being created",
+            "a chat starting",
+            "the plane being saved",
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_extension_that_hears_an_event_and_fails_is_one_note_and_one_that_does_not_hear_it_is_none() {
+    let made = Made::new();
+    let found = teller(
+        &made,
+        r#"["workspace-created"]"#,
+        "teller-notes",
+        "#!/bin/sh\nexit 3\n",
+    );
+    install(&made.config(), &BuiltIn::none(), &found.path).expect("installed");
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    let executor =
+        crate::executor::Executor::default().with_deadline(std::time::Duration::from_secs(30));
+    let choices = project::Choices::default();
+
+    let notes = events::deliver(
+        &executor,
+        &made.config(),
+        &choices,
+        &events::Event::WorkspaceCreated {
+            workspace: "alpha".into(),
+        },
+    );
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].starts_with("Teller missed workspace 'alpha' being created: "),
+        "{notes:?}"
+    );
+
+    let notes = events::deliver(
+        &executor,
+        &made.config(),
+        &choices,
+        &events::Event::PlaneSaved,
+    );
+    assert_eq!(notes, Vec::<String>::new(), "an event it does not hear");
+}
+
+#[test]
+fn a_fork_carries_the_folder_of_an_approved_extension_and_of_no_other() {
+    let made = Made::new();
+    let found = teller(
+        &made,
+        r#"["workspace-forked"]"#,
+        "teller-notes",
+        "#!/bin/sh\n",
+    );
+    install(&made.config(), &BuiltIn::none(), &found.path).expect("installed");
+    assert_eq!(
+        events::carried(&made.config(), &BuiltIn::none()),
+        Vec::<String>::new(),
+        "installed and not approved"
+    );
+
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    assert_eq!(
+        events::carried(&made.config(), &BuiltIn::none()),
+        ["teller-notes"]
+    );
+
+    // Changed since its yes: its manifest names a folder nobody approved.
+    made.file("extra.txt", "changed");
+    assert_eq!(
+        events::carried(&made.config(), &BuiltIn::none()),
+        Vec::<String>::new(),
+        "changed since it was approved"
+    );
+}
+
+#[test]
+fn a_fork_carries_the_folder_of_a_built_in_that_nobody_approved_by_hand() {
+    let made = Made::new();
+    let root = made.dir.path().join("bundle");
+    let dir = root.join("keeper");
+    std::fs::create_dir_all(dir.join("bin")).expect("a bundle");
+    std::fs::write(
+        dir.join(MANIFEST),
+        r#"{"version":2,"id":"keeper","name":"Keeper","capabilities":["events"],
+            "contributes":{"runs":"bin/p",
+                           "events":{"hears":["workspace-forked"],"workspace_folder":"kept"}}}"#,
+    )
+    .expect("a manifest");
+    std::fs::write(dir.join("bin/p"), "#!/bin/sh\n").expect("a program");
+
+    assert_eq!(
+        events::carried(&made.config(), &BuiltIn::at(root)),
+        ["kept"]
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// What a project's choices are resolved against (charter-app#253)
+// ---------------------------------------------------------------------------------------
+
+/// Each extension a list holds, by id, and whether it counts as approved.
+fn approvals(installed: &[project::Installed]) -> Vec<(&str, bool)> {
+    installed
+        .iter()
+        .map(|it| (it.id.as_str(), it.approved))
+        .collect()
+}
+
+#[test]
+fn the_record_alone_counts_an_extension_approved_by_its_yes_or_by_shipping_with_the_app() {
+    let made = Made::new();
+    let built_in = bundle(&made);
+    let found = install(&made.config(), &built_in, &made.ordinary()).expect("installed");
+    assert_eq!(
+        approvals(&project::Installed::from_record(&read(
+            &made.config(),
+            &built_in
+        ))),
+        [("solarized", false), ("stats", true)]
+    );
+
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    assert_eq!(
+        approvals(&project::Installed::from_record(&read(
+            &made.config(),
+            &built_in
+        ))),
+        [("solarized", true), ("stats", true)]
+    );
+}
+
+#[test]
+fn the_survey_hands_each_extension_on_this_machine_with_its_name_and_standing() {
+    let made = Made::new();
+    let found = install(&made.config(), &BuiltIn::none(), &made.ordinary()).expect("installed");
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+
+    let installed = project::Installed::from_survey(&survey(&made.config(), &BuiltIn::none()));
+    assert_eq!(approvals(&installed), [("solarized", true)]);
+    assert_eq!(installed[0].name, "Solarized");
+}

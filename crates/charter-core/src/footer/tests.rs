@@ -294,3 +294,73 @@ fn an_alert_row_follows_the_declaration_inside_the_frame_and_the_active_workspac
     let widths: Vec<usize> = lines.iter().map(|l| crate::tui::width(l)).collect();
     assert!(widths.iter().all(|w| *w == widths[0]), "{widths:?}");
 }
+
+/// An approved extension under `dir` that declares one footer badge and fills it with `value`,
+/// written at `now` — a facts file and no program. Answers its config home.
+fn a_footer_badge(dir: &Path, value: &str, now: chrono::DateTime<chrono::Utc>) -> PathBuf {
+    use crate::extension;
+    // The record keeps only an absolute path free of `..`.
+    let ext = dir.canonicalize().unwrap().join("ext");
+    std::fs::create_dir_all(ext.join("state")).unwrap();
+    std::fs::write(
+        ext.join(extension::MANIFEST),
+        r#"{"version": 1, "id": "prs", "name": "Pull requests", "state": "state",
+            "capabilities": ["badges"],
+            "contributes": {"badges": [{"id": "open", "label": "PRs", "surfaces": ["footer"],
+                                        "fresh_seconds": 600}]}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ext.join("state").join(extension::facts::FILE),
+        format!(
+            r#"{{"badges": {{"open": {{"value": "{value}", "at": {}}}}}}}"#,
+            now.timestamp()
+        ),
+    )
+    .unwrap();
+    let config = dir.join("config");
+    let found = extension::install(&config, &extension::BuiltIn::none(), &ext).unwrap();
+    extension::approve(&config, found.id(), &found.path, &found.fingerprint).unwrap();
+    config
+}
+
+/// The body's rows between the frame, for `root` with the extension record at `config`.
+fn body_with_config(root: &Path, config: &Path) -> Vec<String> {
+    let env = |name: &str| match name {
+        "COLUMNS" => Some("80".to_string()),
+        "CHARTER_WORKSPACE" => Some("alpha".to_string()),
+        _ => None,
+    };
+    let mut at = ambient(&env, root);
+    at.config = Some(config);
+    let out = render(root, &serde_json::Value::Null, &at);
+    let lines: Vec<String> = out.lines().map(str::to_owned).collect();
+    lines[1..lines.len() - 1].to_vec()
+}
+
+#[test]
+fn an_approved_extensions_badge_is_one_row_under_the_declaration_and_nothing_more() {
+    let (_held, root) = a_plane("alpha");
+    let now = chrono::DateTime::from_timestamp(1_772_000_000, 0).unwrap();
+    let config = a_footer_badge(&root, "4", now);
+
+    let body = body_with_config(&root, &config);
+
+    // Identity row, rule, the declaration, the badge row.
+    assert_eq!(body.len(), 4, "{body:?}");
+    assert!(body[2].contains(NOT_DRAWN_YET), "{body:?}");
+    assert!(body[3].contains("\x1b[2mPRs\x1b[0m 4"), "{:?}", body[3]);
+}
+
+#[test]
+fn a_config_home_with_no_extension_adds_no_row_to_the_footer() {
+    let (_held, root) = a_plane("alpha");
+    let config = root.join("config");
+    std::fs::create_dir_all(&config).unwrap();
+
+    let body = body_with_config(&root, &config);
+
+    // Identity row, rule, the declaration — no empty badge row, no note.
+    assert_eq!(body.len(), 3, "{body:?}");
+    assert!(body[2].contains(NOT_DRAWN_YET), "{body:?}");
+}

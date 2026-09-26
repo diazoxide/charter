@@ -276,6 +276,41 @@ mod tests {
     }
 
     #[test]
+    fn exactly_the_most_write_paths_are_listed_and_one_more_is_refused() {
+        let paths = |count: usize| -> serde_json::Value {
+            (0..count).map(|at| format!("notes/{at}/")).collect()
+        };
+        assert_eq!(
+            writes_of(&paths(MOST_WRITES)).expect("the most").len(),
+            MOST_WRITES
+        );
+        let why = writes_of(&paths(MOST_WRITES + 1)).expect_err("one more");
+        assert!(
+            why.contains(&format!("declares {} write paths", MOST_WRITES + 1)),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn a_write_path_of_exactly_the_most_bytes_is_listed_and_an_empty_or_longer_one_is_not() {
+        let most = format!("notes/{}", "a".repeat(MOST_PATH_BYTES - "notes/".len()));
+        assert_eq!(most.len(), MOST_PATH_BYTES);
+        assert!(refused(&most).is_ok());
+        for path in [String::new(), format!("{most}a")] {
+            let why = refused(&path).expect_err(&path);
+            assert!(why.starts_with("is empty or longer than"), "{path}: {why}");
+        }
+    }
+
+    #[test]
+    fn a_write_path_holding_a_backslash_or_a_control_character_is_refused() {
+        for path in ["notes\\x", "notes/\u{7}x"] {
+            let why = refused(path).expect_err(path);
+            assert!(why.contains("will not draw"), "{path:?}: {why}");
+        }
+    }
+
+    #[test]
     fn a_path_resolves_against_what_the_plane_has_now_and_keeps_what_is_named() {
         let plane = tempfile::tempdir().expect("a plane");
         for dir in ["workspaces/a", "workspaces/b", "workspaces/.hidden"] {

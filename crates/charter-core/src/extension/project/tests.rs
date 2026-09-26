@@ -492,3 +492,104 @@ fn the_workspace_source_names_its_file() {
     assert_eq!(Source::Workspace.as_str(), "workspace");
     assert_eq!(Source::Workspace.file(), Some("workspace.json"));
 }
+
+// -------------------------------------------------------------------------------------
+// Choices compared, the plane they were read from, and the words
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn choices_are_equal_when_they_choose_the_same_and_wherever_they_were_read_from() {
+    let shared = "[extensions.stats]\nenabled = false\n";
+    let plane = tempfile::tempdir().expect("a plane");
+    std::fs::write(plane.path().join(COMMITTED_FILE), shared).expect("charter.toml");
+
+    let read = Choices::read(plane.path());
+    let from_text = Choices::from_text(Some(shared), None);
+    assert_eq!(read.plane(), Some(plane.path()));
+    assert_eq!(from_text.plane(), None);
+    assert_eq!(read, from_text, "where they were read from is not a choice");
+}
+
+#[test]
+fn choices_that_differ_in_any_one_layer_or_workspace_are_not_equal() {
+    let off = "[extensions.stats]\nenabled = false\n";
+    let on = "[extensions.stats]\nenabled = true\n";
+    let base = Choices::from_text(Some(off), Some(off));
+
+    assert_ne!(
+        base,
+        Choices::from_text(Some(on), Some(off)),
+        "Shared differs"
+    );
+    assert_ne!(
+        base,
+        Choices::from_text(Some(off), Some(on)),
+        "Local differs"
+    );
+    let workspace = |manifest: Option<&str>, name: &str| {
+        Choices::from_text(Some(off), Some(off)).in_workspace(name, manifest)
+    };
+    let said = r#"{"settings": {"extensions": {"stats": {"enabled": true}}}}"#;
+    assert_ne!(
+        workspace(None, "alpha"),
+        workspace(Some(said), "alpha"),
+        "the workspace differs"
+    );
+    assert_ne!(
+        workspace(None, "alpha"),
+        workspace(None, "beta"),
+        "the workspace's name differs"
+    );
+    assert_eq!(
+        workspace(Some(said), "alpha"),
+        workspace(Some(said), "alpha")
+    );
+}
+
+#[test]
+fn only_an_extension_that_is_on_says_it_is_on() {
+    assert!(one(approved("stats"), "", "").is_on());
+    assert!(
+        !one(
+            approved("stats"),
+            "[extensions.stats]\nenabled = false\n",
+            ""
+        )
+        .is_on()
+    );
+    assert!(!one(unapproved("stats"), "", "").is_on());
+}
+
+#[test]
+fn each_state_has_its_word() {
+    let words: Vec<&str> = [
+        State::On,
+        State::Off,
+        State::NeedsApproval,
+        State::NotInstalled,
+    ]
+    .iter()
+    .map(|it| it.as_str())
+    .collect();
+    assert_eq!(words, ["on", "off", "needs-approval", "not-installed"]);
+}
+
+#[test]
+fn an_id_is_one_segment_of_id_characters_starting_with_a_letter_or_a_digit() {
+    for good in ["stats", "7up", "a.b-c_d"] {
+        assert!(id_ok(good), "{good}");
+    }
+    for bad in ["", "-a", ".a", "a b", "a/b", ".."] {
+        assert!(!id_ok(bad), "{bad}");
+    }
+}
+
+#[test]
+fn a_setting_key_is_letters_digits_dashes_and_underscores_starting_with_a_letter_or_a_digit() {
+    for good in ["window", "a-b", "a_b", "7"] {
+        assert!(key_ok(good), "{good}");
+    }
+    for bad in ["", "-a", "_a", "a.b", "a b"] {
+        assert!(!key_ok(bad), "{bad}");
+    }
+}

@@ -238,6 +238,26 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_names_each_capability_by_its_word_and_says_what_it_does() {
+        assert_eq!(
+            Capability::Briefing.asks(),
+            "the capability “briefing” — adds text to every chat's first message, quoted as \
+             data under its name"
+        );
+    }
+
+    #[test]
+    fn the_test_capability_declares_no_shape_and_every_other_one_does() {
+        assert!(!Capability::Probe.has_shape());
+        assert!(
+            Capability::known()
+                .into_iter()
+                .filter(|it| *it != Capability::Probe)
+                .all(Capability::has_shape)
+        );
+    }
+
+    #[test]
     fn a_release_build_knows_badges_and_repo_columns() {
         assert_eq!(Capability::parse("badges"), Some(Capability::Badges));
         assert_eq!(

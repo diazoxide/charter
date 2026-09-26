@@ -511,3 +511,200 @@ fn a_declared_identity_source_is_stripped_and_the_op_prefix_is_case_insensitive(
         "{names:?}"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// The password-box path and the pinned `op` (#237, #271 review U1/U3). The `op` here is a
+// stand-in on a temp PATH, unsigned, so `codesign` reports no team for it; the keyring is the
+// test build's stub.
+
+const PASTED_TOKEN: &str = "ops_fixture-pasted-identity-5c3a08";
+
+/// A plane with a 1Password vault `team` read through `$OP_TEAM_TOKEN`, with an op-vault and an
+/// account, and a stand-in `op` that prints `out` — the directory holding it, and its path.
+fn pinned_plane(
+    out: &str,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    registry::Vault,
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let op = stand_in::program(
+        bin.path(),
+        "op",
+        &format!("#!/bin/sh\nprintf '%s' '{out}'\n"),
+    );
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Fixture"));
+    config.insert("account".into(), serde_json::json!("acme.1password.com"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
+    );
+    registry::add_vault(&ctx, "team", "1password", config, None, false, false).unwrap();
+    let v = registry::vault(&ctx, "team").unwrap();
+    (tmp, bin, op, v)
+}
+
+/// A context on `root` whose PATH is `bin` alone.
+fn on_path(root: &std::path::Path, bin: &std::path::Path) -> Ctx {
+    Ctx::new(root, Env::of(&[("PATH", &bin.to_string_lossy())]))
+}
+
+/// The identity record this machine's half keeps for `team`.
+fn identity_record(ctx: &Ctx) -> serde_json::Value {
+    registry::load_local(ctx).unwrap()["vaults"]["team"]["config"]["identity"].clone()
+}
+
+#[test]
+fn a_pasted_token_is_kept_under_a_random_item_and_pins_the_binding_and_the_op_on_path() {
+    let (tmp, bin, op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+
+    assert_eq!(
+        identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap(),
+        ["OP_TEAM_TOKEN"]
+    );
+
+    let rec = identity_record(&ctx);
+    assert_eq!(rec["held"], "keyring");
+    assert_eq!(
+        rec["bindings"],
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"})
+    );
+    assert_eq!(rec["op_vault"], "Fixture");
+    assert_eq!(rec["account"], "acme.1password.com");
+    assert_eq!(rec["op_cmd"], op.to_string_lossy().as_ref());
+    assert_eq!(rec["op_team"], "", "an unsigned `op` carries no team");
+    let id = rec["ids"]["OP_TEAM_TOKEN"].as_str().unwrap().to_owned();
+    assert!(
+        id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()),
+        "{id:?}"
+    );
+
+    // The item is `charter/@identity/<id>`, account the source variable.
+    let stub: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(tmp.path().join(".charter/keyring-stub.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        stub,
+        serde_json::json!({ format!("charter/@identity/{id}\nOP_TEAM_TOKEN"): PASTED_TOKEN })
+    );
+
+    // Read back where the variable is not set, running exactly the pinned `op`.
+    let bare = Ctx::new(tmp.path(), Env::of(&[]));
+    assert_eq!(
+        env_overlay(&bare, &v).unwrap(),
+        vec![(
+            "OP_SERVICE_ACCOUNT_TOKEN".to_string(),
+            PASTED_TOKEN.to_string()
+        )]
+    );
+    assert_eq!(identity::pinned_op(&bare, &v).unwrap(), Some(op));
+}
+
+#[test]
+fn two_pasted_tokens_are_kept_under_two_different_items() {
+    let (tmp, bin, _op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    let first = identity_record(&ctx)["ids"]["OP_TEAM_TOKEN"].clone();
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    assert_ne!(identity_record(&ctx)["ids"]["OP_TEAM_TOKEN"], first);
+}
+
+#[test]
+fn a_vault_whose_identity_is_not_in_the_keyring_pins_no_op() {
+    let (tmp, _bin, _op, v) = pinned_plane("");
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    assert_eq!(identity::pinned_op(&ctx, &v).unwrap(), None);
+}
+
+#[test]
+fn a_pinned_op_that_is_missing_gone_or_signed_by_another_team_is_refused() {
+    let (tmp, bin, op, v) = pinned_plane("");
+    let ctx = on_path(tmp.path(), bin.path());
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    let set_field = |field: &str, value: &str| {
+        let mut local = registry::load_local(&ctx).unwrap();
+        local["vaults"]["team"]["config"]["identity"][field] = serde_json::json!(value);
+        registry::save_local(&ctx, &local).unwrap();
+    };
+
+    set_field("op_team", identity::ONEPASSWORD_TEAM_ID);
+    let err = identity::pinned_op(&ctx, &v).unwrap_err();
+    assert!(err.message.contains("different team"), "{}", err.message);
+
+    set_field("op_team", "");
+    std::fs::remove_file(&op).unwrap();
+    let err = identity::pinned_op(&ctx, &v).unwrap_err();
+    assert!(err.message.contains("is gone"), "{}", err.message);
+
+    set_field("op_cmd", "");
+    let err = identity::pinned_op(&ctx, &v).unwrap_err();
+    assert!(
+        err.message.contains("no `op` was pinned"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn a_token_pasted_where_no_op_is_on_path_is_kept_and_every_read_is_refused_until_it_is_put_again() {
+    let (tmp, _bin, _op, v) = pinned_plane("");
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    identity::put_in_keyring(&ctx, &v, PASTED_TOKEN).unwrap();
+    let rec = identity_record(&ctx);
+    assert_eq!(
+        (&rec["op_cmd"], &rec["op_team"]),
+        (&serde_json::json!(""), &serde_json::json!(""))
+    );
+    let err = identity::pinned_op(&ctx, &v).unwrap_err();
+    assert!(
+        err.message.contains("no `op` was pinned"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn the_app_environment_is_said_to_hold_a_token_only_for_a_source_set_to_something() {
+    let (tmp, _bin, _op, v) = pinned_plane("");
+    let set = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", PASTED_TOKEN)]));
+    assert_eq!(identity::app_env_holds_a_token(&set, &v), ["OP_TEAM_TOKEN"]);
+    let empty = Ctx::new(tmp.path(), Env::of(&[("OP_TEAM_TOKEN", "")]));
+    assert!(identity::app_env_holds_a_token(&empty, &v).is_empty());
+    let unset = Ctx::new(tmp.path(), Env::of(&[]));
+    assert!(identity::app_env_holds_a_token(&unset, &v).is_empty());
+}
+
+#[test]
+fn a_keyring_held_reference_runs_the_pinned_op_and_refuses_any_other_cli() {
+    let (tmp, bin, _op, _team) = pinned_plane("resolved-through-the-pin");
+    let root = tmp.path();
+    let setup = on_path(root, bin.path());
+    let mut config = serde_json::Map::new();
+    config.insert("file".into(), serde_json::json!("refs.json"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_REF_TOKEN"}),
+    );
+    registry::add_vault(&setup, "refs", "reference", config, None, false, false).unwrap();
+    let v = registry::vault(&setup, "refs").unwrap();
+    reference::set(&setup, &v, "A", "op://Eng/item/field").unwrap();
+    reference::set(&setup, &v, "B", "vault://secret/data/app#TOKEN").unwrap();
+    identity::put_in_keyring(&setup, &v, PASTED_TOKEN).unwrap();
+
+    // No PATH at all: only the pinned absolute `op` can answer.
+    let bare = Ctx::new(root, Env::of(&[]));
+    assert_eq!(
+        reference::get(&bare, &v, "A").unwrap(),
+        "resolved-through-the-pin"
+    );
+    let err = reference::get(&bare, &v, "B").unwrap_err();
+    assert!(err.message.contains("pins only `op`"), "{}", err.message);
+}

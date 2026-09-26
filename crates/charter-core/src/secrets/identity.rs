@@ -465,3 +465,20 @@ pub fn kept_from_chats(name: &std::ffi::OsStr) -> bool {
     bytes.len() >= KEPT_FROM_CHATS.len()
         && bytes[..KEPT_FROM_CHATS.len()].eq_ignore_ascii_case(KEPT_FROM_CHATS.as_bytes())
 }
+
+/// macOS only: off macOS there is nothing here to test.
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    /// macOS only: off macOS `op_team_id` is `None` by construction, and there is no `codesign`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_binary_signed_by_no_team_or_not_signed_at_all_has_no_team() {
+        // Apple's own binaries are signed with `TeamIdentifier=not set`.
+        assert_eq!(op_team_id(Path::new("/usr/bin/true")), None);
+        let bin = tempfile::tempdir().unwrap();
+        let op = stand_in::program(bin.path(), "op", "#!/bin/sh\n");
+        assert_eq!(op_team_id(&op), None);
+    }
+}

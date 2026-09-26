@@ -775,6 +775,9 @@ pub struct BuiltIn {
 
 impl BuiltIn {
     /// No built-in extensions: the CLI, and a build whose bundle has none.
+    ///
+    /// It IS `Self::default()` — a `root` of `None` — so the mutant that returns
+    /// `Default::default()` is this function itself, and is excluded in `.cargo/mutants.toml`.
     pub fn none() -> Self {
         Self::default()
     }

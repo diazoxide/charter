@@ -452,3 +452,18 @@ fn the_save_branch_is_the_one_named_or_this_clones_own() {
         "charter/save/laptop"
     );
 }
+
+#[test]
+fn the_repos_auto_save_can_reach_are_every_table_in_either_file_sorted_and_once() {
+    let got = settings(
+        "[plane]\nmode = \"push\"\n[repos.widget]\nmode = \"pr\"\n[repos.api]\n",
+        "[repos.widget]\nautosave = true\n[repos.docs]\nmode = \"push\"\n",
+    )
+    .repo_tables();
+    assert_eq!(got, ["api", "docs", "widget"]);
+    assert!(
+        settings("[plane]\nmode = \"push\"\n", "")
+            .repo_tables()
+            .is_empty()
+    );
+}
