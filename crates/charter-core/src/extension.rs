@@ -2285,14 +2285,10 @@ fn update(config_root: &Path, change: impl FnOnce(&mut Registry)) -> io::Result<
     write(config_root, &loaded.registry)
 }
 
-/// Write the record: `0600`, in charter's `0700` directory, atomically by rename.
-///
-/// This is [`crate::machine::write`]'s body with this record's name, and the sharp parts are
-/// the same because they are the same directory: the mode goes on the **temp** file (a rename
-/// carries the source's mode onto the target, never the other way round), the containment walk
-/// gates the **temp** path because that is where the bytes actually land, and the `rename`
-/// needs no gate because it replaces a *name* — a symlink sitting at the record's path is
-/// replaced rather than written through.
+/// Write the record: `0600`, in charter's `0700` directory, replaced whole by
+/// [`crate::machine::write_beside`] — the store's writer, because it is the same directory
+/// (#434). The walk gates the temp file the bytes land on as well as the record, and a record
+/// that is itself a link is refused.
 pub fn write(config_root: &Path, registry: &Registry) -> io::Result<()> {
     supported()?;
     let dir = crate::machine::dir(config_root);
@@ -2303,46 +2299,8 @@ pub fn write(config_root: &Path, registry: &Registry) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
     }
-    let target = dir.join(RECORD);
-    // A pid AND a per-call tag, as `machine::write` does: the pid separates two processes, the
-    // tag separates two writers inside one — Tauri runs commands on a thread pool — and a pid
-    // the kernel has recycled.
-    let temp = dir.join(format!(
-        "{RECORD}.{}.{}.writing",
-        std::process::id(),
-        crate::workspaces::scratch_tag()
-    ));
     let text = crate::pyjson::dumps_indent2(&as_json(registry)) + "\n";
-    write_through(config_root, &target, &temp, text.as_bytes())
-}
-
-/// [`write`]'s body with the temp file named by the caller.
-///
-/// The seam exists so a test can **plant its link at the path that is actually opened**.
-/// `machine::write_through` has the same one for the same reason: a test that plants a link at
-/// the record's own path passes against code that writes through an unguarded temp file, which
-/// is precisely the defect the gate exists to stop.
-fn write_through(config_root: &Path, target: &Path, temp: &Path, bytes: &[u8]) -> io::Result<()> {
-    crate::contain::no_link_on_the_way(config_root, temp)?;
-    let mut options = std::fs::OpenOptions::new();
-    // `create_new`, so an existing file at the temp path is refused rather than written
-    // through — and, on any POSIX system, so is a symlink sitting there (`O_CREAT|O_EXCL`
-    // fails on one).
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut out = crate::contain::nofollow(&mut options).open(temp)?;
-    let result = io::Write::write_all(&mut out, bytes)
-        .and_then(|()| out.sync_all())
-        .and_then(|()| std::fs::rename(temp, target));
-    if result.is_err() {
-        // This call created it, so this call takes it away.
-        let _ = std::fs::remove_file(temp);
-    }
-    result
+    crate::machine::write_beside(config_root, &dir.join(RECORD), text.as_bytes())
 }
 
 /// Put an extension in the record, unapproved, and hand back what was read.

@@ -1342,76 +1342,24 @@ impl Drop for Lock {
 /// half of one, and a process killed between the two leaves the previous store intact with a
 /// stray temp file beside it.
 ///
-/// **The gate is on the path the write actually lands on**, which is the temp file and not
-/// the store. Guarding the destination of a rename while the bytes go somewhere unguarded is
-/// the mistake this repo has had six review rounds on, and the one that put a whole
-/// `reopen.json` outside a plane through a committed `reopen.json.writing -> elsewhere`.
-///
-/// `rename` is not gated and does not need to be: it replaces a **name**, so a symlink
-/// sitting at the store's path is replaced rather than written through.
+/// That is [`crate::rewrite::replace`] with [`crate::rewrite::Mode::Private`] (#434), gated
+/// from the config home: the walk covers the store's path **and** the temp file the bytes
+/// actually land on — the mistake this repo has had six review rounds on, and the one that
+/// put a whole `reopen.json` outside a plane through a committed
+/// `reopen.json.writing -> elsewhere`. A store that is itself a link is refused.
 pub fn write(config_root: &Path, store: &Store) -> io::Result<()> {
     supported()?;
     let dir = private_dir(config_root)?;
-    let target = dir.join(FILE);
-    // A pid AND a per-call tag, as `profiletrust::write_private` does: the pid separates two
-    // processes, the tag separates two writers inside one — Tauri runs commands on a thread
-    // pool — and a pid the kernel has recycled.
-    let temp = dir.join(format!(
-        "{FILE}.{}.{}.writing",
-        std::process::id(),
-        crate::workspaces::scratch_tag()
-    ));
     let text = serde_json::to_string_pretty(&OnDisk::from(store))
         .expect("the store is plain data serde can always write");
-    write_through(config_root, &target, &temp, (text + "\n").as_bytes())
+    write_beside(config_root, &dir.join(FILE), (text + "\n").as_bytes())
 }
 
-/// [`write`]'s body, with the temp file named by the caller.
-///
-/// The seam exists so a test can **plant its link at the path that is actually opened**. A
-/// test that plants one at the store's own path passes against code that writes through an
-/// unguarded temp file, which is precisely the defect the gate here exists to stop, so a test
-/// that cannot name the temp file proves nothing about it.
-pub(crate) fn write_through(
-    config_root: &Path,
-    target: &Path,
-    temp: &Path,
-    bytes: &[u8],
-) -> io::Result<()> {
-    // The walk, against the config home: this is what refuses a `charter/` that is a link
-    // out of it, at the moment the create happens rather than at some earlier check.
-    crate::contain::no_link_on_the_way(config_root, temp)?;
-    let mut options = std::fs::OpenOptions::new();
-    // `create_new`, so an existing file at the temp path is refused rather than written
-    // through — and, on any POSIX system, so is a symlink sitting there (`O_CREAT|O_EXCL`
-    // fails on one). `O_NOFOLLOW` comes from `contain::nofollow` as well; on this path it is
-    // the second of two answers to the same question, which is said here so nobody credits
-    // it with a refusal `O_EXCL` already made.
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        // The mode is set on the TEMP file because a rename carries the source's mode onto
-        // the target, not the other way round — and `OpenOptions::mode` applies only when the
-        // call creates the inode, which `create_new` guarantees it does.
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    // The open is outside what is cleaned up below, deliberately: a `create_new` that fails
-    // failed because something was ALREADY at that path, and unlinking that something is
-    // charter deleting a file it did not make.
-    let mut out = crate::contain::nofollow(&mut options).open(temp)?;
-    let result = io::Write::write_all(&mut out, bytes)
-        // The bytes reach the disk before the name changes. This does not make the rename
-        // itself durable — that would need the directory synced too — so what it buys is
-        // narrow and worth stating: a store whose name is the new one is never a file of
-        // zeroes.
-        .and_then(|()| out.sync_all())
-        .and_then(|()| std::fs::rename(temp, target));
-    if result.is_err() {
-        // This call created it, so this call takes it away.
-        let _ = std::fs::remove_file(temp);
-    }
-    result
+/// Replace `target`, a file in charter's own directory, whole: 0600, through the walk from
+/// `config_root`, never through a link (#434). Every writer of that directory — the store,
+/// the extension record, the window's layout — goes through here.
+pub(crate) fn write_beside(config_root: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
+    crate::rewrite::replace(config_root, target, bytes, crate::rewrite::Mode::Private)
 }
 
 /// charter's directory under `config_root`, private to the operator.
@@ -2919,52 +2867,38 @@ mod tests {
     }
 
     #[test]
-    fn the_write_lands_on_a_path_that_is_gated_and_not_beside_one() {
-        // The mistake this repo has had six review rounds on: the store's own path is
-        // guarded while the bytes go to a temp file that is not. So the link is planted at
-        // the path that is actually opened.
+    fn a_store_that_is_a_link_is_refused_and_what_it_points_at_is_untouched() {
+        // #434: a link at the store's own name used to be replaced by the rename; it is now
+        // refused, as every whole-file writer refuses one. The temp file the bytes land on is
+        // gated by the same walk (`rewrite`'s own tests plant links there).
         let machine = machine();
-        let captured = machine.path().join("captured.json");
+        let theirs = machine.path().join("theirs.json");
+        std::fs::write(&theirs, "THEIRS\n").unwrap();
         let dir = private_dir(machine.path()).unwrap();
-        let temp = dir.join("machine.json.writing");
-        std::os::unix::fs::symlink(&captured, &temp).unwrap();
+        std::os::unix::fs::symlink(&theirs, dir.join(FILE)).unwrap();
 
-        let refused = write_through(
-            machine.path(),
-            &dir.join(FILE),
-            &temp,
-            b"{\"version\":1,\"at\":0}",
-        );
+        let refused = write(machine.path(), &one_plane());
 
-        assert!(refused.is_err(), "the temp path was written through");
-        assert!(
-            !captured.exists(),
-            "the store was written outside charter's own directory"
-        );
+        assert!(refused.is_err(), "a linked store was written");
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "THEIRS\n");
+        assert!(dir.join(FILE).is_symlink());
     }
 
     #[test]
-    fn the_write_asks_about_the_directory_again_at_the_moment_of_the_create() {
-        // `private_dir` refuses a linked `charter/` a moment earlier, and this is the only
-        // thing between a directory swapped in AFTER that answer and the bytes. `O_NOFOLLOW`
-        // cannot hold this: it answers about the last component and a directory above it is
-        // not one. So `write_through` is called directly, with the link already there.
+    fn a_store_write_that_dies_before_its_rename_leaves_the_old_store_whole() {
         let machine = machine();
-        let elsewhere = machine.path().join("elsewhere");
-        std::fs::create_dir_all(&elsewhere).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, dir(machine.path())).unwrap();
-        let temp = dir(machine.path()).join("machine.json.writing");
+        let dir = private_dir(machine.path()).unwrap();
+        std::fs::write(dir.join(FILE), "old\n").unwrap();
+        let _killed = crate::rewrite::hook::set(|_, _| Err(io::Error::other("killed")));
 
-        let refused = write_through(machine.path(), &file(machine.path()), &temp, b"{}");
+        assert!(write(machine.path(), &one_plane()).is_err());
 
-        assert!(
-            refused.is_err(),
-            "the bytes went through a linked directory"
-        );
-        assert!(
-            !elsewhere.join("machine.json.writing").exists(),
-            "the store was written outside the config home"
-        );
+        assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), "old\n");
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [FILE], "no temp was left beside the store");
     }
 
     #[test]

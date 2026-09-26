@@ -191,11 +191,18 @@ pub fn write(
     if index {
         gate(root, &dir.join(INDEX))?;
     }
-    if private {
-        write_private(&path, body.as_bytes())?;
+    // Replaced whole (#434): a link planted at the chosen name
+    // after the gate above answered is refused or replaced, never written through, and a
+    // crash leaves no half-written memory. Charter's own state is 0600 whatever the file
+    // had; a committed store keeps the operator's mode.
+    let mode = if private {
+        crate::rewrite::Mode::Private
     } else {
-        std::fs::write(&path, body)?;
-    }
+        crate::rewrite::Mode::Kept
+    };
+    // Gated from the store itself: `gate` has answered for the directories above it, and a
+    // link among them that stays inside the plane is followed, as it always was.
+    crate::rewrite::replace(dir, &path, body.as_bytes(), mode)?;
     if index {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         index_append(root, &dir.join(INDEX), &name, &title)?;
@@ -206,24 +213,6 @@ pub fn write(
 /// Is `path` in the plane's state directory, `.charter/` — charter's own, and private?
 fn under_state(root: &std::path::Path, path: &std::path::Path) -> bool {
     path.starts_with(root.join(".charter"))
-}
-
-/// Write a whole file of charter's own state at 0600, an existing one tightened first.
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut out = options.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = out.set_permissions(std::fs::Permissions::from_mode(0o600));
-    }
-    std::io::Write::write_all(&mut out, bytes)
 }
 
 /// Append one `- [title](file)` line. Order is write order: charter never sorts this file.
@@ -487,7 +476,16 @@ fn drop_index_line(root: &std::path::Path, dir: &std::path::Path, filename: &str
     } else {
         format!("{}\n", kept.join("\n"))
     };
-    let _ = std::fs::write(&index, body);
+    // Replaced whole and never through a link (#434): a link swapped in after
+    // `readable_file` answered is refused or replaced rather than truncated through. Gated
+    // from the store, which `gate` answered for above. A committed index keeps its mode, as
+    // the in-place write kept it; one under `.charter/` is charter's own, and 0600.
+    let mode = if under_state(root, dir) {
+        crate::rewrite::Mode::Private
+    } else {
+        crate::rewrite::Mode::Kept
+    };
+    let _ = crate::rewrite::replace(dir, &index, body.as_bytes(), mode);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1450,6 +1448,112 @@ mod gate_tests {
         std::os::unix::fs::symlink(&gone, store.join(INDEX)).unwrap();
         assert!(index_append(dir.path(), &store.join(INDEX), "a.md", "A").is_err());
         assert!(!gone.exists(), "nothing was created where the link points");
+    }
+
+    /// Plant a link to `at_target` at the path being replaced, in the window between the
+    /// gate and the rename — where an in-place write would have followed it. Returns whether
+    /// the window was ever reached, so a writer that bypasses `rewrite` cannot pass vacuously.
+    #[cfg(unix)]
+    fn plant_in_the_window(
+        at_target: std::path::PathBuf,
+    ) -> (
+        std::rc::Rc<std::cell::Cell<bool>>,
+        crate::rewrite::hook::Unset,
+    ) {
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = std::rc::Rc::clone(&fired);
+        let unset = crate::rewrite::hook::set(move |target, _temp| {
+            seen.set(true);
+            let _ = std::fs::remove_file(target);
+            std::os::unix::fs::symlink(&at_target, target)
+        });
+        (fired, unset)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_planted_at_a_new_memorys_name_is_never_written_through() {
+        // #434: the name is gated, then written. A link that lands in between used to take
+        // the whole memory to wherever it pointed.
+        let (dir, store, outside) = plane();
+        let theirs = outside.path().join("theirs");
+        std::fs::write(&theirs, "THEIRS\n").unwrap();
+        let (fired, _unset) = plant_in_the_window(theirs.clone());
+
+        let path = write(
+            dir.path(),
+            &store,
+            "A fact",
+            None,
+            false,
+            "persistent",
+            false,
+            stamp(),
+        )
+        .unwrap();
+
+        assert!(fired.get(), "the memory went through rewrite::replace");
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "THEIRS\n");
+        assert!(!path.is_symlink(), "the link was replaced, not followed");
+    }
+
+    #[test]
+    fn a_memory_write_that_dies_before_its_rename_leaves_no_memory_behind() {
+        let (dir, store, _outside) = plane();
+        let _killed = crate::rewrite::hook::set(|_, _| Err(std::io::Error::other("killed")));
+
+        let refused = write(
+            dir.path(),
+            &store,
+            "A fact",
+            None,
+            false,
+            "persistent",
+            false,
+            stamp(),
+        );
+
+        assert!(refused.is_err());
+        assert_eq!(
+            std::fs::read_dir(&store).unwrap().count(),
+            0,
+            "no temp, no memory"
+        );
+    }
+
+    #[test]
+    fn forgetting_a_memory_that_dies_while_dropping_its_line_leaves_the_index_whole() {
+        // #434: the index is replaced whole, so a crash mid-rewrite leaves the old index,
+        // stale line and all, rather than an empty or cut-short one.
+        let (dir, store, _outside) = plane();
+        std::fs::write(store.join("a.md"), "# A\n").unwrap();
+        let index = "# Memory Index\n\n- [A](a.md)\n- [B](b.md)\n";
+        std::fs::write(store.join(INDEX), index).unwrap();
+        let _killed = crate::rewrite::hook::set(|_, _| Err(std::io::Error::other("killed")));
+
+        forget(dir.path(), &store, "a").unwrap();
+
+        assert_eq!(std::fs::read_to_string(store.join(INDEX)).unwrap(), index);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_planted_at_the_index_while_a_line_is_dropped_is_never_truncated_through() {
+        let (dir, store, outside) = plane();
+        std::fs::write(store.join("a.md"), "# A\n").unwrap();
+        std::fs::write(store.join(INDEX), "# Memory Index\n\n- [A](a.md)\n").unwrap();
+        let theirs = outside.path().join("theirs");
+        std::fs::write(&theirs, "THEIRS\n").unwrap();
+        let (fired, _unset) = plant_in_the_window(theirs.clone());
+
+        forget(dir.path(), &store, "a").unwrap();
+
+        assert!(fired.get(), "the index went through rewrite::replace");
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "THEIRS\n");
+        assert_eq!(
+            std::fs::read_to_string(store.join(INDEX)).unwrap(),
+            "# Memory Index\n\n"
+        );
     }
 
     #[test]

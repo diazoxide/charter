@@ -879,7 +879,7 @@ impl Planes {
     /// window can only be shown to have closed by a writer that lands *in* it. A test that
     /// writes before the call is testing the comparison above, which was already there; a test
     /// that writes after it is testing nothing at all. This is the same seam, for the same
-    /// reason, that `machine::write_through` keeps so a test can plant its link at the path
+    /// reason, that `rewrite::replace_through` keeps so a test can plant its link at the path
     /// that is actually opened.
     fn approving(
         &self,

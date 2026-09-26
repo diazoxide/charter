@@ -594,6 +594,31 @@ fn settings_gate(run: &mut Run, root: &Path) -> bool {
     run.gate(root, settings::SETTINGS).is_some()
 }
 
+/// `Path.touch` for a `.gitkeep`: created when absent, never truncated, and never through a
+/// link (#434). `create_new` is `O_EXCL`, which no link survives, so a link planted after the
+/// gate answered meets `AlreadyExists` — and is then refused, because a `.gitkeep` that is a
+/// link is not one charter made. A plain file already there is left as it is.
+fn touch(path: &Path) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    match crate::contain::nofollow(&mut options).open(path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            match std::fs::symlink_metadata(path) {
+                Ok(found) if found.file_type().is_symlink() => Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "{} is a symlink, and charter will not write through one",
+                        path.display()
+                    ),
+                )),
+                _ => Ok(()),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
 fn write_failed(run: &mut Run, path: &Path, e: &std::io::Error) {
     run.err(format!(
         "could not write {} ({}) — left untouched.",
@@ -1077,14 +1102,18 @@ fn front_door(run: &mut Run, root: &Path, name: &str) {
     let role = text::py_title(&name.replace(['-', '_'], " "));
     fn scaffold(dir: &Path, name: &str, role: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        std::fs::write(dir.join("persona.md"), front_door_text(name, role))?;
+        // Never through a link (#434): the paths were gated above — a link on the way that
+        // stays inside the plane is followed, as it always was — and a link that lands at the
+        // file in between is refused or replaced rather than written through.
+        crate::rewrite::replace(
+            dir,
+            &dir.join("persona.md"),
+            front_door_text(name, role).as_bytes(),
+            crate::rewrite::Mode::Kept,
+        )?;
         for sub in ["memory", "refs"] {
             std::fs::create_dir_all(dir.join(sub))?;
-            // `Path.touch`: created when absent, never truncated.
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join(sub).join(".gitkeep"))?;
+            touch(&dir.join(sub).join(".gitkeep"))?;
         }
         Ok(())
     }
@@ -2619,6 +2648,64 @@ mod tests {
             std::fs::read_dir(&outside).expect("the directory").count(),
             0
         );
+    }
+
+    /// #434: the `.gitkeep` touch is `create_new`. A link at it — planted after the gate
+    /// answered — is refused, and what it points at is neither created nor appended to.
+    #[test]
+    fn a_gitkeep_that_is_a_link_is_refused_and_its_target_is_untouched() {
+        let (dir, root) = empty_plane();
+        let theirs = dir.path().join("theirs");
+        std::fs::write(&theirs, "THEIRS\n").expect("a file outside");
+        let keep = root.join(".gitkeep");
+        std::os::unix::fs::symlink(&theirs, &keep).expect("a link");
+
+        assert!(touch(&keep).is_err(), "a linked .gitkeep is refused");
+        assert_eq!(
+            std::fs::read_to_string(&theirs).expect("theirs"),
+            "THEIRS\n"
+        );
+
+        let gone = dir.path().join("gone");
+        std::fs::remove_file(&keep).expect("unlink");
+        std::os::unix::fs::symlink(&gone, &keep).expect("a dangling link");
+        assert!(touch(&keep).is_err(), "a dangling link is refused too");
+        assert!(!gone.exists(), "nothing was created where the link points");
+
+        // A plain file already there is left exactly as it is.
+        std::fs::remove_file(&keep).expect("unlink");
+        std::fs::write(&keep, "mine\n").expect("a note");
+        touch(&keep).expect("an existing .gitkeep is fine");
+        assert_eq!(std::fs::read_to_string(&keep).expect("kept"), "mine\n");
+    }
+
+    /// #434: the front door's `persona.md` goes through `rewrite::replace`, so a link planted
+    /// at it after the gate answered is replaced by the file, never written through.
+    #[test]
+    fn a_link_planted_at_the_front_doors_persona_md_is_never_written_through() {
+        let (dir, root) = empty_plane();
+        let theirs = dir.path().join("theirs");
+        std::fs::write(&theirs, "THEIRS\n").expect("a file outside");
+        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = std::rc::Rc::clone(&fired);
+        let planted = theirs.clone();
+        let _unset = crate::rewrite::hook::set(move |target, _| {
+            if target.ends_with("persona.md") {
+                seen.set(true);
+                std::os::unix::fs::symlink(&planted, target)?;
+            }
+            Ok(())
+        });
+
+        let outcome = init(&at(&root, false), &plain());
+
+        assert!(fired.get(), "persona.md went through rewrite::replace");
+        assert_eq!(outcome.code, 0, "{:?}", outcome.said);
+        assert_eq!(
+            std::fs::read_to_string(&theirs).expect("theirs"),
+            "THEIRS\n"
+        );
+        assert!(!root.join("personas/steward/persona.md").is_symlink());
     }
 
     // ---------------------------------------------------------------------------------------

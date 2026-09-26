@@ -984,3 +984,77 @@ fn a_replaced_vault_and_its_sidecar_are_0600() {
     assert_eq!(mode_of(&p), 0o600);
     assert_eq!(mode_of(&tmp.path().join("app.meta.json")), 0o600);
 }
+
+/// #434: both registry halves are replaced whole, so a write killed between the complete
+/// temp file and the rename leaves the old registry byte for byte, and no temp.
+#[test]
+fn a_registry_write_that_dies_before_its_rename_leaves_the_old_registry_whole() {
+    let (tmp, ctx) = registry_plane();
+    let add = |name: &str, share: bool| {
+        registry::add_vault(
+            &ctx,
+            name,
+            "plain-file",
+            cfg(json!({"file": format!("{name}.json")})),
+            None,
+            false,
+            share,
+        )
+    };
+    add("a", false).unwrap();
+    add("s", true).unwrap();
+    let local = tmp.path().join(".charter/vaults.json");
+    let shared = tmp.path().join("vaults.json");
+    let (was_local, was_shared) = (
+        std::fs::read(&local).unwrap(),
+        std::fs::read(&shared).unwrap(),
+    );
+    let _killed = crate::rewrite::hook::set(|_, _| Err(std::io::Error::other("killed")));
+
+    assert!(add("b", false).is_err());
+    assert!(add("t", true).is_err());
+
+    assert_eq!(std::fs::read(&local).unwrap(), was_local);
+    assert_eq!(std::fs::read(&shared).unwrap(), was_shared);
+    let temps = |dir: &Path| {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter(|e| {
+                let name = e.as_ref().unwrap().file_name();
+                name.to_string_lossy().ends_with(".tmp")
+            })
+            .count()
+    };
+    assert_eq!(temps(tmp.path()) + temps(&tmp.path().join(".charter")), 0);
+}
+
+/// #434: a registry half that is a link is refused — the local one names every vault's file
+/// — and what the link points at is untouched.
+#[cfg(unix)]
+#[test]
+fn a_registry_half_that_is_a_link_is_refused_and_its_target_is_untouched() {
+    let (tmp, ctx) = registry_plane();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let theirs = elsewhere.path().join("theirs.json");
+    std::fs::write(&theirs, "{}").unwrap();
+    std::fs::create_dir_all(tmp.path().join(".charter")).unwrap();
+    for (half, share) in [(".charter/vaults.json", false), ("vaults.json", true)] {
+        let at = tmp.path().join(half);
+        std::os::unix::fs::symlink(&theirs, &at).unwrap();
+
+        let refused = registry::add_vault(
+            &ctx,
+            "a",
+            "plain-file",
+            cfg(json!({"file": "a.json"})),
+            None,
+            false,
+            share,
+        );
+
+        assert!(refused.is_err(), "{half} was written through its link");
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "{}", "{half}");
+        assert!(at.is_symlink(), "{half}");
+        std::fs::remove_file(&at).unwrap();
+    }
+}

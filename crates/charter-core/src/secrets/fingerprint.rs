@@ -43,25 +43,10 @@ fn key(p: &Path) -> Option<Vec<u8>> {
     super::make_private_dir(parent).ok()?;
     let mut new = [0u8; KEY_BYTES];
     getrandom::fill(&mut new).ok()?;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(p).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-        let mode = file.metadata().ok()?.permissions().mode();
-        if mode & super::OTHERS != 0 {
-            return None;
-        }
-    }
-    file.set_len(0).ok()?;
-    std::io::Write::write_all(&mut file, &new).ok()?;
+    // Replaced whole, 0600 before a byte of the key lands, and never through a link (#434):
+    // a link at the key is refused, and a crash leaves the old key rather than a short one
+    // the next run would silently regenerate.
+    crate::rewrite::replace(parent, p, &new, crate::rewrite::Mode::Secret).ok()?;
     Some(new.to_vec())
 }
 

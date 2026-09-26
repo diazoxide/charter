@@ -379,40 +379,20 @@ pub fn private_dir(plane: &Path, dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Write charter's own state at 0600, settling the mode on the **inode** before any content
-/// reaches it — `charter/config.py:_private_fd`, including its ordering.
+/// Write charter's own state at 0600, whole or not at all, never through a link —
+/// [`crate::rewrite::replace`] with [`crate::rewrite::Mode::Private`] (#434).
 ///
-/// `OpenOptions::mode` applies **only when the call creates the inode**, so a file written by
-/// an older charter, restored from a tarball or made by hand keeps whatever mode it had and
-/// every byte written after it sits at that mode. The permission is therefore set on the
-/// descriptor this call holds.
+/// The bytes go to a temp file beside `path`, created 0600 with `O_NOFOLLOW` through the
+/// containment walk from `plane`, and are renamed over it. So a file an older charter left at
+/// a looser mode is replaced by one that was never readable by anyone else, a link planted at
+/// `path` after the walk answered is replaced rather than written through, and a crash leaves
+/// the previous state whole instead of truncated.
 ///
-/// **`O_TRUNC` is deliberately not in the flags.** Truncating first would empty the file while
-/// it is still at its old mode; the truncate happens after, so there is no window in which new
-/// content is readable by an account the finished file is not.
-///
-/// A failed chmod is swallowed rather than raised, as Python's is: filesystems with fixed
+/// The chmod is best effort, as `charter/config.py:_private_fd`'s is: filesystems with fixed
 /// permissions (exFAT, many network mounts) cannot hold a mode, and refusing to write state to
 /// protect a mode the filesystem was never going to keep helps nobody.
 pub fn write_private(plane: &Path, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-
-    crate::contain::no_link_on_the_way(plane, path)?;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = crate::contain::nofollow(&mut options).open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-    }
-    file.set_len(0)?;
-    file.write_all(bytes)
+    crate::rewrite::replace(plane, path, bytes, crate::rewrite::Mode::Private)
 }
 
 #[cfg(test)]
@@ -676,5 +656,39 @@ mod tests {
         let tree = bare_worktree_of(&cut_from, "feature", &holding.join("feature"));
 
         assert_eq!(find_root(&tree), Ok(holding));
+    }
+
+    /// #434: charter's own state is replaced whole, so a crash between the write and the
+    /// rename leaves the previous state rather than a truncated file.
+    #[test]
+    fn private_state_that_dies_before_its_rename_leaves_the_old_state_whole() {
+        let plane = tempfile::tempdir().unwrap();
+        let state = plane.path().join(".charter/active-persona");
+        fs::create_dir_all(state.parent().unwrap()).unwrap();
+        fs::write(&state, "old\n").unwrap();
+        let _killed = crate::rewrite::hook::set(|_, _| Err(std::io::Error::other("killed")));
+
+        write_private(plane.path(), &state, b"new\n").unwrap_err();
+
+        assert_eq!(fs::read_to_string(&state).unwrap(), "old\n");
+        assert_eq!(fs::read_dir(state.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    /// #434: a link at the state file is refused, and what it points at is untouched.
+    #[cfg(unix)]
+    #[test]
+    fn private_state_at_a_link_is_refused_and_the_links_target_is_untouched() {
+        let plane = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("theirs");
+        fs::write(&target, "theirs\n").unwrap();
+        let state = plane.path().join(".charter/active-persona");
+        fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &state).unwrap();
+
+        write_private(plane.path(), &state, b"new\n").unwrap_err();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "theirs\n");
+        assert!(state.is_symlink());
     }
 }

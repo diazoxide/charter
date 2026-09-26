@@ -94,6 +94,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   when it is a symlink. A `workspace.json` or generated settings file you made read-only is
   now left alone and reported, where it used to be replaced.
   ([#430](https://github.com/diazoxide/charter/issues/430))
+- **More of charter's files are replaced whole and never written through a symlink.** The
+  vault registry (both halves), the fingerprint key, memory files and a memory index's
+  rewrite, the front-door persona charter scaffolds, a checkout's presence record, the
+  remembered open chats (`reopen.json`), the app's machine store, extension record and window
+  layout, and charter's own state files (the active persona and workspace, MCP approvals, the
+  forge cache and its lock) now go through the same writer: a new file beside the old one,
+  flushed and swapped in. A crash mid-write leaves the old file whole, and a file that is a
+  symlink is refused, where some of these used to write to wherever the link pointed and
+  others replaced the link. What else changes:
+  - The local vault registry and the fingerprint key must be private (0600). On a filesystem
+    that cannot hold that mode, the write is now refused instead of made at a looser mode.
+  - The shared vault registry keeps the permissions it has, where it used to be reset to 0644
+    on every write. A new one gets your usual file permissions.
+  - `reopen.json` is now private to you (0600). It used to get your usual file permissions.
+    So is a memory index under `.charter/` when charter removes a line from it.
+  - Charter's own state files that you made read-only are replaced, as charter owns their
+    mode. A read-only shared vault registry, local registry or fingerprint key is refused.
+  - A `.gitkeep` that is a symlink stops `charter init`'s front-door persona with an error.
+  ([#434](https://github.com/diazoxide/charter/issues/434))
 - **A guard that crashes now refuses the tool call instead of letting it run.** If charter hit
   an internal error while checking a tool call, the crash ended the process with a status
   Claude Code and Codex read as a non-blocking error, so the call went ahead unchecked. Any
