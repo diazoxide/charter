@@ -29,7 +29,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use charter_core::curation::{self, Kind, Resolved, Source, Subject};
+use charter_core::curation::{self, Resolved, Source, Subject};
 use charter_core::harness::Harness;
 use charter_core::hookwire::Report;
 use charter_core::state::Event;
@@ -260,15 +260,6 @@ fn tab_label(label: &str, subject: &str) -> String {
     cut
 }
 
-/// The workspace a chat started in `cwd` is filed under: the subject workspace when it runs in
-/// that workspace's own directory, and none otherwise — at the plane root, or in a persona's
-/// directory, it works outside every workspace.
-fn filed_under(subject: &Subject, root: &Path, cwd: &Path) -> Option<String> {
-    let name = subject.name.as_deref()?;
-    (subject.kind == Kind::Workspace && cwd == root.join("workspaces").join(name))
-        .then(|| name.to_owned())
-}
-
 /// Opens the chat. The prompt is held for it BEFORE it starts, because its harness can report
 /// its start before `start_ready` returns, and let go again when nothing started.
 fn open(
@@ -336,7 +327,10 @@ fn open(
         label,
         persona: chosen.runner,
         harness: ready.harness.map(|harness| harness.name().to_owned()),
-        workspace: filed_under(&subject, &root, &chosen.cwd),
+        // The one question the window files every chat by, and the one `start::ready` tells
+        // the chat its workspace by: a chat at the plane root, or in a persona's directory, is
+        // in none.
+        workspace: charter_core::workspaces::Plane::open(&root).workspace_of(&chosen.cwd),
     })
 }
 
