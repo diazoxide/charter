@@ -221,7 +221,9 @@ describe("making a workspace and deleting one", function () {
     // So this spec sends the event the platform sends, and asks charter the question a
     // scenario run can still ask: that the menu is the catalogue's, on the real window, with
     // the real core behind it. `Menus.test.tsx` owns the rows.
-    const sent = await sendContextMenu(`${WORKSPACES} [role="tab"]`);
+    // A workspace's tab, not the plane root's icon tab first on the strip (SI-1), whose menu
+    // is its own and deletes nothing.
+    const sent = await sendContextMenu(`${WORKSPACES} [role="tab"]:not(.plane-root)`);
     expect(sent).toBe(true);
 
     const menu = await $('[role="menu"]');

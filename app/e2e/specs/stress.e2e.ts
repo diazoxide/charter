@@ -163,8 +163,11 @@ async function closeEveryTab(): Promise<void> {
     // only fail sixty seconds later, as a leak, with no sign of what leaked.
     expect(await hiddenTabs()).toBe(0);
   }
-  // On a known workspace, so the fifty this spec is about all land on one strip.
-  if (names[0] !== undefined) await focusWorkspace(names[0]);
+  // On a known workspace, so the fifty this spec is about all land on one strip — a real one,
+  // not the plane root first on the strip (SI-1): the app process is shared with the specs
+  // after this one, and they expect a workspace's panels in front.
+  const workspace = names.find((name) => name !== "Plane root");
+  if (workspace !== undefined) await focusWorkspace(workspace);
   await browser.waitUntil(async () => harnessesRunning() === 0, {
     timeout: 60_000,
     interval: 250,
