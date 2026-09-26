@@ -36,8 +36,8 @@ pub const SPLIT_PREFIX: &str = "window-";
 pub const SPLIT_GLOB: &str = "window-[0-9]*";
 
 /// The event a window is sent when projects are moved into it, or handed back by a split
-/// window that closed: [`Arrived`].
-pub const ARRIVED: &str = "projects-arrived";
+/// window that closed: [`ProjectsArrived`].
+pub const PROJECTS_ARRIVED: &str = "projects-arrived";
 
 /// The event every window is sent when a window is made or goes away: the labels of the
 /// windows there are now. A window reads it to know which others to hear from before a quit.
@@ -49,11 +49,16 @@ pub fn split_label(n: u32) -> String {
 }
 
 /// Whether `label` is one of charter's windows: the main window, or a split window.
+///
+/// **The same test as the capabilities' `window-[0-9]*`**, `window-` and then a digit, so the
+/// windows charter treats as its own and the windows the access-control list grants are one
+/// set (`ipc.rs` holds them together). charter only ever makes `window-<n>`; the page cannot
+/// make a window at all.
 pub fn is_charter_window(label: &str) -> bool {
     label == MAIN
         || label
             .strip_prefix(SPLIT_PREFIX)
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|byte| byte.is_ascii_digit()))
+            .is_some_and(|rest| rest.starts_with(|first: char| first.is_ascii_digit()))
 }
 
 /// The order windows are listed and remembered in: the main window, then the split windows by
@@ -73,8 +78,8 @@ pub(crate) fn order_key(label: &str) -> (u8, u64, String) {
 
 /// Projects moved into a window, and the one it is to bring to the front — `None` when they go
 /// in behind what it is showing, which is what a closed split window's projects do.
-#[derive(Debug, Clone, Serialize, specta::Type)]
-pub struct Arrived {
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectsArrived {
     pub planes: Vec<PlaneId>,
     pub front: Option<PlaneId>,
 }
@@ -184,12 +189,6 @@ pub async fn move_projects(
     let from = window.label().to_owned();
     for plane in &projects {
         planes.held(plane)?;
-        if showing.holder(plane).is_some_and(|holder| holder != from) {
-            return Err(format!(
-                "{} is in another window, and only that window can move it.",
-                plane.as_str()
-            ));
-        }
     }
     let made = to.is_none();
     let to = match to {
@@ -203,20 +202,27 @@ pub async fn move_projects(
     let in_front = front
         .as_ref()
         .or(if made { projects.first() } else { None });
-    showing.move_into(&projects, in_front, &to);
+    showing
+        .move_into(&from, &projects, in_front, &to)
+        .map_err(|theirs| {
+            format!(
+                "{} is in another window, and only that window can move it.",
+                charter_core::shown::short(theirs.as_str())
+            )
+        })?;
     if made {
         // What it holds is in `Showing` before the window exists, so the window's first ask
         // (`projects_handed`) finds it. A window that could not be made hands them back.
         if let Err(why) = make_split(&app, &to) {
-            showing.move_into(&projects, None, &from);
+            let _ = showing.move_into(&to, &projects, None, &from);
             return Err(why);
         }
         tell_windows_changed(&app, None);
     } else {
         let _ = app.emit_to(
             to.as_str(),
-            ARRIVED,
-            Arrived {
+            PROJECTS_ARRIVED,
+            ProjectsArrived {
                 planes: projects,
                 front: front.clone(),
             },
@@ -267,7 +273,7 @@ pub fn show_window_holding(
 /// A window said what it holds. **A split window that holds nothing goes**: it was made to hold
 /// the projects moved into it, and with the last of them moved or closed it has no reason to
 /// be there. The main window stays, and draws the opener.
-pub fn held<R: Runtime>(window: &tauri::Window<R>, showing: &Showing, holding: Holding) {
+pub fn said_it_holds<R: Runtime>(window: &tauri::Window<R>, showing: &Showing, holding: Holding) {
     let empty = holding.planes.is_empty();
     showing.in_window(window.label(), holding);
     if empty && window.label() != MAIN {
@@ -275,12 +281,35 @@ pub fn held<R: Runtime>(window: &tauri::Window<R>, showing: &Showing, holding: H
     }
 }
 
+/// Hands whatever `window` still held to the main window, behind what it is showing, and tells
+/// the main window. Answers whether there was anything to hand back.
+fn hand_back<R: Runtime>(app: &AppHandle<R>, window: &str) -> bool {
+    let Some(showing) = app.try_state::<Showing>() else {
+        return false;
+    };
+    let handed = showing.close_into(window, MAIN);
+    if handed.is_empty() {
+        return false;
+    }
+    let _ = app.emit_to(
+        MAIN,
+        PROJECTS_ARRIVED,
+        ProjectsArrived {
+            planes: handed,
+            front: None,
+        },
+    );
+    remember(app);
+    true
+}
+
 /// The close button on a window.
 ///
 /// The main window hides, as it always has: every session is a child of this process (ADR
 /// 0025), and the way out is Quit, which says what it is about to end. **A split window closes,
 /// and its projects go back to the main window**, behind what that window is showing, with
-/// every chat still running (ADR 0033, amended 2026-09-26).
+/// every chat still running (ADR 0033, amended 2026-09-26). The main window is brought back if
+/// it was hidden, so the projects are somewhere the operator can see.
 pub fn close_requested<R: Runtime>(window: &tauri::Window<R>, api: &tauri::CloseRequestApi) {
     if window.label() == MAIN || !is_charter_window(window.label()) {
         api.prevent_close();
@@ -288,42 +317,21 @@ pub fn close_requested<R: Runtime>(window: &tauri::Window<R>, api: &tauri::Close
         return;
     }
     let app = window.app_handle();
-    let Some(showing) = app.try_state::<Showing>() else {
-        return;
-    };
-    let handed = showing.close_into(window.label(), MAIN);
-    if !handed.is_empty() {
-        let _ = app.emit_to(
-            MAIN,
-            ARRIVED,
-            Arrived {
-                planes: handed,
-                front: None,
-            },
-        );
+    if hand_back(app, window.label())
+        && !app
+            .get_webview_window(MAIN)
+            .is_some_and(|main| main.is_visible().unwrap_or(false))
+    {
+        raise(app, MAIN);
     }
-    remember(app);
 }
 
-/// A window has gone. It is forgotten, and every other window is told.
+/// A window has gone. It is forgotten, and every other window is told. Whatever it still held
+/// goes to the main window rather than nowhere: a window that went without a close must not
+/// take projects with it.
 pub fn destroyed<R: Runtime>(window: &tauri::Window<R>) {
     let app = window.app_handle();
-    if let Some(showing) = app.try_state::<Showing>() {
-        // Whatever it still held goes to the main window rather than nowhere: a window that
-        // went without a close (destroyed by the system) must not take projects with it.
-        let handed = showing.close_into(window.label(), MAIN);
-        if !handed.is_empty() {
-            let _ = app.emit_to(
-                MAIN,
-                ARRIVED,
-                Arrived {
-                    planes: handed,
-                    front: None,
-                },
-            );
-            remember(app);
-        }
-    }
+    hand_back(app, window.label());
     tell_windows_changed(app, Some(window.label()));
 }
 
@@ -336,15 +344,9 @@ mod tests {
         assert!(is_charter_window(MAIN));
         assert!(is_charter_window("window-1"));
         assert!(is_charter_window(&split_label(42)));
-        for stray in [
-            "window-",
-            "window-x",
-            "windows-1",
-            "other",
-            "",
-            "window-1a",
-            "Main",
-        ] {
+        // The capabilities' glob reads `window-` and a digit, and so does this.
+        assert!(is_charter_window("window-1a"));
+        for stray in ["window-", "window-x", "windows-1", "other", "", "Main"] {
             assert!(!is_charter_window(stray), "{stray}");
         }
     }

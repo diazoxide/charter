@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import clsx from "clsx";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "./here";
 import { MAIN, thisWindow } from "./windows";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";

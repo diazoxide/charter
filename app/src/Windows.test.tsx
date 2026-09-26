@@ -208,6 +208,30 @@ describe("a project moved into a window of its own", () => {
     expect(sent("planes_to_restore")).toEqual([]);
   });
 
+  it("listens only for what is sent to every window or to it", async () => {
+    // Tauri delivers every event to a listener whose target is `Any`, including one the core
+    // sent to another window. A split window listening that way would answer the main window's
+    // quit and take in projects moved to the main window.
+    mockWindows("window-1");
+    const { asked } = core({
+      handed: { planes: [TWO], active: 0 },
+      chats: { [TWO]: [chat(1, "two.1")] },
+    });
+    render(<App />);
+    await vi.waitFor(() => expect(projectTabs()).toEqual(["two*"]));
+    await screen.findByRole("tab", { name: /two\.1/ });
+
+    const listening = asked.filter((one) => one.cmd === "plugin:event|listen");
+    const events = new Set(listening.map((one) => one.args.event));
+    for (const event of ["quit-asked", "projects-arrived", "open-plane", "chat-moved", "run-offer"])
+      expect(events).toContain(event);
+    for (const one of listening)
+      expect({ event: one.args.event, target: one.args.target }).toEqual({
+        event: one.args.event,
+        target: { kind: "AnyLabel", label: "window-1" },
+      });
+  });
+
   it("moves back to the main window from the split window, which then holds nothing", async () => {
     mockWindows("window-1");
     const { sent } = core({ handed: { planes: [TWO], active: 0 } });

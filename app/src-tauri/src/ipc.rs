@@ -170,6 +170,33 @@ mod tests {
     }
 
     #[test]
+    fn the_windows_the_grant_reaches_are_the_windows_charter_calls_its_own() {
+        // The capabilities grant a glob, and `windows.rs` decides which labels are charter's
+        // windows. Two answers to one question would be a window with half the app, or a grant
+        // reaching a window charter does not treat as its own.
+        let app = app();
+        for label in [
+            "main",
+            "window-1",
+            "window-27",
+            "window-1a",
+            "window-",
+            "window-x",
+            "windows-1",
+            "another-window",
+            "mainly",
+            "Main",
+        ] {
+            let there = window(&app, label);
+            assert_eq!(
+                invoke(&there, "open_planes").is_ok(),
+                crate::windows::is_charter_window(label),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
     fn no_window_but_charters_own_may_invoke_any_listed_command() {
         // A window charter did not make starts with nothing, and is granted what it needs by
         // name; above all it is never handed a vault's reveal or copy by default. The split

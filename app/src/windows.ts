@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { emit, emitTo, listen } from "@tauri-apps/api/event";
+import { emit, emitTo } from "@tauri-apps/api/event";
+
+import { listen, MAIN, thisWindow } from "./here";
 
 import { commands } from "./bindings";
-import { MAIN_WINDOW, type Offer } from "./actions";
+import type { Offer } from "./actions";
 import type { Needing, Quiet } from "./NeedsYou";
 import type { Ending } from "./QuitWarning";
 
@@ -24,19 +26,7 @@ import type { Ending } from "./QuitWarning";
  *   window, and waits until every window has said what it has open.
  */
 
-/** The main window's label: the one `tauri.conf.json` declares. */
-export const MAIN = MAIN_WINDOW;
-
-type Internals = { metadata?: { currentWindow?: { label?: string } } };
-
-/**
- * This window's label, as Tauri gave it — the main window's when the page is not in a Tauri
- * window at all (a unit test), which is the window every test before split windows was about.
- */
-export function thisWindow(): string {
-  const internals = (globalThis as { __TAURI_INTERNALS__?: Internals }).__TAURI_INTERNALS__;
-  return internals?.metadata?.currentWindow?.label ?? MAIN;
-}
+export { MAIN, thisWindow };
 
 /** What one window tells the others: what is asking for the operator in it, and what a quit
  *  would end there. */

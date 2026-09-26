@@ -27,6 +27,7 @@
  * decided to say about it.
  */
 import type { ChatWorktree, ExtensionCommand, ExtensionView, RowAction } from "./bindings";
+import { MAIN } from "./here";
 import {
   chatOf,
   contentsOf,
@@ -108,10 +109,6 @@ export const RENAMES_ON_F2 = "data-renames-on-f2";
  * workspace. It never reaches the operator — `catalogue` gives its row its own words.
  */
 export const OUTSIDE = "outside/every/workspace";
-
-/** The main window's label (`tauri.conf.json`): the window a launch opens, and the one a
- *  project in a split window is moved back to (charter#126). */
-export const MAIN_WINDOW = "main";
 
 /** What the strip and the palette call that one. */
 export const OUTSIDE_TITLE = "Outside every workspace";
@@ -600,7 +597,7 @@ export function projectRows(
           ...can(
             `project.main:${project.plane}`,
             `Move project ${project.name} to the main window`,
-            { verb: "moveProject", plane: project.plane, to: MAIN_WINDOW },
+            { verb: "moveProject", plane: project.plane, to: MAIN },
             project.name,
           ),
           note: "Its chats go on running.",

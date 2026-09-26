@@ -7,7 +7,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "./here";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import "./styles.css";
 import {

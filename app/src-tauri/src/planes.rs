@@ -1452,8 +1452,27 @@ impl Showing {
     /// A window holding nothing is forgotten rather than recorded as empty: it is an opener
     /// with nothing open, and an empty window in the arrangement would restore as nothing at
     /// the next launch while still being a row charter had to write down.
-    pub fn in_window(&self, window: &str, holding: Holding) {
+    ///
+    /// **A window cannot claim a project another window holds.** What a window says can be a
+    /// moment behind — it reports its tabs after it draws them, and a project moved out of it
+    /// is still on the tabs it reported just before — and a project only changes window through
+    /// [`Self::move_into`] or [`Self::close_into`]. So a project another window holds is left
+    /// out of what this one is recorded as holding.
+    pub fn in_window(&self, window: &str, mut holding: Holding) {
         let mut showing = self.held();
+        let elsewhere: Vec<PlaneId> = holding
+            .planes
+            .iter()
+            .filter(|plane| {
+                showing
+                    .iter()
+                    .any(|(label, other)| label != window && other.planes.contains(plane))
+            })
+            .cloned()
+            .collect();
+        for plane in &elsewhere {
+            holding.take_out(plane);
+        }
         if holding.planes.is_empty() {
             showing.remove(window);
         } else {
@@ -1527,28 +1546,41 @@ impl Showing {
         }
     }
 
-    /// Moves `planes` into `to`, out of whichever windows held them, **in one step**.
+    /// Moves `planes` from the window `from` into `to`, **in one step**, under one lock.
+    ///
+    /// A project may be moved by the window holding it, or when no window holds it yet (a
+    /// restore opens projects before it moves them into their window). **One held by a third
+    /// window is refused**, and answered, and nothing moves: a window cannot take a project out
+    /// from under another. The check and the move are one step, so two moves cannot both pass
+    /// it.
     ///
     /// A window a project leaves keeps its other projects, and if the one it had in front was
     /// the one that left, the tab beside it comes forward — `closeTab`'s rule one scope up, and
     /// the same rule the window follows when a project is closed. A window left holding nothing
     /// is forgotten. `front`, when it is one of `planes`, is what `to` has in front afterwards;
     /// otherwise `to` keeps what it had in front.
-    ///
-    /// Answers the windows that lost a project, so the caller can tell each one.
-    pub fn move_into(&self, planes: &[PlaneId], front: Option<&PlaneId>, to: &str) -> Vec<String> {
+    pub fn move_into(
+        &self,
+        from: &str,
+        planes: &[PlaneId],
+        front: Option<&PlaneId>,
+        to: &str,
+    ) -> Result<(), PlaneId> {
         let mut showing = self.held();
-        let mut lost = Vec::new();
+        for plane in planes {
+            let theirs = showing.iter().any(|(label, holding)| {
+                label != from && label != to && holding.planes.contains(plane)
+            });
+            if theirs {
+                return Err(plane.clone());
+            }
+        }
         for (label, holding) in showing.iter_mut() {
             if label == to {
                 continue;
             }
-            let before = holding.planes.len();
             for plane in planes {
                 holding.take_out(plane);
-            }
-            if holding.planes.len() != before {
-                lost.push(label.clone());
             }
         }
         showing.retain(|_, holding| !holding.planes.is_empty());
@@ -1566,8 +1598,7 @@ impl Showing {
         if target.planes.is_empty() {
             showing.remove(to);
         }
-        lost.sort_by_key(|label| crate::windows::order_key(label));
-        lost
+        Ok(())
     }
 
     /// A window is closed: whatever it held goes to `into`, behind what `into` has in front,
@@ -3480,9 +3511,10 @@ mod tests {
         showing.in_window("main", holding(&[&one, &two, &three], Some(1)));
         let split = showing.fresh_label();
 
-        let lost = showing.move_into(std::slice::from_ref(&two), Some(&two), &split);
+        showing
+            .move_into("main", std::slice::from_ref(&two), Some(&two), &split)
+            .expect("main holds it");
 
-        assert_eq!(lost, vec!["main".to_owned()]);
         assert_eq!(showing.holder(&two), Some(split.clone()));
         assert_eq!(showing.holder(&one), Some("main".to_owned()));
         assert_eq!(showing.holding(&split), Some(holding(&[&two], Some(0))));
@@ -3499,7 +3531,9 @@ mod tests {
         let showing = Showing::default();
         showing.in_window("main", holding(&[&one, &two, &three], Some(2)));
 
-        showing.move_into(std::slice::from_ref(&one), None, "window-1");
+        showing
+            .move_into("main", std::slice::from_ref(&one), None, "window-1")
+            .expect("main holds it");
 
         assert_eq!(
             showing.holding("main"),
@@ -3515,7 +3549,9 @@ mod tests {
         let showing = Showing::default();
         showing.in_window("main", holding(&[&one, &two], Some(1)));
 
-        showing.move_into(std::slice::from_ref(&two), Some(&two), "window-1");
+        showing
+            .move_into("main", std::slice::from_ref(&two), Some(&two), "window-1")
+            .expect("main holds it");
 
         assert!(showing.is_showing("main", &one));
         assert!(!showing.is_showing("main", &two));
@@ -3530,9 +3566,10 @@ mod tests {
         showing.in_window("main", holding(&[&one], Some(0)));
         showing.in_window("window-1", holding(&[&two], Some(0)));
 
-        let lost = showing.move_into(std::slice::from_ref(&two), Some(&two), "main");
+        showing
+            .move_into("window-1", std::slice::from_ref(&two), Some(&two), "main")
+            .expect("window-1 holds it");
 
-        assert_eq!(lost, vec!["window-1".to_owned()]);
         assert_eq!(
             showing.holding("main"),
             Some(holding(&[&one, &two], Some(1)))
@@ -3540,6 +3577,55 @@ mod tests {
         // A window left holding nothing is forgotten, not remembered as empty.
         assert_eq!(showing.holding("window-1"), None);
         assert_eq!(showing.arrangement().len(), 1);
+    }
+
+    #[test]
+    fn a_window_cannot_move_a_project_another_window_holds() {
+        let (one, two, _) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("main", holding(&[&one], Some(0)));
+        showing.in_window("window-1", holding(&[&two], Some(0)));
+
+        let refused = showing.move_into("main", std::slice::from_ref(&two), Some(&two), "window-2");
+
+        assert_eq!(refused, Err(two.clone()));
+        assert_eq!(showing.holder(&two), Some("window-1".to_owned()));
+        assert_eq!(showing.holding("window-2"), None);
+    }
+
+    #[test]
+    fn a_project_no_window_holds_yet_can_be_moved_into_one() {
+        // A cold launch opens a remembered split window's projects in the main window, which
+        // has not drawn them, and moves them into their own window.
+        let (one, two, _) = three_ids();
+        let showing = Showing::default();
+
+        showing
+            .move_into("main", &[one.clone(), two.clone()], Some(&two), "window-1")
+            .expect("nobody holds them");
+
+        assert_eq!(
+            showing.holding("window-1"),
+            Some(holding(&[&one, &two], Some(1)))
+        );
+    }
+
+    #[test]
+    fn a_window_a_moment_behind_does_not_take_a_moved_project_back() {
+        // The main window reported its tabs just before the move landed. Recording that report
+        // would put one project in two windows, and every event for it would go to whichever
+        // the map found first.
+        let (one, two, _) = three_ids();
+        let showing = Showing::default();
+        showing.in_window("main", holding(&[&one, &two], Some(1)));
+        showing
+            .move_into("main", std::slice::from_ref(&two), Some(&two), "window-1")
+            .expect("main holds it");
+
+        showing.in_window("main", holding(&[&one, &two], Some(1)));
+
+        assert_eq!(showing.holding("main"), Some(holding(&[&one], Some(0))));
+        assert_eq!(showing.holder(&two), Some("window-1".to_owned()));
     }
 
     #[test]

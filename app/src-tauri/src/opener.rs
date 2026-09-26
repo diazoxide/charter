@@ -505,7 +505,7 @@ pub fn window_holds_planes(
     planes: tauri::State<'_, Planes>,
     held: WindowTabs,
 ) {
-    crate::windows::held(
+    crate::windows::said_it_holds(
         &window,
         &showing,
         Holding {
