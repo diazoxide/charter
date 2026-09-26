@@ -296,7 +296,7 @@ pub fn delete(ctx: &Ctx, vault: &Vault, key: &str) -> Result<(), VaultError> {
     save(ctx, vault, data)
 }
 
-/// `_save`: sorted keys, indented, ASCII-escaped, 0600.
+/// `_save`: sorted keys, indented, ASCII-escaped, 0600 from the moment the file exists.
 fn save(ctx: &Ctx, vault: &Vault, data: Map<String, Value>) -> Result<(), VaultError> {
     let p = plain_file::file_path(ctx, vault)?;
     let mut keys: Vec<&String> = data.keys().collect();
@@ -305,19 +305,10 @@ fn save(ctx: &Ctx, vault: &Vault, data: Map<String, Value>) -> Result<(), VaultE
         .into_iter()
         .map(|k| (k.clone(), data[k].clone()))
         .collect();
-    if let Some(parent) = p.parent() {
-        super::make_private_dir(parent)
-            .map_err(|e| VaultError::new(format!("cannot create {}: {e}", parent.display())))?;
-    }
+    // Through the plain-file provider's writer, so the file is 0600 before a byte of it is
+    // written (#356) — a write followed by a chmod left it at the umask in between.
     let text = crate::pyjson::dumps_indent2(&Value::Object(sorted));
-    std::fs::write(&p, text)
-        .map_err(|e| VaultError::new(format!("cannot write {}: {e}", p.display())))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
+    plain_file::write_private_text(&p, &text)
 }
 
 /// `health`: reference count and resolver availability — never resolving anything.

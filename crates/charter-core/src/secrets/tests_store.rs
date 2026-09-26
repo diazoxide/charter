@@ -869,3 +869,34 @@ fn a_null_in_the_local_half_leaves_the_shared_field_as_it_was() {
     assert_eq!(v.persona.as_deref(), Some("devops"));
     assert_eq!(v.provider, "plain-file");
 }
+
+/// #356: a reference vault's file is `0600` from the instant it exists. The mode is settled
+/// on the descriptor before a byte of content lands — never chmodded after the write — and
+/// that holds for a file that is new and for one left at `0644` by something else.
+#[cfg(unix)]
+#[test]
+fn a_reference_vault_is_0600_before_any_content_reaches_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let (tmp, _bin, ctx) = reference_plane(&[]);
+    let v = vault("refs", "reference", json!({"file": "refs.json"}));
+    let p = tmp.path().join("refs.json");
+    let seen: std::rc::Rc<std::cell::RefCell<Vec<(u32, u64)>>> = Default::default();
+    let log = seen.clone();
+    let _watch = plain_file::watch::set(move |file| {
+        let meta = file.metadata().unwrap();
+        log.borrow_mut()
+            .push((meta.permissions().mode() & 0o777, meta.len()));
+    });
+
+    reference::set(&ctx, &v, "A", "op://Eng/item/field").unwrap();
+    chmod(&p, 0o644);
+    let before = std::fs::metadata(&p).unwrap().len();
+    reference::set(&ctx, &v, "B", "op://Eng/item/other").unwrap();
+
+    // The new file was CREATED 0600 — seen at the open, before any chmod could run. The
+    // loose one is seen as it was, holding only its old content: nothing new has reached it
+    // until its mode is settled.
+    assert_eq!(*seen.borrow(), [(0o600, 0), (0o644, before)]);
+    assert_eq!(mode_of(&p), 0o600);
+    assert_eq!(reference::keys(&ctx, &v).unwrap(), ["A", "B"]);
+}

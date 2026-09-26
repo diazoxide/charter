@@ -659,3 +659,46 @@ fn a_theme_charter_would_not_read_is_refused_in_either_file() {
         );
     }
 }
+
+/// #357: the settings tab and `charter persona default` both rewrite charter.toml. One
+/// starting while the other is between its check and its rename must not be overwritten by
+/// it: the tab's save holds the plane's lock from the "changed on disk?" check to the rename.
+#[test]
+fn a_save_and_a_persona_default_at_once_both_land() {
+    let dir = plane("schema = 1\n");
+    let manifest = dir.path().join("charter.toml");
+    let other = manifest.clone();
+    let second: std::rc::Rc<std::cell::RefCell<Option<std::thread::JoinHandle<()>>>> =
+        Default::default();
+    let started = second.clone();
+    let _hook = crate::rewrite::hook::set(move |_, _| {
+        if started.borrow().is_none() {
+            let path = other.clone();
+            let (done, finished) = std::sync::mpsc::channel();
+            *started.borrow_mut() = Some(std::thread::spawn(move || {
+                crate::personacmd::set_key(&path, "persona", "default", Some("ops")).unwrap();
+                let _ = done.send(());
+            }));
+            let _ = finished.recv_timeout(std::time::Duration::from_millis(300));
+        }
+        Ok(())
+    });
+
+    save(
+        dir.path(),
+        Which::Shared,
+        Some("schema = 1\n"),
+        "schema = 1\n\n[memory]\nshare = \"local\"\n",
+    )
+    .unwrap();
+    second
+        .borrow_mut()
+        .take()
+        .expect("the hook ran")
+        .join()
+        .unwrap();
+
+    let now = text(dir.path(), "charter.toml");
+    assert!(now.contains("[memory]\nshare = \"local\"\n"), "{now}");
+    assert!(now.contains("[persona]\ndefault = \"ops\"\n"), "{now}");
+}

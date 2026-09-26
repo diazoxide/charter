@@ -50,9 +50,9 @@ pub fn default_command(root: &Path, name: Option<&str>, clear: bool, say: Sink) 
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => {
                 // The OS's own words beside the path, and no cause of charter's (ADR 0009): a
-                // read-only file, an unreadable one and a full disk all land here. Nothing
-                // about what the file now holds, either: a write that failed after opening
-                // can leave it short, so "left as it was" would be a claim unread.
+                // read-only file, an unreadable one and a full disk all land here. The file is
+                // replaced by rename (#357), so a failed write leaves it as it was; the
+                // sentence still claims nothing about it, as the recorded answer has it.
                 say(Say::Fail(format!(
                     "could not clear the default persona: could not update {} ({e}).",
                     manifest.display()
@@ -181,11 +181,29 @@ fn legacy_default(root: &Path) -> Option<String> {
 ///
 /// `instance._set_key`, line for line. See this module's header for why it is a text edit and
 /// why the edit is confined to the section's own span.
+///
+/// **Whole or not at all, one writer at a time** (#357): the read, the edit and the write
+/// happen under [`crate::rewrite::Lock`], and the file is replaced by rename, so a crash leaves
+/// the old file and two writers at once both land.
 pub fn set_key(path: &Path, section: &str, key: &str, value: Option<&str>) -> io::Result<()> {
-    let text = std::fs::read_to_string(path)?;
+    let root = path.parent().unwrap_or(Path::new("."));
+    crate::rewrite::update(root, path, |text| {
+        let Some(text) = text else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{} is not there", path.display()),
+            ));
+        };
+        Ok(edited(text, section, key, value))
+    })
+    .map(|_| ())
+}
+
+/// `text` with `key` set or removed inside `[section]`, or `None` when nothing changes.
+fn edited(text: &str, section: &str, key: &str, value: Option<&str>) -> Option<String> {
     // `splitlines(keepends=True)`: every line keeps its own terminator, so a file with no
     // final newline keeps none and one with CRLF keeps it.
-    let mut lines = keep_ends(&text);
+    let mut lines = keep_ends(text);
 
     // `^[ \t]*\[<section>\][ \t]*$` against the line WITH its ending, which is what Python's
     // `$` allows: the terminator comes off first, then the horizontal whitespace.
@@ -228,7 +246,7 @@ pub fn set_key(path: &Path, section: &str, key: &str, value: Option<&str>) -> io
                 // Nothing declared, nothing to undeclare — and the file is NOT rewritten, so
                 // `--clear` on a read-only charter.toml that had nothing to take out of it
                 // does not fail (charter#1010).
-                return Ok(());
+                return None;
             };
             // `"" if not lines or lines[-1].endswith("\n") else "\n"` — an empty file needs no
             // separator, and one whose last line is unterminated needs exactly one.
@@ -249,7 +267,7 @@ pub fn set_key(path: &Path, section: &str, key: &str, value: Option<&str>) -> io
             match (value, hit) {
                 // The emptied header a previous removal leaves behind, and no key: the same
                 // "nothing to undeclare" as a file with no section at all.
-                (None, None) => return Ok(()),
+                (None, None) => return None,
                 (None, Some(at)) => {
                     lines.remove(at);
                 }
@@ -271,7 +289,7 @@ pub fn set_key(path: &Path, section: &str, key: &str, value: Option<&str>) -> io
             }
         }
     }
-    std::fs::write(path, lines.concat())
+    Some(lines.concat())
 }
 
 /// `str.splitlines(keepends=True)` for the subset TOML can hold: `\n` ends a line, and a `\r`
@@ -505,5 +523,79 @@ mod tests {
         let (code, said) = run(dir.path(), Some("devops"), false);
         assert_eq!(code, 1);
         assert!(said[0].contains("there is no"), "{said:?}");
+    }
+
+    /// #357: `charter.toml` is replaced by rename, so a reader — or a crash — between the
+    /// write and the rename finds the whole of the old file, never a truncated one.
+    #[test]
+    fn set_key_replaces_charter_toml_whole_or_not_at_all() {
+        let dir = plane("# ours\n[persona]\ndefault = \"ops\"\n");
+        let saw = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = saw.clone();
+        let _hook = crate::rewrite::hook::set(move |target, temp| {
+            seen.set(true);
+            assert_eq!(
+                std::fs::read_to_string(target).unwrap(),
+                "# ours\n[persona]\ndefault = \"ops\"\n"
+            );
+            assert_eq!(
+                std::fs::read_to_string(temp).unwrap(),
+                "# ours\n[persona]\ndefault = \"devops\"\n"
+            );
+            Err(io::Error::other("killed before the rename"))
+        });
+
+        let manifest_path = dir.path().join(crate::plane::MANIFEST);
+        assert!(set_key(&manifest_path, "persona", "default", Some("devops")).is_err());
+
+        assert!(saw.get(), "the write went through the temp-and-rename path");
+        assert_eq!(
+            manifest(dir.path()),
+            "# ours\n[persona]\ndefault = \"ops\"\n"
+        );
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec![crate::plane::MANIFEST.to_string()]);
+    }
+
+    /// #357: two writers of `charter.toml` at once. The second one starts while the first is
+    /// between its read and its rename; without a lock it reads the old file and one of the
+    /// two edits is lost.
+    #[test]
+    fn two_writers_of_charter_toml_do_not_lose_an_update() {
+        let dir = plane("schema = 1\n");
+        let manifest_path = dir.path().join(crate::plane::MANIFEST);
+        let other = manifest_path.clone();
+        let second: std::rc::Rc<std::cell::RefCell<Option<std::thread::JoinHandle<()>>>> =
+            Default::default();
+        let started = second.clone();
+        let _hook = crate::rewrite::hook::set(move |_, _| {
+            if started.borrow().is_none() {
+                let path = other.clone();
+                let (done, finished) = std::sync::mpsc::channel();
+                *started.borrow_mut() = Some(std::thread::spawn(move || {
+                    set_key(&path, "version", "pin", Some("0.9.0")).unwrap();
+                    let _ = done.send(());
+                }));
+                // Give the second writer every chance to finish inside the first one's
+                // read-modify-write. Held off by the lock, it cannot, and this times out.
+                let _ = finished.recv_timeout(std::time::Duration::from_millis(300));
+            }
+            Ok(())
+        });
+
+        set_key(&manifest_path, "persona", "default", Some("devops")).unwrap();
+        second
+            .borrow_mut()
+            .take()
+            .expect("the hook ran")
+            .join()
+            .unwrap();
+
+        let text = manifest(dir.path());
+        assert!(text.contains("[persona]\ndefault = \"devops\"\n"), "{text}");
+        assert!(text.contains("[version]\npin = \"0.9.0\"\n"), "{text}");
     }
 }

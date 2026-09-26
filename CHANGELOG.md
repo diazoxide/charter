@@ -41,6 +41,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the workspace and persona names in the clone and memory rows used to be printed as they
   were, so a value with a line break in it could print a row that looked like one of doctor's
   own. ([#353](https://github.com/diazoxide/charter/issues/353))
+- **`charter.toml` and the plane's `.gitignore` can no longer be left cut short.** charter
+  now writes the new version beside the file and swaps it in, so a crash or a full disk leaves
+  the old file whole. Two edits at once, such as `charter persona default` while the settings
+  tab saves, or two workspaces made live together, now both land instead of one overwriting
+  the other. A `.gitignore` charter cannot read as text is now left alone rather than
+  rewritten from nothing. ([#357](https://github.com/diazoxide/charter/issues/357),
+  [#358](https://github.com/diazoxide/charter/issues/358))
+- **`charter init` creates `workspaces/.gitkeep`**, the file its `.gitignore` already
+  expected, so an empty `workspaces/` can be committed. `charter reinit` adds it to older
+  planes. ([#355](https://github.com/diazoxide/charter/issues/355))
+- **A reference vault's file is private from the moment it is created.** charter used to
+  write it first and restrict its permissions afterwards; it now sets them before any content,
+  as plain-file vaults already did.
+  ([#356](https://github.com/diazoxide/charter/issues/356))
 
 ## [0.3.0] - 2026-09-25
 

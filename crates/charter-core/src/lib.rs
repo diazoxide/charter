@@ -73,6 +73,7 @@ pub mod reopen;
 pub mod repocmd;
 pub mod repos;
 pub mod reposave;
+pub mod rewrite;
 pub mod roster;
 pub mod scaffold;
 pub mod secrets;

@@ -181,6 +181,9 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
         PathBuf::from(".gitattributes"),
         Node::File(MERGE_RULES.as_bytes().to_vec()),
     );
+    // And the file the baseline `.gitignore` un-ignores, which the Python charter never
+    // created (#355): without it an empty `workspaces/` cannot be committed.
+    want.insert(PathBuf::from("workspaces/.gitkeep"), Node::File(Vec::new()));
     assert_eq!(tree(&scene.plane), want);
 }
 
@@ -239,6 +242,7 @@ fn a_file_already_at_every_path_init_writes_is_left_byte_for_byte() {
     scene.write("personas/ops/persona.md", "---\nname: ops\n---\n");
     scene.write("inventory/repos.json", "{}");
     scene.write("workspaces/alpha/workspace.md", "# alpha\n");
+    scene.write("workspaces/.gitkeep", "");
     scene.write(".gitattributes", &format!("*.png binary\n{MERGE_RULES}"));
     let before = tree(&scene.plane);
 

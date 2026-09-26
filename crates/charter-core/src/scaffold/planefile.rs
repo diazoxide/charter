@@ -159,10 +159,25 @@ pub fn render(forge: &str, owner: &str, host: Option<&str>) -> String {
 /// **Every byte the operator wrote is kept**, line endings included. Python reads the file
 /// with universal newlines and writes it back, so a CRLF `charter.toml` comes back LF from
 /// its `persona default`; this keeps the file's own endings and adds its lines with `\n`.
+///
+/// Read, edited and replaced under [`crate::rewrite::update`]'s lock and rename (#357).
 pub fn set_key(root: &Path, section: &str, key: &str, value: &str) -> std::io::Result<()> {
-    let path = root.join(crate::plane::MANIFEST);
-    let body = std::fs::read_to_string(&path)?;
-    let mut lines: Vec<String> = text::lines_with_ends(&body)
+    // A link `init`'s gate let through stays inside the plane and is followed, as every other
+    // file `init` writes is; the file it lands on is the one replaced.
+    let path = super::linked_to(&root.join(crate::plane::MANIFEST));
+    let dir = path.parent().unwrap_or(root);
+    crate::rewrite::update(dir, &path, |body| match body {
+        Some(body) => Ok(Some(edited(body, section, key, value))),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} is not there", path.display()),
+        )),
+    })
+    .map(|_| ())
+}
+
+fn edited(body: &str, section: &str, key: &str, value: &str) -> String {
+    let mut lines: Vec<String> = text::lines_with_ends(body)
         .into_iter()
         .map(str::to_owned)
         .collect();
@@ -209,7 +224,7 @@ pub fn set_key(root: &Path, section: &str, key: &str, value: &str) -> std::io::R
             }
         }
     }
-    std::fs::write(&path, lines.concat())
+    lines.concat()
 }
 
 #[cfg(test)]
@@ -267,5 +282,25 @@ mod tests {
             set("schema = 1\r\n# kept\r\n"),
             "schema = 1\r\n# kept\r\n\n[persona]\ndefault = \"steward\"\n"
         );
+    }
+
+    /// #357: `init`'s declaration of its front door goes through the same temp-and-rename,
+    /// so a crash between the two leaves the charter.toml `init` had just written.
+    #[test]
+    fn init_s_declaration_replaces_charter_toml_whole_or_not_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+        let _hook = crate::rewrite::hook::set(|target, _| {
+            assert_eq!(std::fs::read_to_string(target).unwrap(), "schema = 1\n");
+            Err(std::io::Error::other("killed before the rename"))
+        });
+
+        assert!(set_key(dir.path(), "persona", "default", "steward").is_err());
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("charter.toml")).unwrap(),
+            "schema = 1\n"
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

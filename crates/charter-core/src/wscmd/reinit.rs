@@ -139,8 +139,7 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
         // block. A plane made LIVE before `todos/` existed lists four paths per workspace and
         // nothing re-runs `set_live` unprompted, so the upgrade command is where it is
         // repaired.
-        let live: Vec<String> = wscmd::live_workspaces(root).into_iter().collect();
-        let _ = wscmd::write_live_block(root, live.iter().map(String::as_str));
+        let _ = wscmd::refresh_live_block(root);
 
         for row in &layer {
             let rel = &row.rel;
