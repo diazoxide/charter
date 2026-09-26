@@ -193,10 +193,11 @@ impl Kept {
         if let Some(dir) = path.parent()
             && crate::profiletrust::private_dir(dir).is_ok()
         {
-            let _ = crate::profiletrust::write_private(
+            let _ = crate::rewrite::replace(
                 dir,
                 &path,
                 crate::pyjson::dumps_indent2(&doc).as_bytes(),
+                crate::rewrite::Mode::Private,
             );
         }
     }

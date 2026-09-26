@@ -794,7 +794,8 @@ fn ensure_gitignore(path: &Path) -> Result<bool, String> {
 fn replace_text(path: &Path, text: &str) -> Result<(), String> {
     let target = linked_to(path);
     let dir = target.parent().unwrap_or(Path::new("."));
-    crate::rewrite::replace(dir, &target, text.as_bytes(), None).map_err(|e| strerror(&e))
+    crate::rewrite::replace(dir, &target, text.as_bytes(), crate::rewrite::Mode::Kept)
+        .map_err(|e| strerror(&e))
 }
 
 /// Where `path` lands when it is a symlink, else `path` itself.

@@ -1422,7 +1422,7 @@ fn temps_left(dirs: impl Iterator<Item = PathBuf>) -> Option<bool> {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
                     let name = name.to_string_lossy();
-                    if name.starts_with(".charter-generated.") && name.ends_with(".tmp") {
+                    if name.starts_with(crate::rewrite::TEMP_PREFIX) && name.ends_with(".tmp") {
                         return Some(true);
                     }
                 }
@@ -1588,6 +1588,16 @@ mod tests {
         out.push(MARKER.to_owned());
         out.push(TEMP_PATTERN.to_owned());
         out
+    }
+
+    /// The pattern hides the temps `rewrite::replace` actually writes, so a write killed
+    /// before its rename leaves nothing in a guest checkout's `git status`.
+    #[test]
+    fn the_temp_pattern_is_the_one_every_whole_file_write_names_its_temp_by() {
+        assert_eq!(
+            TEMP_PATTERN,
+            format!("{}*.tmp", crate::rewrite::TEMP_PREFIX)
+        );
     }
 
     #[test]

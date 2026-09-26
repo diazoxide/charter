@@ -475,9 +475,15 @@ impl Workspace {
             map.insert(manifest::KEY.to_string(), serde_json::Value::String(digest));
         }
         std::fs::create_dir_all(&self.dir)?;
-        replace_atomically(
+        // Whole or not at all: one of this file's readers is `git add`, so half a manifest is
+        // not a glitch somebody re-runs past — it is half a manifest a teammate pulls. Gated
+        // from the workspace's own directory, which `writable` has just answered for: a link
+        // to the manifest itself is refused rather than replaced.
+        crate::rewrite::replace(
+            &self.dir,
             &self.dir.join("workspace.json"),
             crate::pyjson::dumps_indent2(&doc).as_bytes(),
+            crate::rewrite::Mode::Kept,
         )
     }
 
@@ -685,7 +691,8 @@ fn file_name(path: &Path) -> std::borrow::Cow<'_, str> {
 /// Twelve hex characters no other writer in this process will produce, so the temp name is
 /// unique per CALL and not merely per process.
 ///
-/// charter's own temp is `<target>.<pid>.<12 random hex>.tmp`: the pid separates two
+/// charter's own temp is `.charter-generated.<target>.<pid>.<12 random hex>.tmp`
+/// ([`crate::rewrite::replace`]): the pid separates two
 /// processes (#893 — two commands scaffolding one workspace used to share a single
 /// `workspace.json.tmp`) and the random half separates two writers inside one, which threads
 /// in a single process are.
@@ -698,31 +705,6 @@ pub(crate) fn scratch_tag() -> String {
         .unwrap_or(0);
     let mixed = nanos ^ (NEXT.fetch_add(1, Ordering::Relaxed) << 32);
     format!("{:012x}", mixed & 0xffff_ffff_ffff)
-}
-
-/// Write `bytes` to `path` through a temp file beside it, then rename.
-///
-/// One of this file's readers is `git add`, so half a manifest is not a glitch somebody
-/// re-runs past — it is half a manifest a teammate pulls. The temp name carries the pid
-/// because two commands scaffolding one workspace at once used to share one temp file.
-fn replace_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let name = file_name(path);
-    let temp = dir.join(format!(
-        "{name}.{}.{}.tmp",
-        std::process::id(),
-        scratch_tag()
-    ));
-    // The mode the file ends up with is the temp file's: `rename` carries the source's,
-    // so it is created here under the umask rather than with a private mode.
-    std::fs::write(&temp, bytes)?;
-    match std::fs::rename(&temp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = std::fs::remove_file(&temp);
-            Err(e)
-        }
-    }
 }
 
 /// A containment refusal as an IO error, so every caller handles one kind of failure.

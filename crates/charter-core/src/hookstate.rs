@@ -76,21 +76,14 @@ impl State {
         crate::plane::write_private(&self.trust, path, bytes)
     }
 
-    /// `config.replace_for` — whole or not at all: a temp file beside it, then one rename.
+    /// `config.replace_for` — whole or not at all, at 0600, the parent made private first:
+    /// [`crate::rewrite::replace`], gated from the trust root.
     pub fn replace(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         let Some(parent) = path.parent() else {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "no parent"));
         };
         self.mkdir(parent)?;
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let temp = parent.join(format!(".{name}.{}.tmp", std::process::id()));
-        crate::plane::write_private(&self.trust, &temp, bytes)?;
-        std::fs::rename(&temp, path).inspect_err(|_| {
-            let _ = std::fs::remove_file(&temp);
-        })
+        crate::rewrite::replace(&self.trust, path, bytes, crate::rewrite::Mode::Private)
     }
 
     /// `config.touch_for` — create at 0600 if absent, and bump the mtime either way.

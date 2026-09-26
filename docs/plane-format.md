@@ -528,7 +528,10 @@ key refuses.
 - **Written by:** `charter/profiletrust.py:155` `record_launched` — `config.replace_for`
   (atomic temp+rename, private 0600) of `json.dumps({**_read(), name: fingerprint}, indent=2) + "\n"`
   (`charter/profiletrust.py:172`). Triggered by approving a profile at the prompt
-  (`charter/profiletrust.py:303`) and by a launch that runs one.
+  (`charter/profiletrust.py:303`) and by a launch that runs one. **In charter-app** (#430)
+  it is written by `rewrite::replace` at `0600`, which also flushes the directory after the
+  rename and **refuses a record that is a symlink** (Python's rename replaces the link); the
+  consent is then not recorded, and the profile asks again.
 - **Read by:** `charter/profiletrust.py:138` `_read` → `last_launched`
   (`charter/profiletrust.py:144`), `approval_needed` (`charter/profiletrust.py:195`),
   `refusal` (`charter/profiletrust.py:306`), the frame launcher and `charter reopen`.
@@ -919,6 +922,9 @@ Two rules hold for the whole area and are not repeated per file:
   - Atomic: `config.replace_for` through a pid+random temp beside the file
     (`charter/workspace.py:1612`), path first run through `contain.writable`
     (`charter/workspace.py:1609`), which **raises** on a symlink out of the plane.
+    **In charter-app** (#430) through `rewrite::replace`: the file keeps the mode it has
+    (Python's comes back at the umask's), a read-only one and one that is itself a symlink
+    are refused, and the directory is flushed after the rename.
   - Key order is insertion order of the dict the writer built, with `charter_generated`
     appended last (`charter/workspace.py:1611`). The birth document's order is
     `name, description, repos, updated_at, updated_by` (`charter/workspace.py:1677`);
@@ -2316,6 +2322,14 @@ Live-plane check (names and modes only, no contents): the real plane has
   written (`charter/secrets/plain_file.py:72`-`87`). Not atomic (in-place truncate), no
   locking. `get` first tightens a loose mode (`charter/secrets/plain_file.py:137`); the
   read-only paths report instead of repairing (`charter/secrets/base.py:214` `mode_note`).
+  **In charter-app** (#429) the vault is replaced whole, never written in place: the text
+  goes to a temp file beside it (`.charter-generated.<name>.<pid>.<tag>.tmp`), created
+  `0600` with its mode read back before any byte (the same refusal as above when it will
+  not hold), flushed, renamed over the vault, and the directory flushed. A crash mid-write
+  leaves the old vault whole. **A vault path that is a symlink is refused** ("it is a
+  symlink … Nothing was written") and the file it points at is left alone; Python writes
+  through the link. A read-only vault is still refused. The `.meta.json` sidecar, the
+  keyring provider's `.keys.json` index and the reference vault below share this writer.
 
 Shape with placeholder values:
 
@@ -2403,8 +2417,8 @@ given never writes it.
   (`charter/secrets/reference.py:194`-`195`). So: **sorted keys** here, insertion order in
   the plain-file vault; and the mode is applied after the content, not before. **In
   charter-app** (#356) the encoding is unchanged but the write goes through the plain-file
-  provider's writer: created `0600`, the mode settled on the descriptor and read back, and
-  only then truncated and written.
+  provider's writer: since #429 that replaces the file whole through a temp created
+  `0600`, and refuses a vault path that is a symlink (see the plain-file vault above).
 - **Git:** default path is under `.charter/` and therefore ignored; a team that commits
   these points `--file` at a tracked path, which is allowed for this provider (the
   unignored-path refusal is `plain-file` only, `charter/commands_secrets.py:159`).
@@ -2696,7 +2710,11 @@ generated or mirrored** (`charter/harness/base.py:245`-`249`,
   `/.claude/settings.json`, `/.charter-generated`, `.charter-generated.*.tmp`.
 - **Temp files:** every write in a checkout goes through
   `.charter-generated.<pid>.<hex12>.tmp` beside the target, fsynced, then `os.replace`,
-  keeping the replaced file's mode (`charter/workspace.py:2913`-`2924`).
+  keeping the replaced file's mode (`charter/workspace.py:2913`-`2924`). **In charter-app**
+  (#430) the temp is `.charter-generated.<name>.<pid>.<hex12>.tmp`, which the same glob
+  hides; the replaced file's mode is kept (it used to come back at the umask's), the
+  directory is flushed after the rename, and a generated file that is read-only or is itself
+  a symlink is refused and reported blocked.
 
 ### 2b. Outside the plane (machine-global)
 
@@ -2914,6 +2932,15 @@ does not re-tighten a pre-existing directory but does tighten a pre-existing fil
 | `config.create_for(p, data)` | `O_EXCL` create; returns False if it already existed | `charter/config.py:517` |
 | `config.touch_for(p)` | create empty (append mode) + `os.utime` — the mtime is the payload | `charter/config.py:644` |
 | `config.private_mkdir` / `claim_private_dir` | 0700 mkdir / `O_EXCL`-style claim of a directory | `charter/config.py:190`, `charter/config.py:283` |
+
+**In charter-app** (#430) every whole-file replace — `replace_for`'s equivalent here, and the
+plane's committed files, `workspace.json`, the generated harness layer and the vaults — goes
+through one writer, `charter_core::rewrite::replace`. Its temp is
+`.charter-generated.<name>.<pid>.<12 hex>.tmp` (the prefix a guest checkout's exclude block
+already hides); it is flushed before the rename and the directory after it; a target that is a
+symlink is refused rather than replaced; and the mode is one of four: kept (committed files),
+kept-or-0600-when-new (the settings tab's files), 0600 (state here), or 0600-or-nothing
+(vaults).
 
 **Git.** The whole directory is gitignored: `charter init` writes `/.charter/` into the
 plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,

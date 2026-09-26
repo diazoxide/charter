@@ -93,50 +93,58 @@ pub fn keys(ctx: &Ctx, vault: &Vault) -> Result<Vec<String>, VaultError> {
 }
 
 /// `_write_private`: `payload` into `p` with `p` provably 0600 before a byte lands — or
-/// nothing written at all (#437). Opened without `O_TRUNC`, the mode settled on the
-/// DESCRIPTOR and read back, and only then truncated and written.
+/// nothing written at all (#437). Whole or not at all, and never through a link (#429).
 pub fn write_private(p: &Path, payload: &Value) -> Result<(), VaultError> {
     write_private_text(p, &crate::pyjson::dumps_indent2_unicode(payload))
 }
 
 /// [`write_private`] for text the caller has already encoded — the reference provider's,
-/// which sorts its keys and escapes to ASCII where this provider does neither (#356). Same
-/// guarantee: `p` is `0600` before a byte of `text` reaches it, or nothing is written.
+/// which sorts its keys and escapes to ASCII where this provider does neither (#356).
+///
+/// The vault is replaced, never written in place ([`crate::rewrite::replace`], #429): the
+/// text goes to a temp file beside it — created 0600, its mode read back before a byte of
+/// secret reaches it — which is flushed and renamed over the vault. A crash mid-write leaves
+/// the old vault whole rather than truncated. A vault path that is a symlink is refused: it
+/// used to be written through, to wherever the link pointed.
 pub fn write_private_text(p: &Path, text: &str) -> Result<(), VaultError> {
-    if let Some(parent) = p.parent() {
-        super::make_private_dir(parent)
-            .map_err(|e| VaultError::new(format!("cannot create {}: {e}", parent.display())))?;
+    let parent = p.parent().unwrap_or(Path::new("."));
+    super::make_private_dir(parent)
+        .map_err(|e| VaultError::new(format!("cannot create {}: {e}", parent.display())))?;
+    if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(linked(p));
     }
-    let fail = |e: std::io::Error| VaultError::new(format!("cannot write {}: {e}", p.display()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(p).map_err(fail)?;
-    #[cfg(test)]
-    watch::opened(&file);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-        let mode = file.metadata().map_err(fail)?.permissions().mode() & 0o7777;
-        if mode & super::OTHERS != 0 {
-            return Err(VaultError::new(format!(
-                "refusing to write {}: it is mode {:03o} and charter could not make it 0600, so \
-                 the plaintext would be readable by other accounts on this machine. Nothing was \
-                 written.\n  Filesystems with fixed permissions (exFAT, many network mounts) \
-                 cannot hold a plain-file vault — point the vault at a path on a filesystem that \
-                 keeps modes, or use a provider that does not store plaintext.",
-                p.display(),
-                mode & 0o777
-            )));
+    // Gated from the vault's own directory: the file alone. The directories above it are the
+    // operator's choice of where the vault lives, and may be links honestly.
+    crate::rewrite::replace(parent, p, text.as_bytes(), crate::rewrite::Mode::Secret).map_err(|e| {
+        match e
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<crate::rewrite::NotPrivate>())
+        {
+            Some(loose) => VaultError::new(format!(
+                "refusing to write {}: {loose}, so the plaintext would be readable by other \
+                 accounts on this machine. Nothing was written.\n  Filesystems with fixed \
+                 permissions (exFAT, many network mounts) cannot hold a plain-file vault — \
+                 point the vault at a path on a filesystem that keeps modes, or use a provider \
+                 that does not store plaintext.",
+                p.display()
+            )),
+            // Linked between the check above and the replace's own gate.
+            None if std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()) => {
+                linked(p)
+            }
+            None => VaultError::new(format!("cannot write {}: {e}", p.display())),
         }
-    }
-    file.set_len(0).map_err(fail)?;
-    std::io::Write::write_all(&mut file, text.as_bytes()).map_err(fail)
+    })
+}
+
+/// The refusal of a vault path that is a symlink (#429).
+fn linked(p: &Path) -> VaultError {
+    VaultError::new(format!(
+        "refusing to write {}: it is a symlink. charter replaces a vault file whole and will not \
+         write secrets through a link to wherever it points. Nothing was written.\n  Point the \
+         vault's 'file' at the real path instead.",
+        p.display()
+    ))
 }
 
 fn meta_path(p: &Path) -> PathBuf {
@@ -258,40 +266,5 @@ pub fn loose_dirs(ctx: &Ctx, vault: &Vault) -> Vec<(PathBuf, u32)> {
             None => Vec::new(),
         },
         Err(_) => Vec::new(),
-    }
-}
-
-/// A test's view of the descriptor [`write_private_text`] holds, the instant it is opened:
-/// before its mode is touched and before any content is written, so a new file's mode here is
-/// the one it was created with. Thread-local, so it sees only its own test.
-#[cfg(test)]
-pub(crate) mod watch {
-    use std::cell::RefCell;
-
-    type Watch = Box<dyn FnMut(&std::fs::File)>;
-
-    thread_local! {
-        static WATCH: RefCell<Option<Watch>> = const { RefCell::new(None) };
-    }
-
-    pub(crate) fn set(f: impl FnMut(&std::fs::File) + 'static) -> Unset {
-        WATCH.with(|w| *w.borrow_mut() = Some(Box::new(f)));
-        Unset
-    }
-
-    pub(crate) struct Unset;
-
-    impl Drop for Unset {
-        fn drop(&mut self) {
-            WATCH.with(|w| *w.borrow_mut() = None);
-        }
-    }
-
-    pub(super) fn opened(file: &std::fs::File) {
-        WATCH.with(|w| {
-            if let Some(f) = w.borrow_mut().as_mut() {
-                f(file);
-            }
-        });
     }
 }
