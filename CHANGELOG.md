@@ -157,6 +157,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same row in both panes after the screen scrolled. A pane that opens late now also keeps
   the program's scroll region, so a full-screen program such as an editor or a pager scrolls
   the right rows in it. ([#447](https://github.com/diazoxide/charter/issues/447))
+- **A pane that opens late no longer shows a screen you cleared in its scrollback.** After
+  `clear`, or after a program deleted lines at the top of the screen or scrolled it up, a pane
+  that opened later had the old lines in its scrollback, and a pane open all along did not.
+  Now both panes show the same scrollback.
+  ([#452](https://github.com/diazoxide/charter/issues/452))
 - **The extension tests no longer fail on a busy machine.** Extensions still get the same time
   as before: 5 seconds for a view, an action, an event or a command, and at a chat's start 2
   seconds each and 3 seconds for all of them together. A debug build of `charter` now lets the

@@ -56,15 +56,20 @@
 //! region whose bottom is past the screen ends at the bottom of the screen in xterm.js, which
 //! ignores it when that leaves no rows; `alacritty_terminal` would keep a region with none.
 //!
+//! **What reaches the scrollback.** xterm.js puts a line into its scrollback only when a line
+//! feed scrolls it off the top of the screen. Deleting lines (`DL`) or scrolling up (`SU`)
+//! from the top of the screen drops the lines taken off, and erasing the screen (`ED 2`, what
+//! `clear` sends) erases it in place, since the pane leaves `scrollOnEraseInDisplay` off.
+//! `alacritty_terminal` moves the lines into its history in all three, and a pane that opened
+//! late would get them in its scrollback. The engine makes those edits itself, without the
+//! history, so its history is the pane's scrollback.
+//!
 //! **Restoring the cursor after the screen scrolled.** xterm.js saves the cursor's row in its
 //! scrollback, not on the screen, so it comes back to a row that has moved up with every line
 //! scrolled into the scrollback since, until the scrollback is full. xterm and VTE save the row
-//! on the screen, and so does `alacritty_terminal`, which also moves the lines that deleting
-//! lines or scrolling up (`SU`) take off the top of the screen, and those erasing the screen
-//! (`ED 2`) erases, into its history, where xterm.js drops them. The engine counts the lines
-//! scrolled into history since the cursor was saved, leaving those out, and moves the cursor
-//! up by as many as it restores it. Once the scrollback is full, the count can be off by as
-//! many lines as were left out. The lines themselves stay in the engine's history (#452).
+//! on the screen, and so does `alacritty_terminal`. The engine counts the lines scrolled into
+//! its history since the cursor was saved, and moves the cursor up by as many as it restores
+//! it.
 //!
 //! **A combining mark with nothing before it.** At the start of a row, xterm.js gives a
 //! zero-width character, such as a combining mark, a cell of its own that it draws nothing in,
@@ -118,9 +123,6 @@ pub(super) struct Beside {
     /// for each, and the alternate screen opens with the whole screen; `alacritty_terminal`
     /// keeps one for both, and is given the other one whenever the screens change.
     scroll_regions: [ScrollRegion; 2],
-    /// How many lines of `alacritty_terminal`'s history the pane does not have in its
-    /// scrollback: ones it moved there that xterm.js drops.
-    not_in_pane: usize,
     /// How many lines the pane had in its scrollback when the cursor was saved, on the main
     /// screen and on the alternate screen.
     saved_at: [usize; 2],
@@ -131,7 +133,6 @@ impl Beside {
     pub(super) fn new(rows: usize) -> Self {
         Self {
             scroll_regions: [ScrollRegion::whole(rows), ScrollRegion::whole(rows)],
-            not_in_pane: 0,
             saved_at: [0; 2],
         }
     }
@@ -159,16 +160,10 @@ impl Beside {
     /// save the row on the screen.
     pub(super) fn saved_line<T>(&self, term: &Term<T>) -> Line {
         let screen = screen(term);
-        let scrolled = self.pane_history(term) as i64 - self.saved_at[screen] as i64;
+        let scrolled = term.history_size() as i64 - self.saved_at[screen] as i64;
         let last = term.screen_lines() as i64 - 1;
         let saved = i64::from(term.grid().saved_cursor.point.line.0);
         Line((saved - scrolled).clamp(0, last) as i32)
-    }
-
-    /// How many lines the pane has in its scrollback, as far as the engine can tell: once the
-    /// scrollback is full, lines the pane dropped have made room for others in `term`.
-    fn pane_history<T>(&self, term: &Term<T>) -> usize {
-        term.history_size().saturating_sub(self.not_in_pane)
     }
 }
 
@@ -188,6 +183,10 @@ impl ScrollRegion {
     /// rows and below `top`.
     fn set(&mut self, top: usize, bottom: usize) {
         self.0 = top as i32 - 1..bottom as i32;
+    }
+
+    fn top(&self) -> Line {
+        Line(self.0.start)
     }
 
     fn contains(&self, line: Line) -> bool {
@@ -282,14 +281,24 @@ impl<T> PaneRules<'_, T> {
         }
     }
 
-    /// Runs `apply`, an edit that xterm.js makes without touching its scrollback: deleting lines
-    /// or scrolling up from the top of the screen, or erasing the screen. `alacritty_terminal`
-    /// moves the lines it takes off the screen into its history, and this counts them as lines
-    /// the pane does not have.
-    fn dropping_from_history(&mut self, apply: impl FnOnce(&mut Term<T>)) {
-        let before = self.0.history_size();
-        apply(self.0);
-        self.1.not_in_pane += self.0.history_size().saturating_sub(before);
+    /// Moves the rows from `top` to the bottom of the scroll region up by `rows`, dropping the
+    /// ones moved off `top` and blanking the ones left at the bottom, as xterm.js deletes lines
+    /// (`DL`) and scrolls up (`SU`). `alacritty_terminal` moves the rows it drops into its
+    /// history when `top` is the top of the screen; xterm.js puts only lines that a line feed
+    /// scrolls off the screen into its scrollback. Unlike `alacritty_terminal`, this keeps no
+    /// damage, selection or vi-mode cursor up to date: nothing in the engine reads them.
+    fn shift_up(&mut self, top: Line, rows: usize) {
+        // The row below the bottom of the region.
+        let bottom = self.region().0.end;
+        let rows = rows.min((bottom - top.0) as usize) as i32;
+        let grid = self.0.grid_mut();
+        for line in top.0..bottom - rows {
+            grid[Line(line)] = grid[Line(line + rows)].clone();
+        }
+        let template = grid.cursor.template.clone();
+        for line in bottom - rows..bottom {
+            grid[Line(line)].reset(&template);
+        }
     }
 
     /// Leaves the cursor on the last column with no wrap pending, as xterm, VTE and xterm.js
@@ -545,13 +554,11 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
                     self.0.grid_mut().reset_region(..line);
                 }
             }
-            ClearMode::All => self.dropping_from_history(|term| term.clear_screen(mode)),
-            ClearMode::Saved => {
-                self.0.clear_screen(mode);
-                if self.screen() == MAIN {
-                    self.1.not_in_pane = 0;
-                }
-            }
+            // xterm.js erases the screen in place. `alacritty_terminal` erases the alternate
+            // screen so, and scrolls what is on the main one into its history, which would
+            // give a pane that opens late a scrollback the live pane never had.
+            ClearMode::All => self.0.grid_mut().reset_region(..),
+            ClearMode::Saved => self.0.clear_screen(mode),
         }
     }
 
@@ -663,7 +670,7 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
     }
 
     fn scroll_up(&mut self, rows: usize) {
-        self.dropping_from_history(|term| term.scroll_up(rows))
+        self.shift_up(self.region().top(), rows)
     }
 
     fn scroll_down(&mut self, rows: usize) {
@@ -678,7 +685,10 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
 
     fn delete_lines(&mut self, rows: usize) {
         self.end_pending_wrap();
-        self.dropping_from_history(|term| term.delete_lines(rows));
+        let (line, _) = self.cursor();
+        if self.region().contains(line) {
+            self.shift_up(line, rows);
+        }
         self.after_lines_moved();
     }
 
@@ -697,7 +707,7 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
 
     fn save_cursor_position(&mut self) {
         let screen = self.screen();
-        self.1.saved_at[screen] = self.1.pane_history(self.0);
+        self.1.saved_at[screen] = self.0.history_size();
         self.0.save_cursor_position()
     }
 
@@ -753,7 +763,7 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
         // already. `alacritty_terminal` saves it only opening it.
         let opening = mode == ALTERNATE_SCREEN && self.screen() == MAIN;
         if opening {
-            self.1.saved_at[MAIN] = self.1.pane_history(self.0);
+            self.1.saved_at[MAIN] = self.0.history_size();
         } else if mode == ALTERNATE_SCREEN {
             self.save_cursor_position();
         }
@@ -898,6 +908,7 @@ impl<T: EventListener> Handler for PaneRules<'_, T> {
 /// The screens these tests expect are the ones `@xterm/headless` 6.0.0 draws for the same
 /// output on a terminal of the same size.
 mod tests {
+    use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::term::cell::Flags;
     use alacritty_terminal::vte::ansi::{Color, NamedColor};
@@ -929,6 +940,20 @@ mod tests {
     }
 
     const DEFAULT: Color = Color::Named(NamedColor::Background);
+
+    /// The lines of the scrollback, oldest first, each without the blanks it ends with.
+    fn scrollback(term: &AlacrittyEngine) -> Vec<String> {
+        let grid = term.grid();
+        (grid.topmost_line().0..0)
+            .map(|line| {
+                let row = &grid[Line(line)];
+                let text: String = (0..grid.columns())
+                    .map(|column| row[Column(column)].c)
+                    .collect();
+                text.trim_end().to_owned()
+            })
+            .collect()
+    }
 
     // Each expectation below is what xterm.js 6.0.0, the pane, shows for the same bytes.
 
@@ -1425,5 +1450,45 @@ mod tests {
         let mut term = fed("\x1b[?1049h\x1b[2;4r\x1b[?1049l\x1b[?1049h\x1b[5Bx");
 
         assert_eq!(line(&mut term, 4), "x");
+    }
+
+    #[test]
+    fn erasing_the_screen_leaves_the_scrollback_alone() {
+        // `clear` does this. xterm.js erases the screen in place; `alacritty_terminal` scrolled
+        // what was on it into its history.
+        let mut term = fed("abc\r\ndef\x1b[2J");
+
+        assert!(scrollback(&term).is_empty());
+        assert_eq!(line(&mut term, 0), "");
+    }
+
+    #[test]
+    fn erasing_the_screen_keeps_what_had_scrolled_into_the_scrollback_before() {
+        let term = fed("1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\x1b[2J");
+
+        assert_eq!(scrollback(&term), ["1", "2"]);
+    }
+
+    #[test]
+    fn scrolling_up_drops_the_lines_it_takes_off_the_top() {
+        let mut term = fed("abc\r\ndef\x1b[S");
+
+        assert!(scrollback(&term).is_empty());
+        assert_eq!(line(&mut term, 0), "def");
+    }
+
+    #[test]
+    fn deleting_lines_at_the_top_drops_them() {
+        let mut term = fed("abc\r\ndef\x1b[H\x1b[M");
+
+        assert!(scrollback(&term).is_empty());
+        assert_eq!(line(&mut term, 0), "def");
+    }
+
+    #[test]
+    fn a_line_feed_at_the_bottom_of_a_scroll_region_at_the_top_still_scrolls_into_the_scrollback() {
+        let term = fed("abc\r\ndef\x1b[1;4r\x1b[4;1H\n");
+
+        assert_eq!(scrollback(&term), ["abc"]);
     }
 }
