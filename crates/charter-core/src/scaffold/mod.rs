@@ -843,7 +843,11 @@ fn read_text(path: &Path) -> Result<String, String> {
 ///
 /// Trailing line breaks are collapsed to the one blank line before the new block, as Python
 /// does; every other byte, CRLF endings included, is kept.
-fn append_gitignore(path: &Path, lines: &[&str], header: &str) -> Result<Vec<String>, String> {
+pub(crate) fn append_gitignore(
+    path: &Path,
+    lines: &[&str],
+    header: &str,
+) -> Result<Vec<String>, String> {
     let body = if path.exists() {
         read_text(path)?
     } else {

@@ -5,6 +5,7 @@ pub mod adopt;
 pub mod alerts;
 pub mod autosave;
 pub mod briefing;
+pub mod browser;
 pub mod cistate;
 pub mod clipath;
 pub mod commitgate;

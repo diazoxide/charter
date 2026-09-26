@@ -74,6 +74,9 @@ pub enum Act {
     /// Writing a harness's own configuration — Claude Code's user settings, Codex's
     /// `config.toml` — which every chat on this machine reads, not only one a run started.
     HarnessConfig,
+    /// Running a generator in it — `charter browser install`'s `npx`, which writes whatever
+    /// the package it fetched writes, where it runs.
+    Generate,
 }
 
 impl Act {
@@ -86,6 +89,7 @@ impl Act {
             Self::Open => "open the plane",
             Self::Store => "keep this machine's charter store at",
             Self::HarnessConfig => "write a harness's own configuration at",
+            Self::Generate => "run a generator that writes into the plane",
         }
     }
 }

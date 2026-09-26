@@ -208,7 +208,7 @@ the command line, for that session alone, and writes nothing into any config fol
 
 - **Claude Code** gets `--plugin-dir <the bundled plugin>`: the app's own plugin,
   `charter`, with every hook charter answers — the state hooks and the Bash guard — and
-  the `handoff`, `working-in-a-clone` and `update` skills, which reach the model as
+  the `handoff`, `working-in-a-clone`, `update`, `persona`, `secrets` and `browser` skills, which reach the model as
   `charter:<skill>`. Beside it, `--settings` carries `enabledPlugins` with
   `charter@inline` pinned on — a project file a chat can write could otherwise turn it
   off — and a plugin named `charter@charter` turned off, so a plane whose settings enable an

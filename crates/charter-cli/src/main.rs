@@ -110,6 +110,11 @@ enum Command {
         verb: Option<GuardCommand>,
     },
 
+    /// The browser lane: charter's plugin ships the credential bridge (the `browser` skill),
+    /// Playwright ships the page-driving surface.
+    #[command(subcommand)]
+    Browser(BrowserCommand),
+
     /// Add what the plane's forges list to inventory/repos.json, then regenerate docs.
     Discover {
         /// Skip per-repo stack detection (faster).
@@ -501,6 +506,18 @@ fn place() -> Result<charter_core::plane::Place, String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
     Ok(charter_core::plane::place(&cwd))
+}
+
+#[derive(Subcommand)]
+enum BrowserCommand {
+    /// Generate Playwright's driving-surface skill into this plane's .claude/skills/, from the
+    /// tool that owns it (charter vendors none of it — Apache-2.0, and it ships far more
+    /// often than charter does).
+    Install {
+        /// @playwright/cli version, exactly (default: the one charter is known to work with).
+        #[arg(long)]
+        version: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1991,6 +2008,17 @@ fn run(command: Command) -> Result<u8, String> {
             let (said, code) = guardcmd::report(&root, &rule, bucket, local);
             print!("{said}");
             return Ok(code);
+        }
+        Command::Browser(BrowserCommand::Install { version }) => {
+            let path = std::env::var_os("PATH");
+            let mut sink = speak;
+            return Ok(charter_core::browser::install(
+                here.plane.root(),
+                version.as_deref(),
+                charter_core::browser::npx_on(path.as_deref()),
+                &mut charter_core::browser::Npx,
+                &mut sink,
+            ));
         }
         Command::Harness(HarnessCommand::List) => {
             let root = here.plane.root().to_path_buf();

@@ -14,6 +14,11 @@
 //! **What is allowed to name a missing command:** a literal that says, in the same sentence
 //! set, that it is "not in this version yet" — the plain spelling for a planned command.
 //!
+//! **The skills charter's plugin ships are messages too** (#370): an agent reads
+//! `app/src-tauri/plugin/skills/**/SKILL.md` and runs what it says. Every `charter …` in one —
+//! in backticks, after those verbs, or opening a line of a fenced code block — is checked the
+//! same way.
+//!
 //! **Asked of the binary, not of a list.** Each word is checked with `charter <word> --help`
 //! (and `charter <word> <sub> --help` where the first has subcommands), so an alias clap
 //! accepts counts and a list here cannot drift from the parser.
@@ -134,6 +139,45 @@ fn literals(src: &str) -> Vec<String> {
     out
 }
 
+/// Every `SKILL.md` under the plugin charter ships.
+fn shipped_skills(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if entry.file_name() == "SKILL.md" {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&root.join("app/src-tauri/plugin/skills"), &mut out);
+    out.sort();
+    out
+}
+
+/// The texts of a skill a reader runs: the whole page for the inline shapes, and each line of
+/// a fenced code block that opens with `charter `, as a backticked command.
+fn skill_texts(page: &str) -> Vec<String> {
+    let mut out = vec![page.to_owned()];
+    let mut fenced = false;
+    for line in page.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced && let Some(rest) = trimmed.strip_prefix("charter ") {
+            out.push(format!("`charter {rest}`"));
+        }
+    }
+    out
+}
+
 /// `(first word, optional second word)` of every suggestion in `text`.
 fn suggestions(text: &str) -> Vec<(String, Option<String>)> {
     let re = regex::Regex::new(
@@ -156,9 +200,9 @@ fn suggestions(text: &str) -> Vec<(String, Option<String>)> {
 }
 
 /// Words that follow "charter" when it is the subject of a sentence rather than a command.
-const PROSE: [&str; 14] = [
+const PROSE: [&str; 15] = [
     "is", "was", "will", "would", "could", "can", "cannot", "does", "did", "has", "had", "found",
-    "reads", "never",
+    "reads", "never", "says",
 ];
 
 /// `charter <words> --help`, answered by this build.
@@ -226,12 +270,52 @@ fn every_charter_command_a_message_names_is_a_command_this_binary_has() {
         seen > 20,
         "only {seen} suggestions found, so the scan is not reading the messages"
     );
+    let skills = shipped_skills(&root);
+    assert!(skills.len() >= 3, "the walk found the skills: {skills:?}");
+    let mut in_skills = 0;
+    for file in &skills {
+        let page = std::fs::read_to_string(file).expect("a skill reads");
+        for text in skill_texts(&page) {
+            for (first, second) in suggestions(&text) {
+                in_skills += 1;
+                let known = *answered
+                    .entry((first.clone(), second.clone()))
+                    .or_insert_with(|| exists(&first, second.as_deref()));
+                if !known {
+                    let shown = second.map_or(first.clone(), |s| format!("{first} {s}"));
+                    let rel = file
+                        .strip_prefix(&root)
+                        .unwrap_or(file)
+                        .display()
+                        .to_string();
+                    missing.push(format!("{rel}: `charter {shown}`"));
+                }
+            }
+        }
+    }
+    assert!(
+        in_skills > 10,
+        "only {in_skills} suggestions found in the skills, so the scan is not reading them"
+    );
     assert!(
         missing.is_empty(),
         "these messages name a command this charter does not have — name the real one, point \
          at the app's window, or say \"{PLANNED}\":\n{}",
         missing.join("\n")
     );
+}
+
+#[test]
+fn a_skills_code_block_line_is_a_suggestion_and_prose_outside_one_is_not() {
+    let page = "Run `charter persona show x`.\n\n```bash\ncharter wt add x   # a comment\n  charter persona list\n```\ncharter is not a command here\n";
+    let found: Vec<(String, Option<String>)> = skill_texts(page)
+        .iter()
+        .flat_map(|t| suggestions(t))
+        .collect();
+    assert!(found.contains(&("persona".into(), Some("show".into()))));
+    assert!(found.contains(&("wt".into(), Some("add".into()))));
+    assert!(found.contains(&("persona".into(), Some("list".into()))));
+    assert!(!found.iter().any(|(f, _)| f == "is"), "{found:?}");
 }
 
 #[test]
