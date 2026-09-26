@@ -286,8 +286,8 @@ pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
     // NOT gated on `within_plane`: the state directory is machine-local and `$CHARTER_HOME`
     // may legitimately put it outside the plane, so that question is the wrong one to ask
     // about this file. `private_dir` refuses a state directory that is a symlink, and
-    // `write_private` writes beside the record and renames over it — so a link planted AT the
-    // record is replaced rather than written through.
+    // `rewrite::replace` refuses a record that is one — so a link planted AT the record is
+    // never written through.
     //
     // The state directory is what the containment walk is ROOTED at, for that same reason:
     // it is the deepest thing here charter already trusts, `private_dir` has just refused it
@@ -296,10 +296,11 @@ pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
     if let Some(dir) = path.parent()
         && crate::profiletrust::private_dir(dir).is_ok()
     {
-        let _ = crate::profiletrust::write_private(
+        let _ = crate::rewrite::replace(
             dir,
             &path,
             crate::pyjson::dumps_indent2(&doc).as_bytes(),
+            crate::rewrite::Mode::Private,
         );
     }
     res
@@ -1763,11 +1764,11 @@ pub(crate) fn journal_append(root: &Path, entry: &serde_json::Value) {
     let mut out = keep.join("\n");
     out.push('\n');
     // As the push record is written: into the state directory `private_dir` has refused as a
-    // link, beside the file and renamed over it.
+    // link, whole, through `rewrite::replace`.
     if let Some(dir) = path.parent()
         && crate::profiletrust::private_dir(dir).is_ok()
     {
-        let _ = crate::profiletrust::write_private(dir, &path, out.as_bytes());
+        let _ = crate::rewrite::replace(dir, &path, out.as_bytes(), crate::rewrite::Mode::Private);
     }
 }
 

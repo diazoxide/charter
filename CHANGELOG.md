@@ -34,6 +34,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A vault file that is a symlink is refused.** `charter secret set` and `charter secret rm`
+  on a plain-file or reference vault whose file is a link now stop with a message saying so,
+  and write nothing. They used to write the secrets to wherever the link pointed. Point the
+  vault's `file` at the real path instead.
+  ([#429](https://github.com/diazoxide/charter/issues/429))
 - **`charter news` prints this changelog.** It shows every version of the app, newest first,
   and `charter news --for <version>` shows one, the same notes as the release page and About
   Charter. It used to read the Python charter's news and told every plane it had no update
@@ -62,6 +67,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The dispatch log, the session trace and a memory index refuse to write through a link.**
   They now open the file without following a link, and refuse it when it is one.
   ([#420](https://github.com/diazoxide/charter/issues/420))
+- **A vault is never left half-written.** Setting or removing a secret in a plain-file or
+  reference vault now writes a new file beside it and swaps it in, instead of rewriting the
+  vault in place, so a crash or a full disk mid-write leaves the old vault whole. The file is
+  still private to you (0600) from the moment it exists.
+  ([#429](https://github.com/diazoxide/charter/issues/429))
+- **Every file charter replaces whole is written the same careful way.** `workspace.json`, the
+  settings charter generates for a workspace or a checkout, the profile approval record and
+  the hook bookkeeping now share one writer. Each is flushed to disk with its directory, keeps
+  the permissions it had (or stays private, for charter's own state), and is never replaced
+  when it is a symlink. A `workspace.json` or generated settings file you made read-only is
+  now left alone and reported, where it used to be replaced.
+  ([#430](https://github.com/diazoxide/charter/issues/430))
 - **A guard that crashes now refuses the tool call instead of letting it run.** If charter hit
   an internal error while checking a tool call, the crash ended the process with a status
   Claude Code and Codex read as a non-blocking error, so the call went ahead unchecked. Any

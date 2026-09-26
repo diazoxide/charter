@@ -471,15 +471,15 @@ pub fn write_into(base: &Path, rel: &str, text: &str) -> Result<(), String> {
     write_whole(&path, text)
 }
 
-/// Replace the file at `path` with `text` whole — a temp beside it, fsynced, then one
-/// rename — or leave it exactly as it was.
+/// Replace the file at `path` with `text` whole — [`crate::rewrite::replace`]: a temp beside
+/// it, fsynced, one rename, the directory fsynced — or leave it exactly as it was.
 ///
 /// Written in place, a kill mid-write left a `settings.json` at 68 or 0 bytes, which reads as
 /// somebody else's edit: the plane's new `deny` never arrived there, and `doctor` said all
 /// current.
 ///
-/// The temp is `.charter-generated.<pid>.<rand>.tmp` — beside the target, so the rename is a
-/// rename, and private to this writer.
+/// The temp is `.charter-generated.<name>.<pid>.<tag>.tmp` ([`crate::rewrite::TEMP_PREFIX`]) —
+/// beside the target, so the rename is a rename, and private to this writer.
 pub fn write_whole(path: &Path, text: &str) -> Result<(), String> {
     write_whole_io(path, text).map_err(|e| e.to_string())
 }
@@ -491,28 +491,13 @@ pub fn write_whole(path: &Path, text: &str) -> Result<(), String> {
 /// disk and a read-only mount are not "restore write access" — and an `io::Error` rendered to
 /// a string has already lost the number that decides which sentence to print.
 pub fn write_whole_io(path: &Path, text: &str) -> std::io::Result<()> {
+    // Gated from the file's own directory: every caller has already walked the path above it,
+    // so this adds the one answer they could not hold — a link AT the file is refused rather
+    // than replaced. `Kept`: a generated file keeps the mode it has.
     let parent = path
         .parent()
         .ok_or_else(|| std::io::Error::other("no parent"))?;
-    let tmp = parent.join(format!(
-        "{MARKER}.{}.{}.tmp",
-        std::process::id(),
-        uuid::Uuid::new_v4().simple()
-    ));
-    let write = || -> std::io::Result<()> {
-        use std::io::Write;
-        let mut file = std::fs::File::create_new(&tmp)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)
-    };
-    match write() {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            Err(e)
-        }
-    }
+    crate::rewrite::replace(parent, path, text.as_bytes(), crate::rewrite::Mode::Kept)
 }
 
 /// Publish `record` at `base`, or remove the marker when it names nothing.

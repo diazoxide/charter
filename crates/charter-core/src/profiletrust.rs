@@ -166,10 +166,13 @@ pub fn record_launched(root: &Path, name: &str, print: &Fingerprint) -> io::Resu
         .map(Path::to_path_buf)
         .unwrap_or_else(|| root.to_path_buf());
     private_dir(&dir)?;
-    write_private(
+    // 0600: it records the operator's consent to run a command. The walk is rooted at the
+    // plane, so the temp file the bytes land on is gated as well as the record (#113).
+    crate::rewrite::replace(
         root,
         &path(root),
         crate::pyjson::dumps_indent2(&doc).as_bytes(),
+        crate::rewrite::Mode::Private,
     )
 }
 
@@ -203,104 +206,6 @@ pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
     {
         std::fs::create_dir_all(dir)
     }
-}
-
-/// Write the record atomically, 0600: it records the operator's consent to run a command.
-///
-/// The mode is set on the TEMP file, because a rename carries the source's mode onto the
-/// target rather than the other way round.
-///
-/// **`root` is here because the gate belongs on the path that is OPENED** (charter-app#113).
-/// Until then this function argued containment for the record all the way down and then
-/// handed the temp file to a plain `OpenOptions`, with no walk and no `O_NOFOLLOW` — so a
-/// link pre-placed at `<record>.<pid>.<tag>.tmp` was followed, and the operator's consent to
-/// run a command landed wherever it pointed. Nothing about that was live: the name carries a
-/// pid and a per-call tag nobody can predict, and it sits under a directory
-/// [`private_dir`] refuses to follow. That is two accidents of naming and placement, not a
-/// gate, and it is the same shape as charter-app#28 — `reopen.json` guarded while the bytes
-/// went to `reopen.json.writing` — and as `machine::write`'s six review rounds.
-///
-/// `root` is what the walk is rooted at, named by the caller for the reason
-/// [`crate::contain::no_link_on_the_way`] gives: [`record_launched`] passes the plane, and
-/// `planegit::record_push` passes its own state directory, because `$CHARTER_HOME` may
-/// legitimately put that outside the plane and "is it in the plane" is the wrong question
-/// about it.
-pub(crate) fn write_private(root: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = target.parent().unwrap_or(Path::new("."));
-    let name = target
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    // pid AND a per-call tag, as charter's `config.temp_beside` does: the pid separates two
-    // processes, the tail separates two writers inside one — Tauri runs commands on a thread
-    // pool — and a pid the kernel has recycled.
-    let temp = dir.join(format!(
-        "{name}.{}.{}.tmp",
-        std::process::id(),
-        crate::workspaces::scratch_tag()
-    ));
-    write_through(root, target, &temp, bytes)
-}
-
-/// [`write_private`]'s body, with the temp file named by the caller.
-///
-/// The seam exists so a test can **plant its link at the path that is actually opened** —
-/// `machine::write_through` and `extension::write_through` have the same one for the same
-/// reason. A test that plants a link at the RECORD's path proves nothing here: the rename
-/// replaces a name, so such a link is replaced rather than written through, and the test
-/// passes against the ungated version this replaces.
-///
-/// # Why [`crate::contain::create_no_link`] and not `create_new`
-///
-/// `machine` and `extension` open their temp files with `O_CREAT|O_EXCL`, which on POSIX also
-/// refuses a symlink. That is a second answer to the same question, and charter-app#110's
-/// proof run found it holding tests that were named for the guard — a test that cannot go red
-/// when the gate is deleted is not evidence about the gate. So this one is held by the gate
-/// alone. Measured rather than asserted, by putting each half back:
-///
-/// | what `write_through` opens with | which tests go red |
-/// | --- | --- |
-/// | the plain `OpenOptions` this replaces | the link at the temp path, AND the swapped-in directory |
-/// | `O_NOFOLLOW` but no walk | the swapped-in directory |
-/// | the walk but no `O_NOFOLLOW` | neither — the walk answers first |
-///
-/// So the leaf test is held by the pair and by nothing else, and
-/// `the_write_asks_about_the_state_directory_again_at_the_moment_of_the_create` is what the
-/// walk alone is on the hook for.
-///
-/// It is also the right open on its own terms, for the reason `create_no_link` states: this
-/// name carries a pid and a tag, so anything already at it is debris from a killed process,
-/// and `create_new` would turn that debris into a permanent refusal to record consent —
-/// charter would ask about the same profile, every launch, for ever.
-///
-/// The mode goes on the DESCRIPTOR rather than through `OpenOptions::mode`, which applies
-/// only when the call creates the inode: reusing such a leftover would otherwise keep
-/// whatever mode it had. `plane::write_private` sets it the same way, for the same reason.
-/// The truncate happens at the open, before any byte is written, so there is no moment in
-/// which content sits at a mode the finished file is not.
-pub(crate) fn write_through(
-    root: &Path,
-    target: &Path,
-    temp: &Path,
-    bytes: &[u8],
-) -> io::Result<()> {
-    let mut out = crate::contain::create_no_link(root, temp)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // Best-effort, as every `chmod` in this crate is: a filesystem that cannot hold a
-        // mode is not a reason to refuse to record what the operator approved.
-        let _ = out.set_permissions(std::fs::Permissions::from_mode(0o600));
-    }
-    // `rename` is not gated and does not need to be: it replaces a NAME, so a link sitting at
-    // the record's own path is replaced rather than written through.
-    let result =
-        std::io::Write::write_all(&mut out, bytes).and_then(|()| std::fs::rename(temp, target));
-    if result.is_err() {
-        let _ = std::fs::remove_file(temp);
-    }
-    result
 }
 
 /// Why a profile is being asked about before its command runs.
@@ -362,88 +267,38 @@ mod tests {
         dir
     }
 
-    /// The temp path [`write_private`] would choose, named so a test can plant a link at it.
-    fn temp_beside(root: &Path) -> PathBuf {
-        path(root).with_extension("json.writing")
+    fn print() -> Fingerprint {
+        Fingerprint {
+            kind: "claude".into(),
+            command: vec!["claude".into()],
+            env: BTreeMap::new(),
+        }
     }
 
-    /// charter-app#113. The record's own path was gated and the bytes went somewhere else.
-    ///
-    /// The link is planted at the TEMP path, which is the path the write actually opens, and
-    /// [`write_through`] is called directly because that is the only way to name it. A test
-    /// that plants one at the record's path passes against the ungated version this replaces:
-    /// the write ends in a `rename`, which replaces a name rather than following it — see
-    /// `a_link_at_the_record_itself_is_replaced_rather_than_written_through` below, which
-    /// pins exactly that and is therefore no evidence about this.
+    /// A link planted AT the record is refused, never followed: consent to run a command
+    /// lands in the record or nowhere. (The gates on the temp file and on a swapped-in state
+    /// directory are `rewrite`'s, and tested there.)
     #[test]
-    fn the_bytes_land_on_a_path_that_is_gated_and_not_beside_one() {
-        let plane = plane();
-        let captured = plane.path().join("captured.json");
-        let temp = temp_beside(plane.path());
-        std::os::unix::fs::symlink(&captured, &temp).unwrap();
-
-        let refused = write_through(plane.path(), &path(plane.path()), &temp, b"{}");
-
-        assert!(refused.is_err(), "the temp path was written through");
-        assert!(
-            !captured.exists(),
-            "consent to run a command was written through a link, outside the record"
-        );
-    }
-
-    /// The walk, and not `O_NOFOLLOW`, is what answers about a directory ABOVE the temp file.
-    ///
-    /// [`private_dir`] refuses a linked `.charter` a moment earlier; this is the only thing
-    /// between a directory swapped in AFTER that answer and the bytes, and `O_NOFOLLOW`
-    /// cannot hold it — the flag answers about the last component, and a directory above it
-    /// is not one.
-    #[test]
-    fn the_write_asks_about_the_state_directory_again_at_the_moment_of_the_create() {
-        let plane = tempfile::tempdir().unwrap();
-        let elsewhere = plane.path().join("elsewhere");
-        std::fs::create_dir_all(&elsewhere).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, plane.path().join(".charter")).unwrap();
-
-        let refused = write_through(
-            plane.path(),
-            &path(plane.path()),
-            &temp_beside(plane.path()),
-            b"{}",
-        );
-
-        assert!(refused.is_err(), "a swapped-in state directory was written");
-        assert!(
-            !elsewhere.join(RECORD).exists(),
-            "the record landed outside the plane's own state directory"
-        );
-    }
-
-    /// The claim the `rename` makes, written down so the test above cannot be mistaken for it.
-    #[test]
-    fn a_link_at_the_record_itself_is_replaced_rather_than_written_through() {
+    fn a_link_at_the_record_itself_is_refused_and_not_written_through() {
         let plane = plane();
         let captured = plane.path().join("captured.json");
         std::os::unix::fs::symlink(&captured, path(plane.path())).unwrap();
 
-        write_private(plane.path(), &path(plane.path()), b"{}").expect("the record is written");
+        let refused = record_launched(plane.path(), "work", &print());
 
+        assert!(refused.is_err(), "a linked record was replaced or followed");
         assert!(
             !captured.exists(),
             "the record was written through the link"
         );
-        assert_eq!(std::fs::read(path(plane.path())).unwrap(), b"{}");
     }
 
-    /// The mode the record ends at, which is the reason the temp file is opened at all.
-    ///
-    /// A rename carries the SOURCE's mode onto the target, so this is a statement about the
-    /// temp file — and it is asserted of the finished record because that is what an operator
-    /// can look at.
+    /// The mode the record ends at: it holds what the operator approved.
     #[test]
     fn the_record_is_private_to_the_operator() {
         let plane = plane();
 
-        write_private(plane.path(), &path(plane.path()), b"{}").expect("the record is written");
+        record_launched(plane.path(), "work", &print()).expect("it records");
 
         let mode = std::fs::metadata(path(plane.path()))
             .unwrap()
@@ -454,22 +309,6 @@ mod tests {
             0o600,
             "the record is readable by somebody else"
         );
-    }
-
-    /// Debris from a killed process is written through, not treated as a permanent refusal.
-    ///
-    /// `create_new` would fail here, and charter would then ask about every profile on every
-    /// launch until somebody deleted a file they have no reason to know about — which is why
-    /// [`crate::contain::create_no_link`] truncates rather than insisting it creates.
-    #[test]
-    fn a_temp_file_left_by_a_killed_process_does_not_stop_the_next_write() {
-        let plane = plane();
-        let temp = temp_beside(plane.path());
-        std::fs::write(&temp, b"half a record from a process that died").unwrap();
-
-        write_through(plane.path(), &path(plane.path()), &temp, b"{}").expect("it is written");
-
-        assert_eq!(std::fs::read(path(plane.path())).unwrap(), b"{}");
     }
 
     /// End to end: what [`record_launched`] wrote is what [`last_launched`] reads back.

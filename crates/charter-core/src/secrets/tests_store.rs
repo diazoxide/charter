@@ -870,9 +870,10 @@ fn a_null_in_the_local_half_leaves_the_shared_field_as_it_was() {
     assert_eq!(v.provider, "plain-file");
 }
 
-/// #356: a reference vault's file is `0600` from the instant it exists. The mode is settled
-/// on the descriptor before a byte of content lands — never chmodded after the write — and
-/// that holds for a file that is new and for one left at `0644` by something else.
+/// #356: a reference vault's file is `0600` from the instant it exists. Since #429 the bytes
+/// go to a temp file beside it and are renamed over it, so the file that is ever opened for
+/// writing is that temp — created 0600, seen at the open before any chmod could run — and a
+/// vault left at `0644` by something else is never opened for writing at all.
 #[cfg(unix)]
 #[test]
 fn a_reference_vault_is_0600_before_any_content_reaches_it() {
@@ -882,7 +883,7 @@ fn a_reference_vault_is_0600_before_any_content_reaches_it() {
     let p = tmp.path().join("refs.json");
     let seen: std::rc::Rc<std::cell::RefCell<Vec<(u32, u64)>>> = Default::default();
     let log = seen.clone();
-    let _watch = plain_file::watch::set(move |file| {
+    let _watch = crate::rewrite::hook::watch_created(move |file| {
         let meta = file.metadata().unwrap();
         log.borrow_mut()
             .push((meta.permissions().mode() & 0o777, meta.len()));
@@ -890,13 +891,96 @@ fn a_reference_vault_is_0600_before_any_content_reaches_it() {
 
     reference::set(&ctx, &v, "A", "op://Eng/item/field").unwrap();
     chmod(&p, 0o644);
-    let before = std::fs::metadata(&p).unwrap().len();
     reference::set(&ctx, &v, "B", "op://Eng/item/other").unwrap();
 
-    // The new file was CREATED 0600 — seen at the open, before any chmod could run. The
-    // loose one is seen as it was, holding only its old content: nothing new has reached it
-    // until its mode is settled.
-    assert_eq!(*seen.borrow(), [(0o600, 0), (0o644, before)]);
+    assert_eq!(*seen.borrow(), [(0o600, 0), (0o600, 0)]);
     assert_eq!(mode_of(&p), 0o600);
     assert_eq!(reference::keys(&ctx, &v).unwrap(), ["A", "B"]);
+}
+
+/// #429: a vault is replaced whole. A write that dies between the complete temp file and the
+/// rename — where a crash lands — leaves the old vault whole and no temp beside it. Written in
+/// place, the same crash left the vault truncated: every secret in it gone.
+#[test]
+fn a_vault_write_that_dies_before_its_rename_leaves_the_old_vault_whole() {
+    for provider in ["plain-file", "reference"] {
+        let (tmp, _bin, ctx) = reference_plane(&[]);
+        let v = vault("app", provider, json!({"file": "vault/app.json"}));
+        let set = |key: &str| match provider {
+            "plain-file" => plain_file::set(&ctx, &v, key, "value", day("2026-09-01")),
+            _ => reference::set(&ctx, &v, key, "op://Eng/item/field"),
+        };
+        set("A").unwrap();
+        let p = tmp.path().join("vault/app.json");
+        let before = std::fs::read_to_string(&p).unwrap();
+        let _hook = crate::rewrite::hook::set(|target, temp| {
+            assert!(std::fs::read_to_string(temp).unwrap().contains("\"B\""));
+            assert!(!std::fs::read_to_string(target).unwrap().contains("\"B\""));
+            Err(std::io::Error::other("killed"))
+        });
+
+        let err = set("B").unwrap_err();
+
+        assert!(err.to_string().contains("killed"), "{provider}: {err}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), before, "{provider}");
+        let left: Vec<String> = std::fs::read_dir(p.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "{provider}: {left:?}");
+    }
+}
+
+/// #429: a vault path that is a symlink is refused, with a message that says so, and the file
+/// it points at is untouched. Before, the secrets were written through the link to wherever
+/// it pointed.
+#[cfg(unix)]
+#[test]
+fn a_vault_that_is_a_symlink_is_refused_and_what_it_points_at_is_untouched() {
+    for provider in ["plain-file", "reference"] {
+        let (tmp, _bin, ctx) = reference_plane(&[]);
+        let elsewhere = tempfile::tempdir().unwrap();
+        let target = elsewhere.path().join("real.json");
+        std::fs::write(&target, "{}\n").unwrap();
+        let p = tmp.path().join("app.json");
+        std::os::unix::fs::symlink(&target, &p).unwrap();
+        let v = vault("app", provider, json!({"file": "app.json"}));
+
+        let err = match provider {
+            "plain-file" => plain_file::set(&ctx, &v, "K", "value", day("2026-09-01")),
+            _ => reference::set(&ctx, &v, "K", "op://Eng/item/field"),
+        }
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("is a symlink"),
+            "{provider}: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "{}\n",
+            "{provider}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&p).unwrap().is_symlink(),
+            "{provider}: the link itself was replaced"
+        );
+    }
+}
+
+/// #429: the replaced vault, and its sidecar, are 0600 — a new one and one left looser.
+#[cfg(unix)]
+#[test]
+fn a_replaced_vault_and_its_sidecar_are_0600() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = vault("app", "plain-file", json!({"file": "app.json"}));
+    let p = tmp.path().join("app.json");
+    plain_file::set(&ctx, &v, "A", "1", day("2026-09-01")).unwrap();
+    chmod(&p, 0o644);
+    chmod(&tmp.path().join("app.meta.json"), 0o644);
+    plain_file::set(&ctx, &v, "B", "2", day("2026-09-02")).unwrap();
+    assert_eq!(mode_of(&p), 0o600);
+    assert_eq!(mode_of(&tmp.path().join("app.meta.json")), 0o600);
 }

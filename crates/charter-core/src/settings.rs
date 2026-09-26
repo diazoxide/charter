@@ -611,7 +611,12 @@ pub fn save(root: &Path, which: Which, base: Option<&str>, text: &str) -> Result
 fn write(root: &Path, which: Which, text: &str) -> std::io::Result<()> {
     // A new file is 0600: nobody else on this machine has any business reading this plane's
     // settings, and the Local file is this user's by definition. An existing one keeps its mode.
-    crate::rewrite::replace(root, &which.path(root), text.as_bytes(), Some(0o600))
+    crate::rewrite::replace(
+        root,
+        &which.path(root),
+        text.as_bytes(),
+        crate::rewrite::Mode::KeptOrPrivate,
+    )
 }
 
 #[cfg(test)]
