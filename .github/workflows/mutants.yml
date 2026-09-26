@@ -46,6 +46,10 @@ name: mutants
 #    (`the_recorded_plane_root_cases_answer_what_the_python_answered`, 1,912 recorded cases
 #    that each ask git). One mutant in five survived that night, so survivors were half of
 #    every shard's time. 120 mutants at 97 s is ~3 h 15 m, and leaves room for a worse night.
+#    That one test was then cut to about a quarter of its time (#464): its git probes repeat
+#    across rows (5,641 operand probes over 230 distinct ones, 3,413 target probes over 188,
+#    1,912 default-branch probes over 6 roots), and each distinct one is now asked once. 25 s
+#    to 6 s on a 14-core laptop; `PER_SHARD` is left where it is until a night measures it.
 # 2. **The baseline is checked ONCE.** With a per-shard baseline, 24 shards is 24 rolls of
 #    the same flaky dice: three separate deadline-bound tests were caught failing an
 #    unmutated charter-core while this was being written. One job asks the question, every
