@@ -1,12 +1,12 @@
 # How charter updates itself, and the steps only the operator can take
 
 charter-app updates itself with Tauri's updater, from GitHub Releases, on one of two channels.
-The reasons are ADR 0042. This page is the part a person has to do by hand: generate
-one keypair, store two secrets, create one release. Until they are done, nothing is published
+The reasons are ADR 0042. This page is the part a person has to do by hand: create one
+environment, generate one keypair, store two secrets, create one release. Until they are done, nothing is published
 and the app offers no updates. Every error the release workflow prints points back to one of
 these steps.
 
-**Steps 1, 2 and 4 are required. Step 3 is not** — it buys a smoother first install and costs
+**Steps 0, 1, 2 and 4 are required. Step 3 is not** — it buys a smoother first install and costs
 an Apple Developer account. Without it macOS builds are ad-hoc signed, which publishes fine and
 updates fine (ADR 0042 §3, amended 2026-09-23).
 
@@ -30,6 +30,34 @@ writes the same records just before it does, and the installer starts it again. 
 a mid-turn chat there first, and none of the Windows path has been run: nothing is ported to
 Windows yet.
 
+## 0. The `release` environment: where the secrets live
+
+The signing secrets are **environment** secrets, not repository secrets. The release workflow's
+`plan`, `build` and `publish` jobs run in an environment called `release` whenever they publish,
+and the environment's deployment policy decides which refs may reach them:
+
+| Policy entry | Type | Admits |
+|---|---|---|
+| `main` | branch | the dev channel: `release.yml` runs from `workflow_run`, which GitHub runs on the default branch |
+| `v*` | tag | the stable channel: the operator's `v*` tag |
+
+A job on any other ref is refused before it starts, so a pull request or a pushed branch never
+sees a key. An on-demand `workflow_dispatch` build takes no environment at all: it publishes
+nowhere and comes out unsigned for the updater.
+
+```sh
+gh api -X PUT repos/diazoxide/charter/environments/release \
+  -F 'deployment_branch_policy[protected_branches]=false' \
+  -F 'deployment_branch_policy[custom_branch_policies]=true'
+gh api -X POST repos/diazoxide/charter/environments/release/deployment-branch-policies \
+  -f name=main -f type=branch
+gh api -X POST repos/diazoxide/charter/environments/release/deployment-branch-policies \
+  -f name='v*' -f type=tag
+```
+
+A required reviewer is optional. It asks for an approval on every run that publishes, the dev
+build after each merge to `main` included.
+
 ## 1. The updater keypair (minisign): mandatory
 
 This is the key the app checks every update against before it installs anything. Without it
@@ -41,8 +69,8 @@ npx tauri signer generate -w ~/.tauri/charter-updater.key
 #   (on a machine where npx hangs: node node_modules/@tauri-apps/cli/tauri.js signer generate -w ~/.tauri/charter-updater.key)
 #   Give it a password when asked.
 
-gh secret set TAURI_SIGNING_PRIVATE_KEY          --repo diazoxide/charter < ~/.tauri/charter-updater.key
-gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo diazoxide/charter   # prompts; paste the password
+gh secret set TAURI_SIGNING_PRIVATE_KEY          --repo diazoxide/charter --env release < ~/.tauri/charter-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo diazoxide/charter --env release   # prompts; paste the password
 ```
 
 **Put the private key and its password in your password manager as well.** Every installed
@@ -89,9 +117,9 @@ certificate silently signs with something nobody chose.
 ```sh
 security find-identity -v -p codesigning    # copy the "Developer ID Application: … (TEAMID)" line
 
-base64 -i charter-devid.p12 | gh secret set APPLE_CERTIFICATE --repo diazoxide/charter
-gh secret set APPLE_CERTIFICATE_PASSWORD --repo diazoxide/charter                     # the .p12 password
-gh secret set APPLE_SIGNING_IDENTITY --repo diazoxide/charter \
+base64 -i charter-devid.p12 | gh secret set APPLE_CERTIFICATE --repo diazoxide/charter --env release
+gh secret set APPLE_CERTIFICATE_PASSWORD --repo diazoxide/charter --env release       # the .p12 password
+gh secret set APPLE_SIGNING_IDENTITY --repo diazoxide/charter --env release \
   --body "Developer ID Application: Your Name (TEAMID)"
 ```
 

@@ -14,7 +14,9 @@ name: release
 #   `ci` green on `main`   -> the DEV channel: the bundles and `dev.json` replace the assets of
 #                             the one prerelease named `dev`.
 #   `workflow_dispatch`    -> a build of any branch, uploaded as run artifacts and published
-#                             NOWHERE. The operator asking for something to try.
+#                             NOWHERE. The operator asking for something to try. It runs
+#                             outside the `release` environment, so it holds no signing key
+#                             and its bundles are unsigned for the updater.
 #
 # **Nothing here creates, moves or deletes a tag.** The stable release is created with
 # `--verify-tag`, which refuses unless the tag the operator pushed is already on the remote;
@@ -81,6 +83,15 @@ jobs:
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_repository.full_name == github.repository
       )
+    # **The signing secrets live in the `release` environment, not the repository** (#344).
+    # Its deployment policy admits `main` (a `workflow_run` job runs on the default branch)
+    # and `v*` tags, so a job on any other ref gets no secret at all. `plan` only asks whether
+    # they are SET, but it has to ask inside the environment to get a true answer. An
+    # on-demand `workflow_dispatch` build publishes nowhere, so it takes no environment and no
+    # key, whatever branch it builds, and comes out unsigned (see `This build's config`).
+    # `x && 'release' || ''` and never `x && '' || 'release'`: an empty string is falsy, so
+    # the second form is `release` every time.
+    environment: ${{ github.event_name != 'workflow_dispatch' && 'release' || '' }}
     outputs:
       channel: ${{ steps.plan.outputs.channel }}
       publish: ${{ steps.plan.outputs.publish }}
@@ -249,6 +260,9 @@ jobs:
     name: ${{ matrix.name }}
     needs: plan
     if: needs.plan.outputs.skip != 'true'
+    # The job that reads the signing keys, so it runs in the `release` environment whenever
+    # it builds something that is published — and only then (see `plan`).
+    environment: ${{ needs.plan.outputs.publish == 'true' && 'release' || '' }}
     strategy:
       # Neither platform's bundle is worth losing because the other one broke.
       fail-fast: false
@@ -343,9 +357,10 @@ jobs:
       # `requireSignedVersion` and `release-manifest` both check.
       #
       # One exception, and it is the ONLY way this workflow ever builds without updater
-      # artifacts: a `workflow_dispatch` build on a repository with no signing key yet. It
-      # publishes nothing, its summary says it is unsigned, and `release-manifest` never sees
-      # it. A publish with no key never gets here — `plan` refused it.
+      # artifacts: a `workflow_dispatch` build. It runs outside the `release` environment, so
+      # it never has the signing key. It publishes nothing, its summary says it is unsigned,
+      # and `release-manifest` never sees it. A publish with no key never gets here — `plan`
+      # refused it.
       - name: This build's config
         env:
           SIGNED: ${{ needs.plan.outputs.signed }}
@@ -770,6 +785,9 @@ jobs:
     needs: [plan, build]
     if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-24.04
+    # It holds no signing key, but it is what a release IS, so it runs under the same
+    # environment's rules: `main` and `v*` tags only, and a required reviewer if one is set.
+    environment: release
     # The only job that can write to the repository, and what it writes is release assets.
     permissions:
       contents: write
