@@ -62,7 +62,7 @@ fn install_wires_both_harnesses_to_this_charter_and_a_second_run_changes_nothing
     assert!(text.contains("claude:\n"), "{text}");
     assert!(text.contains("codex:\n"), "{text}");
     assert!(
-        text.contains("done    enable charter@charter-app"),
+        text.contains("done     enable charter@charter-app"),
         "{text}"
     );
 
@@ -99,7 +99,7 @@ fn a_dry_run_writes_nothing_and_uninstall_takes_it_all_back() {
     let m = Machine::new();
     let dry = m.charter(&["plugin", "install", "--dry-run"]);
     assert_eq!(dry.status.code(), Some(0));
-    assert!(said(&dry).contains("would   enable charter@charter-app"));
+    assert!(said(&dry).contains("would    enable charter@charter-app"));
     assert!(!m.root.join("home/.claude/settings.json").exists());
     assert!(!m.root.join("home/.codex/config.toml").exists());
     assert!(!m.root.join("config/charter/plugin").exists());

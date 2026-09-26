@@ -96,7 +96,7 @@ fn a_dry_run_says_what_it_would_change_and_writes_nothing() {
     let out = run(&m, Verb::Install, &[], true);
     let said = render(&out, true);
     assert!(
-        said.contains(&format!("would   enable {INSTALLED_AS}")),
+        said.contains(&format!("would    enable {INSTALLED_AS}")),
         "{said}"
     );
     assert!(
@@ -274,4 +274,82 @@ fn a_bundle_that_is_not_charters_plugin_is_refused() {
     let out = run(&m, Verb::Install, &["claude".to_owned()], false);
     assert!(failed(&out));
     assert!(!m.claude_config.join("settings.json").exists());
+}
+
+#[test]
+fn codex_hooks_written_inline_are_read_and_kept() {
+    let (_d, m) = machine();
+    let config = m.codex_home.join("config.toml");
+    std::fs::write(
+        &config,
+        "hooks = { PreToolUse = [{ matcher = \"Bash\", hooks = [{ type = \"command\", command = \"mine\" }] }] }\n",
+    )
+    .unwrap();
+    let out = run(&m, Verb::Install, &["codex".to_owned()], false);
+    assert!(!failed(&out), "{}", render(&out, false));
+    let doc: toml::Table = toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    let groups = doc["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0]["hooks"][0]["command"].as_str(), Some("mine"));
+    let out = run(&m, Verb::Uninstall, &["codex".to_owned()], false);
+    assert!(!failed(&out), "{}", render(&out, false));
+    let doc: toml::Table = toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(doc["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+
+    std::fs::write(&config, "hooks = {}\n").unwrap();
+    let out = run(&m, Verb::Install, &["codex".to_owned()], false);
+    assert!(!failed(&out), "{}", render(&out, false));
+    assert!(
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("hook pretooluse")
+    );
+}
+
+#[test]
+fn a_settings_file_that_is_a_link_stays_a_link_and_keeps_its_non_ascii() {
+    let (d, m) = machine();
+    let real = d.path().join("dotfiles-claude.json");
+    std::fs::write(
+        &real,
+        "{\n  \"statusLine\": {\"command\": \"echo \u{2192}\"}\n}\n",
+    )
+    .unwrap();
+    let link = m.claude_config.join("settings.json");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let out = run(&m, Verb::Install, &["claude".to_owned()], false);
+    assert!(!failed(&out), "{}", render(&out, false));
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let text = std::fs::read_to_string(&real).unwrap();
+    assert!(text.contains("echo \u{2192}"), "{text}");
+    assert!(text.contains(INSTALLED_AS), "{text}");
+}
+
+#[test]
+fn a_write_that_fails_is_reported_as_not_done() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, m) = machine();
+    std::fs::set_permissions(&m.claude_config, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if std::fs::write(m.claude_config.join("probe"), "").is_ok() {
+        // Root writes through a mode of 500, and the question does not arise.
+        return;
+    }
+    let out = run(&m, Verb::Install, &["claude".to_owned()], false);
+    std::fs::set_permissions(&m.claude_config, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let said = render(&out, false);
+    assert!(failed(&out));
+    assert!(
+        said.contains("done     a copy of charter's plugin"),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!("not done enable {INSTALLED_AS}")),
+        "{said}"
+    );
+    assert!(said.contains("FAILED: "), "{said}");
 }

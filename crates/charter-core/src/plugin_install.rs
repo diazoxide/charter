@@ -49,9 +49,18 @@
 //!
 //! # The retired plugin
 //!
-//! Nothing here ever enables `charter@charter`. Where the file this command writes anyway
-//! enables it, the same write turns it off and says so: two plugins named `charter` load one of
-//! them, and which one is not something a guard should be left to.
+//! Nothing here ever enables `charter@charter`. Where a file this command writes anyway
+//! enables it, the same write turns it off and says so. That does not reach a plane whose own
+//! `.claude/settings.json` turns it on: measured on 2.1.283, a project `true` beats the user
+//! `false`, and both plugins named `charter` then load, with both sets of hooks. The plane's
+//! file is the operator's, so `charter doctor` names it rather than this command rewriting it.
+//!
+//! # Uninstall
+//!
+//! Takes back what install writes: the two user-settings keys, Claude Code's own record of the
+//! marketplace, the copy, and every Codex guard group in the shape install writes — whichever
+//! `charter` it names, since install replaces those too rather than adding a second. A Codex
+//! trust record for the hook stays in Codex's `[hooks.state]`; it names a hook that is gone.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -155,6 +164,8 @@ pub struct Step {
     pub what: String,
     /// `false` when it is already so, and nothing will be written for it.
     pub needed: bool,
+    /// Which of the plan's writes makes it so, once one is queued.
+    by: Option<usize>,
 }
 
 /// A file's new content, or its removal — what applying a plan writes.
@@ -180,7 +191,19 @@ impl Plan {
             path: path.to_path_buf(),
             what: what.into(),
             needed,
+            by: None,
         });
+    }
+
+    /// Queue `write` as what makes every needed step from `from` on so.
+    fn settle(&mut self, from: usize, write: Write) {
+        let at = self.writes.len();
+        for step in self.steps.iter_mut().skip(from) {
+            if step.needed && step.by.is_none() {
+                step.by = Some(at);
+            }
+        }
+        self.writes.push(write);
     }
 
     /// Whether anything would be written.
@@ -227,6 +250,8 @@ pub struct Outcome {
     pub skipped: Option<String>,
     /// Why applying the plan failed part-way, when it did.
     pub failed: Option<String>,
+    /// How many of the plan's writes were made before it stopped.
+    applied: usize,
 }
 
 /// Plan — and unless `dry_run`, apply — `verb` for each of `named`, or for every harness
@@ -261,6 +286,7 @@ pub fn run(m: &Machine, verb: Verb, named: &[String], dry_run: bool) -> Vec<Outc
                     }
                 )),
                 failed: None,
+                applied: 0,
             });
             continue;
         }
@@ -268,15 +294,16 @@ pub fn run(m: &Machine, verb: Verb, named: &[String], dry_run: bool) -> Vec<Outc
             Verb::Install => a.install(m),
             Verb::Uninstall => a.uninstall(m),
         };
-        let failed = match (&plan, dry_run) {
-            (Ok(plan), false) => apply(plan).err(),
-            _ => None,
+        let (applied, failed) = match (&plan, dry_run) {
+            (Ok(plan), false) => apply(plan),
+            _ => (0, None),
         };
         out.push(Outcome {
             harness: a.harness(),
             plan,
             skipped: None,
             failed,
+            applied,
         });
     }
     out
@@ -298,10 +325,11 @@ pub fn render(outcomes: &[Outcome], dry_run: bool) -> String {
                     let verb = match (s.needed, dry_run) {
                         (false, _) => "already",
                         (true, true) => "would",
-                        (true, false) => "done",
+                        (true, false) if s.by.is_some_and(|by| by < o.applied) => "done",
+                        (true, false) => "not done",
                     };
                     text.push_str(&format!(
-                        "  {verb:<7} {} \u{2014} {}\n",
+                        "  {verb:<8} {} \u{2014} {}\n",
                         s.what,
                         crate::shown::one_line(&s.path.display().to_string(), 1024)
                     ));
@@ -330,24 +358,35 @@ pub fn failed(outcomes: &[Outcome]) -> bool {
         .any(|o| o.plan.is_err() || o.failed.is_some())
 }
 
-fn apply(plan: &Plan) -> Result<(), String> {
-    for w in &plan.writes {
-        match w {
+/// Make the plan's writes in order, stopping at the first that fails: how many were made,
+/// and why the next one was not.
+fn apply(plan: &Plan) -> (usize, Option<String>) {
+    for (done, w) in plan.writes.iter().enumerate() {
+        let made = match w {
             Write::File(path, bytes) => write_file(path, bytes),
             Write::Tree(path, files) => write_tree(path, files),
-            Write::RemoveTree(path) => match std::fs::remove_dir_all(path) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-                _ => Ok(()),
-            },
+            Write::RemoveTree(path) => {
+                crate::fence::hold(
+                    crate::fence::Act::HarnessConfig,
+                    path.parent().unwrap_or(path),
+                );
+                match std::fs::remove_dir_all(path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                    _ => Ok(()),
+                }
+            }
+        };
+        if let Err(e) = made {
+            return (
+                done,
+                Some(format!(
+                    "{} could not be written: {e}",
+                    crate::shown::one_line(&path_of(w).display().to_string(), 1024)
+                )),
+            );
         }
-        .map_err(|e| {
-            format!(
-                "{} could not be written: {e}",
-                crate::shown::one_line(&path_of(w).display().to_string(), 1024)
-            )
-        })?;
     }
-    Ok(())
+    (plan.writes.len(), None)
 }
 
 fn path_of(w: &Write) -> &Path {
@@ -358,7 +397,17 @@ fn path_of(w: &Write) -> &Path {
 
 /// Write `bytes` to `path` in one step: a temporary file beside it, synced, then renamed over
 /// it, keeping the mode the old file had. A reader sees the old file or the new one.
+///
+/// A file that is a symbolic link — a dotfiles manager's — is written through: the file it
+/// points at is replaced, and the link stays a link.
 fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let linked = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    let target = if linked {
+        path.canonicalize()?
+    } else {
+        path.to_path_buf()
+    };
+    let path = target.as_path();
     let dir = path.parent().unwrap_or(Path::new("."));
     crate::fence::hold(crate::fence::Act::HarnessConfig, dir);
     std::fs::create_dir_all(dir)?;
@@ -373,7 +422,9 @@ fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Replace the directory `path` with exactly `files`: built beside it, then swapped in.
+/// Replace the directory `path` with exactly `files`: built beside it, then moved into place
+/// with two renames, so a harness starting meanwhile finds the old copy or the new one for all
+/// but the instant between them. A staging directory that fails is removed.
 fn write_tree(path: &Path, files: &BTreeMap<PathBuf, Vec<u8>>) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     crate::fence::hold(crate::fence::Act::HarnessConfig, parent);
@@ -388,12 +439,23 @@ fn write_tree(path: &Path, files: &BTreeMap<PathBuf, Vec<u8>>) -> std::io::Resul
         }
         std::fs::write(&to, bytes)?;
     }
-    match std::fs::remove_dir_all(path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-        _ => {}
+    let old = tempfile::Builder::new()
+        .prefix(".plugin-old-")
+        .tempdir_in(parent)?;
+    let aside = old.path().join("plugin");
+    let had = match std::fs::rename(path, &aside) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    if let Err(e) = std::fs::rename(staged.path(), path) {
+        if had {
+            let _ = std::fs::rename(&aside, path);
+        }
+        return Err(e);
     }
-    let staged = staged.keep();
-    std::fs::rename(&staged, path)
+    // `staged` now names nothing, and `old` takes the previous copy with it when dropped.
+    Ok(())
 }
 
 /// Every regular file under `dir`, by path relative to it. `None` when `dir` is not there.
@@ -406,8 +468,9 @@ fn read_tree(dir: &Path) -> std::io::Result<Option<BTreeMap<PathBuf, Vec<u8>>>> 
     while let Some(at) = stack.pop() {
         for entry in std::fs::read_dir(&at)? {
             let entry = entry?;
-            let kind = entry.file_type()?;
             let path = entry.path();
+            // Followed, as Claude Code follows it: a linked skill is part of the plugin.
+            let kind = std::fs::metadata(&path)?.file_type();
             if kind.is_dir() {
                 stack.push(path);
             } else if kind.is_file() {
@@ -508,16 +571,22 @@ fn json_object(path: &Path) -> Result<(Map<String, Value>, String), String> {
     }
 }
 
-/// `map`, in the layout `raw` was written in (two spaces for a new file), ending in a newline.
+/// `map`, indented the way `raw` was (two spaces for a new file), non-ASCII kept as itself the
+/// way Claude Code writes it, ending in a newline.
 fn render_json(map: Map<String, Value>, raw: &str) -> Vec<u8> {
-    let (indent, item, key) = if raw.trim().is_empty() {
-        (Some("  ".to_owned()), ",".to_owned(), ": ".to_owned())
-    } else {
-        crate::pyjson::json_style(raw)
-    };
-    let mut text = crate::pyjson::dumps(&Value::Object(map), indent.as_deref(), &item, &key);
-    text.push('\n');
-    text.into_bytes()
+    use serde::Serialize as _;
+    let indent = crate::pyjson::json_style(raw)
+        .0
+        .filter(|pad| !pad.is_empty())
+        .unwrap_or_else(|| "  ".to_owned());
+    let mut out = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes());
+    let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
+    Value::Object(map)
+        .serialize(&mut ser)
+        .expect("a JSON value serialises");
+    out.push(b'\n');
+    out
 }
 
 /// The object at `map[key]`, created when absent — or why it cannot be.
@@ -559,8 +628,9 @@ impl Adapter for ClaudeCode {
             !fresh,
         );
         if !fresh {
-            plan.writes.push(Write::Tree(dir.clone(), want));
+            plan.settle(0, Write::Tree(dir.clone(), want));
         }
+        let from = plan.steps.len();
 
         let path = Self::settings(m);
         let (mut map, raw) = json_object(&path)?;
@@ -591,8 +661,8 @@ impl Adapter for ClaudeCode {
                 true,
             );
         }
-        if plan.steps.iter().skip(1).any(|s| s.needed) {
-            plan.writes.push(Write::File(path, render_json(map, &raw)));
+        if plan.steps[from..].iter().any(|s| s.needed) {
+            plan.settle(from, Write::File(path, render_json(map, &raw)));
         }
         plan.notes.push(
             "a `claude` started from now on loads it; one already running does not. A chat the \
@@ -627,7 +697,7 @@ impl Adapter for ClaudeCode {
             plan.step(&path, what, had);
         }
         if changed {
-            plan.writes.push(Write::File(path, render_json(map, &raw)));
+            plan.settle(0, Write::File(path, render_json(map, &raw)));
         }
         // Claude Code records a marketplace it has seen in its own list; only that entry goes.
         let known = m.claude_config.join("plugins/known_marketplaces.json");
@@ -639,13 +709,13 @@ impl Adapter for ClaudeCode {
                 format!("drop Claude Code's record of `{MARKETPLACE}`"),
                 true,
             );
-            plan.writes.push(Write::File(known, render_json(map, &raw)));
+            plan.settle(0, Write::File(known, render_json(map, &raw)));
         }
         let dir = plugin_dir(m);
         let there = dir.exists();
         plan.step(&dir, "remove charter's copy of its plugin", there);
         if there {
-            plan.writes.push(Write::RemoveTree(dir));
+            plan.settle(0, Write::RemoveTree(dir));
         }
         Ok(plan)
     }
@@ -658,6 +728,30 @@ impl Adapter for ClaudeCode {
 /// Codex: charter's Bash guard as one hook group in the user `config.toml`.
 pub struct Codex;
 
+/// An inline table as a table, and an array of inline tables (or an empty array) as an array
+/// of tables — what `toml_edit` keeps private as `make_item`. Anything else is left as it is.
+fn spell_out(item: &mut toml_edit::Item) {
+    let taken = std::mem::take(item);
+    let taken = match taken.into_table() {
+        Ok(t) => toml_edit::Item::Table(t),
+        Err(i) => i,
+    };
+    *item = match taken {
+        toml_edit::Item::Value(toml_edit::Value::Array(a)) if a.is_empty() => {
+            toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new())
+        }
+        other => match other.into_array_of_tables() {
+            Ok(a) => toml_edit::Item::ArrayOfTables(a),
+            Err(i) => i,
+        },
+    };
+}
+
+/// The guard's timeout, in seconds: the registry's, as every other arming of it uses.
+fn guard_timeout() -> u32 {
+    crate::hookreg::find("pretooluse").map_or(10, |h| h.timeout)
+}
+
 /// The guard's group, as this binary writes it.
 fn codex_guard(binary: &Path) -> toml_edit::ArrayOfTables {
     let mut hook = toml_edit::Table::new();
@@ -666,7 +760,7 @@ fn codex_guard(binary: &Path) -> toml_edit::ArrayOfTables {
         "command",
         toml_edit::value(crate::plugin::command_at(binary, "pretooluse")),
     );
-    hook.insert("timeout", toml_edit::value(10));
+    hook.insert("timeout", toml_edit::value(i64::from(guard_timeout())));
     let mut hooks = toml_edit::ArrayOfTables::new();
     hooks.push(hook);
     let mut group = toml_edit::Table::new();
@@ -740,6 +834,9 @@ impl Codex {
             t.set_implicit(true);
             doc.insert("hooks", toml_edit::Item::Table(t));
         }
+        // Codex reads the inline spellings too — `hooks = { PreToolUse = [ … ] }` — and
+        // `toml_edit` edits them only as tables, so an inline one is spelled out first.
+        spell_out(&mut doc["hooks"]);
         let hooks = doc["hooks"]
             .as_table_like_mut()
             .ok_or_else(|| bad("hooks"))?;
@@ -752,11 +849,17 @@ impl Codex {
                 toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()),
             );
         }
-        hooks
-            .get_mut("PreToolUse")
-            .and_then(toml_edit::Item::as_array_of_tables_mut)
-            .map(Some)
-            .ok_or_else(|| bad("hooks.PreToolUse"))
+        let groups = hooks.get_mut("PreToolUse").expect("present");
+        spell_out(groups);
+        let groups = groups
+            .as_array_of_tables_mut()
+            .ok_or_else(|| bad("hooks.PreToolUse"))?;
+        for group in groups.iter_mut() {
+            if let Some(inner) = group.get_mut("hooks") {
+                spell_out(inner);
+            }
+        }
+        Ok(Some(groups))
     }
 }
 
@@ -788,7 +891,8 @@ impl Adapter for Codex {
                     .is_some_and(|h| {
                         h.get("command").and_then(toml_edit::Item::as_str) == Some(&command)
                             && h.get("type").and_then(toml_edit::Item::as_str) == Some("command")
-                            && h.get("timeout").and_then(toml_edit::Item::as_integer) == Some(10)
+                            && h.get("timeout").and_then(toml_edit::Item::as_integer)
+                                == Some(i64::from(guard_timeout()))
                     })
             });
         if !current {

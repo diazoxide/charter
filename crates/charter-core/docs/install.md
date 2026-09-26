@@ -99,7 +99,7 @@ still loads the app's own copy instead. For Codex it adds only charter's Bash gu
 `~/.codex/config.toml`, because the app already gives its own Codex chats the rest and Codex
 would run both. Codex asks you to trust that hook the next time it starts. It never enables
 the retired `charter@charter` plugin, and turns it off in the files it writes.
-`charter plugin uninstall` takes back exactly what it wrote. `--harness claude|codex` limits
+`charter plugin uninstall` takes back what it wrote. `--harness claude|codex` limits
 either one to one harness.
 
 `charter doctor --fix` is refused in this version, and `charter doctor` reports without

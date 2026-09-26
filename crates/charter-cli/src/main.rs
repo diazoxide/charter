@@ -2185,7 +2185,13 @@ fn plugin(verb: &PluginCommand) -> ExitCode {
         }
     };
     let bundle = match from {
-        Some(dir) => dir.canonicalize().ok(),
+        Some(dir) => match dir.canonicalize() {
+            Ok(dir) => Some(dir),
+            Err(e) => {
+                eprintln!("charter: --plugin-from {}: {e}", dir.display());
+                return ExitCode::FAILURE;
+            }
+        },
         None => install::bundle_beside(&binary),
     };
     let machine = match Machine::from_env(binary, bundle) {
