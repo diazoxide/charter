@@ -254,6 +254,9 @@ struct Watching {
     columns: u16,
     rows: u16,
     scrollback: u32,
+    /// What Shift+Enter sends: the newline of the harness the session runs
+    /// (`Harness::newline`), or none for a shell, which keeps the terminal's own Enter.
+    newline: Option<String>,
 }
 
 /// When this process started, as close to it as the app can see.
@@ -1217,7 +1220,10 @@ fn watch_session(
     session: u32,
     output: Channel<String>,
 ) -> Result<Watching, String> {
-    let watching = planes.held(&plane)?.chats().sessions().watch(
+    let held = planes.held(&plane)?;
+    let chats = held.chats();
+    let newline = chats.harness(session).map(|h| h.newline().to_owned());
+    let watching = chats.sessions().watch(
         session,
         // A view whose window has gone is closed by the pane that owned it; until then, text
         // it cannot take is dropped rather than held, and the session keeps running.
@@ -1230,6 +1236,7 @@ fn watch_session(
         columns: watching.size.columns,
         rows: watching.size.rows,
         scrollback: sessions::SCROLLBACK,
+        newline,
     })
 }
 

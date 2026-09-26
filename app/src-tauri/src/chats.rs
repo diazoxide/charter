@@ -498,6 +498,13 @@ impl Chats {
         ))
     }
 
+    /// The harness `session` was started as, or none for a shell or a chat charter does not
+    /// have open — the same one [`Self::open_now`] answers, never one inferred from the
+    /// program's name.
+    pub fn harness(&self, session: u32) -> Option<Harness> {
+        lock(&self.open).get(&session)?.harness
+    }
+
     /// The handoff `session` was opened by, where one opened it.
     pub fn handed_from(&self, session: u32) -> Option<charter_core::reopen::HandedFrom> {
         lock(&self.open).get(&session)?.chat.from.clone()
@@ -1345,6 +1352,28 @@ mod tests {
         assert_eq!(record.chats[0].name, "ide.7");
         assert_eq!(chats.open_now()[0].session, session);
         assert_eq!(chats.open_now()[0].harness, Some(Harness::ClaudeCode));
+    }
+
+    #[test]
+    fn a_chats_harness_is_answered_by_its_session_number_and_a_shells_is_none() {
+        // What a pane asks as it opens its view (SI-4): Shift+Enter is the harness's newline,
+        // and a shell keeps the terminal's own Enter.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let claude = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .expect("the chat starts");
+        let shell = chats
+            .start(&chat("/bin/sh", "a shell", None), SIZE)
+            .expect("the shell starts");
+
+        assert_eq!(chats.harness(claude), Some(Harness::ClaudeCode));
+        assert_eq!(chats.harness(shell), None);
+        assert_eq!(
+            chats.harness(claude + shell + 1),
+            None,
+            "a chat that is not open"
+        );
     }
 
     #[test]

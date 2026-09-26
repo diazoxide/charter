@@ -145,6 +145,11 @@ export const TOKENS = [
   "terminal.cursor",
   "terminal.cursor-accent",
   "terminal.selection",
+  // What a find in a pane draws under every match, and under the one it is on (SI-4). Drawn
+  // as the cells' background, beneath the terminal's own text, so both are held to the
+  // foreground's contrast floor.
+  "terminal.find-match",
+  "terminal.find-match-active",
   "terminal.ansi.black",
   "terminal.ansi.red",
   "terminal.ansi.green",
@@ -459,6 +464,41 @@ export function xtermTheme(theme: Theme): Record<string, string> {
   const object: Record<string, string> = {};
   for (const [token, key] of XTERM) object[key] = theme.values[token];
   return object;
+}
+
+/** What `@xterm/addon-search` is told to draw its matches in. Its own shape, and its own
+ *  required keys: the overview-ruler colours are required even with no ruler on screen. */
+export type SearchDecorations = {
+  matchBackground: string;
+  matchOverviewRuler: string;
+  activeMatchBackground: string;
+  activeMatchColorOverviewRuler: string;
+};
+
+/**
+ * A theme value as `#rrggbb`: the one form the search addon takes for a match's background.
+ * A short value is spelled long, and an alpha is dropped — a match is a cell's background, so
+ * it is drawn opaque whatever was written.
+ */
+function sixDigits(value: string): string {
+  const digits = value.slice(1);
+  const long = digits.length <= 4 ? [...digits].map((d) => d + d).join("") : digits;
+  return `#${long.slice(0, 6)}`;
+}
+
+/**
+ * The theme as the search addon's decorations — a third consumer of the same file, so a
+ * match in a pane is coloured where every other colour is (SI-4).
+ */
+export function searchDecorations(theme: Theme): SearchDecorations {
+  const match = sixDigits(theme.values["terminal.find-match"]);
+  const active = sixDigits(theme.values["terminal.find-match-active"]);
+  return {
+    matchBackground: match,
+    matchOverviewRuler: match,
+    activeMatchBackground: active,
+    activeMatchColorOverviewRuler: active,
+  };
 }
 
 /**

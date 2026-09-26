@@ -747,3 +747,16 @@ real xterm sends `^_` for a plain `Ctrl+-` too; xterm.js does not, and it is the
 every pane.) They are a capture listener on the window, like the palette's, and not menu
 accelerators: which size a key changes depends on where the keystroke landed, which only the
 page knows. Preferences… is on the menu, on `⌘,` and `Ctrl+,`; xterm sends nothing for either.
+
+**Find in a pane is `⌘F` on a Mac and `Ctrl+Shift+F` elsewhere, and takes nothing either** (SI-4,
+`SessionPane.opensFind`). xterm.js 6.0.0 sends nothing for `⌘F`. It would send `\x06` for
+`Ctrl+F` — readline's forward-char — so off a Mac the chord adds `Shift`, as GNOME Terminal and
+Konsole do for their own find, and a Mac's `Ctrl+F` stays the shell's as well. It is caught by the
+pane's own terminal (`attachCustomKeyEventHandler`) rather than on the window, because find is
+over the pane that has the keyboard and nowhere else. Neither the palette (`⌘K`, `F2`) nor the
+native menu claims `F`: the macOS menu is charter's, Edit's predefined items and nothing else.
+
+**Shift+Enter in a harness's pane is the harness's newline** (SI-4, `Harness::newline`). A
+terminal has no Shift+Enter: xterm.js 6.0.0 sends a bare CR for it, the byte Enter sends, so every
+harness submitted on it. The pane sends the harness's own newline instead — ESC CR for all three,
+measured — and a shell's pane, which runs no harness, keeps xterm's Enter.
