@@ -2,6 +2,7 @@ import { realpathSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { anEmptyRecord, copyFixturePlane } from "../harness.js";
+import { closeProject } from "../opening.js";
 
 /**
  * A project tab split into an OS window of its own, and moved back (charter#126; ADR 0033,
@@ -15,7 +16,11 @@ import { anEmptyRecord, copyFixturePlane } from "../harness.js";
  * **Every row is pressed from the palette**, in whichever window it is about: each window has
  * its own palette and its own `F2`, which is one of the three things #126 named.
  *
- * **It leaves the app as it found it**: back in the main window, with its own project closed.
+ * **It leaves the app as it found it**: back in the main window, with its own project closed —
+ * through the window, not behind its back. One app process serves the whole run, and a project
+ * let go of by `close_plane` alone stays drawn, in front, as a project the core no longer holds:
+ * the next spec (`workspace-explorer.e2e.ts`) then found an empty workspace strip and no clones,
+ * on `main` on both platforms, whenever an earlier test here had left `splitme` in front.
  */
 
 const PROJECTS = '[role="tablist"][aria-label="Projects"]';
@@ -64,8 +69,19 @@ async function stripHas(path: string, has: boolean): Promise<void> {
   });
 }
 
-/** Runs one palette row by its title, in the window the driver is in. */
-async function fromThePalette(title: string): Promise<void> {
+/** What the driver says when the window it sent a command to is gone before it answered. */
+const WINDOW_GONE = /No window could be found|Channel closed/;
+
+/**
+ * Runs one palette row by its title, in the window the driver is in.
+ *
+ * `closesThisWindow` is for a row whose whole effect is that this window goes. The `Enter` that
+ * presses it is a WebDriver action, answered by the window it was sent to — and when the row
+ * works, that window can be gone before it answers (`Channel closed`, then `No window could be
+ * found` on the driver's own retry), which read as a failure of the very move that succeeded.
+ * So for such a row only that answer is let go of, and the caller asserts the window went.
+ */
+async function fromThePalette(title: string, closesThisWindow = false): Promise<void> {
   await browser.keys(["F2"]);
   await $(PALETTE).waitForDisplayed({ timeout: 20_000 });
   const box = await $("#palette-query");
@@ -85,7 +101,11 @@ async function fromThePalette(title: string): Promise<void> {
       ),
     { timeout: 10_000, timeoutMsg: `the palette never listed "${title}"` },
   );
-  await browser.keys(["Enter"]);
+  const pressed = browser.keys(["Enter"]);
+  if (!closesThisWindow) return pressed;
+  await pressed.catch((e: unknown) => {
+    if (!WINDOW_GONE.test(String(e))) throw e;
+  });
 }
 
 /** Waits for the window labelled `label` to exist, or to be gone. */
@@ -131,8 +151,26 @@ describe("a project tab in a window of its own", function () {
   });
 
   after(async () => {
+    // A test that failed half way can leave the project in a split window: that window's own
+    // close request hands it back, as the last test proves.
+    for (const label of (await browser.getWindowHandles()).filter((one) => one !== MAIN)) {
+      await browser.switchToWindow(label);
+      await browser
+        .execute(() => {
+          void window.__TAURI__.window.getCurrentWindow().close();
+        })
+        .catch(() => undefined);
+      await windowThere(label, false);
+    }
     await browser.switchToWindow(MAIN);
-    await ask("close_plane", { plane: split }).catch(() => undefined);
+    // Let go of through the window, by its tab's ×, so the window stops drawing it too.
+    const closer = `${PROJECTS} button[aria-label="Close project splitme"]`;
+    if (await $(closer).isExisting()) await closeProject(closer);
+    await browser.waitUntil(async () => !(await ask<string[]>("open_planes")).includes(split), {
+      timeout: 20_000,
+      timeoutMsg: "the splitme project was not let go of",
+    });
+    await stripHas(split, false);
   });
 
   it("moves into a new window, which draws it, and leaves the main window", async () => {
@@ -153,7 +191,7 @@ describe("a project tab in a window of its own", function () {
     const label = await theSplitWindow();
     await browser.switchToWindow(label);
 
-    await fromThePalette("Move project splitme to the main window");
+    await fromThePalette("Move project splitme to the main window", true);
 
     await windowThere(label, false);
     await browser.switchToWindow(MAIN);
@@ -161,6 +199,7 @@ describe("a project tab in a window of its own", function () {
   });
 
   it("comes back to the main window when its window is closed, with nothing ended", async () => {
+    await browser.switchToWindow(MAIN);
     await fromThePalette("Move project splitme to a new window");
     const label = await theSplitWindow();
     await browser.switchToWindow(label);
