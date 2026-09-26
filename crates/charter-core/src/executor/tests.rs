@@ -384,6 +384,36 @@ fn a_program_that_never_answers_is_refused_as_too_late_never_as_a_lost_connectio
 }
 
 #[test]
+fn a_program_that_never_answers_is_said_to_have_left_its_question_unread_only_when_it_did() {
+    let short = || Executor::default().with_deadline(Duration::from_secs(1));
+    let rig = Rig::new();
+    rig.approved("#!/bin/sh\nexec sleep 60\n");
+
+    // A question the socket holds whole is written, whether or not the program reads it.
+    let refused = rig.ask(&short()).expect_err("an answer from nothing");
+    assert!(
+        refused.contains("It was asked one question. It printed"),
+        "{refused}"
+    );
+
+    // One larger than the socket holds is written only as far as the program reads it.
+    let refused = short()
+        .ask(
+            &rig.config(),
+            &project::Choices::default(),
+            "probe",
+            "stats",
+            None,
+            |_| serde_json::Value::String("x".repeat(4 << 20)),
+        )
+        .expect_err("an answer from nothing");
+    assert!(
+        refused.contains("It was asked one question, and it never finished reading it."),
+        "{refused}"
+    );
+}
+
+#[test]
 fn every_executor_charter_makes_gives_its_programs_the_real_deadline() {
     // **The real [`DEADLINE`], held to account without a program racing it** (#422). This used
     // to be the one test that ran a program against the real five seconds, and on a machine too
@@ -1695,4 +1725,692 @@ fn an_action_this_extension_does_not_declare_starts_nothing() {
         "{refused}"
     );
     assert!(!marker.exists(), "the program was started");
+}
+
+// -------------------------------------------------------------------------------------
+// ...when it is run as a command, told an event, or asked for a briefing? (charter-app#342,
+// charter-app#343) And what does the watch on the plane see? (charter-app#341)
+// -------------------------------------------------------------------------------------
+
+/// A protocol-2 extension that does everything a program can be asked: a view, two actions
+/// that ask first, a write path, an event, a briefing section and two commands, one that says
+/// it writes and one that says it only reads.
+const TALKING_MANIFEST: &str = r#"{"version":2,"id":"probe","name":"Probe",
+    "capabilities":["actions","writes","events","briefing","cli"],
+    "contributes":{"runs":"bin/run",
+                   "views":[{"id":"stats","title":"Probe statistics","about":"personas"}],
+                   "actions":[{"id":"careful","title":"Careful","confirm":true},
+                              {"id":"forget","title":"Forget","confirm":false,"deletes":true}],
+                   "writes":["notes/"],
+                   "events":{"hears":["plane-saved"]},
+                   "briefing":{"title":"Probe"},
+                   "cli":[{"name":"look","title":"Look","writes":false},
+                          {"name":"stamp","title":"Stamp","writes":true}]}}"#;
+
+impl Rig {
+    fn talking(&self, script: &str) -> &Self {
+        self.write(TALKING_MANIFEST, script);
+        let found = extension::install(&self.config(), &extension::BuiltIn::none(), &self.at())
+            .expect("installed");
+        extension::approve(&self.config(), found.id(), &found.path, &found.fingerprint)
+            .expect("approved");
+        self
+    }
+
+    /// A plane that is a git repository, as a plane is, made on first use.
+    fn plane(&self) -> PathBuf {
+        let plane = self.dir.path().join("plane");
+        if !plane.exists() {
+            std::fs::create_dir_all(&plane).expect("the plane");
+            crate::testgit::run(&plane, &["init", "-q", "."]);
+        }
+        plane
+    }
+
+    fn command_in(
+        &self,
+        executor: &Executor,
+        project: &project::Choices,
+        name: &str,
+    ) -> Result<Ran, String> {
+        executor.command(&self.config(), project, "probe", name, &[])
+    }
+
+    fn command(&self, executor: &Executor) -> Result<Ran, String> {
+        self.command_in(executor, &project::Choices::default(), "look")
+    }
+
+    fn tell(
+        &self,
+        executor: &Executor,
+        event: &extension::events::Event,
+    ) -> Result<Option<String>, String> {
+        executor.tell(&self.config(), &project::Choices::default(), "probe", event)
+    }
+}
+
+/// Ask `ask` until the program got far enough to be judged on what it did rather than on how
+/// long macOS took to assess a program file it had not seen (see
+/// [`a_program_that_never_answers_is_stopped_at_the_deadline`]): an attempt refused as not
+/// having finished at all is asked again.
+fn once_started(ask: impl Fn() -> Result<Ran, String>) -> Result<Ran, String> {
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        let said = ask();
+        match &said {
+            Err(why) if why.contains("did not finish within") && tries < 10 => {}
+            _ => return said,
+        }
+    }
+}
+
+#[test]
+fn a_command_s_output_and_exit_status_are_passed_back_as_the_program_wrote_them() {
+    let rig = Rig::new();
+    rig.talking("#!/bin/sh\nprintf 'out\\n'\nprintf 'err\\n' >&2\nexit 7\n");
+
+    let ran = rig.command(&patient()).expect("it ran");
+
+    assert_eq!(ran.stdout, b"out\n");
+    assert_eq!(ran.stderr, b"err\n");
+    assert_eq!(ran.status, 7);
+}
+
+#[test]
+fn a_command_that_exits_without_reading_its_question_still_has_its_output_passed_back() {
+    // It sleeps first, so the whole question is sitting unread in its socket when it exits —
+    // which on Linux makes charter's read answer `ECONNRESET` after the output, rather than
+    // the end of it. The program ending that way is still the program ending.
+    let rig = Rig::new();
+    rig.talking("#!/bin/sh\nsleep 0.3\nprintf 'out\\n'\n");
+
+    let ran = rig.command(&patient()).expect("it ran");
+
+    assert_eq!(ran.stdout, b"out\n");
+    assert_eq!(ran.status, 0);
+}
+
+#[test]
+fn a_command_that_closes_its_output_before_it_exits_is_waited_for_and_its_status_kept() {
+    let rig = Rig::new();
+    rig.talking("#!/bin/sh\nprintf 'out\\n'\nexec >&- <&-\nsleep 0.3\nexit 4\n");
+
+    let ran = rig.command(&patient()).expect("it ran");
+
+    assert_eq!(ran.stdout, b"out\n");
+    assert_eq!(ran.status, 4);
+}
+
+#[test]
+fn a_command_that_closes_its_output_and_never_exits_passes_nothing_on() {
+    let rig = Rig::new();
+    rig.talking("#!/bin/sh\nprintf 'out\\n'\nexec >&- <&-\nexec sleep 60\n");
+
+    let refused =
+        once_started(|| rig.command(&Executor::default().with_deadline(Duration::from_secs(1))))
+            .expect_err("a command that never exited was passed on");
+
+    assert!(
+        refused.contains("closed its output and did not exit within 1 seconds"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_command_that_never_finishes_is_refused_as_too_late_never_as_a_lost_connection() {
+    let rig = Rig::new();
+    rig.talking("#!/bin/sh\nexec sleep 60\n");
+
+    let refused = rig
+        .command(&Executor::default().with_deadline(Duration::from_secs(1)))
+        .expect_err("an answer from nothing");
+
+    assert!(
+        refused.starts_with("'probe' did not finish within 1 seconds, so charter stopped it"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_command_s_output_of_exactly_the_most_charter_passes_on_is_passed_and_one_byte_more_is_not() {
+    let printing = |bytes: usize| format!("#!/bin/sh\nhead -c {bytes} /dev/zero | tr '\\0' x\n");
+    let rig = Rig::new();
+    rig.talking(&printing(MOST_ANSWER_BYTES));
+    let ran = rig.command(&patient()).expect("exactly the most");
+    assert_eq!(ran.stdout.len(), MOST_ANSWER_BYTES);
+
+    let rig = Rig::new();
+    rig.talking(&printing(MOST_ANSWER_BYTES + 1));
+    let refused = rig
+        .command(&patient())
+        .expect_err("one byte more was passed on");
+    assert!(
+        refused.contains("printed more than 512 KiB, so charter stopped it"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_command_s_stderr_of_exactly_the_most_charter_passes_on_is_passed_and_one_byte_more_is_not() {
+    let printing =
+        |bytes: usize| format!("#!/bin/sh\nhead -c {bytes} /dev/zero | tr '\\0' e >&2\n");
+    let rig = Rig::new();
+    rig.talking(&printing(MOST_ANSWER_BYTES));
+    let ran = rig.command(&patient()).expect("exactly the most");
+    assert_eq!(ran.stderr.len(), MOST_ANSWER_BYTES);
+
+    let rig = Rig::new();
+    rig.talking(&printing(MOST_ANSWER_BYTES + 1));
+    let refused = rig
+        .command(&patient())
+        .expect_err("one byte more was passed on");
+    assert!(
+        refused.contains("printed more than 512 KiB on stderr"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_command_whose_stderr_something_it_started_still_holds_passes_nothing_on() {
+    // The helper leaves the group, so charter's kill does not reach it, and keeps the
+    // program's stderr open past the deadline: what was read of it is not all of it. The
+    // program exits only once the helper has left, or the kill could land first.
+    let rig = Rig::new();
+    let escaped = rig.marker("escaped");
+    rig.talking(&format!(
+        "#!/bin/sh\nperl -e 'setpgrp(0,0); open(F,\">{0}\"); print F $$; close F; sleep 30' \
+         >/dev/null </dev/null &\nwhile [ ! -s '{0}' ]; do sleep 0.01; done\nprintf 'out\\n'\n",
+        escaped.display()
+    ));
+
+    let said =
+        once_started(|| rig.command(&Executor::default().with_deadline(Duration::from_secs(1))));
+
+    if let Some(pid) = alive_from(&escaped)
+        && let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
+    {
+        let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
+    }
+    let refused = said.expect_err("a stderr still open was passed on as the whole of it");
+    assert!(
+        refused.contains("its stderr did not end within 1 seconds"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_command_s_stderr_is_read_to_its_end_after_the_stop_while_its_deadline_allows() {
+    use std::io::Write;
+    let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().expect("a pair");
+    // Stopped already, and well inside the deadline: the end comes after the moment a view's
+    // quoted tail would have been cut off ([`STDERR_AFTER_STOP`]), and is still waited for.
+    let stop = std::sync::atomic::AtomicBool::new(true);
+    let late = std::thread::spawn(move || {
+        std::thread::sleep(STDERR_AFTER_STOP * 3);
+        theirs.write_all(b"late words").expect("written");
+    });
+
+    let drained = drain(&ours, &stop, 1 << 10, Some(Instant::now() + PATIENT));
+
+    late.join().expect("the writer");
+    assert!(drained.ended, "the drain stopped before the end");
+    assert_eq!(drained.kept, b"late words");
+    assert!(!drained.overflowed);
+}
+
+#[test]
+fn a_read_that_fails_is_a_lost_connection_never_a_late_or_whole_answer() {
+    // What charter reads from is a socket; a descriptor that is not one fails every read with
+    // an error that is none of the ones a program ending or running long produces.
+    let dir = tempfile::tempdir().expect("a directory");
+    let not_a_socket = std::os::fd::OwnedFd::from(std::fs::File::open(dir.path()).expect("open"));
+    let ours = std::os::unix::net::UnixStream::from(not_a_socket);
+
+    let heard = listen_to_the_end(&ours, Instant::now() + PATIENT);
+
+    assert!(matches!(heard, Heard::Broken(_)), "not a lost connection");
+}
+
+#[test]
+fn a_command_that_says_it_only_reads_is_held_to_no_path_and_one_that_writes_to_its_own() {
+    let rig = Rig::new();
+    let plane = rig.plane();
+    let asked = rig.marker("asked");
+    rig.talking(&format!(
+        "#!/bin/sh\ncat > '{}'\nmkdir -p '{1}/notes'\necho $$ > '{1}/notes/n'\n",
+        asked.display(),
+        plane.display()
+    ));
+    let here = project::Choices::read(&plane);
+
+    let looked = rig.command_in(&patient(), &here, "look").expect("it ran");
+    let told: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&asked).expect("the question"))
+            .expect("JSON");
+    assert_eq!(told["writes"], serde_json::json!([]));
+    let said = looked
+        .overreach
+        .expect("a write by a command that only reads went unreported");
+    assert!(said.contains("notes/n"), "{said}");
+
+    let stamped = rig.command_in(&patient(), &here, "stamp").expect("it ran");
+    let told: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&asked).expect("the question"))
+            .expect("JSON");
+    assert_eq!(
+        told["writes"],
+        serde_json::json!(extension::writes::resolve(&plane, &["notes/".to_owned()]))
+    );
+    assert_eq!(
+        stamped.overreach, None,
+        "a write inside its own paths was reported"
+    );
+}
+
+#[test]
+fn a_protocol_1_program_asked_in_a_plane_is_told_nothing_about_where_it_may_write() {
+    let rig = Rig::new();
+    let plane = rig.plane();
+    let asked = rig.marker("asked");
+    rig.approved(&format!(
+        "#!/bin/sh\ncat > '{}'\nprintf '%s\\n' '{ANSWER}'\n",
+        asked.display()
+    ));
+
+    patient()
+        .ask(
+            &rig.config(),
+            &project::Choices::read(&plane),
+            "probe",
+            "stats",
+            None,
+            |_| serde_json::Value::Null,
+        )
+        .expect("an answer");
+
+    let told: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&asked).expect("the question"))
+            .expect("JSON");
+    assert_eq!(told.get("writes"), None, "{told}");
+}
+
+#[test]
+fn a_command_the_extension_does_not_declare_starts_nothing_and_names_the_ones_it_has() {
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.talking(&marking(&marker));
+
+    let refused = rig
+        .command_in(&patient(), &project::Choices::default(), "rm-rf")
+        .expect_err("an undeclared command ran");
+
+    assert_eq!(
+        refused,
+        "'probe' has no command called 'rm-rf'. It has: look, stamp."
+    );
+    assert!(!marker.exists(), "the program was started");
+}
+
+#[test]
+fn an_action_that_asks_first_is_run_only_with_a_yes_and_says_why_it_asks() {
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.talking(&format!(
+        "#!/bin/sh\ntouch '{}'\nread line\nprintf '%s\\n' '{{\"charter\":2}}'\n",
+        marker.display()
+    ));
+    let act = |action: &str, confirmed: bool| {
+        patient().act(
+            &rig.config(),
+            &project::Choices::default(),
+            "probe",
+            action,
+            On::default(),
+            confirmed,
+            |_| serde_json::Value::Null,
+        )
+    };
+
+    let refused = act("careful", false).expect_err("run without a yes");
+    assert_eq!(
+        refused,
+        "'probe''s action “Careful” was not run: its extension asks charter to ask you first, \
+         and nobody said yes."
+    );
+    let refused = act("forget", false).expect_err("a delete run without a yes");
+    assert_eq!(
+        refused,
+        "'probe''s action “Forget” was not run: it deletes, and charter asks before every \
+         action that deletes, and nobody said yes."
+    );
+    assert!(!marker.exists(), "the program was started");
+
+    act("careful", true).expect("run with a yes");
+    assert!(marker.exists(), "the program was not started");
+}
+
+#[test]
+fn an_event_it_hears_is_told_and_nothing_is_reported_when_nothing_changed() {
+    let rig = Rig::new();
+    let asked = rig.marker("asked");
+    rig.talking(&format!(
+        "#!/bin/sh\ncat > '{}'\nprintf '%s\\n' '{{\"charter\":2}}'\n",
+        asked.display()
+    ));
+
+    let told = rig.tell(&patient(), &extension::events::Event::PlaneSaved);
+
+    assert_eq!(told, Ok(None));
+    let asked: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&asked).expect("the question"))
+            .expect("JSON");
+    assert_eq!(asked["event"], "plane-saved");
+}
+
+#[test]
+fn an_event_it_does_not_hear_is_refused_and_starts_nothing() {
+    let rig = Rig::new();
+    let marker = rig.marker("ran");
+    rig.talking(&marking(&marker));
+
+    let refused = rig
+        .tell(
+            &patient(),
+            &extension::events::Event::WorkspaceFocused {
+                workspace: "ide".into(),
+            },
+        )
+        .expect_err("told an event it does not hear");
+
+    assert_eq!(
+        refused,
+        "'probe' does not hear a workspace being focused, so charter does not tell it"
+    );
+    assert!(!marker.exists(), "the program was started");
+}
+
+#[test]
+fn an_event_s_answer_is_that_it_heard_or_an_error_and_nothing_else() {
+    let told = |line: &str| {
+        let rig = Rig::new();
+        rig.talking(&answering_with(line));
+        rig.tell(&patient(), &extension::events::Event::PlaneSaved)
+    };
+
+    let refused = told(r#"{"charter":2,"error":"no disk"}"#).expect_err("an error heard as done");
+    assert!(
+        refused.contains("answered that it could not: no disk"),
+        "{refused}"
+    );
+
+    let refused = told(r#"{"charter":2,"blocks":[]}"#).expect_err("blocks from an event");
+    assert!(
+        refused.contains(
+            "answered \"blocks\", which is not part of charter's protocol 2 — this answer is \
+             'charter', and 'error'"
+        ),
+        "{refused}"
+    );
+
+    let refused = told(r#"{"charter":1}"#).expect_err("an answer in another protocol");
+    assert!(
+        refused.contains("answered in protocol 1, and charter asked it in protocol 2"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn an_event_s_program_that_writes_outside_its_paths_is_reported() {
+    let rig = Rig::new();
+    let plane = rig.plane();
+    rig.talking(&format!(
+        "#!/bin/sh\nread line\necho $$ > '{}/stray'\nprintf '%s\\n' '{{\"charter\":2}}'\n",
+        plane.display()
+    ));
+
+    let told = patient()
+        .tell(
+            &rig.config(),
+            &project::Choices::read(&plane),
+            "probe",
+            &extension::events::Event::PlaneSaved,
+        )
+        .expect("it heard");
+
+    let said = told.expect("a write outside notes/ went unreported");
+    assert!(said.starts_with("While 'probe' was answering"), "{said}");
+    assert!(said.contains(": stray."), "{said}");
+}
+
+#[test]
+fn an_event_waits_for_the_question_in_flight_rather_than_being_refused() {
+    let rig = Rig::new();
+    let pid = rig.marker("pid");
+    let go = rig.marker("go");
+    rig.talking(&format!(
+        "#!/bin/sh\nread line\ncase \"$line\" in\n*'\"event\"'*) printf '%s\\n' '{{\"charter\":2}}' ;;\n\
+         *) echo $$ > '{}'\nwhile [ ! -e '{}' ]; do sleep 0.01; done\n\
+         printf '%s\\n' '{{\"charter\":2,\"blocks\":[]}}' ;;\nesac\n",
+        pid.display(),
+        go.display()
+    ));
+    let executor = patient();
+
+    std::thread::scope(|scope| {
+        let asking = scope.spawn(|| rig.ask(&executor));
+        wait_for(&pid);
+        let telling = scope.spawn(|| rig.tell(&executor, &extension::events::Event::PlaneSaved));
+        // Long enough for the event to be waiting on the slot; a charter that refused it
+        // would have done so by now.
+        std::thread::sleep(Duration::from_millis(200));
+        std::fs::write(&go, "").expect("go");
+
+        asking
+            .join()
+            .expect("the asking thread")
+            .expect("the view's answer");
+        assert_eq!(
+            telling.join().expect("the telling thread"),
+            Ok(None),
+            "the event was refused rather than waiting its turn"
+        );
+    });
+}
+
+#[test]
+fn a_briefing_section_comes_back_as_the_program_wrote_it() {
+    let rig = Rig::new();
+    rig.talking(&answering_with(r#"{"charter":2,"section":"two open PRs"}"#));
+
+    let section = patient().brief(
+        &rig.config(),
+        &project::Choices::default(),
+        "probe",
+        serde_json::json!({ "workspace": "ide" }),
+    );
+
+    assert_eq!(section, Ok("two open PRs".to_owned()));
+}
+
+#[test]
+fn how_it_runs_names_only_the_moments_this_extension_is_started_at() {
+    let rig = Rig::new();
+    rig.write(
+        r#"{"version":2,"id":"probe","name":"Probe","capabilities":["cli"],
+            "contributes":{"runs":"bin/run",
+                           "views":[{"id":"stats","title":"Probe statistics","about":"personas"}],
+                           "cli":[{"name":"look","title":"Look","writes":false}]}}"#,
+        "#!/bin/sh\n",
+    );
+    let manifest = extension::manifest_at(&rig.at()).expect("a manifest");
+
+    assert_eq!(
+        how_it_runs(&manifest),
+        format!(
+            "charter starts it when you open one of this extension's views, and when you or a \
+             chat run one of its commands (`charter probe <command>`) — never at launch and \
+             never on a timer. Each time it is asked one question, given at most {} seconds to \
+             answer, and then stopped along with anything it started. A program set on \
+             outliving that can, because it runs as you do.",
+            DEADLINE.as_secs()
+        )
+    );
+}
+
+#[test]
+fn an_executor_made_with_the_app_s_built_in_extensions_holds_them() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let built_in = extension::BuiltIn::at(dir.path().to_path_buf());
+
+    let executor = Executor::with_built_in(built_in.clone());
+
+    assert_eq!(executor.built_in(), &built_in);
+}
+
+// ---- the watch on the plane ----------------------------------------------------------
+
+/// A plane that is a git repository, with one file committed in `notes/`.
+fn watched_plane() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a directory");
+    let plane = dir.path();
+    crate::testgit::run(plane, &["init", "-q", "."]);
+    std::fs::create_dir_all(plane.join("notes")).expect("notes");
+    std::fs::write(plane.join("notes/kept.md"), "kept\n").expect("a note");
+    crate::testgit::run(plane, &["add", "-A"]);
+    crate::testgit::run(
+        plane,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-qm",
+            "notes",
+        ],
+    );
+    dir
+}
+
+fn notes() -> Vec<String> {
+    vec!["notes/".to_owned()]
+}
+
+const NOT_PROOF: &str = ". charter does not confine an extension (ADR 0041): this is what \
+     changed while it answered, not proof of who changed it.";
+
+#[test]
+fn a_plane_that_is_not_a_repository_is_not_watched() {
+    let dir = tempfile::tempdir().expect("a directory");
+    assert!(watch::Before::take(dir.path()).is_none());
+
+    let plane = watched_plane();
+    assert!(watch::Before::take(plane.path()).is_some());
+}
+
+#[test]
+fn a_plane_where_nothing_changed_is_reported_as_nothing() {
+    let plane = watched_plane();
+    // Listed by git before and after, and the same on disk both times.
+    std::fs::write(plane.path().join("draft.md"), "draft\n").expect("an untracked file");
+    let before = watch::Before::take(plane.path()).expect("a repository");
+
+    assert_eq!(before.overreach("probe", &notes(), false), None);
+}
+
+#[test]
+fn a_write_outside_the_declared_paths_is_reported_in_charter_s_words() {
+    let plane = watched_plane();
+    let before = watch::Before::take(plane.path()).expect("a repository");
+    std::fs::write(plane.path().join("stray.md"), "stray\n").expect("a stray write");
+    std::fs::write(plane.path().join("notes/new.md"), "new\n").expect("a write inside");
+
+    assert_eq!(
+        before.overreach("probe", &notes(), false),
+        Some(format!(
+            "While 'probe' was answering, charter saw these change outside the plane paths it \
+             declares it writes: stray.md{NOT_PROOF}"
+        ))
+    );
+}
+
+#[test]
+fn a_file_already_changed_that_changes_again_is_seen() {
+    let plane = watched_plane();
+    std::fs::write(plane.path().join("draft.md"), "draft\n").expect("an untracked file");
+    let before = watch::Before::take(plane.path()).expect("a repository");
+    std::fs::write(plane.path().join("draft.md"), "a longer draft\n").expect("rewritten");
+
+    let said = before
+        .overreach("probe", &notes(), false)
+        .expect("unreported");
+    assert!(said.contains(": draft.md."), "{said}");
+}
+
+#[test]
+fn a_delete_inside_the_declared_paths_is_reported_unless_the_action_says_it_deletes() {
+    let deleting = || {
+        let plane = watched_plane();
+        let before = watch::Before::take(plane.path()).expect("a repository");
+        std::fs::remove_file(plane.path().join("notes/kept.md")).expect("deleted");
+        (plane, before)
+    };
+
+    let (_plane, before) = deleting();
+    assert_eq!(
+        before.overreach("probe", &notes(), false),
+        Some(format!(
+            "While 'probe' was answering, charter saw these deleted though it does not say it \
+             deletes: notes/kept.md{NOT_PROOF}"
+        ))
+    );
+
+    let (_plane, before) = deleting();
+    assert_eq!(before.overreach("probe", &notes(), true), None);
+}
+
+#[test]
+fn a_change_inside_the_declared_paths_that_is_not_a_delete_is_not_reported() {
+    let plane = watched_plane();
+    let before = watch::Before::take(plane.path()).expect("a repository");
+    std::fs::write(plane.path().join("notes/kept.md"), "kept, and more\n").expect("rewritten");
+
+    assert_eq!(before.overreach("probe", &notes(), false), None);
+}
+
+#[test]
+fn a_write_outside_and_a_delete_inside_are_both_reported_in_one_sentence() {
+    let plane = watched_plane();
+    let before = watch::Before::take(plane.path()).expect("a repository");
+    std::fs::write(plane.path().join("stray.md"), "stray\n").expect("a stray write");
+    std::fs::remove_file(plane.path().join("notes/kept.md")).expect("deleted");
+
+    assert_eq!(
+        before.overreach("probe", &notes(), false),
+        Some(format!(
+            "While 'probe' was answering, charter saw these change outside the plane paths it \
+             declares it writes: stray.md, and these deleted though it does not say it deletes: \
+             notes/kept.md{NOT_PROOF}"
+        ))
+    );
+}
+
+#[test]
+fn a_report_names_five_paths_and_counts_the_rest() {
+    let plane = watched_plane();
+    let before = watch::Before::take(plane.path()).expect("a repository");
+    for n in 1..=7 {
+        std::fs::write(plane.path().join(format!("stray-{n}.md")), "x").expect("a stray write");
+    }
+
+    let said = before
+        .overreach("probe", &notes(), false)
+        .expect("unreported");
+    assert!(
+        said.contains(
+            ": stray-1.md, stray-2.md, stray-3.md, stray-4.md, stray-5.md and 2 more. charter"
+        ),
+        "{said}"
+    );
 }
