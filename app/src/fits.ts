@@ -79,6 +79,13 @@ export const LEAST = {
 
 export type Least = (typeof LEAST)[keyof typeof LEAST];
 
+/**
+ * The plane root's tab (SI-1): an icon, not a share of the strip. Its width, in pixels at the
+ * default text size, which `PlaneView` takes off the workspace strip's room before the named
+ * workspaces share the rest and hands to the stylesheet as `--root`, so the two agree.
+ */
+export const LEAST_ROOT = 36;
+
 /** The window text size {@link LEAST} was measured at: the root was 13px until #283. */
 export const LEAST_TUNED_AT = 13;
 

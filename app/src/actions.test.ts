@@ -252,15 +252,29 @@ describe("the one list of actions", () => {
     expect(by(offers, "workspace.focus:alpha")?.title).toBe("Focus workspace alpha");
   });
 
-  it("gives the strip for chats outside every workspace words of its own", () => {
+  it("gives the plane root words of its own", () => {
     // Its name is a sentinel that cannot be a directory, so the row cannot be built the way
     // the others are — and `Focus workspace outside/every/workspace` is not a sentence.
-    const offers = catalogue(now({ workspaces: ["alpha", OUTSIDE] }));
+    const offers = catalogue(now({ workspaces: [OUTSIDE, "alpha"] }));
 
-    expect(by(offers, `workspace.focus:${OUTSIDE}`)?.title).toBe(
-      "Focus the chats outside every workspace",
-    );
+    expect(by(offers, `workspace.focus:${OUTSIDE}`)?.title).toBe("Focus the plane root");
     expect(by(offers, `workspace.focus:${OUTSIDE}`)?.name).toBeUndefined();
+  });
+
+  it("starts a chat and a shell at the plane root from its own rows (SI-1)", async () => {
+    const done = doing();
+    const offers = catalogue(now({ workspaces: [OUTSIDE, "alpha"], plane: "/plane" }));
+
+    const chat = by(offers, "root.chat");
+    const shell = by(offers, `shell.new:${OUTSIDE}`);
+    expect(chat?.title).toBe("New chat at the plane root");
+    expect(shell?.title).toBe("New shell at the plane root");
+    if (chat === undefined || shell === undefined) throw new Error("no root rows");
+    await perform(chat, done);
+    await perform(shell, done);
+    expect(done.calls).toEqual(["newChatIn:/plane", `newShell:${OUTSIDE}`]);
+    // With no plane read there is no root to start in.
+    expect(by(catalogue(now({ workspaces: [OUTSIDE] })), "root.chat")?.available).toBe(false);
   });
 
   it("says on the row that ends a chat what ending it costs", () => {
@@ -1078,10 +1092,13 @@ describe("a plain shell tab (SI-5)", () => {
     expect(hands.calls).toEqual(["newShell:beta"]);
   });
 
-  it("offers no shell in the strip of chats outside every workspace, which is no directory", () => {
-    const offers = ids(catalogue(now({ workspaces: ["alpha", OUTSIDE] })));
-
-    expect(offers).not.toContain(`shell.new:${OUTSIDE}`);
+  it("offers the plane root's shell only once there is a plane root to start it in (SI-1)", () => {
+    // The strip of chats outside every workspace became the plane root, whose directory is
+    // the plane's own — so it has a shell row, which cannot run before the plane is read.
+    const unread = catalogue(now({ workspaces: [OUTSIDE, "alpha"] }));
+    expect(by(unread, `shell.new:${OUTSIDE}`)?.available).toBe(false);
+    const read = catalogue(now({ workspaces: [OUTSIDE, "alpha"], plane: "/plane" }));
+    expect(by(read, `shell.new:${OUTSIDE}`)?.available).toBe(true);
   });
 
   it("puts a new shell on a workspace's menu and on the panes' menu, beside a new tab", () => {

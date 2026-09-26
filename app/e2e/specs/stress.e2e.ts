@@ -94,10 +94,19 @@ async function workspaceTabs(): Promise<WebdriverIO.Element[]> {
   return [...(await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements())];
 }
 
+/** What a strip tab is called: its drawn name, or — the plane root's icon tab (SI-1) — its
+ *  accessible one. */
+async function tabName(tab: WebdriverIO.Element): Promise<string> {
+  const drawn = await tab.$(".workspace-name");
+  return (await drawn.isExisting())
+    ? drawn.getText()
+    : ((await tab.getAttribute("aria-label")) ?? "");
+}
+
 /** Focuses a workspace by the name on its strip tab. */
 async function focusWorkspace(name: string): Promise<boolean> {
   for (const tab of await workspaceTabs()) {
-    if ((await tab.$(".workspace-name").getText()) === name) {
+    if ((await tabName(tab)) === name) {
       await tab.click();
       return true;
     }
@@ -131,7 +140,7 @@ async function hiddenTabs(): Promise<number> {
  */
 async function closeEveryTab(): Promise<void> {
   const names: string[] = [];
-  for (const tab of await workspaceTabs()) names.push(await tab.$(".workspace-name").getText());
+  for (const tab of await workspaceTabs()) names.push(await tabName(tab));
   for (const name of names.length > 0 ? names : [""]) {
     if (name !== "" && !(await focusWorkspace(name))) continue;
     // Bounded, so a close that never takes shows up as a failure and not as a hang.

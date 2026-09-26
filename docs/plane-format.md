@@ -1501,6 +1501,22 @@ launched, with no session pointer yet — where the Rust side falls through to
 `.charter/terminals/<tid>.workspace` and below. ADR 0032 records the decision, what an operator
 on a frame-driven plane sees until then, and the one command that closes it.
 
+**Two more differences, both charter-app's own (SI-1, 2026-09-26):**
+
+- **`workspaces/<ws>` itself is in `<ws>`.** Python's `from_path` counts only a path with
+  something under the workspace (the directory itself is "a container and not a tree"), so a
+  session standing in `workspaces/<ws>` fell through to the pointers. The app starts a
+  workspace's chats in exactly that directory and files them under that workspace, so the
+  Rust cwd rung counts it (`active::workspace_of_tree`, which `Plane::workspace_of` now calls).
+  The recorded scenario `workspace-the-workspace-directory-itself-is-in-that-workspace` holds
+  the new answer.
+- **`$CHARTER_PLANE_ROOT_SESSION=1` puts a session in no workspace.** Asked before the ladder:
+  when it is exactly `1` and neither `--workspace` nor a non-blank `$CHARTER_WORKSPACE` names a
+  workspace, a command that needs one refuses with a sentence telling the caller to pass `-w`,
+  `workspace current` prints nothing and fails, `workspace use` and `workspace create --use` are
+  refused, `recall` searches every base but a workspace's, and `status` reports every
+  workspace with none marked. Any other value changes nothing. The ladder itself is unchanged.
+
 ---
 
 ## Personas, memory and the roster
@@ -3737,7 +3753,8 @@ semantics below.
 | `CHARTER_SESSION_ID` | Names `sessions/<sid>.*`, `commit-gate/<sid>`, `ws-edit-nudge/<sid>-…`, the trace bucket, and inside a frame it is the **chat id** that names `frame/<chat>/` and `chat-turns/<chat>` | `charter/session.py:65`, shadowing explained `charter/session.py:46` |
 | `CLAUDE_CODE_SESSION_ID` | Fallback for the above | `charter/session.py:66` |
 | `TERM_SESSION_ID` / `TMUX_PANE` / `STY` / `SSH_TTY` (then `ttyname`) | Name `terminals/<tid>.*` | `charter/session.py:75`–`:79`, `charter/session.py:111` |
-| `CHARTER_WORKSPACE` | Overrides the resolved workspace **without writing anything**; also the `identity` pin read per chat | `charter/workspace.py:550`, `charter/frame/state.py:1616` |
+| `CHARTER_WORKSPACE` | Overrides the resolved workspace **without writing anything**; also the `identity` pin read per chat. **charter-app sets it on every chat it starts in a workspace** (SI-1), and never lets a chat inherit the app's own | `charter/workspace.py:550`, `charter/frame/state.py:1616`; `crates/charter-core/src/start.rs` |
+| `CHARTER_PLANE_ROOT_SESSION` | **charter-app only** (SI-1). `1` on a chat the app started at the plane root: the session is in no workspace (see the workspace resolution order). Any other value is ignored. A variable of its own rather than a value of `CHARTER_WORKSPACE`, so nothing that reads that one as a name ever sees it; set by the app, never inherited, and refused in a profile's `env` like every `CHARTER_` name | `crates/charter-core/src/active.rs` (`PLANE_ROOT_ENV`, `at_plane_root`) |
 | `CHARTER_PERSONA` | Same, for personas | `charter/persona.py:1260` |
 | `CHARTER_HARNESS` | Which harness the registry reports; stored per chat in `frame/<chat>/identity` | `charter/harness/registry.py:46`, `charter/commands_frame.py:3058` |
 | `CHARTER_WORKTREES` | Moves worktrees (not state) | `charter/config.py:82` |

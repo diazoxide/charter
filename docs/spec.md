@@ -269,6 +269,17 @@ how it is cited and nothing here is renumbered.
     already was, on this machine and never committed: projects in the window arrangement of
     decision 25, workspace pins in the same store, chats in the plane's own
     `.charter/app/reopen.json`. **ADR 0039, as amended 2026-09-26.**
+30. **The plane root is the workspace strip's first tab, and a chat knows where it was
+    started.** The root tab is always drawn, drawn as an icon whose tooltip is *"Plane — chats
+    here start at the plane root"*, and it cannot be dragged, pinned, renamed or deleted. Chats
+    and shells started from it start in the plane's own directory. It is not a workspace: it
+    has no charter, memory or todos, and the panels that are a workspace's say so while it is
+    focused. Every chat the app starts is told where it started, in its environment:
+    `$CHARTER_WORKSPACE=<name>` in a workspace, `$CHARTER_PLANE_ROOT_SESSION=1` at the plane
+    root, neither anywhere else — so no chat the app started is asked which workspace it is in.
+    A plane-root chat is in no workspace: `charter` refuses a command that needs one unless it
+    is named with `-w`, `charter workspace use` does not move it, and its briefing lists the
+    plane's workspaces as ones it may manage. Operator's rulings, 2026-09-26 (SI-1).
 
 ### Curation actions — added 2026-09-26
 

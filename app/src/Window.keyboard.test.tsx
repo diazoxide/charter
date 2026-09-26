@@ -194,16 +194,26 @@ describe("a strip is one Tab stop", () => {
   it("the workspace strip: the focused workspace is the stop, and the arrows move", async () => {
     core();
     render(<App />);
-    await waitFor(() => expect(tabsOf("Workspaces")).toHaveLength(2));
-    const [alpha, beta] = tabsOf("Workspaces");
+    // The plane root's tab first (SI-1), then the two workspaces.
+    await waitFor(() => expect(tabsOf("Workspaces")).toHaveLength(3));
+    const [root, alpha, beta] = tabsOf("Workspaces");
     expect(alpha).toHaveAttribute("aria-selected", "true");
-    expect([alpha, beta].map((tab) => tab.getAttribute("tabindex"))).toEqual(["0", "-1"]);
+    expect([root, alpha, beta].map((tab) => tab.getAttribute("tabindex"))).toEqual([
+      "-1",
+      "0",
+      "-1",
+    ]);
 
     alpha.focus();
     await userEvent.keyboard("{ArrowRight}");
     await waitFor(() => expect(beta).toHaveFocus());
     await userEvent.keyboard(" ");
-    await waitFor(() => expect(tabsOf("Workspaces")[1]).toHaveAttribute("aria-selected", "true"));
+    await waitFor(() => expect(tabsOf("Workspaces")[2]).toHaveAttribute("aria-selected", "true"));
+    // And the root is reached the same way: it is a tab on the strip like any other.
+    await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
+    await waitFor(() => expect(tabsOf("Workspaces")[0]).toHaveFocus());
+    await userEvent.keyboard(" ");
+    await waitFor(() => expect(tabsOf("Workspaces")[0]).toHaveAttribute("aria-selected", "true"));
   });
 
   it("the project strip: the project in front is the stop", async () => {
@@ -521,8 +531,8 @@ describe("Delete on a focused tab", () => {
   it("closes nothing on a workspace tab, which has no × and whose menu deletes it on disk", async () => {
     const { asked } = core();
     render(<App />);
-    await waitFor(() => expect(tabsOf("Workspaces")).toHaveLength(2));
-    const [alpha] = tabsOf("Workspaces");
+    await waitFor(() => expect(tabsOf("Workspaces")).toHaveLength(3));
+    const [, alpha] = tabsOf("Workspaces");
     alpha.focus();
 
     const del = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
@@ -530,7 +540,7 @@ describe("Delete on a focused tab", () => {
 
     expect(del.defaultPrevented).toBe(false);
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(tabsOf("Workspaces")).toHaveLength(2);
+    expect(tabsOf("Workspaces")).toHaveLength(3);
     expect(asked.filter((cmd) => cmd.startsWith("delete"))).toEqual([]);
   });
 

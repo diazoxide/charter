@@ -74,19 +74,24 @@ describe("what a menu lists", () => {
   });
 
   it("drops a row the catalogue does not have, without knowing which rows those are", () => {
-    // The strip of chats outside every workspace is not a workspace on the plane: it has no
-    // pin row and no delete row, because there is nothing on disk for either to name. Nothing
-    // in `Menus.tsx` or in `menuOn` was told about that case — the rows are looked up by id
-    // and the two that do not exist are not found.
-    const shown = titles(
-      { on: "workspace", workspace: OUTSIDE },
-      {
-        workspaces: ["alpha", OUTSIDE],
-        plane: "/plane",
-      },
-    );
+    // A workspace with no settings row offered — here, one the catalogue was not told is on
+    // the plane — has no such row in its menu. Nothing in `Menus.tsx` or in `menuOn` was told
+    // which: the rows are looked up by id and the ones that do not exist are not found.
+    const shown = titles({ on: "workspace", workspace: "ghost" }, { workspaces: ["alpha"] });
 
-    expect(shown.above).toEqual(["Focus the chats outside every workspace", "New workspace…"]);
+    expect(shown.above).toEqual(["New workspace…"]);
+    expect(shown.below).toEqual([]);
+  });
+
+  it("gives the plane root a menu of its own: focus, a chat and a shell there, and no delete (SI-1)", () => {
+    const shown = titles({ on: "root" }, { workspaces: [OUTSIDE, "alpha"], plane: "/plane" });
+
+    expect(shown.above).toEqual([
+      "Focus the plane root",
+      "New chat at the plane root",
+      "New shell at the plane root",
+      "New workspace…",
+    ]);
     expect(shown.below).toEqual([]);
   });
 

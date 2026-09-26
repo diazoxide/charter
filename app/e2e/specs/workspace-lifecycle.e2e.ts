@@ -73,13 +73,15 @@ async function ask<T>(command: string, args: Record<string, unknown> = {}): Prom
   return answer.ok as T;
 }
 
-/** The workspaces the strip is showing, left to right. */
+/** The workspaces the strip is showing, left to right — after the plane root's tab, which is
+ *  first on every strip and is not a workspace (SI-1). */
 async function stripNames(): Promise<string[]> {
   return browser.execute(
     (selector: string) =>
-      [...(document.querySelector(selector)?.querySelectorAll('[role="tab"]') ?? [])].map(
-        (tab) => tab.querySelector(".workspace-name")?.textContent ?? "",
-      ),
+      [
+        ...(document.querySelector(selector)?.querySelectorAll('[role="tab"]:not(.plane-root)') ??
+          []),
+      ].map((tab) => tab.querySelector(".workspace-name")?.textContent ?? ""),
     WORKSPACES,
   );
 }
