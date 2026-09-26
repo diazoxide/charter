@@ -267,4 +267,120 @@ mod tests {
         );
         assert_eq!(signals(&pasted), Vec::<&str>::new());
     }
+
+    /// A fork-shaped ask: an action and open-ended wording.
+    const FORK: &str = "build something like the importer";
+
+    /// What `userpromptsubmit` hands the gate for `prompt` from `session`, in the plane at `root`.
+    fn ask(root: &std::path::Path, in_plane: bool, payload: &serde_json::Value) -> Option<String> {
+        let hook = Hook {
+            root,
+            in_plane,
+            payload,
+            env: &|_| None,
+            cwd: root,
+            now: chrono::Utc::now(),
+            host: "test-host",
+        };
+        nudge(&hook)
+    }
+
+    fn prompt(session: &str, text: &str) -> serde_json::Value {
+        serde_json::json!({ "session_id": session, "prompt": text })
+    }
+
+    #[test]
+    fn the_gate_fires_once_then_keeps_quiet_for_its_cooldown_then_fires_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(
+            ask(root, true, &prompt("s1", FORK)),
+            message(FORK),
+            "a fork in an attended session of a plane is asked about"
+        );
+        for quiet in 1..=COOLDOWN {
+            assert_eq!(
+                ask(root, true, &prompt("s1", FORK)),
+                None,
+                "prompt {quiet} of the cooldown is quiet"
+            );
+        }
+        assert!(
+            ask(root, true, &prompt("s1", FORK)).is_some(),
+            "the cooldown ends after {COOLDOWN} prompts"
+        );
+        // The cooldown is the session's own: another session is asked at once.
+        assert!(ask(root, true, &prompt("s2", FORK)).is_some());
+    }
+
+    #[test]
+    fn every_attended_prompt_counts_down_the_cooldown_whether_or_not_it_is_a_fork() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(ask(root, true, &prompt("s1", FORK)).is_some());
+        for _ in 0..COOLDOWN {
+            assert_eq!(ask(root, true, &prompt("s1", "yes, the first one")), None);
+        }
+        assert!(ask(root, true, &prompt("s1", FORK)).is_some());
+    }
+
+    #[test]
+    fn a_session_whose_id_is_only_dots_has_no_cooldown_file_and_is_asked_every_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for id in [".", ".."] {
+            assert!(ask(root, true, &prompt(id, FORK)).is_some());
+            assert!(ask(root, true, &prompt(id, FORK)).is_some(), "{id:?}");
+        }
+        assert!(!root.join(".charter/commit-gate").exists());
+    }
+
+    #[test]
+    fn the_gate_says_nothing_outside_a_plane_or_to_a_run_nobody_is_watching() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(ask(root, false, &prompt("s1", FORK)), None);
+        let unattended = serde_json::json!({
+            "session_id": "s1",
+            "prompt": FORK,
+            "permission_mode": "bypassPermissions",
+        });
+        assert_eq!(ask(root, true, &unattended), None);
+        let attended = serde_json::json!({
+            "session_id": "s1",
+            "prompt": FORK,
+            "permission_mode": "default",
+        });
+        assert!(ask(root, true, &attended).is_some());
+    }
+
+    #[test]
+    fn a_slash_command_a_blank_prompt_and_a_lookup_are_never_commitment_points() {
+        assert_eq!(signals("/build something like the importer"), Vec::<&str>::new());
+        assert_eq!(signals("   "), Vec::<&str>::new());
+        assert_eq!(
+            signals("how does it build something like the importer?"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(message("/build something like the importer"), None);
+    }
+
+    #[test]
+    fn the_message_names_the_signals_and_the_step_that_fits_a_build_or_a_symptom() {
+        let built = message(FORK).expect("a fork");
+        assert!(
+            built.starts_with(
+                "⬢ **Commitment point**: this reads as **work to be built**, with open-ended \
+                 wording."
+            ),
+            "{built}"
+        );
+        assert!(built.contains("2. **Then ask the operator**"), "{built}");
+        let symptom = message("fix the crash somehow").expect("a fork");
+        assert!(
+            symptom.contains("a **symptom to diagnose**, with open-ended wording"),
+            "{symptom}"
+        );
+        assert!(symptom.contains("2. **Reproduce it as a failing test**"), "{symptom}");
+    }
 }
