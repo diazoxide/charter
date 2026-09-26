@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`charter change` declares a piece of work that spans several repos.** `create` names it
+  and says why, `add` puts in a repo already cloned in the workspace (on `change/<slug>` or a
+  branch you name, with `--needs` for the repos that must land first), `drop` takes one out
+  with the reason, and `list`, `show` and `forget` read and end it. The record is
+  `workspaces/<ws>/changes/<slug>.json` and holds intent only; it is committed when the
+  workspace is LIVE. An unknown change, a repo with no clone, a repo added twice or an order
+  that cannot be true is refused with exit 2. Pushing, landing and reverting come later
+  (ADR 0060).
 - **charter's plugin teaches personas, vaults and the browser again.** It now ships the
   `charter:persona`, `charter:secrets` and `charter:browser` skills beside `handoff`,
   `update` and `working-in-a-clone`, rewritten for this charter's commands. `charter browser
