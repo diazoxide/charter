@@ -222,8 +222,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   When a heredoc is opened inside `$(…)`, backticks, `<(…)` or `>(…)` and the substitution
   does not close on that line, bash 3.2, bash 5 and zsh can disagree about which of the
   following lines are the heredoc's body. The guards now read those lines both as commands and
-  as a body, and never set them aside as a body alone. After such a body, they no longer set
-  aside any later heredoc body either.
+  as a body, and never set them aside as a body alone. After such a body, or after a heredoc
+  whose delimiter the shells read differently, they no longer set aside any later heredoc body
+  either.
 
 - **The nightly mutation run finishes again.** Its shards were sized for a test suite half as
   long as today's, so two of them ran out of time. The run now uses smaller shards and a longer

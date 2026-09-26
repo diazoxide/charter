@@ -1421,6 +1421,19 @@ enum Enclosed {
     SpansLines(&'static [char]),
 }
 
+impl Enclosed {
+    /// The answer that reads more of the two: a body either reading runs is run.
+    fn either(self, other: Self) -> Self {
+        use Enclosed::*;
+        match (self, other) {
+            (ClosedOnItsLine, _) | (_, ClosedOnItsLine) => ClosedOnItsLine,
+            (No, x) | (x, No) => x,
+            (SpansLines(a), SpansLines(b)) if a == b => SpansLines(a),
+            (SpansLines(_), SpansLines(_)) => SpansLines(&[')', '`']),
+        }
+    }
+}
+
 /// The `$( … )`, backtick and process substitutions (`<( … )`, `>( … )`, zsh's `=( … )`) open
 /// at each point of the command text, carried from one command line to the next.
 ///
@@ -1442,11 +1455,18 @@ enum Enclosed {
 /// A subshell `( … )` or group `{ …; }` is neither: every one of those shells reads the body
 /// after the line. [`heredoc_layout`] reads either kind of body both ways.
 ///
+/// A `#` comment is read both ways too ([`SubstitutionContext::comments`]): GNU bash 3.2.57
+/// skips a `)` in a comment inside an unquoted `$( … )` but closes a `"$( … )"` at one, and a
+/// backtick in a comment ends a backtick substitution in every one of those shells.
+///
 /// Its own small walk, because a backtick's pairing is what matters here and the quote map
 /// marks the two backticks of a pair differently inside `"…"`. It steps only command text:
 /// body lines are not read, as no shell reads them for its brackets but GNU bash 3.2.57.
 #[derive(Debug, Default)]
 struct SubstitutionContext {
+    /// Whether a `#` that begins a word begins a comment, whose brackets open and close
+    /// nothing. The layout keeps one context each way.
+    comments: bool,
     /// Each open frame, innermost last, with the id a substitution frame is known by.
     stack: Vec<(Frame, usize)>,
     next_id: usize,
@@ -1527,6 +1547,12 @@ impl SubstitutionContext {
                     k += 1;
                 }
                 i = k;
+            } else if self.comments && c == '#' && (i == 0 || BEFORE_COMMENT.contains(chars[i - 1]))
+            {
+                // A comment, to the end of the line.
+                while i + 1 < n && chars[i + 1] != '\n' {
+                    i += 1;
+                }
             } else if c == '"' {
                 self.push(Frame::DoubleQuoted);
             } else if c == '(' && opens_process_substitution(chars, i) {
@@ -1553,10 +1579,10 @@ impl SubstitutionContext {
                 let closes_here = around.iter().any(|(_, id)| {
                     closed_at
                         .get(id)
-                        .is_some_and(|&hi| !chars[a.min(hi)..hi].contains(&'\n'))
+                        .is_some_and(|&hi| !chars[a..hi].contains(&'\n'))
                 });
-                let kinds = |frame: Frame| around.iter().any(|&(f, _)| f == frame);
-                match (closes_here, kinds(Frame::Sub), kinds(Frame::Tick)) {
+                let inside = |frame: Frame| around.iter().any(|&(f, _)| f == frame);
+                match (closes_here, inside(Frame::Sub), inside(Frame::Tick)) {
                     (true, _, _) => Enclosed::ClosedOnItsLine,
                     (false, false, false) => Enclosed::No,
                     (false, true, false) => Enclosed::SpansLines(&[')']),
@@ -1565,6 +1591,14 @@ impl SubstitutionContext {
                 }
             })
             .collect()
+    }
+
+    /// A context that reads a comment as a comment (`true`) or as text.
+    fn new(comments: bool) -> Self {
+        Self {
+            comments,
+            ..Self::default()
+        }
     }
 
     fn push(&mut self, frame: Frame) {
@@ -1624,7 +1658,11 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
     // command line is still open on the next, and heredoc bodies between them are not read.
     let mut ctx = ShiftContext::default();
     // The substitutions open at the end of the command text read so far, carried the same way.
-    let mut subs = SubstitutionContext::default();
+    // One reads a comment as a comment and one as text, as the shells differ there.
+    let mut subs = [
+        SubstitutionContext::new(true),
+        SubstitutionContext::new(false),
+    ];
     // Once a body the shells read differently has been met, the lines after it have two
     // structures — one where they are commands with heredocs of their own, one where they are
     // its body — and the two part company for the rest of the text. So from there on no body is
@@ -1688,17 +1726,24 @@ pub fn heredoc_layout(cmd: &str) -> Vec<LayoutLine> {
             };
             let openers = openers_after(&folded_line, &mut ctx);
             let starts: Vec<usize> = openers.iter().map(|m| m.start).collect();
-            // The line read on its own as well, as it was before a substitution was carried
-            // from one line to the next: what that reading reads both ways still is.
-            let alone = SubstitutionContext::default().read(&folded_line, &starts);
-            let enclosed =
-                subs.read(&folded_line, &starts)
-                    .into_iter()
-                    .zip(alone)
-                    .map(|(carried, alone)| match alone {
-                        Enclosed::ClosedOnItsLine => alone,
-                        _ => carried,
-                    });
+            // The line is also read on its own. What is carried from earlier lines can be wrong
+            // where a shell closed a bracket this walk did not see open, and then a substitution
+            // that opens and closes on this line would go unseen; read alone, it is seen.
+            let mut enclosed = vec![Enclosed::No; starts.len()];
+            for ctx in subs.iter_mut() {
+                let alone = SubstitutionContext::new(ctx.comments).read(&folded_line, &starts);
+                let carried = ctx.read(&folded_line, &starts);
+                for (k, (a, c)) in alone.into_iter().zip(carried).enumerate() {
+                    // Alone, only a substitution closed on this line is taken: one still open
+                    // at its end is the carried reading's to judge.
+                    let a = if a == Enclosed::ClosedOnItsLine {
+                        a
+                    } else {
+                        Enclosed::No
+                    };
+                    enclosed[k] = enclosed[k].either(a).either(c);
+                }
+            }
             for (h, (m, within)) in openers.into_iter().zip(enclosed).enumerate() {
                 let idx = body_count;
                 body_count += 1;

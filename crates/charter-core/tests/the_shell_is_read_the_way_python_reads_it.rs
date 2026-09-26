@@ -1162,6 +1162,13 @@ fn a_heredoc_in_a_substitution_spanning_lines_opens_no_body_a_guard_may_skip() {
         "x=$(\ncat <<\"2\")\nsecret\n2\nls",
         // bash 5.3's `${ …; }`, which GNU bash 3.2.57 and 5.2 read as a parameter expansion.
         "x=${ \ncat <<\"2\"\n}\nsecret\n2\nls",
+        // A bracket in a comment closes nothing.
+        "x=$(\n# )\ncat <<\"2\"\n)\nsecret\n2\n)",
+        "x=$( # )\ncat <<\"2\"\n)\nsecret\n2\n)",
+        "cat <(\n# )\ncat <<\"2\"\n)\nsecret\n2\n)",
+        // …and one in a comment may close a substitution all the same.
+        "x=\"$( cat <<'2' # )\"\nsecret\n2",
+        "x=`cat <<'2' # `\nsecret\n2",
     ] {
         assert_eq!(heredoc::strip_reader_heredocs(cmd), cmd, "{cmd:?}");
         let layout = heredoc::heredoc_layout(cmd);
@@ -1175,14 +1182,16 @@ fn a_heredoc_in_a_substitution_spanning_lines_opens_no_body_a_guard_may_skip() {
 /// Once the shells part company about which lines are a body, they do not agree again: GNU bash
 /// 3.2.57 reads the would-be body as commands, one of which opens a heredoc of its own, and
 /// that one's body takes the terminator the other reading ends at. So from the first body read
-/// both ways, no body after it is dropped either. Both lines below ran `secret` in bash 3.2.57
-/// (the first in zsh 5.9 too).
+/// both ways, no body after it is dropped either. The first two lines below ran `secret` in
+/// bash 3.2.57 (the first in zsh 5.9 too), and the third, whose delimiter the shells read
+/// differently, in zsh 5.9.
 #[test]
 fn a_body_read_both_ways_keeps_every_body_after_it() {
     charter_core::unsteered!();
     for cmd in [
         "x=$(cat <<'E' )\ncat <<'Y'\nE\ncat <<'W'\nY\nsecret\nW",
         "x=$(cat <<'E'\n)\ncat <<'Y'\nE\ncat <<'W'\nY\nsecret\nW",
+        "cat <<$\"E\"\nE\ncat <<'W'\n$E\nsecret\nW",
     ] {
         assert_eq!(heredoc::strip_reader_heredocs(cmd), cmd, "{cmd:?}");
         let layout = heredoc::heredoc_layout(cmd);
@@ -1209,6 +1218,11 @@ fn a_heredoc_in_a_substitution_with_no_closer_in_its_body_is_read_once() {
         (
             "x=$(date)\ncat <<'2'\n)\nsecret\n2\nls",
             "x=$(date)\ncat <<'2'\nls",
+        ),
+        // A `#` inside a word begins no comment.
+        (
+            "x=$(\necho a#)\ncat <<'2'\n)\nsecret\n2\nls",
+            "x=$(\necho a#)\ncat <<'2'\nls",
         ),
     ] {
         assert_eq!(heredoc::strip_reader_heredocs(cmd), kept, "{cmd:?}");
