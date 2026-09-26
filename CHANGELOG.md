@@ -61,7 +61,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   settings charter generates for a workspace or a checkout, the profile approval record and
   the hook bookkeeping now share one writer. Each is flushed to disk with its directory, keeps
   the permissions it had (or stays private, for charter's own state), and is never replaced
-  when it is a symlink. ([#430](https://github.com/diazoxide/charter/issues/430))
+  when it is a symlink. A `workspace.json` or generated settings file you made read-only is
+  now left alone and reported, where it used to be replaced.
+  ([#430](https://github.com/diazoxide/charter/issues/430))
 - **A guard that crashes now refuses the tool call instead of letting it run.** If charter hit
   an internal error while checking a tool call, the crash ended the process with a status
   Claude Code and Codex read as a non-blocking error, so the call went ahead unchecked. Any

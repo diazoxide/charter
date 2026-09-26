@@ -2933,9 +2933,9 @@ does not re-tighten a pre-existing directory but does tighten a pre-existing fil
 | `config.touch_for(p)` | create empty (append mode) + `os.utime` — the mtime is the payload | `charter/config.py:644` |
 | `config.private_mkdir` / `claim_private_dir` | 0700 mkdir / `O_EXCL`-style claim of a directory | `charter/config.py:190`, `charter/config.py:283` |
 
-**In charter-app** (#430) every whole-file replace — `replace_for`'s equivalent here, and the
-plane's committed files, `workspace.json`, the generated harness layer and the vaults — goes
-through one writer, `charter_core::rewrite::replace`. Its temp is
+**In charter-app** (#430) the whole-file replaces — `replace_for`'s equivalent here (the
+profile trust record, the push and save journals, hook state), and the plane's committed files,
+`workspace.json`, the generated harness layer and the vaults — go through one writer, `charter_core::rewrite::replace`. Its temp is
 `.charter-generated.<name>.<pid>.<12 hex>.tmp` (the prefix a guest checkout's exclude block
 already hides); it is flushed before the rename and the directory after it; a target that is a
 symlink is refused rather than replaced; and the mode is one of four: kept (committed files),

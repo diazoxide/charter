@@ -114,9 +114,42 @@ pub enum Mode {
     /// the write, as `config.py`'s `_private_fd` does.
     Private,
     /// A secret — a vault file. 0600 before a byte lands, or nothing is written at all: the
-    /// error is a [`NotPrivate`] when the filesystem will not hold the mode. A read-only file
+    /// error is a [`NotPrivate`] when the filesystem will not hold the mode. (Unix: on
+    /// Windows there is no mode to set or read back, and the directory's ACL decides.) A read-only file
     /// is refused, as the in-place write this replaces refused it.
     Secret,
+}
+
+impl Mode {
+    /// Whether a file somebody made read-only is refused rather than replaced.
+    fn refuses_read_only(self) -> bool {
+        self != Mode::Private
+    }
+
+    /// The permissions the finished file has, given the ones it has `now`; `None` leaves
+    /// them to the umask.
+    fn permissions(self, now: Option<std::fs::Permissions>) -> Option<std::fs::Permissions> {
+        match (self, now) {
+            (Mode::Kept | Mode::KeptOrPrivate, Some(now)) => Some(now),
+            (Mode::Kept, None) => None,
+            _ => private(),
+        }
+    }
+}
+
+/// Whether `permissions` let nobody but the owner in — a temp that will end so is created
+/// that way, and never opened at a looser mode first.
+fn owner_only(permissions: &std::fs::Permissions) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.mode() & 0o077 == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = permissions;
+        false
+    }
 }
 
 /// The file [`Mode::Secret`] was writing could not be made 0600, so nothing was written.
@@ -142,7 +175,7 @@ impl std::error::Error for NotPrivate {}
 /// Every temp file [`replace`] writes starts with this, so one pattern names all of them:
 /// `.charter-generated.<name>.<pid>.<tag>.tmp`. It is the prefix the generated layer's temps
 /// have always had, which a guest checkout's exclude block hides (`guest::TEMP_PATTERN`) and
-/// its "temps left" check looks for.
+/// its "temps left" check looks for. It is [`crate::layer::MARKER`] and a dot.
 pub const TEMP_PREFIX: &str = ".charter-generated.";
 
 /// Replace `path` with `bytes`, whole or not at all.
@@ -192,39 +225,32 @@ fn replace_through(
         .map(|m| m.permissions());
     // A file somebody made read-only is theirs to open up again. A rename needs only the
     // directory's permission, so without this the replace would go straight past what an
-    // in-place write used to refuse. Charter's own state is the exception: its mode is
-    // charter's, and the writers this replaced renamed over a read-only one.
-    if mode != Mode::Private && now.as_ref().is_some_and(std::fs::Permissions::readonly) {
+    // in-place write used to refuse.
+    if mode.refuses_read_only() && now.as_ref().is_some_and(std::fs::Permissions::readonly) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("{} is read-only", path.display()),
         ));
     }
-    let wanted = match (mode, now) {
-        (Mode::Kept | Mode::KeptOrPrivate, Some(now)) => Some(now),
-        (Mode::Kept, None) => None,
-        _ => private(),
-    };
+    let wanted = mode.permissions(now);
     let result = (|| {
-        let mut out = create_temp(root, temp, wanted.is_some())?;
+        let mut out = create_temp(root, temp, wanted.as_ref().is_some_and(owner_only))?;
         #[cfg(test)]
         hook::created(&out);
+        // Best effort in every mode, as every chmod in this crate is: a filesystem that
+        // cannot hold a mode is not a reason to refuse the write. The one mode for which it
+        // is — a secret — reads the answer back below.
         if let Some(permissions) = wanted {
-            match mode {
-                Mode::Kept | Mode::KeptOrPrivate => out.set_permissions(permissions)?,
-                Mode::Private | Mode::Secret => {
-                    let _ = out.set_permissions(permissions);
-                }
-            }
+            let _ = out.set_permissions(permissions);
         }
         #[cfg(unix)]
         if mode == Mode::Secret {
             use std::os::unix::fs::PermissionsExt;
-            let bits = out.metadata()?.permissions().mode() & 0o777;
+            let bits = out.metadata()?.permissions().mode() & 0o7777;
             if bits & 0o077 != 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    NotPrivate { mode: bits },
+                    NotPrivate { mode: bits & 0o777 },
                 ));
             }
         }
@@ -262,18 +288,19 @@ fn private() -> Option<std::fs::Permissions> {
 
 /// The temp file, through the gate and `O_NOFOLLOW`. `create`/`truncate` rather than
 /// `create_new`: the name is this call's own, so anything already at it is debris from a
-/// killed process, and refusing it would refuse every later write.
-fn create_temp(root: &Path, temp: &Path, private: bool) -> io::Result<std::fs::File> {
+/// killed process, and refusing it would refuse every later write. Created 0600 when the
+/// finished file will let nobody but its owner in; under the umask otherwise.
+fn create_temp(root: &Path, temp: &Path, owner_only: bool) -> io::Result<std::fs::File> {
     crate::contain::no_link_on_the_way(root, temp)?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
-    if private {
+    if owner_only {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
     #[cfg(not(unix))]
-    let _ = private;
+    let _ = owner_only;
     crate::contain::nofollow(&mut options).open(temp)
 }
 
@@ -524,9 +551,24 @@ mod tests {
 
         replace(dir.path(), &dir.path().join("new"), b"s", Mode::Secret).unwrap();
         replace(dir.path(), &loose, b"s", Mode::Private).unwrap();
-        replace(dir.path(), &loose, b"s", Mode::KeptOrPrivate).unwrap();
+        replace(
+            dir.path(),
+            &dir.path().join("tab"),
+            b"s",
+            Mode::KeptOrPrivate,
+        )
+        .unwrap();
+        let kept = dir.path().join("kept");
+        std::fs::write(&kept, "old").unwrap();
+        chmod(&kept, 0o600);
+        replace(dir.path(), &kept, b"s", Mode::Kept).unwrap();
 
-        assert_eq!(*seen.borrow(), [(0o600, 0), (0o600, 0), (0o600, 0)]);
+        assert_eq!(*seen.borrow(), [(0o600, 0); 4]);
+    }
+
+    #[test]
+    fn the_temp_prefix_is_the_layer_s_marker_and_a_dot() {
+        assert_eq!(TEMP_PREFIX, format!("{}.", crate::layer::MARKER));
     }
 
     #[test]
