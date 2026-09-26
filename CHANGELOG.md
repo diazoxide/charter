@@ -29,8 +29,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types a literal brace as `{{` or `}}`, so `{{word}}` types `{word}`. `charter` is now a
   reserved persona name, because its actions would read `charter/<id>` like the built-ins:
   `charter persona create charter` is refused, and a persona that already has the name is
-  reported by `charter persona lint` and offers no curation actions. The app's Curate menu
-  comes in a later release (ADR 0061).
+  reported by `charter persona lint` and offers no curation actions. In the app, right-click a
+  workspace, a persona or the plane root for **Curate ▸**, or type `curate` in the palette: the
+  chat opens on your default profile as the action's persona, named `<action> · <subject>`, and
+  the prompt appears in its input once the harness has started — never sent. An action a
+  persona's file could not offer is listed, greyed, with why. It needs a Claude Code default
+  profile: Codex and opencode say nothing until your first prompt, so charter has no moment to
+  type into them, and says so on the menu (ADR 0061).
 - **The plane root is the first tab of the workspace strip.** It is always there, drawn as an
   icon (its tooltip: *Plane — chats here start at the plane root*), and it cannot be dragged,
   pinned, renamed or deleted. Its menu starts a chat or a shell at the plane root, and so do
@@ -40,7 +45,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   picked (`charter workspace use` does not move it). The Todos box is not offered there, and
   the region says why. It replaces the "Outside every workspace" tab, and the chats it held are
   on it.
-
 - **Plain shell tabs, and a warning when a harness starts inside one.** `New shell` sits beside
   `New tab` in the palette, on the panes' menu and on each workspace's menu (`New shell in
   <workspace>`), on ⌘⇧T (Ctrl+Shift+T off a Mac): your own shell, where a new chat would start,

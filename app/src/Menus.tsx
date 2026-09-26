@@ -1,6 +1,13 @@
 import { useEffect, useId, type KeyboardEvent, type ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import { menuRows, type Catalogued, type MenuOn, type Offer } from "./actions";
+import {
+  curateRows,
+  curateSubjectOf,
+  menuRows,
+  type Catalogued,
+  type MenuOn,
+  type Offer,
+} from "./actions";
 
 /**
  * The window's context menus: right-click on a thing, and charter offers what it can do to it.
@@ -45,11 +52,13 @@ export function Menued({
   children: ReactNode;
 }) {
   const rows = menuRows(on, offers);
+  const curating = curateSubjectOf(on);
   // Nothing to offer — a project this window holds while its catalogue has not been built yet,
   // for instance. The element is drawn exactly as it was, and `useNoBrowserMenu` still takes
   // the browser's own menu away: a surface with no charter menu must not fall back to
   // `Reload` and `Inspect Element`.
-  if (rows.above.length === 0 && rows.below.length === 0) return <>{children}</>;
+  if (rows.above.length === 0 && rows.below.length === 0 && curating === undefined)
+    return <>{children}</>;
   return (
     <ContextMenu.Root modal={false}>
       <ContextMenu.Trigger asChild onKeyDown={openFromTheKeyboard}>
@@ -60,6 +69,9 @@ export function Menued({
           {rows.above.map((offer) => (
             <Row key={offer.id} offer={offer} onPress={onPress} />
           ))}
+          {curating !== undefined && (
+            <Curate subject={curating} offers={offers} onPress={onPress} />
+          )}
           {rows.above.length > 0 && rows.below.length > 0 && (
             <ContextMenu.Separator className="menu-line" />
           )}
@@ -70,6 +82,76 @@ export function Menued({
       </ContextMenu.Portal>
     </ContextMenu.Root>
   );
+}
+
+/**
+ * The "Curate ▸" submenu of a workspace, a persona or the plane (ADR 0061): charter's own
+ * actions first, then a group per persona that declared one, named, then every action the core
+ * left out as a row that cannot run, with the core's sentence as its tooltip — never dropped
+ * silently.
+ *
+ * **Drawn only while its menu is open**, because it is inside the menu's content, which Radix
+ * mounts only then — so the scan `curateRows` makes is paid by a menu the operator opened and
+ * not by every tab on a strip per render. A subject with nothing at all draws no submenu.
+ *
+ * Radix's own `ContextMenu.Sub` (ADR 0037): the arrow keys, the hover intent and the collision
+ * handling of a nested menu are the primitive's.
+ */
+function Curate({
+  subject,
+  offers,
+  onPress,
+}: {
+  subject: string;
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
+}) {
+  const { charter, personas, leftOut } = curateRows(subject, offers);
+  if (charter.length === 0 && personas.length === 0 && leftOut.length === 0) return null;
+  return (
+    <ContextMenu.Sub>
+      <ContextMenu.SubTrigger className="menu-row menu-sub">
+        <span className="menu-title">Curate</span>
+        <span className="menu-sub-mark" aria-hidden="true">
+          ▸
+        </span>
+      </ContextMenu.SubTrigger>
+      <ContextMenu.Portal>
+        <ContextMenu.SubContent className="item-menu" collisionPadding={8}>
+          {charter.map((offer) => (
+            <Row key={offer.id} offer={offer} onPress={onPress} words={labelOf(offer)} />
+          ))}
+          {personas.map(({ persona, rows }, i) => (
+            <ContextMenu.Group key={persona}>
+              {(i > 0 || charter.length > 0) && <ContextMenu.Separator className="menu-line" />}
+              <ContextMenu.Label className="menu-label">{persona}</ContextMenu.Label>
+              {rows.map((offer) => (
+                <Row key={offer.id} offer={offer} onPress={onPress} words={labelOf(offer)} />
+              ))}
+            </ContextMenu.Group>
+          ))}
+          {leftOut.length > 0 && (
+            <ContextMenu.Group>
+              {(charter.length > 0 || personas.length > 0) && (
+                <ContextMenu.Separator className="menu-line" />
+              )}
+              {leftOut.map((offer) => (
+                <Row key={offer.id} offer={offer} onPress={onPress} words={labelOf(offer)} />
+              ))}
+            </ContextMenu.Group>
+          )}
+        </ContextMenu.SubContent>
+      </ContextMenu.Portal>
+    </ContextMenu.Sub>
+  );
+}
+
+/** A curation row's words inside its submenu: the action alone. The palette's title names the
+ *  subject too (`Curate smart-ide: Safe remove`), and inside a menu opened on that subject the
+ *  subject is already said. */
+function labelOf(offer: Offer): string {
+  const said = `Curate ${offer.name ?? ""}: `;
+  return offer.title.startsWith(said) ? offer.title.slice(said.length) : offer.title;
 }
 
 /**
@@ -114,12 +196,16 @@ function Row({
   offer,
   onPress,
   dangerous,
+  words,
 }: {
   offer: Offer;
   onPress: (offer: Offer) => void;
   /** Whether this row is below the line — it loses something, and says so in the colour as
    *  well as in the words. */
   dangerous?: boolean;
+  /** What the row says, where a submenu says less than the catalogue's title because its
+   *  parent already said the rest. Its accessible name too. */
+  words?: string;
 }) {
   const note = offer.available ? offer.note : undefined;
   const noted = useId();
@@ -133,11 +219,11 @@ function Row({
       // consequence run onto the end of it — "End chat 3 steward Ends the program it runs." —
       // so every row would announce as a paragraph and no surface could ask for one by name.
       // The note is still read, as a description, which is where a consequence belongs.
-      aria-label={offer.title}
+      aria-label={words ?? offer.title}
       aria-describedby={note ? noted : undefined}
       onSelect={() => onPress(offer)}
     >
-      <span className="menu-title">{offer.title}</span>
+      <span className="menu-title">{words ?? offer.title}</span>
       {/* What the row costs, under its words. Only where the catalogue wrote one, and never
           for a row that cannot run — then the tooltip and the grey say what is true instead. */}
       {note && (

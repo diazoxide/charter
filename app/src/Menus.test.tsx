@@ -257,6 +257,177 @@ describe("a menu on screen", () => {
   });
 });
 
+/** What the core answers `curation_offers` for workspace `alpha` (ADR 0061): charter's own two,
+ *  `ops`'s and `qa`'s, and one file it left out. */
+function curations(cannot: string | null = null): NonNullable<Now["curations"]> {
+  const action = (id: string, label: string, by: string | null) => ({
+    id,
+    label,
+    declared_by: by,
+    runner: by ?? "steward",
+    cwd: "/plane/workspaces/alpha",
+    prompt: `${label} alpha.`,
+  });
+  return {
+    subjects: [
+      {
+        subject: "workspace:alpha",
+        name: "alpha",
+        actions: [
+          action("charter/safe-remove", "Safe remove", null),
+          action("charter/compact", "Compact & improve", null),
+          action("ops/tidy", "Tidy", "ops"),
+          action("qa/audit", "Audit", "qa"),
+        ],
+        left_out: [
+          {
+            what: "personas/ops/curation/bad.md",
+            why: "personas/ops/curation/bad.md is not offered: no label.",
+          },
+        ],
+        trouble: null,
+      },
+    ],
+    cannot,
+  };
+}
+
+describe("the Curate ▸ submenu (ADR 0061)", () => {
+  function aWorkspaceMenu(cannot: string | null = null) {
+    const pressed: string[] = [];
+    const offers = catalogued(
+      catalogue(now({ workspaces: ["alpha"], plane: "/plane", curations: curations(cannot) })),
+    );
+    render(
+      <Menued
+        on={{ on: "workspace", workspace: "alpha" }}
+        offers={offers}
+        onPress={(offer) => pressed.push(offer.id)}
+      >
+        <span data-testid="strip-alpha">alpha</span>
+      </Menued>,
+    );
+    return pressed;
+  }
+
+  async function openCurate() {
+    fireEvent.contextMenu(screen.getByTestId("strip-alpha"));
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Curate" }));
+    const menus = await screen.findAllByRole("menu");
+    return menus[menus.length - 1];
+  }
+
+  it("lists charter's own first, then a named group per persona, then what was left out", async () => {
+    aWorkspaceMenu();
+
+    const sub = await openCurate();
+
+    expect(
+      Array.from(sub.querySelectorAll("[role=menuitem], .menu-label, .menu-line")).map((el) =>
+        el.getAttribute("role") === "menuitem"
+          ? el.getAttribute("aria-label")
+          : el.classList.contains("menu-label")
+            ? `[${el.textContent}]`
+            : "---",
+      ),
+    ).toEqual([
+      "Safe remove",
+      "Compact & improve",
+      "---",
+      "[ops]",
+      "Tidy",
+      "---",
+      "[qa]",
+      "Audit",
+      "---",
+      "personas/ops/curation/bad.md is left out",
+    ]);
+  });
+
+  it("draws an action the core left out as a row that cannot run, saying why", async () => {
+    aWorkspaceMenu();
+
+    const sub = await openCurate();
+
+    const left = within(sub).getByRole("menuitem", {
+      name: "personas/ops/curation/bad.md is left out",
+    });
+    expect(left.getAttribute("aria-disabled")).toBe("true");
+    expect(left.getAttribute("title")).toBe(
+      "personas/ops/curation/bad.md is not offered: no label.",
+    );
+  });
+
+  it("hands back the action's own row when one is chosen", async () => {
+    const pressed = aWorkspaceMenu();
+
+    const sub = await openCurate();
+    await userEvent.click(within(sub).getByRole("menuitem", { name: "Tidy" }));
+
+    expect(pressed).toEqual(["curate:workspace:alpha/ops/tidy"]);
+  });
+
+  it("draws every action disabled, with the reason, when no chat can be typed into", async () => {
+    aWorkspaceMenu(
+      "The default profile 'work' runs codex, which says nothing until your first prompt.",
+    );
+
+    const sub = await openCurate();
+
+    const safe = within(sub).getByRole("menuitem", { name: "Safe remove" });
+    expect(safe.getAttribute("aria-disabled")).toBe("true");
+    expect(safe.getAttribute("title")).toContain("first prompt");
+  });
+
+  it("curates the plane from the plane root's tab (SI-1)", async () => {
+    const pressed: string[] = [];
+    const plane = {
+      subject: "plane",
+      name: "plane",
+      actions: [
+        {
+          id: "ops/audit",
+          label: "Audit the plane",
+          declared_by: "ops",
+          runner: "ops",
+          cwd: "/plane",
+          prompt: "Audit.",
+        },
+      ],
+      left_out: [],
+      trouble: null,
+    };
+    render(
+      <Menued
+        on={{ on: "root" }}
+        offers={catalogued(
+          catalogue(
+            now({
+              workspaces: [OUTSIDE, "alpha"],
+              plane: "/plane",
+              curations: { subjects: [plane], cannot: null },
+            }),
+          ),
+        )}
+        onPress={(offer) => pressed.push(offer.id)}
+      >
+        <span data-testid="root">root</span>
+      </Menued>,
+    );
+
+    fireEvent.contextMenu(screen.getByTestId("root"));
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Curate" }));
+    const menus = await screen.findAllByRole("menu");
+    await userEvent.click(
+      within(menus[menus.length - 1]).getByRole("menuitem", { name: "Audit the plane" }),
+    );
+
+    expect(pressed).toEqual(["curate:plane/ops/audit"]);
+  });
+});
+
 describe("a menu from the keyboard (charter-app#174)", () => {
   /** A focusable row with a menu, and a text box inside a second trigger — a pane's terminal
    *  takes its keys the same way. */

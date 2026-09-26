@@ -294,8 +294,15 @@ how it is cited and nothing here is renumbered.
     a built-in's id or label, is left out with a warning and fails `charter persona lint`.
     charter's own run as the persona being curated, or else as the plane's default persona, or
     as no persona. The core resolves a subject's list (`charter curation show <subject>`), and
-    `charter persona curation list|add|remove` manages a persona's files. The app's menus are a
-    later change. **ADR 0061.**
+    `charter persona curation list|add|remove` manages a persona's files. In the app, a
+    workspace's, a persona's and the plane root tab's right-click menu has a "Curate ▸" submenu — charter's own, then
+    a group per declaring persona, then every action left out, disabled, with the reason — and
+    the palette lists each as `Curate <subject>: <label>`. Choosing one opens a new chat on the
+    project's default profile, as the action's runner, where it runs, named `<label> ·
+    <subject>`, and holds its prompt in the app until that chat's first `SessionStart` hook
+    report; the prompt is then written once the terminal hands keys to the harness, as one
+    bracketed paste with nothing after it. A harness that reports its start only at the first
+    prompt (Codex, opencode) is refused rather than typed into late. **ADR 0061.**
 
 ## Limits (acceptance)
 

@@ -26,7 +26,14 @@
  * gave travels to the operator as the core's own sentence rather than as whatever a `catch`
  * decided to say about it.
  */
-import type { ChatWorktree, ExtensionCommand, ExtensionView, RowAction } from "./bindings";
+import type {
+  ChatWorktree,
+  Curations,
+  ExtensionCommand,
+  ExtensionView,
+  RowAction,
+  SubjectCurations,
+} from "./bindings";
 import { MAIN } from "./here";
 import { shellKeySaid } from "./shellKey";
 import { onAMac } from "./tabKeys";
@@ -284,6 +291,10 @@ export type Does =
   /** Opens the Preferences tab (charter-app#283) — this machine's text sizes — on the project
    *  in front. It writes nothing by itself: a size is changed on the tab, or by its keys. */
   | { verb: "openPreferences" }
+  /** Opens a new chat for one curation action on one subject, with the action's prompt typed
+   *  into it and never sent (ADR 0061). It carries the action's id and nothing of its text: the
+   *  core resolves the subject again (`curate`), so what is typed is the core's prompt now. */
+  | { verb: "curate"; subject: string; action: string }
   | { verb: "quit" }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
@@ -327,6 +338,13 @@ export type Offer = {
    * `available` is false. A note is about a row that can.
    */
   note?: string;
+  /**
+   * The group a submenu draws this row under, for a row that is in one: a curation action's
+   * declaring persona, or [`LEFT_OUT`] for an action the core left out. None for charter's own
+   * — they come first, ungrouped. The palette ignores it: its rows name their group in the
+   * title already.
+   */
+  group?: string;
 };
 
 /** The window as it now stands: everything an offer's availability is decided from. */
@@ -440,6 +458,13 @@ export type Now = {
   /** The chats that reported back to a chat in the queue, by name (charter-app#259), so its row
    *  says what the operator is being asked to look at. */
   reportsTo?: (session: number) => readonly string[];
+  /**
+   * What the plane's workspaces, personas and the plane itself are offered to curate
+   * (`curation_offers`, ADR 0061) — the core's answer, one row per action and one disabled row
+   * per action it left out. Every subject's, because the palette lists them all; the menus
+   * pick theirs out by id ([`curateRows`]).
+   */
+  curations?: Curations;
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -526,6 +551,9 @@ export type Doing = {
   renameWorkspace: (workspace: string) => void;
   /** Opens the Preferences tab, or brings forward the one already open. */
   openPreferences: () => void;
+  /** Opens a curation chat. The core can refuse — the action gone, a harness that cannot be
+   *  typed into — so it answers a `Ran`. */
+  curate: (subject: string, action: string) => Promise<Ran>;
   quit: () => void;
 };
 
@@ -753,6 +781,57 @@ function can(id: string, title: string, does: Does, name?: string): Offer {
 /** An offer that cannot, which therefore has to say why. */
 function cannot(id: string, title: string, reason: string, name?: string): Offer {
   return { id, title, available: false, reason, does: { verb: "nothing" }, name };
+}
+
+/**
+ * The group a curation row the core left out is drawn under. Slashes, for `OUTSIDE`'s reason:
+ * no persona can be called this, so it cannot collide with a declaring persona's group.
+ */
+export const LEFT_OUT = "left/out";
+
+/** The prefix every curation row of one subject's id starts with. */
+function curateId(subject: string): string {
+  return `curate:${subject}/`;
+}
+
+/**
+ * One subject's curation rows: its actions in the core's order — charter's own first, then
+ * each persona's — and a row that cannot run for each action the core left out, with the
+ * core's sentence as its reason.
+ *
+ * `cannot` is why no curation chat can be opened in this project right now (its default
+ * harness cannot be typed into); every action row is then drawn with it as its reason rather
+ * than refused on a click.
+ */
+function curationRows(subject: SubjectCurations, cannotOpen: string | null): Offer[] {
+  const name = subject.name;
+  const rows: Offer[] = subject.actions.map((action) => {
+    const id = `${curateId(subject.subject)}${action.id}`;
+    const title = `Curate ${name}: ${action.label}`;
+    const group = action.declared_by ?? undefined;
+    if (cannotOpen !== null) return { ...cannot(id, title, cannotOpen, name), group };
+    const who = action.runner === null ? "with no persona" : `as ${action.runner}`;
+    return {
+      ...can(id, title, { verb: "curate", subject: subject.subject, action: action.id }, name),
+      note: `Opens a chat ${who} in ${action.cwd}, with its prompt typed and not sent.`,
+      group,
+    };
+  });
+  subject.left_out.forEach((left, i) => {
+    rows.push({
+      ...cannot(
+        `${curateId(subject.subject)}!${i}`,
+        `Curate ${name}: ${left.what} is left out`,
+        left.why,
+        name,
+      ),
+      group: LEFT_OUT,
+    });
+  });
+  if (subject.trouble !== null && rows.length === 0) {
+    rows.push(cannot(`${curateId(subject.subject)}!`, `Curate ${name}`, subject.trouble, name));
+  }
+  return rows;
 }
 
 /**
@@ -1066,6 +1145,14 @@ export function catalogue(now: Now): Offer[] {
         note: "Opens it in your editor — whatever your system opens a .md file with.",
       },
     );
+  }
+
+  // **Curation actions (ADR 0061)**: one row per action a workspace, a persona or the plane is
+  // offered, named `Curate <subject>: <label>`, and one row that cannot run per action the core
+  // left out — never dropped silently. Above the line: an action opens a chat and types a
+  // prompt, and nothing runs until the operator reads it and presses Enter.
+  for (const subject of now.curations?.subjects ?? []) {
+    offers.push(...curationRows(subject, now.curations?.cannot ?? null));
   }
 
   // **The plane's vaults, one row each, and each opens that vault's own tab** (charter-app#235)
@@ -1554,6 +1641,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openPreferences":
       doing.openPreferences();
       return DID;
+    case "curate":
+      return doing.curate(does.subject, does.action);
     case "quit":
       doing.quit();
       return DID;
@@ -1877,10 +1966,8 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       // What charter can do to a persona from this window (SI-3): show it, hand its
       // definition to the operator's editor, make another, and delete it.
       //
-      // **Curation goes here, as a group of its own** — a later change adds a "Curate ▸"
-      // submenu to persona and workspace rows. It is not drawn yet, and nothing here pretends
-      // it is: a menu row the catalogue does not offer is dropped (`menuRows`), so the ids it
-      // adds join `above` when the catalogue has them.
+      // **Curation is a group of its own**: the "Curate ▸" submenu (ADR 0061), which
+      // `Menus.tsx` draws from `curateSubjectOf` and `curateRows` rather than from this list.
       return {
         above: [`persona.show:${what.persona}`, `persona.edit:${what.persona}`, "persona.create"],
         below: [`persona.remove:${what.persona}`],
@@ -1902,6 +1989,58 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         below: ["pane.close"],
       };
   }
+}
+
+/**
+ * The curation subject a context menu on that item offers a "Curate ▸" submenu for, in the
+ * core's spelling, or none. A function of its own rather than a third list in [`menuOn`]: a
+ * submenu is a group of rows the catalogue decides the length of, and `menuOn` is a list of
+ * names it can know in advance.
+ */
+export function curateSubjectOf(what: MenuOn): string | undefined {
+  switch (what.on) {
+    case "workspace":
+      return what.workspace === OUTSIDE ? undefined : `workspace:${what.workspace}`;
+    case "persona":
+      return `persona:${what.persona}`;
+    // The plane root's tab is the plane's own place on the strip (SI-1), so the plane is
+    // curated from it.
+    case "root":
+      return "plane";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * A subject's "Curate ▸" submenu, in the order it is drawn: charter's own actions, then a group
+ * per declaring persona in the core's order, then every action the core left out.
+ *
+ * **A scan of the catalogue, and only when the submenu is drawn** — which is when its menu is
+ * open. `Menus.tsx` calls it from inside the menu's content, which Radix mounts only while the
+ * menu is up, so a strip of fifty tabs does not pay it per render.
+ */
+export function curateRows(
+  subject: string,
+  offers: Catalogued,
+): { charter: Offer[]; personas: { persona: string; rows: Offer[] }[]; leftOut: Offer[] } {
+  const prefix = curateId(subject);
+  const charter: Offer[] = [];
+  const personas: { persona: string; rows: Offer[] }[] = [];
+  const leftOut: Offer[] = [];
+  for (const [id, offer] of offers) {
+    if (!id.startsWith(prefix)) continue;
+    if (offer.group === LEFT_OUT || (offer.group === undefined && id.startsWith(`${prefix}!`))) {
+      leftOut.push(offer);
+    } else if (offer.group === undefined) {
+      charter.push(offer);
+    } else {
+      const last = personas.at(-1);
+      if (last?.persona === offer.group) last.rows.push(offer);
+      else personas.push({ persona: offer.group, rows: [offer] });
+    }
+  }
+  return { charter, personas, leftOut };
 }
 
 /**

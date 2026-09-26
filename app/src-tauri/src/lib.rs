@@ -10,6 +10,7 @@ mod alerts;
 mod autosave;
 mod chats;
 mod clipath;
+mod curation;
 mod doctor;
 mod extensions;
 mod handoff;

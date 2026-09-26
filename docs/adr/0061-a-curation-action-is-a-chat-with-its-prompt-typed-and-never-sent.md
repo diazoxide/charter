@@ -14,9 +14,9 @@ The operator reads the prompt and presses Enter. There is no setting, flag or fi
 sends it instead. The prompt is the whole contract between the action and the operator, so the
 operator always sees it before anything runs.
 
-This PR is the model and its resolution, in `charter_core::curation`. The app's menus (a
-"Curate ▸" group, palette rows, and pasting the prompt once the chat's first SessionStart hook
-has reported) are a later PR, and they call [`resolve`](../../crates/charter-core/src/curation.rs).
+The model and its resolution are `charter_core::curation`. The app's side, SI-2b, calls
+[`resolve`](../../crates/charter-core/src/curation.rs) and nothing else to decide what is offered;
+it is recorded under **The app's side** below.
 
 ### What a subject is offered
 
@@ -111,6 +111,42 @@ An opencode chat the app starts discovers charter's skills as its own, through t
 Codex chat is briefed on them at `SessionStart`, with the path to each `SKILL.md`. The prompts
 still say what to do in a sentence as well, because a chat outside the app, or a Codex chat whose
 hooks are not trusted yet, has no skills from charter.
+
+## The app's side
+
+- **Where it is offered.** A "Curate ▸" submenu on a workspace's, a persona's and the plane
+  root tab's right-click menu (the plane root tab is the plane subject's, SI-1), and one palette
+  row per action, `Curate <subject>: <label>`. charter's own first, then a
+  group per declaring persona, then each action the core left out as a row that cannot run, with
+  the core's sentence as its reason.
+- **What opens.** The window names the subject and the action's id and nothing else;
+  `curation::curate` in the app resolves the subject again, so the text typed is the core's now.
+  The chat starts on the project's default profile (else the first the picker lists, which is
+  the row a new chat's picker starts on), as the action's runner, in its directory, and its tab
+  says `<label> · <subject>`. It is filed under the subject workspace when it runs in that
+  workspace's directory, and on the plane root's tab otherwise; `start::ready` hands a chat at
+  the root `$CHARTER_PLANE_ROOT_SESSION=1` as it does any other (SI-1).
+- **When the prompt is typed.** The prompt is held in the app per chat, not in the window, until
+  the chat's first `SessionStart` hook report that began a session. A report of a prompt, a
+  turn's end or the chat's own end before that drops it; so does the chat ending or being
+  closed. It is never typed late.
+- **How.** One bracketed paste, `ESC [200~ … ESC [201~`, and nothing after it: no carriage
+  return, no line feed. Line breaks inside are line feeds; every other control character is
+  taken out, so a prompt holding `ESC [201~` cannot end the paste early and have the rest read
+  as keys. It is pasted bracketed whether or not the program asked for it: the terminal engine
+  offers no way to ask which modes are on, and all three harnesses turn it on.
+- **Only once the terminal hands keys to the harness.** `SessionStart` says the harness started,
+  not that it reads keys. Measured on Claude Code 2.1.283: in a folder it has just been told to
+  trust, the hook fires inside a third of a second when the terminal is canonical again, and a
+  two-line paste written then was echoed onto the screen and lost its second line. So the app
+  asks the terminal's line discipline (`Session::edits_lines`, the pty's `ICANON`) every 20 ms
+  for up to ten seconds and types the moment it is raw; a terminal still canonical then is not
+  typed into, and stderr says so. That is the kernel's state, not the harness's output.
+- **Which harnesses.** Only one that reports `SessionStart` at launch
+  (`Harness::reports_its_start_before_the_first_prompt`): Claude Code. Codex fires it inside the
+  first turn and opencode's shim at the first prompt, so a prompt typed on it would follow what
+  the operator had already sent. With either as the default profile every action is shown
+  disabled with that reason, and `curate` refuses before anything starts.
 
 ## What this costs
 

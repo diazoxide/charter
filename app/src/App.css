@@ -3178,6 +3178,30 @@ h2.sidebar-title .node-icon {
   background: var(--danger-surface);
 }
 
+/* The "Curate ▸" row that opens a submenu (ADR 0061): its words and its arrow on one line, and
+   highlighted while its submenu is open as well as under the pointer. */
+.menu-row.menu-sub {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.menu-row.menu-sub[data-state="open"] {
+  background: var(--tab-active);
+}
+
+.menu-sub-mark {
+  color: var(--text-muted);
+}
+
+/* A submenu group's name — the persona that declared the actions under it. Not a row: it
+   cannot be chosen, and says so by being quieter and smaller than one. */
+.menu-label {
+  padding: 0.2rem 0.45rem 0.1rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
 /* ---------------------------------------------------------------------------------------
    The dialogs that make and delete things
    --------------------------------------------------------------------------------------- */

@@ -297,6 +297,13 @@ impl Sessions {
         })
     }
 
+    /// Whether a session's terminal is still in the kernel's line editing rather than handing
+    /// keys to its program (`charter_core::session::Session::edits_lines`), or none where the
+    /// platform cannot say. Refused for a session that is gone.
+    pub fn edits_lines(&self, id: u32) -> Result<Option<bool>, String> {
+        self.with(id, |running| Ok(running.session.edits_lines()))
+    }
+
     pub fn resize(&self, id: u32, size: Size) -> Result<(), String> {
         self.with(id, |running| {
             running.session.resize(size).map_err(|err| err.to_string())
