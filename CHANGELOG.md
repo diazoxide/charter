@@ -64,6 +64,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A terminal pane that opens late no longer adds a line when a wide character sits in the
+  last column.** If a program had pushed a wide character, such as a CJK character, into the
+  last column with wrapping turned off, the catch-up redraw printed that character again. That
+  wrapped it onto the next row, and on the bottom row it scrolled the pane by one line. The
+  pane now draws the blank that the terminal holds there.
+  ([#435](https://github.com/diazoxide/charter/issues/435))
 - **The extension tests no longer fail on a busy machine.** Extensions still get the same time
   as before: 5 seconds for a view, an action, an event or a command, and at a chat's start 2
   seconds each and 3 seconds for all of them together. A debug build of `charter` now lets the
