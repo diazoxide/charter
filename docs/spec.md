@@ -86,12 +86,24 @@ When two choices conflict, the higher priority wins.
    - **A chat inherits none of that from charter itself.** charter may be launched from inside
      a harness session, and a chat that inherited its `CLAUDE_PID` would report the launcher's
      identity as its own.
-4. **A worktree per writing chat.** A chat that writes to a repo gets its own git worktree by
-   default. The sidebar shows its branch. Merging back is an explicit action — `merge` lands
-   it locally, fast-forward only, into the branch the piece was cut from; `publish` pushes;
-   neither does the other, and neither takes `--all` (ADR 0020). Git is the only registry,
-   reached through the git binary: **ADR 0027**. The design is
-   `docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md`.
+4. **A worktree per writing chat.** The goal is that a chat that writes to a repo gets its own
+   git worktree — a **piece** — by default. What ships today is narrower:
+   - The explorer lists each clone's pieces under it. Picking one makes the next chat start
+     there, and a chat's row shows the piece's branch.
+   - A chat started in a piece gets the plane's harness layer written into that tree first
+     (`start::layered_or_refusal`), or it is refused with the sentence naming what stopped it.
+     `unwired` marks a tree the layer is not in yet.
+   - Merging back is an explicit action on the piece's row. `merge` lands it locally,
+     fast-forward only, into the branch the piece was cut from. `remove` refuses to discard
+     uncommitted changes or commits no other ref reaches unless the operator forces it.
+   - **Not shipped yet** (charter#368): cutting a piece from the window or the command line, a
+     new chat getting one by default, `publish`, and the piece log's `claimed`, `done` and
+     `abandoned` events. The session briefing and the footer read that log, and nothing writes
+     it, so a piece reads as silent there.
+
+   Neither `merge` nor `publish` takes `--all` (ADR 0020). Git is the only registry, reached
+   through the git binary: **ADR 0027**. The design is charter-plane's
+   [`docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md`](https://github.com/diazoxide/charter-plane/blob/cli-final/docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md).
 5. **Lifecycle.** Closing the window hides the app to the tray. Quitting warns if a session is
    mid-turn and then ends every session. On the next launch, when anything was open, the window
    asks once — reopen every session, or start fresh — naming how many chats in which projects,
@@ -255,9 +267,12 @@ Each milestone is something the operator actually uses, not a layer.
   - the plane read *and written* in Rust: workspaces, chats, personas, todos, profiles
   - the workspace sidebar and the "needs you" queue
   - chats with the profile and persona picker
-  - a worktree per chat (ADR 0027) — with one gap named there and not papered over: the
-    harness layer is not yet written into a worktree, so such a chat runs without charter's
-    guards, its row says `unwired`, and a persona cannot be attached to it
+  - a worktree per chat (ADR 0027). The gap ADR 0027 named is closed: the harness layer is
+    written into a piece when charter cuts it and again when a chat starts there, so that chat
+    has the plane's guards and its persona's agents
+    (`crates/charter-core/tests/a_chat_in_a_worktree_gets_the_planes_layer.rs`). `unwired` is
+    left only on a tree whose layer is not in it yet, and a chat is refused there rather than
+    started unguarded. What is still missing is in decision 4
   - read-only panels and the palette
   - lifecycle: tray, a quit warning mid-turn, reopen on relaunch
   - `charter hook …` answered by the Rust binary, which is also what meets the hook limit
