@@ -1447,23 +1447,28 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
         _ => return None,
     };
     let code = match command {
-        // A pull that failed, or met conflicts, stops the save: it would stage their markers.
-        Command::Save { pull: true, .. } if charter_core::planegit::pull(&root, &mut say) != 0 => 1,
         Command::Save {
             message,
             sign,
             no_push,
-            ..
-        } => charter_core::planegit::save(
-            &charter_core::planegit::Request {
-                root: &root,
-                message: message.as_deref(),
-                sign: *sign,
-                no_push: *no_push,
-                cwd: &cwd,
-            },
-            &mut say,
-        ),
+            pull,
+        } => {
+            // A pull that failed, or met conflicts, stops the save: it would stage the markers.
+            if *pull && charter_core::planegit::pull(&root, &mut say) != 0 {
+                1
+            } else {
+                charter_core::planegit::save(
+                    &charter_core::planegit::Request {
+                        root: &root,
+                        message: message.as_deref(),
+                        sign: *sign,
+                        no_push: *no_push,
+                        cwd: &cwd,
+                    },
+                    &mut say,
+                )
+            }
+        }
         Command::GitPolicy { apply } => charter_core::gitpolicy::policy(&root, *apply, &mut say),
         _ => return None,
     };

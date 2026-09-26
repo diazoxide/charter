@@ -132,7 +132,8 @@ daemon stands in for them. `charter save --pull` runs the incoming loop's fetch 
 fast-forward first, through the same core function, so one command does both from a terminal.
 The fast-forward waits on the same conditions. If the tree has unsaved work, what came in is
 left where it is and the save goes ahead. If the tree has conflicts, the command refuses and
-saves nothing, because a save would stage the conflict markers.
+saves nothing, because a save would stage the conflict markers. The pull is asked for, so it
+runs whatever the mode, `off` included, where the save after it then commits nothing.
 
 Defaults:
 

@@ -723,8 +723,8 @@ impl Held {
                 format!("the plane is on `{here}`, not its target branch `{branch}`")
             }
             Self::Ahead(n) => format!(
-                "the plane has {n} commit(s) the remote lacks; a save that pushes rebases onto \
-                 what came in"
+                "the plane has {n} commit(s) of its own the remote lacks, and a pull only \
+                 fast-forwards"
             ),
             Self::Unsaved => "the tree has unsaved changes, and a pull never moves them".into(),
             Self::Refused(detail) => format!("git refused the fast-forward: {detail}"),
@@ -777,33 +777,29 @@ pub fn fetch(root: &Path, fast_forward: bool) -> Result<Incoming, String> {
             == prsave::Settled::Moved;
     let mine = count(root, &format!("refs/remotes/origin/{branch}..HEAD")).unwrap_or(0);
     let git_dir = git_dir_of(root);
-    let mut held = (fast_forward && !settled && behind > 0)
+    let held = (fast_forward && !settled && behind > 0)
         .then(|| hold(root, &git_dir, &here, &branch, mine))
         .flatten();
-    let moved = settled
-        || fast_forward
-            && behind > 0
-            && held.is_none()
-            // Untimed: a merge checks out a tree, and a killed one leaves it half-written.
-            && match git::run_untimed(
-                root,
-                &[
-                    "merge",
-                    "--ff-only",
-                    "--no-overwrite-ignore",
-                    &format!("refs/remotes/origin/{branch}"),
-                ],
-            ) {
-                Ok(run) if run.ok() => true,
-                Ok(run) => {
-                    held = Some(Held::Refused(tail(&run)));
-                    false
-                }
-                Err(unavailable) => {
-                    held = Some(Held::Refused(unavailable.to_string()));
-                    false
-                }
-            };
+    let (moved, held) = if settled {
+        (true, None)
+    } else if fast_forward && behind > 0 && held.is_none() {
+        // Untimed: a merge checks out a tree, and a killed one leaves it half-written.
+        match git::run_untimed(
+            root,
+            &[
+                "merge",
+                "--ff-only",
+                "--no-overwrite-ignore",
+                &format!("refs/remotes/origin/{branch}"),
+            ],
+        ) {
+            Ok(run) if run.ok() => (true, None),
+            Ok(run) => (false, Some(Held::Refused(tail(&run)))),
+            Err(unavailable) => (false, Some(Held::Refused(unavailable.to_string()))),
+        }
+    } else {
+        (false, held)
+    };
     Ok(Incoming {
         behind,
         moved,
@@ -861,7 +857,8 @@ fn git_dir_of(root: &Path) -> PathBuf {
 
 /// `charter save --pull`'s first half: [`fetch`] the plane's target branch and fast-forward
 /// onto it, exactly as the app's incoming loop does with auto-save on (ADR 0051), and say
-/// what happened. The pull is asked for, so it is made whatever the plane's mode.
+/// what happened. The pull is asked for, so it is made whatever the plane's mode — `off`
+/// included, where the save that follows then commits nothing.
 ///
 /// `0` when there is nothing to stop the save that follows: nothing came in, it was brought
 /// in, or it was left for a reason the save does not make worse (unsaved work, which the save
