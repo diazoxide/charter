@@ -431,28 +431,42 @@ impl Surface {
 /// `_registered_vault_files(resolve=False)`: each vault's configured `file`, as a path —
 /// `vaults.json` at the root merged under `.charter/vaults.json`. `None` when the registry holds
 /// something charter cannot read as a registry, so the gate declines rather than guess which
-/// files are vaults.
+/// files are vaults — and when a half is a link, or reached through one (#440): what it points
+/// at would otherwise decide what the gate protects.
 fn registered_vault_files(plane: &Path) -> Option<Vec<String>> {
-    fn half(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, ()> {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Ok(serde_json::Map::new());
+    /// `Err` for a half that is not JSON; `Ok(None)` for one charter refuses to read.
+    fn half(
+        trust: &Path,
+        path: &Path,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, ()> {
+        let text = match crate::contain::read_text_no_link(trust, path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Some(serde_json::Map::new()));
+            }
+            // A link, a FIFO, a file charter may not read: nothing it can vouch for.
+            Err(_) => return Ok(None),
         };
         let doc: serde_json::Value = serde_json::from_str(&text).map_err(|_| ())?;
-        Ok(doc
-            .get("vaults")
-            .and_then(|v| v.as_object())
-            .map(|m| {
-                m.iter()
-                    .filter(|(_, e)| e.is_object())
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
-            })
-            .unwrap_or_default())
+        Ok(Some(
+            doc.get("vaults")
+                .and_then(|v| v.as_object())
+                .map(|m| {
+                    m.iter()
+                        .filter(|(_, e)| e.is_object())
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ))
     }
     // A registry that is not JSON is `VaultError` in charter, caught by `_registered_vault_files`
     // as "no registered files" — the state and vault directories are still the surface.
-    let shared = half(&plane.join("vaults.json")).unwrap_or_default();
-    let local = half(&State::of(plane).dir().join("vaults.json")).unwrap_or_default();
+    let state = State::of(plane);
+    let corrupt_is_empty =
+        |read: Result<Option<_>, ()>| read.unwrap_or_else(|()| Some(Default::default()));
+    let shared = corrupt_is_empty(half(plane, &plane.join("vaults.json")))?;
+    let local = corrupt_is_empty(half(state.trust(), &state.dir().join("vaults.json")))?;
     let mut files: BTreeMap<String, Option<String>> = BTreeMap::new();
     for (name, entry) in shared.iter().chain(local.iter()) {
         match entry.get("config") {
@@ -957,6 +971,28 @@ mod tests {
             ask(&root, "cat notes.txt"),
             Some(("ops".into(), "cat".into()))
         );
+    }
+
+    /// #440: a registry half that is a link is never read as the list of vault files. What
+    /// it points at would decide what the gate protects, so the gate declines instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_registry_half_that_is_a_link_makes_the_gate_decline() {
+        let (_d, root) = plane("cat");
+        std::fs::write(root.join("notes.txt"), "x").unwrap();
+        assert!(ask(&root, "cat notes.txt").is_some(), "the honest baseline");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let theirs = elsewhere.path().join("theirs.json");
+        std::fs::write(&theirs, r#"{"vaults": {}}"#).unwrap();
+        for half in ["vaults.json", ".charter/vaults.json"] {
+            std::os::unix::fs::symlink(&theirs, root.join(half)).unwrap();
+            assert_eq!(
+                ask(&root, "cat notes.txt"),
+                None,
+                "{half} was read through its link"
+            );
+            std::fs::remove_file(root.join(half)).unwrap();
+        }
     }
 
     #[test]

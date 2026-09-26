@@ -68,12 +68,6 @@ fn read(trust: &Path, path: &Path) -> Result<Map<String, Value>, VaultError> {
             doc.insert("vaults".into(), Value::Object(Map::new()));
             return Ok(doc);
         }
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            return Err(VaultError::new(format!(
-                "vault registry {} cannot be read: {e}",
-                path.display()
-            )));
-        }
         Err(e) => {
             return Err(VaultError::new(format!(
                 "vault registry {} is corrupt: {e}",

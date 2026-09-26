@@ -22,6 +22,14 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// The directory a state directory's paths are gated from: the plane when `state` is inside
+/// it, so a `.charter/` that is itself a link is refused — and `state` itself when
+/// `$CHARTER_HOME` puts it elsewhere, since then the plane is no place to walk from and the
+/// directory is the operator's own choice.
+pub fn trust_root<'a>(root: &'a Path, state: &'a Path) -> &'a Path {
+    if state.starts_with(root) { root } else { state }
+}
+
 /// A plane's state directory, and the directory its paths are trusted below.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
@@ -33,14 +41,13 @@ impl State {
     /// The state directory of the plane at `root`.
     pub fn of(root: &Path) -> Self {
         let dir = crate::plane::state_dir(root);
-        // `$CHARTER_HOME` may put the state directory outside the plane, and then the plane
-        // is no place to walk from: the directory itself is what charter made.
-        let trust = if dir.starts_with(root) {
-            root.to_path_buf()
-        } else {
-            dir.clone()
-        };
+        let trust = trust_root(root, &dir).to_path_buf();
         Self { dir, trust }
+    }
+
+    /// The directory this state's paths are gated from ([`trust_root`]).
+    pub fn trust(&self) -> &Path {
+        &self.trust
     }
 
     /// `config.STATE_DIR`.

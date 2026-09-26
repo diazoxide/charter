@@ -137,6 +137,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     size band.
   - A vault registry, vault file or key index that is a symlink is an error that names it.
   - A session tool ceiling that is a symlink grants nothing, so every tool asks.
+  - When a vault registry half is a symlink, the persona tool gate does not auto-allow a
+    command, since it cannot tell which files are vaults.
   - Other bookkeeping reads as nothing recorded.
 - **A `.charter/` directory that is a symlink is refused for the vault registry and the
   fingerprint key.** Neither is read from nor written to where it points. A `$CHARTER_HOME`

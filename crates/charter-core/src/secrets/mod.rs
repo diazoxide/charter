@@ -209,11 +209,7 @@ impl Ctx {
     /// directory itself when `$CHARTER_HOME` puts it elsewhere, where it is the operator's own
     /// choice of directory and may be a link honestly.
     pub fn trust(&self) -> &Path {
-        if self.state.starts_with(&self.root) {
-            &self.root
-        } else {
-            &self.state
-        }
+        crate::hookstate::trust_root(&self.root, &self.state)
     }
 
     /// `config.SHARED_VAULTS` — the committed half, beside `personas/`.

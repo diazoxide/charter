@@ -12,6 +12,10 @@
 //! shapes, a plain file (never a link), and older than [`STALE_AFTER`] is removed: a name
 //! charter did not make is not charter's to remove, and a temp an older charter still running
 //! beside this one is writing right now is younger than that.
+//!
+//! The gate on the way to the directory is a `stat`, and the removal is by path, so a
+//! directory swapped for a link in between is ADR 0028's shared window; what could be lost
+//! there is a file with exactly one of these names, older than the threshold.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -150,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_a_plane_removes_the_temps_an_older_charter_left_and_nothing_else() {
+    fn a_planes_sweep_removes_the_temps_an_older_charter_left_and_nothing_else() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let reopen = root.join(".charter/app/reopen.json.writing");
