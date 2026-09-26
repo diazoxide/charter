@@ -87,7 +87,7 @@ static HARNESSES: [Harness; 3] = [
                session here would find — the app arms charter's hooks on each Codex chat's \
                command line (`-c hooks.*`), so no file in a directory carries them. Codex also \
                reads `~/.codex/config.toml` and, once the project is trusted, a project \
-               `.codex/config.toml`, which charter does not write. Codex DOES read an in-repo \
+               `.codex/config.toml` (measured, 0.147.0), which charter does not write. Codex DOES read an in-repo \
                `.codex/skills/` (measured, 0.147.0); charter mirrors the plane's copy of that \
                into a workspace's checkouts",
         trust_gate: "",

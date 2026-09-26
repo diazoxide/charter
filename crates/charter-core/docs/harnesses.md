@@ -158,7 +158,7 @@ fact, and the row names which part is missing and which rule decided.
 Codex gets nothing here and says why: a workspace **directory** is not a config scope for it,
 so two workspaces on one machine cannot be made to differ. It does read something from a
 project — `.codex/skills/` — and, once the project is trusted, a project `.codex/config.toml`
-(codex-cli 0.147.0), which charter does not write. The app arms charter's hooks on each Codex
+(both measured on codex-cli 0.147.0, the second in #354), which charter does not write. The app arms charter's hooks on each Codex
 chat's command line (`-c hooks.*`) instead, so no file in a directory carries them. Charter
 writes nothing machine-global on the operator's behalf.
 
@@ -194,7 +194,7 @@ deliberately absent:
   plane and a clone does not — see [workspaces.md](workspaces.md) for how charter keeps that
   file hidden once Claude Code writes its own approvals into it.
 - **A project `.codex/config.toml`**. Codex reads it only once the project is trusted, and
-  then it can carry hooks, sandbox and MCP settings — so copying one would put config in force
+  then it can carry hooks, sandbox and MCP settings (measured on codex-cli 0.147.0, #354) — so copying one would put config in force
   in a repository nobody granted it in, the same reason as above. The app arms charter's hooks
   on each Codex chat's command line (`-c hooks.*`) instead.
 - **`CLAUDE.md` or any equivalent**, because a guest hides its own files and does not
