@@ -135,6 +135,10 @@ pub trait Adapter: Sync {
     fn installed(&self, env: &Env<'_>) -> Result<Vec<Plugin>, String>;
     fn support(&self) -> Support;
     /// What charter fixes for it, whatever a file says.
+    ///
+    /// The default is an empty slice, and cargo-mutants' `Vec::leak(Vec::new())` is an empty
+    /// slice too: every caller only iterates it, so no input tells them apart
+    /// (`.cargo/mutants.toml` excludes that one mutant).
     fn pinned(&self) -> &'static [Pin] {
         &[]
     }

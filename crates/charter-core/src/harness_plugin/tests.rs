@@ -745,3 +745,125 @@ fn a_chat_on_a_harness_that_cannot_apply_is_handed_nothing_at_its_start() {
         Chosen::new()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_project_that_chooses_nothing_never_opens_the_harnesss_record() {
+    // The test above cannot tell a read from none: a record that fails to parse is the pins
+    // too. A fifo can — opening it for reading waits for a writer, so the writer here learns
+    // whether anything opened it.
+    use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let plane = tempfile::tempdir().unwrap();
+    std::fs::write(plane.path().join("charter.toml"), "").unwrap();
+    let config = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("plugins")).unwrap();
+    let record = config.path().join("plugins/installed_plugins.json");
+    let made_it = crate::forklock::status(std::process::Command::new("mkfifo").arg(&record))
+        .expect("mkfifo runs");
+    assert!(made_it.success(), "the test needs a fifo to plant");
+
+    let opened = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let opened = Arc::clone(&opened);
+        let record = record.clone();
+        std::thread::spawn(move || {
+            let mut pipe = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&record)
+                .expect("the fifo's write end");
+            opened.store(true, Ordering::SeqCst);
+            let _ = pipe.write_all(b"{}");
+        })
+    };
+    let chat = env_of(&[("CLAUDE_CONFIG_DIR", config.path())]);
+    let env = Env {
+        chat: &chat,
+        home: None,
+        process: false,
+    };
+
+    let got = for_start("claude", plane.path(), None, &env);
+    let read_it = opened.load(Ordering::SeqCst);
+    if !read_it {
+        // Nothing opened it, so the writer is still waiting for a reader: be one.
+        drop(std::fs::File::open(&record).expect("the fifo's read end"));
+    }
+    writer.join().expect("the writer");
+
+    assert!(
+        !read_it,
+        "the record was opened for a project that chooses nothing"
+    );
+    assert_eq!(got, BTreeMap::from(pins(&CLAUDE_CODE)));
+}
+
+#[test]
+fn claude_code_says_so_when_its_install_record_cannot_be_read() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("plugins/installed_plugins.json")).unwrap();
+    let env = env_of(&[("CLAUDE_CONFIG_DIR", home.path())]);
+
+    let why = CLAUDE_CODE
+        .installed(&Env::of(&env))
+        .expect_err("a record that is a directory read as no record");
+    assert!(why.starts_with("charter could not read "), "{why}");
+}
+
+#[test]
+fn claude_code_is_called_claude_code() {
+    assert_eq!(CLAUDE_CODE.title(), "Claude Code");
+}
+
+#[test]
+fn a_plugin_id_is_one_short_line_with_nothing_in_it_that_draws_as_nothing() {
+    for good in ["figma@official", "a", &"a".repeat(MOST_ID_BYTES)] {
+        assert!(id_ok(good), "{good}");
+    }
+    for bad in [
+        "",
+        "   ",
+        &"a".repeat(MOST_ID_BYTES + 1),
+        "a\nb",
+        "a\u{200b}b",
+    ] {
+        assert!(!id_ok(bad), "{bad:?}");
+    }
+}
+
+#[test]
+fn the_settings_tab_lists_every_harness_with_what_it_has_installed() {
+    let config = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("plugins")).unwrap();
+    std::fs::write(
+        config.path().join("plugins/installed_plugins.json"),
+        r#"{"version": 2, "plugins": {"figma@official": [{"scope": "user"}]}}"#,
+    )
+    .unwrap();
+    let chat = env_of(&[("CLAUDE_CONFIG_DIR", config.path())]);
+    let env = Env {
+        chat: &chat,
+        home: None,
+        process: false,
+    };
+
+    let groups = survey(&Choices::default(), &env);
+    let harnesses: Vec<&str> = groups.iter().map(|it| it.adapter.harness()).collect();
+    assert_eq!(harnesses, ["claude", "opencode", "codex"]);
+    assert_eq!(
+        groups[0].record,
+        Some(config.path().join("plugins/installed_plugins.json"))
+    );
+    assert!(groups[0].trouble.is_none());
+    assert!(
+        groups[0].plugins.iter().any(|it| it.id == "figma@official"),
+        "{:?}",
+        groups[0]
+            .plugins
+            .iter()
+            .map(|it| &it.id)
+            .collect::<Vec<_>>()
+    );
+}

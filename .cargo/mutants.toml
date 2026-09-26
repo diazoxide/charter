@@ -151,4 +151,7 @@ exclude_re = [
     # `executor::ask_within`'s `left.is_zero() || set_write_timeout(..).is_err()` against `&&`:
     # a zero timeout is an error to `set_write_timeout`, so the halves agree. The site says so.
     'src/executor\.rs:\d+:\d+: replace \|\| with && in ask_within$',
+    # `harness_plugin::Adapter::pinned`'s default is `&[]`, and `Vec::leak(Vec::new())` is the
+    # same empty slice: every caller only iterates what it answers. The site says so.
+    'src/harness_plugin\.rs:\d+:\d+: replace Adapter::pinned -> &.static\[Pin\] with Vec::leak\(Vec::new\(\)\)$',
 ]
