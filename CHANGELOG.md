@@ -218,6 +218,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   heredoc opened inside a process substitution that closes on the same line is read the way a
   heredoc inside `$(…)` already was.
 
+- **The guards read a heredoc inside a substitution that spans lines the way each shell does.**
+  When a heredoc is opened inside `$(…)`, backticks, `<(…)` or `>(…)` and the substitution
+  does not close on that line, bash 3.2, bash 5 and zsh can disagree about which of the
+  following lines are the heredoc's body. The guards now read those lines both as commands and
+  as a body, and never set them aside as a body alone. After such a body, they no longer set
+  aside any later heredoc body either.
+
 - **The nightly mutation run finishes again.** Its shards were sized for a test suite half as
   long as today's, so two of them ran out of time. The run now uses smaller shards and a longer
   per-mutant limit. It also stops reporting slow survivors as timeouts. New tests now cover the

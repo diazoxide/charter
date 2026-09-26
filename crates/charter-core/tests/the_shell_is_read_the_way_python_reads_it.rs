@@ -1135,6 +1135,86 @@ fn a_shift_opens_no_body_a_guard_may_skip() {
     );
 }
 
+/// A heredoc opened inside a substitution that does not close on the header's line — `$( … )`,
+/// a backtick, `<( … )`, `>( … )` or zsh's `=( … )`, however nested — has a body the shells
+/// read differently when a line of it holds a `)` or a backtick. GNU bash 3.2.57 ends the
+/// substitution there and runs the lines after it; GNU bash 5.2 and 5.3 and zsh 5.9 read them
+/// as the body, and every one of those shells ends a backtick substitution at a backtick in the
+/// body. Each first line below ran `secret` in at least one of those shells, checked with a
+/// `touch` marker. Such a body is read both ways: never dropped, and read as lines a shell runs.
+#[test]
+fn a_heredoc_in_a_substitution_spanning_lines_opens_no_body_a_guard_may_skip() {
+    charter_core::unsteered!();
+    for cmd in [
+        "x=$(\ncat <<\"2\"\n)\nsecret\n2\nls",
+        "x=`\ncat <<\"2\"\n`\nsecret\n2\nls",
+        "cat <(\ncat <<\"2\"\n)\nsecret\n2\nls",
+        "cat >(\ncat <<\"2\"\n)\nsecret\n2\nls",
+        "x=\"$(\ncat <<'2'\n)\"\nsecret\n2\nls",
+        "x=$(\ny=$(\ncat <<\"2\"\n)\n)\nsecret\n2\nls",
+        "x=$(echo `\ncat <<'2'\n`)\nsecret\n2\nls",
+        "x=`echo $(\ncat <<'2'\n)`\nsecret\n2\nls",
+        "x=$(cat <<\"2\"\n)\nsecret\n2\nls",
+        "cat <(cat <<\"2\"\n)\nsecret\n2\nls",
+        "x=\"$(cat <<'2'\nfix )\"\nsecret\n2\n)\"",
+        "x=`cat <<'2'\na`\nsecret\n2\n`",
+        // Closed on the header's line, having opened on an earlier one.
+        "x=$(\ncat <<\"2\")\nsecret\n2\nls",
+        // bash 5.3's `${ …; }`, which GNU bash 3.2.57 and 5.2 read as a parameter expansion.
+        "x=${ \ncat <<\"2\"\n}\nsecret\n2\nls",
+    ] {
+        assert_eq!(heredoc::strip_reader_heredocs(cmd), cmd, "{cmd:?}");
+        let layout = heredoc::heredoc_layout(cmd);
+        assert!(
+            layout.iter().all(|l| !l.drop && (!l.body || l.executed)),
+            "{cmd:?}: {layout:?}"
+        );
+    }
+}
+
+/// Once the shells part company about which lines are a body, they do not agree again: GNU bash
+/// 3.2.57 reads the would-be body as commands, one of which opens a heredoc of its own, and
+/// that one's body takes the terminator the other reading ends at. So from the first body read
+/// both ways, no body after it is dropped either. Both lines below ran `secret` in bash 3.2.57
+/// (the first in zsh 5.9 too).
+#[test]
+fn a_body_read_both_ways_keeps_every_body_after_it() {
+    charter_core::unsteered!();
+    for cmd in [
+        "x=$(cat <<'E' )\ncat <<'Y'\nE\ncat <<'W'\nY\nsecret\nW",
+        "x=$(cat <<'E'\n)\ncat <<'Y'\nE\ncat <<'W'\nY\nsecret\nW",
+    ] {
+        assert_eq!(heredoc::strip_reader_heredocs(cmd), cmd, "{cmd:?}");
+        let layout = heredoc::heredoc_layout(cmd);
+        assert!(
+            layout.iter().all(|l| !l.drop && (!l.body || l.executed)),
+            "{cmd:?}: {layout:?}"
+        );
+    }
+}
+
+/// Where no line of the body holds a `)` or a backtick, every shell above reads the same body,
+/// and a quoted reader's body is data as before (GNU bash 3.2.57, 5.2, 5.3 and zsh 5.9 all left
+/// `secret` unrun).
+#[test]
+fn a_heredoc_in_a_substitution_with_no_closer_in_its_body_is_read_once() {
+    charter_core::unsteered!();
+    for (cmd, kept) in [
+        (
+            "x=$(\ncat <<'2'\nsecret\n2\n)\nls",
+            "x=$(\ncat <<'2'\n)\nls",
+        ),
+        ("x=`\ncat <<'2'\nsecret\n2\n`\nls", "x=`\ncat <<'2'\n`\nls"),
+        // A substitution that closed before the header is not around it.
+        (
+            "x=$(date)\ncat <<'2'\n)\nsecret\n2\nls",
+            "x=$(date)\ncat <<'2'\nls",
+        ),
+    ] {
+        assert_eq!(heredoc::strip_reader_heredocs(cmd), kept, "{cmd:?}");
+    }
+}
+
 /// zsh runs `=(…)` at the start of a word, as an assignment's value and as the operand of a
 /// `${…}` operator, and hands the program a temporary file holding the output. Its command is a
 /// segment of its own, as a `<(…)`'s is. After a name (`a=(…)`, an array) or a quoted part of

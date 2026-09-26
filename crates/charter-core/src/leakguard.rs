@@ -1359,6 +1359,28 @@ mod tests {
         }
     }
 
+    /// A heredoc opened in a substitution that spans lines, whose body holds a `)` or a
+    /// backtick: GNU bash 3.2.57 ends the substitution there and runs the next lines (every
+    /// shell does, for a backtick), so the leak guard reads them and A7 reads them as lines a
+    /// shell runs.
+    #[test]
+    fn a_heredoc_in_a_substitution_spanning_lines_keeps_the_next_lines() {
+        for first in [
+            "x=$(\ncat <<\"2\"\n)",
+            "x=`\ncat <<\"2\"\n`",
+            "cat <(\ncat <<\"2\"\n)",
+            "x=\"$(\ncat <<'2'\n)\"",
+        ] {
+            let cmd = format!("{first}\ncat .charter/vaults/x.json\n2");
+            assert!(reason(&cmd).is_some(), "{cmd:?}");
+            let rows = lines_a_command_could_run(&format!("{first}\ncharter handoff b\n2"));
+            assert!(
+                rows.iter().any(|(l, _)| l == "charter handoff b"),
+                "{first:?}: {rows:?}"
+            );
+        }
+    }
+
     /// zsh's `=(…)` runs its command and hands the program a file holding the output, so a read
     /// inside one is a read (zsh 5.9).
     #[test]
