@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Explorer, type Spot } from "./Explorer";
-import { nothingKnown } from "./chatState";
+import { moved, nothingKnown, type ChatStates } from "./chatState";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
 import type { OpenChat, Panels as PanelsModel, Piece } from "./bindings";
@@ -83,13 +83,14 @@ function draw(on: {
    *  tree these tests are about is the tree they were always about. */
   offers?: Catalogued;
   onPress?: (offer: Offer) => void;
+  states?: ChatStates;
 }) {
   render(
     <Explorer
       workspace={"workspace" in on ? on.workspace : "alpha"}
       state={on.state ?? state()}
       chats={on.chats ?? []}
-      states={nothingKnown}
+      states={on.states ?? nothingKnown}
       spot={on.spot}
       onPick={on.onPick ?? (() => {})}
       onShowChat={on.onShowChat ?? (() => {})}
@@ -224,6 +225,40 @@ describe("the explorer", () => {
   // ---------------------------------------------------------------------------------------
   // What is already running where
   // ---------------------------------------------------------------------------------------
+
+  it("draws no state mark on a shell tab's chat, and `unknown` on a harness's", () => {
+    // A shell's terminal icon already says what it is; a dashed `unknown` beside it read as a
+    // spinner. A harness that has reported nothing yet still says so.
+    draw({
+      chats: [
+        chat(1, "shell 1", `${CUT}/one`, { harness: null, profile: null }),
+        chat(2, "ide.2", `${CUT}/one`),
+      ],
+    });
+
+    const mark = (name: string) =>
+      screen.getByRole("treeitem", { name: new RegExp(name) }).querySelector("[data-state]");
+    expect(mark("shell 1")).toBeNull();
+    expect(mark("ide.2")).toHaveAttribute("data-state", "unknown");
+  });
+
+  it("draws a shell tab's state once a harness in it reports one", () => {
+    const states = moved(nothingKnown, {
+      plane: "/home/dev/plane",
+      session: 1,
+      state: "waiting",
+      needs_you: true,
+      queue: [1],
+      moved_at: 1,
+      reports: [],
+      sequence: 1,
+    });
+    draw({ chats: [chat(1, "shell 1", `${CUT}/one`, { harness: null, profile: null })], states });
+
+    expect(
+      screen.getByRole("treeitem", { name: /shell 1/ }).querySelector("[data-state]"),
+    ).toHaveAttribute("data-state", "waiting");
+  });
 
   it("shows the chats working in a worktree under that worktree", () => {
     draw({ chats: [chat(1, "ide.1", `${CUT}/one/deep`), chat(2, "ide.2", ALPHA)] });

@@ -13,7 +13,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import App from "./App";
-import type { ByHand, OpenChat } from "./bindings";
+import type { ByHand, Moved, OpenChat } from "./bindings";
 import { onAMac } from "./tabKeys";
 
 /**
@@ -85,7 +85,7 @@ function opened(session: number, name: string, cwd: string | null, on: Partial<O
 }
 
 /** The core, filing each chat by the directory it works in, as the real one does. */
-function core(put: ReturnType<typeof opened>[] = []) {
+function core(put: ReturnType<typeof opened>[] = [], heard: Moved[] = []) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const chats = [...put];
   let next = Math.max(0, ...chats.map((one) => one.session));
@@ -134,7 +134,7 @@ function core(put: ReturnType<typeof opened>[] = []) {
           ],
         };
       if (cmd === "start_options") return START_OPTIONS;
-      if (cmd === "chat_states") return [];
+      if (cmd === "chat_states") return heard;
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd === "running_sessions") return [];
       return null;
@@ -268,6 +268,64 @@ describe("a plain shell tab", () => {
 
     await waitFor(() => expect(chatTabs()).toEqual(["claude 1"]));
     expect(shellMark()).toBeNull();
+  });
+});
+
+/** The state mark on the one tab, or `null` where it draws none. */
+const stateMark = () =>
+  within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getByRole("tab")
+    .querySelector("[data-state]")
+    ?.getAttribute("data-state") ?? null;
+
+describe("a shell tab's state mark", () => {
+  it("draws none: its terminal mark already says what it is, and `unknown` read as a spinner", async () => {
+    core([opened(4, "shell 4", ALPHA, { in_front: true })]);
+    render(<App />);
+
+    await waitFor(() => expect(chatTabs()).toEqual(["shell 4"]));
+    await settle();
+    expect(stateMark()).toBeNull();
+  });
+
+  it("draws none on a shell opened here either", async () => {
+    core();
+    render(<App />);
+    await waitFor(() => expect(workspaces()).toEqual(["Plane root", "alpha", "beta"]));
+
+    await fromThePalette("New shell");
+
+    await waitFor(() => expect(chatTabs()).toEqual(["shell 1"]));
+    await settle();
+    expect(stateMark()).toBeNull();
+  });
+
+  it("draws what a harness in it reports, once one does", async () => {
+    // A harness started by hand whose hook report the board adopted: the tab is no longer
+    // saying nothing, so neither is its mark.
+    const running: Moved = {
+      plane: PLANE,
+      session: 4,
+      state: "running",
+      needs_you: false,
+      queue: [],
+      moved_at: 1,
+      reports: [],
+      sequence: 1,
+    };
+    core([opened(4, "shell 4", ALPHA, { in_front: true })], [running]);
+    render(<App />);
+
+    await waitFor(() => expect(chatTabs()).toEqual(["shell 4"]));
+    await waitFor(() => expect(stateMark()).toBe("running"));
+  });
+
+  it("leaves a harness chat's `unknown` as it was", async () => {
+    core([opened(4, "1", ALPHA, { in_front: true, harness: "claude", profile: "claude" })]);
+    render(<App />);
+
+    await waitFor(() => expect(chatTabs()).toEqual(["claude 1"]));
+    expect(stateMark()).toBe("unknown");
   });
 });
 

@@ -35,6 +35,11 @@ export function ChatState({ state }: { state: State }) {
   );
 }
 
+/** {@link ChatState} where a chat has a mark to draw, and nothing where it has none (`markOf`). */
+export function ChatMark({ state }: { state: State | undefined }) {
+  return state === undefined ? null : <ChatState state={state} />;
+}
+
 /**
  * **A needs-you item's Ignore** (charter-app#248): the catalogue's `needs.ignore:<session>` row
  * drawn as the `✕` a pointer wants, so its accessible name is the row's words — "Ignore ide.3
