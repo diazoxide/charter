@@ -953,6 +953,30 @@ fn a_backslash_newline_is_gone_before_the_word_is_read() {
     );
 }
 
+/// `$"…"` is a double-quoted run: a `$(` inside it is LIVE (bash runs `$"$(cmd)"`), so
+/// `quote_map` must not read its interior as quoted, or a heredoc opener in its substitution is
+/// lost. And a `$'`/`$"` that a `$$` PID already consumed opens nothing.
+#[test]
+fn a_locale_string_is_double_quoted_not_single_quoted_to_the_quote_map() {
+    charter_core::unsteered!();
+    // The substitution inside `$"…"` is not quoted, so its bytes read as a command context.
+    let q = shellseg::quote_map("$\"$(echo hi)\"");
+    let chars: Vec<char> = "$\"$(echo hi)\"".chars().collect();
+    let at = chars.iter().position(|&c| c == 'e').unwrap();
+    assert!(
+        !q[at],
+        "the `echo` inside $\"$( … )\" is a command, not quoted text"
+    );
+    // A heredoc opener inside that substitution is seen.
+    let line = Line::of("x=$\"$(cat <<'Z'\ny\nZ\n)\"");
+    assert_eq!(heredoc::heredoc_openers(&line).len(), 1);
+    // `$$'…'` is the PID and a PLAIN single quote, so the `$'` does not open an ANSI-C string.
+    assert_eq!(
+        shellseg::segment_argv("echo $$'a'"),
+        vec![vec!["echo".to_string(), "$$a".to_string()]]
+    );
+}
+
 /// bash 5.3 runs `${ cmd; }` and `${| cmd; }` as substitutions in the current shell. Read as
 /// `$( … )` is: the command inside is a segment of its own, and the enclosing one keeps it too.
 #[test]

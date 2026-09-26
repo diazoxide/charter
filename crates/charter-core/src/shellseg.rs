@@ -142,7 +142,8 @@ const PROCSUB_LEAD: [&str; 2] = ["<", ">"];
 
 /// The quoting contexts a position can sit in. `(` and a backtick are SUBSTITUTIONS — inside
 /// them quoting starts again from nothing — so they are on the stack but are not "quoted".
-const QUOTED_CONTEXTS: [&str; 4] = ["'", "\"", "$'", "$\""];
+/// `$"…"` is not here because it opens the same `"` context an ordinary double quote does.
+const QUOTED_CONTEXTS: [&str; 3] = ["'", "\"", "$'"];
 
 /// What may stand in front of the `#` that begins a comment.
 const BEFORE_COMMENT: &str = " \t\n;|&()<>";
@@ -470,13 +471,11 @@ impl Lexer {
                         self.set_state(St::Esc(c));
                     } else if WORDCHARS.contains(c) {
                         self.token = vec![c];
-                        self.dollars = 0;
                         self.set_state(St::Word);
                     } else if self.cfg.punctuation.contains(c) {
                         self.token = vec![c];
                         self.set_state(St::Punct);
                     } else if QUOTES.contains(c) {
-                        self.dollars = 0;
                         self.set_state(St::Quote(c));
                     } else {
                         // `whitespace_split` is true, so this is the arm that catches
@@ -1146,6 +1145,19 @@ pub fn past_continuations(chars: &[char], mut j: usize) -> usize {
     j
 }
 
+/// Whether the `$` at `i` opens a `$'…'` or `$"…"` quotation rather than being the tail of a
+/// `$$` PID expansion. The shell pairs `$$` into the PID before it reads a quote, so the `$`
+/// opens the quotation only when an EVEN number of `$` stand immediately before it: `$$'x'` is
+/// the PID and a plain `'x'`, `$$$'x'` is the PID and an ANSI-C `$'x'` (checked against bash).
+/// This is the parity [`Lexer`] tracks with its `dollars` counter, on the source-walking path.
+pub fn dollar_opens_quote(chars: &[char], i: usize) -> bool {
+    let mut before = 0;
+    while before < i && chars[i - 1 - before] == '$' {
+        before += 1;
+    }
+    before % 2 == 0
+}
+
 /// For each offset in `line`, whether it sits inside quotes — computed in ONE pass.
 ///
 /// Read off the source rather than from the lexer, because this runs on lines the lexer could
@@ -1156,9 +1168,15 @@ pub fn past_continuations(chars: &[char], mut j: usize) -> usize {
 /// that command's `<<` is a real opener, so `$(` and a backtick open a nested context.
 ///
 /// **But `$'` opens nothing inside `"…"`**, where both shells read a bare `$` as a literal. The
-/// `"` arm therefore comes BEFORE the `$'`/`$"` arm: with the order reversed, the `$` in an
+/// `"` arm therefore comes BEFORE the `$'` arm: with the order reversed, the `$` in an
 /// ordinary regex anchor (`grep -v "^$" f`) swallows the closing quote and the rest of the line
 /// reads as quoted.
+///
+/// **`$"…"` is a double-quoted run, not a single-quoted one.** A `$(` and a backtick inside it
+/// are LIVE — `$"$(cmd)"` runs `cmd` (checked against bash) — and a heredoc opener inside its
+/// substitution is a real opener, so `$"` opens the same context `"` does rather than one that
+/// swallows them. Only the `$'`/`$"` that a `$$` did not consume opens a quotation
+/// ([`dollar_opens_quote`]).
 ///
 /// The returned vector has one more entry than `line` has characters: the last is the state at
 /// end of input.
@@ -1187,9 +1205,9 @@ pub fn quote_map(line: &str) -> Vec<bool> {
             if c == '\'' {
                 stack.pop();
             }
-        } else if top == "$'" || top == "$\"" {
+        } else if top == "$'" {
             // Closes on its own quote, and nothing else opens inside it: `$(` is literal there.
-            if c == top.chars().nth(1).unwrap_or('\0') {
+            if c == '\'' {
                 stack.pop();
             }
         } else if let Some(end) = spliced_end(&chars, i, "$(") {
@@ -1210,13 +1228,19 @@ pub fn quote_map(line: &str) -> Vec<bool> {
             if c == '"' {
                 stack.pop();
             }
-        } else if let Some(end) = spliced_end(&chars, i, "$'") {
+        } else if let Some(end) =
+            spliced_end(&chars, i, "$'").filter(|_| dollar_opens_quote(&chars, i))
+        {
             stack.push("$'");
             flags[i + 1..end].fill(here);
             i = end;
             continue;
-        } else if let Some(end) = spliced_end(&chars, i, "$\"") {
-            stack.push("$\"");
+        } else if let Some(end) =
+            spliced_end(&chars, i, "$\"").filter(|_| dollar_opens_quote(&chars, i))
+        {
+            // A double-quoted run whose `$` the shell drops: the same context `"` opens, so a
+            // `$(`/backtick inside is live and a heredoc opener in it is real.
+            stack.push("\"");
             flags[i + 1..end].fill(here);
             i = end;
             continue;

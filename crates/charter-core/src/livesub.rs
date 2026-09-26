@@ -47,7 +47,7 @@
 //! the fail-OPEN direction, on the exact path the working rule steers agents onto.
 
 use crate::heredoc::{self, Line};
-use crate::shellseg::{past_continuations, spliced_end};
+use crate::shellseg::{dollar_opens_quote, past_continuations, spliced_end};
 
 /// The two spellings of command substitution — `_SUBSTITUTIONS`.
 ///
@@ -271,7 +271,10 @@ pub fn live_substitution(cmd: &str) -> Option<&'static str> {
             }
         } else if let Some(hit) = substitution_at(chars, i) {
             return Some(hit);
-        } else if let Some(open) = spliced_end(chars, i, "$'").filter(|_| c == '$') {
+        } else if let Some(open) =
+            spliced_end(chars, i, "$'").filter(|_| dollar_opens_quote(chars, i))
+        {
+            // A `$'…'` the shell reads, not the tail of `$$` — its own backslash rule ends it.
             i = ansi_c_end(chars, open);
         } else if c == '<' && starts_with(chars, i, "<<<") {
             // A here-STRING, not a heredoc: its word is an ordinary one and the loop must judge
@@ -462,6 +465,18 @@ mod tests {
     #[test]
     fn an_ansi_c_quotation_split_from_its_dollar_still_ends_where_bash_ends_it() {
         assert_eq!(live_substitution("x $\\\n'a\\'b' `y`"), Some("`"));
+    }
+
+    /// `$$'…'` is the PID and a PLAIN single-quoted string, not an ANSI-C one; `$$$'…'` is the
+    /// PID and an ANSI-C string. Reading the second `$` of `$$` as opening `$'` gave the
+    /// quotation the wrong end and could hide a live backtick after it (checked against bash).
+    #[test]
+    fn a_dollar_dollar_does_not_open_an_ansi_c_quotation() {
+        // Even run: plain single quote, so the `\'` closes at the middle quote and the backtick
+        // after it is live.
+        assert_eq!(live_substitution(r"echo $$'a\'`x`'"), Some("`"));
+        // Odd run: ANSI-C, whose `\'` does not close, so the backtick is inside it and inert.
+        assert_eq!(live_substitution(r"echo $$$'a\'`x`'"), None);
     }
 
     /// bash 5.3 runs `${ cmd; }` and `${| cmd; }`; `${VAR}` is a parameter.
