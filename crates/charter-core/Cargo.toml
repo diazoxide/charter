@@ -34,6 +34,10 @@ serde = { workspace = true, features = ["derive"] }
 # `f64` at PARSE time — the digest would then be taken over a number the file never held.
 serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "0.11"
+# How many cells a character takes, measured as `alacritty_terminal` measures it: the engine
+# needs it to repair what inserting a character does (`engine/pane_rules.rs`). Already in this
+# workspace's lockfile through `alacritty_terminal`, so it adds no crate to the tree.
+unicode-width = "0.2"
 # The keyed fingerprint `secret get` prints (`charter/secrets/fingerprint.py`): HMAC-SHA256 over
 # `sha2`, and 32 random bytes for the plane's key. Both already in this workspace's lockfile.
 hmac = "0.13"

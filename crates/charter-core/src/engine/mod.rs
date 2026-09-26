@@ -6,6 +6,7 @@
 use std::time::Instant;
 
 mod alacritty;
+mod pane_rules;
 mod snapshot;
 
 pub use alacritty::AlacrittyEngine;

@@ -10,6 +10,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb};
 
+use super::pane_rules::PaneRules;
 use super::{Engine, Screen, Size};
 
 pub struct AlacrittyEngine {
@@ -36,12 +37,20 @@ impl AlacrittyEngine {
 }
 
 impl AlacrittyEngine {
+    /// The scrollback and screen, cell by cell, for tests that look past the text.
+    #[cfg(test)]
+    pub(super) fn grid(
+        &self,
+    ) -> &alacritty_terminal::grid::Grid<alacritty_terminal::term::cell::Cell> {
+        self.term.grid()
+    }
+
     fn apply_expired_sync(&mut self) {
         let expired = self
             .open_update()
             .is_some_and(|deadline| Instant::now() >= deadline);
         if expired {
-            self.parser.stop_sync(&mut self.term);
+            self.parser.stop_sync(&mut PaneRules(&mut self.term));
         }
     }
 }
@@ -49,7 +58,7 @@ impl AlacrittyEngine {
 impl Engine for AlacrittyEngine {
     fn advance(&mut self, bytes: &[u8]) {
         self.apply_expired_sync();
-        self.parser.advance(&mut self.term, bytes);
+        self.parser.advance(&mut PaneRules(&mut self.term), bytes);
     }
 
     fn open_update(&self) -> Option<Instant> {
@@ -69,8 +78,14 @@ impl Engine for AlacrittyEngine {
             .map(|row| {
                 let row = &grid[Line(row as i32)];
                 let mut text = String::new();
-                for cell in (0..grid.columns()).map(|column| &row[Column(column)]) {
-                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                for column in 0..grid.columns() {
+                    let cell = &row[Column(column)];
+                    // The second half of a wide character is drawn by the character. One whose
+                    // character is gone is a blank, and keeps the columns after it in place.
+                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                        && column > 0
+                        && row[Column(column - 1)].flags.contains(Flags::WIDE_CHAR)
+                    {
                         continue;
                     }
                     // A tab is a character the program put in the cell, and a blank is what
@@ -97,7 +112,7 @@ impl Engine for AlacrittyEngine {
         // Everything this engine has read has to be in the snapshot, because the view it is
         // for is sent the output that comes after. A synchronized update still open holds
         // bytes back, so it is ended here: half a frame drawn beats a frame lost.
-        self.parser.stop_sync(&mut self.term);
+        self.parser.stop_sync(&mut PaneRules(&mut self.term));
         super::snapshot::snapshot(&self.term)
     }
 
@@ -727,6 +742,11 @@ mod snapshot_tests {
         prop_oneof![
             "[a-z ]{1,15}".prop_map(String::into_bytes),
             Just("\u{4e2d}".as_bytes().to_vec()),
+            // Wide characters side by side, and the cursor stepped back onto a second half,
+            // for the edits below to cut into.
+            Just("\u{4e2d}\u{6587}".as_bytes().to_vec()),
+            Just(b"\x1b[D".to_vec()),
+            Just(b"\x1b[C".to_vec()),
             Just("e\u{301}".as_bytes().to_vec()),
             Just(b"\r\n".to_vec()),
             Just(b"\r".to_vec()),
@@ -766,8 +786,18 @@ mod snapshot_tests {
                 "\x1b[K",
                 "\x1b[1K",
                 "\x1b[2K",
+                "\x1b[@",
                 "\x1b[2@",
+                "\x1b[20@",
+                "\x1b[P",
                 "\x1b[2P",
+                "\x1b[20P",
+                "\x1b[X",
+                "\x1b[2X",
+                "\x1b[20X",
+                "\x1bD",
+                "\x1bE",
+                "\x0b",
                 "\x1b[L",
                 "\x1b[M",
                 "\x1b[S",
