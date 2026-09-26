@@ -403,8 +403,18 @@ fn the_active_personas_declared_tool_runs_without_a_prompt() {
 /// from the PROCESS's directory, and an inherited `$CHARTER_ROOT` would point this test at the
 /// operator's own plane — which is the fence this suite is under (charter-app#132).
 fn guard(cwd: &std::path::Path, payload: &str, env: &[(&str, &str)]) -> (i32, String, String) {
+    charter_in(cwd, &["hook", "pretooluse"], payload, env)
+}
+
+/// [`guard`]'s process with any command line: `charter <args>`, `$CHARTER_ROOT` at `cwd`.
+fn charter_in(
+    cwd: &std::path::Path,
+    args: &[&str],
+    payload: &str,
+    env: &[(&str, &str)],
+) -> (i32, String, String) {
     let mut child = Command::new(CHARTER)
-        .args(["hook", "pretooluse"])
+        .args(args)
         .current_dir(cwd)
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
@@ -480,6 +490,87 @@ fn the_bash_guard_refuses_by_printing_and_exits_cleanly() {
         said.contains("no config key, environment variable or switch"),
         "every denial carries the override note: {said}"
     );
+}
+
+/// What makes a debug build's `charter hook <word>` panic before it answers (#349).
+const PANICS: (&str, &str) = ("CHARTER_TEST_HOOK_PANICS", "1");
+
+#[test]
+fn a_bash_guard_that_crashes_refuses_the_call_under_every_harness_that_runs_it() {
+    // **A crashed guard is a refusal, never an allow** (#349). A panic ends the process with
+    // 101, or with SIGABRT under the release profile's `panic = "abort"`, and a harness reads
+    // either as a non-blocking error and runs the tool. Exit 2 is the one status Claude Code
+    // and Codex both read as "block", with stderr handed to the model as the reason (Codex's
+    // hooks page: "you can also use exit code `2` and write the blocking reason to `stderr`").
+    // Both arm this same `charter hook pretooluse`; the harness is named in the environment.
+    let plane = a_plane();
+    for harness in ["claude-code", "codex"] {
+        let (code, out, err) = guard(
+            plane.path(),
+            &bash("echo hello"),
+            &[PANICS, ("CHARTER_HARNESS", harness)],
+        );
+
+        assert_eq!(code, 2, "{harness}: a crashed guard must block: {err}");
+        assert_eq!(
+            out, "",
+            "{harness}: nothing on stdout, which exit 2 does not read"
+        );
+        assert!(err.starts_with("charter guard: "), "{harness}: {err:?}");
+        assert!(err.contains("refused"), "{harness}: {err:?}");
+        // The panic's own message is not the model's business and may carry what the guard
+        // was judging. One line, and only the line charter wrote.
+        assert_eq!(err.lines().count(), 1, "{harness}: {err:?}");
+        assert!(!err.contains(PANICS.0), "{harness}: {err:?}");
+    }
+}
+
+#[test]
+fn a_crash_refuses_on_every_pretooluse_word_and_blocks_nothing_else() {
+    // Driven by the registry, so a hook charter adds is asked this without anyone listing it.
+    // A `PreToolUse` word decides whether a tool call runs, and a crash there refuses it; a
+    // word nobody has invented yet in that namespace is held to the same rule. Everywhere else
+    // exit 2 guards nothing and can wedge a session — on `Stop` it keeps one from ending — so
+    // a crash there is any other failure.
+    let plane = a_plane();
+    let mut words: Vec<(&str, bool)> = charter_core::hookreg::HANDLERS
+        .iter()
+        .map(|h| (h.name, h.event == "PreToolUse"))
+        .collect();
+    words.extend(charter_core::hookreg::NO_OPS.iter().map(|w| (*w, false)));
+    words.push(("pretooluse-notebook", true));
+    words.push(("stopp", false));
+    assert!(
+        words.iter().filter(|(_, pre)| *pre).count() > 2,
+        "{words:?}"
+    );
+
+    for (word, refuses) in words {
+        // The command line the plugin writes.
+        let (code, _, err) = charter_in(
+            plane.path(),
+            &["hook", word, "--plugin-version", "0.62.1"],
+            &bash("echo hello"),
+            &[PANICS],
+        );
+
+        if refuses {
+            assert_eq!(code, 2, "`{word}` crashed open: {err}");
+            assert!(err.starts_with("charter guard: "), "`{word}`: {err:?}");
+        } else {
+            assert_ne!(code, 2, "`{word}` crashed into a block: {err}");
+            assert_ne!(code, 0, "`{word}` did not crash; the seam is not reached");
+        }
+    }
+    // A flag written before the word does not hide it: the boundary is decided on the raw
+    // command line, before clap has read it, because a crash in the parse is a crash too.
+    let (code, _, err) = charter_in(
+        plane.path(),
+        &["hook", "--plugin-version", "0.62.1", "pretooluse"],
+        &bash("echo hello"),
+        &[PANICS],
+    );
+    assert_eq!(code, 2, "a flag first hid the word: {err}");
 }
 
 #[test]

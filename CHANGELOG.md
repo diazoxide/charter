@@ -11,6 +11,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A guard that crashes now refuses the tool call instead of letting it run.** If charter hit
+  an internal error while checking a tool call, the crash ended the process with a status
+  Claude Code and Codex read as a non-blocking error, so the call went ahead unchecked. Any
+  crash in a `PreToolUse` hook now exits 2, which both read as "block", with one line on
+  stderr saying the guard could not answer. A crash in any other hook still never blocks.
+  ([#349](https://github.com/diazoxide/charter/issues/349))
+
 ## [0.3.0] - 2026-09-25
 
 0.3.0 is about extensions you can act through and workspaces that carry their repos. An

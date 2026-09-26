@@ -986,11 +986,35 @@ const GUARDED_TOOL_HOOK: &str = "pretooluse";
 /// nobody has invented yet, and the rule for it is unchanged because its argument is: a
 /// program that has checked nothing may not say `allow`.
 fn is_a_tool_hook(name: &str) -> bool {
-    name.starts_with("pretooluse") || name.starts_with("posttooluse")
+    is_a_pretooluse_hook(name) || name.starts_with("posttooluse")
+}
+
+/// Whether the word is a `PreToolUse` hook: one that decides whether a tool call runs, so a
+/// crash in it must refuse the call ([`guard::refuse_on_a_crash`]). The namespace, as
+/// [`is_a_tool_hook`] reads it, and for its reason — a matcher charter adds tomorrow is covered
+/// today. `posttooluse` is not: the tool has already run, and there is nothing left to refuse.
+fn is_a_pretooluse_hook(name: &str) -> bool {
+    name.starts_with("pretooluse")
+}
+
+/// Whether this command line is `charter hook <a PreToolUse word>`, read off the raw argv
+/// because it is asked before clap has parsed anything — a crash in the parse is a crash too.
+/// Any argument after `hook` counts, so a flag written before the word does not hide it.
+fn is_a_pretooluse_call(argv: &[std::ffi::OsString]) -> bool {
+    argv.get(1).is_some_and(|word| word == "hook")
+        && argv
+            .iter()
+            .skip(2)
+            .any(|arg| arg.to_str().is_some_and(is_a_pretooluse_hook))
 }
 
 /// What a harness reads as "block".
 const BLOCK: u8 = 2;
+
+/// Set in a debug build, `charter` panics before it has read its command line (#349): the
+/// test suite's way to watch what a crash answers. Compiled out of a release build.
+#[cfg(debug_assertions)]
+const PANIC_ON_PURPOSE_ENV: &str = "CHARTER_TEST_HOOK_PANICS";
 
 /// How long the payload on stdin is waited for.
 ///
@@ -1029,9 +1053,10 @@ fn payload() -> String {
 /// **Never exit 2, except where the whole point is to.** A harness reads 2 as "block": on
 /// `Stop` it makes the harness carry on rather than end. Nothing charter draws is worth that,
 /// so every failure on a REPORTING hook is a silent 0 and the state the app draws is simply the
-/// last one it was told. The two exceptions are both about a tool call: a denial a guard
-/// decided and could not print ([`guard::deny`]), and a word in the tool-hook namespace this
-/// binary does not answer at all ([`is_a_tool_hook`]).
+/// last one it was told. The three exceptions are all about a tool call: a denial a guard
+/// decided and could not print ([`guard::deny`]), a word in the tool-hook namespace this
+/// binary does not answer at all ([`is_a_tool_hook`]), and a `PreToolUse` hook that crashed
+/// ([`guard::refuse_on_a_crash`]).
 fn hook(name: &str, now: Option<&str>) -> ExitCode {
     // FIRST, in front of `Event::parse`, because none of these is one of the app's reporting
     // events: a tool call carries no chat state worth a `Report`, and a guard that also spoke
@@ -2201,6 +2226,15 @@ fn todo(
 }
 
 fn main() -> ExitCode {
+    // FIRST, before anything that could panic, argv and clap included: a guard that crashed
+    // must refuse the tool call, not allow it (#349).
+    if is_a_pretooluse_call(&std::env::args_os().collect::<Vec<_>>()) {
+        guard::refuse_on_a_crash();
+    }
+    #[cfg(debug_assertions)]
+    if std::env::var_os(PANIC_ON_PURPOSE_ENV).is_some() {
+        panic!("{PANIC_ON_PURPOSE_ENV} is set, so charter crashes");
+    }
     // **`Cli::parse` exits 2 on a bad command line, and 2 is the one code a harness reads as
     // "block".** A hook that exited 2 by accident would make a session unable to end, so this
     // binary answers for its own argv before clap can, whatever the command turns out to be.
