@@ -256,8 +256,23 @@ Each is a **piece**. Git is the only registry of them: every listing is
 `git worktree list --porcelain`, so a worktree made with plain git at that path is a piece,
 and one removed by hand is gone
 ([ADR 0027](https://github.com/diazoxide/charter/blob/main/docs/adr/0027-git-is-the-only-registry-for-a-chats-worktree.md)).
-The app lists a workspace's pieces, merges one back into the branch it was cut from, and
-removes one. Cutting a piece from the app or the CLI is not in this version yet.
+The app lists a workspace's pieces, merges one back into the branch it was cut from, marks
+one done, and removes one. Cutting a piece from the app is not in this version yet.
+
+From a terminal or a chat, `charter worktree` (alias `wt`):
+
+    charter wt add <repo> <piece> [-w <ws>]   # cut it off the clone's HEAD; exit 2 if taken
+    charter wt done                          # from inside the piece: it is finished
+    charter wt abandon "<why you stopped>"   # from inside the piece: it is given up
+    charter wt list [<repo>] [-w <ws>]       # what git has, and what each piece said
+    charter wt history [<repo> [<piece>]]    # what happened, removed pieces included
+    charter wt remove <repo> <piece> [--force] [--delete-branch]
+
+`add` records a `claimed` line and `done`/`abandon` a declaration in
+`workspaces/<ws>/pieces/<host>.jsonl`. A piece that declared nothing is reported as silent,
+with an age, in `list`, the footer and the session briefing. `remove` runs `git worktree
+remove`. It refuses a piece with uncommitted changes or commits no other ref reaches, and it
+names those files and commits, until `--force` says to discard them.
 
 A relocated worktree root — `[plane] worktrees` or `$CHARTER_WORKTREES` — is not followed in
 this version yet: unset it to keep worktrees in the plane.

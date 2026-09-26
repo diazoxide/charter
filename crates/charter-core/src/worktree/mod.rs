@@ -79,10 +79,16 @@ pub enum Refusal {
         repo: String,
         piece: String,
     },
-    #[error(
-        "'{piece}' has uncommitted changes — refusing to remove. Commit them, or discard with --force"
-    )]
+    /// A merge's refusal: there is no `--force` past it, so the sentence names none.
+    #[error("'{piece}' has uncommitted changes — refusing to merge. Commit or stash them first")]
     Dirty { piece: String },
+    /// A removal's refusal, naming what `--force` would discard.
+    #[error(
+        "'{piece}' has uncommitted changes — refusing to remove. These would be lost:\n{}\n\
+         Commit them, or discard with --force",
+        listed(.changes, .changes.len())
+    )]
+    Uncommitted { piece: String, changes: Vec<String> },
     #[error(
         "could not determine whether '{piece}' holds uncommitted changes — refusing to \
          remove. Check the worktree by hand, or discard with --force"
@@ -102,10 +108,16 @@ pub enum Refusal {
     )]
     BaseNotRecorded { branch: String, why: String },
     #[error(
-        "'{piece}' has {count} commit(s) that exist nowhere else — refusing to remove. Push \
-         the branch or merge it, or discard with --force"
+        "'{piece}' has {count} commit(s) that exist nowhere else — refusing to remove. These \
+         would be lost:\n{}\nPush the branch or merge it, or discard with --force",
+        listed(.commits, *.count as usize)
     )]
-    WouldLoseWork { piece: String, count: u32 },
+    WouldLoseWork {
+        piece: String,
+        count: u32,
+        /// `<short sha> <subject>`, newest first, at most [`NAMED`] of them.
+        commits: Vec<String>,
+    },
     #[error("git {what} failed:\n{err}")]
     GitRefused { what: String, err: String },
     #[error("could not {what} {path}: {why}")]
@@ -114,6 +126,24 @@ pub enum Refusal {
         path: String,
         why: String,
     },
+}
+
+/// How many changed paths or commits a refusal names before it says how many more there are.
+pub const NAMED: usize = 10;
+
+/// A refusal's list: one indented line each for the first [`NAMED`], and a count of the rest
+/// out of `total` — which for commits is git's count, not the length of the list read.
+fn listed(items: &[String], total: usize) -> String {
+    let mut lines: Vec<String> = items
+        .iter()
+        .take(NAMED)
+        .map(|item| format!("    {item}"))
+        .collect();
+    let shown = lines.len();
+    if total > shown {
+        lines.push(format!("    … and {} more", total - shown));
+    }
+    lines.join("\n")
 }
 
 /// This workspace's worktree root: `workspaces/<ws>/.worktrees`.
@@ -205,6 +235,21 @@ pub fn unique_commits_of(tree: &Path, branch: Option<&str>) -> Option<u32> {
     // know" the `Ok(None)` inside stands for — and the caller's sentence for both is "could
     // not be checked for unique commits".
     unique_commits(tree, branch).ok().flatten()
+}
+
+/// The paths `git status --porcelain` reports, as it prints them (`?? new.txt`, ` M a.rs`),
+/// or `None` when git could not say — [`Dirt`]'s three states, with the dirt spelled out.
+fn changes(tree: &Path) -> Option<Vec<String>> {
+    match git::run(tree, &["status", "--porcelain"], git::READ) {
+        Ok(seen) if seen.ok() => Some(
+            seen.out
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(str::to_string)
+                .collect(),
+        ),
+        _ => None,
+    }
 }
 
 fn dirt(tree: &Path) -> Dirt {
@@ -430,6 +475,9 @@ pub fn add(
 pub struct Removed {
     pub branch: Option<String>,
     pub was_stale: bool,
+    /// Whether `delete_branch` was asked for and git deleted the branch. `false` when it was
+    /// not asked, when there was no branch, or when git refused (`-d` on unmerged work).
+    pub branch_deleted: bool,
 }
 
 pub fn remove(
@@ -488,6 +536,7 @@ pub fn remove(
         return Ok(Removed {
             branch: stale.branch,
             was_stale: true,
+            branch_deleted: false,
         });
     }
 
@@ -497,18 +546,21 @@ pub fn remove(
     };
 
     if !force {
-        match dirt(&path) {
-            Dirt::Dirty => {
-                return Err(Refusal::Dirty {
+        // What would be lost is NAMED, not only counted: `--force` is the operator's call, and
+        // it is an informed one only if they can see which files and which commits it takes.
+        match changes(&path) {
+            Some(changes) if changes.is_empty() => {}
+            Some(changes) => {
+                return Err(Refusal::Uncommitted {
                     piece: piece.to_string(),
+                    changes,
                 });
             }
-            Dirt::Unknown => {
+            None => {
                 return Err(Refusal::DirtUnknown {
                     piece: piece.to_string(),
                 });
             }
-            Dirt::Clean => {}
         }
         match unique_commits(&path, branch.as_deref())? {
             None => {
@@ -524,6 +576,7 @@ pub fn remove(
                 return Err(Refusal::WouldLoseWork {
                     piece: piece.to_string(),
                     count,
+                    commits: commits_alone(&path, branch.as_deref()),
                 });
             }
         }
@@ -544,13 +597,16 @@ pub fn remove(
         });
     }
 
+    let mut branch_deleted = false;
     if let (true, Some(b)) = (delete_branch, &branch) {
         let flag = if force { "-D" } else { "-d" };
-        let _ = git::run(&clone, &["branch", flag, "--", b], git::READ);
+        branch_deleted =
+            git::run(&clone, &["branch", flag, "--", b], git::READ).is_ok_and(|seen| seen.ok());
     }
     Ok(Removed {
         branch,
         was_stale: false,
+        branch_deleted,
     })
 }
 
@@ -576,6 +632,25 @@ fn unique_commits(tree: &Path, branch: Option<&str>) -> Result<Option<u32>, Refu
         return Ok(None);
     }
     Ok(seen.line().trim().parse::<u32>().ok())
+}
+
+/// The commits [`unique_commits`] counts, as `<short sha> <subject>`, newest first and at most
+/// one more than [`NAMED`] — enough for the refusal to say there are more. Empty when git
+/// would not say, which leaves the count to speak alone.
+fn commits_alone(tree: &Path, branch: Option<&str>) -> Vec<String> {
+    let most = format!("--max-count={}", NAMED + 1);
+    let exclude;
+    let mut argv = vec!["log", "--format=%h %s", &most, "HEAD", "--not"];
+    if let Some(b) = branch {
+        exclude = format!("--exclude={b}");
+        argv.push(&exclude);
+    }
+    argv.push("--branches");
+    argv.push("--remotes");
+    match git::run(tree, &argv, git::READ) {
+        Ok(seen) if seen.ok() => seen.out.lines().map(str::to_string).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// One piece of this workspace, as git reports it.

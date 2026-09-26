@@ -1711,6 +1711,20 @@ export function PlaneView({
     [plane],
   );
 
+  /** Records the piece the row named as `done` in its log (charter#368). The tree stays. */
+  const declareWorktreeDone = useCallback(
+    async (cut: Cut): Promise<Ran> => {
+      const answer = await commands
+        .worktreeDone(plane, cut.workspace, cut.repo, cut.piece)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (answer.status === "error") return { ok: false, refused: answer.error };
+      // The explorer's row reads what the piece said, so it is read again.
+      setRereadWorkspace((asked) => asked + 1);
+      return { ok: true, said: `${cut.repo} · ${cut.piece} — done` };
+    },
+    [plane],
+  );
+
   /**
    * Hands a key the palette claimed to the chat in front.
    *
@@ -1900,6 +1914,7 @@ export function PlaneView({
       createVault,
       removeWorktree,
       mergeWorktree,
+      declareWorktreeDone,
       // A clone picked from its menu is the explorer's own pick one level up: the same state,
       // so the explorer marks it and `New tab` starts there (charter-app#174).
       pickClone: (repo, path) => pickSpot({ repo, path }),
@@ -1930,6 +1945,7 @@ export function PlaneView({
       focusWorkspace,
       ignoreNeedsYou,
       mergeWorktree,
+      declareWorktreeDone,
       newTab,
       pickVault,
       newTabIn,

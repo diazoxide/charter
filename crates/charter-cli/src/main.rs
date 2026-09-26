@@ -40,6 +40,7 @@ mod guard;
 mod handoff;
 mod hooks;
 mod memory;
+mod piece;
 mod secret;
 mod statusline;
 mod voice;
@@ -92,6 +93,10 @@ enum Command {
     /// Workspaces: their vision, their memory, their todos.
     #[command(subcommand, alias = "ws")]
     Workspace(WorkspaceCommand),
+
+    /// Pieces: worktrees of a workspace's clones — cut, declared done or abandoned, removed.
+    #[command(subcommand, alias = "wt")]
+    Worktree(piece::WorktreeCommand),
 
     /// Harness profiles: which program a chat runs, and with what environment.
     #[command(subcommand)]
@@ -2063,6 +2068,7 @@ fn run(command: Command) -> Result<u8, String> {
         }
         Command::Recall(args) => return memory::recall(&here, args),
         Command::Persona(command) => return memory::persona(&here, command),
+        Command::Worktree(command) => return piece::run(&here, command),
         Command::Workspace(WorkspaceCommand::Remember {
             text,
             title,

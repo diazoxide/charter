@@ -21,6 +21,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of logged-in runs land. The version must be an exact version: anything else npm would read
   there, such as a tag or a git URL, is refused.
   ([#370](https://github.com/diazoxide/charter/issues/370))
+
+- **Worktrees can be cut, declared and removed from the command line.** `charter worktree`
+  (alias `wt`): `add <repo> <piece>` cuts a piece off the clone's HEAD and records the claim;
+  `done`, and `abandon "<why>"`, run from inside a piece, say it is finished or given up;
+  `list` shows each piece with what it declared or how long it has been silent; `history`
+  shows what happened to pieces, removed ones included; `remove` takes a piece away through
+  git. The session briefing and the footer now see those declarations. In the window, each
+  worktree row shows the same word, and its menu can mark it done.
+  ([#368](https://github.com/diazoxide/charter/issues/368))
+
 - **A persona's memory can be kept up like a workspace's.** `charter persona forget <name>
   <slug>` deletes one memory, `charter persona dedupe` lists near-duplicate pairs to prune,
   `charter persona optimize` runs the curation `charter workspace optimize` runs over each
@@ -101,6 +111,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ([#374](https://github.com/diazoxide/charter/issues/374))
 
 ### Changed
+
+- **Removing a worktree that holds work now says which work.** The refusal lists the
+  uncommitted files and the commits no other branch has, so you can see what `--force` (or
+  "Discard that work and remove the worktree anyway", in the window) would discard. A merge refused over uncommitted changes no
+  longer tells you to remove or force.
+  ([#368](https://github.com/diazoxide/charter/issues/368))
 
 - **A vault file that is a symlink is refused.** `charter secret set` and `charter secret rm`
   on a plain-file or reference vault whose file is a link now stop with a message saying so,

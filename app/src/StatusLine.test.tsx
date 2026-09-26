@@ -24,7 +24,14 @@ function todo(slug: string): PanelTodo {
 }
 
 function piece(name: string): Piece {
-  return { piece: name, path: `${PLANE}/${name}`, branch: name, wired: true, stale: false };
+  return {
+    piece: name,
+    path: `${PLANE}/${name}`,
+    branch: name,
+    wired: true,
+    stale: false,
+    said: "",
+  };
 }
 
 function panels(over: Partial<Panels> = {}): Panels {

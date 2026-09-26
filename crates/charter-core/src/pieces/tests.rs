@@ -402,3 +402,78 @@ fn a_presence_record_that_is_a_link_is_refused_and_its_target_is_untouched() {
     assert!(p.is_symlink());
     assert!(!fired.get(), "refused before any temp was written");
 }
+
+#[test]
+fn a_recorded_line_is_the_one_pythons_pieces_record_wrote() {
+    // `json.dumps(line, sort_keys=True)` of `pieces.record`'s closed FIELDS, one line per event
+    // in `<host>.jsonl` — the shape `docs/plane-format.md` documents and every reader here
+    // parses. A null session and persona are written, as Python writes `None`; an empty
+    // reason is not written at all.
+    let (_held, root) = a_plane();
+    let who = Who {
+        session: Some("s-1".into()),
+        persona: None,
+        host: "box".into(),
+    };
+
+    let path = record(
+        &root,
+        "alpha",
+        Event::Claimed,
+        "svc",
+        "p1",
+        None,
+        &who,
+        now(),
+    )
+    .unwrap();
+    record(
+        &root,
+        "alpha",
+        Event::Abandoned,
+        "svc",
+        "p1",
+        Some("blocked"),
+        &who,
+        now(),
+    )
+    .unwrap();
+
+    assert_eq!(path, dir_for(&root, "alpha").join("box.jsonl"));
+    let stamp = at(0);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        format!(
+            "{{\"event\": \"claimed\", \"host\": \"box\", \"persona\": null, \"piece\": \"p1\", \
+             \"repo\": \"svc\", \"session\": \"s-1\", \"ts\": \"{stamp}\"}}\n\
+             {{\"event\": \"abandoned\", \"host\": \"box\", \"persona\": null, \"piece\": \"p1\", \
+             \"reason\": \"blocked\", \"repo\": \"svc\", \"session\": \"s-1\", \"ts\": \"{stamp}\"}}\n"
+        )
+    );
+    assert_eq!(
+        outcome(declarations(&root, "alpha").get(&("svc".into(), "p1".into()))),
+        "abandoned: blocked"
+    );
+}
+
+#[test]
+fn a_log_that_is_a_link_is_not_written_through() {
+    let (_held, root) = a_plane();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("elsewhere.jsonl");
+    std::fs::write(&target, "").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, dir_for(&root, "alpha").join("box.jsonl")).unwrap();
+    let who = Who {
+        host: "box".into(),
+        ..Who::default()
+    };
+
+    let wrote = record(&root, "alpha", Event::Done, "svc", "p1", None, &who, now());
+
+    #[cfg(unix)]
+    {
+        assert!(wrote.is_none());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
+    }
+}

@@ -30,7 +30,15 @@ const PANELS: PanelsModel = {
 };
 
 function piece(name: string, on: Partial<Piece> = {}): Piece {
-  return { piece: name, path: `${CUT}/${name}`, branch: name, wired: true, stale: false, ...on };
+  return {
+    piece: name,
+    path: `${CUT}/${name}`,
+    branch: name,
+    wired: true,
+    stale: false,
+    said: "",
+    ...on,
+  };
 }
 
 function chat(session: number, name: string, cwd: string, on: Partial<OpenChat> = {}): OpenChat {
@@ -156,6 +164,30 @@ describe("the explorer", () => {
     draw({ state: state({ pieces: { svc: [piece("one", { wired: false })], tool: [] } }) });
 
     expect(screen.getByTestId("piece-svc-one")).toHaveTextContent("unwired");
+  });
+
+  it("says what each piece declared, or how long it has been silent", () => {
+    // charter#368: a finished piece and a quiet one must not look alike on the row.
+    draw({
+      state: state({
+        pieces: {
+          svc: [
+            piece("one", { said: "done" }),
+            piece("two", { said: "abandoned: wrong approach" }),
+            piece("three", { said: "silent 3d" }),
+            piece("four"),
+          ],
+          tool: [],
+        },
+      }),
+    });
+
+    expect(screen.getByTestId("piece-svc-one")).toHaveTextContent("done");
+    expect(screen.getByTestId("piece-svc-two")).toHaveTextContent("abandoned: wrong approach");
+    expect(screen.getByTestId("piece-svc-three")).toHaveTextContent("silent 3d");
+    expect(screen.getByTestId("piece-svc-four").querySelector("[data-testid=piece-said]")).toBe(
+      null,
+    );
   });
 
   it("says a registration whose directory is gone is stale", () => {

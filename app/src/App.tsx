@@ -893,6 +893,7 @@ function App() {
       pinProject: windowDoes.pinProject,
       removeWorktree: async () => nowhere(),
       mergeWorktree: async () => nowhere(),
+      declareWorktreeDone: async () => nowhere(),
       sendKey: async () => nowhere(),
       openProject: windowDoes.openProject,
       createProject: windowDoes.createProject,

@@ -66,6 +66,9 @@ pub struct Piece {
     pub wired: bool,
     /// Set when git still has a registration whose directory is gone.
     pub stale: bool,
+    /// What the piece has said: `done`, `abandoned: <reason>`, `silent <age>` for a piece
+    /// charter cut that has declared nothing, or empty (charter#368). An age, never a verdict.
+    pub said: String,
 }
 
 /// Where a chat is working, when it is working in a piece.
@@ -125,11 +128,13 @@ pub fn worktree_list(
 
 /// The listing itself, against a root the registry has already vouched for.
 fn pieces_of(plane: &Path, workspace: &str, repo: &str) -> Result<Vec<Piece>, String> {
+    let now = chrono::Utc::now();
     worktree::list(plane, workspace, repo)
         .map(|pieces| {
             pieces
                 .into_iter()
                 .map(|p| Piece {
+                    said: charter_core::pieces::said(plane, workspace, repo, &p.piece, now),
                     piece: p.piece,
                     path: p.path.display().to_string(),
                     branch: p.branch,
@@ -177,6 +182,46 @@ fn remove_piece(
     worktree::remove(plane, workspace, repo, piece, force, false)
         .map(|_| ())
         .map_err(|refusal| refusal.to_string())
+}
+
+/// Declare a piece done, from its row (charter#368).
+///
+/// The operator speaking for the piece, which is theirs to call: the worker's own `charter
+/// worktree done` writes the same line from inside it. Recorded with no session or persona —
+/// the window is neither — and this machine's name, so the listing's claimant reads as the
+/// host. Refused, in the core's words, for a piece git no longer has.
+// Its plane is a `PlaneId` the registry vouches for, like every other command's
+// (charter-app#127); see `worktree_list` above. Not a doc comment, for the reason given there.
+#[tauri::command]
+#[specta::specta]
+pub fn worktree_done(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+    piece: String,
+) -> Result<(), String> {
+    declare_done(planes.held(&plane)?.root(), &workspace, &repo, &piece)
+}
+
+/// The declaration itself, against a root the registry has already vouched for.
+fn declare_done(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Result<(), String> {
+    let who = charter_core::pieces::Who {
+        session: None,
+        persona: None,
+        host: charter_core::dispatch::host(),
+    };
+    charter_core::pieces::declare(
+        plane,
+        workspace,
+        repo,
+        piece,
+        charter_core::pieces::Declaration::Done,
+        &who,
+        chrono::Utc::now(),
+    )
+    .map(|_| ())
+    .map_err(|why| why.to_string())
 }
 
 /// What a merge did, for the window to report.
@@ -354,6 +399,23 @@ mod tests {
         assert_eq!(through, core);
         assert!(through.contains("uncommitted"), "{through}");
         assert!(added.path.is_dir(), "and nothing was removed");
+    }
+
+    #[test]
+    fn a_piece_declared_done_from_its_row_says_so_on_the_row() {
+        let (_dir, root, _clone) = plane();
+        worktree::add(&root, "alpha", "thing", "piece", None).unwrap();
+        assert_eq!(
+            pieces_of(&root, "alpha", "thing").unwrap()[0].said,
+            "",
+            "cut by the core directly, so nothing claimed it and nothing is silent"
+        );
+
+        declare_done(&root, "alpha", "thing", "piece").unwrap();
+
+        assert_eq!(pieces_of(&root, "alpha", "thing").unwrap()[0].said, "done");
+        let refused = declare_done(&root, "alpha", "thing", "nope").unwrap_err();
+        assert!(refused.contains("'nope' is not a worktree"), "{refused}");
     }
 
     #[test]
