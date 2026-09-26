@@ -50,11 +50,14 @@ pub(super) fn git() -> Row {
 /// lost.
 pub(super) fn identity(d: &Doctor) -> Row {
     const NAME: &str = "git identity";
-    // Quoted onto one line (#353, #449): `first_line` drops what follows a `\n`, and a `\r` or
-    // an escape sequence in a name a repo's own config sets would still overdraw the row.
+    // The whole value, quoted onto one line (#353, #449): a `\n`, a `\r` or an escape sequence
+    // in a name a repo's own config sets is shown escaped, never dropped or drawn. Only the
+    // newline git ends its answer with is taken off first.
     let ask = |key: &str| {
-        git_in(&d.cwd, &["config", "--get", key])
-            .map(|run| super::one_line(&first_line(&run.out), super::DISPLAY_LIMIT))
+        git_in(&d.cwd, &["config", "--get", key]).map(|run| {
+            let value = run.out.strip_suffix('\n').unwrap_or(&run.out);
+            super::one_line(value, super::DISPLAY_LIMIT)
+        })
     };
     let (name, email) = match (ask("user.name"), ask("user.email")) {
         (Ok(name), Ok(email)) => (name, email),

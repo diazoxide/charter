@@ -351,8 +351,16 @@ pub fn report(root: &Path, rule: &str, bucket: Bucket, local: bool) -> (String, 
 /// What it says: the workspaces it carried the rule into, and the ones it could not.
 fn mirror(root: &Path) -> String {
     let plane = crate::workspaces::Plane::open(root);
-    let Ok((names, unread)) = plane.read_workspaces() else {
-        return String::new();
+    let (names, unread) = match plane.read_workspaces() {
+        Ok(listing) => listing,
+        // No `workspaces/` is a plane with none; one that cannot be listed is said.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return String::new(),
+        Err(e) => {
+            return format!(
+                "! workspaces/ could not be listed ({e}), so the rule was not carried into any \
+                 workspace. `charter workspace reinit --all` carries it once it can be.\n"
+            );
+        }
     };
     let mut carried: Vec<String> = Vec::new();
     let mut out = String::new();

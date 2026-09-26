@@ -1796,7 +1796,10 @@ fn a_short_path_is_quoted_on_one_line() {
 fn a_git_identity_with_a_carriage_return_or_an_escape_is_quoted_on_one_line() {
     let (_d, root) = plane("schema = 1\n");
     git(&root, &["init", "-q", "-b", "main", "."]);
-    git(&root, &["config", "user.name", "Ann\r  \u{2713}  forged"]);
+    git(
+        &root,
+        &["config", "user.name", "Ann\r  \u{2713}  forged\nsecond"],
+    );
     git(
         &root,
         &["config", "user.email", "a@example.invalid\u{1b}[2K"],
@@ -1805,6 +1808,6 @@ fn a_git_identity_with_a_carriage_return_or_an_escape_is_quoted_on_one_line() {
     assert_eq!(r.status, Status::Ok, "{r:?}");
     assert_eq!(
         r.detail,
-        "Ann\\x0d  \u{2713}  forged <a@example.invalid\\x1b[2K>"
+        "Ann\\x0d  \u{2713}  forged\\x0asecond <a@example.invalid\\x1b[2K>"
     );
 }

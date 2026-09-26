@@ -108,10 +108,13 @@ fn refresh_installed_plugin(binary: PathBuf, plugin: PathBuf) {
             };
             let outcomes = install::refresh(&machine);
             if !outcomes.is_empty() {
-                eprint!(
-                    "charter: brought the installed plugin up to date with this app\n{}",
-                    install::render(&outcomes, false)
-                );
+                let said = if install::failed(&outcomes) {
+                    "could not bring the installed plugin fully up to date with this app; \
+                     `charter plugin install` says why"
+                } else {
+                    "brought the installed plugin up to date with this app"
+                };
+                eprint!("charter: {said}\n{}", install::render(&outcomes, false));
             }
         });
 }

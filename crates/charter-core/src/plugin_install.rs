@@ -1185,8 +1185,8 @@ impl Adapter for Codex {
             );
         }
         // A replaced guard's trust record names a hook that is gone, as after an uninstall.
-        if !current {
-            forget_trust(&mut doc, &path, &ours);
+        if !current && forget_trust(&mut doc, &path, &ours) {
+            plan.step(&path, "forget Codex's trust in the guard it replaces", true);
         }
         if !current || retired {
             plan.settle(0, Write::File(path, doc.to_string().into_bytes()));
@@ -1261,7 +1261,7 @@ impl Adapter for Codex {
         {
             doc.remove("hooks");
         }
-        if removed || forgot {
+        if removed {
             plan.settle(0, Write::File(path, doc.to_string().into_bytes()));
         }
         Ok(plan)
