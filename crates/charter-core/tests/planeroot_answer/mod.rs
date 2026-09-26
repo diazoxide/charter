@@ -115,7 +115,7 @@ pub fn answer(case: &Value, scratch: &Path) -> Value {
     let mut gt = Vec::new();
     for (toks, before) in segs.iter().zip(&befores) {
         let (prog, env, argv) = shellwrap::split_env(toks);
-        if shellwrap::basename(&prog) != "git" {
+        if shellwrap::base_lower(&prog) != "git" {
             continue;
         }
         let (pre, _rest) = shellwrap::git_globals(&argv);

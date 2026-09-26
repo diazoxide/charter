@@ -150,6 +150,221 @@ fn only_the_root_is_guarded_however_it_is_reached() {
     assert_eq!(branch(&f, &cd), None);
 }
 
+/// A `cd` that fails leaves the shell where it was (#345). Only `&&` stops the list when it
+/// fails, so only a `cd` joined by `&&` may be taken to have moved the commands after it — and
+/// only until the `&&` chain ends.
+#[test]
+fn a_cd_that_fails_leaves_the_later_commands_in_the_root() {
+    let f = fixture();
+    let nowhere = format!("{}/nowhere", f.base);
+    for sep in [";", "||", "&", "\n"] {
+        let cmd = format!("cd {nowhere} {sep} git checkout feature");
+        assert!(branch(&f, &cmd).is_some(), "{cmd:?}");
+        let cmd = format!("cd {nowhere} {sep} git reset --hard origin/main");
+        assert!(reset(&f, &cmd).is_some(), "{cmd:?}");
+    }
+    // `&&` stops the list: the one spelling that moves the later command for certain.
+    assert_eq!(
+        branch(&f, &format!("cd {nowhere} && git checkout feature")),
+        None
+    );
+    // ...but only as far as the `&&` chain runs: a failed `cd` skips `true` and not what
+    // follows the `;` or the `||`.
+    for tail in ["; git checkout feature", "|| git checkout feature"] {
+        let cmd = format!("cd {nowhere} && true {tail}");
+        assert!(branch(&f, &cmd).is_some(), "{cmd:?}");
+    }
+}
+
+/// Only the SHELL's own `cd` moves the shell: one run in a subshell, a pipeline, or as a
+/// program (`env cd`, `/usr/bin/cd`, and `CD`, which a case-insensitive filesystem finds as
+/// `/usr/bin/cd`) leaves the next command in the root.
+#[test]
+fn a_cd_that_does_not_move_the_shell_does_not_move_the_guard() {
+    let f = fixture();
+    let elsewhere = format!("{}/elsewhere", f.base);
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    for cmd in [
+        format!("(cd {elsewhere} && true); git checkout feature"),
+        format!("(cd {elsewhere}) && git checkout feature"),
+        format!("true | cd {elsewhere} && git checkout feature"),
+        format!("env cd {elsewhere} && git checkout feature"),
+        format!("/usr/bin/cd {elsewhere} && git checkout feature"),
+        format!("CD {elsewhere} && git checkout feature"),
+        format!("! cd {elsewhere} && git checkout feature"),
+    ] {
+        assert!(branch(&f, &cmd).is_some(), "{cmd:?}");
+    }
+    // The shell's own `cd`, however it is spelled, still moves it.
+    for cmd in [
+        format!("builtin cd {elsewhere} && git checkout feature"),
+        format!("command cd {elsewhere} && git checkout feature"),
+        format!("FOO=1 cd {elsewhere} && git checkout feature"),
+        format!("pushd {elsewhere} && git checkout feature"),
+    ] {
+        assert_eq!(branch(&f, &cmd), None, "{cmd:?}");
+    }
+}
+
+/// Where a `cd` goes is read the way the shell reads it: `pushd` is a `cd`, `~` is `$HOME`, a
+/// `..` after a symlink is taken logically as well as physically, a wrapper's chdir flag moves
+/// git, and a destination the guard cannot read (`$VAR`, a glob, `cd -`, `popd`) may be the root.
+#[test]
+fn a_cd_is_followed_to_where_the_shell_goes() {
+    let f = fixture();
+    let elsewhere = format!("{}/elsewhere", f.base);
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let from_elsewhere = |cmd: &str| plane_root_branch_reason(cmd, &elsewhere, &f.root);
+    for cmd in [
+        format!("pushd {} && git checkout feature", f.root),
+        "cd $PLANE && git checkout feature".to_string(),
+        format!("cd {}/pla* && git checkout feature", f.base),
+        format!("cd {} && cd - && git checkout feature", f.root),
+        "popd && git checkout feature".to_string(),
+        format!("env -C {} git checkout feature", f.root),
+        format!("sudo --chdir={} git checkout feature", f.root),
+    ] {
+        assert!(from_elsewhere(&cmd).is_some(), "{cmd:?}");
+    }
+    // `cd` reads `a/link/..` logically: back in `a`, wherever the link points.
+    #[cfg(unix)]
+    {
+        let link = format!("{}/away", f.root);
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        assert!(from_elsewhere(&format!("cd {link}/.. && git checkout feature")).is_some());
+    }
+    // `~` is the home directory: reach the root from it through `..`.
+    if let Ok(home) = std::env::var("HOME")
+        && home.starts_with('/')
+    {
+        let ups = "../".repeat(home.trim_end_matches('/').matches('/').count());
+        let cmd = format!("cd ~/{ups}{} && git checkout feature", &f.root[1..]);
+        assert!(from_elsewhere(&cmd).is_some(), "{cmd:?}");
+    }
+}
+
+/// A `cd` the line itself can redirect is not taken on trust: a `pushd -n` that moves nothing, a
+/// `~` or `CDPATH` the line sets, a `cd` the line redefines or disables, and zsh's two-operand
+/// `cd old new` all leave the later command possibly in the root.
+#[test]
+fn a_cd_the_line_can_redirect_is_not_taken_on_trust() {
+    let f = fixture();
+    let clone = format!("{}/workspaces/w/clone", f.root);
+    std::fs::create_dir_all(&clone).unwrap();
+    git(
+        std::path::Path::new(&clone),
+        &["init", "-q", "-b", "main", "."],
+    );
+    for cmd in [
+        "pushd -n workspaces/w/clone && git checkout feature".to_string(),
+        format!("HOME={}; cd ~ && git checkout feature", f.root),
+        format!("HOME={} cd && git checkout feature", f.root),
+        format!(
+            "CDPATH={}; cd workspaces/w/clone && git checkout feature",
+            f.base
+        ),
+        "cd(){ :;}; cd workspaces/w/clone && git checkout feature".to_string(),
+        "function cd { :; }; cd workspaces/w/clone && git checkout feature".to_string(),
+        "enable -n cd; cd workspaces/w/clone && git checkout feature".to_string(),
+        format!("cd {0} {0} && git checkout feature", f.base),
+    ] {
+        assert!(branch(&f, &cmd).is_some(), "{cmd:?}");
+    }
+    // The workflow the denial recommends still runs.
+    assert_eq!(
+        branch(&f, "cd workspaces/w/clone && git checkout -b x"),
+        None
+    );
+}
+
+/// git is recognised by what runs, not how it is spelled: on APFS and NTFS `GIT` runs git (#346).
+#[test]
+fn a_git_spelled_in_capitals_is_git() {
+    let f = fixture();
+    for cmd in [
+        "GIT checkout feature",
+        "Git checkout feature",
+        "/usr/bin/GIT checkout feature",
+    ] {
+        assert!(branch(&f, cmd).is_some(), "{cmd}");
+    }
+    assert!(reset(&f, "GIT reset --hard origin/main").is_some());
+    assert!(reset(&f, "Git zzwipe origin/main").is_some());
+    // The shell takes the quotes off before it runs the word, and the walk reads the word it runs.
+    assert!(branch(&f, "g''it checkout feature").is_some());
+    assert!(reset(&f, "g''it reset --hard origin/main").is_some());
+    assert!(reset(&f, "G\\IT reset --hard origin/main").is_some());
+}
+
+/// An alias defined in one case and used in another is the same alias: git folds the key.
+#[test]
+fn an_inline_alias_is_found_in_any_case() {
+    let f = fixture();
+    for cmd in [
+        "git -c alias.ZZIN=checkout zzin feature",
+        "git -c alias.zzin=checkout ZZIN feature",
+        "git -c alias.ZzIn=checkout zZiN feature",
+        "git -c 'alias.zzb=!GIT checkout' zzb feature",
+    ] {
+        assert!(branch(&f, cmd).is_some(), "{cmd}");
+    }
+}
+
+/// The root is recognised by WHAT it is, not how its path is spelled (#346): a re-cased path on
+/// a case-insensitive filesystem and macOS's `/System/Volumes/Data` firmlink both name it, and so
+/// does any directory git would discover the root's repository from — a subdirectory of it, or
+/// one not made yet — while a repository of its own inside it is not the root.
+#[test]
+fn the_root_is_recognised_by_what_it_is_not_how_it_is_spelled() {
+    let f = fixture();
+    let elsewhere = format!("{}/elsewhere", f.base);
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let from_elsewhere = |cmd: &str| plane_root_branch_reason(cmd, &elsewhere, &f.root);
+
+    let recased = format!("{}/PLANE", f.base);
+    if std::fs::metadata(&recased).is_ok() {
+        assert!(from_elsewhere(&format!("git -C {recased} checkout feature")).is_some());
+        assert!(from_elsewhere(&format!("cd {recased} && git checkout feature")).is_some());
+    }
+    let firmlinked = format!("/System/Volumes/Data{}", f.root);
+    if std::fs::metadata(&firmlinked).is_ok() {
+        assert!(from_elsewhere(&format!("git -C {firmlinked} checkout feature")).is_some());
+    }
+
+    std::fs::create_dir_all(format!("{}/docs", f.root)).unwrap();
+    for cmd in [
+        format!("git -C {}/docs checkout feature", f.root),
+        format!("cd {}/docs && git checkout feature", f.root),
+        format!(
+            "mkdir {0}/new && cd {0}/new && git checkout feature",
+            f.root
+        ),
+        format!("git -C {}/docs reset --hard origin/main", f.root),
+    ] {
+        let said = if cmd.contains("reset") {
+            plane_root_reset_reason(&cmd, &elsewhere, &f.root)
+        } else {
+            from_elsewhere(&cmd)
+        };
+        assert!(said.is_some(), "{cmd:?}");
+    }
+
+    let clone = format!("{}/workspaces/w/clone", f.root);
+    std::fs::create_dir_all(&clone).unwrap();
+    git(
+        std::path::Path::new(&clone),
+        &["init", "-q", "-b", "main", "."],
+    );
+    assert_eq!(
+        branch(&f, "cd workspaces/w/clone && git checkout -b x"),
+        None
+    );
+    assert_eq!(
+        from_elsewhere(&format!("git -C {clone} checkout -b x")),
+        None
+    );
+}
+
 #[test]
 fn a_clone_whose_config_names_the_root_as_its_work_tree_is_the_root() {
     let f = fixture();

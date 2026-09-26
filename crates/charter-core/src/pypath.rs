@@ -106,6 +106,24 @@ pub fn path_div(a: &str, b: &str) -> String {
     }
 }
 
+/// `(st_dev, st_ino)` of `path`, following links, or `None` where it cannot be stat-ed — what
+/// `os.path.samefile` compares. Two spellings name one directory exactly when these agree: a
+/// re-cased path on a case-insensitive filesystem, or a macOS firmlink such as
+/// `/System/Volumes/Data/Users`, which `realpath` leaves spelled differently.
+pub fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
+}
+
 /// `os.path.normpath` on posix — `posixpath.normpath`, collapsing `//`, `/./` and `a/b/..`.
 ///
 /// CPython runs this in C (`posix._path_normpath`) and the pure-Python fallback beside it is

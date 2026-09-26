@@ -306,6 +306,24 @@ pub fn base_lower(tok: &str) -> String {
     basename(tok).to_lowercase()
 }
 
+/// A command line as a hot-path NAME prefilter must search it: lower-cased, as [`base_lower`]
+/// folds the program a reader names, and with every quote, backslash and newline taken out,
+/// because the shell removes them before it runs the word — `G''H`, `g\h` and `g\<newline>h`
+/// all run `gh`. A prefilter may only reject a line its reader would also pass over (#347), and
+/// taking out more characters than the shell does can only let more lines through to the reader.
+pub fn prefilter_text(cmd: &str) -> String {
+    cmd.chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\' | '\n'))
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Whether `cmd` may name the program `name` (lower-case), as a hot-path prefilter must ask it:
+/// through [`prefilter_text`], so it never rejects a spelling the reader behind it accepts.
+pub fn may_name(cmd: &str, name: &str) -> bool {
+    prefilter_text(cmd).contains(name)
+}
+
 /// Whether `tok` is a REDIRECTION token — `_REDIRECT_RE.match`.
 ///
 /// It is never the program and never the program's operand, and it may appear anywhere in a

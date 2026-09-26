@@ -94,6 +94,15 @@ fn build(base: &Path) {
             panic!("a fixture step nothing runs: {s}");
         }
     }
+    // The rows that name the root re-cased (`@B@/PLANE`, #346) were recorded where the filesystem
+    // folds case, so `PLANE` IS the root there. On a filesystem that does not, the same answer
+    // needs the same directory under that name, and a link to it is one: the recorded answer is
+    // then the machine-neutral one either way, and the fold itself is unit-tested where the
+    // filesystem can show it.
+    #[cfg(unix)]
+    if std::fs::metadata(base.join("PLANE")).is_err() {
+        std::os::unix::fs::symlink(base.join("plane"), base.join("PLANE")).unwrap();
+    }
 }
 
 /// The harness's `normalise`: the base directory as `@B@`, a config probe's scratch directory as

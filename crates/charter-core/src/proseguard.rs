@@ -327,28 +327,25 @@ pub fn charter_prose_command(cmd: &str) -> Option<(String, &'static str, Option<
 /// English (`through`, `night`), so they reject almost nothing, while `charter` is seven
 /// characters and rare.
 ///
-/// # Only ONE of the three filters is inert, and the Python says all three are
+/// # The name filters fold, because the readers behind them do
 ///
-/// The `hooks.py` section above these functions records a deletion sweep that called both of
-/// them survivors that "cannot change a verdict, the table lookup and `_live_substitution`
-/// decide". That is true of the SUBSTITUTION test — this port's own sweep reports it inert over
-/// 20,000 cases and over the whole recording, because [`live_substitution`] re-decides exactly
-/// that question. It is **false of the NAME test**, in both guards: the filter is a
-/// case-SENSITIVE substring test and [`forge_prose_command`] / [`charter_words`] fold the
-/// program with [`base_lower`], so `GH issue create` and `CHARTER persona remember` are rejected
-/// here and would be refused by the rule behind. Removing the name filter moves 43 answers in
-/// 20,000 (A5) and 31 (A6).
-///
-/// That is charter#1173, and this port **reproduces it** — the frozen Python is the
-/// differential's oracle, and a port that is right where the oracle is wrong fails its own test.
-/// The corpus carries the uppercase spellings so the upstream fix shows up as a divergence
-/// rather than silently. It is the same class `credguard` already documents as fixed in A2:
-/// a case-sensitive compare on a program name is one Shift key from absent.
+/// The SUBSTITUTION test is inert: [`live_substitution`] re-decides exactly that question, and
+/// this port's own sweep reports it inert over 20,000 cases and over the whole recording. The
+/// NAME tests are not. [`forge_prose_command`] and [`charter_words`] fold the program with
+/// [`base_lower`], because on APFS and NTFS `GH` runs `gh`, so a name filter that did not fold
+/// rejected `GH issue create` and `CHARTER persona remember` before the rule that refuses them
+/// was asked (#347; removing the case-sensitive filter moved 43 answers in 20,000 for A5 and 31
+/// for A6). The same holds for a name the shell reassembles from quotes (`g''h`, `char''ter`),
+/// which the reader sees whole. So each filter asks [`shellwrap::may_name`]: it still rejects almost
+/// every command for one substring scan, and it can no longer disagree with the reader. It is the
+/// class `credguard` documents as fixed in A2: a case-sensitive compare on a program name is one
+/// Shift key from absent. The frozen Python oracle had the defect (charter#1173); the recorded
+/// corpus rows for the uppercase spellings were changed to the refusal when this was fixed.
 pub fn forge_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
     if !SUBSTITUTIONS.iter().any(|s| cmd.contains(s)) {
         return None;
     }
-    if !cmd.contains("gh") && !cmd.contains("glab") {
+    if !shellwrap::may_name(cmd, "gh") && !shellwrap::may_name(cmd, "glab") {
         return None;
     }
     let spelling = live_substitution(cmd)?;
@@ -386,7 +383,7 @@ pub fn forge_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
 /// works is one backslash per backtick: inside double quotes ``\` `` is a literal backtick and
 /// the apostrophes keep working.
 pub fn charter_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
-    if !cmd.contains("charter") {
+    if !shellwrap::may_name(cmd, "charter") {
         return None;
     }
     if !SUBSTITUTIONS.iter().any(|s| cmd.contains(s)) {
@@ -573,9 +570,47 @@ mod tests {
         );
     }
 
-    /// The two prefilters cannot change a verdict; they only avoid a call. Both directions are
-    /// asserted so a mutation that deletes one is caught by the differential rather than here —
-    /// what is pinned here is that they are PREFILTERS.
+    /// A program name in any case is the program: on APFS and NTFS `GH` runs `gh`, and the
+    /// readers behind the name filters fold it, so the filters must fold too (#347).
+    #[test]
+    fn a_program_name_in_capitals_is_still_the_program() {
+        for cmd in [
+            "GH issue create --body \"a `x` b\"",
+            "Gh issue create --body \"a `x` b\"",
+            "/usr/bin/GH issue create --body \"a `x` b\"",
+            "GLAB issue create --description \"a `x` b\"",
+        ] {
+            assert!(forge_substitution_hit(cmd).is_some(), "{cmd}");
+        }
+        for cmd in [
+            "CHARTER persona remember \"a `x` b\"",
+            "Charter ws note \"a `x` b\"",
+        ] {
+            assert!(charter_substitution_hit(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    /// A program name the shell puts back together from quotes or a backslash is the program
+    /// too: `g''h` runs `gh`, and the reader behind the filter reads the word the shell runs.
+    #[test]
+    fn a_program_name_split_by_quoting_is_still_the_program() {
+        for cmd in [
+            "g''h issue create --body \"a `x` b\"",
+            "g\\h issue create --body \"a `x` b\"",
+            "\"g\"lab issue create --description \"a `x` b\"",
+        ] {
+            assert!(forge_substitution_hit(cmd).is_some(), "{cmd}");
+        }
+        for cmd in [
+            "char''ter persona remember \"a `x` b\"",
+            "c\\harter persona remember \"a `x` b\"",
+        ] {
+            assert!(charter_substitution_hit(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    /// The prefilters only avoid a call where they agree with the reader behind them: a command
+    /// that passes them is still judged, and one with no substitution is still allowed.
     #[test]
     fn the_prefilters_only_avoid_a_call() {
         // A command that passes both filters and is still allowed.

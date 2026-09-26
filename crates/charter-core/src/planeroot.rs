@@ -56,22 +56,22 @@
 //! differential keeps those inputs out of its alphabet, because it cannot arbitrate an input one
 //! side has no answer for. Unit tests below pin what this does there.
 //!
-//! # Defects reproduced rather than fixed
+//! # Where this parts from the frozen Python, on purpose
 //!
-//! The frozen Python is the oracle, and a port that is right where the oracle is wrong fails its
-//! own test. So these are kept, with recorded cases pinning today's answer so an upstream fix
-//! shows up as a divergence rather than silently:
+//! The Python oracle recognised git and the root by SPELLING and modelled every `cd` as
+//! succeeding (charter#1176, charter#1177). Both were fail-opens, fixed here and recorded as
+//! changed corpus rows (ADR 0046):
 //!
-//! * **charter#1176** — git and the root are recognised by SPELLING: the program's basename is
-//!   compared case-sensitively (`GIT` runs git on a case-insensitive filesystem), and a subject
-//!   is compared to the root as a resolved string, which a re-cased path or a macOS firmlink
-//!   names differently. Inline aliases are keyed case-sensitively while git folds alias names.
-//! * **charter#1177** — every `cd` is modelled as succeeding, so `cd <missing> || git checkout x`
-//!   is judged as running in `<missing>` while the shell runs it in the root.
+//! * **#346** — `git` is recognised folded (`GIT` runs git on APFS and NTFS), inline aliases are
+//!   keyed folded as git keys them, and a subject is compared to the root by identity and by the
+//!   repository git would discover from it ([`TheRoot`]), not as a resolved string.
+//! * **#345** — a `cd` only moves the later segments for certain when its failure would stop them
+//!   (the shell's own `cd`, joined by `&&`); any other `cd` adds a directory the shell may be in
+//!   and keeps the one it was in ([`Whereabouts`]).
 
 use crate::gitconfig;
 use crate::memstore::py_strip;
-use crate::pypath::{is_abs, path_div, pure_path, realpath};
+use crate::pypath::{is_abs, normpath, path_div, pure_path, realpath};
 use crate::shellseg;
 use crate::shellwrap::{self, GIT_VALUE_OPTS};
 use crate::worktree::git as runner;
@@ -383,6 +383,262 @@ pub struct RootInvocation {
     pub pre: Vec<String>,
 }
 
+/// The plane root as the walk recognises it: by IDENTITY, never by spelling (#346).
+///
+/// A re-cased path on a case-insensitive filesystem and macOS's `/System/Volumes/Data` firmlink
+/// both reach the root while [`resolved`] spells them differently, so a subject is compared by
+/// `(st_dev, st_ino)`, falling back to the resolved string only where it cannot be stat-ed. And
+/// git does not act on the directory it runs in but on the repository it DISCOVERS upward from
+/// it, so a subject inside the root's own repository — `docs/`, or a directory the same command
+/// is about to make — reaches the root too, while a repository of its own inside it (a workspace
+/// clone) stops the ascent and does not.
+struct TheRoot {
+    path: String,
+    id: Option<(u64, u64)>,
+    /// The root's own git directory and its identity, when the root has a `.git` of its own.
+    git_dir: Option<(String, Option<(u64, u64)>)>,
+}
+
+impl TheRoot {
+    fn of(root: &str) -> Self {
+        let own = std::fs::symlink_metadata(path_div(root, ".git")).is_ok();
+        let git_dir = own
+            .then(|| gitconfig::git_dir_at(root))
+            .flatten()
+            .map(|gd| {
+                let gd = resolved(&gd);
+                let id = identity(&gd);
+                (gd, id)
+            });
+        TheRoot {
+            path: root.to_string(),
+            id: identity(root),
+            git_dir,
+        }
+    }
+
+    /// Whether git, pointed at the subject `t`, acts on the root's repository.
+    fn is_reached_from(&self, t: &str) -> bool {
+        let t = resolved(t);
+        if same_dir(&t, &self.path, self.id) {
+            return true;
+        }
+        let Some((root_gd, root_gd_id)) = &self.git_dir else {
+            return false;
+        };
+        gitconfig::git_dir_at(&t).is_some_and(|gd| same_dir(&resolved(&gd), root_gd, *root_gd_id))
+    }
+}
+
+/// Whether the resolved `path` and `other` (whose identity is `other_id`) are one directory: by
+/// identity where both can be stat-ed, by the resolved string where either cannot.
+fn same_dir(path: &str, other: &str, other_id: Option<(u64, u64)>) -> bool {
+    match (identity(path), other_id) {
+        (Some(a), Some(b)) => a == b,
+        _ => path == other,
+    }
+}
+
+/// `str(Path(dir) / rel)`, with an empty `dir` read as the current directory.
+fn join_dir(dir: &str, rel: &str) -> String {
+    path_div(&pure_path(if dir.is_empty() { "." } else { dir }), rel)
+}
+
+/// [`crate::pypath::file_identity`] of a path string.
+fn identity(path: &str) -> Option<(u64, u64)> {
+    crate::pypath::file_identity(std::path::Path::new(path))
+}
+
+/// Where the later segments of one command line may be running: every directory a `cd` so far
+/// could have left the shell in, and whether one of them is a directory this cannot name
+/// (`cd "$DIR"`, `cd -`, `popd`), which may be the root.
+///
+/// **It only ever grows while the shell might still be elsewhere**, as [`git_target`]'s list does
+/// and for the same reason: a `cd` is only taken to REPLACE where the shell is when its failure
+/// would stop what follows, and a `cd` that fails leaves the shell where it was (#345).
+#[derive(Clone, Debug, Default)]
+struct Whereabouts {
+    dirs: Vec<String>,
+    anywhere: bool,
+}
+
+impl Whereabouts {
+    fn at(dir: &str) -> Self {
+        Whereabouts {
+            dirs: vec![dir.to_string()],
+            anywhere: false,
+        }
+    }
+
+    fn merge(&mut self, other: Whereabouts) {
+        for d in other.dirs {
+            if !self.dirs.contains(&d) {
+                self.dirs.push(d);
+            }
+        }
+        self.anywhere |= other.anywhere;
+    }
+}
+
+/// The shell's own directory-changing builtins, by the word the shell looks up: the lookup is
+/// case-SENSITIVE (a builtin is found before `PATH`), so `CD` is not one of them — on a
+/// case-insensitive filesystem it runs `/usr/bin/cd`, a program that cannot move the shell.
+const CD_BUILTINS: [&str; 3] = ["cd", "pushd", "popd"];
+
+/// One `cd`, `pushd` or `popd` in a segment.
+struct CdCall {
+    builtin: String,
+    args: Vec<String>,
+    /// CERTAINLY the shell's own builtin run in this shell: the bare word at the front, after
+    /// assignments and an optional `builtin` or `command`. Anything else that names one (`if cd
+    /// x`, `! cd x`, `time cd x`, `env cd x`, `/usr/bin/cd x`) may or may not move the shell, and
+    /// a guard that cannot tell takes both directories.
+    certain: bool,
+}
+
+/// The `cd`-shaped call in one segment, if it is one — see [`CdCall`].
+fn cd_call(toks: &[String], prog: &str, args: &[String]) -> Option<CdCall> {
+    let mut i = 0;
+    while i < toks.len() && shellwrap::is_env_assignment(&toks[i]) {
+        i += 1;
+    }
+    if matches!(toks.get(i).map(String::as_str), Some("builtin" | "command")) {
+        i += 1;
+    }
+    if let Some(word) = toks.get(i)
+        && CD_BUILTINS.contains(&word.as_str())
+    {
+        return Some(CdCall {
+            builtin: word.clone(),
+            args: toks[i + 1..].to_vec(),
+            certain: true,
+        });
+    }
+    let base = shellwrap::basename(prog);
+    CD_BUILTINS.contains(&base).then(|| CdCall {
+        builtin: base.to_string(),
+        args: args.get(1..).unwrap_or(&[]).to_vec(),
+        certain: false,
+    })
+}
+
+/// What the whole command line does to the meaning of a `cd` in it — read once, from its text.
+///
+/// Each is a fail-closed reading of a substring: a line that merely mentions `HOME` loses the
+/// `~` shortcut, which costs nothing but a refusal the denial's own remedy answers.
+struct CdContext {
+    /// The line may redefine `cd` — a function (`cd() …`, `function cd`), an `alias`, or an
+    /// `enable -n` — so no `cd` in it is certainly the builtin.
+    redefined: bool,
+    /// The line may set `HOME`, so `~` and a bare `cd` go where this cannot tell.
+    sets_home: bool,
+    /// `CDPATH` is in play — set on the line, or in the environment the shell inherits — so a
+    /// relative name may resolve somewhere else entirely.
+    cdpath: bool,
+}
+
+impl CdContext {
+    fn of(cmd: &str) -> Self {
+        static REDEFINES: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let redefines = REDEFINES.get_or_init(|| {
+            regex::Regex::new(
+                r"(?:^|[^A-Za-z0-9_])(?:(?:cd|pushd|popd)\s*\(|function\s+(?:cd|pushd|popd)\b)|(?:^|[;&|({\n]|\bthen|\bdo)\s*(?:builtin\s+|command\s+)?(?:alias|enable)\b",
+            )
+            .expect("compiles")
+        });
+        CdContext {
+            redefined: redefines.is_match(cmd),
+            sets_home: cmd.contains("HOME"),
+            cdpath: cmd.contains("CDPATH")
+                || std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty()),
+        }
+    }
+}
+
+/// Where one `cd`/`pushd`/`popd` sends the shell from `here`, read as the shell reads it.
+///
+/// A destination this cannot name is `anywhere`: `popd`, `cd -` (`$OLDPWD`), `pushd` with no
+/// directory or a stack rotation, a word the shell will still expand (`$`, a glob, a brace), a
+/// `~user`, a `~` when the line may set `HOME`, a second operand (zsh's `cd old new`), and — when
+/// `CDPATH` is in play — a relative name `CDPATH` may resolve elsewhere. `pushd -n` moves nothing.
+/// `~` and a bare `cd` are `$HOME`. A `..` is read both ways, because `cd` takes `a/link/..`
+/// LOGICALLY (back in `a`) where [`resolved`] takes it physically; both readings are kept.
+fn cd_destinations(
+    builtin: &str,
+    args: &[String],
+    here: &Whereabouts,
+    line: &CdContext,
+) -> Whereabouts {
+    let anywhere = || Whereabouts {
+        dirs: Vec::new(),
+        anywhere: true,
+    };
+    if builtin == "popd" {
+        return anywhere();
+    }
+    let mut operands = args.iter().filter(|a| *a == "-" || !a.starts_with('-'));
+    let dest = operands.next();
+    if operands.next().is_some() {
+        return anywhere(); // zsh: `cd old new` substitutes in the current path
+    }
+    let no_change = args
+        .iter()
+        .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains('n'));
+    if builtin == "pushd" && no_change {
+        return here.clone(); // `pushd -n` edits the stack and stays put
+    }
+    let dest = match (builtin, dest) {
+        (_, Some(d)) if d == "-" || d.starts_with('+') => return anywhere(),
+        ("pushd", None) => return anywhere(),
+        (_, None) => "~".to_string(),
+        (_, Some(d)) if d.is_empty() => return here.clone(), // `cd ""` stays put
+        (_, Some(d)) => d.clone(),
+    };
+    if dest.contains(['$', '*', '?', '[', '{', '`']) {
+        return anywhere();
+    }
+    let dest = if dest == "~" || dest.starts_with("~/") {
+        if line.sets_home {
+            return anywhere();
+        }
+        match std::env::var("HOME") {
+            Ok(home) if is_abs(&home) => format!("{home}{}", &dest[1..]),
+            _ => return anywhere(),
+        }
+    } else if dest.starts_with('~') {
+        return anywhere();
+    } else {
+        dest
+    };
+    if !is_abs(&dest) {
+        let walks_cdpath =
+            !(dest == "." || dest == ".." || dest.starts_with("./") || dest.starts_with("../"));
+        if walks_cdpath && line.cdpath {
+            return anywhere();
+        }
+    }
+    let mut out = Whereabouts {
+        dirs: Vec::new(),
+        anywhere: here.anywhere && !is_abs(&dest),
+    };
+    let from: Vec<&str> = if is_abs(&dest) {
+        vec![""]
+    } else {
+        here.dirs.iter().map(String::as_str).collect()
+    };
+    for h in from {
+        let physical = if is_abs(&dest) {
+            dest.clone()
+        } else {
+            join_dir(h, &dest)
+        };
+        let logical = normpath(&physical);
+        out.merge(Whereabouts::at(&physical));
+        out.merge(Whereabouts::at(&logical));
+    }
+    out
+}
+
 /// Every git invocation in `cmd` that acts on the PLANE ROOT — `_plane_root_git`, the walk both
 /// guards share, so the two of them share one pair of eyes.
 ///
@@ -391,53 +647,71 @@ pub struct RootInvocation {
 /// * **Fails OPEN on a command that would not tokenize**, in one place: the re-segmented guess
 ///   is made without quoting, and a phantom `git checkout` out of a broken quote must not stop a
 ///   turn. The leak and one-credential guards, which may not miss, keep scanning it.
-/// * **A `cd` earlier in the SAME command moves where later segments run** (#183) — modelled as
-///   always succeeding, which charter#1177 records as a fail-open and this reproduces.
-/// * **Any** subject being the root is enough ([`git_target`]).
+/// * **A `cd` earlier in the SAME command moves where later segments run** (#183) — but only a
+///   `cd` whose failure stops them is taken to have moved them for certain: the shell's own `cd`,
+///   joined to what follows by `&&`, and only until that `&&` chain ends. Every other `cd` — one
+///   followed by `;`, `||`, `&` or a newline, one in a pipeline or a subshell, one run as a
+///   program — ADDS its destination and keeps the directory the shell was in (#345).
+/// * **A wrapper's own chdir flag** (`env -C`, `sudo --chdir`) moves git as a `cd` would.
+/// * **Any** subject being the root is enough ([`git_target`]), from any directory the shell may
+///   be in.
 pub fn plane_root_git(cmd: &str, cwd: &str, root: &str) -> Vec<RootInvocation> {
-    let (segments, parsed) = shellseg::segment_argv_parsed(cmd);
-    if !parsed {
+    let Some(segments) = shellseg::joined_argv(cmd) else {
         return Vec::new();
-    }
+    };
+    let argvs: Vec<Vec<String>> = segments.iter().map(|s| s.argv.clone()).collect();
+    let carried = shellwrap::exported_env(&argvs);
+    // Stat-ed on the first git invocation, so a line with none pays nothing for it.
+    let the_root = std::cell::OnceCell::new();
     let mut out = Vec::new();
-    let mut here = cwd.to_string();
-    let carried = shellwrap::exported_env(&segments);
-    for (toks, before) in segments.iter().zip(carried.iter()) {
-        let (prog, env, args) = shellwrap::split_env(toks);
-        // Case-SENSITIVE, as the Python's is — charter#1176.
-        let base = shellwrap::basename(&prog);
-        if base == "cd" {
-            let dest = args.iter().skip(1).find(|a| !a.starts_with('-'));
-            if let Some(dest) = dest.filter(|d| !d.is_empty()) {
-                here = if is_abs(dest) {
-                    dest.clone()
-                } else {
-                    path_div(&pure_path(if here.is_empty() { "." } else { &here }), dest)
-                };
-            }
-            continue;
-        }
-        if base != "git" {
-            continue;
-        }
-        let (pre, rest) = shellwrap::git_globals(&args);
-        let Some((sub, post)) = rest.split_first() else {
-            continue; // global options only: no subcommand to judge
-        };
-        // `before + env`, in that order: an assignment on THIS invocation overrides an export.
+    let mut here = Whereabouts::at(cwd);
+    // Where the shell stays if a `cd … &&` failed: back in play once the `&&` chain ends.
+    let mut left_behind = Whereabouts::default();
+    let context = CdContext::of(cmd);
+    for (seg, before) in segments.iter().zip(carried.iter()) {
+        let call = shellwrap::split_env_chdir(&seg.argv);
+        let (prog, env, args, chdir) = (call.prog, call.env, call.argv, call.chdir);
         let mut inherited = before.clone();
         inherited.extend(env);
-        if !git_target(&here, &pre, &inherited)
-            .iter()
-            .any(|t| resolved(t) == root)
-        {
-            continue;
+        if let Some(cd) = cd_call(&seg.argv, &prog, &args) {
+            let moved = cd_destinations(&cd.builtin, &cd.args, &here, &context);
+            let piped = matches!(seg.before.as_deref(), Some("|" | "|&"));
+            if cd.certain && !context.redefined && !piped && seg.after.as_deref() == Some("&&") {
+                left_behind.merge(std::mem::replace(&mut here, moved));
+            } else {
+                here.merge(moved);
+            }
+        } else if shellwrap::base_lower(&prog) == "git" {
+            // Folded: on APFS and NTFS `GIT` runs git (#346).
+            let (pre, rest) = shellwrap::git_globals(&args);
+            if let Some((sub, post)) = rest.split_first() {
+                // `before + env`, in that order: an assignment on THIS invocation overrides an
+                // export.
+                let on_root = here.anywhere
+                    || here.dirs.iter().any(|dir| {
+                        let dir = if chdir.is_empty() {
+                            dir.clone()
+                        } else {
+                            join_dir(dir, &chdir) // `env -C`, `sudo --chdir`
+                        };
+                        git_target(&dir, &pre, &inherited).iter().any(|t| {
+                            the_root
+                                .get_or_init(|| TheRoot::of(root))
+                                .is_reached_from(t)
+                        })
+                    });
+                if on_root {
+                    out.push(RootInvocation {
+                        sub: sub.clone(),
+                        post: post.to_vec(),
+                        pre,
+                    });
+                }
+            }
         }
-        out.push(RootInvocation {
-            sub: sub.clone(),
-            post: post.to_vec(),
-            pre,
-        });
+        if !matches!(seg.after.as_deref(), Some("&&" | "|" | "|&")) {
+            here.merge(std::mem::take(&mut left_behind));
+        }
     }
     out
 }
@@ -532,8 +806,8 @@ pub fn checkout_operand_kind(root: &str, op: &str) -> OperandKind {
 
 /// Aliases defined ON THE COMMAND LINE: `git -c alias.co=checkout co feature` —
 /// `_inline_aliases`. Only the separated `-c <name>=<value>`: git rejects the attached form.
-/// Later definitions win, as a dict's later assignment does. The NAME is kept as written, which
-/// is charter#1176's third spelling defect (git folds it) and is reproduced.
+/// Later definitions win, as a dict's later assignment does. The NAME is kept LOWER-CASED, git's
+/// own rule for the last component of a config key, so `-c alias.CO=checkout co` is found (#346).
 pub fn inline_aliases(pre: &[String]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for j in 0..pre.len().saturating_sub(1) {
@@ -544,7 +818,11 @@ pub fn inline_aliases(pre: &[String]) -> Vec<(String, String)> {
             continue;
         };
         if name.to_lowercase().starts_with("alias.") {
-            let alias: String = name.chars().skip("alias.".len()).collect();
+            let alias: String = name
+                .chars()
+                .skip("alias.".len())
+                .collect::<String>()
+                .to_lowercase();
             match out.iter_mut().find(|(k, _)| *k == alias) {
                 Some(row) => row.1 = body.to_string(),
                 None => out.push((alias, body.to_string())),
@@ -579,7 +857,8 @@ pub fn resolve_git_alias(
             return (sub, post);
         }
         seen.push(sub.clone());
-        let body = match inline.iter().find(|(k, _)| *k == sub) {
+        let folded = sub.to_lowercase();
+        let body = match inline.iter().find(|(k, _)| *k == folded) {
             Some((_, b)) => b.clone(),
             None => {
                 let key = format!("alias.{sub}");
@@ -599,7 +878,7 @@ pub fn resolve_git_alias(
             return (sub, post);
         };
         if shell {
-            if toks.first().map(|t| shellwrap::basename(t)) != Some("git") {
+            if toks.first().map(|t| shellwrap::base_lower(t)).as_deref() != Some("git") {
                 return (sub, post);
             }
             toks.remove(0);
@@ -932,9 +1211,10 @@ fn py_int(text: &str) -> Option<i128> {
 /// drops something unpublished ([`unpushed_at_risk`] is the whole condition); and the denial
 /// clears itself the moment `charter save` pushes the commits. It follows ALIASES as the branch
 /// guard does (#467), so its hot-path filter is `git`, never `reset`: `wipe = reset --hard`
-/// destroys commits without the word.
+/// destroys commits without the word. The filter folds and reads through quoting
+/// ([`shellwrap::may_name`]), because the walk behind it does: `GIT` and `g''it` are git.
 pub fn plane_root_reset_reason(cmd: &str, cwd: &str, root: &str) -> Option<String> {
-    if !cmd.contains("git") {
+    if !shellwrap::may_name(cmd, "git") {
         return None;
     }
     let root = plane_root(root);
