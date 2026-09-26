@@ -165,6 +165,9 @@ impl<'a> Linter<'a> {
         issues.extend(bin_issues(root, name));
         issues.extend(self.skill_ref_issues(&charter));
         issues.extend(self.mcp_issues(name));
+        // Its curation actions, each under its file: the same judgement the menus make when
+        // they leave a broken one out ([`crate::curation::parse`]).
+        issues.extend(crate::curation::lint(root, name));
         issues
     }
 

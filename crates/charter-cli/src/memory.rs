@@ -281,6 +281,12 @@ pub enum PersonaCommand {
         #[arg(long, hide = true)]
         now: Option<String>,
     },
+    /// A persona's curation actions: chats the operator opens on a workspace, a persona or
+    /// the plane with a prompt typed and never sent (personas/<name>/curation/<id>.md).
+    ///
+    /// The work is [`charter_core::curation`].
+    #[command(subcommand)]
+    Curation(crate::curation::PersonaCuration),
     /// Append to (with a message) or show the persona's activity in this session.
     ///
     /// The work is [`charter_core::personaverbs::upkeep::log`].
@@ -813,6 +819,7 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
         PersonaCommand::Gc { .. } | PersonaCommand::Secret(_) => {
             unreachable!("answered before run")
         }
+        PersonaCommand::Curation(command) => crate::curation::persona(plane.root(), command),
         PersonaCommand::Current => {
             // `(none)` is the word charter prints, and it is NOT what it prints for a rung
             // that named a persona this plane does not have: THAT name is printed, because a

@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Curation actions: chats that open with their prompt typed, for you to read and send.**
+  `charter curation show workspace:<name>` (or `persona:<name>`, or `plane`) lists what that
+  subject is offered, who runs each one, where, and the exact prompt. charter ships three:
+  Safe remove, Compact & improve, and Add curation action, each naming a new skill in charter's
+  plugin (`safe-remove`, `compact`, `add-curation-action`). A persona adds its own as
+  `personas/<name>/curation/<id>.md`, or with `charter persona curation add`, and
+  `charter persona lint` reports one that is broken or that takes a built-in's name. The app's
+  Curate menu comes in a later release (ADR 0061).
 - **The harness asks you before `charter report` files an issue.** `charter init` now writes an
   ask rule for `charter report *--yes*` in `.claude/settings.json` and `opencode.json`, beside
   the one for `charter handoff`, so a chat cannot file a public report without your yes.

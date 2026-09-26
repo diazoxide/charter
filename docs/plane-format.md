@@ -107,6 +107,7 @@ row), and the status of that field where it differs from its file's.
   - [`personas/<name>/refs/README.md` and `personas/<name>/refs/**`](#personasnamerefsreadmemd-and-personasnamerefs)
   - [`personas/<name>/mcp.json`](#personasnamemcpjson)
   - [`personas/<name>/bin/<script>`](#personasnamebinscript)
+  - [`personas/<name>/curation/<id>.md` — a curation action](#personasnamecurationidmd--a-curation-action)
   - [`personas/_shared/` (`memory/`, `refs/`)](#personasshared-memory-refs)
   - [`personas/.default` (legacy)](#personasdefault-legacy)
   - [`personas/_dispatch/<YYYY-MM>.<host>.jsonl`](#personasdispatchyyyy-mmhostjsonl)
@@ -1814,6 +1815,59 @@ with `", "` (`:907`-`:908`).
   os.access(f, os.X_OK)` counts (`charter/persona.py:604`-`:606`). `uses:`/`borrows:` do
   **not** carry scripts. Paths are rendered plane-relative in the agent
   (`charter/commands_persona.py:858`, `:1003`).
+
+---
+
+### `personas/<name>/curation/<id>.md` — a curation action
+
+New in charter-app (ADR 0061); the Python charter never read or wrote it. A **curation action**
+is a chat the operator can open on a workspace, a persona or the plane with a prompt already
+typed into it and never sent. This file declares one, and the persona it sits under is the one
+that runs it.
+
+- **Format:** Markdown with the same line-based frontmatter as
+  [`persona.md`](#personasnamepersonamd) (`crates/charter-core/src/personas.rs`,
+  `frontmatter` and `charter_body`: not YAML, quotes kept, a key matched exactly). The body
+  below the frontmatter is the prompt template.
+- **Status:** stable — hand-edited, committed, and read by the app's menus and by
+  `charter curation show`.
+- **Written by:** the operator by hand, or `charter persona curation add <name> <id>`, which
+  writes it only when it would read back without an error and never over an existing file.
+  Removed by `charter persona curation remove <name> <id>`, and with the whole persona by
+  `charter persona remove`.
+- **Read by:** `crates/charter-core/src/curation.rs` (`declared`, `resolve`, `lint`), which
+  `charter persona curation list`, `charter curation show` and `charter persona lint` all
+  call.
+- **Git:** committed, like everything else under `personas/<name>/`.
+- **Encoding details:**
+  - `<id>` is the file's stem and must be a name charter could mint, the persona-name grammar
+    `[a-z0-9][a-z0-9._-]*`. The action's full id is `<name>/<id>`. charter's own built-in
+    actions are `charter/<id>` and are not files at all: they ship inside the binary.
+  - Only `*.md` files directly under `curation/` are actions. A dotfile (`.gitkeep`) or a
+    subdirectory is not one and is not reported.
+  - A file that is not UTF-8, is larger than a memory file may be, or resolves out of the plane
+    is an error, not an action.
+  - `extends:` does not carry curation actions. Each persona offers only the files in its own
+    `curation/`.
+  - **The template** substitutes exactly four variables: `{subject.kind}` (`workspace`,
+    `persona` or `plane`), `{subject.name}`, `{subject.path}` (the workspace's directory, the
+    persona's directory, or the plane root) and `{plane.root}`. Substitution is one plain
+    pass: a substituted value is never read again for variables, nothing is expanded by a
+    shell, and no environment variable, vault or secret is ever read. Any other
+    `{word}` — braces around letters, digits, `_`, `.` or `-` — is an error, so a typo is
+    caught rather than typed into a chat. Braces around anything else (`{"a": 1}`) are text.
+  - **An action that has an error is not offered**, and the list that leaves it out says so
+    with a warning naming the file. So is one whose id or label is one of charter's built-in
+    actions' (`charter/safe-remove`, `charter/compact`, `charter/add-curation-action`; labels
+    compared case-insensitively): a built-in cannot be overridden or impersonated.
+
+| Field | Type | Required / default | Meaning | Status | Source |
+|---|---|---|---|---|---|
+| `label` | string (one line) | required, non-empty | What the menu and the palette show | stable | `crates/charter-core/src/curation.rs` |
+| `on` | CSV of `workspace`, `persona`, `plane` | required, at least one; an unknown kind is an error | The kinds of subject the action is offered on | stable | same |
+| `runs-in` | `subject` \| `plane` | absent → a workspace subject runs in its directory, a persona or the plane at the plane root; an unknown value is an error | The directory the chat starts in. `subject` is the subject's own directory (the workspace's, `personas/<name>/`, or the plane root) | stable | same |
+
+An unknown key is a warning, as it is in `persona.md`, and a repeated key is an error.
 
 ---
 

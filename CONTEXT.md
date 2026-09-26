@@ -200,6 +200,14 @@ to *run action `<id>` on `<subject>`*. Never one of charter's own verbs. charter
 the manifest says so, and always before one that deletes.
 _Avoid_: command (for this), verb (unqualified), button
 
+**Curation action**:
+A chat charter opens on a workspace, a persona or the plane with a prompt already typed into it
+and never sent: the operator reads it and presses Enter. charter ships three of its own
+(`charter/safe-remove`, `charter/compact`, `charter/add-curation-action`), and a persona
+declares more as `personas/<name>/curation/<id>.md`, which that persona runs. Unlike an
+extension's **Action**, nothing runs a program: the chat is the whole of it (ADR 0061).
+_Avoid_: action (unqualified), quick action, macro
+
 **Palette command** (of an extension):
 A row an extension adds to the palette, named with the extension's name, that opens one of its
 views or runs one of its actions.
