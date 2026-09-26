@@ -239,6 +239,12 @@ how it is cited and nothing here is renumbered.
     unchanged; the two records are separate because an arrangement spans planes and a plane's
     chats travel with the plane. A plane that has moved or gone is dropped with a line saying
     so, never an error dialog. `--no-restore` starts clean. **ADR 0033.**
+29. **A strip's order is the operator's.** Nothing reorders a strip by itself; the operator can
+    drag a tab along its own strip, with the pointer or the keyboard, and a drop across the
+    pinned tabs' boundary pins or unpins it. Each order is kept where that strip's arrangement
+    already was, on this machine and never committed: projects in the window arrangement of
+    decision 25, workspace pins in the same store, chats in the plane's own
+    `.charter/app/reopen.json`. **ADR 0039, as amended 2026-09-26.**
 
 ## Limits (acceptance)
 

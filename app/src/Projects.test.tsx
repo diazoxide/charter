@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
+import { dragWithTheKeyboard, laidOutInARow } from "./test-strips";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce, onDrawn, type Theme } from "./theme/theme";
 
 /**
@@ -32,6 +33,7 @@ const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMo
 afterEach(() => {
   cleanup();
   clearMocks();
+  vi.restoreAllMocks();
 });
 
 declare global {
@@ -531,6 +533,27 @@ describe("a window holding more than one project", () => {
     await vi.waitFor(() =>
       expect(asked.filter((one) => one.cmd === "window_holds_planes").pop()?.args).toEqual({
         held: { planes: [ONE, TWO], active: 1 },
+      }),
+    );
+  });
+
+  it("puts its projects in the order a project tab was dragged into, and remembers it", async () => {
+    // SI-6: the project strip's order is the window's arrangement, which is what the machine
+    // store keeps for the next cold launch — so the drag is written down by the same call.
+    laidOutInARow();
+    const { asked } = core({ restore: { planes: [ONE, TWO], active: 0, dropped: [] } });
+    render(<App />);
+    await waitFor(() => expect(projectTabs()).toEqual(["one*", "two"]));
+
+    within(screen.getByRole("tablist", { name: "Projects" }))
+      .getAllByRole("tab")[1]
+      .focus();
+    await dragWithTheKeyboard("{ArrowLeft}");
+
+    await waitFor(() => expect(projectTabs()).toEqual(["two", "one*"]));
+    await vi.waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "window_holds_planes").pop()?.args).toEqual({
+        held: { planes: [TWO, ONE], active: 1 },
       }),
     );
   });

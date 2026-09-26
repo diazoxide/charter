@@ -3299,7 +3299,8 @@ down rather than read off the code.
   relaunch's worth of chats: the app starts with none open, which is what a first launch
   does anyway. No second process reads it, which is what would make it stable.
 - **Written by:** `app/src-tauri/src/lib.rs` (charter-app) — whenever what is open changes
-  (a chat started, closed, or brought to front), and again on the way out. Not only on the
+  (a chat started, closed, brought to front, or dragged to another place on its strip), and
+  again on the way out. Not only on the
   way out: an app that is killed, or crashes, runs no exit handler. **Restart to update**
   (charter-app#251) writes it too, with `relaunch_after_update`, before the restart is asked
   for, so a relaunch that fails loses nothing: the next launch reads the same record.
@@ -3316,7 +3317,7 @@ down rather than read off the code.
 |---|---|---|---|
 | `version` | int | `1`; any other value and the record is ignored whole | format version |
 | `at` | int epoch | required | when it was written; nothing reads it |
-| `chats[]` | list | required | one entry per chat that was open |
+| `chats[]` | list | required | one entry per chat that was open, **in the order the chat strip drew them**, which is the order a launch puts them back in (ADR 0039, amended for SI-6: the operator can drag a tab). A record written before that lists them in the order they were numbered, which was the strip's order then, so it reads back as the strip its operator last saw |
 | `chats[].program` | str | required | the program, as it was launched: a path or a bare name |
 | `chats[].args` | list[str] | default `[]` | its arguments, **without** any charter added — a resume spells those differently from a start, so they are decided again at the reopen |
 | `chats[].cwd` | str | default `""` (absent) | the directory it ran in |

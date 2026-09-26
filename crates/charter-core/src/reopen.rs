@@ -252,6 +252,13 @@ pub struct View {
 /// Every chat that was open, and the numbers this plane has already spent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Record {
+    /// Every chat that was open, **in the order the chat strip drew them** — which is the
+    /// order a launch puts them back in (ADR 0039, amended when a tab could be dragged).
+    ///
+    /// Not the order they were numbered in: a chat keeps its number across a launch
+    /// ([`Chat::number`]), and the operator can drag it anywhere on the strip. Not a format
+    /// change either, for [`Chat::pinned`]'s reason: a record written before tabs could be
+    /// dragged lists them in number order, which was the strip's order when it was written.
     pub chats: Vec<Chat>,
     /// The view tabs that were open — see [`View`]. Empty in every record written before a tab
     /// could hold one, which is what was true of those.

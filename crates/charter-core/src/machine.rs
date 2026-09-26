@@ -935,6 +935,47 @@ impl Store {
         Ok(entry.pinned_workspaces.len() != had)
     }
 
+    /// Puts a plane's pinned workspaces in the order `order` names them — the order the
+    /// operator dragged them into on the workspace strip (ADR 0039, as amended by SI-6) —
+    /// answering whether anything changed.
+    ///
+    /// **Arranging is not pinning.** A name in `order` that is not pinned is passed over:
+    /// pinning has its own bound and its own refusal ([`Self::pin_workspace`]), and a
+    /// drag that crosses from the unpinned tabs to the pinned ones pins first and arranges
+    /// second.
+    ///
+    /// **Only what the window drew moves.** The pins `order` names take, in `order`'s
+    /// sequence, the places those same pins held; a pin it does not name keeps its place. The
+    /// window draws only the pins whose workspace still exists ([`Self::pinned_workspaces`]),
+    /// so a dangling pin is one it never saw, and it is not the window's to move.
+    pub fn arrange_workspaces(&mut self, plane: &Path, order: &[&str]) -> Result<bool, String> {
+        let Some(entry) = self.recents.iter_mut().find(|one| one.plane == plane) else {
+            return Err(
+                "charter does not remember that project, so there is nothing to arrange in."
+                    .to_owned(),
+            );
+        };
+        let mut named = order
+            .iter()
+            .filter(|name| entry.pinned_workspaces.iter().any(|one| one == *name));
+        let arranged: Vec<String> = entry
+            .pinned_workspaces
+            .iter()
+            .map(|one| {
+                if order.contains(&one.as_str()) {
+                    named
+                        .next()
+                        .map_or_else(|| one.clone(), |name| (*name).to_owned())
+                } else {
+                    one.clone()
+                }
+            })
+            .collect();
+        let changed = arranged != entry.pinned_workspaces;
+        entry.pinned_workspaces = arranged;
+        Ok(changed)
+    }
+
     /// Moves a workspace's pin to the name it was renamed to (charter#367), keeping its
     /// place in the order, and answers whether anything changed.
     ///
@@ -3324,6 +3365,91 @@ mod tests {
         store.pin_workspace(plane, "alpha", true).unwrap();
         let (kept, _) = store.pinned_workspaces(plane, &["alpha", "mu", "zeta"]);
         assert_eq!(kept, ["zeta", "mu", "alpha"]);
+    }
+
+    #[test]
+    fn arranging_the_pinned_workspaces_puts_them_in_the_order_the_operator_dragged_them_to() {
+        // Pin order was the order of pinning until the strip could be dragged (SI-6). Once
+        // it can, the order the operator left it in is the order it is drawn in.
+        let mut store = remembering(&["/planes/a"]);
+        let plane = Path::new("/planes/a");
+        for name in ["zeta", "alpha", "mu"] {
+            store.pin_workspace(plane, name, true).unwrap();
+        }
+
+        assert_eq!(
+            store.arrange_workspaces(plane, &["mu", "zeta", "alpha"]),
+            Ok(true)
+        );
+
+        let (kept, _) = store.pinned_workspaces(plane, &["alpha", "mu", "zeta"]);
+        assert_eq!(kept, ["mu", "zeta", "alpha"]);
+    }
+
+    #[test]
+    fn arranging_the_pins_in_the_order_they_already_have_changes_nothing() {
+        let mut store = remembering(&["/planes/a"]);
+        let plane = Path::new("/planes/a");
+        for name in ["zeta", "alpha"] {
+            store.pin_workspace(plane, name, true).unwrap();
+        }
+
+        assert_eq!(
+            store.arrange_workspaces(plane, &["zeta", "alpha"]),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn arranging_never_pins_a_workspace_that_was_not_pinned() {
+        // Pinning is its own act, with its own bound and its own refusal. An arrangement that
+        // names a workspace nobody pinned has nothing to arrange about it.
+        let mut store = remembering(&["/planes/a"]);
+        let plane = Path::new("/planes/a");
+        for name in ["zeta", "alpha"] {
+            store.pin_workspace(plane, name, true).unwrap();
+        }
+
+        store
+            .arrange_workspaces(plane, &["alpha", "ide", "zeta"])
+            .unwrap();
+
+        let (kept, _) = store.pinned_workspaces(plane, &["alpha", "ide", "zeta"]);
+        assert_eq!(kept, ["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn a_pin_the_window_was_not_drawing_keeps_its_place_when_the_rest_are_arranged() {
+        // A pin whose workspace has gone from disk is named, never drawn, so the window
+        // arranges only the ones it drew. The dangling one is not the window's to move.
+        let mut store = remembering(&["/planes/a"]);
+        let plane = Path::new("/planes/a");
+        for name in ["zeta", "gone", "alpha", "mu"] {
+            store.pin_workspace(plane, name, true).unwrap();
+        }
+
+        store
+            .arrange_workspaces(plane, &["mu", "alpha", "zeta"])
+            .unwrap();
+
+        let (kept, missing) = store.pinned_workspaces(plane, &["alpha", "mu", "zeta"]);
+        assert_eq!(kept, ["mu", "alpha", "zeta"]);
+        assert_eq!(missing, ["gone"]);
+        assert_eq!(
+            store.recent(plane).unwrap().pinned_workspaces,
+            ["mu", "gone", "alpha", "zeta"]
+        );
+    }
+
+    #[test]
+    fn arranging_workspaces_in_a_plane_charter_does_not_remember_is_refused() {
+        let mut store = remembering(&["/planes/a"]);
+
+        assert!(
+            store
+                .arrange_workspaces(Path::new("/planes/b"), &["ide"])
+                .is_err()
+        );
     }
 
     #[test]
