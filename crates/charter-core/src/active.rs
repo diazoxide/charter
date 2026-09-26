@@ -650,6 +650,65 @@ fn state_dir(root: &Path) -> PathBuf {
     root.join(".charter")
 }
 
+/// The persona selections `ids` could have written: this session's pointer, this pane's, and
+/// the plane-wide `.charter/active-persona` — the three files `charter persona clear` drops.
+/// An id that is not one path segment names no file.
+pub fn persona_pointers(root: &Path, ids: &Ids) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for (dir, id) in [
+        ("sessions", ids.session.as_deref()),
+        ("terminals", ids.terminal.as_deref()),
+    ] {
+        if let Some(id) = id.filter(|id| contain::segment_ok(id)) {
+            out.push(state_dir(root).join(dir).join(format!("{id}.persona")));
+        }
+    }
+    out.push(active_persona_file(root));
+    out
+}
+
+/// The name a pointer file holds, read as the ladder reads it — `persona._read_pointer`.
+pub fn read_pointer(root: &Path, path: &Path) -> Option<String> {
+    local_file(root, path)
+}
+
+/// The plane-wide selection, `.charter/active-persona` — written by `charter persona use` in a
+/// shell with neither a session nor a pane id.
+pub fn active_persona_file(root: &Path) -> PathBuf {
+    state_dir(root).join("active-persona")
+}
+
+/// How many persona selections on this machine name one persona, by rung.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pointers {
+    pub sessions: usize,
+    pub terminals: usize,
+    pub active_file: bool,
+}
+
+/// Every selection on this machine naming `name` — `persona.pointers_naming`. Every session's
+/// and every pane's, not this process's: a persona created under a removed one's name becomes
+/// each of them.
+pub fn pointers_naming(root: &Path, name: &str) -> Pointers {
+    let count = |dir: &str| {
+        std::fs::read_dir(state_dir(root).join(dir))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|x| x == "persona"))
+                    .filter(|p| local_file(root, p).as_deref() == Some(name))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    Pointers {
+        sessions: count("sessions"),
+        terminals: count("terminals"),
+        active_file: local_file(root, &active_persona_file(root)).as_deref() == Some(name),
+    }
+}
+
 /// A pointer file's contents, or `None` — `.charter/<dir>/<id>.<ext>`.
 ///
 /// `id` is checked as a path SEGMENT before it is joined: it comes from the environment

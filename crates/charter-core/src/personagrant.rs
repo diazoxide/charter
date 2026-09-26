@@ -154,6 +154,11 @@ pub fn resolve(root: &Path, name: &str) -> Option<Resolved> {
     })
 }
 
+/// Whether charter reads `key` or emits it into the sub-agent — `key in persona.KNOWN_KEYS`.
+pub(crate) fn known_key(key: &str) -> bool {
+    KNOWN_KEYS.contains(&key)
+}
+
 /// The KNOWN key `key` is a case-variant of, when it is not itself known —
 /// `persona.misspelled_key`.
 pub(crate) fn misspelled_key(key: &str) -> Option<&'static str> {

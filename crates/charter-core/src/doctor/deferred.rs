@@ -39,7 +39,6 @@ pub(crate) const CHANGES: &str = "this version of charter does not check cross-r
                                   yet";
 pub(crate) const VAULTS: &str = "this version of charter does not check vaults and the \
                                  credentials they hold yet";
-pub(crate) const PERSONA_LINT: &str = "this version of charter does not lint personas yet";
 pub(crate) const NEWS: &str = "this version of charter does not check release news";
 pub(crate) const SHADOWED_DOCS: &str = "this version of charter does not check shadowed \
                                         knowledge docs yet";

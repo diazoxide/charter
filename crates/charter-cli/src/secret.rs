@@ -443,6 +443,26 @@ pub fn vault(here: &crate::Here, command: VaultCommand) -> u8 {
     status(code)
 }
 
+/// `charter persona create --with-vault`: register `vault` for `persona` exactly as
+/// `charter vault add <vault> --persona <persona>` would — the default provider, the keyring
+/// (ADR 0047).
+pub fn add_persona_vault(here: &crate::Here, vault: &str, persona: &str) -> u8 {
+    let request = AddRequest {
+        name: vault.to_string(),
+        provider: "keyring".into(),
+        file: None,
+        op_vault: None,
+        op_item: None,
+        account: None,
+        persona: Some(persona.to_string()),
+        env: Vec::new(),
+        token_env: None,
+        share: false,
+        force: false,
+    };
+    status(vaultcmd::add(&ctx(here), &request, &mut Console))
+}
+
 /// `sys.exit(n)`: the low byte of whatever the command returned.
 fn status(code: i32) -> u8 {
     (code & 0xff) as u8

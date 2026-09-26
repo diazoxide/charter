@@ -177,7 +177,7 @@ fn a_name_outside_the_alphabet_or_not_defined_is_refused_with_exit_one() {
     assert_eq!((rc, heard.out.as_str()), (1, ""));
     assert_eq!(
         heard.err,
-        "✗ no persona 'ghost' (add it: write personas/ghost/persona.md)\n"
+        "✗ no persona 'ghost' (create it: charter persona create ghost)\n"
     );
 }
 
