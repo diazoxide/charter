@@ -143,6 +143,16 @@ fn wait_for(marker: &Path) {
     }
 }
 
+/// Kill the helper whose pid `marker` holds, if it wrote one: by the pid this test caused to
+/// exist, never by name.
+fn kill_escaped(marker: &Path) {
+    if let Some(pid) = alive_from(marker)
+        && let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
+    {
+        let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
+    }
+}
+
 // -------------------------------------------------------------------------------------
 // Can a program run without approval?
 // -------------------------------------------------------------------------------------
@@ -451,14 +461,14 @@ fn a_program_that_never_answers_is_stopped_at_the_deadline() {
     // program exists, whether or not it got as far as saying anything; and the deadline is
     // timed from there, so the work before the start — the fingerprint, the fork — which a
     // loaded machine makes take seconds, is not counted against it.
-    let started = executor
+    let groups = executor
         .table
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .groups
         .clone();
-    let [(group, at)] = started[..] else {
-        panic!("one program started, not {started:?}");
+    let [(group, at)] = groups[..] else {
+        panic!("one program started, not {groups:?}");
     };
     let took = returned.duration_since(at);
     assert!(took >= SHORT, "gave up after {took:?}, before the deadline");
@@ -1928,38 +1938,31 @@ fn a_command_s_stderr_of_exactly_the_most_charter_passes_on_is_passed_and_one_by
     );
 }
 
-/// Kill the helper whose pid `marker` holds, if it wrote one: by the pid this test caused to
-/// exist, never by name.
-fn kill_escaped(marker: &Path) {
-    if let Some(pid) = alive_from(marker)
-        && let Some(it) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
-    {
-        let _ = rustix::process::kill_process(it, rustix::process::Signal::KILL);
-    }
-}
-
 #[test]
 fn a_command_whose_stderr_something_it_started_still_holds_passes_nothing_on() {
     // The helper leaves the group, so charter's kill does not reach it, and keeps the
     // program's stderr open past the deadline: what was read of it is not all of it. The
     // program exits only once the helper has left, or the kill could land first.
+    //
+    // **Each attempt's helper writes a marker of its own**, named by the program's pid (#465):
+    // with one shared marker, the helper of an attempt refused as too slow could write it
+    // after the next attempt began, and that attempt's program would print before its own
+    // helper had left.
     let rig = Rig::new();
     let escaped = rig.marker("escaped");
+    std::fs::create_dir(&escaped).expect("a directory for the markers");
     rig.talking(&format!(
-        "#!/bin/sh\nperl -e 'setpgrp(0,0); open(F,\">{0}\"); print F $$; close F; sleep 30' \
-         >/dev/null </dev/null &\nwhile [ ! -s '{0}' ]; do sleep 0.01; done\nprintf 'out\\n'\n",
+        "#!/bin/sh\ne='{0}'/$$\n\
+         perl -e 'setpgrp(0,0); open(F,\">$ARGV[0]\"); print F $$; close F; sleep 30' \"$e\" \
+         >/dev/null </dev/null &\nwhile [ ! -s \"$e\" ]; do sleep 0.01; done\nprintf 'out\\n'\n",
         escaped.display()
     ));
 
-    // Each attempt waits for its own helper: one a refused attempt left behind would be
-    // read as this one's having left, and the kill could land before this one had.
-    let (said, deadline) = once_started(|executor| {
-        kill_escaped(&escaped);
-        let _ = std::fs::remove_file(&escaped);
-        rig.command(executor)
-    });
+    let (said, deadline) = once_started(|executor| rig.command(executor));
 
-    kill_escaped(&escaped);
+    for marker in std::fs::read_dir(&escaped).expect("the markers").flatten() {
+        kill_escaped(&marker.path());
+    }
     let refused = said.expect_err("a stderr still open was passed on as the whole of it");
     assert!(
         refused.contains(&format!(

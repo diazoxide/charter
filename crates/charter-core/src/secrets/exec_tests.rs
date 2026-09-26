@@ -498,11 +498,23 @@ fn spawn(script: &str) -> std::process::Child {
 
 #[cfg(unix)]
 #[test]
-fn after_a_ctrl_c_the_child_is_given_its_quarter_second_to_finish() {
+fn a_ctrl_c_gives_the_child_a_quarter_second() {
+    assert_eq!(CTRL_C_GRACE, Duration::from_millis(250));
+}
+
+#[cfg(unix)]
+#[test]
+fn after_a_ctrl_c_the_child_is_given_its_grace_to_finish() {
+    // **A patient grace, not the real quarter second** (#465): what is tested is that the
+    // child is waited for rather than killed at once, and on a loaded machine a shell took
+    // longer than a quarter second to reach its last line. The grace itself is the test above.
     let tmp = tempfile::tempdir().unwrap();
     let marker = tmp.path().join("finished");
     let child = spawn(&format!("sleep 0.02; touch '{}'", marker.display()));
-    assert_eq!(supervise(child, &caught(Termination::SIGINT)), 128 + 2);
+    assert_eq!(
+        supervise(child, &caught(Termination::SIGINT), Duration::from_secs(30)),
+        128 + 2
+    );
     assert!(marker.exists(), "the child finished on its own, not killed");
 }
 
@@ -511,14 +523,14 @@ fn after_a_ctrl_c_the_child_is_given_its_quarter_second_to_finish() {
 fn after_any_other_terminating_signal_the_child_is_killed_at_once() {
     let started = std::time::Instant::now();
     let child = spawn("sleep 30");
-    assert_eq!(supervise(child, &caught(15)), 128 + 15);
+    assert_eq!(supervise(child, &caught(15), CTRL_C_GRACE), 128 + 15);
     assert!(started.elapsed() < Duration::from_secs(10));
 }
 
 #[cfg(unix)]
 #[test]
 fn with_no_signal_the_childs_own_status_passes_through() {
-    assert_eq!(supervise(spawn("exit 3"), &caught(0)), 3);
+    assert_eq!(supervise(spawn("exit 3"), &caught(0), CTRL_C_GRACE), 3);
 }
 
 #[cfg(unix)]

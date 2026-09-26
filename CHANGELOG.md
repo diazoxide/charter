@@ -247,7 +247,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   room, and a test that is about it uses a short limit and a program that never answers.
   ([#422](https://github.com/diazoxide/charter/issues/422))
 - **The extension runner's tests and the `secrets exec` tests no longer fail on a busy
-  machine.** Extensions keep the same 5 seconds. The tests about the limit now use a short
+  machine.** Extensions keep the same 5 seconds, and a program `secrets exec` runs still gets
+  a quarter of a second to finish after a Ctrl-C. The tests about the limit now use a short
   limit and a program that never answers, and no longer need the program to report that it
   started. A test whose program has to get somewhere before the limit now waits for it to get
   there. The one `secrets exec` test that replaces its own process now runs apart from the
