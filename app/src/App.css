@@ -358,6 +358,16 @@ body {
   color: var(--text-primary);
 }
 
+/* **The plane root's tab is an icon, not a share of the strip** (SI-1). It is always first and
+   exactly `--root` wide — the width `PlaneView` takes off the strip's room before the named
+   workspaces share what is left, so the arithmetic and this rule cannot disagree. */
+.workspaces-strip [role="tab"].plane-root {
+  flex: 0 0 var(--root);
+  min-width: var(--root);
+  max-width: var(--root);
+  padding-inline: 0;
+}
+
 /* Inside the cell, because a ring outside it is clipped by the strip that scrolls. */
 .projects [role="tab"]:focus-visible,
 .workspaces-strip [role="tab"]:focus-visible,

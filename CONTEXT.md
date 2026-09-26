@@ -27,6 +27,14 @@ A named piece of work inside a plane, with its own charter (`workspace.md`), mem
 repos.
 _Avoid_: task, context
 
+**Plane root**:
+The plane's own directory, as a place a chat works: the workspace strip's first tab, drawn as
+an icon, always there. A chat started there is in no workspace on purpose — it looks after the
+plane and names a workspace with `-w` when it acts on one. It is not a workspace: it has no
+charter, memory or todos. In code it is still `OUTSIDE`, the strip every chat working in no
+workspace is filed on.
+_Avoid_: master, home, outside every workspace (in UI text), the default workspace
+
 **Repo** (of a workspace):
 A clone of a code repository that a workspace holds. It has its own remote and its own rules,
 and it is never part of the plane's commits.

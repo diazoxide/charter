@@ -83,7 +83,7 @@ pub fn run(here: &Here, command: ChangeCommand) -> Result<u8, String> {
             workspace,
         } => cmd::create(
             &root,
-            &ws(workspace.as_deref()),
+            &ws(workspace.as_deref())?,
             &change,
             why.as_deref(),
             &cmd::author(&root),
@@ -98,7 +98,7 @@ pub fn run(here: &Here, command: ChangeCommand) -> Result<u8, String> {
             workspace,
         } => cmd::add(
             &root,
-            &ws(workspace.as_deref()),
+            &ws(workspace.as_deref())?,
             &change,
             &repo,
             branch.as_deref(),
@@ -112,19 +112,19 @@ pub fn run(here: &Here, command: ChangeCommand) -> Result<u8, String> {
             workspace,
         } => cmd::drop(
             &root,
-            &ws(workspace.as_deref()),
+            &ws(workspace.as_deref())?,
             &change,
             &repo,
             why.as_deref(),
             now,
             &mut say,
         ),
-        ChangeCommand::List { workspace } => cmd::list(&root, &ws(workspace.as_deref()), &mut say),
+        ChangeCommand::List { workspace } => cmd::list(&root, &ws(workspace.as_deref())?, &mut say),
         ChangeCommand::Show { change, workspace } => {
-            cmd::show(&root, &ws(workspace.as_deref()), &change, now, &mut say)
+            cmd::show(&root, &ws(workspace.as_deref())?, &change, now, &mut say)
         }
         ChangeCommand::Forget { change, workspace } => {
-            cmd::forget(&root, &ws(workspace.as_deref()), &change, &mut say)
+            cmd::forget(&root, &ws(workspace.as_deref())?, &change, &mut say)
         }
     };
     Ok(code)

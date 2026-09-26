@@ -135,7 +135,15 @@ Resolved fresh on every command, in this order. The first rung that answers, win
 7. `default`
 
 The cwd sits above the pointers because it cannot be wrong: a workspace's trees live at
-paths that name the workspace, so being inside one is not a hint, it is the fact.
+paths that name the workspace, so being inside one is not a hint, it is the fact. The
+workspace's own directory, `workspaces/<ws>`, counts too.
+
+A chat the app starts in a workspace is handed `$CHARTER_WORKSPACE`, so it is never asked
+which workspace it is in. A chat the app starts at the **plane root** is handed
+`$CHARTER_PLANE_ROOT_SESSION=1` instead, and is in no workspace at all: a command that needs
+one refuses and asks for `-w <workspace>`, `charter workspace current` prints nothing and
+fails, and `charter workspace use` does not move it. `-w`, or `$CHARTER_WORKSPACE` set on one
+command, names the workspace it acts on.
 
 `charter workspace current` prints the answer, the name alone, for a script. `charter
 status` prints it *and the rung that produced it*, which is usually the faster question to

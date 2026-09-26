@@ -88,7 +88,26 @@ use std::path::{Path, PathBuf};
 use crate::contain;
 
 /// `$CHARTER_WORKSPACE` — the per-session pin a launcher hands a chat.
+///
+/// The app sets it on every chat it starts in a workspace (SI-1), so that chat never has to
+/// be asked which workspace it is in.
 pub const WORKSPACE_ENV: &str = "CHARTER_WORKSPACE";
+
+/// `$CHARTER_PLANE_ROOT_SESSION` — the pin a launcher hands a chat it started at the **plane
+/// root**: in no workspace, on purpose (SI-1).
+///
+/// **A variable of its own, and not a value of [`WORKSPACE_ENV`].** Anything that reads
+/// `$CHARTER_WORKSPACE` — an older `charter`, an extension's program, a script — takes its
+/// value as a workspace name and joins it onto `workspaces/`. A sentinel there is a name
+/// something will one day create a directory for; a second variable is one an older reader
+/// simply does not see, and that reader then answers as it always did.
+///
+/// **Only [`PLANE_ROOT_ON`] turns it on** ([`at_plane_root`]). Any other value is a chat the
+/// ladder answers as it always has — the failure that changes nothing.
+pub const PLANE_ROOT_ENV: &str = "CHARTER_PLANE_ROOT_SESSION";
+
+/// The one value of [`PLANE_ROOT_ENV`] that means "this chat is at the plane root".
+pub const PLANE_ROOT_ON: &str = "1";
 
 /// `$CHARTER_SESSION_ID` — what the pointer rungs are keyed on, and the variable a LAUNCHER
 /// sets so that every process it starts answers [`session_id`] identically.
@@ -400,12 +419,67 @@ pub fn chosen_workspace(asking: &Asking) -> Option<ActiveWorkspace> {
     None
 }
 
-/// The workspace whose working tree `cwd` is inside, or `None` — `workspace.from_path`.
+/// Whether this session is a **plane-root chat**: its launcher set [`PLANE_ROOT_ENV`] to
+/// [`PLANE_ROOT_ON`], and nothing on this command names a workspace instead.
 ///
-/// `workspaces/<ws>` alone is the CONTAINER and not a tree, so only a path with something
-/// under the workspace counts. That covers a clone (`workspaces/<ws>/<repo>/…`) and a
-/// worktree at the default root (`workspaces/<ws>/.worktrees/<repo>/<piece>/…`) with one
-/// walk, because both live under the workspace's own directory.
+/// It is asked BEFORE the ladder, by every caller that would otherwise act on the ladder's
+/// answer, because the ladder always ends on a name (`default`) and a plane-root chat is in
+/// no workspace at all. The two things that outrank it are the two that name a workspace for
+/// one command: `-w`, and `$CHARTER_WORKSPACE` set on it — which is how a root chat manages
+/// a workspace without being moved into it. A blank one names nothing and outranks nothing,
+/// the rule the ladder already has (charter#1055).
+///
+/// Above the tree the caller stands in, as `$CHARTER_WORKSPACE` is: a root chat that `cd`s
+/// into a workspace's clone is still the chat its launcher started.
+pub fn at_plane_root(
+    flag: Option<&str>,
+    workspace_env: Option<&str>,
+    plane_root_env: Option<&str>,
+) -> bool {
+    let named = |value: Option<&str>| value.is_some_and(|v| !py_strip(v).is_empty());
+    plane_root_env == Some(PLANE_ROOT_ON) && !named(flag) && !named(workspace_env)
+}
+
+/// [`at_plane_root`] for a hook, which carries no `-w`: both variables read from `env`.
+pub fn at_plane_root_in(env: &dyn Fn(&str) -> Option<String>) -> bool {
+    at_plane_root(
+        None,
+        env(WORKSPACE_ENV).as_deref(),
+        env(PLANE_ROOT_ENV).as_deref(),
+    )
+}
+
+/// What a command that needs a workspace says in a plane-root chat, instead of acting on one
+/// charter picked for it.
+pub fn plane_root_refusal(root: &Path) -> String {
+    let names = crate::workspaces::Plane::open(root)
+        .workspaces()
+        .unwrap_or_default();
+    let existing = if names.is_empty() {
+        "none yet — `charter workspace create <name>` makes one".to_string()
+    } else {
+        names
+            .iter()
+            .map(|n| format!("`{n}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "this chat was started at the plane root, so it is in no workspace and charter will \
+         not pick one for it — name the workspace with -w <workspace> (existing: {existing})."
+    )
+}
+
+/// The workspace whose directory `cwd` is inside, or `None` — `workspace.from_path`, and the
+/// path arithmetic under [`crate::workspaces::Plane::workspace_of`].
+///
+/// **`workspaces/<ws>` itself counts** (SI-1). Python's rule was that it is the CONTAINER and
+/// not a tree, so only a path with something under it counted. The app starts a workspace's
+/// chats exactly there and files them under that workspace, so the two answered one question
+/// differently and the chat was asked which workspace it was in. A workspace's own directory
+/// holds its charter, memory and todos; standing in it is being in it. A clone
+/// (`workspaces/<ws>/<repo>/…`) and a worktree at the default root
+/// (`workspaces/<ws>/.worktrees/<repo>/<piece>/…`) are covered by the same walk.
 ///
 /// **A plane that moves its worktree root with `[plane] worktrees` is not covered here**, and
 /// Python's is (`worktree.locate` tries both roots). charter-app refuses a relocated root
@@ -422,8 +496,6 @@ pub fn workspace_of_tree(root: &Path, cwd: &Path) -> Option<String> {
     let rest = here.strip_prefix(&base).ok()?;
     let mut parts = rest.components();
     let name = parts.next()?.as_os_str().to_str()?.to_string();
-    // Something under it, or this is the container.
-    parts.next()?;
     contain::workspace_name_ok(&name).then_some(name)
 }
 
@@ -919,16 +991,87 @@ mod tests {
     }
 
     #[test]
-    fn the_workspace_directory_itself_is_a_container_and_not_a_tree() {
-        // A status line naming a workspace for a path with no repo in it would be claiming a
-        // tree that is not there, so `workspaces/<ws>` falls through to the pointers.
+    fn the_workspace_directory_itself_is_in_that_workspace() {
+        // SI-1: the app starts a workspace's chats in `workspaces/<ws>` and files them under
+        // `<ws>` (`Plane::workspace_of`), so the ladder answers the same for that directory.
+        // It used to be "a container and not a tree" and fall through to the pointers, which
+        // is how a chat the app started in a workspace was asked which workspace it was in.
         let rig = Rig::new();
         let (root, ids) = (rig.root(), rig.ids());
         let cwd = root.join("workspaces/w-cwd");
 
         let found = workspace(&ask(&root, &cwd, &ids));
-        assert_eq!(found.name, "w-session");
-        assert_eq!(found.rung, WorkspaceRung::SessionPointer);
+        assert_eq!(found.name, "w-cwd");
+        assert_eq!(found.rung, WorkspaceRung::Cwd);
+    }
+
+    #[test]
+    fn the_workspaces_directory_itself_is_in_no_workspace() {
+        let rig = Rig::new();
+        let (root, ids) = (rig.root(), rig.ids());
+        let cwd = root.join("workspaces");
+
+        assert_eq!(workspace_of_tree(&root, &cwd), None);
+        assert_eq!(
+            workspace(&ask(&root, &cwd, &ids)).rung,
+            WorkspaceRung::SessionPointer
+        );
+    }
+
+    // --- the plane root ------------------------------------------------------------------ //
+
+    #[test]
+    fn a_chat_started_at_the_plane_root_is_in_no_workspace() {
+        assert!(at_plane_root(None, None, Some(PLANE_ROOT_ON)));
+        // A hook reads both variables from the environment it was handed.
+        let env = |name: &str| (name == PLANE_ROOT_ENV).then(|| PLANE_ROOT_ON.to_string());
+        assert!(at_plane_root_in(&env));
+        let pinned = |name: &str| match name {
+            PLANE_ROOT_ENV => Some(PLANE_ROOT_ON.to_string()),
+            WORKSPACE_ENV => Some("w-env".to_string()),
+            _ => None,
+        };
+        assert!(!at_plane_root_in(&pinned));
+    }
+
+    #[test]
+    fn a_named_workspace_outranks_the_plane_root() {
+        // `-w` is how a root chat acts on one workspace, and `CHARTER_WORKSPACE=<name>` set
+        // on one command is the same request spelled in the environment.
+        assert!(!at_plane_root(Some("w-flag"), None, Some(PLANE_ROOT_ON)));
+        assert!(!at_plane_root(None, Some("w-env"), Some(PLANE_ROOT_ON)));
+        // A blank one names nothing, so it outranks nothing.
+        assert!(at_plane_root(Some(""), Some("  "), Some(PLANE_ROOT_ON)));
+    }
+
+    #[test]
+    fn only_the_one_word_marks_a_plane_root_chat() {
+        // Fail toward no change: anything else is a chat the ladder answers as it always did.
+        for other in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some(" 1"),
+            Some("yes"),
+        ] {
+            assert!(!at_plane_root(None, None, other), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_refusal_at_the_plane_root_names_the_flag_and_the_workspaces() {
+        let rig = Rig::new();
+        let root = rig.root();
+        fs::create_dir_all(root.join("workspaces/beta")).unwrap();
+
+        let said = plane_root_refusal(&root);
+        assert!(said.contains("plane root"), "{said}");
+        assert!(said.contains("-w <workspace>"), "{said}");
+        assert!(
+            said.contains("`beta`") && said.contains("`w-cwd`"),
+            "{said}"
+        );
     }
 
     #[test]

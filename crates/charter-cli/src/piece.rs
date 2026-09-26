@@ -88,7 +88,7 @@ pub fn run(here: &Here, command: WorktreeCommand) -> Result<u8, String> {
             workspace,
         } => piececmd::add(
             &root,
-            &here.active_workspace(workspace.as_deref()),
+            &here.active_workspace(workspace.as_deref())?,
             &repo,
             &piece,
             branch.as_deref(),
@@ -111,7 +111,7 @@ pub fn run(here: &Here, command: WorktreeCommand) -> Result<u8, String> {
         ),
         WorktreeCommand::List { repo, workspace } => piececmd::list(
             &root,
-            &here.active_workspace(workspace.as_deref()),
+            &here.active_workspace(workspace.as_deref())?,
             repo.as_deref(),
             now,
             &mut say,
@@ -122,7 +122,7 @@ pub fn run(here: &Here, command: WorktreeCommand) -> Result<u8, String> {
             workspace,
         } => piececmd::history(
             &root,
-            &here.active_workspace(workspace.as_deref()),
+            &here.active_workspace(workspace.as_deref())?,
             repo.as_deref(),
             piece.as_deref(),
             &mut say,
@@ -135,7 +135,7 @@ pub fn run(here: &Here, command: WorktreeCommand) -> Result<u8, String> {
             workspace,
         } => piececmd::remove(
             &root,
-            &here.active_workspace(workspace.as_deref()),
+            &here.active_workspace(workspace.as_deref())?,
             &repo,
             &piece,
             force,

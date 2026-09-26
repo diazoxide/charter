@@ -108,9 +108,12 @@ afterEach(() => {
 });
 
 /** The names on one strip's tabs, in the order it draws them. */
+/** The names on a strip — leaving out the plane root's tab, which is first on every
+ *  workspace strip and can never be dragged (SI-1; asserted below). */
 const namesOn = (strip: string) =>
   within(screen.getByRole("tablist", { name: strip }))
     .getAllByRole("tab")
+    .filter((tab) => !tab.classList.contains("plane-root"))
     .map((tab) => tab.textContent);
 
 /** One strip's tab whose text includes `name`. */
@@ -301,6 +304,27 @@ describe("dragging a workspace tab with the keyboard", () => {
       within(tabOn("Workspaces", "alpha")).getByRole("img", { name: /^pinned / }),
     ).toBeTruthy();
     answer(null);
+  });
+
+  it("never moves anything in front of the plane root, nor the root itself (SI-1)", async () => {
+    const window = core();
+    render(<App />);
+    await waitFor(() => expect(namesOn("Workspaces")).toHaveLength(2));
+    const first = () =>
+      within(screen.getByRole("tablist", { name: "Workspaces" })).getAllByRole("tab")[0];
+    expect(first()).toHaveAttribute("aria-label", "Plane root");
+
+    // alpha, the first named tab, carried one place left: onto the root's.
+    tabOn("Workspaces", "alpha").focus();
+    await dragWithTheKeyboard("{ArrowLeft}");
+    expect(window.last("arrange_workspace_pins")).toBeUndefined();
+    expect(first()).toHaveAttribute("aria-label", "Plane root");
+
+    // And the root does not pick up.
+    first().focus();
+    await dragWithTheKeyboard("{ArrowRight}");
+    expect(window.last("arrange_workspace_pins")).toBeUndefined();
+    expect(first()).toHaveAttribute("aria-label", "Plane root");
   });
 });
 

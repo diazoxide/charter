@@ -712,3 +712,100 @@ fn the_briefing_is_printed_the_way_json_dumps_prints_it() {
          \"a\\n\\n\\u00e9\"}}"
     );
 }
+
+// ---- SI-1: a chat knows where the app started it -------------------------------------------
+
+#[test]
+fn a_chat_the_app_started_in_a_workspace_is_not_asked_which_one() {
+    // The app sets `$CHARTER_WORKSPACE` on every chat it starts in a workspace (SI-1). Before
+    // it did, a chat started in `workspaces/alpha` was asked to confirm its workspace.
+    let (_d, root) = plane();
+    let pinned = told(
+        &root,
+        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        serde_json::json!({}),
+    );
+    assert!(!pinned.iter().any(|p| p.contains("Confirm the workspace")));
+    assert!(pinned.iter().any(|p| p.contains("1 other workspace")));
+}
+
+#[test]
+fn a_plane_root_chat_is_not_asked_and_is_told_it_is_at_the_root() {
+    let (_d, root) = plane();
+    let got = told(
+        &root,
+        &[
+            ("CHARTER_SESSION_ID", "s1"),
+            ("CHARTER_PLANE_ROOT_SESSION", "1"),
+        ],
+        serde_json::json!({}),
+    );
+    assert!(
+        !got.iter().any(|p| p.contains("Confirm the workspace")),
+        "{got:?}"
+    );
+    assert!(
+        got[0].starts_with("⬢ **This chat is at the plane root"),
+        "{}",
+        got[0]
+    );
+    assert!(got[0].contains("-w <name>"), "{}", got[0]);
+    assert!(got[0].contains("charter workspace use"), "{}", got[0]);
+    // And it still knows who it is: the plane's default persona.
+    assert!(got.iter().any(|p| p.contains("`ops` persona")));
+}
+
+#[test]
+fn a_plane_root_chat_is_shown_every_workspace_as_one_it_may_manage() {
+    let (_d, root) = plane();
+    todos(&root, "alpha", 2);
+    let got = told(
+        &root,
+        &[
+            ("CHARTER_SESSION_ID", "s1"),
+            ("CHARTER_PLANE_ROOT_SESSION", "1"),
+        ],
+        serde_json::json!({}),
+    );
+    let listed = got
+        .iter()
+        .find(|p| p.contains("workspaces on this plane"))
+        .unwrap_or_else(|| panic!("{got:?}"));
+    assert!(
+        listed.starts_with("⬡ **2 workspaces on this plane** — yours to manage from here"),
+        "{listed}"
+    );
+    // Both of them, none left out as "the active one", and never called background.
+    assert!(
+        listed.contains("`alpha` · Ship alpha. · 2 todos"),
+        "{listed}"
+    );
+    assert!(listed.contains("`beta` · Ship beta."), "{listed}");
+    assert!(!listed.contains("background"), "{listed}");
+    // A root chat has no workspace, so no workspace's todos are its digest.
+    assert!(!got.iter().any(|p| p.contains("open todo")), "{got:?}");
+    assert!(
+        !got.iter().any(|p| p.contains("other workspace")),
+        "{got:?}"
+    );
+}
+
+#[test]
+fn a_chat_with_no_pin_and_no_tree_is_asked_as_it_always_was() {
+    let (_d, root) = plane();
+    for value in ["", "0", "yes"] {
+        let got = told(
+            &root,
+            &[
+                ("CHARTER_SESSION_ID", "s1"),
+                ("CHARTER_PLANE_ROOT_SESSION", value),
+            ],
+            serde_json::json!({}),
+        );
+        assert!(
+            got[0].starts_with("⬢ **Confirm the workspace before any repo work.**"),
+            "{value:?}: {}",
+            got[0]
+        );
+    }
+}

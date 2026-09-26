@@ -925,6 +925,13 @@ impl Common {
     }
 }
 
+/// Says `why` as charter's refusal and fails — for a command answered outside [`run`], whose
+/// `Err` is printed the same way.
+fn refused(why: &str) -> ExitCode {
+    eprintln!("charter: {why}");
+    ExitCode::FAILURE
+}
+
 /// Where this invocation is standing: the plane, the directory, and who is asking.
 ///
 /// Built ONCE per command rather than per rung. Every piece of it is read from the process —
@@ -936,6 +943,8 @@ pub struct Here {
     cwd: std::path::PathBuf,
     ids: charter_core::active::Ids,
     workspace_env: Option<String>,
+    /// `$CHARTER_PLANE_ROOT_SESSION`: the app started this chat at the plane root (SI-1).
+    plane_root_env: Option<String>,
     persona_env: Option<String>,
 }
 
@@ -961,6 +970,7 @@ impl Here {
             cwd,
             ids: charter_core::active::Ids::from_env(),
             workspace_env: std::env::var(charter_core::active::WORKSPACE_ENV).ok(),
+            plane_root_env: std::env::var(charter_core::active::PLANE_ROOT_ENV).ok(),
             persona_env: std::env::var(charter_core::active::PERSONA_ENV).ok(),
         })
     }
@@ -980,10 +990,37 @@ impl Here {
         }
     }
 
-    /// The workspace this invocation acts on. There is always one: the ladder ends on
-    /// `[workspace] default`, and under that on the literal `default`.
-    pub fn active_workspace(&self, flag: Option<&str>) -> String {
+    /// Whether this is a plane-root chat and `flag` does not name a workspace instead
+    /// ([`charter_core::active::at_plane_root`]).
+    fn at_plane_root(&self, flag: Option<&str>) -> bool {
+        charter_core::active::at_plane_root(
+            flag,
+            self.workspace_env.as_deref(),
+            self.plane_root_env.as_deref(),
+        )
+    }
+
+    /// The workspace this invocation acts on — or, in a chat the app started at the plane
+    /// root, the sentence saying to name one with `-w` (SI-1). Everywhere else there is always
+    /// one: the ladder ends on `[workspace] default`, and under that on the literal `default`.
+    pub fn active_workspace(&self, flag: Option<&str>) -> Result<String, String> {
+        if self.at_plane_root(flag) {
+            return Err(charter_core::active::plane_root_refusal(self.plane.root()));
+        }
+        Ok(charter_core::active::workspace(&self.asking(flag, self.workspace_env.as_deref())).name)
+    }
+
+    /// The ladder's answer, with no regard for a plane-root chat — for the one caller that
+    /// must name a workspace and cannot yet say "none" (`handoff`'s stamp).
+    pub fn ladder_workspace(&self, flag: Option<&str>) -> String {
         charter_core::active::workspace(&self.asking(flag, self.workspace_env.as_deref())).name
+    }
+
+    /// The workspace this invocation is in, or `None` in a plane-root chat — for a command
+    /// that reads a workspace when there is one and runs without one (`recall`, an extension's
+    /// project choices, the background refresh).
+    pub fn workspace_if_any(&self, flag: Option<&str>) -> Option<String> {
+        self.active_workspace(flag).ok()
     }
 
     /// The persona this invocation acts as, or `None` — a plane may have no front door, and
@@ -998,7 +1035,7 @@ impl Here {
     /// never typed a name, and quoting an empty one would describe nothing.
     fn workspace(&self, flag: Option<&str>) -> Result<charter_core::workspaces::Workspace, String> {
         self.plane
-            .workspace(&self.active_workspace(flag))
+            .workspace(&self.active_workspace(flag)?)
             .map_err(|e| e.to_string())
     }
 }
@@ -1246,7 +1283,10 @@ fn refresh_the_forge_cache() {
     let Ok(here) = Here::read() else {
         return;
     };
-    let workspace = here.active_workspace(None);
+    // A plane-root chat is in no workspace, so there are no clones of one to refresh.
+    let Some(workspace) = here.workspace_if_any(None) else {
+        return;
+    };
     let root = here.plane.root();
     // The same list the panel draws and the same list the child will fetch for, because a
     // staleness question asked about other trees is a question about nothing.
@@ -1608,7 +1648,10 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
                 .unwrap_or_else(|| "unknown".to_string());
             // With no `-w`, the ladder: "default: the active one" is what charter's own
             // `--workspace` help has always promised for this command.
-            let ws = here.active_workspace(workspace.as_deref());
+            let ws = match here.active_workspace(workspace.as_deref()) {
+                Ok(ws) => ws,
+                Err(why) => return Some(refused(&why)),
+            };
             repocmd::clone::clone(
                 &repocmd::clone::Request {
                     root: &root,
@@ -1623,7 +1666,11 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
         Command::Sync { workspace, all } => {
             // `--all` is the only thing that replaces the ladder here, and clap already
             // refuses it beside `-w`.
-            let one = (!*all).then(|| here.active_workspace(workspace.as_deref()));
+            let one = match (!*all).then(|| here.active_workspace(workspace.as_deref())) {
+                Some(Err(why)) => return Some(refused(&why)),
+                Some(Ok(ws)) => Some(ws),
+                None => None,
+            };
             let scope = match &one {
                 Some(ws) => repocmd::sync::Scope::One(ws),
                 None => repocmd::sync::Scope::All,
@@ -1637,14 +1684,22 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
             let asking = here.asking(workspace.as_deref(), here.workspace_env.as_deref());
             let chosen = charter_core::active::workspace(&asking);
             let via = charter_core::active::workspace_source(&here.ids, chosen.rung);
+            // A plane-root chat is in no workspace: every workspace is reported, and none is
+            // marked as the one it is in (SI-1). `(none)` can be no workspace's name.
+            let at_root = here.at_plane_root(workspace.as_deref());
+            let (active, via) = if at_root {
+                ("(none)", "the plane root".to_string())
+            } else {
+                (chosen.name.as_str(), via)
+            };
             let mut out = |line: String| println!("{line}");
             repocmd::status::status(
                 &repocmd::status::Request {
                     root: &root,
                     cwd: &here.cwd,
-                    active: &chosen.name,
+                    active,
                     via: &via,
-                    all: *all,
+                    all: *all || at_root,
                 },
                 &mut out,
                 &mut say,
@@ -1755,6 +1810,13 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             let Some(now) = pinned(now) else {
                 return Some(ExitCode::FAILURE);
             };
+            if here.at_plane_root(None) {
+                return Some(refused(&format!(
+                    "this chat was started at the plane root and stays there, so it is not \
+                     moved into '{name}'. Name the workspace on each command with -w {name}, or \
+                     start a chat in it."
+                )));
+            }
             // `--create` makes one that is not there, which is a workspace being created too.
             let there_before = Plane::open(&root)
                 .workspace(name)
@@ -1785,6 +1847,13 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             let Some(now) = pinned(now) else {
                 return Some(ExitCode::FAILURE);
             };
+            if *use_it && here.at_plane_root(None) {
+                return Some(refused(&format!(
+                    "this chat was started at the plane root and stays there, so nothing was \
+                     created: --use would move it into '{name}'. Create it without --use, and \
+                     name it with -w {name} from here."
+                )));
+            }
             let code = wscmd::create::create(
                 &wscmd::create::Request {
                     root: &root,
@@ -1869,7 +1938,11 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             };
             // With no `--all` and no name, the ladder: "default: the active one", which is
             // what charter's own `reinit` resolves.
-            let one = (!*all).then(|| here.active_workspace(name.as_deref()));
+            let one = match (!*all).then(|| here.active_workspace(name.as_deref())) {
+                Some(Err(why)) => return Some(refused(&why)),
+                Some(Ok(ws)) => Some(ws),
+                None => None,
+            };
             let scope = match &one {
                 Some(ws) => wscmd::reinit::Scope::One(ws),
                 None => wscmd::reinit::Scope::All,
@@ -1908,7 +1981,10 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             wscmd::snapshot::snapshot(
                 &wscmd::snapshot::Request {
                     root: &root,
-                    ws: &here.active_workspace(name.as_deref()),
+                    ws: &match here.active_workspace(name.as_deref()) {
+                        Ok(ws) => ws,
+                        Err(why) => return Some(refused(&why)),
+                    },
                     description: description.as_deref(),
                     force: *force,
                     now,
@@ -2027,7 +2103,7 @@ fn run(command: Command) -> Result<u8, String> {
             println!("{}", here.plane.root().display());
         }
         Command::Workspace(WorkspaceCommand::Current) => {
-            println!("{}", here.active_workspace(None));
+            println!("{}", here.active_workspace(None)?);
         }
         Command::Guard { verb } => {
             use charter_core::guardcmd::{self, Bucket};
@@ -2123,7 +2199,7 @@ fn run(command: Command) -> Result<u8, String> {
         }) => {
             return memory::workspace_remember(
                 &here.plane,
-                &here.active_workspace(common.workspace.as_deref()),
+                &here.active_workspace(common.workspace.as_deref())?,
                 text.as_deref(),
                 title.as_deref(),
                 no_sync,
@@ -2137,7 +2213,7 @@ fn run(command: Command) -> Result<u8, String> {
         }) => {
             return memory::workspace_remember(
                 &here.plane,
-                &here.active_workspace(common.workspace.as_deref()),
+                &here.active_workspace(common.workspace.as_deref())?,
                 message.as_deref(),
                 None,
                 no_sync,
@@ -2147,14 +2223,14 @@ fn run(command: Command) -> Result<u8, String> {
         Command::Workspace(WorkspaceCommand::Recall { query, common }) => {
             return memory::workspace_recall(
                 &here.plane,
-                &here.active_workspace(common.workspace.as_deref()),
+                &here.active_workspace(common.workspace.as_deref())?,
                 query.as_deref(),
             );
         }
         Command::Workspace(WorkspaceCommand::Forget { slug, common }) => {
             return memory::workspace_forget(
                 &here.plane,
-                &here.active_workspace(common.workspace.as_deref()),
+                &here.active_workspace(common.workspace.as_deref())?,
                 &slug,
             );
         }
@@ -2535,11 +2611,11 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            return gl_refresh(
-                &here.active_workspace(workspace.as_deref()),
-                *detach,
-                now.as_deref(),
-            );
+            let workspace = match here.active_workspace(workspace.as_deref()) {
+                Ok(ws) => ws,
+                Err(why) => return refused(&why),
+            };
+            return gl_refresh(&workspace, *detach, now.as_deref());
         }
         Command::Statusline { watch, now, .. } => {
             // Nothing writes a payload to a `--watch` render, and reading stdin there would

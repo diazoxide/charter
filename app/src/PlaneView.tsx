@@ -22,6 +22,7 @@ import {
   ChevronDown,
   FolderOpen,
   FolderPlus,
+  FolderRoot,
   MessageSquarePlus,
   Pin as PinMark,
   Plus,
@@ -51,6 +52,7 @@ import {
   OUTSIDE,
   OUTSIDE_TITLE,
   perform,
+  ROOT_TIP,
   showId,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
@@ -152,7 +154,7 @@ import { inForce, onDrawn, TINTED_TABS, tintVariables } from "./theme/theme";
 import { hueOf } from "./theme/tint";
 import { handedFromNote, type HandedFrom } from "./handedFrom";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
-import { fitting, LEAST, leastAt, useRoom } from "./fits";
+import { fitting, LEAST, LEAST_ROOT, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
 import { useTextSizes } from "./textSize";
@@ -719,14 +721,13 @@ export function PlaneView({
             : lead.kind === "session"
               ? here(lead.session)
               : lead.workspace;
+        // The plane root always stands: it is the plane's own directory (SI-1).
         const stands = (name: string) =>
-          name === OUTSIDE
-            ? next.unfiled.length > 0 || ofFront === OUTSIDE
-            : next.workspaces.some((ws) => ws.name === name);
+          name === OUTSIDE || next.workspaces.some((ws) => ws.name === name);
         setPicked((current) =>
           current !== undefined && stands(current)
             ? current
-            : (ofFront ?? next.workspaces[0]?.name),
+            : (ofFront ?? next.workspaces[0]?.name ?? OUTSIDE),
         );
         // A view tab is on the strip it was opened from, which it carries; when the plane stops
         // having that workspace nothing else would move it, and it would be on a strip that is
@@ -903,7 +904,16 @@ export function PlaneView({
   // Nothing on the plane records a chat, so where it works is the only thing relating the
   // two, and a piece of a workspace is still in that workspace. Null when there is neither,
   // and the core starts that chat in the plane's own directory.
-  const startIn = spot?.path ?? sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
+  //
+  // **The plane root starts its chats in the plane's own directory, said out loud** (SI-1),
+  // rather than as the `null` that happens to mean the same: the core tells a chat started
+  // there that it is in no workspace.
+  const startIn =
+    spot?.path ??
+    (focused === OUTSIDE
+      ? sidebar?.root
+      : sidebar?.workspaces.find((ws) => ws.name === focused)?.path) ??
+    null;
 
   /** What the explorer picks, remembered against the workspace it was picked in. */
   const pickSpot = useCallback(
@@ -914,25 +924,22 @@ export function PlaneView({
     [ofWorkspace],
   );
 
-  /** Every workspace the window can bring forward: this project's, plus the one for chats
-   *  outside them all when there are any: the pinned ones first, in the order they were
-   *  pinned in, then the rest in the plane's own order, which is the sidebar's.
+  /** Every workspace the window can bring forward: **the plane root first, always** (SI-1),
+   *  then this project's workspaces — the pinned ones first, in the order they were pinned in,
+   *  then the rest in the plane's own order, which is the sidebar's.
    *  The palette lists all of them; the strip draws fewer (`onWorkspaceStrip`, below). */
   const strips = useMemo(() => {
     if (sidebar === undefined) return [];
     const names = sidebar.workspaces.map((ws) => ws.name);
-    const stray =
-      sidebar.unfiled.length > 0 ||
-      tabs.order.some((id) => workspaceOf(tabs, id, filedIn) === OUTSIDE);
-    const all = stray ? [...names, OUTSIDE] : names;
     // **Pinned first, in the order they were pinned in, then the rest in the plane's own
     // order** (ADR 0039, ADR 0054, charter#402). The store answers the pins in that order, and
-    // only the ones the plane still has.
+    // only the ones the plane still has. The root is never a pin: it is drawn before them.
     return [
-      ...pinnedWorkspaces.filter((name) => all.includes(name)),
-      ...all.filter((name) => !pinnedWorkspaces.includes(name)),
+      OUTSIDE,
+      ...pinnedWorkspaces.filter((name) => names.includes(name)),
+      ...names.filter((name) => !pinnedWorkspaces.includes(name)),
     ];
-  }, [filedIn, pinnedWorkspaces, sidebar, tabs]);
+  }, [pinnedWorkspaces, sidebar]);
 
   /**
    * What the workspace strip draws: **the pinned workspaces, and the one you are in** (ADR
@@ -947,7 +954,10 @@ export function PlaneView({
    * onto the strip under the operator's hand.
    */
   const onWorkspaceStrip = useMemo(
-    () => strips.filter((name) => pinnedWorkspaces.includes(name) || name === focused),
+    () =>
+      strips.filter(
+        (name) => name === OUTSIDE || pinnedWorkspaces.includes(name) || name === focused,
+      ),
     [focused, pinnedWorkspaces, strips],
   );
 
@@ -959,10 +969,22 @@ export function PlaneView({
   const windowText = useTextSizes().window;
   const workspaceLeast = leastAt(LEAST.workspace, windowText);
   const chatLeast = leastAt(LEAST.chat, windowText);
+  // The plane root's tab is an icon, as wide as this and never wider (`.plane-root`): it is
+  // taken off the room before the workspaces share what is left, so the arithmetic and the
+  // stylesheet agree about it as they do about `--least`.
+  const rootWidth = leastAt(LEAST_ROOT, windowText);
   const workspacesShown = useMemo(() => {
-    const { shown } = fitting(onWorkspaceStrip, focused, workspaceRoom, workspaceLeast);
-    return { shown, hidden: strips.filter((name) => !shown.includes(name)) };
-  }, [focused, onWorkspaceStrip, strips, workspaceRoom, workspaceLeast]);
+    const { shown } = fitting(
+      onWorkspaceStrip.filter((name) => name !== OUTSIDE),
+      focused,
+      workspaceRoom <= 0 ? workspaceRoom : Math.max(1, workspaceRoom - rootWidth),
+      workspaceLeast,
+    );
+    // **The root is always drawn, and always first** (SI-1): it is never hidden behind
+    // show-more, whatever else does not fit.
+    const drawn = [OUTSIDE, ...shown];
+    return { shown: drawn, hidden: strips.filter((name) => !drawn.includes(name)) };
+  }, [focused, onWorkspaceStrip, rootWidth, strips, workspaceRoom, workspaceLeast]);
 
   /**
    * **Each workspace's colour** (charter-app#281), as the core read it out of its
@@ -1020,6 +1042,7 @@ export function PlaneView({
     const here = tabsIn(tabs, workspace, filedIn).length;
     const called = workspace === OUTSIDE ? OUTSIDE_TITLE : workspace;
     const colour = colourOf(workspace);
+    const root = workspace === OUTSIDE;
     return (
       <>
         {/* Its colour, as a mark in its own accent (charter-app#281) — on the strip and in the
@@ -1028,7 +1051,13 @@ export function PlaneView({
         {colour !== null && (
           <span className="workspace-mark" aria-hidden="true" style={tintOf(workspace)} />
         )}
-        <span className="workspace-name">{called}</span>
+        {/* The plane root is drawn as an icon alone (SI-1): its tab's `aria-label` and tooltip
+            say what it is. Everything else is drawn by name. */}
+        {root ? (
+          <FolderRoot className="node-icon" aria-hidden="true" />
+        ) : (
+          <span className="workspace-name">{called}</span>
+        )}
         {/* LIVE, said: published with the plane (charter-app#301). LOCAL is the default and
             draws nothing. */}
         {liveOf(workspace) && <LiveMark />}
@@ -1208,6 +1237,11 @@ export function PlaneView({
     (workspace?: string) => {
       if (workspace === undefined) {
         openShell(startIn, filedFor(startIn, focused));
+        return;
+      }
+      // The plane root's own row (SI-1): the plane's directory, filed on the root's strip.
+      if (workspace === OUTSIDE) {
+        if (sidebar !== undefined) openShell(sidebar.root, OUTSIDE);
         return;
       }
       const path = sidebar?.workspaces.find((ws) => ws.name === workspace)?.path;
@@ -2666,10 +2700,18 @@ export function PlaneView({
                   role="tablist"
                   aria-label="Workspaces"
                   ref={workspaceStrip}
-                  style={{ "--least": `${workspaceLeast}px` } as CSSProperties}
+                  style={
+                    {
+                      "--least": `${workspaceLeast}px`,
+                      "--root": `${rootWidth}px`,
+                    } as CSSProperties
+                  }
                 >
                   {workspacesShown.shown.map((workspace) => {
                     const offer = by(`workspace.focus:${workspace}`);
+                    // **The plane root** (SI-1): first, fixed, an icon with the operator's
+                    // tooltip, and a menu of its own — it is not a workspace.
+                    const root = workspace === OUTSIDE;
                     return (
                       <SortableTab key={workspace} id={workspace} fixed={workspace === OUTSIDE}>
                         {({ sortable, style }) => (
@@ -2678,7 +2720,7 @@ export function PlaneView({
                              `asChild`, so the strip gains no wrapper: the trigger IS the tab,
                              which is what #171's `flex: 1 1 0` cells require. */
                           <Menued
-                            on={{ on: "workspace", workspace }}
+                            on={root ? { on: "root" } : { on: "workspace", workspace }}
                             offers={found}
                             onPress={press}
                           >
@@ -2690,14 +2732,14 @@ export function PlaneView({
                               <button
                                 ref={sortable.setNodeRef}
                                 role="tab"
+                                className={root ? "plane-root" : undefined}
+                                aria-label={root ? OUTSIDE_TITLE : undefined}
                                 aria-selected={workspace === focused}
                                 aria-describedby={
-                                  workspace === OUTSIDE
-                                    ? undefined
-                                    : sortable.attributes["aria-describedby"]
+                                  root ? undefined : sortable.attributes["aria-describedby"]
                                 }
                                 data-dragging={sortable.isDragging || undefined}
-                                title={offer?.title}
+                                title={root ? ROOT_TIP : offer?.title}
                                 // Its own colour, in front or not (charter-app#281): its shade and its
                                 // mark are its tint, set on the tab and nowhere else.
                                 data-colour={colourOf(workspace) ?? undefined}
@@ -3031,6 +3073,7 @@ export function PlaneView({
               onShowRow={setShownRow}
               vaults={vaults}
               onAddTodo={edits.addTodo}
+              atRoot={focused === OUTSIDE}
             />
           ),
           bottom: (

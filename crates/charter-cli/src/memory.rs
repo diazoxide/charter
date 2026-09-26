@@ -397,12 +397,17 @@ pub fn recall(here: &crate::Here, args: RecallArgs) -> Result<Code, String> {
         // reads whatever that lands on inside the plane's data; a name that is a path is not
         // one this reads through. The resolved name has already passed the same check on the
         // way out of the ladder, so this can only ever fire for a flag somebody typed.
-        let name = here.active_workspace(args.workspace.as_deref().filter(|w| !w.is_empty()));
-        if let Err(e) = plane.workspace(&name) {
-            voice::err(&e.to_string());
-            return Ok(1);
+        match here.workspace_if_any(args.workspace.as_deref().filter(|w| !w.is_empty())) {
+            // A plane-root chat is in no workspace: it searches everything but one (SI-1).
+            None => None,
+            Some(name) => {
+                if let Err(e) = plane.workspace(&name) {
+                    voice::err(&e.to_string());
+                    return Ok(1);
+                }
+                Some(Workspaces::One(name))
+            }
         }
-        Some(Workspaces::One(name))
     } else {
         // `--scope persona` names no workspace at all, and charter's `sources` resolves one
         // only for the scope that uses it. Resolving here anyway would let a `-w` the search

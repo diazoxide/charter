@@ -58,6 +58,7 @@ export function Panels({
   onShowRow,
   vaults,
   onAddTodo,
+  atRoot = false,
 }: {
   /** The focused workspace, whose todos these are. */
   workspace: string | undefined;
@@ -92,6 +93,12 @@ export function Panels({
    * writes to, and it sends that one.
    */
   onAddTodo?: (workspace: string, text: string) => Promise<string | undefined>;
+  /**
+   * The plane root is focused (SI-1). It is not a workspace — no charter, memory or todos —
+   * so this region says so rather than drawing a workspace's panels, and there is no Todos box
+   * to type into: a todo typed here would have to land in a workspace nobody chose.
+   */
+  atRoot?: boolean;
 }) {
   const { panels, trouble } = state;
 
@@ -114,7 +121,11 @@ export function Panels({
       data-testid="panels"
     >
       {workspace === undefined ? (
-        <p className="empty">No workspace focused.</p>
+        <p className="empty">
+          {atRoot
+            ? "The plane root is not a workspace: it has no todos or memory of its own. Chats here look after the plane and its workspaces; focus a workspace to see its panels."
+            : "No workspace focused."}
+        </p>
       ) : (
         <>
           {trouble && (

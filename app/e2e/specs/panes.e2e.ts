@@ -224,7 +224,9 @@ describe("the window", () => {
           narrow.push(`${named}: no --least on the strip`);
           continue;
         }
-        for (const tab of strip.querySelectorAll('[role="tab"]')) {
+        // Not the plane root's tab (SI-1): an icon exactly `--root` wide by design, taken off
+        // the strip's room before the others share it, so `--least` is not its floor.
+        for (const tab of strip.querySelectorAll('[role="tab"]:not(.plane-root)')) {
           // The CELL, which is what carries the floor: a wrapper where there is one (a tab and
           // its `×`), and the button itself where there is not.
           const cell = tab.closest(".project, .tab") ?? tab;

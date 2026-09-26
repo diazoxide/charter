@@ -63,7 +63,19 @@ pub const CLAUDE_PID_ENV: &str = "CLAUDE_PID";
 /// the Claude Code session that had started the app.
 ///
 /// Only the harness the app starts may set these, and it sets them for its own hooks.
-pub const NOT_INHERITED: &[&str] = &[CLAUDE_CONVERSATION_ENV, CLAUDE_PID_ENV, "CLAUDECODE"];
+///
+/// **Nor where the launcher's chat was** (SI-1): `$CHARTER_WORKSPACE` and
+/// `$CHARTER_PLANE_ROOT_SESSION` say where the app started THIS chat, and it sets them itself
+/// (`start::ready`). An app launched from a chat pinned to `alpha` would otherwise hand
+/// `alpha` to every chat it starts at the plane root, where the pin outranks the root. They are
+/// removed before the chat's own are set, so a chat in a workspace still gets its own.
+pub const NOT_INHERITED: &[&str] = &[
+    CLAUDE_CONVERSATION_ENV,
+    CLAUDE_PID_ENV,
+    "CLAUDECODE",
+    crate::active::WORKSPACE_ENV,
+    crate::active::PLANE_ROOT_ENV,
+];
 
 /// Which conversation a report is of, and how well that is known.
 ///
@@ -1104,6 +1116,9 @@ mod tests {
         // starts may answer that.
         assert!(NOT_INHERITED.contains(&CLAUDE_CONVERSATION_ENV));
         assert!(NOT_INHERITED.contains(&CLAUDE_PID_ENV));
+        // Nor where the chat that launched the app was pinned (SI-1).
+        assert!(NOT_INHERITED.contains(&crate::active::WORKSPACE_ENV));
+        assert!(NOT_INHERITED.contains(&crate::active::PLANE_ROOT_ENV));
         // charter's own two are set per session, after these are removed, so they are not
         // here — removing them would remove what the app just put in.
         assert!(!NOT_INHERITED.contains(&SOCKET_ENV));

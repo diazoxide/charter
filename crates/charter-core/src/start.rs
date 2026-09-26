@@ -201,21 +201,29 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     let mut argv = crate::programs::resolve_argv(&profiles::expanded_command(profile, &home))
         .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
     let program = argv.remove(0);
-    let env = environment(profile, root, persona.as_deref(), start.show_footer);
+    let standing = Standing::of(&here, root);
+    let env = environment(
+        profile,
+        root,
+        persona.as_deref(),
+        start.show_footer,
+        &standing,
+    );
     // Listed from the chat's OWN environment: a profile that points its harness at another
     // account's directory (`CLAUDE_CONFIG_DIR`) is listed against that account. A chat in a
     // workspace — by its directory, which is how the window files it under one — also takes
     // that workspace's choices, between Shared and Local (charter-app#282).
     // Asked only for a kind that has an adapter: any other is handed nothing either way.
-    let workspace = start
-        .cwd
-        .as_deref()
-        .filter(|_| crate::harness_plugin::adapter(&profile.kind).is_some())
-        .and_then(|cwd| crate::workspaces::Plane::open(root).workspace_of(cwd));
+    let workspace = match &standing {
+        Standing::Workspace(name) if crate::harness_plugin::adapter(&profile.kind).is_some() => {
+            Some(name.as_str())
+        }
+        _ => None,
+    };
     let plugins = crate::harness_plugin::for_start(
         &profile.kind,
         root,
-        workspace.as_deref(),
+        workspace,
         &crate::harness_plugin::Env::of(&env),
     );
     // The profile's own words stay together and in front; charter's go after them and after
@@ -234,6 +242,34 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
         how,
         plugins,
     })
+}
+
+/// Where a chat starts, as the plane has it — and so what the chat is told about its
+/// workspace (SI-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Standing {
+    /// In one of the plane's workspaces: its directory, a clone or a piece of it. The same
+    /// question the window files the chat's tab by ([`crate::workspaces::Plane::workspace_of`]),
+    /// asked once, so the tab and the chat cannot name two workspaces.
+    Workspace(String),
+    /// At the plane root itself: in no workspace, on purpose.
+    PlaneRoot,
+    /// Anywhere else. The chat is told nothing, and its own ladder answers as it always has.
+    Elsewhere,
+}
+
+impl Standing {
+    fn of(here: &Path, root: &Path) -> Self {
+        if let Some(name) = crate::workspaces::Plane::open(root).workspace_of(here) {
+            return Self::Workspace(name);
+        }
+        let resolved = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if resolved(here) == resolved(root) {
+            Self::PlaneRoot
+        } else {
+            Self::Elsewhere
+        }
+    }
 }
 
 /// Make sure the plane's guest layer is in the tree this chat would start in — or say why a
@@ -333,11 +369,18 @@ fn arguments(
 /// absent variable is the default, so nothing has to be unset for a chat that did not ask —
 /// and a chat that did cannot be confused with one whose value came from somewhere else,
 /// because only this line writes it.
+///
+/// **Where it started is said too** (SI-1): `$CHARTER_WORKSPACE` for a chat in a workspace,
+/// `$CHARTER_PLANE_ROOT_SESSION=1` for one at the plane root, and neither for anywhere else.
+/// Without them the window filed a chat under its workspace and the chat's own briefing asked
+/// the operator which workspace it was in. A profile may not set either — both are
+/// `CHARTER_`-prefixed, which a profile's `env` is refused (ruling 14).
 fn environment(
     profile: &Profile,
     root: &Path,
     persona: Option<&str>,
     show_footer: bool,
+    standing: &Standing,
 ) -> Vec<(String, String)> {
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
     let mut env: Vec<(String, String)> =
@@ -350,6 +393,16 @@ fn environment(
     }
     if show_footer {
         env.push((FOOTER_ENV.to_owned(), FOOTER_SHOW.to_owned()));
+    }
+    match standing {
+        Standing::Workspace(name) => {
+            env.push((crate::active::WORKSPACE_ENV.to_owned(), name.clone()));
+        }
+        Standing::PlaneRoot => env.push((
+            crate::active::PLANE_ROOT_ENV.to_owned(),
+            crate::active::PLANE_ROOT_ON.to_owned(),
+        )),
+        Standing::Elsewhere => {}
     }
     env.sort();
     env

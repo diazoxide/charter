@@ -61,6 +61,7 @@ fn handoff(root: &Path, brief: &str) -> Output {
     for name in [
         "CLAUDE_CODE_SESSION_ID",
         "CHARTER_WORKSPACE",
+        "CHARTER_PLANE_ROOT_SESSION",
         "CHARTER_PERSONA",
         "CHARTER_HARNESS",
         // The app's socket and this chat's number: inherited, they would send the handoff
