@@ -124,6 +124,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The nightly mutation run finishes again.** Its shards were sized for a test suite half as
+  long as today's, so two of them ran out of time. The run now uses smaller shards and a longer
+  per-mutant limit. It also stops reporting slow survivors as timeouts. New tests now cover the
+  extension, executor, secrets, save and settings behaviour the run found untested.
+
 - **Every guard reads a heredoc the same way, and the way the shell does.** The secret-leak
   guard used a second, narrower reading of where a heredoc starts than the one that decides
   where its body ends, and on some lines the two disagreed, so a command after the heredoc could
