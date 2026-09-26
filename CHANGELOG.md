@@ -92,7 +92,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   test suite set a different limit, so a test that is not about the limit gives a slow machine
   room, and a test that is about it uses a short limit and a program that never answers.
   ([#422](https://github.com/diazoxide/charter/issues/422))
-
+- **The guards read more of the shell's quoting the way the shell does.** The shared command
+  reader behind every guard now decodes ANSI-C quoting (`$'…'`) and bash's `$"…"` strings, and
+  drops a backslash-newline line continuation before it reads a word, inside double quotes as
+  well as outside. A command substitution split by a line continuation is recognised as one,
+  and so is bash 5.3's `${ …; }`. A heredoc delimiter split by a continuation is read as the
+  unquoted delimiter it is. A shell named in capitals (`BASH -c`) is recognised when it runs a
+  string, as it is on a filesystem that ignores case. A git alias that runs through the shell
+  is read with the same rules.
 - **The dispatch log, the session trace and a memory index refuse to write through a link.**
   They now open the file without following a link, and refuse it when it is one.
   ([#420](https://github.com/diazoxide/charter/issues/420))

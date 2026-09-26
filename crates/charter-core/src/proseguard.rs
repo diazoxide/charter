@@ -57,7 +57,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::livesub::{SUBSTITUTIONS, live_substitution};
+use crate::livesub::{live_substitution, may_substitute};
 use crate::shellseg;
 use crate::shellwrap::{self, base_lower};
 
@@ -312,6 +312,15 @@ pub fn charter_prose_command(cmd: &str) -> Option<(String, &'static str, Option<
     None
 }
 
+/// How a denial names the substitution [`live_substitution`] found.
+fn shown_as(spelling: &str) -> &'static str {
+    match spelling {
+        "`" => "`…`",
+        "${" => "${ …; }",
+        _ => "$(…)",
+    }
+}
+
 /// `(the substitution's spelling, the denial)` for a prose-publishing forge command whose line
 /// carries a live substitution — or `None`. A5, `_forge_substitution_hit`.
 ///
@@ -329,9 +338,12 @@ pub fn charter_prose_command(cmd: &str) -> Option<(String, &'static str, Option<
 ///
 /// # The name filters fold, because the readers behind them do
 ///
-/// The SUBSTITUTION test is inert: [`live_substitution`] re-decides exactly that question, and
-/// this port's own sweep reports it inert over 20,000 cases and over the whole recording. The
-/// NAME tests are not. [`forge_prose_command`] and [`charter_words`] fold the program with
+/// The SUBSTITUTION test ([`may_substitute`]) must stay inert: [`live_substitution`] re-decides
+/// exactly that question. It was measured inert over 20,000 cases and the whole recording while
+/// it was a plain search for a backtick or `$(`, and it was not: `"$\<newline>(x)"` runs `x`, and
+/// no `$(` stands in the text, so the filter refused to ask the walk. It now allows a
+/// backslash-newline after the `$`, as the walk does. The NAME tests ([`shellwrap::may_name`])
+/// are not inert either. [`forge_prose_command`] and [`charter_words`] fold the program with
 /// [`base_lower`], because on APFS and NTFS `GH` runs `gh`, so a name filter that did not fold
 /// rejected `GH issue create` and `CHARTER persona remember` before the rule that refuses them
 /// was asked (#347; removing the case-sensitive filter moved 43 answers in 20,000 for A5 and 31
@@ -342,7 +354,7 @@ pub fn charter_prose_command(cmd: &str) -> Option<(String, &'static str, Option<
 /// Shift key from absent. The frozen Python oracle had the defect (charter#1173); the recorded
 /// corpus rows for the uppercase spellings were changed to the refusal when this was fixed.
 pub fn forge_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
-    if !SUBSTITUTIONS.iter().any(|s| cmd.contains(s)) {
+    if !may_substitute(cmd) {
         return None;
     }
     if !shellwrap::may_name(cmd, "gh") && !shellwrap::may_name(cmd, "glab") {
@@ -350,7 +362,7 @@ pub fn forge_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
     }
     let spelling = live_substitution(cmd)?;
     let where_ = forge_prose_command(cmd)?;
-    let shown = if spelling == "`" { "`…`" } else { "$(…)" };
+    let shown = shown_as(spelling);
     // Python's `where.split()[0]`, which is the program name the pair was found under.
     let program = where_.split_whitespace().next().unwrap_or("").to_string();
     Some((
@@ -386,12 +398,12 @@ pub fn charter_substitution_hit(cmd: &str) -> Option<(&'static str, String)> {
     if !shellwrap::may_name(cmd, "charter") {
         return None;
     }
-    if !SUBSTITUTIONS.iter().any(|s| cmd.contains(s)) {
+    if !may_substitute(cmd) {
         return None;
     }
     let spelling = live_substitution(cmd)?;
     let (where_, dest, from_file) = charter_prose_command(cmd)?;
-    let shown = if spelling == "`" { "`…`" } else { "$(…)" };
+    let shown = shown_as(spelling);
     let fix = match from_file {
         Some(flag) => format!(
             ", or pass `{flag} <path>` (or `--stdin`) and keep the text out of argv altogether"

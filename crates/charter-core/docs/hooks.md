@@ -383,7 +383,7 @@ rule while one who reads a bare refusal files an issue.
   | --- | --- |
   | a call from a **sub-agent**: the payload carries `agent_id` | You are talking to the parent chat, and what the sub-agent found goes back there anyway. Measured on Claude Code 2.1.268 and codex-cli 0.147.0: a sub-agent's Bash call carries `agent_id` and a main-conversation call does not. A harness nobody has measured is not read this way. |
   | an **unattended run**: `permission_mode: bypassPermissions` | Nobody is there to answer the prompt. The refusal names `charter ws todo` as the way to keep the work. |
-  | a **spelling** of `charter handoff …` it can recognise as other than the exact one: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted or escaped; a word that still reads `charter` or `handoff` once its quoting, expansion and glob characters are removed (`$'handoff'`, `${x:-handoff}`, `{handoff,}`), or that `handoff` matches as a glob (`hando?f`); a gap other than one ASCII space before or after `handoff`, a line continuation included | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to charter, `charter 'handoff'`, `charter $'handoff'`, `charter {handoff,}` and `charter hando?f` ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted `charter`, two spaces and a tab were matched there and are refused anyway, so a model has one spelling to follow. The first two words are judged as written, never as a shell would rewrite them — which is also why a brace split inside a word (`{hand,}off`), an ANSI-C escape (`$'\x68andoff'`) and a parameter default split across one (`hand${x:-}off`) are not recognised; the first two of those ran with no prompt too. |
+  | a **spelling** of `charter handoff …` it can recognise as other than the exact one: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted or escaped; a word that still reads `charter` or `handoff` once its quoting, expansion and glob characters are removed (`$'handoff'`, `${x:-handoff}`, `{handoff,}`), or that `handoff` matches as a glob (`hando?f`); a gap other than one ASCII space before or after `handoff`, a line continuation included | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to charter, `charter 'handoff'`, `charter $'handoff'`, `charter {handoff,}` and `charter hando?f` ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted `charter`, two spaces and a tab were matched there and are refused anyway, so a model has one spelling to follow. The first two words are judged as written, never as a shell would rewrite them — which is also why a brace split inside a word (`{hand,}off`) and a parameter default split across one (`hand${x:-}off`) are not recognised; the first of those ran with no prompt too. An ANSI-C word is the exception, because the shared reader decodes it the way the shell does: `charter $'\x68andoff'` is `charter handoff` spelled another way, and is refused as one. |
   | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'`, `bash -c '…'` or a `bash <<'EOF'` body ran with no prompt. The refusal says to run it directly. Which heredoc bodies a shell runs is the same answer the leak guard uses, so a brief is never one of them. |
   | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before charter reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
 
@@ -418,10 +418,9 @@ rule while one who reads a bare refusal files an issue.
   `echo #' && bash <<'ZZ'` reads the rest of the line as quoted, the real opener is never seen,
   and the handoff in that body runs with no prompt.
 
-  An **ANSI-C word** (`$'don\'t'`) is read correctly by that scan, but the shared lexer cannot
-  parse one, so a call carrying it keeps every heredoc body visible to the secret-leak guard and
-  prose in a brief on such a line can be refused as a read. For the leak guard that errs toward refusing; it is not a claim about
-  A7, whose own mis-reading of `$'` inside `"…"` erased real openers until it was fixed.
+  An **ANSI-C word** (`$'don\'t'`) is read correctly by that scan, and the shared reader
+  decodes it too, as the shell does. A7's own mis-reading of `$'` inside `"…"` erased real
+  openers until it was fixed.
 
   **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
   segment is stdin charter sends on, never a command the shell runs, so it is skipped the way a
@@ -442,7 +441,7 @@ rule while one who reads a bare refusal files an issue.
   command's words and is not a shell. A handoff run by an interpreter (`python3 -c`, `node -e`, or
   `os.system` inside a `python3 - <<'PY'` body),
   through a variable, from a script file, behind an expansion that does not leave the word whole
-  (`{hand,}off`, `$'\x68andoff'`, `hand${x:-}off`), or more than one string deep is not seen.
+  (`{hand,}off`, `hand${x:-}off`), or more than one string deep is not seen.
   Nor is a shell behind a **name charter cannot know**: `r() { bash; }; r <<'EOF'` defines a
   function and calls it, so the opener reads as `r` and its body is treated as data — the same
   class as an interpreter or a script file. The same rule costs the other direction, which is

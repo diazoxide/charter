@@ -25,7 +25,7 @@
 //! It keeps a good-faith chat's permission prompt in front of its handoff by refusing the
 //! spellings it can recognise. **It reads a command's words and is not a shell**: an
 //! interpreter (`python3 -c`), a variable, a script file, a heredoc fed to a shell and an
-//! expansion that does not leave a word whole (`{hand,}off`, `$'\x68andoff'`) all run a
+//! expansion that does not leave a word whole (`{hand,}off`) all run a
 //! handoff it never sees. Claude Code says the same of its own rule — "isn't a security
 //! boundary around the program"
 //! (<https://code.claude.com/docs/en/permissions.md>, *What a Bash rule doesn't match*).
@@ -293,16 +293,19 @@ pub fn disguised_handoff(line: &str) -> bool {
 /// The text a segment hands a shell to run — `eval`'s words, or the argument of a shell's `-c`,
 /// alone or in a cluster such as `-lc` — or `None`. `_shell_string`.
 ///
-/// `os.path.basename` and **not** `base_lower`: the Python compares the base as written, so
-/// `BASH -c` is not a shell here. Kept as measured rather than tidied.
+/// **The shell's name is folded and `eval` is not**, because only one of them is a file. On a
+/// filesystem that folds case (APFS, NTFS) `BASH -c '…'` runs `/bin/bash`, so a shell named in
+/// capitals runs its string as surely as one in lower case; the frozen Python compared the name
+/// as written and let it through. `eval` is a shell BUILTIN with no file behind it (none on
+/// macOS, and none in a Linux `PATH`), so `EVAL '…'` is "command not found" and runs nothing —
+/// the same reasoning that leaves `CD` unfolded in [`crate::planeroot`].
 pub fn shell_string(seg: &[Tok]) -> Option<String> {
     let toks: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
     let (prog, _env, argv) = shellwrap::split_env(&toks);
-    let base = shellwrap::basename(&prog);
-    if base == "eval" {
+    if shellwrap::basename(&prog) == "eval" {
         return Some(argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" "));
     }
-    if !STRING_SHELLS.contains(&base) {
+    if !STRING_SHELLS.contains(&shellwrap::base_lower(&prog).as_str()) {
         return None;
     }
     // Python's `enumerate(argv[1:-1], start=1)`: the LAST word can never be the flag, because
@@ -659,6 +662,14 @@ fn spelled_exactly(line: &str, seg: Option<&[Tok]>) -> bool {
     if !(first.bare && second.bare) || first.text != "charter" || second.text != "handoff" {
         return false;
     }
+    // The SOURCE of each word, too: a backslash-newline inside one (`char\<newline>ter`) is not
+    // quoting, so the word is bare and its text is `charter`, and it is still not the spelling
+    // the host's rule matches.
+    if py_slice(&chars, first.start, first.end) != "charter"
+        || py_slice(&chars, second.start, second.end) != "handoff"
+    {
+        return false;
+    }
     if py_slice(&chars, first.end, second.start) != " " {
         return false;
     }
@@ -769,8 +780,8 @@ mod tests {
 
     #[test]
     fn a_backslash_newline_is_not_the_one_space_after_handoff() {
-        // The lexer folds the pair into the word that follows, so the tokens read as a single
-        // space and only the source tells them apart.
+        // The shell removes the pair, so the tokens read as a single space and only the source
+        // tells them apart.
         let cmd = "charter handoff \\\nbeta <<'BRIEF'\nx\nBRIEF";
         assert_eq!(reason(cmd), Some(REASON_SPELLING));
     }
@@ -1123,5 +1134,56 @@ mod tests {
             reason(cmd).is_some(),
             "the handoff after the comment was missed"
         );
+    }
+    /// A shell named in capitals runs its `-c` string on a filesystem that folds case, so it is
+    /// looked into like the lower-case one. `eval` is a builtin with no file behind it, so
+    /// `EVAL` runs nothing and is not.
+    #[test]
+    fn a_shell_named_in_capitals_is_still_the_shell() {
+        for cmd in [
+            "BASH -c 'charter handoff beta'",
+            "Bash -lc 'charter handoff beta'",
+            "/bin/SH -c 'charter handoff beta'",
+            "env ZSH -c 'charter handoff beta'",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_SHELL_STRING), "{cmd:?}");
+        }
+        let toks =
+            shellseg::split_punctuation(shellseg::lex("EVAL 'charter handoff beta'").unwrap());
+        assert_eq!(shell_string(&toks), None);
+    }
+
+    /// A word written with ANSI-C escapes is the word the shell makes, so `$'\x68'andoff` is
+    /// `handoff` — and not the spelling the host's rule matches.
+    #[test]
+    fn an_ansi_c_spelling_of_a_handoff_is_refused() {
+        for cmd in [
+            "charter $'\\x68'andoff beta <<'BRIEF'\nx\nBRIEF",
+            "$'\\x63harter' handoff beta <<'BRIEF'\nx\nBRIEF",
+            "charter $'\\150andoff' beta <<'BRIEF'\nx\nBRIEF",
+        ] {
+            assert_eq!(reason(cmd), Some(REASON_SPELLING), "{cmd:?}");
+        }
+        assert_eq!(
+            reason("bash -c $'charter \\x68andoff beta'"),
+            Some(REASON_SHELL_STRING)
+        );
+    }
+
+    /// A backslash-newline inside `charter` or `handoff` is gone before the shell reads the
+    /// word, so the word is the program — and the source is still not the exact spelling.
+    #[test]
+    fn a_backslash_newline_inside_a_word_is_not_the_exact_spelling() {
+        let cmd = "char\\\nter handoff beta <<'BRIEF'\nx\nBRIEF";
+        assert_eq!(reason(cmd), Some(REASON_SPELLING));
+        let cmd = "charter hand\\\noff beta <<'BRIEF'\nx\nBRIEF";
+        assert_eq!(reason(cmd), Some(REASON_SPELLING));
+    }
+
+    /// `<<B\<newline>RIEF` is the unquoted delimiter `BRIEF` to the shell, whose body expands.
+    #[test]
+    fn a_delimiter_split_by_a_backslash_newline_is_unquoted() {
+        let cmd = "charter handoff beta <<BR\\\nIEF\n$(x)\nBRIEF";
+        assert_eq!(reason(cmd), Some(REASON_BRIEF_SOURCE));
     }
 }
