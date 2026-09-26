@@ -264,6 +264,12 @@ export const commands = {
 	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
 	/**  Sends what a pane typed to the session's program. */
 	sendInput: (plane: PlaneId, session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { plane, session, text })),
+	/**
+	 *  Sends a pane's bytes that are not text to the session's program, each as the one byte it
+	 *  is: a mouse report in the default encoding, which xterm hands over one character per byte
+	 *  (charter#493). Sent as text, a byte above 127 would reach the program as two.
+	 */
+	sendInputBytes: (plane: PlaneId, session: number, bytes: number[]) => typedError<null, string>(__TAURI_INVOKE("send_input_bytes", { plane, session, bytes })),
 	/**  Tells a session how big the pane showing it now is. */
 	resizeSession: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("resize_session", { plane, session, columns, rows })),
 	/**

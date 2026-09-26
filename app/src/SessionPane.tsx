@@ -138,15 +138,29 @@ export function SessionPane({
     };
     // The renderer loads its own code, so a pane draws with the DOM until it is there.
     void draw(pane, say, () => !gone).then((drawing) => bench.paneDrawing(session, drawing));
-    const typed = pane.onData((text) => {
-      // Input refused is worth seeing: the program has stopped reading it, or has ended.
-      void commands.sendInput(plane, session, text).then(
+    // Input refused is worth seeing: the program has stopped reading it, or has ended.
+    const sayIfRefused = (
+      sending: Promise<{ status: "ok" } | { status: "error"; error: string }>,
+    ) =>
+      void sending.then(
         (sent) => {
           if (sent.status === "error") say(sent.error);
         },
         (err: unknown) => say(String(err)),
       );
-    });
+    const typed = pane.onData((text) => sayIfRefused(commands.sendInput(plane, session, text)));
+    // **And what is not text, as the bytes it is** (charter#493): xterm hands a mouse report in
+    // the default encoding (`?1000h` without `?1006h`) to `onBinary`, one character per byte.
+    // Sent as text, a column or row past 95 — a byte above 127 — would reach the program as two.
+    const bytes = pane.onBinary((binary) =>
+      sayIfRefused(
+        commands.sendInputBytes(
+          plane,
+          session,
+          Array.from(binary, (char) => char.charCodeAt(0) & 0xff),
+        ),
+      ),
+    );
     // The terminal decides the size, and the program is told it.
     const resized = pane.onResize(({ cols, rows }) => {
       void commands.resizeSession(plane, session, cols, rows);
@@ -201,6 +215,7 @@ export function SessionPane({
       watching.disconnect();
       wheeling.dispose();
       typed.dispose();
+      bytes.dispose();
       resized.dispose();
       if (view !== undefined) void commands.unwatchSession(plane, session, view);
       pane.dispose();

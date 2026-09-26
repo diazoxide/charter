@@ -1931,9 +1931,14 @@ export function PlaneView({
    * into the plane's own record, and a mark drawn before that landed would be a pin the next
    * launch does not have. The core's refusal travels back whole for the same reason a
    * worktree removal's does.
+   *
+   * **`early` is the one exception: the mark is drawn before the write lands**, and taken back
+   * if the core refuses. A drop across the pinned boundary asks for it (SI-6b), because the
+   * drop has already moved the tab and a pin that waited would draw it in its old group until
+   * the core answered — a jump under the pointer.
    */
   const pinTab = useCallback(
-    async (id: number, pinned: boolean): Promise<Ran> => {
+    async (id: number, pinned: boolean, { early = false } = {}): Promise<Ran> => {
       const lead = contentsOf(now.current, id)[0]?.content;
       if (lead?.kind === "view") {
         // **Its own record line, written by the one effect that tells the core the view tabs**
@@ -1947,17 +1952,23 @@ export function PlaneView({
       }
       const session = chatOf(now.current, id);
       if (session === undefined) return { ok: false, refused: "That tab has no chat to pin." };
+      const mark = (on: boolean) =>
+        setPinnedChats((was) =>
+          on
+            ? was.includes(session)
+              ? was
+              : [...was, session]
+            : was.filter((one) => one !== session),
+        );
+      if (early) mark(pinned);
       const said = await commands
         .pinChat(plane, session, pinned)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (said.status === "error") return { ok: false, refused: said.error };
-      setPinnedChats((was) =>
-        pinned
-          ? was.includes(session)
-            ? was
-            : [...was, session]
-          : was.filter((one) => one !== session),
-      );
+      if (said.status === "error") {
+        if (early) mark(!pinned);
+        return { ok: false, refused: said.error };
+      }
+      mark(pinned);
       // Nothing is said: the mark appearing on the tab is the answer, and a banner after
       // every pin is noise about something the operator can already see.
       return { ok: true };
@@ -1969,10 +1980,10 @@ export function PlaneView({
    * A chat or view tab dragged onto another on the chat strip (SI-6): moved to where it was put
    * down, and pinned or unpinned when it crossed from one group to the other (`reorder.ts`).
    *
-   * **The order is the window's at once and the pin follows**, because the pin is written by
-   * the core and a tab that waited for it would hang in the air under the pointer. A pin the
-   * core refuses is said, as the tab's menu would say it, and the tab is drawn where its pin
-   * says it goes.
+   * **The order and the pin are the window's at once**, because the pin is written by the core
+   * and a tab that waited for it would be drawn in its old group until the answer came (SI-6b).
+   * A pin the core refuses is taken back and said, as the tab's menu would say it, and the tab
+   * is drawn where its pin says it goes.
    */
   const dragTab = useCallback(
     (moved: number, onto: number) => {
@@ -1980,7 +1991,7 @@ export function PlaneView({
       if (made === undefined) return;
       change((tabs) => ({ ...tabs, order: reslotted(tabs.order, made.order) }));
       if (made.pinned === undefined) return;
-      void pinTab(moved, made.pinned).then((ran) => {
+      void pinTab(moved, made.pinned, { early: true }).then((ran) => {
         if (!ran.ok) setReport({ from: "tab.drag", refused: true, words: ran.refused });
       });
     },
