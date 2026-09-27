@@ -8,16 +8,18 @@
 //! it opens anything, so the prompt typed into the chat is the one the core renders now — never
 //! text the window held, and never one from before a persona's file changed.
 //!
-//! **The prompt is typed once the chat's harness says it has started, and never sent.**
+//! **The prompt is typed once the chat's harness has started, and never sent.**
 //! It is held here, in the app, per chat ([`Typed`]), until the first hook report of a
 //! `SessionStart` that began a session reaches the plane's board — hooks only (spec: nothing
 //! parses harness output to decide anything). It is then written into the terminal as ONE
 //! bracketed paste, `ESC [200~ … ESC [201~`, with nothing after it: no carriage return, no line
 //! feed, no Enter ([`bracketed`]), and only once the terminal hands keys to the harness rather
 //! than editing lines itself ([`type_once_it_reads_keys`]). The operator reads it and presses
-//! Enter. A harness whose `SessionStart` comes at the first prompt rather than at launch is not
-//! given one at all (`Harness::reports_its_start_before_the_first_prompt`): its prompt would
-//! land after whatever the operator had already sent.
+//! Enter. Codex, whose `SessionStart` comes with the first prompt rather than at launch, is
+//! typed into instead once its terminal is raw and has then been quiet for [`QUIET`]
+//! ([`type_once_raw_and_quiet`]): the kernel's line discipline and the moment bytes last
+//! arrived, never what they said. opencode is not typed into at all: it goes quiet while still
+//! starting, and a paste then is lost (`Harness::ready_to_type`).
 //!
 //! **Bracketed whether or not the program asked for it.** Whether a program has turned
 //! bracketed paste on (`?2004h`) is a mode of the terminal the core draws, and the core's
@@ -26,15 +28,15 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use charter_core::curation::{self, Resolved, Source, Subject};
-use charter_core::harness::Harness;
+use charter_core::harness::{Harness, ReadyToType};
 use charter_core::hookwire::Report;
 use charter_core::state::Event;
 
-use crate::planes::{PlaneId, Planes};
+use crate::planes::{Held, PlaneId, Planes};
 use charter_core::engine::Size;
 use charter_core::reopen::Chat;
 
@@ -243,26 +245,46 @@ fn launch_profile(root: &Path) -> Result<String, String> {
         .ok_or_else(|| {
             "This project has no harness profile to open a curation chat on.".to_owned()
         })?;
-    takes_a_typed_prompt(&profile.name, Harness::of_kind(&profile.kind))?;
+    when_typed(&profile.name, Harness::of_kind(&profile.kind))?;
     Ok(profile.name.clone())
 }
 
-/// Whether a chat on `harness` can have a prompt typed into it on its start, in a sentence
-/// when it cannot. One answer for the menu's rows and for the start itself.
-fn takes_a_typed_prompt(profile: &str, harness: Option<Harness>) -> Result<(), String> {
+/// When a chat on `harness` can have a prompt typed into it, or why it cannot, in a sentence.
+/// One answer for the menu's rows and for the start itself.
+fn when_typed(profile: &str, harness: Option<Harness>) -> Result<ReadyToType, String> {
     match harness {
-        Some(harness) if harness.reports_its_start_before_the_first_prompt() => Ok(()),
-        Some(harness) => Err(format!(
-            "The default profile '{profile}' runs {}, which says nothing until your first \
-             prompt, so charter has no moment to type a curation prompt into it. Make a \
-             Claude Code profile the default to curate from here.",
-            harness.name()
-        )),
+        Some(harness) => harness.ready_to_type().ok_or_else(|| {
+            format!(
+                "The default profile '{profile}' runs {}, which says nothing until your first \
+                 prompt and goes quiet while it is still starting, so charter has no moment to \
+                 type a curation prompt into it. Make a Claude Code or Codex profile the \
+                 default to curate from here.",
+                harness.name()
+            )
+        }),
         None => Err(format!(
             "The default profile '{profile}' runs a program charter has not measured, so it \
              cannot tell when to type a curation prompt into it."
         )),
     }
+}
+
+/// Whether `harness` would draw `prompt`, pasted, whole in its input, in a sentence when it
+/// would draw a placeholder instead: a prompt the operator cannot read is not typed (ADR 0061).
+fn drawn_whole(prompt: &str, harness: Option<Harness>) -> Result<(), String> {
+    let Some(most) = harness.and_then(Harness::longest_paste_drawn_whole) else {
+        return Ok(());
+    };
+    let long = pasted(prompt).chars().count();
+    if long <= most {
+        return Ok(());
+    }
+    Err(format!(
+        "This prompt is {long} characters, and {} draws a paste over {most} as a placeholder \
+         you could not read before sending it, so no curation chat was opened. Shorten the \
+         prompt, or make a Claude Code profile the default to curate from here.",
+        harness.map_or("it", Harness::name)
+    ))
 }
 
 /// What a curation chat's tab says: `<label> · <subject>`, held to a chat name's length.
@@ -279,12 +301,7 @@ fn tab_label(label: &str, subject: &str) -> String {
 
 /// Opens the chat. The prompt is held for it BEFORE it starts, because its harness can report
 /// its start before `start_ready` returns, and let go again when nothing started.
-fn open(
-    held: &crate::planes::Held,
-    spec: &str,
-    action: &str,
-    size: Size,
-) -> Result<Curating, String> {
+fn open(held: &Arc<Held>, spec: &str, action: &str, size: Size) -> Result<Curating, String> {
     let root = held.root().to_path_buf();
     let subject = Subject::parse(spec)?;
     let resolution = curation::resolve(&root, &subject)?;
@@ -314,7 +331,8 @@ fn open(
         &root,
     )?;
     // The same question the menu asked, of the harness this start actually resolved.
-    takes_a_typed_prompt(&profile, ready.harness)?;
+    let when = when_typed(&profile, ready.harness)?;
+    drawn_whole(&chosen.prompt, ready.harness)?;
     let chat = Chat {
         program: ready.program.clone(),
         // What the RECORD keeps: the profile's own words. Never the prompt — a relaunch
@@ -333,11 +351,17 @@ fn open(
         from: None,
         renamed_from: None,
     };
-    held.typed().hold(number, chosen.prompt);
+    match when {
+        ReadyToType::WhenItReportsItsStart => held.typed().hold(number, chosen.prompt),
+        ReadyToType::WhenRawAndQuiet => held.typed().hold_until_quiet(number, chosen.prompt),
+    }
     let session = held
         .chats()
         .start_ready(&chat, &ready, size)
         .inspect_err(|_| held.typed().forget(number))?;
+    if when == ReadyToType::WhenRawAndQuiet {
+        type_when_raw_and_quiet(held, session);
+    }
     Ok(Curating {
         session,
         name,
@@ -357,13 +381,47 @@ fn open(
 /// same project, and the chat's harness reports to the plane whichever of them is showing it.
 #[derive(Debug, Default)]
 pub struct Typed {
-    waiting: Mutex<HashMap<u32, String>>,
+    waiting: Mutex<HashMap<u32, Holding>>,
+}
+
+/// One chat's waiting prompt, and the moment it waits for.
+#[derive(Debug)]
+struct Holding {
+    prompt: String,
+    until: ReadyToType,
 }
 
 impl Typed {
     /// Holds `prompt` for chat `session` until its harness reports its start.
     pub fn hold(&self, session: u32, prompt: String) {
-        self.held().insert(session, prompt);
+        self.held().insert(
+            session,
+            Holding {
+                prompt,
+                until: ReadyToType::WhenItReportsItsStart,
+            },
+        );
+    }
+
+    /// Holds `prompt` for chat `session` until its terminal is raw and quiet
+    /// ([`type_once_raw_and_quiet`] takes it then). A start report does not type it: on a
+    /// harness held this way, that report comes with the first prompt, so it drops it.
+    pub fn hold_until_quiet(&self, session: u32, prompt: String) {
+        self.held().insert(
+            session,
+            Holding {
+                prompt,
+                until: ReadyToType::WhenRawAndQuiet,
+            },
+        );
+    }
+
+    /// Takes chat `session`'s prompt, as the one paste it is typed as, so it is typed once.
+    /// None when it was dropped or already taken.
+    pub fn take(&self, session: u32) -> Option<String> {
+        self.held()
+            .remove(&session)
+            .map(|holding| bracketed(&holding.prompt))
     }
 
     /// Lets go of a chat's prompt without typing it: the chat ended, closed, or never started.
@@ -382,7 +440,8 @@ impl Typed {
             Event::SessionStart if report.detail.started.began_a_session() => self
                 .held()
                 .remove(&report.chat)
-                .map(|prompt| bracketed(&prompt)),
+                .filter(|holding| holding.until == ReadyToType::WhenItReportsItsStart)
+                .map(|holding| bracketed(&holding.prompt)),
             Event::UserPromptSubmit | Event::Stop | Event::SessionEnd => {
                 self.forget(report.chat);
                 None
@@ -391,13 +450,12 @@ impl Typed {
         }
     }
 
-    /// Whether a prompt is waiting for chat `session`. Only a test asks.
-    #[cfg(test)]
+    /// Whether a prompt is waiting for chat `session`.
     pub fn waiting(&self, session: u32) -> bool {
         self.held().contains_key(&session)
     }
 
-    fn held(&self) -> MutexGuard<'_, HashMap<u32, String>> {
+    fn held(&self) -> MutexGuard<'_, HashMap<u32, Holding>> {
         self.waiting.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -452,6 +510,153 @@ pub fn type_once_it_reads_keys(
     }
 }
 
+/// How long a Codex chat must have written nothing, after its terminal went raw, before its
+/// prompt is typed.
+///
+/// **Measured** (ADR 0061, amended 2026-09-27). codex-cli 0.147.0 draws its first screen in
+/// three bursts within about 0.25 s of going raw, and its longest silence between them was
+/// 0.18 s idle and 0.3 s with every core busy. It took a paste at any moment after going raw —
+/// 80 ms in, mid-draw, it still landed whole in its input — so this is not what makes the paste
+/// land. It is what keeps one out of a screen still animating: its welcome, before a folder is
+/// trusted, redraws every 80 ms and is never this quiet.
+pub const QUIET: Duration = Duration::from_secs(1);
+
+/// How long a Codex chat is waited on, from its start, for its terminal to be raw and quiet.
+/// Longer than [`KEYS_READ_WITHIN`], because this counts from the start and the quiet period is
+/// inside it.
+pub const QUIET_WITHIN: Duration = Duration::from_secs(15);
+
+/// The quiet period a prompt waits for, and how long it waits for one.
+#[derive(Debug, Clone, Copy)]
+pub struct Wait {
+    pub quiet: Duration,
+    pub within: Duration,
+}
+
+/// A chat a prompt is waiting to be typed into, as [`type_once_raw_and_quiet`] asks it. An
+/// `Err` is a chat, or a project, that has gone.
+pub trait Waiting {
+    /// The terminal's line discipline: `Some(true)` while it is canonical, `None` where the
+    /// platform cannot say.
+    fn edits_lines(&self) -> Result<Option<bool>, String>;
+    /// How long the program has written nothing.
+    fn quiet_for(&self) -> Result<Duration, String>;
+    /// Whether its prompt still waits: not dropped by a prompt, a turn's end, the chat's end
+    /// or its close.
+    fn still_held(&self) -> bool;
+    /// Its prompt, as one paste, taken so it is typed once.
+    fn take(&self) -> Option<String>;
+    fn write(&self, text: &str) -> Result<(), String>;
+}
+
+/// Types a Codex chat's prompt once its terminal is raw and has then been quiet for
+/// `wait.quiet`, and never otherwise.
+///
+/// **Codex does not say it is ready.** It reports its start only with the first prompt, so no
+/// hook marks the moment (`Harness::ready_to_type`). What is left that is not the harness's
+/// output is the kernel's: whether the terminal is raw (`edits_lines`), and when bytes last
+/// arrived (`quiet_for`). Nothing here reads what the harness wrote, so no wording, colour or
+/// layout of its can change when a prompt is typed; a harness that keeps drawing — Codex's
+/// animated welcome, before a folder is trusted — is simply never quiet, and is not typed into.
+///
+/// The quiet period counts from the later of the terminal going raw and its last output, so a
+/// harness silent while it still edits lines is not typed into the moment it goes raw. A
+/// prompt dropped while it waits is not typed. One not typed within `wait.within` is let go of
+/// and stderr says so: typed late, it would land in whatever the operator had begun.
+pub fn type_once_raw_and_quiet(chat: &impl Waiting, wait: Wait) {
+    let until = Instant::now() + wait.within;
+    let mut raw_since: Option<Instant> = None;
+    loop {
+        if !chat.still_held() {
+            return;
+        }
+        let asked = chat
+            .edits_lines()
+            .and_then(|edits| Ok((edits, chat.quiet_for()?)));
+        let Ok((edits, quiet_for)) = asked else {
+            // Gone: nothing to type into, and nothing owed to anyone about it.
+            let _ = chat.take();
+            return;
+        };
+        if edits == Some(true) {
+            raw_since = None;
+        } else {
+            let since = *raw_since.get_or_insert_with(Instant::now);
+            if quiet_for.min(since.elapsed()) >= wait.quiet {
+                if let Some(text) = chat.take() {
+                    // A chat that ended between the question and this write has nothing to
+                    // type into, and nothing is owed to anyone about it either.
+                    let _ = chat.write(&text);
+                }
+                return;
+            }
+        }
+        if Instant::now() >= until {
+            let _ = chat.take();
+            eprintln!(
+                "charter: a curation chat's terminal was not raw and quiet {}s after it \
+                 started, so its prompt was not typed",
+                wait.within.as_secs()
+            );
+            return;
+        }
+        std::thread::sleep(ASKED_EVERY);
+    }
+}
+
+/// One of a project's chats, asked through the project for as long as it is open.
+struct InPlane {
+    held: Weak<Held>,
+    session: u32,
+}
+
+impl InPlane {
+    fn held(&self) -> Result<Arc<Held>, String> {
+        self.held
+            .upgrade()
+            .ok_or_else(|| "the project was closed".to_owned())
+    }
+}
+
+impl Waiting for InPlane {
+    fn edits_lines(&self) -> Result<Option<bool>, String> {
+        self.held()?.chats().sessions().edits_lines(self.session)
+    }
+    fn quiet_for(&self) -> Result<Duration, String> {
+        self.held()?.chats().sessions().quiet_for(self.session)
+    }
+    fn still_held(&self) -> bool {
+        self.held()
+            .is_ok_and(|held| held.typed().waiting(self.session))
+    }
+    fn take(&self) -> Option<String> {
+        self.held().ok()?.typed().take(self.session)
+    }
+    fn write(&self, text: &str) -> Result<(), String> {
+        self.held()?.chats().sessions().input(self.session, text)
+    }
+}
+
+/// Waits, on a thread of its own, to type chat `session`'s held prompt once its terminal is
+/// raw and quiet. Weak, so a closed project is not kept open by a prompt waiting in it.
+fn type_when_raw_and_quiet(held: &Arc<Held>, session: u32) {
+    let chat = InPlane {
+        held: Arc::downgrade(held),
+        session,
+    };
+    let _ = std::thread::Builder::new()
+        .name("charter-curation-typing".into())
+        .spawn(move || {
+            type_once_raw_and_quiet(
+                &chat,
+                Wait {
+                    quiet: QUIET,
+                    within: QUIET_WITHIN,
+                },
+            );
+        });
+}
+
 /// `prompt` as one bracketed paste, with nothing after it.
 ///
 /// **Nothing in it can submit.** Line breaks are line feeds, inside the paste, where a harness
@@ -460,13 +665,17 @@ pub fn type_once_it_reads_keys(
 /// be read as keys, and a carriage return there is Enter — and so is the trailing white space a
 /// file's last line leaves, so the operator's cursor ends on the prompt's last word.
 pub fn bracketed(prompt: &str) -> String {
+    format!("{PASTE_BEGINS}{}{PASTE_ENDS}", pasted(prompt))
+}
+
+/// The text inside [`bracketed`]'s paste: what the harness is handed, and draws.
+fn pasted(prompt: &str) -> String {
     let lines = prompt.replace("\r\n", "\n").replace('\r', "\n");
-    let text: String = lines
+    lines
         .trim_end()
         .chars()
         .filter(|c| *c == '\n' || *c == '\t' || !c.is_control())
-        .collect();
-    format!("{PASTE_BEGINS}{text}{PASTE_ENDS}")
+        .collect()
 }
 
 /// Whether `bytes` would submit anything: a carriage return or a line feed outside a paste.
@@ -686,6 +895,194 @@ mod tests {
         assert_eq!(written.into_inner().unwrap(), ["typed"]);
     }
 
+    /// A chat the raw-and-quiet waiter is asked about, answering from the time since it was
+    /// made: `raw(t)` is `edits_lines`, `quiet(t)` how long its program has written nothing, and
+    /// `held(t)` whether its prompt is still waiting. Writes down what it is sent, and when.
+    struct AChat {
+        born: Instant,
+        raw: Box<dyn Fn(Duration) -> Result<Option<bool>, String> + Send + Sync>,
+        quiet: Box<dyn Fn(Duration) -> Duration + Send + Sync>,
+        held: Box<dyn Fn(Duration) -> bool + Send + Sync>,
+        prompt: Mutex<Option<String>>,
+        written: Mutex<Vec<(Duration, String)>>,
+    }
+
+    impl AChat {
+        fn new(
+            raw: impl Fn(Duration) -> Result<Option<bool>, String> + Send + Sync + 'static,
+            quiet: impl Fn(Duration) -> Duration + Send + Sync + 'static,
+        ) -> Self {
+            Self {
+                born: Instant::now(),
+                raw: Box::new(raw),
+                quiet: Box::new(quiet),
+                held: Box::new(|_| true),
+                prompt: Mutex::new(Some(bracketed("Retire alpha.\nAudit it first."))),
+                written: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn written(&self) -> Vec<(Duration, String)> {
+            self.written.lock().unwrap().clone()
+        }
+    }
+
+    impl Waiting for AChat {
+        fn edits_lines(&self) -> Result<Option<bool>, String> {
+            (self.raw)(self.born.elapsed())
+        }
+        fn quiet_for(&self) -> Result<Duration, String> {
+            Ok((self.quiet)(self.born.elapsed()))
+        }
+        fn still_held(&self) -> bool {
+            (self.held)(self.born.elapsed()) && self.prompt.lock().unwrap().is_some()
+        }
+        fn take(&self) -> Option<String> {
+            self.prompt.lock().unwrap().take()
+        }
+        fn write(&self, text: &str) -> Result<(), String> {
+            self.written
+                .lock()
+                .unwrap()
+                .push((self.born.elapsed(), text.to_owned()));
+            Ok(())
+        }
+    }
+
+    const PASTED: &str = "\x1b[200~Retire alpha.\nAudit it first.\x1b[201~";
+    const A_WHILE: Wait = Wait {
+        quiet: Duration::from_millis(150),
+        within: Duration::from_secs(5),
+    };
+
+    #[test]
+    fn a_harness_that_goes_raw_late_is_typed_into_a_quiet_period_after_it_does() {
+        // Silent from its start, canonical for 200 ms: the quiet period counts from the moment
+        // it went raw, not from its last output, so a paste cannot land while it still edits
+        // lines.
+        let chat = AChat::new(|t| Ok(Some(t < Duration::from_millis(200))), |t| t);
+
+        type_once_raw_and_quiet(&chat, A_WHILE);
+
+        let written = chat.written();
+        assert_eq!(written.len(), 1, "{written:?}");
+        assert_eq!(written[0].1, PASTED);
+        assert!(!submits(&written[0].1));
+        assert!(
+            written[0].0 >= Duration::from_millis(350),
+            "typed {:?} after it started, before a quiet period had passed since it went raw",
+            written[0].0
+        );
+    }
+
+    #[test]
+    fn a_harness_that_keeps_printing_is_never_typed_into_and_its_prompt_is_let_go() {
+        let chat = AChat::new(|_| Ok(Some(false)), |_| Duration::from_millis(20));
+
+        type_once_raw_and_quiet(
+            &chat,
+            Wait {
+                within: Duration::from_millis(500),
+                ..A_WHILE
+            },
+        );
+
+        assert!(chat.written().is_empty());
+        assert!(!chat.still_held(), "a prompt given up on stays waiting");
+    }
+
+    #[test]
+    fn a_harness_raw_and_quiet_is_typed_into_once_with_nothing_after_the_paste() {
+        // It draws for 300 ms after going raw, then stops.
+        let chat = AChat::new(
+            |_| Ok(Some(false)),
+            |t| t.saturating_sub(Duration::from_millis(300)),
+        );
+
+        type_once_raw_and_quiet(&chat, A_WHILE);
+
+        let written = chat.written();
+        assert_eq!(
+            written
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>(),
+            [PASTED]
+        );
+        assert!(!written[0].1.contains('\r'), "a carriage return is Enter");
+        assert!(
+            written[0].0 >= Duration::from_millis(450),
+            "typed at {:?}, while it was still drawing",
+            written[0].0
+        );
+    }
+
+    #[test]
+    fn a_prompt_dropped_while_it_waits_for_quiet_is_never_typed() {
+        let mut chat = AChat::new(|_| Ok(Some(false)), |_| Duration::ZERO);
+        chat.held = Box::new(|t| t < Duration::from_millis(100));
+        let began = Instant::now();
+
+        type_once_raw_and_quiet(&chat, A_WHILE);
+
+        assert!(chat.written().is_empty());
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "it kept waiting for a prompt that was gone"
+        );
+    }
+
+    #[test]
+    fn a_chat_gone_while_it_waits_for_quiet_is_not_typed_into() {
+        let chat = AChat::new(
+            |t| {
+                if t < Duration::from_millis(50) {
+                    Ok(Some(false))
+                } else {
+                    Err("gone".to_owned())
+                }
+            },
+            |_| Duration::ZERO,
+        );
+
+        type_once_raw_and_quiet(&chat, A_WHILE);
+
+        assert!(chat.written().is_empty());
+    }
+
+    #[test]
+    fn a_terminal_that_cannot_say_whether_it_is_raw_waits_for_quiet_alone() {
+        let chat = AChat::new(|_| Ok(None), |t| t);
+
+        type_once_raw_and_quiet(&chat, A_WHILE);
+
+        assert_eq!(chat.written().len(), 1);
+    }
+
+    #[test]
+    fn a_prompt_waiting_for_quiet_is_dropped_by_a_start_report_rather_than_typed() {
+        // Codex reports `SessionStart` inside the first turn, opencode's shim at the first
+        // prompt: that report means something was sent already.
+        let typed = Typed::default();
+        typed.hold_until_quiet(4, "Compact steward.".to_owned());
+
+        assert_eq!(typed.heard(&start(4)), None);
+        assert!(!typed.waiting(4));
+        assert_eq!(typed.take(4), None);
+    }
+
+    #[test]
+    fn a_prompt_waiting_for_quiet_is_taken_once_as_one_paste() {
+        let typed = Typed::default();
+        typed.hold_until_quiet(4, "Compact steward.\n".to_owned());
+
+        assert_eq!(
+            typed.take(4).as_deref(),
+            Some("\x1b[200~Compact steward.\x1b[201~")
+        );
+        assert_eq!(typed.take(4), None);
+    }
+
     #[test]
     fn a_tab_says_the_action_and_its_subject_within_a_chat_name_s_length() {
         assert_eq!(
@@ -740,6 +1137,14 @@ mod tests {
                 ops.join("curation").join("tidy.md"),
                 "---\nlabel: Tidy\non: workspace\nruns-in: subject\n---\n\n\
                  Tidy {subject.name}.\nThen say so.\n",
+            )
+            .unwrap();
+            std::fs::write(
+                ops.join("curation").join("long.md"),
+                format!(
+                    "---\nlabel: Long\non: workspace\n---\n\n{}\n",
+                    "x".repeat(1001)
+                ),
             )
             .unwrap();
             std::fs::write(
@@ -806,10 +1211,11 @@ mod tests {
             [
                 ("charter/safe-remove", None),
                 ("charter/compact", None),
+                ("ops/long", Some("ops")),
                 ("ops/tidy", Some("ops")),
             ]
         );
-        let tidy = &alpha.actions[2];
+        let tidy = &alpha.actions[3];
         assert_eq!(tidy.runner.as_deref(), Some("ops"));
         assert!(tidy.cwd.ends_with("workspaces/alpha"), "{}", tidy.cwd);
         assert_eq!(tidy.prompt, "Tidy alpha.\nThen say so.");
@@ -833,15 +1239,28 @@ mod tests {
     }
 
     #[test]
-    fn a_project_whose_default_harness_cannot_be_typed_into_says_so_on_every_list() {
+    fn a_codex_default_can_curate() {
         let plane = Plane::new("codex");
+
+        let said = offers(&plane.root, &["workspace:alpha".to_owned()]);
+
+        assert_eq!(said.cannot, None);
+        assert!(!said.subjects[0].actions.is_empty());
+    }
+
+    #[test]
+    fn a_project_whose_default_is_opencode_says_it_cannot_curate_on_every_list() {
+        let plane = Plane::new("opencode");
 
         let said = offers(&plane.root, &["workspace:alpha".to_owned()]);
 
         let cannot = said
             .cannot
-            .expect("a codex default cannot take a typed prompt");
-        assert!(cannot.contains("'work'"), "{cannot}");
+            .expect("an opencode default cannot take a typed prompt");
+        assert!(
+            cannot.contains("'work'") && cannot.contains("opencode"),
+            "{cannot}"
+        );
         assert!(
             !said.subjects[0].actions.is_empty(),
             "the list is still shown"
@@ -983,27 +1402,115 @@ mod tests {
         assert!(held.chats().open_now().is_empty());
     }
 
+    /// Waits for `path` to hold at least `len` bytes, then a moment for anything after them.
+    #[cfg(unix)]
+    fn typed_into(path: &Path, len: usize) -> String {
+        let until = Instant::now() + Duration::from_secs(20);
+        while std::fs::read(path).map_or(0, |b| b.len()) < len && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::read_to_string(path).unwrap_or_default()
+    }
+
+    #[cfg(unix)]
     #[test]
-    fn a_codex_default_opens_nothing_rather_than_typing_into_its_first_turn() {
+    fn a_codex_chat_is_typed_into_once_raw_and_quiet_with_no_hook_and_no_enter() {
         let plane = Plane::new("codex");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+
+        let curating = open(&held, "workspace:alpha", "ops/tidy", SIZE).expect("it opens");
+
+        assert_eq!(curating.harness.as_deref(), Some("codex"));
+        let wanted = "\x1b[200~Tidy alpha.\nThen say so.\x1b[201~";
+        let bytes = typed_into(&plane.root.join("typed"), wanted.len());
+        assert_eq!(bytes, wanted, "exactly one paste, and no Enter after it");
+        assert!(!submits(&bytes));
+        assert!(!held.typed().waiting(curating.session));
+        held.close_chat(curating.session).unwrap();
+    }
+
+    #[test]
+    fn an_opencode_default_opens_nothing_rather_than_pasting_into_its_silent_boot() {
+        let plane = Plane::new("opencode");
         let planes = planes();
         let id = planes.open(&plane.root);
         let held = planes.held(&id).expect("held");
 
         let refused = open(&held, "workspace:alpha", "charter/compact", SIZE).unwrap_err();
 
-        assert!(refused.contains("first prompt"), "{refused}");
+        assert!(refused.contains("still starting"), "{refused}");
         assert!(held.chats().open_now().is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn only_a_harness_that_reports_its_start_at_launch_is_typed_into() {
-        assert!(takes_a_typed_prompt("claude", Some(Harness::ClaudeCode)).is_ok());
-        let codex = takes_a_typed_prompt("work", Some(Harness::Codex)).unwrap_err();
-        assert!(
-            codex.contains("'work'") && codex.contains("first prompt"),
-            "{codex}"
+    fn a_codex_chat_whose_operator_sends_a_prompt_first_is_never_typed_into() {
+        let plane = Plane::new("codex");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let curating = open(&held, "workspace:alpha", "ops/tidy", SIZE).expect("it opens");
+
+        // What Codex 0.147.0 reports inside its first turn, before the quiet period is up.
+        for event in [Event::SessionStart, Event::UserPromptSubmit] {
+            charter_core::hookwire::send(
+                held.hooks().socket().expect("listening"),
+                &Report {
+                    chat: curating.session,
+                    event,
+                    conversation: Conversation::Unknown,
+                    pid: None,
+                    detail: Detail::default(),
+                },
+            )
+            .expect("the report reaches the plane");
+        }
+        std::thread::sleep(QUIET + Duration::from_secs(1));
+
+        assert_eq!(
+            std::fs::read_to_string(plane.root.join("typed")).unwrap_or_default(),
+            "",
+            "typed after the operator had sent something"
         );
-        assert!(takes_a_typed_prompt("custom", None).is_err());
+        held.close_chat(curating.session).unwrap();
+    }
+
+    #[test]
+    fn a_prompt_codex_would_draw_as_a_placeholder_opens_nothing() {
+        let plane = Plane::new("codex");
+        let planes = planes();
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+
+        let refused = open(&held, "workspace:alpha", "ops/long", SIZE).unwrap_err();
+
+        assert!(
+            refused.contains("1001") && refused.contains("1000"),
+            "{refused}"
+        );
+        assert!(held.chats().open_now().is_empty());
+        assert!(!held.typed().waiting(1));
+    }
+
+    #[test]
+    fn claude_code_is_typed_into_on_its_start_codex_once_raw_and_quiet_and_opencode_never() {
+        assert_eq!(
+            when_typed("claude", Some(Harness::ClaudeCode)),
+            Ok(ReadyToType::WhenItReportsItsStart)
+        );
+        assert_eq!(
+            when_typed("work", Some(Harness::Codex)),
+            Ok(ReadyToType::WhenRawAndQuiet)
+        );
+        let opencode = when_typed("work", Some(Harness::Opencode)).unwrap_err();
+        assert!(
+            opencode.contains("'work'") && opencode.contains("first prompt"),
+            "{opencode}"
+        );
+        let custom = when_typed("custom", None).unwrap_err();
+        assert!(custom.contains("'custom'"), "{custom}");
     }
 }

@@ -304,6 +304,13 @@ impl Sessions {
         self.with(id, |running| Ok(running.session.edits_lines()))
     }
 
+    /// How long a session's program has written nothing
+    /// (`charter_core::session::Session::quiet_for`): when bytes last arrived, never what they
+    /// were.
+    pub fn quiet_for(&self, id: u32) -> Result<std::time::Duration, String> {
+        self.with(id, |running| Ok(running.session.quiet_for()))
+    }
+
     pub fn resize(&self, id: u32, size: Size) -> Result<(), String> {
         self.with(id, |running| {
             running.session.resize(size).map_err(|err| err.to_string())

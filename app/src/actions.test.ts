@@ -1684,12 +1684,15 @@ describe("curation actions (ADR 0061)", () => {
   it("offers nothing to run when the project's default harness cannot be typed into", async () => {
     const hands = doing();
     const offers = catalogue(
-      now({ plane: "/plane", curations: curations("codex says nothing until your first prompt") }),
+      now({
+        plane: "/plane",
+        curations: curations("opencode says nothing until your first prompt"),
+      }),
     );
 
     const said = await run(offers, "curate:workspace:alpha/ops/tidy", hands);
 
-    expect(said).toEqual({ ok: false, refused: "codex says nothing until your first prompt" });
+    expect(said).toEqual({ ok: false, refused: "opencode says nothing until your first prompt" });
     expect(hands.calls).toEqual([]);
   });
 

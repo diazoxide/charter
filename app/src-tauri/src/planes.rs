@@ -195,7 +195,7 @@ pub struct Held {
     /// What each open chat read of the plane's instructions when it started (charter#369), so
     /// the window can mark a chat still running on ones that have since changed.
     started_on: StartedOn,
-    /// Curation prompts waiting for their chat's harness to report its start (ADR 0061).
+    /// Curation prompts waiting for their chat to be ready for them (ADR 0061).
     typed: Arc<crate::curation::Typed>,
 }
 

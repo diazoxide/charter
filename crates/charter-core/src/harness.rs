@@ -221,6 +221,16 @@ impl Harness {
 }
 
 /// What a harness can tell charter about its own state, and how it is asked to.
+/// When a chat just opened on a harness can have a curation prompt typed into it
+/// ([`Harness::ready_to_type`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadyToType {
+    /// On the first `SessionStart` hook report that began a session, once the terminal is raw.
+    WhenItReportsItsStart,
+    /// Once the terminal is raw and the harness has then written nothing for a quiet period.
+    WhenRawAndQuiet,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StateHooks {
     /// Armed on this session alone, by the arguments and the environment given.
@@ -483,19 +493,59 @@ impl Harness {
     }
 
     /// Whether this harness reports `SessionStart` when it starts, before anyone has typed a
-    /// thing — the one moment charter can type a curation action's prompt into a chat it has
-    /// just opened (ADR 0061) and know, from a hook rather than from the harness's output, that
-    /// the program is there to read it.
+    /// thing — the moment charter types a curation action's prompt into a Claude Code chat it
+    /// has just opened (ADR 0061), knowing from a hook rather than from the harness's output
+    /// that the program is there to read it.
     ///
     /// Measured, not assumed: Claude Code fires it at launch. Codex fires it inside the FIRST
     /// TURN (codex-cli 0.147.0, see [`Harness::unreported`]), and opencode's shim asks for it at
     /// the first prompt because opencode names no hook for a session's creation (ADR 0058). A
     /// prompt typed on either one's `SessionStart` would land after the operator had already
-    /// sent something, so neither is given one.
+    /// sent something, so that report never types one ([`Harness::ready_to_type`] says what
+    /// does).
     pub fn reports_its_start_before_the_first_prompt(self) -> bool {
         match self {
             Self::ClaudeCode => true,
             Self::Codex | Self::Opencode => false,
+        }
+    }
+
+    /// How charter tells that a chat it has just opened on this harness is ready to have a
+    /// curation prompt typed into it (ADR 0061), or `None` where it has no way to tell. Every
+    /// harness is named, so one added later is given an answer on purpose, once measured.
+    ///
+    /// Claude Code reports `SessionStart` at launch, so it is typed into on that hook. Codex
+    /// says nothing until the first prompt, so it is typed into once its terminal has gone raw
+    /// and it has then written nothing for a while — the kernel's line discipline and the
+    /// moment bytes last arrived, never what it drew. Measured on codex-cli 0.147.0: it took a
+    /// paste at any moment after going raw, even mid-draw.
+    ///
+    /// opencode has neither. Measured on 1.18.32, it draws its input box, goes raw, and then
+    /// boots silently before that box takes a key: 0.83 s idle, 1.4 s with every core busy,
+    /// more than 8 s on a machine at load 50 — and a paste in that silence vanished. No quiet
+    /// period long enough to cover it is short enough to wait for (ADR 0061, amended
+    /// 2026-09-27).
+    pub fn ready_to_type(self) -> Option<ReadyToType> {
+        match self {
+            Self::ClaudeCode => Some(ReadyToType::WhenItReportsItsStart),
+            Self::Codex => Some(ReadyToType::WhenRawAndQuiet),
+            Self::Opencode => None,
+        }
+    }
+
+    /// The longest paste, in characters, this harness draws whole in its input, where a longer
+    /// one is drawn as a placeholder the operator cannot read — or `None` for no such limit
+    /// charter knows of. A curation prompt is typed to be read before it is sent (ADR 0061),
+    /// so a longer one is not typed.
+    ///
+    /// Codex 0.147.0 draws a paste over 1,000 characters as `[Pasted Content N chars]`, with no
+    /// setting a chat can be started with to stop it (measured). opencode is never typed into
+    /// ([`Harness::ready_to_type`]). Claude Code's is not measured here: its path is the one ADR
+    /// 0061 shipped with.
+    pub fn longest_paste_drawn_whole(self) -> Option<usize> {
+        match self {
+            Self::Codex => Some(1000),
+            Self::ClaudeCode | Self::Opencode => None,
         }
     }
 
@@ -1184,6 +1234,36 @@ mod tests {
         assert!(Harness::ClaudeCode.reports_its_start_before_the_first_prompt());
         assert!(!Harness::Codex.reports_its_start_before_the_first_prompt());
         assert!(!Harness::Opencode.reports_its_start_before_the_first_prompt());
+    }
+
+    #[test]
+    fn codex_draws_a_paste_over_a_thousand_characters_as_a_placeholder() {
+        // Measured on codex-cli 0.147.0: a paste of 1,000 characters is drawn whole, one of
+        // 1,001 as `[Pasted Content 1001 chars]`.
+        assert_eq!(Harness::Codex.longest_paste_drawn_whole(), Some(1000));
+        assert_eq!(Harness::Opencode.longest_paste_drawn_whole(), None);
+        assert_eq!(Harness::ClaudeCode.longest_paste_drawn_whole(), None);
+    }
+
+    #[test]
+    fn claude_code_is_typed_into_on_its_start_codex_once_raw_and_quiet_and_opencode_never() {
+        assert_eq!(
+            Harness::ClaudeCode.ready_to_type(),
+            Some(ReadyToType::WhenItReportsItsStart)
+        );
+        assert_eq!(
+            Harness::Codex.ready_to_type(),
+            Some(ReadyToType::WhenRawAndQuiet)
+        );
+        assert_eq!(Harness::Opencode.ready_to_type(), None);
+        // The one that reports its start is exactly the one typed into on it.
+        for harness in [Harness::ClaudeCode, Harness::Codex, Harness::Opencode] {
+            assert_eq!(
+                harness.ready_to_type() == Some(ReadyToType::WhenItReportsItsStart),
+                harness.reports_its_start_before_the_first_prompt(),
+                "{harness:?}"
+            );
+        }
     }
 
     #[test]
