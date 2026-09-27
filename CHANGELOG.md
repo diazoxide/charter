@@ -14,14 +14,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.4.0] - 2026-09-27
 
 0.4.0 is the IDE growing up. The plane root is a tab of its own, first on the workspace strip,
-and a **Curate ▸** menu opens a chat for a curation action with its prompt typed and never
-sent. Shell tabs are plain shells that warn when a harness is started in one by hand, every tab
-strip can be reordered by dragging, a chat's pane has find and takes Shift+Enter as a new line,
-and a trackpad scrolls it the way a native terminal does. Vaults, personas and todos can be
-created and deleted in the window, charter's skills reach Codex and opencode chats, and the
-window's own chrome no longer selects as text. Beyond the window: cross-repo changes with
-`charter change`, `charter report` for filing issues, workspace rename, projects in windows of
-their own, and opencode chats started by the app.
+and a **Curate ▸** menu opens a chat for a curation action, in Claude Code or Codex, with its
+prompt typed and never sent. Shell tabs are plain shells that warn when a harness is started in
+one by hand, every tab strip can be reordered by dragging, a chat's pane has find and takes
+Shift+Enter as a new line, and a trackpad scrolls it the way a native terminal does. Vaults,
+personas and todos can be created and deleted in the window, charter's skills reach Codex and
+opencode chats, and the window's own chrome no longer selects as text. Beyond the window:
+cross-repo changes with `charter change`, `charter report` for filing issues, workspace rename,
+projects in windows of their own, and opencode chats started by the app.
 
 ### Added
 
@@ -50,19 +50,30 @@ their own, and opencode chats started by the app.
   the app, right-click a workspace, a persona or the plane root for **Curate ▸**, or type
   `curate` in the palette. The chat opens on your default profile as the action's persona,
   named `<action> · <subject>`, and the prompt appears in its input once the harness has
-  started — never sent. An action a persona's file could not offer is listed, greyed, with
-  why. It needs a Claude Code default profile: Codex and opencode say nothing until your first
-  prompt, so charter has no moment to type into them, and the menu says so. charter ships
-  three actions: Safe remove, Compact & improve, and Add curation action, each naming a new
-  skill in charter's plugin (`safe-remove`, `compact`, `add-curation-action`). A persona adds
-  its own as `personas/<name>/curation/<id>.md`, or with `charter persona curation add`, and
-  `charter persona lint` reports one that is broken or that takes a built-in's name.
-  `charter curation show workspace:<name>` (or `persona:<name>`, or `plane`) lists what a
-  subject is offered, who runs each action, where, and the exact prompt. A prompt types a
-  literal brace as `{{` or `}}`, so `{{word}}` types `{word}`. `charter` is now a reserved
-  persona name, because its actions would read `charter/<id>` like the built-ins:
-  `charter persona create charter` is refused, and a persona that already has the name is
-  reported by `charter persona lint` and offers no curation actions (ADR 0061).
+  started — never sent. If you type, paste or click in that chat before the prompt appears, it
+  is dropped rather than typed after what you began. An action a persona's file could not
+  offer is listed, greyed, with why. It needs a Claude Code or Codex default profile. Codex
+  says nothing until your first prompt, so its prompt is typed once its terminal has gone raw
+  and then stayed quiet for a second. opencode goes quiet while it is still starting, and a
+  prompt pasted then is lost, so charter has no moment to type into it and the menu says so
+  (ADR 0061).
+- **charter ships three curation actions, and a persona can add its own.** Safe remove,
+  Compact & improve, and Add curation action each name a new skill in charter's plugin
+  (`safe-remove`, `compact`, `add-curation-action`), so the prompt you read is one line — for
+  example *Use charter's safe-remove skill to remove the workspace alpha.* — and the skill
+  holds the steps. A persona adds its own as `personas/<name>/curation/<id>.md`, or with
+  `charter persona curation add`. `charter curation show workspace:<name>` (or
+  `persona:<name>`, or `plane`) lists what a subject is offered, who runs each action, where,
+  and the exact prompt. A prompt types a literal brace as `{{` or `}}`, so `{{word}}` types
+  `{word}`. Claude Code shows a paste over 800 characters or of 4 lines or more as
+  `[Pasted text #N +M lines]`, and Codex one over 1,000 characters as
+  `[Pasted Content N chars]`, so an action whose prompt would be shown that way opens no chat
+  on that harness and says why, and `charter persona lint` warns about it, naming the harness.
+  `charter persona lint` also reports an action that is broken or that takes a built-in's
+  name. `charter` is now a reserved persona name, because its actions would read
+  `charter/<id>` like the built-ins: `charter persona create charter` is refused, and a persona
+  that already has the name is reported by `charter persona lint` and offers no curation
+  actions (ADR 0061).
 - **Plain shell tabs, and a warning when a harness starts inside one.** `New shell` sits beside
   `New tab` in the palette, on the panes' menu and on each workspace's menu (`New shell in
   <workspace>`), on ⌘⇧T (Ctrl+Shift+T off a Mac): your own shell, where a new chat would start,

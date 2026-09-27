@@ -311,8 +311,20 @@ how it is cited and nothing here is renumbered.
     project's default profile, as the action's runner, where it runs, named `<label> ·
     <subject>`, and holds its prompt in the app until that chat's first `SessionStart` hook
     report; the prompt is then written once the terminal hands keys to the harness, as one
-    bracketed paste with nothing after it. A harness that reports its start only at the first
-    prompt (Codex, opencode) is refused rather than typed into late. **ADR 0061.**
+    bracketed paste with nothing after it. Codex, which reports its start only at the first
+    prompt, is typed into instead once its terminal is raw and has then written nothing for a
+    second — the fact of bytes arriving, never their content — within 15 seconds or not at all;
+    a prompt over the 1,000 characters Codex draws whole is refused. opencode, which goes quiet
+    while still starting and loses a paste then, is refused. Amended 2026-09-27, pending the
+    operator's ruling (Q25). **A prompt is read whole before Enter** (operator's rulings Q28 and
+    Q29, 2026-09-27): charter's own three are one plain line each that names its skill and its
+    subject — the skill holds the steps. A prompt a harness would draw as a placeholder
+    (Claude Code 2.1.283 over 800 characters or at 4 lines, Codex 0.147.0 over 1,000
+    characters; `Harness::longest_paste_drawn_whole`) opens no chat on that harness, and
+    `charter persona lint` warns about a persona's that would, rendered for a long subject name,
+    naming the harness. A prompt still waiting is dropped the moment the operator sends that
+    chat any input of their own; the terminal's answers to the harness's questions are not the
+    operator's. **ADR 0061.**
 
 ## Limits (acceptance)
 

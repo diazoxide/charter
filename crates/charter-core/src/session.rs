@@ -95,6 +95,10 @@ struct Terminal {
     /// The program has ended and every view was closed for it. A view opened from now on
     /// has no reading thread left to close it, so it is closed as it opens.
     ended: bool,
+    /// When the program last wrote anything, or when the session started if it has written
+    /// nothing yet. Only the moment bytes arrived, never what they said: a curation prompt
+    /// waits for a harness to fall quiet (ADR 0061), and what it drew is not read.
+    wrote_at: Instant,
 }
 
 /// One view's side of a session: where its bytes go, and the ones held back from it because
@@ -257,6 +261,7 @@ impl Session {
             views: Vec::new(),
             opened: 0,
             ended: false,
+            wrote_at: Instant::now(),
         }));
         let (input, queued) = mpsc::sync_channel(INPUT_QUEUE);
         // One wake is enough to send: what it says is "something is held", and the deadline
@@ -474,6 +479,16 @@ impl Session {
         lock(&self.child).process_id()
     }
 
+    /// How long the program has written nothing to its terminal: since its last output, or
+    /// since the session started if there has been none.
+    ///
+    /// **When bytes arrived, never what they were.** Nothing here reads the output, so no
+    /// harness's wording or drawing can change the answer; a program that keeps drawing (a
+    /// spinner, a clock) is simply never quiet.
+    pub fn quiet_for(&self) -> Duration {
+        lock(&self.terminal).wrote_at.elapsed()
+    }
+
     /// Whether the terminal is in canonical mode — the kernel's own line editing, where input
     /// waits for a whole line and is echoed back — rather than handing each key to the program
     /// as it arrives. `None` where the platform cannot say.
@@ -609,6 +624,7 @@ fn read_until_the_output_ends(
         let (answers, held) = {
             let mut terminal = lock(terminal);
             let output = &buffer[..read];
+            terminal.wrote_at = Instant::now();
             terminal.engine.advance(output);
             let open = terminal.engine.open_update().is_some();
             // A session no pane is watching holds nothing, and needs no deadline kept.
@@ -875,6 +891,32 @@ mod tests {
         screen_until(&session, |screen| screen.lines.iter().any(|l| l == "raw"));
 
         assert_eq!(session.edits_lines(), Some(false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_session_says_how_long_its_program_has_written_nothing() {
+        let session = sh(
+            "i=0; while [ $i -lt 60 ]; do printf x; sleep 0.05; i=$((i+1)); done; \
+             printf done; sleep 30",
+        );
+        // Longer than the bound below, so a session that only counted from its start fails.
+        std::thread::sleep(Duration::from_millis(1500));
+
+        assert!(
+            session.quiet_for() < Duration::from_secs(1),
+            "it writes every 50 ms, yet it has been quiet for {:?}",
+            session.quiet_for()
+        );
+
+        screen_until(&session, shows("done"));
+        std::thread::sleep(Duration::from_millis(600));
+
+        assert!(
+            session.quiet_for() >= Duration::from_millis(600),
+            "it has written nothing since `done`, yet it says {:?}",
+            session.quiet_for()
+        );
     }
 
     fn sh(script: &str) -> Session {
@@ -1309,6 +1351,7 @@ mod tests {
             views: Vec::new(),
             opened: 0,
             ended: false,
+            wrote_at: Instant::now(),
         });
         let (sends, output) = mpsc::channel();
         lock(&terminal).views.push(Watcher {

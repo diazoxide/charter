@@ -368,9 +368,24 @@ describe("the Curate ▸ submenu (ADR 0061)", () => {
     expect(pressed).toEqual(["curate:workspace:alpha/ops/tidy"]);
   });
 
+  it("draws every action ready to run when the core says a chat can be typed into (a Codex default, SI-2e)", async () => {
+    // The core answers `cannot: null` for a Codex default as it does for Claude Code: the
+    // prompt is typed once Codex's terminal is raw and quiet (ADR 0061, amended 2026-09-27).
+    const pressed = aWorkspaceMenu(null);
+
+    const sub = await openCurate();
+
+    for (const name of ["Safe remove", "Compact & improve", "Tidy", "Audit"]) {
+      const row = within(sub).getByRole("menuitem", { name });
+      expect(row.getAttribute("aria-disabled")).not.toBe("true");
+    }
+    await userEvent.click(within(sub).getByRole("menuitem", { name: "Safe remove" }));
+    expect(pressed).toEqual(["curate:workspace:alpha/charter/safe-remove"]);
+  });
+
   it("draws every action disabled, with the reason, when no chat can be typed into", async () => {
     aWorkspaceMenu(
-      "The default profile 'work' runs codex, which says nothing until your first prompt.",
+      "The default profile 'work' runs opencode, which says nothing until your first prompt.",
     );
 
     const sub = await openCurate();

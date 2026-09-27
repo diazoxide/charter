@@ -204,11 +204,17 @@ pub struct Builtin {
     pub on: &'static [Kind],
     /// Always at the plane root, whatever the subject: Safe remove's subject is going away.
     pub at_plane_root: bool,
-    /// The prompt template for a subject of this kind.
-    pub template: fn(Kind) -> &'static str,
+    /// The prompt template.
+    pub template: &'static str,
 }
 
 /// charter's own, in the order every list shows them.
+///
+/// **Each prompt is one plain line that names its skill and its subject**, and the skill holds
+/// the procedure. A prompt is typed to be read before the operator presses Enter, and a harness
+/// draws a longer paste as a placeholder nobody can read (`Harness::why_drawn_as_a_placeholder`,
+/// ADR 0061 amended 2026-09-27). The skill is named in words, not by a slash command, so the
+/// same line works in every harness that reaches charter's skills.
 pub const BUILTINS: [Builtin; 3] = [
     Builtin {
         id: "safe-remove",
@@ -216,7 +222,7 @@ pub const BUILTINS: [Builtin; 3] = [
         skill: "safe-remove",
         on: &[Kind::Workspace, Kind::Persona],
         at_plane_root: true,
-        template: safe_remove,
+        template: "Use charter's safe-remove skill to remove the {subject.kind} {subject.name}.",
     },
     Builtin {
         id: "compact",
@@ -224,7 +230,7 @@ pub const BUILTINS: [Builtin; 3] = [
         skill: "compact",
         on: &[Kind::Workspace, Kind::Persona],
         at_plane_root: false,
-        template: compact,
+        template: "Use charter's compact skill to compact and improve the {subject.kind} {subject.name}.",
     },
     Builtin {
         id: "add-curation-action",
@@ -232,64 +238,29 @@ pub const BUILTINS: [Builtin; 3] = [
         skill: "add-curation-action",
         on: &[Kind::Persona],
         at_plane_root: false,
-        template: add_curation_action,
+        template: "Use charter's add-curation-action skill to add a curation action to the persona \
+                   {subject.name}.",
     },
 ];
 
-fn safe_remove(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Persona => {
-            "Safely remove the persona `{subject.name}` ({subject.path}), using charter's \
-`safe-remove` skill.
+/// The subject name `charter persona lint` renders a persona's prompt with, to ask whether it
+/// would still be read whole: long, as a real workspace's name can be.
+pub const LONG_SUBJECT_NAME: &str = "customer-onboarding-platform-migration-2026";
 
-Audit it first: its charter, its memory and its curation actions. Promote every durable \
-learning that should outlive it to shared memory, another persona's memory, or this plane's \
-docs. Show me what you promoted and what you are leaving behind, then run \
-`charter persona remove {subject.name}`. Its guards still apply: if another persona extends \
-or uses it, stop and tell me. Never pass --force unless I say so."
-        }
-        _ => {
-            "Safely remove the workspace `{subject.name}` ({subject.path}), using charter's \
-`safe-remove` skill.
-
-Audit it first: its workspace.md, its memory, its todos, and the work in its repos. Promote \
-every durable learning to where it outlives the workspace: shared memory, a persona's memory, \
-or this plane's docs. Show me what you promoted and what you are leaving behind, then run \
-`charter workspace remove {subject.name}`. Its guards still apply: if it refuses, stop and \
-tell me why. Never pass --force unless I say so."
-        }
-    }
-}
-
-fn compact(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Persona => {
-            "Compact and improve the persona `{subject.name}`, using charter's `compact` skill.
-
-Run `charter persona optimize {subject.name}` and `charter persona dedupe {subject.name}`, and \
-read what they report. Apply the safe operations only once I agree, and forget a memory only \
-with my yes. Then fold the lessons that have become durable into its persona.md, in \
-{subject.path}, and run `charter persona sync-agents` if you changed it."
-        }
-        _ => {
-            "Compact and improve the workspace `{subject.name}`, using charter's `compact` skill.
-
-Run `charter workspace optimize {subject.name}` and read its report. Apply the safe \
-operations only once I agree, and forget a memory only with my yes. Then fold the lessons \
-that have become durable into its workspace.md, in {subject.path}, so the next chat starts \
-from them rather than from the journal."
-        }
-    }
-}
-
-fn add_curation_action(_kind: Kind) -> &'static str {
-    "Add a curation action to the persona `{subject.name}`, using charter's \
-`add-curation-action` skill.
-
-Ask me what it should do, which subjects it is offered on (workspace, persona, plane) and \
-where it should run. Then write it with `charter persona curation add {subject.name} <id> \
---label \"<label>\" --on <kinds>`, the prompt on standard input, and show me what \
-`charter persona curation list {subject.name}` says."
+/// The text inside the one paste a prompt is typed as: what the harness is handed, and draws.
+///
+/// **Nothing in it can submit.** Line breaks are line feeds, which a harness reads inside a
+/// paste as newlines in its input. Every other control character is taken out — an `ESC [201~`
+/// in a persona's prompt would otherwise end the paste early and leave the rest to be read as
+/// keys, and a carriage return there is Enter — and so is the trailing white space a file's
+/// last line leaves, so the operator's cursor ends on the prompt's last word.
+pub fn pasted(prompt: &str) -> String {
+    let lines = prompt.replace("\r\n", "\n").replace('\r', "\n");
+    lines
+        .trim_end()
+        .chars()
+        .filter(|c| *c == '\n' || *c == '\t' || !c.is_control())
+        .collect()
 }
 
 /// The frontmatter keys an action file may give.
@@ -583,13 +554,77 @@ pub fn lint(root: &Path, persona: &str) -> Vec<Issue> {
     declared(root, persona)
         .into_iter()
         .flat_map(|parsed| {
-            let id = parsed.id;
-            parsed.issues.into_iter().map(move |issue| Issue {
-                level: issue.level,
-                message: format!("curation/{id}.md: {}", issue.message),
-            })
+            let id = parsed.id.clone();
+            let unreadable = parsed
+                .action
+                .as_ref()
+                .map(|action| drawn_as_a_placeholder(root, action))
+                .unwrap_or_default();
+            parsed
+                .issues
+                .into_iter()
+                .chain(unreadable)
+                .map(move |issue| Issue {
+                    level: issue.level,
+                    message: format!("curation/{id}.md: {}", issue.message),
+                })
         })
         .collect()
+}
+
+/// A warning for each kind of subject `action` is offered on where its prompt, rendered for a
+/// subject with a long name ([`LONG_SUBJECT_NAME`]), would be drawn as a placeholder by a
+/// harness a curation chat can be typed into — naming the harness. `curate` refuses such a
+/// prompt when it is chosen; this says so before anyone chooses it.
+fn drawn_as_a_placeholder(root: &Path, action: &Declared) -> Vec<Issue> {
+    let mut out = Vec::new();
+    for kind in &action.on {
+        let (name, path) = match kind {
+            Kind::Workspace => (
+                LONG_SUBJECT_NAME.to_owned(),
+                root.join("workspaces").join(LONG_SUBJECT_NAME),
+            ),
+            Kind::Persona => (
+                LONG_SUBJECT_NAME.to_owned(),
+                root.join("personas").join(LONG_SUBJECT_NAME),
+            ),
+            Kind::Plane => (
+                root.file_name().map_or_else(
+                    || root.display().to_string(),
+                    |n| n.to_string_lossy().into(),
+                ),
+                root.to_path_buf(),
+            ),
+        };
+        let vars = Vars {
+            kind: *kind,
+            name,
+            path: path.display().to_string(),
+            plane_root: root.display().to_string(),
+        };
+        let Ok(prompt) = render(&action.template, &vars) else {
+            continue;
+        };
+        let text = pasted(&prompt);
+        let why: Vec<String> = crate::harness::Harness::ALL
+            .into_iter()
+            .filter(|harness| harness.ready_to_type().is_some())
+            .filter_map(|harness| harness.why_drawn_as_a_placeholder(&text))
+            .collect();
+        if !why.is_empty() {
+            out.push(Issue {
+                level: Level::Warn,
+                message: format!(
+                    "on a {} with a long name the prompt is drawn as a placeholder the operator \
+                     cannot read before pressing Enter, so it is not typed: {}. Make it one \
+                     short line that names a skill, and let the skill hold the steps",
+                    kind.as_str(),
+                    why.join("; ")
+                ),
+            });
+        }
+    }
+    out
 }
 
 /// The directory an action on `kind` starts in when it does not say: a workspace's own, and
@@ -686,7 +721,7 @@ pub fn resolve(root: &Path, subject: &Subject) -> Result<Resolution, String> {
             source: Source::Charter,
             runner: builtin_runner.clone(),
             cwd,
-            prompt: render((builtin.template)(subject.kind))?,
+            prompt: render(builtin.template)?,
         });
     }
 
