@@ -179,7 +179,7 @@ describe("choosing a curation action", () => {
   });
 
   it("says the core's refusal and opens no tab", async () => {
-    core("The default profile 'work' runs codex, which says nothing until your first prompt.");
+    core("The default profile 'work' runs opencode, which says nothing until your first prompt.");
     render(<App />);
 
     await runFromThePalette("Curate alpha: Tidy");

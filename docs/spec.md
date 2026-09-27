@@ -311,8 +311,12 @@ how it is cited and nothing here is renumbered.
     project's default profile, as the action's runner, where it runs, named `<label> ·
     <subject>`, and holds its prompt in the app until that chat's first `SessionStart` hook
     report; the prompt is then written once the terminal hands keys to the harness, as one
-    bracketed paste with nothing after it. A harness that reports its start only at the first
-    prompt (Codex, opencode) is refused rather than typed into late. **ADR 0061.**
+    bracketed paste with nothing after it. Codex, which reports its start only at the first
+    prompt, is typed into instead once its terminal is raw and has then written nothing for a
+    second — the fact of bytes arriving, never their content — within 15 seconds or not at all;
+    a prompt over the 1,000 characters Codex draws whole is refused. opencode, which goes quiet
+    while still starting and loses a paste then, is refused. Amended 2026-09-27, pending the
+    operator's ruling (Q25). **ADR 0061.**
 
 ## Limits (acceptance)
 

@@ -33,9 +33,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   workspace, a persona or the plane root for **Curate ▸**, or type `curate` in the palette: the
   chat opens on your default profile as the action's persona, named `<action> · <subject>`, and
   the prompt appears in its input once the harness has started — never sent. An action a
-  persona's file could not offer is listed, greyed, with why. It needs a Claude Code default
-  profile: Codex and opencode say nothing until your first prompt, so charter has no moment to
-  type into them, and says so on the menu (ADR 0061).
+  persona's file could not offer is listed, greyed, with why. It needs a Claude Code or Codex
+  default profile. On Codex, which says nothing until your first prompt, the prompt is typed
+  once its terminal has gone raw and then stayed quiet for a second, and a prompt over 1,000
+  characters, which Codex would show as a placeholder, opens nothing and says why. opencode
+  goes quiet while it is still starting, and a prompt pasted then is lost, so charter has no
+  moment to type into it and says so on the menu (ADR 0061).
 - **The plane root is the first tab of the workspace strip.** It is always there, drawn as an
   icon (its tooltip: *Plane — chats here start at the plane root*), and it cannot be dragged,
   pinned, renamed or deleted. Its menu starts a chat or a shell at the plane root, and so do
