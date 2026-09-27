@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
+import { textOfEach } from "../reading.js";
 
 /**
  * **charter's status line**, against the real app (`app/src/StatusLine.tsx`).
@@ -31,12 +32,11 @@ const viewport = (): Promise<number> =>
 async function untilTheStripIsRead(): Promise<void> {
   await browser.waitUntil(
     async () => {
-      const names = await $$(
+      // In one pass: the strip is drawn while it is polled (charter#506, `reading.ts`).
+      const names = await textOfEach(
         '[role="tablist"][aria-label="Workspaces"] [role="tab"] .workspace-name',
-      ).getElements();
-      return (
-        (await Promise.all([...names].map((name) => name.getText()))).join(",") === "alpha,beta"
       );
+      return names.join(",") === "alpha,beta";
     },
     { timeout: 30_000, interval: 250, timeoutMsg: "the strip never listed the fixture plane" },
   );

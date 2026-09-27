@@ -473,6 +473,27 @@ impl Session {
     pub fn process_id(&self) -> Option<u32> {
         lock(&self.child).process_id()
     }
+
+    /// Whether the terminal is in canonical mode — the kernel's own line editing, where input
+    /// waits for a whole line and is echoed back — rather than handing each key to the program
+    /// as it arrives. `None` where the platform cannot say.
+    ///
+    /// **The line discipline's state, not anything the program printed.** A harness puts its
+    /// terminal in raw mode when it starts reading keys, and a curation prompt written before
+    /// that is echoed onto the screen and cut at its first line break (measured on Claude Code
+    /// 2.1.283, whose trust question hands the terminal back in canonical mode for a moment
+    /// just as `SessionStart` fires; ADR 0061).
+    pub fn edits_lines(&self) -> Option<bool> {
+        #[cfg(unix)]
+        {
+            let termios = lock(&self.master).get_termios()?;
+            Some(termios.local_flags.bits() & libc::ICANON != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
 }
 
 impl Drop for Session {
@@ -836,6 +857,25 @@ mod tests {
         rows: 24,
     };
     const PATIENCE: Duration = Duration::from_secs(10);
+
+    #[cfg(unix)]
+    #[test]
+    fn a_terminal_edits_lines_until_its_program_asks_for_raw_keys() {
+        let session = sh("printf 'cooked\\n'; read _; stty raw -echo; printf 'raw\\n'; sleep 30");
+        screen_until(&session, |screen| {
+            screen.lines.iter().any(|l| l == "cooked")
+        });
+        assert_eq!(
+            session.edits_lines(),
+            Some(true),
+            "a new terminal is canonical"
+        );
+
+        session.write(b"\n").unwrap();
+        screen_until(&session, |screen| screen.lines.iter().any(|l| l == "raw"));
+
+        assert_eq!(session.edits_lines(), Some(false));
+    }
 
     fn sh(script: &str) -> Session {
         Session::spawn(

@@ -28,12 +28,18 @@ function given(name: "CHARTER_FINDER_PLANE" | "CHARTER_FINDER_HOME"): string {
   return value;
 }
 
-/** What the NEWEST tab says its chat is doing, by the accessible name on its state mark. */
+/**
+ * What the NEWEST tab says its chat is doing, by the accessible name on its state mark.
+ *
+ * Read in one pass inside the page: it is polled while the chat starts, and a tab or mark
+ * found and then read can be redrawn in between (charter#506, `reading.ts`).
+ */
 async function theNewestTabSays(): Promise<string> {
-  const tabs = await $$(TABS).getElements();
-  if (tabs.length === 0) return "(no tab)";
-  const mark = await tabs[tabs.length - 1].$(".state");
-  return (await mark.getAttribute("aria-label")) ?? "";
+  return browser.execute((within: string) => {
+    const tabs = document.querySelectorAll(within);
+    if (tabs.length === 0) return "(no tab)";
+    return tabs[tabs.length - 1].querySelector(".state")?.getAttribute("aria-label") ?? "";
+  }, TABS);
 }
 
 /** Waits for the newest tab to say `state`, and says what it said instead if it never does. */

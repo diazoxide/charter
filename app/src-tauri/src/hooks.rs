@@ -121,7 +121,15 @@ pub struct Hooks {
     /// so the socket has to exist first. Until it is filled every ask is answered with a
     /// refusal, never with a silence an asker would have to wait out.
     answering: Arc<Mutex<Option<Answering>>>,
+    /// Told each report the board took, after the window has been told what it moved — a
+    /// slot filled after the fact, for `answering`'s reason: what listens needs the plane's
+    /// chats, which are built after the socket. A curation chat's typed prompt waits on it
+    /// (`crate::curation::Typed`).
+    heard: Arc<Mutex<Option<Heard>>>,
 }
+
+/// What is told each report the board took.
+pub type Heard = Arc<dyn Fn(&Report) + Send + Sync + 'static>;
 
 /// What answers an ask, told which connection it came on.
 pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
@@ -236,6 +244,7 @@ impl Hooks {
             reading: Mutex::new(None),
             socket: None,
             answering: Arc::new(Mutex::new(None)),
+            heard: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -254,13 +263,23 @@ impl Hooks {
         let socket = listener.path().to_path_buf();
         let board = Arc::new(Mutex::new(Board::new()));
         let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
+        let heard: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
         let reading = listener.each_answering_and_noticing(
             {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
+                let heard = Arc::clone(&heard);
                 Box::new(move |report| {
                     if let Some(what) = apply(&board, &plane, &report) {
                         moved(what);
+                        // Only a report that moved the board: one for a chat it does not have,
+                        // or one ADR 0024's rules refused, is heard by nobody. A chat's first
+                        // start always moves it (`unknown` to `waiting`). Taken out of the
+                        // lock before it runs, as an answer is.
+                        let listener = heard.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                        if let Some(listener) = listener {
+                            listener(&report);
+                        }
                     }
                 })
             },
@@ -296,6 +315,7 @@ impl Hooks {
             reading: Mutex::new(Some(reading)),
             socket: Some(socket),
             answering,
+            heard,
         })
     }
 
@@ -328,6 +348,11 @@ impl Hooks {
             .answering
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(answering);
+    }
+
+    /// Who is told each report the board takes from now on.
+    pub fn when_heard(&self, heard: Heard) {
+        *self.heard.lock().unwrap_or_else(PoisonError::into_inner) = Some(heard);
     }
 
     /// A chat `session` handed work to, shown as `from`, has reported back to it

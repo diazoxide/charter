@@ -129,6 +129,8 @@ macro_rules! app_commands {
                 todos::todo_add,
                 todos::todo_done,
                 todos::todo_forget,
+                curation::curation_offers,
+                curation::curate,
                 extensions::project_extensions,
                 extensions::extensions_on,
                 extensions::extension_facts,

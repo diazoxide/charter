@@ -944,6 +944,8 @@ function App() {
       switchLive: () => undefined,
       renameWorkspace: () => undefined,
       openPreferences: windowDoes.openPreferences,
+      // A curation chat is opened in a project, and there is no project here.
+      curate: async () => nowhere(),
       quit: windowDoes.quit,
     }),
     [windowDoes],

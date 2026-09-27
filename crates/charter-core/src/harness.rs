@@ -482,6 +482,23 @@ impl Harness {
         }
     }
 
+    /// Whether this harness reports `SessionStart` when it starts, before anyone has typed a
+    /// thing — the one moment charter can type a curation action's prompt into a chat it has
+    /// just opened (ADR 0061) and know, from a hook rather than from the harness's output, that
+    /// the program is there to read it.
+    ///
+    /// Measured, not assumed: Claude Code fires it at launch. Codex fires it inside the FIRST
+    /// TURN (codex-cli 0.147.0, see [`Harness::unreported`]), and opencode's shim asks for it at
+    /// the first prompt because opencode names no hook for a session's creation (ADR 0058). A
+    /// prompt typed on either one's `SessionStart` would land after the operator had already
+    /// sent something, so neither is given one.
+    pub fn reports_its_start_before_the_first_prompt(self) -> bool {
+        match self {
+            Self::ClaudeCode => true,
+            Self::Codex | Self::Opencode => false,
+        }
+    }
+
     /// What a chat on this harness cannot tell charter, in a sentence the chat shows — or
     /// none, where it can tell charter everything the board asks.
     ///
@@ -1158,6 +1175,15 @@ mod tests {
         // inside the first turn, and a hook is inert until Codex's own review trusts it.
         assert!(said.contains("first prompt"), "{said}");
         assert!(said.contains("trust"), "{said}");
+    }
+
+    #[test]
+    fn only_claude_code_reports_its_start_before_anyone_types() {
+        // Codex and opencode report `SessionStart` at the first prompt, so a curation prompt
+        // typed on it would follow what the operator had already sent.
+        assert!(Harness::ClaudeCode.reports_its_start_before_the_first_prompt());
+        assert!(!Harness::Codex.reports_its_start_before_the_first_prompt());
+        assert!(!Harness::Opencode.reports_its_start_before_the_first_prompt());
     }
 
     #[test]

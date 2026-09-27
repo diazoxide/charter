@@ -195,6 +195,8 @@ pub struct Held {
     /// What each open chat read of the plane's instructions when it started (charter#369), so
     /// the window can mark a chat still running on ones that have since changed.
     started_on: StartedOn,
+    /// Curation prompts waiting for their chat's harness to report its start (ADR 0061).
+    typed: Arc<crate::curation::Typed>,
 }
 
 /// Each chat's [`Stamp`], by session, taken as it starts.
@@ -226,6 +228,11 @@ impl Held {
 
     pub fn chats(&self) -> &Chats {
         &self.chats
+    }
+
+    /// The curation prompts waiting for their chats to start.
+    pub fn typed(&self) -> &crate::curation::Typed {
+        &self.typed
     }
 
     /// Every chat this plane has open whose start-time instructions — `CLAUDE.md`, the
@@ -336,6 +343,7 @@ impl Held {
     pub fn close_chat(&self, session: u32) -> Result<(), String> {
         let gone = self.hooks.closed(session);
         lock_started(&self.started_on).remove(&session);
+        self.typed.forget(session);
         let closed = self.chats.close(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
@@ -646,6 +654,40 @@ impl Planes {
                 None => charter_core::hookwire::Answer::No {
                     why: "this project has been closed".to_owned(),
                 },
+            })
+        });
+        // A curation chat's prompt is typed when its harness reports its start (ADR 0061), and
+        // the socket's thread is where that report arrives. Weak for the handoff's reason.
+        held.hooks().when_heard({
+            let held = Arc::downgrade(&held);
+            Arc::new(move |report| {
+                let Some(strong) = held.upgrade() else { return };
+                let Some(text) = strong.typed.heard(report) else {
+                    return;
+                };
+                drop(strong);
+                // Off the socket's thread, which every other chat's report waits on: typing
+                // can wait for the harness to read keys (`type_once_it_reads_keys`).
+                let session = report.chat;
+                let held = held.clone();
+                let _ = std::thread::Builder::new()
+                    .name("charter-curation-typing".into())
+                    .spawn(move || {
+                        crate::curation::type_once_it_reads_keys(
+                            &text,
+                            || {
+                                held.upgrade()
+                                    .ok_or_else(|| "the project was closed".to_owned())
+                                    .and_then(|held| held.chats.sessions().edits_lines(session))
+                            },
+                            |text| {
+                                held.upgrade()
+                                    .ok_or_else(|| "the project was closed".to_owned())
+                                    .and_then(|held| held.chats.sessions().input(session, text))
+                            },
+                            crate::curation::KEYS_READ_WITHIN,
+                        );
+                    });
             })
         });
         // Auto-save of a workspace's repos waits for its chats' turns, which only the plane
@@ -1213,14 +1255,18 @@ impl Planes {
         // No hook can report a program dying (the process is gone), so the operating system
         // does. That is not charter reading a harness's output (ADR 0018) — it is the
         // process's own exit status, and the only honest source for `failed`.
+        let typed = Arc::new(crate::curation::Typed::default());
         {
             let board = hooks.shared_board();
             let tell = Arc::clone(&self.tell);
             let plane = id.clone();
             let poke = std::sync::Mutex::new(autosave.poker());
+            let typed = Arc::clone(&typed);
             chats
                 .sessions()
                 .when_one_ends(Box::new(move |session, exit| {
+                    // A curation prompt still waiting is for a chat that is gone: never typed.
+                    typed.forget(session);
                     let changed = hooks::held_board(&board).exited(session, hooks::code_of(&exit));
                     if changed {
                         tell(hooks::now(&board, plane.clone(), session));
@@ -1255,6 +1301,7 @@ impl Planes {
             watch: Mutex::new(watch),
             autosave: Mutex::new(Some(autosave)),
             started_on,
+            typed,
         }
     }
 
@@ -3866,6 +3913,188 @@ mod tests {
             },
         )
         .expect("the hook reaches the plane");
+    }
+
+    /// A report of `event` from chat `session`'s harness, over the plane's real socket.
+    fn a_report_from(held: &Held, session: u32, event: charter_core::state::Event) {
+        charter_core::hookwire::send(
+            held.hooks().socket().expect("the plane is listening"),
+            &charter_core::hookwire::Report {
+                chat: session,
+                event,
+                conversation: charter_core::hookwire::Conversation::Unknown,
+                pid: None,
+                detail: charter_core::state::Detail::default(),
+            },
+        )
+        .expect("the hook reaches the plane");
+    }
+
+    /// Waits, up to a bound, for `wanted` to hold. Generous, because a loaded machine starts a
+    /// shell slowly and a bound is only ever reached by a test that is failing anyway.
+    fn becomes(wanted: impl Fn() -> bool) -> bool {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < until {
+            if wanted() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        wanted()
+    }
+
+    /// A stand-in harness that puts its terminal in raw mode — so the line discipline changes
+    /// no byte — says it is ready, and writes down every byte it is sent.
+    fn a_harness_writing_down_its_input(dir: &Path) -> (String, PathBuf, PathBuf) {
+        let ready = dir.join("ready");
+        let typed = dir.join("typed");
+        // Through `stand_in::program`, so the script is whole before anything can run it.
+        let program = stand_in::program(
+            dir,
+            "stand-in-harness",
+            &format!(
+                "#!/bin/sh\nstty raw -echo\n: > '{}'\nexec cat > '{}'\n",
+                ready.display(),
+                typed.display()
+            ),
+        );
+        (program.display().to_string(), ready, typed)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_curation_prompt_is_typed_on_its_chat_s_start_as_one_paste_and_nothing_is_sent() {
+        // ADR 0061: the prompt waits in the app until the chat's harness reports its start,
+        // and what reaches the program is exactly one bracketed paste — no CR, no LF after it.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let (program, ready, typed) = a_harness_writing_down_its_input(dir.path());
+        let session = held
+            .chats()
+            .start(&one_chat_on(&program).chats[0], STARTING)
+            .expect("the chat starts");
+        held.typed().hold(
+            session,
+            "Retire smart-ide.\nAudit it first.\n\nThen remove it.\n".to_owned(),
+        );
+        assert!(becomes(|| ready.exists()), "the stand-in never started");
+        assert!(!typed.exists() || std::fs::read(&typed).unwrap().is_empty());
+
+        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+
+        let wanted = b"\x1b[200~Retire smart-ide.\nAudit it first.\n\nThen remove it.\x1b[201~";
+        assert!(
+            becomes(|| std::fs::read(&typed).is_ok_and(|bytes| bytes.len() >= wanted.len())),
+            "nothing was typed"
+        );
+        // A second start, and a moment for anything that would follow, types nothing more.
+        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let bytes = std::fs::read(&typed).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&bytes),
+            String::from_utf8_lossy(wanted),
+            "the program was sent something other than the one paste"
+        );
+        assert!(!bytes.contains(&b'\r'), "a carriage return is Enter");
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_curation_prompt_waits_for_a_harness_still_editing_lines_when_it_starts() {
+        // Claude Code 2.1.283 after its trust question: `SessionStart` fires while the terminal
+        // is canonical for a moment, and a paste written then is echoed and cut at its first
+        // line break. The stand-in reports its start while still canonical, with echo on, and
+        // only then asks for raw keys.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let typed = dir.path().join("typed");
+        let program = stand_in::program(
+            dir.path(),
+            "slow-to-read-keys",
+            &format!(
+                "#!/bin/sh\nsleep 1\nstty raw -echo\nexec cat > '{}'\n",
+                typed.display()
+            ),
+        );
+        let session = held
+            .chats()
+            .start(
+                &one_chat_on(&program.display().to_string()).chats[0],
+                STARTING,
+            )
+            .expect("the chat starts");
+        let seen = Arc::new(Mutex::new(String::new()));
+        held.chats()
+            .sessions()
+            .watch(session, {
+                let seen = Arc::clone(&seen);
+                Box::new(move |text| seen.lock().unwrap().push_str(&text))
+            })
+            .expect("watched");
+        held.typed()
+            .hold(session, "Retire alpha.\nAudit it first.".to_owned());
+
+        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+
+        let wanted = "\x1b[200~Retire alpha.\nAudit it first.\x1b[201~";
+        assert!(
+            becomes(|| std::fs::read(&typed).is_ok_and(|bytes| bytes.len() >= wanted.len())),
+            "nothing was typed"
+        );
+        assert_eq!(std::fs::read_to_string(&typed).unwrap(), wanted);
+        assert!(
+            !seen.lock().unwrap().contains("Retire"),
+            "the prompt was typed while the terminal still echoed it: {:?}",
+            seen.lock().unwrap()
+        );
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_curation_prompt_is_dropped_when_its_chat_ends_before_it_starts() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let session = held
+            .chats()
+            .start(&one_chat_on("/usr/bin/true").chats[0], STARTING)
+            .expect("the chat starts");
+        held.typed().hold(session, "Compact steward.".to_owned());
+
+        assert!(
+            becomes(|| !held.typed().waiting(session)),
+            "the prompt outlived its chat"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_curation_prompt_is_dropped_when_its_chat_is_closed_before_it_starts() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let session = held
+            .chats()
+            .start(&one_chat_on("/bin/cat").chats[0], STARTING)
+            .expect("the chat starts");
+        held.typed().hold(session, "Compact steward.".to_owned());
+
+        held.close_chat(session).unwrap();
+
+        assert!(!held.typed().waiting(session));
     }
 
     #[cfg(unix)]

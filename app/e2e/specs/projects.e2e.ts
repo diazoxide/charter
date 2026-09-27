@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { THE_RUNS_TREE, anEmptyRecord, copyFixturePlane } from "../harness.js";
 import { answerTheAsk, closeProject, pressAndStart } from "../opening.js";
+import { attributesOfEach } from "../reading.js";
 
 /**
  * A window holding more than one project, in the built app (ADR 0033, decision 23).
@@ -80,19 +81,20 @@ async function ask<T>(command: string, args: Record<string, unknown> = {}): Prom
   return answer.ok as T;
 }
 
-/** The project tabs, as the strip shows them: the path each names, and which is in front. */
+/**
+ * The project tabs, as the strip shows them: the path each names, and which is in front.
+ *
+ * Read in one pass, because the strip is polled while projects open and close on it, and a tab
+ * found and then read can be gone in between (charter#506, `reading.ts`).
+ */
 async function strip(): Promise<{ path: string | null; front: boolean }[]> {
-  const tabs = await $$(`${PROJECTS} [role="tab"]`).getElements();
-  const rows = [];
-  for (const tab of tabs) {
-    rows.push({
-      // The path, not the name: the tab carries the whole path because two projects can share
-      // a directory name, and that is exactly the case this spec sets up.
-      path: await tab.getAttribute("title"),
-      front: (await tab.getAttribute("aria-selected")) === "true",
-    });
-  }
-  return rows;
+  const tabs = await attributesOfEach(`${PROJECTS} [role="tab"]`, ["title", "aria-selected"]);
+  return tabs.map((tab) => ({
+    // The path, not the name: the tab carries the whole path because two projects can share
+    // a directory name, and that is exactly the case this spec sets up.
+    path: tab.title,
+    front: tab["aria-selected"] === "true",
+  }));
 }
 
 /** How many chat tabs the project in front is showing. */
