@@ -11,34 +11,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-27
+
+0.4.0 is the IDE growing up. The plane root is a tab of its own, first on the workspace strip,
+and a **Curate ▸** menu opens a chat for a curation action, in Claude Code or Codex, with its
+prompt typed and never sent. Shell tabs are plain shells that warn when a harness is started in
+one by hand, every tab strip can be reordered by dragging, a chat's pane has find and takes
+Shift+Enter as a new line, and a trackpad scrolls it the way a native terminal does. Vaults,
+personas and todos can be created and deleted in the window, charter's skills reach Codex and
+opencode chats, and the window's own chrome no longer selects as text. Beyond the window:
+cross-repo changes with `charter change`, `charter report` for filing issues, workspace rename,
+projects in windows of their own, and opencode chats started by the app.
+
 ### Added
 
-- **Codex and opencode chats get charter's skills too.** `safe-remove`, `compact`, `handoff`
-  and the other six reached only Claude Code chats. An opencode chat the app starts now finds
-  them as its own skills, beside any `skills.paths` your `opencode.json` names, and a Codex chat
-  is told about each one when it starts, with the file to read, since Codex cannot take a
-  skills folder for one session. Nothing is written into `~/.codex` or `~/.config/opencode`
-  (ADR 0063).
-- **Curation actions: chats that open with their prompt typed, for you to read and send.**
-  `charter curation show workspace:<name>` (or `persona:<name>`, or `plane`) lists what that
-  subject is offered, who runs each one, where, and the exact prompt. charter ships three:
-  Safe remove, Compact & improve, and Add curation action, each naming a new skill in charter's
-  plugin (`safe-remove`, `compact`, `add-curation-action`). A persona adds its own as
-  `personas/<name>/curation/<id>.md`, or with `charter persona curation add`, and
-  `charter persona lint` reports one that is broken or that takes a built-in's name. A prompt
-  types a literal brace as `{{` or `}}`, so `{{word}}` types `{word}`. `charter` is now a
-  reserved persona name, because its actions would read `charter/<id>` like the built-ins:
-  `charter persona create charter` is refused, and a persona that already has the name is
-  reported by `charter persona lint` and offers no curation actions. In the app, right-click a
-  workspace, a persona or the plane root for **Curate ▸**, or type `curate` in the palette: the
-  chat opens on your default profile as the action's persona, named `<action> · <subject>`, and
-  the prompt appears in its input once the harness has started — never sent. An action a
-  persona's file could not offer is listed, greyed, with why. It needs a Claude Code or Codex
-  default profile. On Codex, which says nothing until your first prompt, the prompt is typed
-  once its terminal has gone raw and then stayed quiet for a second, and a prompt over 1,000
-  characters, which Codex would show as a placeholder, opens nothing and says why. opencode
-  goes quiet while it is still starting, and a prompt pasted then is lost, so charter has no
-  moment to type into it and says so on the menu (ADR 0061).
 - **The plane root is the first tab of the workspace strip.** It is always there, drawn as an
   icon (its tooltip: *Plane — chats here start at the plane root*), and it cannot be dragged,
   pinned, renamed or deleted. Its menu starts a chat or a shell at the plane root, and so do
@@ -48,27 +34,84 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   picked (`charter workspace use` does not move it). The Todos box is not offered there, and
   the region says why. It replaces the "Outside every workspace" tab, and the chats it held are
   on it.
-- **Anywhere in the plane outside every workspace is the plane root.** A chat started in
-  `docs/`, `.charter/` or any other directory of the plane that is not a workspace's is marked
-  as a plane-root chat, like one started in the plane's own directory, and is not asked which
-  workspace to use. A terminal session standing there that has not chosen a workspace (no
-  `-w`, no `$CHARTER_WORKSPACE`, no `charter workspace use`) is at the plane root too:
-  `charter` asks it to name a workspace with `-w` instead of acting on the plane's default,
-  which now answers only for a caller outside the plane. `charter workspace use` still moves
-  such a session.
-- **A root chat's footer, handoffs and reports say the plane root.** `charter statusline` shows
-  `⬢ plane root` rather than a workspace; a handoff from a root chat is stamped `plane root`
-  (the new chat still starts in the workspace you handed it to); and a report back to a root
-  chat that has closed is kept for the next chat started at the plane root.
+- **Anywhere in the plane outside every workspace is the plane root, and says so.** A chat
+  started in `docs/`, `.charter/` or any other directory of the plane that is not a
+  workspace's is marked as a plane-root chat, like one started in the plane's own directory,
+  and is not asked which workspace to use. A terminal session standing there that has not
+  chosen a workspace (no `-w`, no `$CHARTER_WORKSPACE`, no `charter workspace use`) is at the
+  plane root too: `charter` asks it to name a workspace with `-w` instead of acting on the
+  plane's default, which now answers only for a caller outside the plane, and
+  `charter workspace use` still moves such a session. A root chat's footer
+  (`charter statusline`) shows `⬢ plane root` rather than a workspace; a handoff from it is
+  stamped `plane root` (the new chat still starts in the workspace you handed it to); and a
+  report back to a root chat that has closed is kept for the next chat started at the plane
+  root.
+- **Curation actions: chats that open with their prompt typed, for you to read and send.** In
+  the app, right-click a workspace, a persona or the plane root for **Curate ▸**, or type
+  `curate` in the palette. The chat opens on your default profile as the action's persona,
+  named `<action> · <subject>`, and the prompt appears in its input once the harness has
+  started — never sent. If you type, paste or click in that chat before the prompt appears, it
+  is dropped rather than typed after what you began. An action a persona's file could not
+  offer is listed, greyed, with why. It needs a Claude Code or Codex default profile. Codex
+  says nothing until your first prompt, so its prompt is typed once its terminal has gone raw
+  and then stayed quiet for a second. opencode goes quiet while it is still starting, and a
+  prompt pasted then is lost, so charter has no moment to type into it and the menu says so
+  (ADR 0061).
+- **charter ships three curation actions, and a persona can add its own.** Safe remove,
+  Compact & improve, and Add curation action each name a new skill in charter's plugin
+  (`safe-remove`, `compact`, `add-curation-action`), so the prompt you read is one line — for
+  example *Use charter's safe-remove skill to remove the workspace alpha.* — and the skill
+  holds the steps. A persona adds its own as `personas/<name>/curation/<id>.md`, or with
+  `charter persona curation add`. `charter curation show workspace:<name>` (or
+  `persona:<name>`, or `plane`) lists what a subject is offered, who runs each action, where,
+  and the exact prompt. A prompt types a literal brace as `{{` or `}}`, so `{{word}}` types
+  `{word}`. Claude Code shows a paste over 800 characters or of 4 lines or more as
+  `[Pasted text #N +M lines]`, and Codex one over 1,000 characters as
+  `[Pasted Content N chars]`, so an action whose prompt would be shown that way opens no chat
+  on that harness and says why, and `charter persona lint` warns about it, naming the harness.
+  `charter persona lint` also reports an action that is broken or that takes a built-in's
+  name. `charter` is now a reserved persona name, because its actions would read
+  `charter/<id>` like the built-ins: `charter persona create charter` is refused, and a persona
+  that already has the name is reported by `charter persona lint` and offers no curation
+  actions (ADR 0061).
 - **Plain shell tabs, and a warning when a harness starts inside one.** `New shell` sits beside
   `New tab` in the palette, on the panes' menu and on each workspace's menu (`New shell in
   <workspace>`), on ⌘⇧T (Ctrl+Shift+T off a Mac): your own shell, where a new chat would start,
-  with a terminal's mark on its tab. Typing `claude`, `codex` or `opencode` in one still starts
-  it, after one line saying it runs outside charter's session tracking, and the tab shows a
-  banner whose **Open as chat** opens the picker there with that harness picked. Detection is
-  the command being started — charter's shims stand first on a shell tab's `PATH`, and stay
-  first after zsh's and bash's own start files — and nothing reads what the harness prints
-  (ADR 0062).
+  with a terminal's mark on its tab and no chat-state mark. Typing `claude`, `codex` or
+  `opencode` in one still starts it, after one line saying it runs outside charter's session
+  tracking, and the tab shows a banner whose **Open as chat** opens the picker there with that
+  harness picked. Detection is the command being started — charter's shims stand first on a
+  shell tab's `PATH`, and stay first after zsh's and bash's own start files — and nothing
+  reads what the harness prints (ADR 0062).
+- **Drag a tab to reorder it, in every strip.** Projects in the title bar, workspaces and chats
+  each take a drag with the pointer, or from the keyboard: Shift+Space picks the focused tab
+  up, the arrows move it, Space or Enter drops it and Escape puts it back. Dropping a tab
+  across the pinned boundary pins or unpins it, where you dropped it, and a pin the store
+  refuses goes back with the reason. A click is still a click: a drag starts only once the
+  pointer has moved. Each order is kept on this machine and comes back on relaunch (ADR 0039,
+  ADR 0040).
+- **Find in a chat's pane, and Shift+Enter for a new line.** ⌘F (Ctrl+Shift+F off a Mac, so
+  Ctrl+F stays with the shell) opens a find bar over the focused pane: every match is
+  highlighted, Enter and Shift+Enter step through them with a count, and Esc closes it and
+  puts the keyboard back in the terminal. In a Claude Code, Codex or opencode chat, Shift+Enter
+  now adds a new line to the prompt instead of sending it; in a shell it is Enter, as before.
+- **Create and delete vaults, personas and todos in the window.** A `+` on the Vaults and
+  Personas headings opens *New vault…* and *New persona* (name, role, the work that comes to it,
+  and what it inherits from; it is created as a draft and its tab opens). *Delete vault…* lists
+  the secrets the vault holds by name, says plainly that a keychain vault's secrets are
+  destroyed and cannot be recovered (a plain-file, references or 1Password vault's file or item
+  is left where it is), and stays disabled until you type the vault's name. *Delete persona…*
+  runs `charter persona remove`, never forced, so a persona another one extends or uses is
+  refused with their names. *Edit persona.md* opens the file in the app your system opens `.md`
+  files with. The Todos panel has a box for a new todo in the focused workspace, and each todo's
+  menu has *Mark done* and *Forget*; the window refuses a todo with the same rules and words as
+  `charter ws todo`.
+- **Codex and opencode chats get charter's skills too.** `safe-remove`, `compact`, `handoff`
+  and the other six reached only Claude Code chats. An opencode chat the app starts now finds
+  them as its own skills, beside any `skills.paths` your `opencode.json` names, and a Codex chat
+  is told about each one when it starts, with the file to read, since Codex cannot take a
+  skills folder for one session. Nothing is written into `~/.codex` or `~/.config/opencode`
+  (ADR 0063).
 - **The harness asks you before `charter report` files an issue.** `charter init` now writes an
   ask rule for `charter report *--yes*` in `.claude/settings.json` and `opencode.json`, beside
   the one for `charter handoff`, so a chat cannot file a public report without your yes.
@@ -101,14 +144,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   request and its checks at the head commit, which members are blocked, and when that was read.
   It asks the forge when the tab opens and when you press Refresh, and never when you switch
   workspaces. A workspace with no changes says how to create one.
-- **Renaming a workspace names the chats that will start a fresh conversation.** Claude Code
-  keeps a conversation under the folder it ran in, and charter does not move that folder. So
-  `charter workspace rename`, and the Rename dialog before you confirm, list by name each
-  Claude Code chat in the workspace that will start fresh. The rename then goes ahead. When
-  you reopen one of those chats, it starts a new conversation and says why once, instead of
-  failing to resume. Codex and opencode chats resume as before and are not listed.
-  ([#367](https://github.com/diazoxide/charter/issues/367))
-
 - **charter's plugin teaches personas, vaults and the browser again.** It now ships the
   `charter:persona`, `charter:secrets` and `charter:browser` skills beside `handoff`,
   `update` and `working-in-a-clone`, rewritten for this charter's commands. `charter browser
@@ -117,7 +152,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of logged-in runs land. The version must be an exact version: anything else npm would read
   there, such as a tag or a git URL, is refused.
   ([#370](https://github.com/diazoxide/charter/issues/370))
-
 - **Worktrees can be cut, declared and removed from the command line.** `charter worktree`
   (alias `wt`): `add <repo> <piece>` cuts a piece off the clone's HEAD and records the claim;
   `done`, and `abandon "<why>"`, run from inside a piece, say it is finished or given up;
@@ -126,7 +160,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   git. The session briefing and the footer now see those declarations. In the window, each
   worktree row shows the same word, and its menu can mark it done.
   ([#368](https://github.com/diazoxide/charter/issues/368))
-
 - **A persona's memory can be kept up like a workspace's.** `charter persona forget <name>
   <slug>` deletes one memory, `charter persona dedupe` lists near-duplicate pairs to prune,
   `charter persona optimize` runs the curation `charter workspace optimize` runs over each
@@ -162,7 +195,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   afterwards. It is refused while a chat is running in the workspace, naming the chats, and when
   the new name is taken or is not a valid name. Unpushed or uncommitted work is not a reason to
   refuse, because a rename moves it whole. If a rename is interrupted, running the same command
-  again finishes it. ([#367](https://github.com/diazoxide/charter/issues/367))
+  again finishes it. Claude Code keeps a conversation under the folder it ran in, and charter
+  does not move that folder, so `charter workspace rename`, and the Rename dialog before you
+  confirm, list by name each Claude Code chat in the workspace that will start a fresh
+  conversation. When you reopen one of those chats, it starts a new conversation and says why
+  once, instead of failing to resume. Codex and opencode chats resume as before and are not
+  listed. ([#367](https://github.com/diazoxide/charter/issues/367))
 - **`charter report bug` and `charter report feature` file an issue on charter's own tracker.**
   Each run shows the draft and files nothing. To file it, answer `y` at the prompt in a
   terminal, or run the same command again with `--yes` and the digest the draft printed. If the
@@ -188,7 +226,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   back the handoff consent rule a plane lost, and `charter guard` on its own lists the rules
   by file. `charter doctor` now checks its `handoff gate` and `ask rules` rows instead of
   saying "not checked". ([#364](https://github.com/diazoxide/charter/issues/364))
-
 - **`charter save --pull` brings in what the remote has before it saves.** A chat the app did
   not start, such as a `claude` or `codex` in a terminal, gets no auto-save and no incoming
   changes. Outside the app, the plane is saved only through `charter save`. `--pull` fetches
@@ -218,25 +255,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Curation prompts are one line you can read before you press Enter.** charter's own three
-  now read, for example, *Use charter's safe-remove skill to remove the workspace alpha.*, and
-  the skill holds the steps the old paragraph spelled out. Claude Code shows a paste over 800
-  characters or of 4 lines or more as `[Pasted text #N +M lines]`, and Codex one over 1,000
-  characters as `[Pasted Content N chars]`, so a curation action whose prompt would be shown
-  that way now opens no chat on that harness and says why, and `charter persona lint` warns
-  about one of a persona's that would, naming the harness (ADR 0061).
-- **Typing in a curation chat before its prompt appears drops the prompt.** Anything you send
-  that chat — a key, a paste, a click — before the prompt is typed means it is never typed
-  after what you began. The terminal's own answers to the harness starting up do not count.
-- **The nightly mutation run's slowest test takes about a quarter of the time it did.** The
-  plane-root replay asks git each distinct question once instead of once per recorded row,
-  and more of how saving and the `CHARTER_*` steering variables behave is pinned by tests.
-  ([#464](https://github.com/diazoxide/charter/issues/464))
-
+- **The window's chrome no longer selects as text.** Tab names, headings, buttons, menus and
+  rows stay put when you click or drag across them, as a native app's do. What you would copy
+  still selects: fields, code, paths, names and commands, a view's answer, error text, and a
+  dialog's text. Pulling on a link or an image no longer drags out a ghost of it. A terminal
+  selects as it always did.
 - **Removing a worktree that holds work now says which work.** The refusal lists the
   uncommitted files and the commits no other branch has, so you can see what `--force` (or
-  "Discard that work and remove the worktree anyway", in the window) would discard. A merge refused over uncommitted changes no
-  longer tells you to remove or force.
+  "Discard that work and remove the worktree anyway", in the window) would discard. A merge
+  refused over uncommitted changes no longer tells you to remove or force.
   ([#368](https://github.com/diazoxide/charter/issues/368))
 - **The app keeps the plugin you installed for terminal chats up to date.** When it starts,
   it re-runs `charter plugin install` for each harness (Claude Code, Codex, opencode) whose
@@ -265,8 +292,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `charter update` points at `charter news`, and the pin dialog no longer has an empty news
   list.
 - **Pinned workspaces stay in the order you pinned them.** The workspace strip draws them in
-  that order, and a workspace you pin later goes after the others. Unpinning one leaves the
-  rest where they were. Pins from an earlier version keep the order they had.
+  that order, and a workspace you pin later goes after the others, until you drag it. Unpinning
+  one leaves the rest where they were. Pins from an earlier version keep the order they had.
   ([#402](https://github.com/diazoxide/charter/issues/402))
 - **The project strip's show-more menu lists the most recently active projects first**, after
   the ones that need you. It used to list them in the strip's order.
@@ -289,40 +316,40 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `$CHARTER_PLANE_ROOT_SESSION=1` at the plane root, and never inherits either from whatever
   launched the app. `charter` also counts a workspace's own directory, `workspaces/<ws>`, as
   being in that workspace, as the window already did.
-
 - **A chat's terminal scrolls as far as your fingers move, from the first pixel.** A trackpad
   or wheel now moves the history one row for every row's height of travel, and a harness in
   full screen — Claude Code's `"tui": "fullscreen"`, opencode — is sent one wheel report per
   row, what is left over carried to the next event. Before, a slow start barely moved a
   full-screen harness (one report per ~50 px) and a flick was cut to one report per event, so
   scrolling felt slow to start and then fast.
-
+- **A program that asks for mouse reports in the default encoding gets them.** A full-screen
+  program in a chat's terminal that turns on mouse tracking without SGR reports got no clicks
+  and no wheel from the pane; they were dropped. They now reach it, byte for byte, columns and
+  rows past 95 included. Claude Code and opencode use SGR reports and were never affected.
+  ([#493](https://github.com/diazoxide/charter/issues/493))
 - **The prose guards treat a process substitution as the substitution it is.** A `gh` or
   `glab` command that publishes prose, a charter command that persists it, and `charter
   handoff` now refuse `<(…)` and `>(…)` wherever the shell runs them, and zsh's `=(…)`, exactly
   as they refuse `$(…)`. Quoted, or in a heredoc body, they are text and are left alone. The
   refusal names a process substitution rather than calling it a command substitution.
-
-- **The guards read `<<` inside arithmetic and parameter expansions the way the shell may.**
-  Inside `(( … ))`, `$(( … ))`, `$[ … ]`, `${ … }` or an array subscript, `<<` can be a shift
-  rather than a heredoc. The guards now read the lines after it both as commands and as a
-  heredoc body, and never set them aside as a body alone. The leak guard also reads the
-  command inside zsh's `=(…)` as a command of its own, as it already did for `<(…)`, and a
-  heredoc opened inside a process substitution that closes on the same line is read the way a
-  heredoc inside `$(…)` already was.
-
-- **The guards read a heredoc inside a substitution that spans lines the way each shell does.**
-  When a heredoc is opened inside `$(…)`, backticks, `<(…)` or `>(…)` and the substitution
-  does not close on that line, bash 3.2, bash 5 and zsh can disagree about which of the
-  following lines are the heredoc's body. The guards now read those lines both as commands and
-  as a body, and never set them aside as a body alone. After such a body, or after a heredoc
-  whose delimiter the shells read differently, they no longer set aside any later heredoc body
-  either.
-
+- **Where the shells may disagree about a heredoc, the guards read it both ways.** Inside
+  `(( … ))`, `$(( … ))`, `$[ … ]`, `${ … }` or an array subscript, `<<` can be a shift rather
+  than a heredoc; and when a heredoc is opened inside `$(…)`, backticks, `<(…)` or `>(…)` and
+  the substitution does not close on that line, bash 3.2, bash 5 and zsh can disagree about
+  which of the following lines are its body. In both cases the guards now read those lines both
+  as commands and as a heredoc body, and never set them aside as a body alone. After such a
+  body, or after a heredoc whose delimiter the shells read differently, they no longer set
+  aside any later heredoc body either. The leak guard also reads the command inside zsh's
+  `=(…)` as a command of its own, as it already did for `<(…)`, and a heredoc opened inside a
+  process substitution that closes on the same line is read the way a heredoc inside `$(…)`
+  already was.
 - **The nightly mutation run finishes again.** Its shards were sized for a test suite half as
   long as today's, so two of them ran out of time. The run now uses smaller shards and a longer
-  per-mutant limit. It also stops reporting slow survivors as timeouts. New tests now cover the
-  extension, executor, secrets, save and settings behaviour the run found untested.
+  per-mutant limit, and its slowest test, the plane-root replay, takes about a quarter of the
+  time it did because it asks git each distinct question once instead of once per recorded row.
+  It also stops reporting slow survivors as timeouts. New tests now cover the extension,
+  executor, secrets, save, settings and `CHARTER_*` steering behaviour the run found untested.
+  ([#464](https://github.com/diazoxide/charter/issues/464))
 - **`charter plugin uninstall --harness codex` no longer leaves Codex's trust record for the
   guard behind** in `[hooks.state]`. A record for a hook of yours that sat after the guard is
   moved to its new position, so Codex does not ask you to trust it again.
@@ -369,20 +396,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that opened later had the old lines in its scrollback, and a pane open all along did not.
   Now both panes show the same scrollback.
   ([#452](https://github.com/diazoxide/charter/issues/452))
-- **The extension tests no longer fail on a busy machine.** Extensions still get the same time
-  as before: 5 seconds for a view, an action, an event or a command, and at a chat's start 2
-  seconds each and 3 seconds for all of them together. A debug build of `charter` now lets the
-  test suite set a different limit, so a test that is not about the limit gives a slow machine
-  room, and a test that is about it uses a short limit and a program that never answers.
-  ([#422](https://github.com/diazoxide/charter/issues/422))
-- **The extension runner's tests and the `secrets exec` tests no longer fail on a busy
-  machine.** Extensions keep the same 5 seconds, and a program `secrets exec` runs still gets
-  a quarter of a second to finish after a Ctrl-C. The tests about the limit now use a short
-  limit and a program that never answers, and no longer need the program to report that it
-  started. A test whose program has to get somewhere before the limit now waits for it to get
-  there. The one `secrets exec` test that replaces its own process now runs apart from the
-  others, so it can no longer break a test running next to it.
-  ([#465](https://github.com/diazoxide/charter/issues/465))
+- **The extension and `secrets exec` tests no longer fail on a busy machine.** Extensions
+  still get the same time as before: 5 seconds for a view, an action, an event or a command,
+  and at a chat's start 2 seconds each and 3 seconds for all of them together; a program
+  `secrets exec` runs still gets a quarter of a second to finish after a Ctrl-C. A debug build
+  of `charter` now lets the test suite set a different limit, so a test that is not about the
+  limit gives a slow machine room, and a test that is about it uses a short limit and a program
+  that never answers. A test whose program has to get somewhere before the limit now waits for
+  it to get there, and the one `secrets exec` test that replaces its own process runs apart
+  from the others. ([#422](https://github.com/diazoxide/charter/issues/422),
+  [#465](https://github.com/diazoxide/charter/issues/465))
 - **The guards read more of the shell's quoting the way the shell does.** The shared command
   reader behind every guard now decodes ANSI-C quoting (`$'…'`) and bash's `$"…"` strings, and
   drops a backslash-newline line continuation before it reads a word, inside double quotes as
@@ -1196,7 +1219,8 @@ and every settings group that it would have changed says so.
 - No program charter starts can hold a chat's terminal open after the chat ends.
   ([#105](https://github.com/diazoxide/charter/pull/105))
 
-[Unreleased]: https://github.com/diazoxide/charter/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/diazoxide/charter/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/diazoxide/charter/releases/tag/v0.4.0
 [0.3.0]: https://github.com/diazoxide/charter/releases/tag/v0.3.0
 [0.2.0]: https://github.com/diazoxide/charter/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/diazoxide/charter/compare/v0.1.0...v0.1.1
