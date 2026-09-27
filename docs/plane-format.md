@@ -1903,6 +1903,15 @@ that runs it.
     compared case-insensitively): a built-in cannot be overridden or impersonated. Nor is any
     action of a persona named `charter`, whose ids would read `charter/<id>`; the name is
     reserved (see [`personas/`](#personas)).
+  - **Keep the prompt to one short line.** It is typed to be read before the operator presses
+    Enter, and a harness draws a longer paste as a placeholder nobody can read: Claude Code
+    2.1.283 over 800 characters or at 4 lines, Codex 0.147.0 over 1,000 characters, opencode
+    1.18.32 over 150 characters or at 3 lines (ADR 0061, amended 2026-09-27). Such a prompt is
+    still a valid action — the file format does not change — but `charter persona lint` warns
+    about it, naming the harness, and the app opens no chat for it on that harness. The lint
+    renders the prompt for a subject with a long name (`LONG_SUBJECT_NAME`, 43 characters) on
+    each kind in `on`. Name a skill in the prompt and let the skill hold the steps, as
+    charter's own three do.
 
 | Field | Type | Required / default | Meaning | Status | Source |
 |---|---|---|---|---|---|

@@ -1239,7 +1239,8 @@ fn chat_states(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<M
         .collect())
 }
 
-/// Sends what a pane typed to the session's program.
+/// Sends what a pane typed to the session's program. Anything but the terminal's own answer
+/// drops a curation prompt still waiting to be typed into it (`Held::operator_input`).
 #[tauri::command]
 #[specta::specta]
 fn send_input(
@@ -1250,9 +1251,7 @@ fn send_input(
 ) -> Result<(), String> {
     planes
         .held(&plane)?
-        .chats()
-        .sessions()
-        .input(session, &text)
+        .operator_input(session, text.as_bytes())
 }
 
 /// Sends a pane's bytes that are not text to the session's program, each as the one byte it
@@ -1266,11 +1265,7 @@ fn send_input_bytes(
     session: u32,
     bytes: Vec<u8>,
 ) -> Result<(), String> {
-    planes
-        .held(&plane)?
-        .chats()
-        .sessions()
-        .input(session, &bytes)
+    planes.held(&plane)?.operator_input(session, &bytes)
 }
 
 /// Tells a session how big the pane showing it now is.

@@ -235,6 +235,21 @@ impl Held {
         &self.typed
     }
 
+    /// Sends what a chat's pane sent — the operator's keys, a paste, a mouse report, or the
+    /// terminal's own answer to a question the program asked — to the chat's program.
+    ///
+    /// **Anything but the terminal's own answer drops the chat's curation prompt**, if one is
+    /// still waiting to be typed: the operator has begun something of their own, and a paste
+    /// landing after it would land in the middle of it (SI-2, Q29). Dropped before the bytes
+    /// are sent, under the lock that types a prompt, so the paste is either written before
+    /// them or never.
+    pub fn operator_input(&self, session: u32, bytes: &[u8]) -> Result<(), String> {
+        if !crate::curation::only_the_terminal_answering(bytes) {
+            self.typed.operator_sent(session);
+        }
+        self.chats.sessions().input(session, bytes)
+    }
+
     /// Every chat this plane has open whose start-time instructions — `CLAUDE.md`, the
     /// harness settings and sub-agents, a persona's charter — have changed since it started,
     /// by session (charter#369). Read from disk each time it is asked: the window asks when the
@@ -662,32 +677,9 @@ impl Planes {
             let held = Arc::downgrade(&held);
             Arc::new(move |report| {
                 let Some(strong) = held.upgrade() else { return };
-                let Some(text) = strong.typed.heard(report) else {
-                    return;
-                };
-                drop(strong);
-                // Off the socket's thread, which every other chat's report waits on: typing
-                // can wait for the harness to read keys (`type_once_it_reads_keys`).
-                let session = report.chat;
-                let held = held.clone();
-                let _ = std::thread::Builder::new()
-                    .name("charter-curation-typing".into())
-                    .spawn(move || {
-                        crate::curation::type_once_it_reads_keys(
-                            &text,
-                            || {
-                                held.upgrade()
-                                    .ok_or_else(|| "the project was closed".to_owned())
-                                    .and_then(|held| held.chats.sessions().edits_lines(session))
-                            },
-                            |text| {
-                                held.upgrade()
-                                    .ok_or_else(|| "the project was closed".to_owned())
-                                    .and_then(|held| held.chats.sessions().input(session, text))
-                            },
-                            crate::curation::KEYS_READ_WITHIN,
-                        );
-                    });
+                if strong.typed.heard(report) {
+                    crate::curation::type_when_it_reads_keys(&strong, report.chat);
+                }
             })
         });
         // Auto-save of a workspace's repos waits for its chats' turns, which only the plane
@@ -4055,6 +4047,114 @@ mod tests {
             "the prompt was typed while the terminal still echoed it: {:?}",
             seen.lock().unwrap()
         );
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_curation_prompt_is_dropped_when_the_operator_types_before_its_chat_starts() {
+        // Q29: the operator's own input, sent before the paste lands, drops the prompt — the
+        // app knows it sent it, and nothing typed later could land anywhere but inside it.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let (program, ready, typed) = a_harness_writing_down_its_input(dir.path());
+        let session = held
+            .chats()
+            .start(&one_chat_on(&program).chats[0], STARTING)
+            .expect("the chat starts");
+        held.typed().hold(session, "Compact steward.".to_owned());
+        assert!(becomes(|| ready.exists()), "the stand-in never started");
+
+        held.operator_input(session, b"hi").expect("sent");
+        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+
+        assert!(
+            !held.typed().waiting(session),
+            "the prompt outlived the input"
+        );
+        assert!(becomes(|| std::fs::read(&typed).is_ok_and(|b| b.len() >= 2)));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(
+            std::fs::read_to_string(&typed).unwrap(),
+            "hi",
+            "the prompt was typed after the operator's own input"
+        );
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_curation_prompt_is_dropped_when_the_operator_types_while_it_waits_for_raw_keys() {
+        // The start was reported, but the terminal still edits lines: the prompt has not landed,
+        // so the operator's input in that moment drops it too.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let typed = dir.path().join("typed");
+        let program = stand_in::program(
+            dir.path(),
+            "slow-to-read-keys",
+            &format!(
+                "#!/bin/sh\nsleep 1\nstty raw -echo\nexec cat > '{}'\n",
+                typed.display()
+            ),
+        );
+        let session = held
+            .chats()
+            .start(
+                &one_chat_on(&program.display().to_string()).chats[0],
+                STARTING,
+            )
+            .expect("the chat starts");
+        held.typed().hold(session, "Retire alpha.".to_owned());
+        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        held.operator_input(session, b"q").expect("sent");
+
+        assert!(becomes(
+            || std::fs::read(&typed).is_ok_and(|b| !b.is_empty())
+        ));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let bytes = std::fs::read_to_string(&typed).unwrap();
+        assert!(
+            !bytes.contains("Retire"),
+            "typed after the input: {bytes:?}"
+        );
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_terminal_s_own_answer_does_not_drop_a_curation_prompt() {
+        // xterm.js answers a program's cursor-position question through the pane's input; that
+        // is the terminal speaking, not the operator.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        let (program, ready, typed) = a_harness_writing_down_its_input(dir.path());
+        let session = held
+            .chats()
+            .start(&one_chat_on(&program).chats[0], STARTING)
+            .expect("the chat starts");
+        held.typed().hold(session, "Compact steward.".to_owned());
+        assert!(becomes(|| ready.exists()), "the stand-in never started");
+
+        held.operator_input(session, b"\x1b[12;1R").expect("sent");
+        a_report_from(&held, session, charter_core::state::Event::SessionStart);
+
+        let wanted = "\x1b[12;1R\x1b[200~Compact steward.\x1b[201~";
+        assert!(becomes(
+            || std::fs::read(&typed).is_ok_and(|b| b.len() >= wanted.len())
+        ));
+        assert_eq!(std::fs::read_to_string(&typed).unwrap(), wanted);
         held.close_chat(session).unwrap();
     }
 

@@ -71,6 +71,9 @@ pub enum Harness {
 }
 
 impl Harness {
+    /// Every harness charter starts, each named once.
+    pub const ALL: [Harness; 3] = [Harness::ClaudeCode, Harness::Codex, Harness::Opencode];
+
     /// The harness a command is, judged by the name it is invoked under, or none for a
     /// program that is not one — a shell, or a harness charter has not measured.
     pub fn of_command(program: &str) -> Option<Self> {
@@ -229,6 +232,14 @@ pub enum ReadyToType {
     WhenItReportsItsStart,
     /// Once the terminal is raw and the harness has then written nothing for a quiet period.
     WhenRawAndQuiet,
+}
+
+/// The biggest paste a harness draws whole in its input ([`Harness::longest_paste_drawn_whole`]):
+/// at most `lines` lines and at most `chars` characters. `usize::MAX` is no limit measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrawnWhole {
+    pub lines: usize,
+    pub chars: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -533,20 +544,66 @@ impl Harness {
         }
     }
 
-    /// The longest paste, in characters, this harness draws whole in its input, where a longer
-    /// one is drawn as a placeholder the operator cannot read — or `None` for no such limit
-    /// charter knows of. A curation prompt is typed to be read before it is sent (ADR 0061),
-    /// so a longer one is not typed.
+    /// The biggest paste this harness draws whole in its input: a paste with more lines or
+    /// more characters is drawn as a placeholder the operator cannot read. A curation prompt is
+    /// typed to be read before it is sent (ADR 0061, and its amendment of 2026-09-27), so one
+    /// that would be drawn as a placeholder is not typed.
     ///
-    /// Codex 0.147.0 draws a paste over 1,000 characters as `[Pasted Content N chars]`, with no
-    /// setting a chat can be started with to stop it (measured). opencode is never typed into
-    /// ([`Harness::ready_to_type`]). Claude Code's is not measured here: its path is the one ADR
-    /// 0061 shipped with.
-    pub fn longest_paste_drawn_whole(self) -> Option<usize> {
+    /// Measured, each with no setting a chat can be started with to stop it:
+    ///
+    /// - Claude Code 2.1.283: `[Pasted text #N +M lines]` over 800 characters or at 4 lines or
+    ///   more. A line feed counts among the characters, a trailing one starts a line, and a
+    ///   character is a character, not a byte.
+    /// - Codex 0.147.0: `[Pasted Content N chars]` over 1,000 characters, line feeds among
+    ///   them, however many lines (200 were drawn whole).
+    /// - opencode 1.18.32: `[Pasted ~N lines]` at 3 lines or more, or over 150 characters.
+    ///   opencode is never typed into ([`Harness::ready_to_type`]); its limit is here so that a
+    ///   harness is judged the moment it can be.
+    pub fn longest_paste_drawn_whole(self) -> DrawnWhole {
         match self {
-            Self::Codex => Some(1000),
-            Self::ClaudeCode | Self::Opencode => None,
+            Self::ClaudeCode => DrawnWhole {
+                lines: 3,
+                chars: 800,
+            },
+            Self::Codex => DrawnWhole {
+                lines: usize::MAX,
+                chars: 1000,
+            },
+            Self::Opencode => DrawnWhole {
+                lines: 2,
+                chars: 150,
+            },
         }
+    }
+
+    /// Why `pasted`, handed to this harness as one paste, would be drawn as a placeholder in
+    /// its input — or `None` when it is drawn whole. `pasted` is the text inside the paste
+    /// (`curation::pasted`), and this is the one place that judges it, for `curate`'s refusal
+    /// and `charter persona lint`'s warning alike.
+    pub fn why_drawn_as_a_placeholder(self, pasted: &str) -> Option<String> {
+        let most = self.longest_paste_drawn_whole();
+        let lines = pasted.split('\n').count();
+        let chars = pasted.chars().count();
+        let title = self.title();
+        if lines > most.lines {
+            return Some(format!(
+                "{title} draws a paste of more than {} lines as a placeholder, and this one is \
+                 {lines} lines",
+                most.lines
+            ));
+        }
+        (chars > most.chars).then(|| {
+            format!(
+                "{title} draws a paste over {} characters as a placeholder, and this one is \
+                 {chars}",
+                most.chars
+            )
+        })
+    }
+
+    /// What the operator calls this harness: `Claude Code`, `Codex`, `opencode`.
+    pub fn title(self) -> &'static str {
+        crate::harness_plugin::adapter(self.name()).map_or(self.name(), |a| a.title())
     }
 
     /// What a chat on this harness cannot tell charter, in a sentence the chat shows — or
@@ -1240,9 +1297,83 @@ mod tests {
     fn codex_draws_a_paste_over_a_thousand_characters_as_a_placeholder() {
         // Measured on codex-cli 0.147.0: a paste of 1,000 characters is drawn whole, one of
         // 1,001 as `[Pasted Content 1001 chars]`.
-        assert_eq!(Harness::Codex.longest_paste_drawn_whole(), Some(1000));
-        assert_eq!(Harness::Opencode.longest_paste_drawn_whole(), None);
-        assert_eq!(Harness::ClaudeCode.longest_paste_drawn_whole(), None);
+        let codex = Harness::Codex;
+        assert_eq!(codex.why_drawn_as_a_placeholder(&"x".repeat(1000)), None);
+        let said = codex
+            .why_drawn_as_a_placeholder(&"x".repeat(1001))
+            .expect("1,001 characters is a placeholder");
+        assert!(
+            said.contains("Codex") && said.contains("1000") && said.contains("1001"),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn claude_code_draws_a_paste_over_800_characters_or_3_lines_as_a_placeholder() {
+        // Measured on Claude Code 2.1.283 (2026-09-27): 800 characters drawn whole, 801 as
+        // `[Pasted text #1]`; 3 lines whole, 4 as `[Pasted text #1 +3 lines]`; the line feeds
+        // count among the characters, and a character is a character, not a byte.
+        let claude = Harness::ClaudeCode;
+        assert_eq!(claude.why_drawn_as_a_placeholder(&"x".repeat(800)), None);
+        assert_eq!(claude.why_drawn_as_a_placeholder(&"é".repeat(800)), None);
+        assert_eq!(claude.why_drawn_as_a_placeholder("ab\nab\nab"), None);
+        let three_long = format!(
+            "{}\n{}\n{}",
+            "x".repeat(266),
+            "x".repeat(266),
+            "x".repeat(266)
+        );
+        assert_eq!(claude.why_drawn_as_a_placeholder(&three_long), None);
+        let chars = claude
+            .why_drawn_as_a_placeholder(&"x".repeat(801))
+            .expect("801 characters is a placeholder");
+        assert!(
+            chars.contains("Claude Code") && chars.contains("800") && chars.contains("801"),
+            "{chars}"
+        );
+        assert!(
+            claude
+                .why_drawn_as_a_placeholder(&format!("x{three_long}"))
+                .is_some(),
+            "801 with the line feeds"
+        );
+        let lines = claude
+            .why_drawn_as_a_placeholder("ab\nab\nab\nab")
+            .expect("four lines is a placeholder");
+        assert!(
+            lines.contains("3 lines") && lines.contains("4 lines"),
+            "{lines}"
+        );
+    }
+
+    #[test]
+    fn opencode_draws_a_paste_of_three_lines_or_over_150_characters_as_a_placeholder() {
+        // Measured on opencode 1.18.32: `[Pasted ~N lines]` at 3 lines or more, or at more than
+        // 150 characters.
+        let opencode = Harness::Opencode;
+        assert_eq!(opencode.why_drawn_as_a_placeholder("one\ntwo"), None);
+        assert_eq!(opencode.why_drawn_as_a_placeholder(&"x".repeat(150)), None);
+        let lines = opencode
+            .why_drawn_as_a_placeholder("one\ntwo\nthree")
+            .expect("three lines is a placeholder");
+        assert!(
+            lines.contains("opencode") && lines.contains("3 lines"),
+            "{lines}"
+        );
+        let chars = opencode
+            .why_drawn_as_a_placeholder(&"x".repeat(151))
+            .expect("151 characters is a placeholder");
+        assert!(chars.contains("150") && chars.contains("151"), "{chars}");
+    }
+
+    #[test]
+    fn every_harness_names_the_paste_it_draws_whole() {
+        // Each one measured, so a curation prompt is judged against every harness it could be
+        // typed into; one added later is given an answer on purpose.
+        for harness in Harness::ALL {
+            let most = harness.longest_paste_drawn_whole();
+            assert!(most.lines >= 1 && most.chars >= 1, "{harness:?}: {most:?}");
+        }
     }
 
     #[test]
