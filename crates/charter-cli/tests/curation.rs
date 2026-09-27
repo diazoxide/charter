@@ -175,7 +175,11 @@ fn charters_own_on_a_persona_are_run_by_that_persona() {
         ]
     );
     assert_eq!(text.matches("runs as: devops").count(), 3, "{text}");
-    assert!(text.contains("`charter persona remove devops`"), "{text}");
+    // Each prompt is one line naming its skill and its subject; the skill holds the steps.
+    assert!(
+        text.contains("Use charter's safe-remove skill to remove the persona devops."),
+        "{text}"
+    );
 }
 
 #[test]

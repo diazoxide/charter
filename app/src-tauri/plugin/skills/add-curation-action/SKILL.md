@@ -18,7 +18,7 @@ on: workspace
 runs-in: subject
 ---
 
-Review the open work in the workspace `{subject.name}` ({subject.path}) ...
+Use the review skill on the workspace {subject.name}.
 ```
 
 - `label` — what the menu shows. Required, one line.
@@ -34,9 +34,15 @@ Review the open work in the workspace `{subject.name}` ({subject.path}) ...
 ## 1. Ask what it is for
 
 Ask the operator what the chat should do, which subjects it belongs on, and where it should
-run. Draft the prompt as the operator would want to read it before pressing Enter: plain
-language, and when it relies on a skill, name the skill in words. Done when the operator
-approves the label, the kinds and the prompt.
+run. Draft the prompt as the operator would want to read it before pressing Enter: **one short,
+plain line** that says what to do and on which subject. When the work has steps, put them in a
+skill and name the skill in words in that line — never as a `/slash` command, which only one
+harness reads.
+
+Keep it short because the harness shows a long paste as a placeholder nobody can read, and
+charter then opens no chat for it: Claude Code over 800 characters or at 4 lines, Codex over
+1,000 characters. `charter persona lint` warns when a prompt, filled in for a long subject name,
+would be shown that way. Done when the operator approves the label, the kinds and the prompt.
 
 ## 2. Write it
 
@@ -67,5 +73,6 @@ charter persona lint <persona>
 ```
 
 `curation show` prints what a subject is offered, in order, each with who runs it, where, and
-the prompt as it will be typed. Done when the new action is listed there with no warning. The
+the prompt as it will be typed. Show the operator what `curation list` says. Done when the new
+action is listed there with no warning, and `persona lint` has no warning about it. The
 file is committed with the persona and travels with the plane's next save.

@@ -697,28 +697,82 @@ fn a_subject_that_is_not_there_is_refused() {
 // charter's own
 
 #[test]
-fn each_builtin_prompt_names_its_skill_uses_only_known_variables_and_no_slash_command() {
+fn each_builtin_prompt_is_one_plain_line_naming_its_skill_and_its_subject() {
+    // The procedure lives in the skill; the prompt is what the operator reads before pressing
+    // Enter, so it is one line that says which skill runs on what (ADR 0061, amended
+    // 2026-09-27).
+    for builtin in BUILTINS {
+        let template = builtin.template;
+        assert!(
+            template_problems(template).is_empty(),
+            "{}: {:?}",
+            builtin.id,
+            template_problems(template)
+        );
+        assert!(!template.contains('\n'), "{} is not one line", builtin.id);
+        assert!(
+            template.starts_with(&format!("Use charter's {} skill ", builtin.skill)),
+            "{} does not name its skill first: {template}",
+            builtin.id
+        );
+        assert!(
+            template.contains("{subject.name}"),
+            "{} does not name its subject",
+            builtin.id
+        );
+        assert!(
+            !template.contains('`'),
+            "{} is not plain language",
+            builtin.id
+        );
+        assert!(
+            !template.starts_with('/'),
+            "{} is a slash command",
+            builtin.id
+        );
+    }
+}
+
+#[test]
+fn each_builtin_prompt_reads_whole_in_every_harness_it_can_be_typed_into() {
+    // Rendered for a subject with a long name, on every kind it is offered on.
+    let dir = plane(&[LONG_SUBJECT_NAME], &[LONG_SUBJECT_NAME], None);
+    let root = dir.path();
     for builtin in BUILTINS {
         for kind in builtin.on {
-            let template = (builtin.template)(*kind);
-            assert!(
-                template_problems(template).is_empty(),
-                "{} on {kind:?}: {:?}",
-                builtin.id,
-                template_problems(template)
-            );
-            assert!(
-                template.contains(&format!("`{}` skill", builtin.skill)),
-                "{} on {kind:?} does not name its skill",
-                builtin.id
-            );
-            assert!(
-                !template.lines().any(|l| l.trim_start().starts_with('/')),
-                "{} on {kind:?} carries a slash command",
-                builtin.id
-            );
+            let subject = Subject {
+                kind: *kind,
+                name: Some(LONG_SUBJECT_NAME.to_owned()),
+            };
+            let got = resolve(root, &subject).unwrap();
+            let action = got
+                .actions
+                .iter()
+                .find(|a| a.id == format!("charter/{}", builtin.id))
+                .unwrap();
+            assert!(action.prompt.contains(LONG_SUBJECT_NAME));
+            for harness in crate::harness::Harness::ALL {
+                if harness.ready_to_type().is_none() {
+                    continue;
+                }
+                assert_eq!(
+                    harness.why_drawn_as_a_placeholder(&pasted(&action.prompt)),
+                    None,
+                    "{} on {kind:?}",
+                    builtin.id
+                );
+            }
         }
     }
+}
+
+#[test]
+fn the_text_pasted_is_the_prompt_with_nothing_that_could_submit_it() {
+    assert_eq!(pasted("one\r\ntwo\rthree\n\n"), "one\ntwo\nthree");
+    assert_eq!(
+        pasted("before\x1b[201~\nafter\x07\x7f\tend"),
+        "before[201~\nafter\tend"
+    );
 }
 
 #[test]
@@ -934,4 +988,110 @@ fn persona_lint_reports_each_curation_problem_under_its_file() {
             ),
         ]
     );
+}
+
+#[test]
+fn persona_lint_warns_when_a_prompt_with_a_long_subject_name_would_be_a_placeholder_in_codex() {
+    // 960 characters and a space before the name: whole for a short name, over Codex's 1,000
+    // for a long one — so the warning is about the prompt rendered, not the template.
+    let dir = plane(&["ops"], &[], None);
+    let root = dir.path();
+    declare(
+        root,
+        "ops",
+        "long",
+        &format!(
+            "---\nlabel: Long\non: workspace\n---\n\n{} {{subject.name}}\n",
+            "x".repeat(960)
+        ),
+    );
+    declare(
+        root,
+        "ops",
+        "short",
+        "---\nlabel: Short\non: workspace, persona, plane\n---\n\nTidy {subject.name}.\n",
+    );
+
+    let issues = lint(root, "ops");
+
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].level, Level::Warn);
+    let said = &issues[0].message;
+    assert!(said.starts_with("curation/long.md: "), "{said}");
+    assert!(said.contains("Codex"), "{said}");
+    assert!(said.contains("workspace"), "{said}");
+    assert!(
+        said.contains(&format!("{}", 961 + LONG_SUBJECT_NAME.len())),
+        "{said}"
+    );
+}
+
+#[test]
+fn persona_lint_never_warns_about_a_harness_no_prompt_is_typed_into() {
+    // opencode draws 151 characters as a placeholder, but curation never types into it.
+    let dir = plane(&["ops"], &[], None);
+    let root = dir.path();
+    declare(
+        root,
+        "ops",
+        "medium",
+        &format!(
+            "---\nlabel: Medium\non: plane\n---\n\n{}\n",
+            "x".repeat(200)
+        ),
+    );
+
+    assert_eq!(lint(root, "ops"), Vec::new());
+}
+
+#[test]
+fn persona_lint_renders_each_kind_s_own_name_and_path() {
+    // Exactly 1,001 characters once rendered, so the count in the warning shows what each
+    // variable became: the plane's own directory name, and a persona's directory.
+    let dir = plane(&["ops"], &[], None);
+    let root = dir.path();
+    let plane_name = root.file_name().unwrap().to_string_lossy().chars().count();
+    declare(
+        root,
+        "ops",
+        "on-plane",
+        &format!(
+            "---\nlabel: P\non: plane\n---\n\n{}{{subject.name}}\n",
+            "x".repeat(1001 - plane_name)
+        ),
+    );
+    let persona_path = root
+        .join("personas")
+        .join(LONG_SUBJECT_NAME)
+        .display()
+        .to_string()
+        .chars()
+        .count();
+    declare(
+        root,
+        "ops",
+        "on-persona",
+        &format!(
+            "---\nlabel: Q\non: persona\n---\n\n{}{{subject.path}}\n",
+            "x".repeat(1001 - persona_path)
+        ),
+    );
+
+    let issues = lint(root, "ops");
+
+    let said: Vec<&str> = issues.iter().map(|i| i.message.as_str()).collect();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said[0].starts_with("curation/on-persona.md: on a persona "),
+        "{}",
+        said[0]
+    );
+    assert!(
+        said[1].starts_with("curation/on-plane.md: on a plane "),
+        "{}",
+        said[1]
+    );
+    for message in said {
+        assert!(message.contains("this one is 1001"), "{message}");
+    }
 }

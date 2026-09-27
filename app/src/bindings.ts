@@ -262,7 +262,10 @@ export const commands = {
 	 *  (charter-app#248). The chat is untouched: it is still waiting, and its next stop asks again.
 	 */
 	ignoreNeedsYou: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("ignore_needs_you", { plane, session })),
-	/**  Sends what a pane typed to the session's program. */
+	/**
+	 *  Sends what a pane typed to the session's program. Anything but the terminal's own answer
+	 *  drops a curation prompt still waiting to be typed into it (`Held::operator_input`).
+	 */
 	sendInput: (plane: PlaneId, session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { plane, session, text })),
 	/**
 	 *  Sends a pane's bytes that are not text to the session's program, each as the one byte it

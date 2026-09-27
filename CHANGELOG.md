@@ -218,6 +218,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Curation prompts are one line you can read before you press Enter.** charter's own three
+  now read, for example, *Use charter's safe-remove skill to remove the workspace alpha.*, and
+  the skill holds the steps the old paragraph spelled out. Claude Code shows a paste over 800
+  characters or of 4 lines or more as `[Pasted text #N +M lines]`, and Codex one over 1,000
+  characters as `[Pasted Content N chars]`, so a curation action whose prompt would be shown
+  that way now opens no chat on that harness and says why, and `charter persona lint` warns
+  about one of a persona's that would, naming the harness (ADR 0061).
+- **Typing in a curation chat before its prompt appears drops the prompt.** Anything you send
+  that chat — a key, a paste, a click — before the prompt is typed means it is never typed
+  after what you began. The terminal's own answers to the harness starting up do not count.
 - **The nightly mutation run's slowest test takes about a quarter of the time it did.** The
   plane-root replay asks git each distinct question once instead of once per recorded row,
   and more of how saving and the `CHARTER_*` steering variables behave is pinned by tests.
