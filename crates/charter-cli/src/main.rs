@@ -990,30 +990,44 @@ impl Here {
         }
     }
 
-    /// Whether this is a plane-root chat and `flag` does not name a workspace instead
-    /// ([`charter_core::active::at_plane_root`]).
-    fn at_plane_root(&self, flag: Option<&str>) -> bool {
-        charter_core::active::at_plane_root(
-            flag,
-            self.workspace_env.as_deref(),
+    /// Whether this invocation is at the plane root, and why — `None` when `flag`, the
+    /// environment, the tree or a pointer puts it in a workspace
+    /// ([`charter_core::active::plane_root`]).
+    fn plane_root(&self, flag: Option<&str>) -> Option<charter_core::active::PlaneRoot> {
+        charter_core::active::plane_root(
+            &self.asking(flag, self.workspace_env.as_deref()),
             self.plane_root_env.as_deref(),
         )
     }
 
-    /// The workspace this invocation acts on — or, in a chat the app started at the plane
-    /// root, the sentence saying to name one with `-w` (SI-1). Everywhere else there is always
-    /// one: the ladder ends on `[workspace] default`, and under that on the literal `default`.
+    /// Whether the app started this chat at the plane root and nothing names a workspace
+    /// instead — the one kind of root session `workspace use` does not move.
+    fn launched_at_plane_root(&self) -> bool {
+        self.plane_root(None) == Some(charter_core::active::PlaneRoot::Launched)
+    }
+
+    /// The workspace this invocation acts on — or, at the plane root, the sentence saying to
+    /// name one with `-w` (SI-1). The plane root is a chat the app started there, or a session
+    /// standing anywhere in the plane outside every workspace that has chosen none (SI-1b).
+    /// Everywhere else there is always one: the ladder ends on `[workspace] default`, and
+    /// under that on the literal `default`.
     pub fn active_workspace(&self, flag: Option<&str>) -> Result<String, String> {
-        if self.at_plane_root(flag) {
-            return Err(charter_core::active::plane_root_refusal(self.plane.root()));
+        if let Some(by) = self.plane_root(flag) {
+            return Err(charter_core::active::plane_root_refusal(
+                self.plane.root(),
+                by,
+            ));
         }
         Ok(charter_core::active::workspace(&self.asking(flag, self.workspace_env.as_deref())).name)
     }
 
-    /// The ladder's answer, with no regard for a plane-root chat — for the one caller that
-    /// must name a workspace and cannot yet say "none" (`handoff`'s stamp).
-    pub fn ladder_workspace(&self, flag: Option<&str>) -> String {
-        charter_core::active::workspace(&self.asking(flag, self.workspace_env.as_deref())).name
+    /// Where this invocation works: the plane root, or the workspace it acts on — for a
+    /// command that records where something came from (`handoff`'s stamp and todo).
+    pub fn place(&self, flag: Option<&str>) -> charter_core::active::Place {
+        match self.active_workspace(flag) {
+            Ok(ws) => charter_core::active::Place::Workspace(ws),
+            Err(_) => charter_core::active::Place::PlaneRoot,
+        }
     }
 
     /// The workspace this invocation is in, or `None` in a plane-root chat — for a command
@@ -1686,7 +1700,7 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
             let via = charter_core::active::workspace_source(&here.ids, chosen.rung);
             // A plane-root chat is in no workspace: every workspace is reported, and none is
             // marked as the one it is in (SI-1). `(none)` can be no workspace's name.
-            let at_root = here.at_plane_root(workspace.as_deref());
+            let at_root = here.plane_root(workspace.as_deref()).is_some();
             let (active, via) = if at_root {
                 ("(none)", "the plane root".to_string())
             } else {
@@ -1810,7 +1824,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             let Some(now) = pinned(now) else {
                 return Some(ExitCode::FAILURE);
             };
-            if here.at_plane_root(None) {
+            if here.launched_at_plane_root() {
                 return Some(refused(&format!(
                     "this chat was started at the plane root and stays there, so it is not \
                      moved into '{name}'. Name the workspace on each command with -w {name}, or \
@@ -1847,7 +1861,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             let Some(now) = pinned(now) else {
                 return Some(ExitCode::FAILURE);
             };
-            if *use_it && here.at_plane_root(None) {
+            if *use_it && here.launched_at_plane_root() {
                 return Some(refused(&format!(
                     "this chat was started at the plane root and stays there, so nothing was \
                      created: --use would move it into '{name}'. Create it without --use, and \

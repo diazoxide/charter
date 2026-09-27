@@ -149,9 +149,9 @@ fn the_gate_and_a_report_back_arrive_as_one_context() {
     let plane = a_plane();
     let report = Handback {
         from: "drop commons".to_owned(),
-        from_workspace: "platform-next".to_owned(),
+        from_workspace: charter_core::active::Place::Workspace("platform-next".to_owned()),
         to: "steward 3".to_owned(),
-        to_workspace: "ops".to_owned(),
+        to_workspace: charter_core::active::Place::Workspace("ops".to_owned()),
         summary: "Dropped it.".to_owned(),
     };
     handback::leave(plane.path(), For::Chat(3), &report).unwrap();

@@ -116,7 +116,9 @@ fn a_shell_with_no_pane_id_is_told_that_is_why_it_is_on_default() {
     // operator asked "why am I in default workspace again?" of.
     let tmp = tempfile::tempdir().unwrap();
     let root = plane(tmp.path().join("plane"), &[]);
-    let ran = run(&root, &["status"]);
+    // From outside the plane: standing at its root with nothing chosen is the plane root, in
+    // no workspace (SI-1b), and the plane's default answers only for a caller that is nowhere.
+    let ran = run_in(&root, tmp.path(), &["status"], &[]);
 
     assert!(
         ran.out.starts_with(

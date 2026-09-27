@@ -252,9 +252,12 @@ enum Standing {
     /// question the window files the chat's tab by ([`crate::workspaces::Plane::workspace_of`]),
     /// asked once, so the tab and the chat cannot name two workspaces.
     Workspace(String),
-    /// At the plane root itself: in no workspace, on purpose.
+    /// At the plane root: in no workspace, on purpose. The plane's own directory and anywhere
+    /// else under it that is not one of its workspaces — `docs/`, `.charter/`, `workspaces/`
+    /// itself (SI-1b) — which is every chat the window files on the plane root's tab.
     PlaneRoot,
-    /// Anywhere else. The chat is told nothing, and its own ladder answers as it always has.
+    /// Outside the plane. The chat is told nothing, and its own ladder answers as it always
+    /// has.
     Elsewhere,
 }
 
@@ -263,8 +266,7 @@ impl Standing {
         if let Some(name) = crate::workspaces::Plane::open(root).workspace_of(here) {
             return Self::Workspace(name);
         }
-        let resolved = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        if resolved(here) == resolved(root) {
+        if crate::active::inside_plane(root, here) {
             Self::PlaneRoot
         } else {
             Self::Elsewhere

@@ -145,6 +145,16 @@ one refuses and asks for `-w <workspace>`, `charter workspace current` prints no
 fails, and `charter workspace use` does not move it. `-w`, or `$CHARTER_WORKSPACE` set on one
 command, names the workspace it acts on.
 
+The plane root is not only the plane's own directory: **anywhere in the plane that is no
+workspace's** — `docs/`, `.charter/`, `workspaces/` itself — is the plane root too, and the app
+hands a chat it starts there the same variable. A session standing there that the app did not
+start is at the plane root as well, as long as nothing has chosen a workspace for it (no `-w`,
+no `$CHARTER_WORKSPACE`, no `charter workspace use` for this session or this terminal): it is
+not asked which workspace to use, and a command that needs one asks for `-w`. The plane's
+defaults — `workspaces/.default` and `[workspace] default` — do not speak for it; they answer
+for a caller outside the plane. Unlike a chat the app started there, it can still move:
+`charter workspace use <name>` puts it in that workspace from then on.
+
 `charter workspace current` prints the answer, the name alone, for a script. `charter
 status` prints it *and the rung that produced it*, which is usually the faster question to
 ask when the answer surprised you.

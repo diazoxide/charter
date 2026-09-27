@@ -111,7 +111,13 @@ from the window, and exits 1. If the app refuses, you get one more line saying w
 
 ```
 ⟨handoff from <source chat's name> · workspace <source-workspace> · <YYYY-MM-DD HH:MM>⟩
+⟨handoff from <source chat's name> · plane root · <YYYY-MM-DD HH:MM>⟩
 ```
+
+The second is a handoff from a chat at the **plane root**, which is in no workspace: its stamp
+says so, rather than naming the workspace charter would otherwise have picked for it. The chat
+it opens still starts in the workspace you handed it to, and a report back to a root chat that
+has since closed is kept for the plane root — the next chat started there reads it.
 
 Facts charter can observe, and no instruction. The new chat — and whoever reads the transcript
 later — can tell the first message was not typed there. The source is named the way you see it:
@@ -124,7 +130,7 @@ chat's name in its place. Minutes, not seconds: the stamp is read by a person de
 this is the message they approved a moment ago.
 
 The same note is on the new chat's tab, as its tooltip, and in its pane's corner:
-`↳ from steward 3 · platform-next`.
+`↳ from steward 3 · platform-next` (`↳ from steward 3 · plane root` from the plane root).
 
 ## A report back
 

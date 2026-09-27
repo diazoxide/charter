@@ -111,13 +111,23 @@ impl Ask<'_> {
         .name
     }
 
-    fn unattended(&self) -> bool {
-        self.text("permission_mode") == Some(UNATTENDED_MODE)
+    /// Whether this session is at the plane root, and why ([`active::plane_root`]).
+    fn plane_root(&self, ids: &Ids) -> Option<active::PlaneRoot> {
+        let pinned = (self.env)(active::WORKSPACE_ENV);
+        active::plane_root_in(
+            &active::Asking {
+                root: self.root,
+                cwd: self.cwd,
+                flag: None,
+                ids,
+                env: pinned.as_deref(),
+            },
+            self.env,
+        )
     }
 
-    /// Whether the launcher started this chat at the plane root ([`active::at_plane_root`]).
-    fn at_plane_root(&self) -> bool {
-        active::at_plane_root_in(self.env)
+    fn unattended(&self) -> bool {
+        self.text("permission_mode") == Some(UNATTENDED_MODE)
     }
 }
 
@@ -125,9 +135,9 @@ impl Ask<'_> {
 pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
     let mut parts = Vec::new();
     let ids = ask.ids();
-    let at_root = ask.at_plane_root();
-    if at_root {
-        parts.push(plane_root_note());
+    let at_root = ask.plane_root(&ids);
+    if let Some(by) = at_root {
+        parts.push(plane_root_note(by));
     } else if let Some(gate) = workspace_confirm_nudge(ask, &ids) {
         parts.push(gate);
     }
@@ -151,7 +161,7 @@ pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
     if let Some(unshared) = uncommitted_memory_nudge(ask.root) {
         parts.push(unshared);
     }
-    if at_root {
+    if at_root.is_some() {
         if let Some(all) = workspaces_to_manage(ask) {
             parts.push(all);
         }
@@ -175,9 +185,20 @@ pub fn parts(ask: &Ask, piece_note: Option<String>) -> Vec<String> {
     parts
 }
 
-/// The workspace this session is in, by the ladder the briefing reads it with.
+/// The workspace this session is in, by the ladder the briefing reads it with — the ladder's
+/// name even at the plane root; [`place_of`] says where the session actually is.
 pub fn workspace_of(ask: &Ask) -> String {
     ask.workspace(&ask.ids())
+}
+
+/// Where this session works: the plane root ([`active::plane_root`]), or the workspace the
+/// ladder the briefing reads it with names.
+pub fn place_of(ask: &Ask) -> active::Place {
+    let ids = ask.ids();
+    match ask.plane_root(&ids) {
+        Some(_) => active::Place::PlaneRoot,
+        None => active::Place::Workspace(ask.workspace(&ids)),
+    }
 }
 
 /// `hooks._one_line`: whitespace runs to one space, clipped with `…`.
@@ -268,20 +289,34 @@ fn workspace_confirm_nudge(ask: &Ask, ids: &Ids) -> Option<String> {
 
 /// What a plane-root chat is told in the gate's place (SI-1): where it is, that it stays
 /// there, and how it reaches a workspace without being moved into one.
-fn plane_root_note() -> String {
-    format!(
-        "⬢ **This chat is at the plane root — in no workspace, on purpose.** charter started it \
-         there (`${}`), so do not ask the user which workspace to use and do not run `charter \
-         workspace use`: this session stays at the root. From here you look after the plane \
-         itself — its personas, its settings, its memory — and its workspaces, which you may \
-         create, rename, curate or retire. Name the workspace on every command that acts on \
-         one, with `-w <name>` (`charter ws todo -w <name> \"<what>\"`, `charter workspace \
-         create <name> --vision \"<the goal>\"`); a command that needs a workspace and is not \
-         given one refuses rather than guess. Work inside a workspace's repos belongs in a chat \
-         started in that workspace.",
-        active::PLANE_ROOT_ENV
-    )
+fn plane_root_note(by: active::PlaneRoot) -> String {
+    match by {
+        active::PlaneRoot::Launched => format!(
+            "⬢ **This chat is at the plane root — in no workspace, on purpose.** charter \
+             started it there (`${}`), so do not ask the user which workspace to use and do not \
+             run `charter workspace use`: this session stays at the root. {}",
+            active::PLANE_ROOT_ENV,
+            AT_THE_ROOT
+        ),
+        // Nothing pinned it there: it stands in the plane outside every workspace and has
+        // chosen none (SI-1b). It is not quizzed either, and it may still move.
+        active::PlaneRoot::Standing => format!(
+            "⬢ **This chat is at the plane root — in no workspace.** It stands in the plane \
+             outside every workspace and nothing has chosen one for it, so do not ask the user \
+             which workspace to use. {} To move this session into one for good, run `charter \
+             workspace use <name>` when the user asks for it.",
+            AT_THE_ROOT
+        ),
+    }
 }
+
+/// What every chat at the plane root is told it may do from there, however it got there.
+const AT_THE_ROOT: &str = "From here you look after the plane itself — its personas, its \
+settings, its memory — and its workspaces, which you may create, rename, curate or retire. Name \
+the workspace on every command that acts on one, with `-w <name>` (`charter ws todo -w <name> \
+\"<what>\"`, `charter workspace create <name> --vision \"<the goal>\"`); a command that needs a \
+workspace and is not given one refuses rather than guess. Work inside a workspace's repos \
+belongs in a chat started in that workspace.";
 
 // ---- 2. the persona -----------------------------------------------------------------------
 

@@ -62,6 +62,11 @@ fn handoff(root: &Path, app: Option<&Path>) -> Output {
 
 /// `charter <args>` with the brief on a pipe, as a chat numbered [`ASKING`] runs it.
 fn charter(root: &Path, app: Option<&Path>, args: &[&str]) -> Output {
+    charter_with(root, app, args, &[])
+}
+
+/// [`charter`], with `env` set on top.
+fn charter_with(root: &Path, app: Option<&Path>, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_charter"));
     command
         .args(args)
@@ -95,6 +100,9 @@ fn charter(root: &Path, app: Option<&Path>, args: &[&str]) -> Output {
         command
             .env(SOCKET_ENV, socket)
             .env(CHAT_ENV, ASKING.to_string());
+    }
+    for (name, value) in env {
+        command.env(name, value);
     }
     let mut child = command.spawn().expect("the binary runs");
     // A refusal can come before charter reads the brief; `feed` leaves that to the caller,
@@ -464,6 +472,12 @@ fn alphas_todos(root: &Path) -> Vec<charter_core::workspaces::Entry> {
 fn an_opened_handoff_leaves_its_todo_in_the_target_workspace_and_not_the_brief() {
     let tmp = daily();
     let root = root(&tmp);
+    // The asking chat chose `beta` (`charter workspace use beta`), so that is where it works.
+    std::fs::write(
+        root.join(format!(".charter/sessions/{ASKING}.workspace")),
+        "beta\n",
+    )
+    .unwrap();
     let before = alphas_todos(&root).len();
     let (socket, _reading, _asked) = an_app(&tmp, opens_as_nine);
 
@@ -636,5 +650,122 @@ fn a_dispatch_row_that_cannot_be_written_is_said_and_the_chat_stays_open() {
         text(&out.stderr),
         "! charter handoff: chat 9 is open in 'alpha', but its row could not be added to the \
          dispatch log (personas/_dispatch).\n"
+    );
+}
+
+// ---- SI-1b: a handoff from the plane root ---------------------------------------------------
+
+/// The open the app was asked for, once a handoff has run against [`opens_as_nine`].
+fn opened(asked: &Asked) -> OpenChat {
+    let asked = asked.lock().unwrap().clone();
+    match asked.last() {
+        Some((_, Ask::Open(open))) => (**open).clone(),
+        other => panic!("the last line opens: {other:?}"),
+    }
+}
+
+#[test]
+fn a_handoff_from_a_chat_the_app_started_at_the_plane_root_is_stamped_with_the_plane_root() {
+    // The defect: the stamp named the ladder's answer — the plane's default — for a chat that is
+    // in no workspace. The open still names the workspace the brief goes to.
+    let tmp = daily();
+    let root = root(&tmp);
+    let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
+
+    let out = charter_with(
+        &root,
+        Some(&socket),
+        &["handoff", "alpha"],
+        &[("CHARTER_PLANE_ROOT_SESSION", "1")],
+    );
+
+    assert_eq!(text(&out.stderr), "", "{}", text(&out.stderr));
+    assert_eq!(out.status.code(), Some(0));
+    let open = opened(&asked);
+    assert_eq!(open.workspace, "alpha", "it lands where the brief sends it");
+    let read = charter_core::handoff::stamped(&open.message).expect("stamped");
+    assert_eq!(read.chat, ASKING.to_string());
+    assert_eq!(read.place(), Some(charter_core::active::Place::PlaneRoot));
+    assert!(
+        minute_masked(&open.message).starts_with(&format!(
+            "⟨handoff from chat {ASKING} · plane root · <when>⟩\n\n"
+        )),
+        "{:?}",
+        open.message
+    );
+    // And the todo it leaves in `alpha` says where it came from, the same way.
+    let todo = alphas_todos(&root)
+        .into_iter()
+        .find(|t| t.title == "# Retry the failed webhook deliveries")
+        .expect("the todo");
+    assert!(
+        todo.body
+            .contains(&format!("Handed off from chat {ASKING} · plane root.")),
+        "{}",
+        todo.body
+    );
+}
+
+#[test]
+fn a_handoff_from_a_session_standing_at_the_root_with_no_workspace_is_stamped_the_same() {
+    // Nothing chose a workspace for chat 3 in the daily plane, and it stands at the root.
+    let tmp = daily();
+    let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
+
+    let out = handoff(&root(&tmp), Some(&socket));
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let open = opened(&asked);
+    assert_eq!(
+        charter_core::handoff::stamped(&open.message).and_then(|read| read.place()),
+        Some(charter_core::active::Place::PlaneRoot)
+    );
+}
+
+#[test]
+fn a_handoff_from_a_chat_in_a_workspace_is_stamped_with_that_workspace() {
+    let tmp = daily();
+    let root = root(&tmp);
+    let (socket, _reading, asked) = an_app(&tmp, opens_as_nine);
+
+    let out = charter_with(
+        &root,
+        Some(&socket),
+        &["handoff", "alpha"],
+        &[("CHARTER_WORKSPACE", "beta")],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let open = opened(&asked);
+    assert_eq!(
+        charter_core::handoff::stamped(&open.message).and_then(|read| read.place()),
+        Some(charter_core::active::Place::Workspace("beta".to_owned()))
+    );
+}
+
+#[test]
+fn a_report_kept_for_the_plane_root_says_so() {
+    // The app keeps a report for the place its closed parent worked in, by `Place::word`.
+    let tmp = daily();
+    let (socket, _reading, _asked) = an_app(&tmp, |tickets, connection, ask| match ask {
+        Ask::Report(back) => {
+            match tickets.spend(back.chat, connection, &back.ticket, Instant::now()) {
+                Ok(()) => Answer::Reported {
+                    to: "steward 1".to_owned(),
+                    kept_for: Some("plane root".to_owned()),
+                },
+                Err(why) => Answer::No { why },
+            }
+        }
+        other => opens_as_nine(tickets, connection, other),
+    });
+
+    let out = charter(&root(&tmp), Some(&socket), &["handoff", "report", "Done."]);
+
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        "charter handoff report: 'steward 1' has closed, so the report is kept for the plane \
+         root. The next chat that starts there reads it.\n"
     );
 }

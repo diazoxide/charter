@@ -461,7 +461,8 @@ struct OpenChat {
 pub struct HandedFromNote {
     /// The chat it came from, by the name the operator saw it under.
     pub name: String,
-    /// The workspace it came from.
+    /// The workspace it came from, or `plane root` for a chat that handed off from there
+    /// (SI-1b) — `charter_core::active::Place::word`, drawn as it is.
     pub workspace: String,
 }
 
@@ -469,7 +470,7 @@ impl From<&charter_core::reopen::HandedFrom> for HandedFromNote {
     fn from(from: &charter_core::reopen::HandedFrom) -> Self {
         Self {
             name: from.name.clone(),
-            workspace: from.workspace.clone(),
+            workspace: from.workspace.word().to_owned(),
         }
     }
 }

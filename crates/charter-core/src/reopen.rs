@@ -147,8 +147,9 @@ pub struct HandedFrom {
     /// Its name as the operator saw it when it handed off: the name it was given, or its
     /// default. A copy, so the note still reads after that chat is closed.
     pub name: String,
-    /// The workspace it handed off from, which is where a report goes when it is gone.
-    pub workspace: String,
+    /// Where it handed off from — a workspace, or the plane root (SI-1b) — which is where a
+    /// report goes when it is gone.
+    pub workspace: crate::active::Place,
     /// Whether it asked for a report, and whether one has been sent.
     pub report: Owed,
 }
@@ -901,7 +902,7 @@ impl From<&HandedFrom> for FromOnDisk {
         Self {
             chat: from.chat,
             name: from.name.clone(),
-            workspace: from.workspace.clone(),
+            workspace: from.workspace.word().to_owned(),
             report: from.report.word().to_owned(),
         }
     }
@@ -915,8 +916,7 @@ impl FromOnDisk {
         Some(HandedFrom {
             chat: (self.chat > 0).then_some(self.chat)?,
             name: label(&self.name).ok().flatten()?,
-            workspace: crate::contain::workspace_name_ok(&self.workspace)
-                .then_some(self.workspace)?,
+            workspace: crate::active::Place::read(&self.workspace)?,
             report: Owed::of(&self.report),
         })
     }
@@ -2226,7 +2226,7 @@ mod tests {
         HandedFrom {
             chat: 16,
             name: "steward 3".into(),
-            workspace: "platform-next".into(),
+            workspace: crate::active::Place::Workspace("platform-next".into()),
             report: Owed::Due,
         }
     }
@@ -2266,6 +2266,28 @@ mod tests {
     }
 
     #[test]
+    fn a_chat_handed_off_from_the_plane_root_comes_back_knowing_it() {
+        // SI-1b: the root is no workspace, and reads back as the root rather than as nothing.
+        let plane = tempfile::tempdir().unwrap();
+        let from_root = HandedFrom {
+            workspace: crate::active::Place::PlaneRoot,
+            ..handed()
+        };
+        let record = Record {
+            chats: vec![Chat {
+                from: Some(from_root.clone()),
+                ..claude("3", None)
+            }],
+            ..Default::default()
+        };
+        write(plane.path(), &record).unwrap();
+
+        let text = std::fs::read_to_string(path(plane.path())).unwrap();
+        assert!(text.contains(r#""workspace": "plane root""#), "{text}");
+        assert_eq!(read(plane.path()).chats[0].from, Some(from_root));
+    }
+
+    #[test]
     fn a_chat_the_operator_opened_writes_no_from_key() {
         let plane = tempfile::tempdir().unwrap();
         write(plane.path(), &one_chat()).unwrap();
@@ -2283,6 +2305,8 @@ mod tests {
             r#"{"chat":0,"name":"steward 3","workspace":"ops","report":"owed"}"#,
             "{\"chat\":16,\"name\":\"pay\\u202elanigiro\",\"workspace\":\"ops\",\"report\":\"owed\"}",
             r#"{"chat":16,"name":"steward 3","workspace":"../up","report":"owed"}"#,
+            r#"{"chat":16,"name":"steward 3","workspace":"","report":"owed"}"#,
+            r#"{"chat":16,"name":"steward 3","workspace":"Plane Root","report":"owed"}"#,
         ] {
             std::fs::write(
                 path(plane.path()),

@@ -129,7 +129,7 @@ fn a_plane() -> Plane {
     elsewhere.from = Some(HandedFrom {
         chat: 1,
         name: "steward 1".into(),
-        workspace: "alpha".into(),
+        workspace: crate::active::Place::Workspace("alpha".into()),
         report: Owed::Due,
     });
     crate::reopen::write(
@@ -273,7 +273,10 @@ fn everything_follows(plane: &Plane) {
         record.chats[0].cwd.as_deref(),
         Some(ws.join("svc").as_path())
     );
-    assert_eq!(record.chats[1].from.as_ref().unwrap().workspace, "beta");
+    assert_eq!(
+        record.chats[1].from.as_ref().unwrap().workspace,
+        crate::active::Place::Workspace("beta".into())
+    );
     assert_eq!(record.views[0].workspace.as_deref(), Some("beta"));
     assert_eq!(record.views[1].key, "beta");
     assert_eq!(record.views[1].title, "Workspace settings · beta");

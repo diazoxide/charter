@@ -180,7 +180,9 @@ fn current_prints_the_resolved_workspace_and_nothing_else() {
     let tmp = tempfile::tempdir().unwrap();
     let root = plane(tmp.path().join("plane"), &["alpha"]);
 
-    let ran = run(&root, &["workspace", "current"], &[]);
+    // From outside the plane, where nothing about the directory says where the caller is: at
+    // the plane root, a session that chose nothing is in no workspace (SI-1b, `plane_root.rs`).
+    let ran = run_in(&root, tmp.path(), &["workspace", "current"], &[]);
     assert_eq!(ran.out, "default\n");
     // Nothing on stderr: charter explains the rung there and this port does not, and a
     // scenario in the differential run records that as the difference it is.

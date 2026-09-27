@@ -40,7 +40,19 @@ fn now() -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
+/// What a session is told whose process stands OUTSIDE the plane — where nothing about the
+/// directory says where it is, so the gate and the ladder decide as they always did. A session
+/// standing in the plane outside every workspace is at the plane root ([`told_at`], SI-1b).
 fn told(root: &Path, env: &[(&str, &str)], payload: Value) -> Vec<String> {
+    told_at(
+        root,
+        root.parent().expect("the plane has a parent"),
+        env,
+        payload,
+    )
+}
+
+fn told_at(root: &Path, cwd: &Path, env: &[(&str, &str)], payload: Value) -> Vec<String> {
     let env: HashMap<String, String> = env
         .iter()
         .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
@@ -49,7 +61,7 @@ fn told(root: &Path, env: &[(&str, &str)], payload: Value) -> Vec<String> {
     parts(
         &Ask {
             root,
-            cwd: root,
+            cwd,
             payload: &payload,
             env: &lookup,
             now: now(),
@@ -832,4 +844,59 @@ fn a_chat_with_no_pin_and_no_tree_is_asked_as_it_always_was() {
             got[0]
         );
     }
+}
+
+// ---- SI-1b: standing in the plane outside every workspace -------------------------------
+
+#[test]
+fn a_session_standing_in_the_plane_outside_every_workspace_is_told_it_is_at_the_root() {
+    // The defect: a chat started in `docs/` was asked which workspace it was in.
+    let (_d, root) = plane();
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    for cwd in [root.clone(), root.join("docs")] {
+        let got = told_at(
+            &root,
+            &cwd,
+            &[("CHARTER_SESSION_ID", "s1")],
+            serde_json::json!({}),
+        );
+        assert!(
+            !got.iter().any(|p| p.contains("Confirm the workspace")),
+            "{got:?}"
+        );
+        assert!(
+            got[0].starts_with("⬢ **This chat is at the plane root — in no workspace.**"),
+            "{}",
+            got[0]
+        );
+        // Nothing pinned it, so it is told how to move — and every workspace is its to manage.
+        assert!(
+            got[0].contains("`charter workspace use <name>`"),
+            "{}",
+            got[0]
+        );
+        assert!(
+            got.iter()
+                .any(|p| p.contains("workspaces on this plane** — yours to manage")),
+            "{got:?}"
+        );
+    }
+}
+
+#[test]
+fn a_session_in_the_plane_that_chose_a_workspace_is_in_it() {
+    let (_d, root) = plane();
+    std::fs::create_dir_all(root.join(".charter/sessions")).unwrap();
+    std::fs::write(root.join(".charter/sessions/s1.workspace"), "alpha\n").unwrap();
+    let got = told_at(
+        &root,
+        &root,
+        &[("CHARTER_SESSION_ID", "s1")],
+        serde_json::json!({}),
+    );
+    assert!(!got.iter().any(|p| p.contains("plane root")), "{got:?}");
+    assert!(
+        got.iter().any(|p| p.contains("1 other workspace")),
+        "{got:?}"
+    );
 }

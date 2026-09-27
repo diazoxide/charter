@@ -281,6 +281,16 @@ how it is cited and nothing here is renumbered.
     A plane-root chat is in no workspace: `charter` refuses a command that needs one unless it
     is named with `-w`, `charter workspace use` does not move it, and its briefing lists the
     plane's workspaces as ones it may manage. Operator's rulings, 2026-09-26 (SI-1).
+    **The plane root is anywhere in the plane outside every workspace** — `docs/` as much as
+    the plane's own directory — and the app marks a chat it starts there the same way. A
+    session standing there that nothing has chosen a workspace for (no `-w`, no
+    `$CHARTER_WORKSPACE`, no session or terminal pointer) is at the plane root too, even with
+    `workspaces/.default` or `[workspace] default` set: those answer for a caller outside the
+    plane, not for one standing in it; unlike an app-started root chat, `charter workspace use`
+    still moves it. A root chat's handoff is stamped `plane root`, not a workspace, and the chat
+    it opens starts in the workspace the brief names; a report back to a root chat that has
+    closed is kept for the plane root. Its footer names the plane root. Operator's ruling,
+    2026-09-26 (SI-1b).
 
 ### Curation actions — added 2026-09-26
 

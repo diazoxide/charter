@@ -132,6 +132,9 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
         };
         let mut parts = charter_core::briefing::parts(&ask, piece);
         let workspace = charter_core::briefing::workspace_of(&ask);
+        // Where this session is: a chat at the plane root is in no workspace (SI-1b), so it
+        // takes no workspace's choices and learns the reports kept for the plane root.
+        let place = charter_core::briefing::place_of(&ask);
         // Each extension that is on here and adds a section, quoted as data under its name —
         // and each that hears it told a chat started — within one bounded wait
         // (charter-app#343). None of it can hold the start past `Bounds::SESSION_START`, and a
@@ -144,7 +147,7 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
             let briefed = briefing::at_session_start(
                 &config,
                 &charter_core::extension::BuiltIn::none(),
-                &charter_core::extension::project::Choices::read_in(hook.root, Some(&workspace)),
+                &charter_core::extension::project::Choices::read_in(hook.root, place.workspace()),
                 &Asked {
                     workspace: workspace.clone(),
                     persona: env(charter_core::active::PERSONA_ENV).filter(|it| !it.is_empty()),
@@ -166,10 +169,7 @@ pub fn sessionstart(payload: &str, now: Option<&str>) {
             .and_then(|v| v.as_str())
             .is_none_or(|source| source == "startup");
         let kept = if starting {
-            charter_core::handback::take(
-                hook.root,
-                charter_core::handback::For::Workspace(&workspace),
-            )
+            charter_core::handback::take(hook.root, charter_core::handback::For::Place(&place))
         } else {
             Vec::new()
         };

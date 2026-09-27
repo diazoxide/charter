@@ -200,11 +200,10 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         .ok()
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| handoff::NO_CHAT.to_string());
-    // **The ladder's answer, even in a plane-root chat** (SI-1). The stamp names a workspace
-    // and the app refuses one that cannot be a workspace's name, so a root chat's handoff is
-    // stamped with the workspace it always was — the plane's default — until the stamp can
-    // say "the plane root" in words the app reads.
-    let source_ws = here.ladder_workspace(None);
+    // Where this chat works, which is what the stamp and the todo say it left from: a chat
+    // at the plane root is in no workspace, and its stamp says the plane root rather than the
+    // workspace the ladder would have picked for it (SI-1b).
+    let source = here.place(None);
     let now = match when(args.now.as_deref()) {
         Ok(now) => now,
         Err(why) => {
@@ -213,7 +212,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
         }
     };
     let msg = handoff::first_message(
-        &handoff::stamp(&source_chat, &source_ws, now.naive_local()),
+        &handoff::stamp(&source_chat, &source, now.naive_local()),
         &brief,
     );
     // Measured as the chat will be sent it: with the report line when one is asked for, and
@@ -244,7 +243,7 @@ pub fn handoff(here: &crate::Here, args: &Args) -> ExitCode {
                 ws,
                 brief: &brief,
                 source_chat: &source_chat,
-                source_ws: &source_ws,
+                source: &source,
                 created: args.create,
                 now,
             });
@@ -324,7 +323,7 @@ fn record_opened(opened: &Opened<'_>) {
             charter_core::personas::one_line(&why)
         )),
     }
-    let placement = if ws == opened.source_ws {
+    let placement = if opened.source.workspace() == Some(ws) {
         charter_core::dispatch::Placement::Here
     } else {
         charter_core::dispatch::Placement::Elsewhere
@@ -353,7 +352,7 @@ enum Todo {
 }
 
 fn record_todo(opened: &Opened<'_>) -> Result<Todo, String> {
-    let text = handoff::todo_text(opened.brief, opened.source_chat, opened.source_ws);
+    let text = handoff::todo_text(opened.brief, opened.source_chat, opened.source);
     let target = opened
         .here
         .plane
@@ -375,7 +374,8 @@ struct Opened<'a> {
     ws: &'a str,
     brief: &'a str,
     source_chat: &'a str,
-    source_ws: &'a str,
+    /// Where the chat that handed off works: a workspace, or the plane root.
+    source: &'a charter_core::active::Place,
     created: bool,
     now: chrono::DateTime<chrono::Local>,
 }
@@ -519,13 +519,18 @@ fn report_back(summary: &str) -> ExitCode {
         }
         Ok(Answer::Reported {
             to,
-            kept_for: Some(ws),
+            kept_for: Some(kept),
         }) => {
+            // The app says where by `Place::word`: a workspace's name, or the plane root's
+            // word for a parent that worked there (SI-1b).
+            let kept_for = match charter_core::active::Place::read(&kept) {
+                Some(place) => place.said(),
+                None => format!("'{}'", charter_core::personas::one_line(&kept)),
+            };
             println!(
-                "charter handoff report: '{}' has closed, so the report is kept for workspace \
-                 '{}'. The next chat that starts there reads it.",
+                "charter handoff report: '{}' has closed, so the report is kept for {kept_for}. \
+                 The next chat that starts there reads it.",
                 charter_core::personas::one_line(&to),
-                charter_core::personas::one_line(&ws)
             );
             ExitCode::SUCCESS
         }

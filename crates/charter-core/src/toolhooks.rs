@@ -149,9 +149,24 @@ impl Hook<'_> {
         .name
     }
 
-    /// Whether the launcher started this chat at the plane root, in no workspace (SI-1).
-    fn at_plane_root(&self) -> bool {
-        crate::active::at_plane_root_in(self.env)
+    /// Whether this session is at the plane root, in no workspace
+    /// ([`crate::active::plane_root`]): the app started it there (SI-1), or it stands in the
+    /// plane outside every workspace and has chosen none (SI-1b).
+    fn at_plane_root(&self, session: Option<&str>) -> bool {
+        let mut ids = crate::active::Ids::of(self.env);
+        ids.session = crate::hookstate::session(session, self.env);
+        let pinned = (self.env)(crate::active::WORKSPACE_ENV);
+        crate::active::plane_root_in(
+            &crate::active::Asking {
+                root: self.root,
+                cwd: self.cwd,
+                flag: None,
+                ids: &ids,
+                env: pinned.as_deref(),
+            },
+            self.env,
+        )
+        .is_some()
     }
 
     /// `_touch_piece`: the worker in the payload's `cwd` is alive.
@@ -552,7 +567,8 @@ fn mem_cadence_nudge(hook: &Hook, count: u64) -> String {
     let session = hook.workspace_session();
     let ws = hook.workspace(session.as_deref());
     // A plane-root chat is in no workspace, so no workspace's memory is where its facts go.
-    let live = !hook.at_plane_root() && crate::workspaces::Plane::open(hook.root).is_live(&ws);
+    let live = !hook.at_plane_root(session.as_deref())
+        && crate::workspaces::Plane::open(hook.root).is_live(&ws);
     let how = if live {
         format!("`charter workspace remember \"<fact>\"` (workspace **{ws}**)")
     } else if let Some(active) = hook.persona() {

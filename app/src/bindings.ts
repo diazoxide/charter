@@ -1443,7 +1443,10 @@ export type GaugeTone = "ok" | "warn" | "bad";
 export type HandedFromNote = {
 	/**  The chat it came from, by the name the operator saw it under. */
 	name: string,
-	/**  The workspace it came from. */
+	/**
+	 *  The workspace it came from, or `plane root` for a chat that handed off from there
+	 *  (SI-1b) — `charter_core::active::Place::word`, drawn as it is.
+	 */
 	workspace: string,
 };
 

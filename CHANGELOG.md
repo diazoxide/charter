@@ -45,6 +45,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   picked (`charter workspace use` does not move it). The Todos box is not offered there, and
   the region says why. It replaces the "Outside every workspace" tab, and the chats it held are
   on it.
+- **Anywhere in the plane outside every workspace is the plane root.** A chat started in
+  `docs/`, `.charter/` or any other directory of the plane that is not a workspace's is marked
+  as a plane-root chat, like one started in the plane's own directory, and is not asked which
+  workspace to use. A terminal session standing there that has not chosen a workspace (no
+  `-w`, no `$CHARTER_WORKSPACE`, no `charter workspace use`) is at the plane root too:
+  `charter` asks it to name a workspace with `-w` instead of acting on the plane's default,
+  which now answers only for a caller outside the plane. `charter workspace use` still moves
+  such a session.
+- **A root chat's footer, handoffs and reports say the plane root.** `charter statusline` shows
+  `⬢ plane root` rather than a workspace; a handoff from a root chat is stamped `plane root`
+  (the new chat still starts in the workspace you handed it to); and a report back to a root
+  chat that has closed is kept for the next chat started at the plane root.
 - **Plain shell tabs, and a warning when a harness starts inside one.** `New shell` sits beside
   `New tab` in the palette, on the panes' menu and on each workspace's menu (`New shell in
   <workspace>`), on ⌘⇧T (Ctrl+Shift+T off a Mac): your own shell, where a new chat would start,

@@ -56,12 +56,25 @@
 //! #372). The arrival mark is the app's own, drawn on its strip. The recorded scenario is
 //! `handoff-inside-the-app-opens-the-chat-there-and-records-its-todo` (ADR 0046).
 
+use crate::active::Place;
+
 /// The first line of every handoff's first message. Facts charter can observe and no
 /// instruction: where it came from, which workspace that was, and when.
 ///
 /// The brackets are `⟨⟩` rather than `<>` so the line cannot be read as markup by anything
 /// that renders the transcript.
-pub const STAMP: &str = "⟨handoff from chat {chat} · workspace {workspace} · {when}⟩";
+///
+/// `{place}` is where it left from: `workspace <name>`, or `plane root` for a chat at the plane
+/// root (SI-1b), which is in no workspace — [`place_words`].
+pub const STAMP: &str = "⟨handoff from chat {chat} · {place} · {when}⟩";
+
+/// A place as a stamp says it: `workspace alpha`, or `plane root`.
+fn place_words(place: &Place) -> String {
+    match place {
+        Place::Workspace(name) => format!("workspace {name}"),
+        Place::PlaneRoot => Place::PLANE_ROOT.to_owned(),
+    }
+}
 
 /// What the stamp calls a source that has no chat id — a handoff proposed from a shell
 /// outside any frame, which is refused, but whose printed command still carries the stamp so
@@ -163,15 +176,15 @@ pub fn read_brief(bytes: Option<&[u8]>, is_terminal: bool) -> Result<String, NoB
 // what the new chat is sent
 // ----------------------------------------------------------------------------------------
 
-/// The stamp line for a handoff leaving `chat` in `workspace`.
+/// The stamp line for a handoff leaving `chat`, which works in `place`.
 ///
 /// Minutes, not seconds: the stamp is read by a person deciding whether this message is the
 /// one they approved a moment ago, and a second's precision answers no question they have.
 /// Local time, because the reader is in it.
-pub fn stamp(chat: &str, workspace: &str, when: chrono::NaiveDateTime) -> String {
+pub fn stamp(chat: &str, place: &Place, when: chrono::NaiveDateTime) -> String {
     STAMP
         .replace("{chat}", chat)
-        .replace("{workspace}", workspace)
+        .replace("{place}", &place_words(place))
         .replace("{when}", &when.format("%Y-%m-%d %H:%M").to_string())
 }
 
@@ -180,8 +193,11 @@ pub fn stamp(chat: &str, workspace: &str, when: chrono::NaiveDateTime) -> String
 pub struct Stamped<'a> {
     /// The chat the handoff left, as `charter handoff` wrote it: the app's number for it.
     pub chat: &'a str,
-    /// The workspace it left from.
+    /// The workspace it left from as the stamp wrote it — or, for a handoff from the plane
+    /// root, [`Place::PLANE_ROOT`]. [`Stamped::place`] reads it.
     pub workspace: &'a str,
+    /// Whether the stamp says the plane root rather than a workspace (SI-1b).
+    pub from_root: bool,
     /// The minute it left, as the stamp wrote it.
     pub when: &'a str,
     /// Everything after the blank line: the brief, verbatim.
@@ -200,14 +216,35 @@ pub fn stamped(msg: &str) -> Option<Stamped<'_>> {
     if inside.contains('⟩') {
         return None;
     }
-    let (chat, tail) = inside.split_once(" · workspace ")?;
-    let (workspace, when) = tail.rsplit_once(" · ")?;
+    let root = format!(" · {} · ", Place::PLANE_ROOT);
+    let (chat, workspace, when, from_root) =
+        if let Some((chat, when)) = inside.split_once(root.as_str()) {
+            (chat, Place::PLANE_ROOT, when, true)
+        } else {
+            let (chat, tail) = inside.split_once(" · workspace ")?;
+            let (workspace, when) = tail.rsplit_once(" · ")?;
+            (chat, workspace, when, false)
+        };
     Some(Stamped {
         chat,
         workspace,
+        from_root,
         when,
         brief,
     })
+}
+
+impl Stamped<'_> {
+    /// Where the handoff left from, or `None` for a stamp naming a workspace that cannot be
+    /// one — which the app refuses to open.
+    pub fn place(&self) -> Option<Place> {
+        if self.from_root {
+            Some(Place::PlaneRoot)
+        } else {
+            crate::contain::workspace_name_ok(self.workspace)
+                .then(|| Place::Workspace(self.workspace.to_owned()))
+        }
+    }
 }
 
 /// Whether `msg` opens with the stamp of a handoff leaving `chat`, followed by the blank line
@@ -228,7 +265,7 @@ pub fn is_stamped_from(msg: &str, chat: &str) -> bool {
 /// The number in [`STAMP`] is what the app matches the asking chat by, and it has done that
 /// job by the time this line is written; the chat reading it, and the operator scrolling back
 /// to its first message, want `steward 3`, not `chat 16`.
-pub const SHOWN_STAMP: &str = "⟨handoff from {from} · workspace {workspace} · {when}⟩";
+pub const SHOWN_STAMP: &str = "⟨handoff from {from} · {place} · {when}⟩";
 
 /// The line a handoff that wants an answer adds under the stamp (charter-app#259).
 ///
@@ -243,8 +280,13 @@ you found. It is sent once, and that chat reads it the next time it is prompted�
 /// message that is not stamped at all.
 pub fn delivered(msg: &str, from: &str, report: bool) -> Option<String> {
     let read = stamped(msg)?;
+    let place = if read.from_root {
+        Place::PLANE_ROOT.to_owned()
+    } else {
+        format!("workspace {}", read.workspace)
+    };
     let line = SHOWN_STAMP
-        .replace("{workspace}", read.workspace)
+        .replace("{place}", &place)
         .replace("{when}", read.when)
         // Last, so a name that happened to spell `{when}` is not filled in again.
         .replace("{from}", from);
@@ -351,11 +393,12 @@ pub fn title(brief: &str) -> String {
 /// **The brief is not in it, and that is not brevity.** A LIVE workspace commits `todos/**`,
 /// and a brief never reaches a committed file. The title is enough for the person reading the
 /// list to recognise the work, and the chat that was opened is holding the rest.
-pub fn todo_text(brief: &str, source_chat: &str, source_workspace: &str) -> String {
+pub fn todo_text(brief: &str, source_chat: &str, source: &Place) -> String {
     format!(
-        "{}\n\nHanded off from chat {source_chat} · workspace {source_workspace}. The full \
-         brief is private to the chat it opened.",
-        title(brief)
+        "{}\n\nHanded off from chat {source_chat} · {}. The full brief is private to the chat \
+         it opened.",
+        title(brief),
+        place_words(source)
     )
 }
 
@@ -499,10 +542,70 @@ mod tests {
         text.parse().unwrap()
     }
 
+    fn ws(name: &str) -> Place {
+        Place::Workspace(name.to_owned())
+    }
+
+    // ----- a handoff from the plane root (SI-1b) -------------------------------------------
+
+    fn from_root() -> String {
+        first_message(
+            &stamp("16", &Place::PlaneRoot, at("2026-09-24T11:32:05")),
+            "# Cut the release\nbody",
+        )
+    }
+
+    #[test]
+    fn a_handoff_from_the_plane_root_is_stamped_with_the_plane_root() {
+        // Not the ladder's workspace: a root chat is in none, and the stamp says so.
+        assert_eq!(
+            stamp("16", &Place::PlaneRoot, at("2026-09-24T11:32:05")),
+            "⟨handoff from chat 16 · plane root · 2026-09-24 11:32⟩"
+        );
+        let msg = from_root();
+        let read = stamped(&msg).expect("stamped");
+        assert_eq!(read.chat, "16");
+        assert_eq!(read.workspace, Place::PLANE_ROOT);
+        assert_eq!(read.place(), Some(Place::PlaneRoot));
+        assert_eq!(read.brief, "# Cut the release\nbody");
+        assert!(is_stamped_from(&msg, "16"));
+    }
+
+    #[test]
+    fn the_chat_a_root_handoff_opens_is_told_it_came_from_the_plane_root() {
+        let told = delivered(&from_root(), "steward 3", false).expect("a stamped message");
+
+        assert_eq!(
+            told,
+            "⟨handoff from steward 3 · plane root · 2026-09-24 11:32⟩\n\n# Cut the release\nbody"
+        );
+    }
+
+    #[test]
+    fn a_stamp_naming_neither_a_workspace_nor_the_plane_root_is_no_place() {
+        for line in [
+            "⟨handoff from chat 16 · workspace ../up · 2026-09-24 11:32⟩",
+            "⟨handoff from chat 16 · workspace plane root · 2026-09-24 11:32⟩",
+            "⟨handoff from chat 16 · the plane · 2026-09-24 11:32⟩",
+        ] {
+            let msg = format!("{line}\n\nbody");
+            assert_eq!(stamped(&msg).and_then(|read| read.place()), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_root_handoffs_todo_says_it_came_from_the_plane_root() {
+        let text = todo_text("# Cut the release", "c1", &Place::PlaneRoot);
+        assert!(
+            text.contains("Handed off from chat c1 · plane root."),
+            "{text}"
+        );
+    }
+
     #[test]
     fn the_stamp_is_facts_and_no_instruction() {
         assert_eq!(
-            stamp("c1", "beta", at("2026-05-04T11:32:17")),
+            stamp("c1", &ws("beta"), at("2026-05-04T11:32:17")),
             "⟨handoff from chat c1 · workspace beta · 2026-05-04 11:32⟩",
             "minutes, not seconds"
         );
@@ -511,7 +614,7 @@ mod tests {
     #[test]
     fn a_message_is_stamped_from_the_chat_its_stamp_names_and_no_other() {
         let msg = first_message(
-            &stamp("7", "default", at("2026-05-04T11:32:17")),
+            &stamp("7", &ws("default"), at("2026-05-04T11:32:17")),
             "# Goal\nbody",
         );
 
@@ -618,7 +721,7 @@ mod tests {
 
     #[test]
     fn the_todo_carries_the_title_and_the_provenance_and_never_the_brief() {
-        let text = todo_text("# Retry the webhooks\n\nSECRET-BODY", "c1", "alpha");
+        let text = todo_text("# Retry the webhooks\n\nSECRET-BODY", "c1", &ws("alpha"));
         assert!(text.starts_with("# Retry the webhooks\n\n"));
         assert!(
             !text.contains("SECRET-BODY"),
@@ -689,7 +792,7 @@ mod tests {
 
     fn wire() -> String {
         first_message(
-            &stamp("16", "platform-next", at("2026-09-24T11:32:05")),
+            &stamp("16", &ws("platform-next"), at("2026-09-24T11:32:05")),
             "# Drop account-console-commons\nbody",
         )
     }

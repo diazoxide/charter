@@ -929,16 +929,44 @@ fn a_chat_started_at_the_plane_root_is_told_it_is_in_no_workspace() {
 }
 
 #[test]
-fn a_chat_started_elsewhere_in_the_plane_is_pinned_to_nothing() {
+fn a_chat_started_anywhere_in_the_plane_outside_every_workspace_is_at_the_plane_root() {
     charter_core::unsteered!();
-    // Not a workspace and not the root: charter says nothing it does not know, and the chat's
-    // own ladder answers as it always has.
+    // SI-1b: a chat started in `docs/` was told nothing, fell to the plane's default workspace
+    // and was asked which workspace it was in. Anywhere under the plane that is not a
+    // workspace's is the plane root, which is also the tab the window files it on.
     let plane = Plane::new();
     let bin = plane.harness();
     plane.profile("claude", &bin, "");
-    fs::create_dir_all(plane.root().join("docs")).unwrap();
+    fs::create_dir_all(plane.root().join("docs/adr")).unwrap();
+    fs::create_dir_all(plane.root().join("workspaces/alpha")).unwrap();
+
+    for cwd in ["docs", "docs/adr", ".charter", "workspaces"] {
+        fs::create_dir_all(plane.root().join(cwd)).unwrap();
+        let start = Start {
+            cwd: Some(plane.root().join(cwd)),
+            ..plane.start("work")
+        };
+        let ready = start::ready(&start, plane.root()).expect("it starts");
+        assert_eq!(
+            env_of(&ready, "CHARTER_PLANE_ROOT_SESSION"),
+            Some("1"),
+            "{cwd}"
+        );
+        assert_eq!(env_of(&ready, "CHARTER_WORKSPACE"), None, "{cwd}");
+    }
+}
+
+#[test]
+fn a_chat_started_outside_the_plane_is_pinned_to_nothing() {
+    charter_core::unsteered!();
+    // Not in the plane at all: charter says nothing it does not know, and the chat's own
+    // ladder answers as it always has.
+    let plane = Plane::new();
+    let bin = plane.harness();
+    plane.profile("claude", &bin, "");
+    let elsewhere = tempfile::tempdir().unwrap();
     let start = Start {
-        cwd: Some(plane.root().join("docs")),
+        cwd: Some(elsewhere.path().to_path_buf()),
         ..plane.start("work")
     };
 

@@ -28,8 +28,8 @@ repos.
 _Avoid_: task, context
 
 **Plane root**:
-The plane's own directory, as a place a chat works: the workspace strip's first tab, drawn as
-an icon, always there. A chat started there is in no workspace on purpose — it looks after the
+The plane's own directory, as a place a chat works — and anywhere else in the plane that is no
+workspace's, such as `docs/`: the workspace strip's first tab, drawn as an icon, always there. A chat started there is in no workspace on purpose — it looks after the
 plane and names a workspace with `-w` when it acts on one. It is not a workspace: it has no
 charter, memory or todos. In code it is still `OUTSIDE`, the strip every chat working in no
 workspace is filed on.

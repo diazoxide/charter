@@ -19,7 +19,11 @@ fn at() -> chrono::NaiveDateTime {
 }
 
 fn handed_off(brief: &str) -> String {
-    todo_text(brief, "3", "default")
+    todo_text(
+        brief,
+        "3",
+        &charter_core::active::Place::Workspace("default".to_owned()),
+    )
 }
 
 #[test]
