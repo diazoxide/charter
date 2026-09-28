@@ -93,6 +93,18 @@ impl Persona {
     /// (`charter init` leaves a `.gitkeep`) gets the store's generic `# Memory Index`
     /// header, not the persona's. [`Persona::scaffold_memory`] is the header's writer.
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
+        self.remember_titled(text, None, stamp)
+    }
+
+    /// Record one durable fact under a title of the caller's, or the text's first line — the
+    /// window's create (ADR 0065 Q9), and the file `charter persona remember --title` writes.
+    /// A title of `""` is no title, as [`crate::workspaces::Workspace::remember_titled`] reads it.
+    pub fn remember_titled(
+        &self,
+        text: &str,
+        title: Option<&str>,
+        stamp: chrono::NaiveDateTime,
+    ) -> io::Result<PathBuf> {
         self.writable(&self.dir.join("memory"))?;
         let dir = self.dir.join("memory");
         // `timestamped: false` — a persona memory is addressed by its slug, so the name
@@ -101,7 +113,7 @@ impl Persona {
             &self.plane_root,
             &dir,
             text,
-            None,
+            title.filter(|t| !t.is_empty()),
             false,
             "persistent",
             true,

@@ -215,7 +215,7 @@ export function usePlaneEdits({
 }
 
 /** A command's answer, or a core that did not answer as a refusal in the words it threw. */
-async function settled<T>(
+export async function settled<T>(
   asked: Promise<{ status: "ok"; data: T } | { status: "error"; error: string }>,
 ): Promise<{ status: "ok"; data: T } | { status: "error"; error: string }> {
   try {

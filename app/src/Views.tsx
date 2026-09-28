@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Brain,
   ChartColumn,
   GitPullRequest,
   History,
@@ -21,6 +22,7 @@ import {
   commands,
   type ExtensionCommand,
   type ExtensionView,
+  type MemoryView,
   type PanelBlock,
   type PanelPoint,
   type PanelRow,
@@ -28,12 +30,15 @@ import {
   type RowAction,
   type ViewAnswer,
 } from "./bindings";
+import { MemoryTab } from "./MemoryTab";
+import { Menued } from "./Menus";
+import { DRAFT, MEMORY_VIEW, isMemory, memoryRefOf } from "./memories";
 import { SavingView } from "./SavingView";
 import { SessionRecordTab } from "./SessionRecordTab";
 import { SESSION_VIEW } from "./sessions";
 import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
-import type { Offer } from "./actions";
+import { catalogued, memoryOffers, toKeep, type Catalogued, type Offer } from "./actions";
 import { factsChanged } from "./extensionFacts";
 
 /** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
@@ -175,6 +180,7 @@ const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   saving: Save,
   changes: GitPullRequest,
   [SESSION_VIEW]: History,
+  [MEMORY_VIEW]: Brain,
   [WORKSPACE_SETTINGS]: Settings2,
   preferences: SlidersHorizontal,
 };
@@ -208,6 +214,9 @@ export function ViewPane({
   onVaultChanged,
   offerFor,
   onPress,
+  changed = 0,
+  onMemorySaved,
+  onCloseView,
 }: {
   plane: PlaneId;
   view: ViewRef;
@@ -228,6 +237,18 @@ export function ViewPane({
   /** The catalogue, by row id: what the heading's own rows are looked up in (SI-3). */
   offerFor?: (id: string) => Offer | undefined;
   onPress?: (offer: Offer) => void;
+  /**
+   * Bumped when the plane changes on disk or a memory is written (SI-9b, ADR 0065 Q10): the
+   * lists and memories charter's own views read are read again, on the trigger the Todos panel
+   * refreshes on. An extension's view is never asked again for it — its program runs on a
+   * press, not on a file changing.
+   */
+  changed?: number;
+  /** A memory's tab wrote its memory: the tab follows it — its name, and its key when a new
+   *  memory's tab has just made one. */
+  onMemorySaved?: (from: ViewRef, memory: MemoryView) => void;
+  /** Close the tab showing `view` — a new memory's Cancel. */
+  onCloseView?: (view: ViewRef) => void;
 }) {
   // **What charter can do to the thing this tab is about, on its heading** (SI-3): a persona's
   // `persona.md` handed to the operator's editor and the persona deleted, a vault deleted. The
@@ -259,6 +280,7 @@ export function ViewPane({
   );
   // charter's own views run no program, so there is nothing a press would be consent to.
   const holding = waits && view.from !== null;
+  const memoryAt = isMemory(view) ? memoryRefOf(view.key) : undefined;
   return (
     <section
       className="view-pane"
@@ -325,6 +347,18 @@ export function ViewPane({
              `session_record`, keyed by the record so a pane that comes to show another starts
              from its own read. */
           <SessionRecordTab key={`${plane}\u0000${view.key}`} plane={plane} path={view.key} />
+        ) : memoryAt !== undefined ? (
+          /* A memory (SI-9b, ADR 0065): read as Markdown, edited in place, keyed by the memory
+             so a pane that comes to show another — the preview tab, replaced — starts from its
+             own read. */
+          <MemoryTab
+            key={`${plane}\u0000${view.key}`}
+            plane={plane}
+            at={memoryAt}
+            changed={changed}
+            onSaved={(memory) => onMemorySaved?.(view, memory)}
+            onClose={() => onCloseView?.(view)}
+          />
         ) : isPreferences(view) ? (
           /* The machine's, not the plane's (charter-app#283): the same surface whichever
              project's strip it was opened on. */
@@ -338,6 +372,9 @@ export function ViewPane({
             view={view}
             title={title}
             workspace={workspace}
+            changed={view.from === null ? changed : 0}
+            offerFor={offerFor}
+            onPress={onPress}
           />
         )}
       </div>
@@ -350,6 +387,9 @@ const OWN_ROWS: Record<string, (key: string) => string[]> = {
   persona: (key) => [`persona.edit:${key}`, `persona.remove:${key}`],
   vault: (key) => [`vault.remove:${key}`],
   [SESSION_VIEW]: (key) => [`session.resume:${key}`],
+  // A memory's Edit and Delete (ADR 0065 Q2) — a new memory's tab has neither yet.
+  [MEMORY_VIEW]: (key) =>
+    memoryRefOf(key)?.slug === DRAFT ? [] : [`memory.edit:${key}`, `memory.delete:${key}`],
 };
 
 /** One catalogue row as a heading's button, in its own words. A row the catalogue does not
@@ -402,11 +442,20 @@ function Answer({
   view,
   title,
   workspace,
+  changed = 0,
+  offerFor,
+  onPress,
 }: {
   plane: PlaneId;
   view: ViewRef;
   title: string;
   workspace: string | undefined;
+  /** Asks again when it moves: charter's own views only (`ViewPane.changed`). */
+  changed?: number;
+  /** The catalogue, by row id, and what pressing one of its rows does — what a row of charter's
+   *  own view runs and what its menu lists (a persona's memories, SI-9b). */
+  offerFor?: (id: string) => Offer | undefined;
+  onPress?: (offer: Offer) => void;
 }) {
   const { from, view: id, key } = view;
   const keeps = isChanges(view);
@@ -435,7 +484,7 @@ function Answer({
     return () => {
       gone = true;
     };
-  }, [plane, from, id, key, workspace, keeps, keptAs, round]);
+  }, [plane, from, id, key, workspace, keeps, keptAs, round, changed]);
 
   /** Refresh, for a kept view: its only way to be asked again. */
   const refresh = keeps ? (
@@ -518,6 +567,8 @@ function Answer({
       <AnsweredBlocks
         blocks={refreshed ?? answer.blocks}
         label={title}
+        offerFor={from === null ? offerFor : undefined}
+        onPress={from === null ? onPress : undefined}
         onAct={
           from === null
             ? undefined
@@ -561,13 +612,36 @@ function AnsweredBlocks({
   blocks,
   label,
   onAct,
+  offerFor,
+  onPress,
 }: {
   blocks: readonly PanelBlock[];
   label: string;
   /** Run one of the extension's actions a row offers; `undefined` for charter's own views. */
   onAct?: (row: PanelRow, action: RowAction) => void;
+  /** The catalogue, for charter's own views only: an extension's rows run no charter verb. */
+  offerFor?: (id: string) => Offer | undefined;
+  onPress?: (offer: Offer) => void;
 }) {
   const [open, setOpen] = useState<string>();
+  // **A memory row's own rows** (SI-9b): Open, Edit and Delete for each memory this view lists,
+  // named for its store and slug and titled with its row's words. The catalogue has no list of
+  // every memory in the plane, and needs none: the list that draws the row supplies its rows.
+  const memories = useMemo<Catalogued>(
+    () =>
+      catalogued(
+        blocks.flatMap((block) =>
+          block.kind !== "list"
+            ? []
+            : block.rows.flatMap((row) => {
+                const ref = memoryRefOf(memoryKeyRun(row) ?? "");
+                return ref === undefined ? [] : memoryOffers(ref, row.text);
+              }),
+        ),
+      ),
+    [blocks],
+  );
+  const lookUp = (id: string) => memories.get(id) ?? offerFor?.(id);
   return (
     <>
       {blocks.map((block, at) =>
@@ -594,6 +668,36 @@ function AnsweredBlocks({
             open={open}
             onOpen={setOpen}
             onAct={onAct}
+            onRun={
+              onPress === undefined
+                ? undefined
+                : (runs, kept) => {
+                    // The catalogue's row or nothing, as a panel's rows are (`Panels.tsx`); a
+                    // double-click keeps what a single click previews (`actions.toKeep`).
+                    const offer = lookUp(runs);
+                    if (offer) onPress(kept ? toKeep(offer) : offer);
+                  }
+            }
+            wrap={
+              onPress === undefined
+                ? undefined
+                : (row, item) => {
+                    const memory = memoryKeyRun(row);
+                    return memory === undefined ? (
+                      item
+                    ) : (
+                      /* Open, Edit | Delete (ADR 0065 Q12): this memory's rows. */
+                      <Menued
+                        key={row.key}
+                        on={{ on: "memory", key: memory }}
+                        offers={memories}
+                        onPress={onPress}
+                      >
+                        {item}
+                      </Menued>
+                    );
+                  }
+            }
             // A tab has the room a side region does not, so a page is twenty rather than twelve.
             page={20}
           />
@@ -601,6 +705,12 @@ function AnsweredBlocks({
       )}
     </>
   );
+}
+
+/** The memory a row opens — its key, out of the row's `memory.open:<key>` — or `undefined`. */
+function memoryKeyRun(row: PanelRow): string | undefined {
+  const prefix = "memory.open:";
+  return row.runs?.startsWith(prefix) ? row.runs.slice(prefix.length) : undefined;
 }
 
 /** A facts block, as the wire carries it. */

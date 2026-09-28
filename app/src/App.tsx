@@ -915,6 +915,13 @@ function App() {
       // A session record is resumed into a project, and there is no project here: its rows are
       // a project's catalogue's, and this one lists none.
       resumeSession: async () => nowhere(),
+      // A memory is a project's, and its tab is shown in one: there is no project here, and no
+      // memory rows in this catalogue.
+      openMemory: () => undefined,
+      editMemory: () => undefined,
+      archiveMemory: async () => nowhere(),
+      newMemory: () => undefined,
+      keepTab: () => undefined,
       // An extension's action runs in a project, and there is no project here: its rows are
       // a project's catalogue's, and this one lists none.
       runAction: async () => nowhere(),

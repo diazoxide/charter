@@ -30,14 +30,20 @@ These only read. Done when you can say, for each finding, what you propose.
 
 - **Exact duplicates and index drift** are safe and reversible: `--apply` moves a duplicate to
   `archive/` and repairs the index. Apply once the operator agrees.
-- **Near duplicates** merge by hand: write the one memory that says both, then forget the rest.
-- **Stale** memories are still true or they are not. Forget one only when the operator agrees it
-  is no longer so.
+- **Near duplicates** merge by hand: edit one of them to say both, then archive the rest.
+- **Stale** memories are still true or they are not. A memory that is half true is edited in
+  place; one that is no longer so is archived, and only when the operator agrees.
 
 ```bash
-charter workspace forget -w <name> <slug>
-charter persona forget <name> <slug>
+charter workspace edit -w <name> <slug> [--title "<title>"] ["<body>" | -]
+charter persona edit-memory <name> <slug> [--title "<title>"] ["<body>" | -] [--shared]
+charter workspace archive -w <name> <slug>              # undo: workspace unarchive
+charter persona archive-memory <name> <slug> [--shared] # undo: persona unarchive-memory
 ```
+
+An edit keeps the memory's slug and date. An archive moves it to `memory/archive/`, out of every
+list, and `unarchive` / `unarchive-memory` puts it back. `workspace forget` and `persona forget`
+delete for good; keep them for a memory that must not survive, such as one holding a secret.
 
 Done when every finding is applied, merged, kept on purpose, or declined by the operator.
 
@@ -45,7 +51,7 @@ Done when every finding is applied, merged, kept on purpose, or declined by the 
 
 A lesson that has held across several memories, or that every chat in this workspace or persona
 should act on from its first turn, belongs in the charter. Write it there in a sentence that
-says what to do and why, then forget the memories it replaces.
+says what to do and why, then archive the memories it replaces.
 
 For a persona, regenerate its sub-agent after editing `persona.md`:
 

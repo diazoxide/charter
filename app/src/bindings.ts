@@ -834,6 +834,54 @@ export const commands = {
 	/**  Forget a todo: it goes, and nothing is journalled. */
 	todoForget: (plane: PlaneId, workspace: string, slug: string) => typedError<string, string>(__TAURI_INVOKE("todo_forget", { plane, workspace, slug })),
 	/**
+	 *  One memory, for its tab. `null` is a memory that is not there any more — a tab put back at a
+	 *  launch can name one archived since — which the tab draws as a view whose source has gone.
+	 */
+	memoryRead: (plane: PlaneId, scope: MemoryScope, slug: string) => typedError<{
+	scope: MemoryScope,
+	/**  The file's stem, which an edit never changes. */
+	slug: string,
+	/**  The `# ` heading. */
+	title: string,
+	/**  The stamp line's date and time, as written; empty for a file with none. */
+	stamp: string,
+	/**  The badge's word: the workspace's or the persona's name, or `shared`. */
+	place: string,
+	/**
+	 *  Everything under the heading and the stamp: what the tab renders, and what an edit
+	 *  starts from.
+	 */
+	body: string,
+	/**  Plane-relative, with `/`. */
+	path: string,
+	/**  The file's whole text as it was read — what a save is checked against (`Base::Read`). */
+	text: string,
+} | null, string>(__TAURI_INVOKE("memory_read", { plane, scope, slug })),
+	/**
+	 *  Save an edit: new title and body, same slug, the stamp kept, the index line retitled.
+	 * 
+	 *  `read` is the file's whole text as the tab read it (`MemoryView.text`); a file that differs
+	 *  on disk now is answered as `stale` and nothing is written. `overwrite` is the tab's
+	 *  Overwrite, after a stale answer: it writes whatever the file holds now.
+	 */
+	memoryEdit: (plane: PlaneId, scope: MemoryScope, slug: string, title: string, text: string, read: string, overwrite: boolean) => typedError<MemoryEdited, string>(__TAURI_INVOKE("memory_edit", { plane, scope, slug, title, text, read, overwrite })),
+	/**
+	 *  The window's Delete: the memory moves to its store's `archive/` and its index line goes.
+	 *  What it answers is what Undo hands back to `memory_unarchive`.
+	 */
+	memoryArchive: (plane: PlaneId, scope: MemoryScope, slug: string) => typedError<MemoryArchived, string>(__TAURI_INVOKE("memory_archive", { plane, scope, slug })),
+	/**
+	 *  The window's Undo: the memory named `archived` in `archive/` moves back — under
+	 *  `restore_as` when given, which is how Undo puts back one that archiving had to number — and
+	 *  its index line is appended. The memory as it is back.
+	 */
+	memoryUnarchive: (plane: PlaneId, scope: MemoryScope, archived: string, restoreAs: string | null) => typedError<MemoryView, string>(__TAURI_INVOKE("memory_unarchive", { plane, scope, archived, restoreAs })),
+	/**
+	 *  A new memory, through the store's own remember: the file `charter … remember --title`
+	 *  writes. An empty `title` is the text's first line.
+	 */
+	memoryCreate: (plane: PlaneId, scope: MemoryScope, title: string, text: string) => typedError<MemoryView, string>(__TAURI_INVOKE("memory_create", { plane, scope, title, text })),
+	/**
 	 *  What each subject the window names is offered (`subjects` in the core's spelling:
 	 *  `workspace:<name>`, `persona:<name>`, `plane`), in the order asked.
 	 */
@@ -1650,6 +1698,59 @@ export type LiveSwitched = {
 	said: string[],
 	/**  Why the plane was not saved after the switch: refused, or not asked yet how it saves. */
 	notSaved: string | null,
+};
+
+/**  What a Delete did, and what its Undo hands back. */
+export type MemoryArchived = {
+	/**  The memory's own slug, which Undo restores it under. */
+	slug: string,
+	/**
+	 *  Its name in `archive/` now — its slug, or a numbered one when an earlier memory of
+	 *  that name was archived before (`memstore::archive_one`).
+	 */
+	archived: string,
+};
+
+/**  What a save came to. */
+export type MemoryEdited = 
+/**  Written. The memory as it is now, whose `text` the next save is checked against. */
+{ kind: "saved"; memory: MemoryView } | 
+/**
+ *  **Refused, and nothing was written**: the file changed on disk since the tab read it.
+ *  `now` is the memory as it is now, or `null` when it is not there any more; the tab
+ *  offers Reload or Overwrite.
+ */
+{ kind: "stale"; now: MemoryView | null };
+
+/**  Which store a memory is in. */
+export type MemoryScope = 
+/**  A workspace's journal, `workspaces/<name>/memory/`. */
+{ kind: "workspace"; name: string } | 
+/**  A persona's own, `personas/<name>/memory/`. */
+{ kind: "persona"; name: string } | 
+/**  Every persona's, `personas/_shared/memory/`. */
+{ kind: "shared" };
+
+/**  One memory, as its tab draws it. */
+export type MemoryView = {
+	scope: MemoryScope,
+	/**  The file's stem, which an edit never changes. */
+	slug: string,
+	/**  The `# ` heading. */
+	title: string,
+	/**  The stamp line's date and time, as written; empty for a file with none. */
+	stamp: string,
+	/**  The badge's word: the workspace's or the persona's name, or `shared`. */
+	place: string,
+	/**
+	 *  Everything under the heading and the stamp: what the tab renders, and what an edit
+	 *  starts from.
+	 */
+	body: string,
+	/**  Plane-relative, with `/`. */
+	path: string,
+	/**  The file's whole text as it was read — what a save is checked against (`Base::Read`). */
+	text: string,
 };
 
 /**  What a merge did, for the window to report. */

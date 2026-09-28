@@ -97,8 +97,11 @@ export function SessionRecordTab({ plane, path }: { plane: PlaneId; path: string
   );
 }
 
-/** A record's `# title` and `## sections`, one level down: the view's heading is above them. */
-const COMPONENTS: Components = {
+/**
+ * A record's `# title` and `## sections`, one level down: the view's heading is above them. A
+ * memory's tab renders its body with the same (`MemoryTab.tsx`), for the same reason.
+ */
+export const COMPONENTS: Components = {
   h1: "h3",
   h2: "h4",
   h3: "h5",

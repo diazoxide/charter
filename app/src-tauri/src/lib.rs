@@ -20,6 +20,7 @@ mod hooks;
 mod ipc;
 mod lifecycle;
 mod live;
+mod memories;
 mod opener;
 mod panels;
 mod panics;

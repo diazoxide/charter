@@ -134,3 +134,32 @@ name.
   as `- [Old](x.md) — see also y` becomes `- [New](x.md) — see also y`.
 - **Nothing in the Python charter reads an edit or an unarchive differently**: the files are
   shapes it already writes and reads, so the recorded behaviour (ADR 0046) moves nowhere.
+
+## As built in the window (SI-9b)
+
+What building the tab settled, inside the rulings above rather than beside them:
+
+- **The preview is one per strip.** A single click replaces the strip's own preview tab — a tab
+  showing one view and nothing else, marked `preview` — and never a kept tab, a tab split beside
+  a chat, or another workspace's preview (`tabs.openPreview`). A memory already open anywhere is
+  brought forward instead. The preview is drawn in italics.
+- **A memory row in a persona's tab keeps on the tab, not on the row.** Its first click brings
+  the memory's tab forward, so the persona's list is off the screen before a second click can
+  land; a double-click on the preview tab keeps it (`tab.keep:<id>`, also in the palette), as
+  VS Code's does. A row's own double-click keeps too (`actions.toKeep`), which is what a list
+  that stays on screen — SI-9c's, in the side region — uses. `tab.keep` is not on the tab's
+  menu, which is held to five rows a tab at fifty tabs (charter-app#174).
+- **A row that runs a catalogue row opens no card, and carries no native tooltip**, whichever
+  list draws it: a persona's row and a session's already opened a tab and had no card, and a
+  memory's now does too. Its detail, where it has one, is what the search reads. A row with a
+  card and no verb — a todo, an extension's — keeps its popover and its tooltip.
+- **Every list's search matches the body**, not only a memory list's, and shows the matching
+  part under a row whose own words do not show the match.
+- **A memory is addressed as a store and a slug**, `workspace/<ws>/<slug>`, `persona/<name>/<slug>`
+  or `shared/<slug>`: the tab's view key and the catalogue rows' suffix
+  (`memory.open|edit|delete:<key>`), spelled by `memories::view_key` in the core and
+  `memories.memoryKey` in the window. A new memory's tab is the slug `+`, which no slug can be.
+- **An edit in progress outlives its tab being out of sight**: only the tab in front has panes
+  on screen, so the draft is kept outside it, for as long as the window runs.
+- **Undo is offered for eight seconds**, in a line where the window says its other news, and
+  puts the memory back under its own slug even when archiving had to number it.

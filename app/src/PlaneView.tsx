@@ -42,6 +42,7 @@ import {
   type Refused,
   type Sidebar as SidebarModel,
   type StartOptions,
+  type MemoryView,
   type ViewTab,
 } from "./bindings";
 import {
@@ -155,6 +156,8 @@ import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
 import { OpenVault, useVaults } from "./Vaults";
 import { usePlaneEdits } from "./PlaneEdits";
+import { useMemoryEdits } from "./MemoryEdits";
+import { DRAFT, isMemory, memoryRefOf } from "./memories";
 import { ViewMark, ViewPane } from "./Views";
 import { useTabStop } from "./roving";
 import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
@@ -1581,14 +1584,19 @@ export function PlaneView({
    * `workspace` files it on that strip instead: a workspace's own settings belong on its strip
    * whichever one is in front (charter-app#280).
    */
-  const showView = useCallback(
-    (view: ViewRef, title: string, on?: string) => {
-      const next = change((tabs) => openView(tabs, view, title, on ?? focused ?? OUTSIDE));
+  const present = useCallback(
+    (open: (tabs: Tabs, strip: string) => Tabs) => {
+      const next = change((tabs) => open(tabs, focused ?? OUTSIDE));
       const workspace =
         next.inFront === undefined ? undefined : workspaceOf(next, next.inFront, filedIn);
       if (workspace !== undefined) setPicked(workspace);
     },
     [change, filedIn, focused],
+  );
+  const showView = useCallback(
+    (view: ViewRef, title: string, on?: string) =>
+      present((tabs, strip) => openView(tabs, view, title, on ?? strip)),
+    [present],
   );
 
   /**
@@ -1613,6 +1621,14 @@ export function PlaneView({
     closeView,
     reread: rereadPanels,
     reloadVaults,
+  });
+  /** A plane's memories (SI-9b): the preview tab, edits, Delete and its Undo. */
+  const memoryEdits = useMemoryEdits({
+    plane,
+    present,
+    update: change,
+    closeView,
+    reread: rereadPanels,
   });
 
   /**
@@ -2432,6 +2448,7 @@ export function PlaneView({
       pickVault,
       createVault,
       ...edits.doing,
+      ...memoryEdits.doing,
       removeWorktree,
       mergeWorktree,
       declareWorktreeDone,
@@ -2466,6 +2483,7 @@ export function PlaneView({
       createVault,
       createWorkspace,
       edits.doing,
+      memoryEdits.doing,
       focusWorkspace,
       ignoreNeedsYou,
       mergeWorktree,
@@ -3254,7 +3272,8 @@ export function PlaneView({
                                   }}
                                   // A double-click on the name renames it — the same row again.
                                   onDoubleClick={() => {
-                                    const offer = by(`tab.rename:${id}`);
+                                    // …and keeps a preview tab, VS Code's double-click (SI-9b).
+                                    const offer = by(`tab.rename:${id}`) ?? by(`tab.keep:${id}`);
                                     if (offer?.available) press(offer);
                                   }}
                                 >
@@ -3434,6 +3453,9 @@ export function PlaneView({
         </p>
       )}
 
+      {/* A memory's Delete, which can be undone for a few seconds (SI-9b, ADR 0065 Q8). */}
+      {memoryEdits.undo}
+
       {wouldNotStart.map(([name, why]) => (
         <p className="came-back trouble" role="status" key={name}>
           <strong>{name}</strong> did not start ({why}). It is still recorded, and will be tried
@@ -3522,6 +3544,11 @@ export function PlaneView({
                   onOpenView={showView}
                   onAsk={(pane) => change((tabs) => stopWaiting(tabs, pane))}
                   onVaultChanged={reloadVaults}
+                  memory={{
+                    changed: memoryEdits.changed + changesOnDisk,
+                    onSaved: memoryEdits.onSaved,
+                    onClose: closeView,
+                  }}
                 />
               ) : tabs.order.some((id) => !isBackground(id)) ? (
                 // Chats are running — just not in the workspace being looked at. Saying
@@ -3966,6 +3993,8 @@ function viewTabsOf(tabs: Tabs, pinnedViews: readonly string[]): ViewTab[] {
   return tabs.order.flatMap((id, at) => {
     const lead = contentsOf(tabs, id)[0]?.content;
     if (lead?.kind !== "view") return [];
+    // A new memory's tab holds nothing on disk yet, so there is nothing to bring back.
+    if (isMemory(lead.view) && memoryRefOf(lead.view.key)?.slug === DRAFT) return [];
     return [
       {
         from: lead.view.from,
@@ -4376,7 +4405,11 @@ function TabMarks({
     return (
       <>
         <ViewMark view={lead.view} />
-        <span className="tab-name">{tabs.byId[id].name}</span>
+        {/* The preview tab is in italics, as VS Code draws its own: the tab the next single
+            click on a memory reuses (SI-9b). */}
+        <span className={lead.preview ? "tab-name is-preview" : "tab-name"}>
+          {tabs.byId[id].name}
+        </span>
         {pin}
       </>
     );
@@ -4417,6 +4450,7 @@ function LayoutPanes({
   onOpenView,
   onAsk,
   onVaultChanged,
+  memory,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
@@ -4445,6 +4479,13 @@ function LayoutPanes({
   onAsk: (pane: number) => void;
   /** A vault's tab wrote to its vault: the plane's vault list is read again. */
   onVaultChanged: () => void;
+  /** What charter's own views re-read on, and what a memory's tab calls when it wrote or asks
+   *  to close (SI-9b). */
+  memory: {
+    changed: number;
+    onSaved: (from: ViewRef, memory: MemoryView) => void;
+    onClose: (view: ViewRef) => void;
+  };
 }) {
   if (layout.kind === "pane") {
     const content = layout.content;
@@ -4474,6 +4515,9 @@ function LayoutPanes({
               onVaultChanged={onVaultChanged}
               offerFor={offerFor}
               onPress={(offer) => onPaneDoes(layout.pane, offer)}
+              changed={memory.changed}
+              onMemorySaved={memory.onSaved}
+              onCloseView={memory.onClose}
             />
           </div>
         </div>
@@ -4537,6 +4581,7 @@ function LayoutPanes({
               onOpenView={onOpenView}
               onAsk={onAsk}
               onVaultChanged={onVaultChanged}
+              memory={memory}
             />
           </Panel>
         </Fragment>

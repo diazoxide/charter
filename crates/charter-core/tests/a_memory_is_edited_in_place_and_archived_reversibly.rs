@@ -649,3 +649,41 @@ fn unarchiving_a_memory_the_index_still_lists_does_not_list_it_twice() {
 
     assert_eq!(read(&index), before);
 }
+
+// --- create, under a title of the caller's ----------------------------------------------------
+
+#[test]
+fn a_persona_memory_made_under_a_title_is_named_and_indexed_for_that_title() {
+    charter_core::unsteered!();
+    // The window's create (SI-9b): the title is the operator's field, and the body its own
+    // text, so the file is the one `charter persona remember --title` would have written.
+    let tmp = tempfile::tempdir().unwrap();
+    let devops: Persona = plane(&tmp).persona("devops").unwrap();
+
+    let path = devops
+        .remember_titled("It lives in eu-west-1.", Some("Where prod-1 is"), at())
+        .unwrap();
+
+    assert_eq!(path.file_name().unwrap(), "where-prod-1-is.md");
+    assert_eq!(
+        read(&path),
+        "# Where prod-1 is\n\n_2026-03-02 09:14 · persistent_\n\nIt lives in eu-west-1.\n"
+    );
+    assert_eq!(
+        lines(&devops.dir().join("memory/MEMORY.md")),
+        ["- [Where prod-1 is](where-prod-1-is.md)"]
+    );
+}
+
+#[test]
+fn a_persona_memory_made_with_no_title_is_titled_by_its_first_line() {
+    charter_core::unsteered!();
+    let tmp = tempfile::tempdir().unwrap();
+    let shared = plane(&tmp).persona("_shared").unwrap();
+
+    let path = shared
+        .remember_titled("Deploys freeze on Fridays\nAsk first.", None, at())
+        .unwrap();
+
+    assert_eq!(path.file_name().unwrap(), "deploys-freeze-on-fridays.md");
+}
