@@ -14,7 +14,9 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import App from "./App";
 import type { Phase, SavedRecord, SmartCloseOffer } from "./bindings";
+import { LEAST, LEAST_CHIP, leastAt } from "./fits";
 import { dragWithTheKeyboard, laidOutInARow } from "./test-strips";
+import { DEFAULT_TEXT } from "./textSize";
 
 /**
  * **Smart close, as the window draws it** (ADR 0064, SI-8c): the close dialog's three answers,
@@ -407,6 +409,32 @@ describe("a chat put into the background (SI-8f)", () => {
     await waitFor(() => expect(strip()).toEqual(["three — wrapping up", "one", "two"]));
   });
 
+  it("takes only a chip's room, so the strip still shows every tab it has room for", async () => {
+    // jsdom lays nothing out (#149): the chat strip answers `clientWidth` with room for exactly
+    // one chip and two tabs, and every other element none, which draws everything.
+    const room =
+      leastAt(LEAST_CHIP, DEFAULT_TEXT.window) + 2 * leastAt(LEAST.chat, DEFAULT_TEXT.window);
+    const was = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.getAttribute("aria-label") === "Tabs" ? room : 0;
+      },
+    });
+    try {
+      coreWith();
+      render(<App />);
+      await waitFor(() => expect(strip()).toEqual(["one", "two"]));
+
+      await step(2, "sent");
+
+      await waitFor(() => expect(strip()).toEqual(["two — wrapping up", "one", "three"]));
+    } finally {
+      if (was) Object.defineProperty(HTMLElement.prototype, "clientWidth", was);
+      else Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+    }
+  });
+
   it("cannot be picked up and carried along the strip", async () => {
     laidOutInARow();
     const { asked: log } = coreWith();
@@ -518,6 +546,27 @@ describe("a chat put into the background (SI-8f)", () => {
     await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
     expect(
       await screen.findByRole("menuitem", { name: /^Go to one: smart close stopped — it ended/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("comes back in its old place when its queued prompt could not be sent, and says so", async () => {
+    coreWith();
+    render(<App />);
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    await step(2, "queued");
+    await waitFor(() => expect(strip()).toEqual(["two — wrapping up", "one", "three"]));
+
+    await step(2, "not_sent");
+
+    await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
+    expect(
+      screen.getByText("Smart close could not send two its prompt, so it was left open."),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
+    expect(
+      await screen.findByRole("menuitem", {
+        name: /^Go to two: smart close stopped — its prompt could not be sent/,
+      }),
     ).toBeInTheDocument();
   });
 

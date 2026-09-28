@@ -81,6 +81,9 @@ pub enum Phase {
     NoRecord,
     /// The chat's program ended before it wrote a record.
     Ended,
+    /// The prompt, queued for the chat's turn to end, could not be written to it then; the chat
+    /// was left open.
+    NotSent,
 }
 
 /// One step of one chat's smart close, as the window is told it.
@@ -373,6 +376,18 @@ pub fn cancel(held: &Held, session: u32) {
 /// A report reached the plane: a queued smart close whose chat has now ended its turn — waiting,
 /// and asking nothing — is sent its prompt.
 pub fn reported(held: &Arc<Held>, report: &Report) {
+    reported_sending(held, report, |chat, prompt| {
+        held.chats().sessions().input(chat, prompt)
+    });
+}
+
+/// [`reported`], with what writes the prompt to the chat handed in: no pty refuses a write on
+/// demand, so this is how a test has the write fail.
+pub(crate) fn reported_sending(
+    held: &Arc<Held>,
+    report: &Report,
+    send: impl FnOnce(u32, String) -> Result<(), String>,
+) {
     let closing = held.closing();
     let mut chats = closing.chats();
     let Some(entry) = chats.get_mut(&report.chat) else {
@@ -388,14 +403,14 @@ pub fn reported(held: &Arc<Held>, report: &Report) {
     if !ready {
         return;
     }
-    if held
-        .chats()
-        .sessions()
-        .input(report.chat, sent_as())
-        .is_err()
-    {
-        // Gone between the report and the write: its exit says the rest.
+    if send(report.chat, sent_as()).is_err() {
+        // It ends here and the window is told, as every other end is. Whoever takes the entry
+        // out says so, and this is who took it: a chat whose program ended between the report
+        // and the write finds nothing left to forget when its exit is heard, so the exit says
+        // nothing and this is the one step the window gets.
         chats.remove(&report.chat);
+        drop(chats);
+        held.tell_smart_close(report.chat, Phase::NotSent);
         return;
     }
     entry.sent = true;

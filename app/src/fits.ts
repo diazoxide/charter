@@ -86,6 +86,15 @@ export type Least = (typeof LEAST)[keyof typeof LEAST];
  */
 export const LEAST_ROOT = 36;
 
+/**
+ * A chip (SI-8f): a tab in the background while its chat wraps up, drawn as the chat's icon and
+ * the breathing mark with no name. It is exactly this wide, in pixels at the default text size,
+ * not a share of the strip: `PlaneView` hands it to the stylesheet as `--chip` and to
+ * {@link fitting} as a chip's cost, so a strip holding chips fits exactly as many tabs as its
+ * room allows.
+ */
+export const LEAST_CHIP = 40;
+
 /** The window text size {@link LEAST} was measured at: the root was 13px until #283. */
 export const LEAST_TUNED_AT = 13;
 
@@ -132,19 +141,36 @@ export function fitting<T>(
   selected: T | undefined,
   width: number,
   least: number,
+  chips?: Chips<T>,
 ): { shown: T[]; hidden: T[] } {
-  const room = capacity(width, least);
+  if (width <= 0) return { shown: [...order], hidden: [] };
+  // A chip takes its own width and a tab `least`; the tabs share what the chips leave, so
+  // `n` tabs fit beside the chips exactly when the chips' widths and `n` floors add up to no
+  // more than `width` — the same arithmetic as {@link capacity}, one cost per tab.
+  const cost = (one: T) => (chips?.is(one) ? chips.width : least);
+  let used = 0;
+  let room = 0;
+  while (room < order.length && used + cost(order[room]) <= width) used += cost(order[room++]);
+  room = Math.max(1, room);
   if (order.length <= room) return { shown: [...order], hidden: [] };
-  const drawn = new Set(order.slice(0, room));
-  if (selected !== undefined && order.includes(selected) && !drawn.has(selected)) {
-    drawn.delete(order[room - 1]);
-    drawn.add(selected);
+  const drawn = order.slice(0, room);
+  if (selected !== undefined && order.includes(selected) && !drawn.includes(selected)) {
+    // It takes the place of the last tab that fits — and of as many before it as it needs,
+    // where a tab is wider than the chips it replaces.
+    let keep = room - 1;
+    let kept = drawn.slice(0, keep).reduce((sum, one) => sum + cost(one), 0);
+    while (keep > 0 && kept + cost(selected) > width) kept -= cost(drawn[--keep]);
+    drawn.splice(keep, drawn.length - keep, selected);
   }
+  const shown = new Set(drawn);
   return {
-    shown: order.filter((one) => drawn.has(one)),
-    hidden: order.filter((one) => !drawn.has(one)),
+    shown: order.filter((one) => shown.has(one)),
+    hidden: order.filter((one) => !shown.has(one)),
   };
 }
+
+/** Which of a strip's tabs are chips ({@link LEAST_CHIP}), and how wide one is drawn. */
+export type Chips<T> = { is: (one: T) => boolean; width: number };
 
 /**
  * Watches how wide a strip is, and how much of it its own controls have taken.

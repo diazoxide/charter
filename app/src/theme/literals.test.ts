@@ -279,6 +279,8 @@ describe("the stylesheet and the vocabulary agree", () => {
    * - `--least`: how narrow a tab of a strip may be drawn (`src/fits.ts`).
    * - `--root`: how wide the plane root's icon tab is drawn (`src/fits.ts`, `LEAST_ROOT`, SI-1) —
    *   the same number the workspace strip's arithmetic takes off its room.
+   * - `--chip`: how wide a wrapping-up chat's chip is drawn (`src/fits.ts`, `LEAST_CHIP`,
+   *   SI-8f) — the same number the chat strip's arithmetic counts a chip at.
    * - `--window-controls`: how much of the title bar the operating system's own window
    *   controls have already spent (`src/TitleBar.tsx`, `title_bar_room`). macOS's traffic
    *   lights float over charter's bar under `titleBarStyle: "Overlay"` and no other platform
@@ -291,7 +293,7 @@ describe("the stylesheet and the vocabulary agree", () => {
    * differ. Listed by hand, so that adding one is a decision somebody makes in this file
    * rather than a hole that opens quietly; the test below holds each to being really set.
    */
-  const fromTheWindow = ["--least", "--root", "--window-controls"];
+  const fromTheWindow = ["--least", "--root", "--chip", "--window-controls"];
 
   it("every custom property the stylesheet reads is a token, its own, or the window's", () => {
     // A `var(--typo)` resolves to nothing and the rule silently disappears, which is the one

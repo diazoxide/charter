@@ -2009,7 +2009,12 @@ export type Phase =
 /**  No record arrived in time; the chat was left open. */
 "no_record" | 
 /**  The chat's program ended before it wrote a record. */
-"ended";
+"ended" | 
+/**
+ *  The prompt, queued for the chat's turn to end, could not be written to it then; the chat
+ *  was left open.
+ */
+"not_sent";
 
 /**  One piece, as the window shows it. */
 export type Piece = {
