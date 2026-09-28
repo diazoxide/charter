@@ -495,7 +495,7 @@ fn the_cadence_nudge_names_the_live_workspace_of_the_apps_chat_id_first() {
     let said = twelfth(&p).unwrap();
     assert!(
         said.contains("`charter workspace remember \\\"<fact>\\\"` (workspace **alpha**)"),
-        "{said}"
+        "the nudge did not name workspace alpha"
     );
 }
 
@@ -530,12 +530,18 @@ fn outside_the_app_the_cadence_nudge_keys_the_workspace_on_the_payloads_session(
     p.env.remove("CHARTER_SESSION_ID");
     live_alpha_for(&p, "s-1");
     let said = twelfth(&p).unwrap();
-    assert!(said.contains("(workspace **alpha**)"), "{said}");
+    assert!(
+        said.contains("(workspace **alpha**)"),
+        "the nudge did not name workspace alpha"
+    );
     // An empty `$CHARTER_SESSION_ID` is no id at all.
     let p = p.with_env("CHARTER_SESSION_ID", "");
     std::fs::remove_file(p.root.join(".charter/sessions/s-1.memnudge")).unwrap();
     let said = twelfth(&p).unwrap();
-    assert!(said.contains("(workspace **alpha**)"), "{said}");
+    assert!(
+        said.contains("(workspace **alpha**)"),
+        "the nudge did not name workspace alpha"
+    );
 }
 
 #[test]
