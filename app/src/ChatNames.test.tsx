@@ -78,6 +78,7 @@ function putBack(session: number, name: string, label: string | null): OpenChat 
     profile: "claude",
     persona: "steward",
     unreported: null,
+    guessed: null,
     pinned: false,
     label,
     from: null,

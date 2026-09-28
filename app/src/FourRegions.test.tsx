@@ -63,6 +63,7 @@ function chat(session: number, name: string, cwd: string | null) {
     profile: "claude",
     persona: "steward",
     unreported: null,
+    guessed: null,
   };
 }
 

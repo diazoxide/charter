@@ -66,6 +66,7 @@ function chat(session: number, name: string, cwd: string | null, on: Partial<Ope
     profile: "claude",
     persona: "steward",
     unreported: null,
+    guessed: null,
     ...on,
   };
 }

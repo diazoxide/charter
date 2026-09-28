@@ -105,6 +105,7 @@ function resumedChat(session: number, over: Record<string, unknown> = {}) {
     profile: "claude",
     persona: "steward",
     unreported: null,
+    guessed: null,
     pinned: false,
     label: null,
     from: null,
@@ -112,7 +113,15 @@ function resumedChat(session: number, over: Record<string, unknown> = {}) {
   };
 }
 
-function core(on: { resumes?: ((args: Record<string, unknown>) => unknown)[] } = {}) {
+function core(
+  on: {
+    resumes?: ((args: Record<string, unknown>) => unknown)[];
+    /** The view tabs the last launch left open (`reopened_views`). */
+    reopened?: unknown[];
+    /** The focused workspace's records, when not {@link ALPHAS}. */
+    alphas?: SessionRecordRow[];
+  } = {},
+) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const moves: number[] = [];
   let resumed = 0;
@@ -126,7 +135,7 @@ function core(on: { resumes?: ((args: Record<string, unknown>) => unknown)[] } =
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "opened_chats") return [];
-    if (cmd === "reopened_views") return [];
+    if (cmd === "reopened_views") return on.reopened ?? [];
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
@@ -146,8 +155,8 @@ function core(on: { resumes?: ((args: Record<string, unknown>) => unknown)[] } =
         todos_refused: null,
         personas: ["steward"],
         persona: "steward",
-        sessions: ALPHAS,
-        contributed: [sessionsPanel(ALPHAS)],
+        sessions: on.alphas ?? ALPHAS,
+        contributed: [sessionsPanel(on.alphas ?? ALPHAS)],
       };
     if (cmd === "plane_root_panels")
       return { sessions: ROOT_RECORDS, contributed: [sessionsPanel(ROOT_RECORDS)] };
@@ -249,6 +258,59 @@ describe("the Sessions panel", () => {
         path: NEWER,
       }),
     );
+  });
+
+  it("resumes ITS record from a record's tab whatever records the place in front lists", async () => {
+    // The tab's button was the catalogue's row for the place in front, so a record the
+    // focused place's list did not hold drew no Resume at all (SI-8e).
+    const { asked } = core({
+      alphas: [ALPHAS[0]],
+      reopened: [
+        {
+          from: null,
+          view: "session",
+          key: OLDER,
+          title: "Session · Plan it",
+          workspace: "alpha",
+          at: 0,
+          active: true,
+          pinned: false,
+        },
+      ],
+    });
+    render(<App />);
+    await screen.findByTestId("session-record");
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Resume session: / }));
+
+    await waitFor(() =>
+      expect(asked.find((one) => one.cmd === "resume_session")?.args).toMatchObject({
+        path: OLDER,
+      }),
+    );
+  });
+
+  it("says what a Resume had to guess, beside what it resumed", async () => {
+    core({
+      resumes: [
+        () =>
+          resumedChat(7, {
+            guessed:
+              "its session record does not say which directory it ran in, so it starts in workspace alpha's own directory",
+          }),
+      ],
+    });
+    render(<App />);
+    const panel = await screen.findByTestId("panel-sessions");
+    fireEvent.contextMenu(await within(panel).findByRole("button", { name: /Ship the widget/ }));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Resume session: Ship the widget" }),
+    );
+
+    expect(await screen.findByText(/was resumed — conversation/)).toBeTruthy();
+    expect(
+      await screen.findByText(/does not say which directory it ran in, so it starts in/),
+    ).toBeTruthy();
   });
 
   it("says which happened when the record came back as a new chat", async () => {

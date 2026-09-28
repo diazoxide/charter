@@ -37,7 +37,9 @@ fn facts(place: Place, when: chrono::NaiveDateTime) -> Facts {
             number: 3,
             name: Some("steward 3".to_owned()),
             harness: Some("claude".to_owned()),
+            profile: Some("work".to_owned()),
             conversation: Some("0f6c2a1e-aaaa-bbbb-cccc-123456789abc".to_owned()),
+            cwd: Some("workspaces/alpha/charter/si-8b".to_owned()),
         }),
         persona: Some("steward".to_owned()),
         pieces: vec![Touched {
@@ -158,8 +160,9 @@ fn a_workspace_record_is_one_file_under_its_sessions_directory_named_by_time_and
     assert!(
         text.starts_with(
             "---\ntitle: Ship the record\ndate: 2026-09-28 14:03:12\nchat: 3\nchat-name: \
-             steward 3\npersona: steward\nharness: claude\nconversation: \
-             0f6c2a1e-aaaa-bbbb-cccc-123456789abc\nworkspace: alpha\npiece: charter/si-8b @ \
+             steward 3\npersona: steward\nharness: claude\nprofile: work\nconversation: \
+             0f6c2a1e-aaaa-bbbb-cccc-123456789abc\nworkspace: alpha\ncwd: \
+             workspaces/alpha/charter/si-8b\npiece: charter/si-8b @ \
              si-8b-session-record-core\n---\n\n# Ship the record\n\n## Goal\n"
         ),
         "{text}"
@@ -181,8 +184,10 @@ fn a_fact_charter_does_not_have_is_written_as_unknown_and_never_left_out() {
         "chat-name: unknown\n",
         "persona: none\n",
         "harness: unknown\n",
+        "profile: unknown\n",
         "conversation: unknown\n",
         "workspace: alpha\n",
+        "cwd: unknown\n",
     ] {
         assert!(text.contains(line), "{line:?} in {text}");
     }
@@ -419,8 +424,10 @@ fn a_chats_facts_come_from_the_apps_record_of_it_by_number() {
         r#"{"version": 1, "at": 1, "dealt": 7, "chats": [
             {"program": "claude", "name": "3", "number": 3, "resume": "old-one"},
             {"program": "/usr/local/bin/claude", "name": "7", "number": 7,
-             "resume": "0f6c2a1e-aaaa-bbbb-cccc-123456789abc", "persona": "steward"}
-        ]}"#,
+             "resume": "0f6c2a1e-aaaa-bbbb-cccc-123456789abc", "persona": "steward",
+             "profile": "work", "cwd": "PLANE/workspaces/alpha/charter/si-8b"}
+        ]}"#
+        .replace("PLANE", &dir.path().display().to_string()),
     )
     .unwrap();
     let seen = chat_facts(dir.path(), 7);
@@ -431,6 +438,35 @@ fn a_chats_facts_come_from_the_apps_record_of_it_by_number() {
         seen.conversation.as_deref(),
         Some("0f6c2a1e-aaaa-bbbb-cccc-123456789abc")
     );
+    assert_eq!(
+        seen.profile.as_deref(),
+        Some("work"),
+        "the profile, by name"
+    );
+    assert_eq!(
+        seen.cwd.as_deref(),
+        Some("workspaces/alpha/charter/si-8b"),
+        "the directory, plane-relative"
+    );
+}
+
+#[test]
+fn a_chat_at_the_plane_root_ran_in_dot_and_one_outside_the_plane_in_no_directory_charter_says() {
+    let dir = plane(&[]);
+    std::fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
+    std::fs::write(
+        dir.path().join(crate::reopen::IN_PLANE),
+        r#"{"version": 1, "at": 1, "dealt": 7, "chats": [
+            {"program": "claude", "name": "3", "number": 3, "cwd": "PLANE"},
+            {"program": "claude", "name": "4", "number": 4, "cwd": "/somewhere/else"},
+            {"program": "claude", "name": "5", "number": 5, "cwd": "PLANE/workspaces/../.."}
+        ]}"#
+        .replace("PLANE", &dir.path().display().to_string()),
+    )
+    .unwrap();
+    assert_eq!(chat_facts(dir.path(), 3).cwd.as_deref(), Some("."));
+    assert_eq!(chat_facts(dir.path(), 4).cwd, None, "outside the plane");
+    assert_eq!(chat_facts(dir.path(), 5).cwd, None, "a path that walks up");
 }
 
 #[test]
@@ -443,7 +479,9 @@ fn a_chat_the_app_has_no_record_of_is_known_only_by_its_number() {
             number: 5,
             name: None,
             harness: None,
+            profile: None,
             conversation: None,
+            cwd: None,
         }
     );
 }
@@ -471,6 +509,42 @@ fn a_listing_carries_each_records_persona_harness_and_conversation() {
     assert_eq!(listed[1].persona, None);
     assert_eq!(listed[1].harness, None);
     assert_eq!(listed[1].conversation, None);
+    assert_eq!(listed[0].profile.as_deref(), Some("work"));
+    assert_eq!(
+        listed[0].cwd.as_deref(),
+        Some("workspaces/alpha/charter/si-8b")
+    );
+    assert_eq!(listed[1].profile, None);
+    assert_eq!(listed[1].cwd, None);
+}
+
+#[test]
+fn a_profile_or_directory_a_hand_edit_made_unsafe_is_not_carried() {
+    let dir = plane(&["alpha"]);
+    let done = write(dir.path(), "Edited", BODY, &facts(alpha(), at(9, 0, 0))).unwrap();
+    let original = std::fs::read_to_string(&done.path).unwrap();
+    for (profile, cwd) in [
+        ("--dangerously-skip-permissions", "../../etc"),
+        ("work;rm", "/etc"),
+        ("wo.rk", "workspaces/alpha/../../.."),
+        ("work", "workspaces/alpha/./x"),
+        ("work", "workspaces\\alpha"),
+        ("work", "workspaces//alpha"),
+        ("work", "workspaces/alpha/"),
+    ] {
+        let text = original
+            .replace("profile: work", &format!("profile: {profile}"))
+            .replace(
+                "cwd: workspaces/alpha/charter/si-8b",
+                &format!("cwd: {cwd}"),
+            );
+        std::fs::write(&done.path, text).unwrap();
+        let listed = list(dir.path(), &alpha());
+        if profile != "work" {
+            assert_eq!(listed[0].profile, None, "not a profile name");
+        }
+        assert_eq!(listed[0].cwd, None, "not a plane-relative directory");
+    }
 }
 
 #[test]

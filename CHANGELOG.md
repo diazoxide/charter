@@ -45,6 +45,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Smart close never stops to ask permission for its own command in a Claude Code chat.** A
+  chat the app starts may run `charter session record` without asking — that command and no
+  other, and only as a command of its own: your own and the project's permission rules all
+  still apply beside it. Codex needs nothing to run it — in its default sandbox the command runs
+  without asking — but that sandbox keeps the command from telling the app, so a Codex chat's
+  tab does not yet close by itself after its record is written (#517, ADR 0064).
+- **A session record names the harness profile and the directory its chat ran in**, and
+  **Resume** starts the new chat on that profile and in that directory where they still exist
+  — in a piece, for a record written from one. Where either is gone, or the record is older than
+  them, Resume uses the project's default profile or the workspace's directory and says so.
 - **A LIVE workspace publishes its session records** with its memory and todos: the managed
   `.gitignore` block un-ignores `sessions/`, and `charter reinit` brings an older block up to
   date. A new workspace's `workspace.md` has a `## Sessions` section.
@@ -53,6 +63,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A session record's tab always offers Resume.** The button came from the palette's rows for
+  the place in front, so a record's tab showed none while another place was focused.
 - **Codex and opencode chats come back to their conversation at a relaunch, and a Claude Code
   chat comes back to the one it was in after `/clear`.** A chat's conversation was recorded
   only when it started, which only Claude Code has, so every Codex and opencode chat came back

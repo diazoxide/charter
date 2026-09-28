@@ -54,6 +54,7 @@ function chat(session: number, name: string, cwd: string, on: Partial<OpenChat> 
     profile: "claude",
     persona: null,
     unreported: null,
+    guessed: null,
     pinned: false,
     label: null,
     from: null,

@@ -3209,6 +3209,13 @@ export function PlaneView({
           <code>{frontChat.resumed}</code>
         </p>
       )}
+      {/* What a Resume from a session record had to guess because the record could not say
+          it — its profile, its directory (SI-8e) — said beside what happened, never instead. */}
+      {frontTab && frontChat?.guessed && (
+        <p className="came-back">
+          <strong>{frontTab.name}</strong>: {frontChat.guessed}.
+        </p>
+      )}
       {/* Only for a harness. Every chat is a shell until the harness picker lands, and a
           shell has no conversation to bring back — saying so on every relaunch, forever,
           is noise about the normal case. */}

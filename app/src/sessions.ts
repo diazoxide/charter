@@ -22,9 +22,17 @@ export function sessionView(path: string): ViewRef {
 /** The view's id among charter's own. */
 export const SESSION_VIEW = "session";
 
+/** The words before a record's title in its tab's name. */
+const TAB_PREFIX = "Session · ";
+
 /** What a session record's tab is called. */
 export function sessionTitle(title: string): string {
-  return `Session · ${title}`;
+  return `${TAB_PREFIX}${title}`;
+}
+
+/** The record's title out of its tab's name — the name itself where it is not {@link sessionTitle}'s. */
+export function sessionTitleOf(tabName: string): string {
+  return tabName.startsWith(TAB_PREFIX) ? tabName.slice(TAB_PREFIX.length) : tabName;
 }
 
 /**

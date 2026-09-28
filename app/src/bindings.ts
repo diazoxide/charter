@@ -1754,6 +1754,11 @@ export type OpenChat = {
 	resumed: string | null,
 	/**  Why it is a new chat rather than the one it was, where it is. */
 	fresh: string | null,
+	/**
+	 *  What a Resume from a session record had to guess because the record could not say it —
+	 *  its profile, its directory — or none (SI-8e).
+	 */
+	guessed: string | null,
 	/**  The harness profile it started on, where it started on one. */
 	profile: string | null,
 	/**  The persona it adopted. */

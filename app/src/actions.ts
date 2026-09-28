@@ -35,7 +35,7 @@ import type {
   SubjectCurations,
 } from "./bindings";
 import { MAIN } from "./here";
-import { sessionTitle, sessionView } from "./sessions";
+import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
 import { onAMac } from "./tabKeys";
 import {
@@ -1241,6 +1241,15 @@ export function catalogue(now: Now): Offer[] {
   // **The session records of the place in front, two rows each** (SI-8d): open one as a view
   // tab, and resume it as a new chat. Only the place in front's, because the Sessions panel the
   // rows stand beside is about that place — a workspace, or the plane root.
+  const resume = (path: string, title: string, note: string): Offer => ({
+    ...can(
+      `session.resume:${path}`,
+      `Resume session: ${title}`,
+      { verb: "resumeSession", path },
+      title,
+    ),
+    note,
+  });
   for (const record of now.sessions ?? []) {
     offers.push(
       can(
@@ -1253,18 +1262,32 @@ export function catalogue(now: Now): Offer[] {
         },
         record.title,
       ),
-      {
-        ...can(
-          `session.resume:${record.path}`,
-          `Resume session: ${record.title}`,
-          { verb: "resumeSession", path: record.path },
-          record.title,
-        ),
-        note: record.resumable
+      resume(
+        record.path,
+        record.title,
+        record.resumable
           ? "A new chat, given its conversation back, with the record in its briefing."
           : "A new chat with the record in its briefing — the record holds no conversation to give back.",
-      },
+      ),
     );
+  }
+  // **And every open record tab's own Resume, whichever place is in front** (SI-8e). A record's
+  // tab draws this row as its heading's button, so it is about THAT record: a tab left open on
+  // another place's record, or on one the place in front no longer lists, still resumes it.
+  const listed = new Set((now.sessions ?? []).map((record) => record.path));
+  for (const id of now.tabs.order) {
+    for (const { content } of contentsOf(now.tabs, id)) {
+      if (content.kind !== "view" || content.view.from !== null) continue;
+      if (content.view.view !== SESSION_VIEW || listed.has(content.view.key)) continue;
+      listed.add(content.view.key);
+      offers.push(
+        resume(
+          content.view.key,
+          sessionTitleOf(now.tabs.byId[id]?.name ?? content.view.key),
+          "A new chat from this record — given its conversation back where it holds one — with the record in its briefing.",
+        ),
+      );
+    }
   }
   // **The focused workspace's clones, two rows each** (charter-app#174). A clone is where a
   // chat can start, one level up from a piece, and that is the whole of what this window can

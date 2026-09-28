@@ -48,6 +48,7 @@ function chat(session: number, name: string, workspace: string, pinned = false) 
     profile: null,
     persona: null,
     unreported: null,
+    guessed: null,
     pinned,
   };
 }

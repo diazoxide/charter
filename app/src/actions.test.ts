@@ -634,6 +634,43 @@ describe("the one list of actions", () => {
     });
   });
 
+  it("offers Resume for every open session record's tab, whichever place is in front", async () => {
+    // SI-8e: the tab's Resume button is this row, and it used to exist only for the records of
+    // the place in front — so a record's tab drew no Resume once another place was focused.
+    const path = "workspaces/beta/sessions/20260928-140000-ship-it.md";
+    const tabs = openView(
+      noTabs(),
+      { from: null, view: "session", key: path },
+      "Session · Ship it",
+      "beta",
+    );
+    const offers = catalogue(
+      now({
+        plane: "/plane",
+        tabs,
+        focused: "alpha",
+        sessions: [
+          {
+            path: "workspaces/alpha/sessions/20260927-090000-plan.md",
+            title: "Plan",
+            resumable: true,
+          },
+        ],
+      }),
+    );
+
+    const row = by(offers, `session.resume:${path}`);
+    expect(row).toMatchObject({ title: "Resume session: Ship it", available: true });
+    const hands = doing();
+    await run(offers, `session.resume:${path}`, hands);
+    expect(hands.calls).toEqual([`resumeSession:${path}`]);
+    // One row per record, even when its tab is open AND it is the place in front's.
+    const both = catalogue(
+      now({ plane: "/plane", tabs, sessions: [{ path, title: "Ship it", resumable: true }] }),
+    );
+    expect(ids(both).filter((id) => id === `session.resume:${path}`)).toHaveLength(1);
+  });
+
   it("says why a vault cannot be opened on a plane that has none, and still offers to make one", () => {
     const offers = catalogue(now({ plane: "/plane", vaults: [] }));
     expect(by(offers, "vault.pick")?.available).toBe(false);

@@ -1128,7 +1128,11 @@ excepted), and for a secret-shaped value, named by its kind.
   `sessions/<file>` or `workspaces/<ws>/sessions/<file>`, and `sessionrecord::locate` refuses
   every other spelling. What a reader takes from the frontmatter is held to a shape on the way
   in, because the file can be edited: a persona only as a persona name, a harness only as a
-  word, a conversation only as a session id.
+  word, a profile only as a profile name, a conversation only as a session id, and a `cwd`
+  only as a plane-relative path of plain components — no `..`, no `.` but the whole value, not
+  absolute, no backslash. **Resume** starts in it only where it is still a directory inside the
+  record's place once every link is followed; otherwise in the place's own directory, and says
+  so.
 - **Git:** a workspace's follow the workspace — un-ignored by the LIVE block's `sessions` pair,
   kept on disk for a LOCAL one. The plane root's are ignored by `/sessions/` in the plane's
   `.gitignore`: kept on this machine, because the plane root has no LIVE switch (ADR 0064).
@@ -1144,8 +1148,10 @@ excepted), and for a secret-shaped value, named by its kind.
   chat-name: <the name its tab shows | unknown>
   persona: <name | none>
   harness: <claude | codex | opencode | unknown>
+  profile: <the harness profile the chat ran on | unknown>
   conversation: <the harness's conversation id | unknown>
   workspace: <ws | plane root>
+  cwd: <the directory the chat ran in, plane-relative (. for the plane root) | unknown>
   piece: <repo>/<piece> @ <branch | (detached)>      (zero or more lines)
   ---
 
@@ -1166,7 +1172,11 @@ excepted), and for a secret-shaped value, named by its kind.
   The frontmatter is line-based (`personas::frontmatter`), every key always written, and is
   charter's alone: the model gives only the title and the body. `conversation` is
   `reopen::conversation_of` — the app's `reopen.json` `resume` for that chat, which the app
-  keeps current from the chat's hook reports. `piece`
+  keeps current from the chat's hook reports. `profile` and `cwd` are the app's `reopen.json`
+  `profile` and `cwd` for that chat (added 2026-09-28, SI-8e): the profile by its name, never
+  its command, and the directory as a path below the plane root — a chat whose directory is
+  outside the plane is `unknown`. A record written before them has neither key, and reads as
+  `unknown` for both. `piece`
   lines are the piece the command ran in and each `--piece`, with the branch `git worktree
   list` reports; a `--piece` git does not report is refused. The body is exactly the five
   `## ` sections above, in that order, each non-empty, with nothing before the first (a heading

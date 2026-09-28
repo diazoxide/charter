@@ -77,6 +77,7 @@ function opened(session: number, name: string, cwd: string | null, on: Partial<O
     profile: null,
     persona: null,
     unreported: null,
+    guessed: null,
     pinned: false,
     label: null,
     from: null,

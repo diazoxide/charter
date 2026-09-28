@@ -59,8 +59,13 @@ pub struct ChatFacts {
     pub name: Option<String>,
     /// The harness it runs, by the word the plane calls it.
     pub harness: Option<String>,
+    /// The harness profile it started on, by name (the app's record of it).
+    pub profile: Option<String>,
     /// The harness's id for the conversation now ([`crate::reopen::conversation_of`]).
     pub conversation: Option<String>,
+    /// The directory it runs in, plane-relative — `.` for the plane root — from the app's
+    /// record of it; `None` for a chat outside the plane.
+    pub cwd: Option<String>,
 }
 
 /// One piece a chat worked in, as git reports it.
@@ -141,6 +146,12 @@ pub struct Listed {
     /// id's shape ([`crate::harness::SessionId::new`]) — so a value a hand edit left is never
     /// handed to a harness as a flag.
     pub conversation: Option<String>,
+    /// The harness profile it ran on, where the record names one in a profile name's shape.
+    pub profile: Option<String>,
+    /// The directory it ran in, plane-relative, where the record names one in that shape
+    /// ([`relative_dir_ok`]). Whether it is still a directory inside the record's place is
+    /// the reader's to ask ([`crate::sessionresume`]).
+    pub cwd: Option<String>,
 }
 
 /// A record read back by its plane-relative path ([`open`]).
@@ -472,10 +483,18 @@ fn render(new: &New) -> String {
             value(chat.and_then(|c| c.harness.as_deref()), UNKNOWN)
         ),
         format!(
+            "profile: {}",
+            value(chat.and_then(|c| c.profile.as_deref()), UNKNOWN)
+        ),
+        format!(
             "conversation: {}",
             value(chat.and_then(|c| c.conversation.as_deref()), UNKNOWN)
         ),
         format!("workspace: {}", facts.place.word()),
+        format!(
+            "cwd: {}",
+            value(chat.and_then(|c| c.cwd.as_deref()), UNKNOWN)
+        ),
     ];
     for piece in &facts.pieces {
         lines.push(format!(
@@ -553,6 +572,8 @@ fn listed(place: &Place, file: String, text: &str) -> Listed {
     });
     let conversation =
         value("conversation").filter(|v| crate::harness::SessionId::new(v.as_str()).is_ok());
+    let profile = value("profile").filter(|v| crate::profiles::name_ok(v));
+    let cwd = value("cwd").filter(|v| relative_dir_ok(v));
     Listed {
         when: when_of(&file),
         shown: shown(place, &file),
@@ -561,7 +582,63 @@ fn listed(place: &Place, file: String, text: &str) -> Listed {
         persona,
         harness,
         conversation,
+        profile,
+        cwd,
     }
+}
+
+/// The longest `cwd:` charter reads back.
+const MOST_CWD_BYTES: usize = 1024;
+
+/// Whether `dir` is a directory below the plane root spelled as charter writes one: `.` for
+/// the plane root itself, else plain `/`-separated components — never absolute, no `..`, no
+/// `.` inside it, no empty component, no backslash and nothing a line cannot draw.
+///
+/// Only the spelling. Whether it is still a directory, and where it lands once links are
+/// followed, is asked where it is used ([`crate::sessionresume`]).
+pub fn relative_dir_ok(dir: &str) -> bool {
+    if dir == "." {
+        return true;
+    }
+    !dir.is_empty()
+        && dir.len() <= MOST_CWD_BYTES
+        && !dir.contains('\\')
+        && !dir.chars().any(crate::panel::undrawable)
+        && dir
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+/// `dir`, absolute, as a directory below `root` ([`relative_dir_ok`]'s spelling), or `None`
+/// where it is not below it. Lexically first, then with both ends resolved, because the app
+/// may hold the plane by a path a link leads to (`/tmp` and `/private/tmp` on macOS).
+fn plane_relative(root: &Path, dir: &Path) -> Option<String> {
+    let below = |root: &Path, dir: &Path| -> Option<String> {
+        let rest = dir.strip_prefix(root).ok()?;
+        let parts: Option<Vec<&str>> = rest
+            .components()
+            .map(|c| match c {
+                std::path::Component::Normal(part) => part.to_str(),
+                _ => None,
+            })
+            .collect();
+        let parts = parts?;
+        let shown = if parts.is_empty() {
+            ".".to_owned()
+        } else {
+            parts.join("/")
+        };
+        relative_dir_ok(&shown).then_some(shown)
+    };
+    if !dir.is_absolute() {
+        return None;
+    }
+    below(root, dir).or_else(|| {
+        below(
+            &crate::contain::resolved(root)?,
+            &crate::contain::resolved(dir)?,
+        )
+    })
 }
 
 /// The text after a record's frontmatter, or the whole text where it has none.
@@ -735,7 +812,9 @@ pub fn chat_facts(root: &Path, number: u32) -> ChatFacts {
             number,
             name: None,
             harness: None,
+            profile: None,
             conversation: None,
+            cwd: None,
         };
     };
     let harness = chat.harness().map(|h| h.name().to_owned());
@@ -749,6 +828,11 @@ pub fn chat_facts(root: &Path, number: u32) -> ChatFacts {
             .ok()
             .flatten()
             .map(|id| id.as_str().to_owned()),
+        profile: chat.profile.clone().filter(|p| crate::profiles::name_ok(p)),
+        cwd: chat
+            .cwd
+            .as_deref()
+            .and_then(|dir| plane_relative(root, dir)),
     }
 }
 
