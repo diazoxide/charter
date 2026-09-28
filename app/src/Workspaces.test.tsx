@@ -575,9 +575,10 @@ describe("the strip that is drawn", () => {
     plane.addGamma();
     await userEvent.click(screen.getByRole("button", { name: "End chat steward two" }));
     await userEvent.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", {
-        name: "End chat steward two",
-      }),
+      within(await screen.findByRole("alertdialog", { name: "End chat steward two?" })).getByRole(
+        "button",
+        { name: "Close" },
+      ),
     );
 
     await vi.waitFor(() => expect(strip()).toEqual(["Plane root", "alpha", "beta", "gamma"]));

@@ -346,7 +346,16 @@ how it is cited and nothing here is renumbered.
     exception to decision 31 — and the tab closes only when the record is saved, never on
     anything the chat printed; with no record in about five minutes the tab goes back to normal
     and stays open. `charter session list|show` read them back, and charter's `smart-close`
-    skill is the procedure. **ADR 0064.** **The operator can always get an old session back**
+    skill is the procedure. **In the window**, closing a chat asks Cancel, Close or Smart close;
+    Smart close is sent (one bracketed paste and Enter, in one write) at once to a waiting chat
+    and at the next `Stop` to a running one, and is refused to a chat asking a question
+    mid-turn — a `Notification` while a turn runs, which the board now tells from the nudge of
+    an idle chat — and offered to no shell tab, no chat never prompted and none reporting
+    nothing. Close is the default at one turn or fewer. The tab wears a breathing amber mark
+    while it wraps up; its menu's Cancel smart close, or the operator typing into the chat
+    (not the terminal's own answers, not the mouse, and not an answer to the chat's own question)
+    cancels it. A chat that ends on its own mid-close is an ended chat whose record was not
+    written. **ADR 0064.** **The operator can always get an old session back**
     (SI-8d): each workspace has a **Sessions** panel, and the plane root's tab one of the
     plane's own, listing its records newest first; a row opens the record as a read-only view
     tab, and **Resume** — on the row's menu, the record's tab and the palette — starts a NEW

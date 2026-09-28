@@ -12,13 +12,16 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { OpenChat } from "./bindings";
-import { ChatMark } from "./NeedsYou";
+import { ChatMark, WRAPPING_UP, WrappingUp } from "./NeedsYou";
 import { Menued } from "./Menus";
 import { WorktreeMark } from "./Worktree";
 import { isShell, markOf, type ChatStates } from "./chatState";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
+
+/** No chat wrapping up, for a window that has not said. */
+const NONE_WRAPPING: ReadonlySet<number> = new Set();
 
 /**
  * The left region: the repo and worktree **explorer** (ADR 0038).
@@ -105,6 +108,7 @@ export function Explorer({
   spot,
   onPick,
   onShowChat,
+  wrapping = NONE_WRAPPING,
   offers,
   onPress,
 }: {
@@ -120,6 +124,8 @@ export function Explorer({
   spot: Spot | undefined;
   onPick: (spot: Spot | undefined) => void;
   onShowChat: (session: number) => void;
+  /** The chats wrapping up — being smart-closed (ADR 0064) — whose rows say so. */
+  wrapping?: ReadonlySet<number>;
   /** The catalogue by id, which is what a piece row's menu is drawn out of. */
   offers: Catalogued;
   onPress: (offer: Offer) => void;
@@ -237,6 +243,7 @@ export function Explorer({
           <ChatList
             chats={atTheRoot}
             states={states}
+            wrapping={wrapping}
             onShow={onShowChat}
             treeitem={treeitem}
             isDrawn={isDrawn}
@@ -366,6 +373,7 @@ export function Explorer({
                             <ChatList
                               chats={working}
                               states={states}
+                              wrapping={wrapping}
                               onShow={onShowChat}
                               treeitem={treeitem}
                               isDrawn={isDrawn}
@@ -470,12 +478,14 @@ function PieceCount({ pieces, refused }: { pieces?: readonly unknown[]; refused?
 function ChatList({
   chats,
   states,
+  wrapping,
   onShow,
   treeitem,
   isDrawn,
 }: {
   chats: readonly OpenChat[];
   states: ChatStates;
+  wrapping: ReadonlySet<number>;
   onShow: (session: number) => void;
   /** What a row says about its place in the tree. */
   treeitem: (id: string) => TreeItem;
@@ -495,6 +505,8 @@ function ChatList({
             <button
               type="button"
               className="chat"
+              data-wrapping-up={wrapping.has(chat.session) || undefined}
+              title={wrapping.has(chat.session) ? WRAPPING_UP : undefined}
               {...treeitem(chatRow(chat.session))}
               onClick={() => onShow(chat.session)}
             >
@@ -504,6 +516,7 @@ function ChatList({
               <SquareTerminal className="node-icon" />
               <span className="session">{chat.name}</span>
               <ChatMark state={markOf(states, chat.session, isShell(chat))} />
+              <WrappingUp held={wrapping.has(chat.session)} />
               {/* The PROFILE where there is one, and the harness otherwise. A profile is what
                 the operator picked and what a relaunch looks up again; the kind is what the
                 plane calls the harness. Showing the profile alone would hide which harness

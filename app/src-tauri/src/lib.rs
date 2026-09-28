@@ -31,6 +31,7 @@ mod saving;
 mod sessions;
 mod settings;
 mod slowstart;
+mod smartclose;
 mod todos;
 mod updates;
 mod usage;
@@ -1445,6 +1446,8 @@ fn commands() -> Builder<tauri::Wry> {
         .typ::<heard::ExtensionHeard>()
         // What `harness-by-hand` carries (ADR 0062).
         .typ::<hooks::ByHand>()
+        // What `smart-close` carries (ADR 0064).
+        .typ::<smartclose::SmartClosing>()
 }
 
 /// Where the generated TypeScript lives.
@@ -1657,6 +1660,19 @@ pub fn run() {
                             &told.plane.clone(),
                             hooks::BY_HAND,
                             &told,
+                        );
+                    })
+                })
+                // Each step of a smart close: the window draws the tab wrapping up, and closes it
+                // when its record lands (ADR 0064).
+                .telling_smart_close({
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |step: smartclose::SmartClosing| {
+                        windows::emit_for_plane(
+                            &window,
+                            &step.plane.clone(),
+                            smartclose::EVENT,
+                            &step,
                         );
                     })
                 })

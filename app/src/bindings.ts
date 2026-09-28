@@ -846,6 +846,20 @@ export const commands = {
 	 *  directory are the core's answer. A refusal comes back before anything starts.
 	 */
 	curate: (plane: PlaneId, subject: string, action: string, columns: number, rows: number) => typedError<Curating, string>(__TAURI_INVOKE("curate", { plane, subject, action, columns, rows })),
+	/**  Whether chat `session` is offered Smart close, and the answer the close dialog starts on. */
+	smartCloseOffer: (plane: PlaneId, session: number) => typedError<SmartCloseOffer, string>(__TAURI_INVOKE("smart_close_offer", { plane, session })),
+	/**
+	 *  Smart-closes a chat: sends it the prompt to write its session record, now or when its turn
+	 *  ends, and closes its tab when the record is saved.
+	 */
+	smartClose: (plane: PlaneId, session: number) => typedError<Phase, string>(__TAURI_INVOKE("smart_close", { plane, session })),
+	/**  Cancels a chat's smart close. The chat stays open and running. */
+	cancelSmartClose: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("cancel_smart_close", { plane, session })),
+	/**
+	 *  Every chat of a plane being smart-closed, so a window that has just drawn it knows which
+	 *  tabs are wrapping up.
+	 */
+	smartClosing: (plane: PlaneId) => typedError<SmartClosing[], string>(__TAURI_INVOKE("smart_closing", { plane })),
 	/**
 	 *  Every extension this machine has installed, and every one this project's files name, with
 	 *  what each is in this project — `extension::project::resolve`, shaped for the wire. In
@@ -1977,6 +1991,21 @@ export type Percent = {
 	tone: GaugeTone,
 };
 
+/**  Where a smart close stands. */
+export type Phase = 
+/**  Waiting for the chat's turn to end before the prompt is sent. */
+"queued" | 
+/**  The prompt was sent; waiting for the record. */
+"sent" | 
+/**  The record is saved and the chat was closed. */
+"closed" | 
+/**  The operator cancelled it; the chat is open and running. */
+"cancelled" | 
+/**  No record arrived in time; the chat was left open. */
+"no_record" | 
+/**  The chat's program ended before it wrote a record. */
+"ended";
+
 /**  One piece, as the window shows it. */
 export type Piece = {
 	piece: string,
@@ -2704,6 +2733,26 @@ export type SidebarWorkspace = {
 	 *  (charter-app#301). Every place a workspace is drawn marks it.
 	 */
 	live: boolean,
+};
+
+/**  Whether Smart close is offered on a chat, and the answer the close dialog starts on. */
+export type SmartCloseOffer = {
+	available: boolean,
+	/**  Why it is not, in a sentence, where it is not. */
+	why: string | null,
+	/**
+	 *  Whether **Close** is the dialog's default: the chat has had at most one turn, where there
+	 *  is little to record. A chat put back with its conversation has had more than this app
+	 *  saw, so it never is.
+	 */
+	close_first: boolean,
+};
+
+/**  One step of one chat's smart close, as the window is told it. */
+export type SmartClosing = {
+	plane: PlaneId,
+	session: number,
+	phase: Phase,
 };
 
 /**  Everything the picker draws, read from the plane when it is opened. */

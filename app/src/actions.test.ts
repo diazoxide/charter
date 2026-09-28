@@ -77,6 +77,10 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`ignoreNeedsYou:${session}`);
       return { ok: true as const };
     }),
+    cancelSmartClose: vi.fn(async (session: number) => {
+      calls.push(`cancelSmartClose:${session}`);
+      return { ok: true as const };
+    }),
     pinTab: vi.fn(async (tab: number, pinned: boolean) => {
       calls.push(`pinTab:${tab},${pinned}`);
       return { ok: true as const };
@@ -1503,8 +1507,9 @@ describe("the palette at fifty chats", () => {
    * different is the shape: the scan's cost is the catalogue's length, and #174 is the change
    * that grew it — a third more comparisons for the same fifty menus, before anything is
    * added next. A millisecond assertion would be flaky on a shared runner, so what is pinned
-   * below is the work itself, which is the standard #133 set: 200 lookups (150 before a chat
-   * could be renamed, charter-app#254), and the same 200 whichever catalogue it is.
+   * below is the work itself, which is the standard #133 set: 250 lookups (150 before a chat
+   * could be renamed, charter-app#254; 200 before a wrapping-up tab could cancel its smart
+   * close, ADR 0064), and the same 250 whichever catalogue it is.
    */
   describe("what a menu on the chat strip costs (charter-app#174)", () => {
     /** A catalogue that counts what is asked of it. `Map` and not a stand-in, so what is
@@ -1523,16 +1528,16 @@ describe("the palette at fifty chats", () => {
       return offers.lookups;
     }
 
-    it("asks for four rows per tab and never walks the list", () => {
+    it("asks for five rows per tab and never walks the list", () => {
       const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
 
-      // 50 tabs × the four ids a chat menu lists. **Not fifty scans of 291 rows**, which is
+      // 50 tabs × the five ids a chat menu lists. **Not fifty scans of 291 rows**, which is
       // what this cost before the lookup was built once for the window — and the number that
       // does not move when the catalogue grows again.
-      expect(strip(offers)).toBe(200);
+      expect(strip(offers)).toBe(250);
     });
 
-    it("is the same 200 whether the catalogue carries the pieces or not", () => {
+    it("is the same 250 whether the catalogue carries the pieces or not", () => {
       // The property, not the timing: the cost of a menu is flat in the length of the list it
       // reads. A scan is not, which is why #174's hundred rows needed this first.
       const small = new Counting(
@@ -1541,7 +1546,7 @@ describe("the palette at fifty chats", () => {
         ),
       );
 
-      expect(strip(small)).toBe(200);
+      expect(strip(small)).toBe(250);
     });
   });
 });

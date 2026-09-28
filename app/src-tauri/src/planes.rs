@@ -197,6 +197,10 @@ pub struct Held {
     started_on: StartedOn,
     /// Curation prompts waiting for their chat to be ready for them (ADR 0061).
     typed: Arc<crate::curation::Typed>,
+    /// The chats being smart-closed (ADR 0064).
+    closing: Arc<crate::smartclose::Closing>,
+    /// The window, for each step of a smart close.
+    smart: crate::smartclose::Teller,
 }
 
 /// Each chat's [`Stamp`], by session, taken as it starts.
@@ -235,6 +239,20 @@ impl Held {
         &self.typed
     }
 
+    /// The chats being smart-closed (ADR 0064).
+    pub fn closing(&self) -> &crate::smartclose::Closing {
+        &self.closing
+    }
+
+    /// Tells the window chat `session`'s smart close is at `phase`.
+    pub fn tell_smart_close(&self, session: u32, phase: crate::smartclose::Phase) {
+        (self.smart)(crate::smartclose::SmartClosing {
+            plane: self.id.clone(),
+            session,
+            phase,
+        });
+    }
+
     /// Sends what a chat's pane sent — the operator's keys, a paste, a mouse report, or the
     /// terminal's own answer to a question the program asked — to the chat's program.
     ///
@@ -243,9 +261,20 @@ impl Held {
     /// landing after it would land in the middle of it (SI-2, Q29). Dropped before the bytes
     /// are sent, under the lock that types a prompt, so the paste is either written before
     /// them or never.
+    ///
+    /// **And the operator typing cancels the chat's smart close** (ADR 0064) — before the bytes
+    /// are sent, under the lock that sends its prompt — unless the chat is asking them something
+    /// mid-turn, which their keys are answering. A wheel over the pane is not typing
+    /// (`smartclose::typed_by_the_operator`).
     pub fn operator_input(&self, session: u32, bytes: &[u8]) -> Result<(), String> {
         if !crate::curation::only_the_terminal_answering(bytes) {
             self.typed.operator_sent(session);
+        }
+        if self
+            .closing
+            .operator_typed(session, bytes, || self.hooks.board().asking(session))
+        {
+            self.tell_smart_close(session, crate::smartclose::Phase::Cancelled);
         }
         self.chats.sessions().input(session, bytes)
     }
@@ -359,6 +388,8 @@ impl Held {
         let gone = self.hooks.closed(session);
         lock_started(&self.started_on).remove(&session);
         self.typed.forget(session);
+        // Closed by the operator's Close, or by its own record: either way nothing is owed.
+        self.closing.forget(session);
         let closed = self.chats.close(session);
         // Nothing will prompt it again, so a report waiting for its next turn goes to the
         // workspace it asked from, where the next chat to start reads it (charter-app#259).
@@ -517,6 +548,8 @@ pub struct Planes {
     saves: crate::autosave::Saved,
     /// Told when a harness is started by hand in a shell tab of any plane (ADR 0062).
     by_hand: hooks::ByHandTeller,
+    /// Told each step of a smart close in any plane (ADR 0064).
+    smart: crate::smartclose::Teller,
     /// The launch's question and its answer — see [`Relaunching`].
     relaunching: Mutex<Relaunching>,
 }
@@ -578,6 +611,7 @@ impl Planes {
             changes: Arc::new(|_| {}),
             saves: Arc::new(|_, _| {}),
             by_hand: Arc::new(|_| {}),
+            smart: Arc::new(|_| {}),
             relaunching: Mutex::new(Relaunching::default()),
         }
     }
@@ -606,6 +640,13 @@ impl Planes {
     /// registry holds, so the window can put a banner on that tab (ADR 0062).
     pub fn telling_by_hand(mut self, by_hand: hooks::ByHandTeller) -> Self {
         self.by_hand = by_hand;
+        self
+    }
+
+    /// Tells `smart` each step of a smart close in a plane this registry holds, so the window can
+    /// draw the tab wrapping up and close it when its record lands (ADR 0064).
+    pub fn telling_smart_close(mut self, smart: crate::smartclose::Teller) -> Self {
+        self.smart = smart;
         self
     }
 
@@ -679,6 +720,24 @@ impl Planes {
                 let Some(strong) = held.upgrade() else { return };
                 if strong.typed.heard(report) {
                     crate::curation::type_when_it_reads_keys(&strong, report.chat);
+                }
+            })
+        });
+        // A smart close queued for its chat's turn to end is sent then, and one whose record is
+        // saved closes its tab (ADR 0064). Weak for the handoff's reason.
+        held.hooks().when_reported({
+            let held = Arc::downgrade(&held);
+            Arc::new(move |report| {
+                if let Some(held) = held.upgrade() {
+                    crate::smartclose::reported(&held, report);
+                }
+            })
+        });
+        held.hooks().when_saved({
+            let held = Arc::downgrade(&held);
+            Arc::new(move |saved| {
+                if let Some(held) = held.upgrade() {
+                    crate::smartclose::saved(&held, &saved);
                 }
             })
         });
@@ -1259,17 +1318,30 @@ impl Planes {
         // does. That is not charter reading a harness's output (ADR 0018) — it is the
         // process's own exit status, and the only honest source for `failed`.
         let typed = Arc::new(crate::curation::Typed::default());
+        let closing = Arc::new(crate::smartclose::Closing::default());
         {
             let board = hooks.shared_board();
             let tell = Arc::clone(&self.tell);
             let plane = id.clone();
             let poke = std::sync::Mutex::new(autosave.poker());
             let typed = Arc::clone(&typed);
+            let closing = Arc::clone(&closing);
+            let smart = Arc::clone(&self.smart);
             chats
                 .sessions()
                 .when_one_ends(Box::new(move |session, exit| {
                     // A curation prompt still waiting is for a chat that is gone: never typed.
                     typed.forget(session);
+                    // A chat that ended on its own while it wrapped up wrote no record, and the
+                    // window says so (ADR 0064). One closed by Close or by its record was let go
+                    // of before its program was ended, so it says nothing here.
+                    if closing.forget(session) {
+                        smart(crate::smartclose::SmartClosing {
+                            plane: plane.clone(),
+                            session,
+                            phase: crate::smartclose::Phase::Ended,
+                        });
+                    }
                     let changed = hooks::held_board(&board).exited(session, hooks::code_of(&exit));
                     if changed {
                         tell(hooks::now(&board, plane.clone(), session));
@@ -1305,6 +1377,8 @@ impl Planes {
             autosave: Mutex::new(Some(autosave)),
             started_on,
             typed,
+            closing,
+            smart: Arc::clone(&self.smart),
         }
     }
 
@@ -4187,6 +4261,432 @@ mod tests {
             becomes(|| !held.typed().waiting(session)),
             "the prompt outlived its chat"
         );
+    }
+
+    // ----- Smart close (ADR 0064, SI-8c) -----
+
+    type SmartLog = Arc<Mutex<Vec<crate::smartclose::SmartClosing>>>;
+
+    /// A registry whose every smart-close step is written down.
+    fn planes_telling_smart_closes() -> (Planes, SmartLog) {
+        let told: SmartLog = Arc::default();
+        let tell = Arc::clone(&told);
+        let planes = Planes::telling(Arc::new(|_: Moved| {}), crate::Shipped::default(), None)
+            .telling_smart_close(Arc::new(move |step| {
+                tell.lock().expect("the log").push(step);
+            }));
+        (planes, told)
+    }
+
+    /// The phases chat `session` went through, in order.
+    fn phases(told: &SmartLog, session: u32) -> Vec<crate::smartclose::Phase> {
+        told.lock()
+            .expect("the log")
+            .iter()
+            .filter(|step| step.session == session)
+            .map(|step| step.phase)
+            .collect()
+    }
+
+    /// A chat on a stand-in harness that writes down its input, on a profile so that it is a
+    /// chat and not a shell tab. Answers its session and the file its input goes to.
+    fn a_smart_closable_chat(held: &Held, dir: &Path, name: &str) -> (u32, PathBuf) {
+        let ready = dir.join(format!("{name}.ready"));
+        let typed = dir.join(format!("{name}.typed"));
+        let program = stand_in::program(
+            dir,
+            name,
+            &format!(
+                "#!/bin/sh\nstty raw -echo\n: > '{}'\nexec cat > '{}'\n",
+                ready.display(),
+                typed.display()
+            ),
+        );
+        let mut chat = one_chat_on(&program.display().to_string()).chats.remove(0);
+        chat.profile = Some("stand-in".to_owned());
+        chat.name = name.to_owned();
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+        assert!(becomes(|| ready.exists()), "the stand-in never started");
+        (session, typed)
+    }
+
+    /// Reports `events` from chat `session` one at a time, each waited for until the board has
+    /// taken it: every report is a connection of its own, and two in flight at once land in
+    /// either order.
+    fn reported(held: &Held, session: u32, events: &[charter_core::state::Event]) {
+        use charter_core::state::{Event, State};
+        for event in events {
+            let turns = held.hooks().board().turns(session);
+            a_report_from(held, session, *event);
+            let taken = || {
+                let board = held.hooks().board();
+                match event {
+                    Event::UserPromptSubmit => board.turns(session) > turns,
+                    Event::Stop => {
+                        board.state(session) == State::Waiting
+                            && !board.asking(session)
+                            && board.needs_you().contains(&session)
+                    }
+                    Event::Notification => board.asking(session),
+                    _ => board.state(session) == State::Waiting,
+                }
+            };
+            assert!(becomes(taken), "the board never took a report");
+        }
+    }
+
+    /// A chat that has had two turns and is waiting on the operator.
+    fn has_had_two_turns(held: &Held, session: u32) {
+        use charter_core::state::Event::{SessionStart, Stop, UserPromptSubmit};
+        reported(
+            held,
+            session,
+            &[SessionStart, UserPromptSubmit, Stop, UserPromptSubmit, Stop],
+        );
+    }
+
+    /// What `charter session record` sends once chat `session`'s record is on disk.
+    fn a_record_saved_by(held: &Held, session: u32) {
+        charter_core::hookwire::tell_saved(
+            held.hooks().socket().expect("the plane is listening"),
+            &charter_core::hookwire::SessionSaved {
+                chat: session,
+                session_saved: PathBuf::from("/plane/workspaces/alpha/sessions/record.md"),
+            },
+        )
+        .expect("the line reaches the plane");
+    }
+
+    fn is_open(held: &Held, session: u32) -> bool {
+        held.chats()
+            .open_now()
+            .iter()
+            .any(|open| open.session == session)
+    }
+
+    const SENT_AS: &str = "\x1b[200~Use charter's smart-close skill to write this session's \
+                           record and close the chat.\x1b[201~\r";
+
+    #[cfg(unix)]
+    #[test]
+    fn smart_close_sends_its_prompt_to_a_waiting_chat_at_once_as_one_paste_and_enter() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, typed) = a_smart_closable_chat(&held, dir.path(), "claude-stand-in");
+        has_had_two_turns(&held, session);
+
+        let phase = crate::smartclose::begin(&held, session).expect("smart close begins");
+
+        assert_eq!(phase, crate::smartclose::Phase::Sent);
+        assert!(
+            becomes(|| std::fs::read(&typed).is_ok_and(|b| b.len() >= SENT_AS.len())),
+            "nothing was sent"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            std::fs::read_to_string(&typed).unwrap(),
+            SENT_AS,
+            "the chat was sent something other than the paste and one Enter"
+        );
+        assert_eq!(phases(&told, session), [crate::smartclose::Phase::Sent]);
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smart_close_waits_for_a_running_chat_s_turn_to_end_before_it_sends() {
+        use charter_core::state::Event::{Stop, UserPromptSubmit};
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, typed) = a_smart_closable_chat(&held, dir.path(), "codex-stand-in");
+        has_had_two_turns(&held, session);
+        reported(&held, session, &[UserPromptSubmit]);
+
+        let phase = crate::smartclose::begin(&held, session).expect("smart close begins");
+
+        assert_eq!(phase, crate::smartclose::Phase::Queued);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            std::fs::read(&typed).map_or(true, |b| b.is_empty()),
+            "the prompt was sent into a running turn"
+        );
+
+        reported(&held, session, &[Stop]);
+
+        assert!(
+            becomes(|| std::fs::read_to_string(&typed).is_ok_and(|t| t == SENT_AS)),
+            "the prompt was not sent at the turn's end"
+        );
+        assert_eq!(
+            phases(&told, session),
+            [
+                crate::smartclose::Phase::Queued,
+                crate::smartclose::Phase::Sent
+            ]
+        );
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smart_close_is_refused_to_a_chat_asking_you_something_and_sends_nothing() {
+        use charter_core::state::Event::{Notification, UserPromptSubmit};
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, typed) = a_smart_closable_chat(&held, dir.path(), "asking-stand-in");
+        has_had_two_turns(&held, session);
+        reported(&held, session, &[UserPromptSubmit, Notification]);
+
+        let refused = crate::smartclose::begin(&held, session);
+
+        assert!(
+            refused.is_err_and(|why| why.contains("Answer it first")),
+            "a chat asking a question was smart-closed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(std::fs::read(&typed).map_or(true, |b| b.is_empty()));
+        assert!(phases(&told, session).is_empty());
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smart_close_is_refused_to_a_chat_never_prompted() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _typed) = a_smart_closable_chat(&held, dir.path(), "fresh-stand-in");
+        reported(&held, session, &[charter_core::state::Event::SessionStart]);
+
+        let offered = crate::smartclose::offer_for(&held, session).expect("an answer");
+
+        assert!(!offered.available);
+        assert!(offered.close_first);
+        assert!(crate::smartclose::begin(&held, session).is_err());
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_record_closes_the_chat_being_smart_closed_and_no_other() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (closing, _) = a_smart_closable_chat(&held, dir.path(), "closing-stand-in");
+        let (other, _) = a_smart_closable_chat(&held, dir.path(), "other-stand-in");
+        has_had_two_turns(&held, closing);
+        has_had_two_turns(&held, other);
+        crate::smartclose::begin(&held, closing).expect("smart close begins");
+
+        a_record_saved_by(&held, other);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            is_open(&held, other),
+            "a record closed a chat nobody smart-closed"
+        );
+        assert!(is_open(&held, closing));
+
+        a_record_saved_by(&held, closing);
+
+        assert!(
+            becomes(|| !is_open(&held, closing)),
+            "the smart-closed chat stayed open"
+        );
+        assert!(is_open(&held, other));
+        assert_eq!(
+            phases(&told, closing),
+            [
+                crate::smartclose::Phase::Sent,
+                crate::smartclose::Phase::Closed
+            ]
+        );
+        assert!(phases(&told, other).is_empty());
+        held.close_chat(other).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_smart_close_with_no_record_in_time_leaves_the_chat_open_and_says_so() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        held.closing()
+            .give_up_after(std::time::Duration::from_millis(300));
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "slow-stand-in");
+        has_had_two_turns(&held, session);
+        crate::smartclose::begin(&held, session).expect("smart close begins");
+
+        assert!(
+            becomes(|| phases(&told, session).contains(&crate::smartclose::Phase::NoRecord)),
+            "the smart close never gave up"
+        );
+        assert!(is_open(&held, session));
+        assert_eq!(held.closing().phase(session), None);
+
+        // A record that arrives after it gave up closes nothing: the tab is the operator's again.
+        a_record_saved_by(&held, session);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(is_open(&held, session), "a late record closed the chat");
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_operator_typing_into_the_chat_cancels_its_smart_close() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "typed-stand-in");
+        has_had_two_turns(&held, session);
+        crate::smartclose::begin(&held, session).expect("smart close begins");
+
+        // The terminal's own answer and a wheel over the pane are not the operator typing.
+        held.operator_input(session, b"\x1b[I").expect("sent");
+        held.operator_input(session, b"\x1b[<64;10;5M")
+            .expect("sent");
+        assert!(
+            held.closing().phase(session).is_some(),
+            "cancelled by no typing"
+        );
+
+        held.operator_input(session, b"wait").expect("sent");
+
+        assert_eq!(held.closing().phase(session), None);
+        a_record_saved_by(&held, session);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            is_open(&held, session),
+            "a cancelled smart close closed the chat"
+        );
+        assert_eq!(
+            phases(&told, session),
+            [
+                crate::smartclose::Phase::Sent,
+                crate::smartclose::Phase::Cancelled
+            ]
+        );
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn answering_a_question_the_chat_asks_while_it_wraps_up_does_not_cancel_it() {
+        // The skill runs `charter session record`, and a harness may ask the operator's leave
+        // first. Answering that is not taking the chat back.
+        use charter_core::state::Event::{Notification, UserPromptSubmit};
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, _told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "permission-stand-in");
+        has_had_two_turns(&held, session);
+        crate::smartclose::begin(&held, session).expect("smart close begins");
+        reported(&held, session, &[UserPromptSubmit, Notification]);
+
+        held.operator_input(session, b"1").expect("sent");
+
+        assert!(
+            held.closing().phase(session).is_some(),
+            "the answer cancelled it"
+        );
+        a_record_saved_by(&held, session);
+        assert!(
+            becomes(|| !is_open(&held, session)),
+            "the record closed nothing"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_from_the_tab_s_menu_leaves_the_chat_open() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "menu-stand-in");
+        has_had_two_turns(&held, session);
+        crate::smartclose::begin(&held, session).expect("smart close begins");
+
+        crate::smartclose::cancel(&held, session);
+
+        a_record_saved_by(&held, session);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(is_open(&held, session));
+        assert_eq!(
+            phases(&told, session),
+            [
+                crate::smartclose::Phase::Sent,
+                crate::smartclose::Phase::Cancelled
+            ]
+        );
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_that_ends_while_it_wraps_up_is_said_to_have_ended_without_its_record() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let ready = dir.path().join("quits.ready");
+        // Reads the prompt's first byte, and exits.
+        let program = stand_in::program(
+            dir.path(),
+            "quits-stand-in",
+            &format!(
+                "#!/bin/sh\nstty raw -echo\n: > '{}'\nhead -c 1 >/dev/null\nexit 0\n",
+                ready.display()
+            ),
+        );
+        let mut chat = one_chat_on(&program.display().to_string()).chats.remove(0);
+        chat.profile = Some("stand-in".to_owned());
+        let session = held
+            .chats()
+            .start(&chat, STARTING)
+            .expect("the chat starts");
+        assert!(becomes(|| ready.exists()), "the stand-in never started");
+        has_had_two_turns(&held, session);
+
+        crate::smartclose::begin(&held, session).expect("smart close begins");
+
+        assert!(
+            becomes(|| phases(&told, session).contains(&crate::smartclose::Phase::Ended)),
+            "the chat's end was not told"
+        );
+        assert!(!phases(&told, session).contains(&crate::smartclose::Phase::Closed));
+        assert_eq!(held.closing().phase(session), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closing_a_chat_while_it_wraps_up_lets_its_smart_close_go_quietly() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "closed-stand-in");
+        has_had_two_turns(&held, session);
+        crate::smartclose::begin(&held, session).expect("smart close begins");
+
+        held.close_chat(session).unwrap();
+
+        assert_eq!(held.closing().phase(session), None);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(phases(&told, session), [crate::smartclose::Phase::Sent]);
     }
 
     #[cfg(unix)]

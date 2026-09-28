@@ -907,6 +907,7 @@ function App() {
       showChat: () => undefined,
       // The queue is a project's, and there is no project here to have one.
       ignoreNeedsYou: async () => nowhere(),
+      cancelSmartClose: async () => nowhere(),
       // A view is shown in a project's tab, and there is no project here. The rows that open one
       // do not exist without a plane, for the same reason the workspace rows above do not.
       openView: () => undefined,

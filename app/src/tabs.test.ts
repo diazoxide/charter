@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   chatNameOf,
   byLastActivity,
+  closeChat,
   closeFocusedPane,
   closeTab,
   focusPane,
@@ -733,5 +734,40 @@ describe("a tab that shows a view (ADR 0043, as amended 2026-09-23)", () => {
     expect(workspaceOf(moved, other.id, filed)).toBe("other");
     // Nothing at all when the workspace has no tab, so a caller can tell.
     expect(followRename(moved, "alpha", "beta")).toBe(moved);
+  });
+});
+
+describe("a chat the core has closed (a smart close's record landed, ADR 0064)", () => {
+  it("closes its tab when it was the tab's only pane, wherever the tab is", () => {
+    const tabs = twoTabs();
+
+    const left = closeChat(tabs, 11, oneWorkspace);
+
+    expect(left.order).toEqual([tabs.order[1]]);
+    expect(visibleSessions(left)).toEqual([22]);
+  });
+
+  it("closes only its pane when it shares a split, and keeps the tab in front where it was", () => {
+    const tabs = openTab(splitFocusedPane(openTab(noTabs(), 11), "row", 12), 33);
+
+    const left = closeChat(tabs, 12, oneWorkspace);
+
+    expect(panesOf(left, left.order[0])).toEqual([{ pane: 1, session: 11 }]);
+    expect(visibleSessions(left)).toEqual([33]);
+  });
+
+  it("leaves the focus where it was when the pane that goes is not the focused one", () => {
+    const tabs = splitFocusedPane(splitFocusedPane(openTab(noTabs(), 11), "row", 12), "row", 13);
+    const focusedBefore = tabs.byId[front(tabs)].focused;
+
+    const left = closeChat(tabs, 11, oneWorkspace);
+
+    expect(left.byId[front(left)].focused).toBe(focusedBefore);
+  });
+
+  it("changes nothing for a session no tab shows", () => {
+    const tabs = twoTabs();
+
+    expect(closeChat(tabs, 404, oneWorkspace)).toEqual(tabs);
   });
 });

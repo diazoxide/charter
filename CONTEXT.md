@@ -134,7 +134,8 @@ _Avoid_: handoff, log, transcript
 Closing a chat after it has written its session record: the app sends it one line naming
 charter's `smart-close` skill (the operator's click is the consent, the exception to a curation
 action's never-sent prompt), and the tab closes when `charter session record` tells the app the
-record is saved — never on anything the chat printed.
+record is saved — never on anything the chat printed. Until then the chat is **wrapping up**:
+its tab says so, and the operator's Cancel smart close or their own typing stops it.
 _Avoid_: save and close, archive
 
 **Resume** (of a session record):
