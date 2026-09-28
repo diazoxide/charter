@@ -224,9 +224,9 @@ fn under_state(root: &std::path::Path, path: &std::path::Path) -> bool {
 /// Append one `- [title](file)` line ([`index_line`]). Order is write order: charter never
 /// sorts this file.
 ///
-/// Takes no lock itself: [`write()`], [`unarchive`] and `curate::apply_safe` call it holding
-/// the store's [`crate::rewrite::Lock`], which a second `Lock::on` in the same process would
-/// wait for.
+/// Takes no lock itself: [`write()`], [`unarchive`], `curate::apply_safe` and a workspace's
+/// legacy `notes.md` line (`Workspace::index_legacy_memo`) call it holding the store's
+/// [`crate::rewrite::Lock`], which a second `Lock::on` in the same process would wait for.
 pub fn index_append(
     root: &std::path::Path,
     index: &std::path::Path,

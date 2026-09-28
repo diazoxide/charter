@@ -216,3 +216,11 @@ Two loose ends SI-9d left, each reproduced by a test before its fix:
   listed `b.md`, and unarchiving `b` appended no line for it. A line of another shape is still
   read by charter's pattern, and so is the leading link itself, so `- [docs](https://…)` lists
   nothing.
+
+## As reviewed (SI-9f)
+
+The last index append that kept neither rule, reproduced by a test before its fix: a pre-v2
+workspace's legacy `notes.md` line (`remember` and `scaffold_memory`, through one function). It
+is appended when `listed` does not list `notes.md` — charter's `(notes.md)` anywhere in the text
+took a title mentioning it for the memo's line — and under the store's lock, released before
+`write` takes it again.
