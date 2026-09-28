@@ -6,6 +6,7 @@ import {
   closeFocusedPane,
   closeTab,
   focusPane,
+  sendToBackground,
   noTabs,
   openTab,
   openTabBehind,
@@ -769,5 +770,76 @@ describe("a chat the core has closed (a smart close's record landed, ADR 0064)",
     const tabs = twoTabs();
 
     expect(closeChat(tabs, 404, oneWorkspace)).toEqual(tabs);
+  });
+});
+
+describe("a chat put into the background by Smart close (SI-8f, ADR 0039 as amended 2026-09-28)", () => {
+  /** Four tabs, opened 1, 2, 3, 4, with the third in front. */
+  function fourTabs(): Tabs {
+    return selectTab(
+      [11, 22, 33, 44].reduce((tabs, s) => openTab(tabs, s), noTabs()),
+      3,
+    );
+  }
+
+  const holding =
+    (...ids: number[]) =>
+    (id: number) =>
+      ids.includes(id);
+
+  it("is drawn at the strip's left edge, before the pinned tabs", () => {
+    const tabs = fourTabs();
+
+    expect(tabsIn(tabs, "alpha", oneWorkspace, holding(1), holding(3))).toEqual([3, 1, 2, 4]);
+  });
+
+  it("keeps its place in tabs.order, so it goes back there when it comes back", () => {
+    const tabs = fourTabs();
+
+    tabsIn(tabs, "alpha", oneWorkspace, holding(1), holding(3));
+
+    expect(tabs.order).toEqual([1, 2, 3, 4]);
+    expect(tabsIn(tabs, "alpha", oneWorkspace, holding(1))).toEqual([1, 2, 3, 4]);
+  });
+
+  it("sends the front where closing it would have: the tab before it on the strip", () => {
+    const tabs = fourTabs();
+
+    expect(sendToBackground(tabs, 3, oneWorkspace).inFront).toBe(
+      closeTab(tabs, 3, oneWorkspace).inFront,
+    );
+    expect(sendToBackground(tabs, 3, oneWorkspace).inFront).toBe(2);
+  });
+
+  it("sends the front to the next tab from the first, and to nothing from the only one", () => {
+    const first = selectTab(fourTabs(), 1);
+    expect(sendToBackground(first, 1, oneWorkspace).inFront).toBe(2);
+
+    const alone = openTab(noTabs(), 11);
+    expect(sendToBackground(alone, front(alone), oneWorkspace).inFront).toBeUndefined();
+  });
+
+  it("is never where the front goes when another tab closes or goes to the background", () => {
+    // Tab 2 is wrapping up; closing tab 3, the tab before it on the strip is 2 — but 2 is in
+    // the background, so the front goes to the one before that.
+    const tabs = fourTabs();
+
+    expect(closeTab(tabs, 3, oneWorkspace, undefined, holding(2)).inFront).toBe(1);
+    expect(sendToBackground(tabs, 3, oneWorkspace, undefined, holding(2)).inFront).toBe(1);
+  });
+
+  it("leaves the front alone when the tab put in the background is not the one in front", () => {
+    const tabs = fourTabs();
+
+    expect(sendToBackground(tabs, 1, oneWorkspace)).toEqual(tabs);
+  });
+
+  it("keeps the tab and everything in it", () => {
+    const tabs = fourTabs();
+
+    const after = sendToBackground(tabs, 3, oneWorkspace);
+
+    expect(after.order).toEqual(tabs.order);
+    expect(after.byId).toEqual(tabs.byId);
   });
 });

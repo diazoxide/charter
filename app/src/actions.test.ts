@@ -81,6 +81,9 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`cancelSmartClose:${session}`);
       return { ok: true as const };
     }),
+    dismissStopped: vi.fn((session: number) => {
+      calls.push(`dismissStopped:${session}`);
+    }),
     pinTab: vi.fn(async (tab: number, pinned: boolean) => {
       calls.push(`pinTab:${tab},${pinned}`);
       return { ok: true as const };

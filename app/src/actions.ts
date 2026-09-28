@@ -187,6 +187,9 @@ export type Does =
   /** Cancels a chat's smart close (ADR 0064): nothing is sent to it and nothing is closed — the
    *  chat stays open and running, and a record it writes afterwards closes nothing. */
   | { verb: "cancelSmartClose"; session: number }
+  /** Takes a chat off the needs-you list where its Smart close stopped without a record
+   *  (SI-8f). Nothing is asked of the core: the list's entry is the window's own. */
+  | { verb: "dismissStopped"; session: number }
   /** Opens a view in a tab of its own, or brings forward the tab already showing it.
    *
    *  **One verb for charter's views and an extension's** — the persona view is
@@ -480,6 +483,8 @@ export type Now = {
   curations?: Curations;
   /** The chats being smart-closed (ADR 0064): each one's tab offers to cancel it. */
   wrappingUp?: readonly number[];
+  /** Why each chat's Smart close stopped without its record (SI-8f), for its needs-you rows. */
+  stopped?: Readonly<Record<number, string>>;
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -512,6 +517,7 @@ export type Doing = {
   ignoreNeedsYou: (session: number) => Promise<Ran>;
   /** Answers a `Ran`, because the core can refuse it — a project closed meanwhile. */
   cancelSmartClose: (session: number) => Promise<Ran>;
+  dismissStopped: (session: number) => void;
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
@@ -933,6 +939,7 @@ export function catalogue(now: Now): Offer[] {
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
   offers.push(...needsYouRows(now.needsYou, now.nameOf, now.tabs, now.reportsTo));
+  offers.push(...stoppedRows(now.stopped ?? {}, now.needsYou, now.nameOf, now.tabs));
 
   const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
 
@@ -1655,6 +1662,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.ignoreNeedsYou(does.session);
     case "cancelSmartClose":
       return doing.cancelSmartClose(does.session);
+    case "dismissStopped":
+      doing.dismissStopped(does.session);
+      return DID;
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
@@ -1780,6 +1790,45 @@ export function needsYouRows(
       ),
     ];
   });
+}
+
+/**
+ * **The rows of a chat whose Smart close stopped without its record** (SI-8f), for the chats
+ * that are not already in the queue — a chat that is has its queue rows, and its row says why.
+ * Go is the queue's own `needs.show:<session>`, and Dismiss takes the entry off the list: it is
+ * the window's, so nothing is asked of the core.
+ */
+export function stoppedRows(
+  stopped: Readonly<Record<number, string>>,
+  needsYou: readonly number[],
+  nameOf: (session: number) => string,
+  tabs: Tabs,
+): Offer[] {
+  return Object.keys(stopped)
+    .map(Number)
+    .filter((session) => !needsYou.includes(session) && tabHolding(tabs, session) !== undefined)
+    .flatMap((session) => {
+      const name = nameOf(session);
+      return [
+        can(
+          showId(session),
+          `Show ${name}: ${stopped[session]}`,
+          { verb: "showChat", session },
+          name,
+        ),
+        can(
+          dismissId(session),
+          `Dismiss ${name}: ${stopped[session]}`,
+          { verb: "dismissStopped", session },
+          name,
+        ),
+      ];
+    });
+}
+
+/** The catalogue's id for a stopped smart close's Dismiss row (SI-8f). */
+export function dismissId(session: number): string {
+  return `needs.dismiss:${session}`;
 }
 
 /** The catalogue's id for a wrapping-up tab's Cancel smart close row (ADR 0064). */

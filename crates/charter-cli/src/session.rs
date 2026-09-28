@@ -11,8 +11,8 @@ use std::io::{IsTerminal, Read};
 use std::path::Path;
 
 use charter_core::active::Place;
-use charter_core::hookwire::{self, CHAT_ENV, SOCKET_ENV, SessionSaved};
-use charter_core::sessionrecord::{self, Facts, New, Refused, Touched};
+use charter_core::hookwire::{self, CHAT_ENV, Report, SOCKET_ENV, SessionSaved};
+use charter_core::sessionrecord::{self, Facts, New, Refused, Touched, relay};
 use clap::Subcommand;
 
 use crate::Here;
@@ -158,7 +158,8 @@ fn record(
     }
     voice::ok(&format!("Session record → {}", recorded.shown));
     println!("{}", recorded.shown);
-    tell_the_app(chat, &recorded.path);
+    let conversation = facts.chat.as_ref().and_then(|c| c.conversation.clone());
+    tell_the_app(here, chat, conversation, &recorded.path);
     Ok(0)
 }
 
@@ -227,7 +228,13 @@ fn chat_number() -> Option<u32> {
 
 /// Tells the app this chat's record is saved, and says so either way: the record is written
 /// whatever happens here, and a tab that nothing will close is the operator's to close.
-fn tell_the_app(chat: Option<u32>, path: &Path) {
+///
+/// **A line the socket refused is left for the chat's next `Stop` hook** (#517,
+/// `sessionrecord::relay`): a harness can run this command in a sandbox that refuses the
+/// connect — Codex's default one does — and runs its hooks outside it. It is left where the
+/// chat works (`Here::place` with no `-w`), which is where the sandbox lets it write and where
+/// the hook looks.
+fn tell_the_app(here: &Here, chat: Option<u32>, conversation: Option<String>, path: &Path) {
     let socket = std::env::var_os(SOCKET_ENV).filter(|s| !s.is_empty());
     let (Some(socket), Some(chat)) = (socket, chat) else {
         voice::info(
@@ -240,11 +247,52 @@ fn tell_the_app(chat: Option<u32>, path: &Path) {
         chat,
         session_saved: path.to_path_buf(),
     };
-    match hookwire::tell_saved(Path::new(&socket), &saved) {
-        Ok(()) => voice::info("Told the app: a Smart close waiting on this record closes the tab."),
-        Err(e) => voice::warn(&format!(
-            "The app did not hear it ({e}), so this chat's tab will not close by itself — close \
-             it when you are done."
+    let Err(e) = hookwire::tell_saved(Path::new(&socket), &saved) else {
+        voice::info("Told the app: a Smart close waiting on this record closes the tab.");
+        return;
+    };
+    let left = relay::Marker {
+        chat,
+        conversation,
+        session_saved: saved.session_saved,
+        at: unix_now(),
+    };
+    match relay::leave(here.plane.root(), &here.place(None), &left) {
+        Ok(_) => voice::info(&format!(
+            "The app did not hear it ({e}), so this chat's hook tells it when this turn ends. \
+             If the tab is still open after that, close it yourself."
+        )),
+        Err(kept) => voice::warn(&format!(
+            "The app did not hear it ({e}), and charter could not leave it for this chat's hook \
+             ({kept}), so the tab will not close by itself — close it yourself when you are done."
         )),
     }
+}
+
+/// `charter hook stop` in a chat the app started: the saved-record line `charter session
+/// record` left because the socket refused it, sent now (`sessionrecord::relay::take`). The
+/// hook runs outside the harness's sandbox, so its connect gets through where the command's
+/// did not. Silent where there is nothing to send, as a reporting hook is.
+pub fn pass_on_at_stop(socket: &Path, report: &Report) {
+    let Ok(here) = Here::read() else { return };
+    let Some(saved) = relay::take(
+        here.plane.root(),
+        &here.place(None),
+        report.chat,
+        &report.conversation,
+        unix_now(),
+    ) else {
+        return;
+    };
+    if let Err(why) = hookwire::tell_saved(socket, &saved) {
+        // Where a reporting hook's failures go: the harness's own log (`main::hook`).
+        eprintln!("charter: the app did not take this chat's saved session record ({why})");
+    }
+}
+
+/// Seconds since the Unix epoch, as a marker records when it was left.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }

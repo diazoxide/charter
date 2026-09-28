@@ -250,6 +250,17 @@ impl Held {
             plane: self.id.clone(),
             session,
             phase,
+            record: None,
+        });
+    }
+
+    /// Tells the window chat `session`'s smart close ended on its record: it was closed.
+    pub fn tell_smart_closed(&self, session: u32, record: Option<crate::smartclose::SavedRecord>) {
+        (self.smart)(crate::smartclose::SmartClosing {
+            plane: self.id.clone(),
+            session,
+            phase: crate::smartclose::Phase::Closed,
+            record,
         });
     }
 
@@ -1340,6 +1351,7 @@ impl Planes {
                             plane: plane.clone(),
                             session,
                             phase: crate::smartclose::Phase::Ended,
+                            record: None,
                         });
                     }
                     let changed = hooks::held_board(&board).exited(session, hooks::code_of(&exit));
@@ -4513,6 +4525,76 @@ mod tests {
         );
         assert!(phases(&told, other).is_empty());
         held.close_chat(other).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_record_s_closed_step_names_the_record_and_the_same_line_again_closes_nothing() {
+        use charter_core::sessionrecord::{Facts, New};
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "saving-stand-in");
+        has_had_two_turns(&held, session);
+        crate::smartclose::begin(&held, session).expect("smart close begins");
+        let recorded = charter_core::sessionrecord::record(
+            &root,
+            &New {
+                title: "Ship the record",
+                body: "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\no\n\n\
+                       ## How to resume\n\nr\n",
+                facts: &Facts {
+                    place: charter_core::active::Place::PlaneRoot,
+                    at: chrono::NaiveDate::from_ymd_opt(2026, 9, 28)
+                        .and_then(|day| day.and_hms_opt(16, 0, 0))
+                        .expect("a time"),
+                    chat: None,
+                    persona: None,
+                    pieces: Vec::new(),
+                },
+            },
+        )
+        .expect("the record is written");
+        let line = charter_core::hookwire::SessionSaved {
+            chat: session,
+            session_saved: recorded.path.clone(),
+        };
+        let socket = held
+            .hooks()
+            .socket()
+            .expect("the plane is listening")
+            .to_owned();
+
+        // The command's own line, and the same line passed on by the chat's Stop (#517).
+        charter_core::hookwire::tell_saved(&socket, &line).expect("the line");
+        charter_core::hookwire::tell_saved(&socket, &line).expect("the line again");
+
+        assert!(becomes(|| !is_open(&held, session)), "the chat stayed open");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let steps: Vec<crate::smartclose::SmartClosing> = told
+            .lock()
+            .expect("the log")
+            .iter()
+            .filter(|step| step.session == session)
+            .cloned()
+            .collect();
+        assert_eq!(
+            steps.iter().map(|step| step.phase).collect::<Vec<_>>(),
+            [
+                crate::smartclose::Phase::Sent,
+                crate::smartclose::Phase::Closed
+            ],
+            "the second line did more than nothing"
+        );
+        assert_eq!(
+            steps[1].record,
+            Some(crate::smartclose::SavedRecord {
+                path: "sessions/20260928-160000-ship-the-record.md".to_owned(),
+                title: "Ship the record".to_owned(),
+            })
+        );
+        assert_eq!(steps[0].record, None, "a step before the record named one");
     }
 
     #[cfg(unix)]

@@ -25,6 +25,21 @@ export function saidWhenItEnds(phase: Phase, name: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Why a smart close stopped without its record, as the title bar's needs-you list says it
+ * beside the chat's name (SI-8f) — or none, for an end that needs nothing from the operator: the
+ * record landed, or they cancelled it themselves.
+ */
+export function stoppedWhy(phase: Phase): string | undefined {
+  if (phase === "no_record")
+    return "smart close stopped — no session record arrived in five minutes";
+  if (phase === "ended") return "smart close stopped — it ended before it wrote its record";
+  return undefined;
+}
+
+/** What the needs-you list says of a Smart close the core refused to start. */
+export const DID_NOT_START = "smart close did not start";
+
 /** Folds one step into the chats wrapping up. */
 export function stepped(was: ReadonlySet<number>, step: SmartClosing): ReadonlySet<number> {
   const now = new Set(was);

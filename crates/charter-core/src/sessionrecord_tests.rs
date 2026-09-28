@@ -650,3 +650,55 @@ fn open_refuses_a_plane_root_record_that_is_a_link() {
     std::os::unix::fs::symlink(&target, dir.path().join("sessions/20260928-090000-x.md")).unwrap();
     assert!(open(dir.path(), "sessions/20260928-090000-x.md").is_err());
 }
+
+// ---- the record a saved line names ----------------------------------------------------------
+
+#[test]
+fn a_saved_line_names_its_record_by_path_and_the_window_is_told_its_title() {
+    let tmp = plane(&["alpha"]);
+    let recorded = write(tmp.path(), "Ship it", BODY, &facts(alpha(), at(14, 3, 12))).unwrap();
+
+    let named = saved(tmp.path(), &recorded.path).expect("the record");
+
+    assert_eq!(
+        named.shown,
+        "workspaces/alpha/sessions/20260928-140312-ship-it.md"
+    );
+    assert_eq!(named.title, "Ship it");
+}
+
+#[test]
+fn a_saved_line_naming_anything_but_one_of_this_planes_records_names_nothing() {
+    let tmp = plane(&["alpha"]);
+    let recorded = write(tmp.path(), "Ship it", BODY, &facts(alpha(), at(14, 3, 12))).unwrap();
+    let other = tempfile::tempdir().unwrap();
+    for path in [
+        other.path().join("sessions/20260928-140312-ship-it.md"),
+        tmp.path().join("workspaces/alpha/workspace.md"),
+        tmp.path()
+            .join("workspaces/alpha/sessions/../sessions/20260928-140312-ship-it.md"),
+        tmp.path()
+            .join("workspaces/alpha/sessions/20260928-150000-gone.md"),
+    ] {
+        assert_eq!(
+            saved(tmp.path(), &path),
+            None,
+            "a path that is no record named one"
+        );
+    }
+    assert!(saved(tmp.path(), &recorded.path).is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_saved_line_spelling_the_plane_another_way_still_names_its_record() {
+    let tmp = plane(&["alpha"]);
+    let recorded = write(tmp.path(), "Ship it", BODY, &facts(alpha(), at(14, 3, 12))).unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let link = other.path().join("plane");
+    std::os::unix::fs::symlink(tmp.path(), &link).unwrap();
+
+    let named = saved(&link, &recorded.path).expect("the record, through the other spelling");
+
+    assert_eq!(named.title, "Ship it");
+}

@@ -85,6 +85,7 @@ row), and the status of that field where it differs from its file's.
   - [`workspaces/<ws>/todos/`](#workspaceswstodos)
   - [`workspaces/<ws>/refs/README.md` (and whatever else the operator drops in `refs/`)](#workspaceswsrefsreadmemd-and-whatever-else-the-operator-drops-in-refs)
   - [`workspaces/<ws>/sessions/` and `sessions/` — session records](#workspaceswssessions-and-sessions--session-records)
+  - [`.charter/sessions/<chat>.saved` and `workspaces/<ws>/.charter/sessions/<chat>.saved` — a saved record to pass on](#chartersessionschatsaved-and-workspaceswschartersessionschatsaved--a-saved-record-to-pass-on)
   - [`workspaces/<ws>/changes/<slug>.json` — a cross-repo change](#workspaceswschangesslugjson--a-cross-repo-change)
   - [`workspaces/<ws>/changes/log/<host>.jsonl` — the landing log](#workspaceswschangesloghostjsonl--the-landing-log)
   - [`workspaces/<ws>/pieces/<host>.jsonl` — the piece claim log](#workspaceswspieceshostjsonl--the-piece-claim-log)
@@ -1236,6 +1237,37 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   Newest first, by file name. A file whose name is not a record's, a link that leaves the
   plane's data directories (a workspace's) or any link below the plane root (the plane
   root's), and a file over the plane's 1 MiB bound are not records and are not listed.
+
+### `.charter/sessions/<chat>.saved` and `workspaces/<ws>/.charter/sessions/<chat>.saved` — a saved record to pass on
+
+- **Format:** one JSON object and a line feed:
+  `{"chat": <the app's number for the chat>, "conversation": <the harness's conversation id | null>, "session_saved": "<the record, absolute>", "at": <unix seconds>}`.
+- **Status:** internal — **charter-app only** (ADR 0064, amended 2026-09-28; charter#517). Two
+  processes of one chat read it, `charter session record` and that chat's next `Stop` hook, and
+  nothing else ever does. Deleting one costs at most a tab that does not close by itself.
+- **Why:** a harness can run `charter session record` in a sandbox that lets it write the
+  record and refuses its connect to the app's hook socket — Codex's default `workspace-write`
+  does exactly that. The chat's hooks run outside that sandbox, so the record's line is left
+  here for the hook that ends the same turn to send.
+- **Where:** in the directory of the place the chat works — the one `charter session record`
+  files a record in when it is given no `-w`: `.charter/sessions/` below the plane root for a
+  chat at the plane root, `workspaces/<ws>/.charter/sessions/` for a chat in `<ws>`. The chat's
+  own directory, which is where a sandbox lets a command write. `<chat>` is the number, as
+  `$CHARTER_CHAT` spells it. (At the plane root it sits beside the `<sid>.persona` and
+  `<sid>.workspace` pointers below, whose `<sid>` is often the same number; the suffix keeps
+  them apart.)
+- **Written by:** `charter session record`, only when it had a hook socket and a chat to tell
+  and the line did not get through (`sessionrecord::relay::leave`): 0600, written whole (temp
+  file and rename), its directories created 0700.
+- **Read by:** `charter hook stop` in that chat (`sessionrecord::relay::take`), which removes it
+  whatever it holds and sends the app the `SessionSaved` line only when it is this chat's
+  (`chat`), this conversation's (a `conversation` that is not null must be the one the `Stop`
+  names), and at most five minutes old — the time the app waits for a record before it gives a
+  Smart close up. A future `at`, a relative `session_saved`, a link, a file over 8 KiB or one
+  that does not parse are stale, removed and not sent. The app closes a tab on the line only
+  while that chat is being smart-closed, so a line sent twice closes it once.
+- **Git:** ignored — the plane root's by `/.charter/`, a workspace's by `/workspaces/*/*`,
+  which the LIVE block never un-ignores it from.
 
 ### `workspaces/<ws>/changes/<slug>.json` — a cross-repo change
 

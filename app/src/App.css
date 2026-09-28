@@ -2144,6 +2144,21 @@ h2.sidebar-title .node-icon {
 .chat[data-wrapping-up] .session {
   color: var(--text-muted);
 }
+
+/* **A chat in the background** (SI-8f): its tab shrinks to a chip — the chat's icon and the
+   breathing diamond — at the strip's left edge while the chat writes its record, so closing it
+   feels like putting it away. It takes only its own width: it holds no name to share room with.
+   `fits.ts` still counts it as a whole tab, which can only ever leave a little room unused. */
+.tabs .tab.chip {
+  flex: none;
+  min-width: 0;
+}
+.tabs .tab.chip [role="tab"] {
+  padding-inline: 0.5rem;
+}
+.tabs .tab.chip .wrapping-up {
+  margin-inline-start: 0;
+}
 .answer .smart-close:not(:disabled) {
   border-color: var(--accent-base);
   color: var(--accent-base);

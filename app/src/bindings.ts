@@ -2592,6 +2592,13 @@ export type SaveEntry = {
 	detail: string,
 };
 
+/**  The record a smart close ended on, as its view tab opens it (SI-8d). */
+export type SavedRecord = {
+	/**  Plane-relative, as `session_record` reads it. */
+	path: string,
+	title: string,
+};
+
 /**
  *  How far a save of the plane and of each repo goes in this project, and which file decided
  *  each key: what the Project settings tab's Plane and Repos groups say beside each control.
@@ -2758,6 +2765,11 @@ export type SmartClosing = {
 	plane: PlaneId,
 	session: number,
 	phase: Phase,
+	/**
+	 *  On [`Phase::Closed`], the record that closed it, for the window's "Session saved" notice
+	 *  and its **Open record** — where the line named one of this plane's records.
+	 */
+	record: SavedRecord | null,
 };
 
 /**  Everything the picker draws, read from the plane when it is opened. */

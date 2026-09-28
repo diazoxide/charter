@@ -43,14 +43,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longer find it — the chat starts fresh with the record in its briefing, and says why. The
   palette has **Open session record: …** and **Resume session: …** for the place in front.
 
+- **Smart close puts the chat into the background.** Its tab shrinks to a chip — the chat's
+  icon and the breathing amber mark, its name in the tooltip — at the left edge of the chat
+  strip, before the pinned tabs, and the chat that was beside it comes to the front, as Close
+  would bring it. Click the chip to watch the chat work; it stays a chip until it is done, and
+  it cannot be dragged. When the record is saved the chip goes, and a quiet notice says
+  **Session saved — <title>** with **Open record**. If no record arrives, the chat ends first or
+  Smart close could not start, the tab comes back where it was, and the title bar's ✋ list
+  names the chat and why (ADR 0064, ADR 0039).
+
 ### Changed
 
 - **Smart close never stops to ask permission for its own command in a Claude Code chat.** A
   chat the app starts may run `charter session record` without asking — that command and no
   other, and only as a command of its own: your own and the project's permission rules all
   still apply beside it. Codex needs nothing to run it — in its default sandbox the command runs
-  without asking — but that sandbox keeps the command from telling the app, so a Codex chat's
-  tab does not yet close by itself after its record is written (#517, ADR 0064).
+  without asking.
 - **A session record names the harness profile and the directory its chat ran in**, and
   **Resume** starts the new chat on that profile and in that directory where they still exist
   — in a piece, for a record written from one. Where either is gone, or the record is older than
@@ -63,6 +71,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A Codex chat's tab closes after Smart close writes its record.** Codex's default sandbox
+  keeps `charter session record` from reaching the app, so the command now leaves the news
+  beside the chat and the chat's own `Stop` hook, which runs outside the sandbox, passes it on
+  at the end of the same turn — only for that chat and conversation, and only within the five
+  minutes the app waits (#517, ADR 0064).
 - **A session record's tab always offers Resume.** The button came from the palette's rows for
   the place in front, so a record's tab showed none while another place was focused.
 - **Codex and opencode chats come back to their conversation at a relaunch, and a Claude Code
