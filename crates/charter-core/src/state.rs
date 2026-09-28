@@ -169,6 +169,17 @@ pub struct Chat {
     /// kind — `<child> reported back` — and the report itself reaches this chat's next turn as
     /// context, which is why the next prompt is what clears them.
     reports: Vec<String>,
+    /// Whether the chat stopped in the middle of a turn to ask the operator something — a
+    /// permission or a question — and the turn has not ended since (Smart close, ADR 0064).
+    ///
+    /// **A `Notification` while a turn runs, and only then.** Claude Code also nudges a chat
+    /// left idle after its turn with a `Notification`, and that one asks nothing: the turn is
+    /// over and the chat is only waiting. Both put the chat in the needs-you queue, which is
+    /// why this is a fact of its own and not `needs_you`. Not part of what a reader is shown
+    /// (the `was` of [`Chat::reported_from`]), so it never makes a report a move of its own.
+    asking: bool,
+    /// How many prompts have started a turn of this chat since the app started it.
+    turns: u32,
 }
 
 impl Chat {
@@ -179,7 +190,20 @@ impl Chat {
             needs_you: false,
             ended: false,
             reports: Vec::new(),
+            asking: false,
+            turns: 0,
         }
+    }
+
+    /// Whether the chat is asking the operator something in the middle of a turn: a
+    /// permission or a question, never the nudge of a chat that has finished its turn.
+    pub fn asking(&self) -> bool {
+        self.asking
+    }
+
+    /// How many prompts have started a turn of this chat, as the app has heard them.
+    pub fn turns(&self) -> u32 {
+        self.turns
     }
 
     /// The state as it stands.
@@ -238,6 +262,7 @@ impl Chat {
             Event::SessionStart if !started.began_a_session() => {}
             Event::SessionStart => {
                 self.state = State::Waiting;
+                self.asking = false;
             }
             // The turn that begins now is the one a waiting report is handed to, as context
             // (`handback`), so it is read and no longer waiting.
@@ -245,9 +270,13 @@ impl Chat {
                 self.state = State::Running;
                 self.needs_you = false;
                 self.reports.clear();
+                self.asking = false;
+                self.turns = self.turns.saturating_add(1);
             }
             // The turn has not ended, but it cannot go on without an answer.
             Event::Notification => {
+                // Asked in the middle of a turn. After one has ended it is only a nudge.
+                self.asking = self.asking || self.state == State::Running;
                 self.state = State::Waiting;
                 self.needs_you = true;
             }
@@ -264,6 +293,7 @@ impl Chat {
             Event::Stop => {
                 self.state = State::Waiting;
                 self.needs_you = true;
+                self.asking = false;
             }
             // Emphatically not `Stop`: a dispatched sub-agent finishing does not end the
             // turn that dispatched it, and a fan-out would blink the chat out of `running`
@@ -277,6 +307,7 @@ impl Chat {
             Event::SessionEnd => {
                 self.state = State::Done;
                 self.needs_you = false;
+                self.asking = false;
             }
         }
         was != (self.state, self.needs_you, self.reports.len())
@@ -316,6 +347,7 @@ impl Chat {
             State::Failed
         };
         self.needs_you = false;
+        self.asking = false;
         self.ended = true;
         // Nothing will prompt it again, so nothing it was waiting to read is an item any more.
         self.reports.clear();
@@ -691,6 +723,22 @@ impl Board {
         self.chats
             .get(&number)
             .map_or(State::Unknown, |tracked| tracked.chat.state())
+    }
+
+    /// Whether this chat is asking the operator something mid-turn ([`Chat::asking`]). A chat
+    /// the board does not have asks nothing.
+    pub fn asking(&self, number: u32) -> bool {
+        self.chats
+            .get(&number)
+            .is_some_and(|tracked| tracked.chat.asking())
+    }
+
+    /// How many prompts have started a turn of this chat ([`Chat::turns`]); none for a chat the
+    /// board does not have.
+    pub fn turns(&self, number: u32) -> u32 {
+        self.chats
+            .get(&number)
+            .map_or(0, |tracked| tracked.chat.turns())
     }
 
     /// A chat `number` handed work to, `from`, has reported back to it (charter-app#259).
@@ -1603,6 +1651,112 @@ mod tests {
         board.ignored(7);
 
         assert_eq!(board.moved_at(7), before);
+    }
+
+    // ----- asking, and how many turns a chat has had (Smart close, ADR 0064) -----
+
+    #[test]
+    fn a_notification_in_the_middle_of_a_turn_is_the_chat_asking_until_the_turn_ends() {
+        // A permission or a question: the turn cannot go on without an answer, and a prompt
+        // sent now would land in the question rather than after it.
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        assert!(!chat.asking());
+
+        chat.reported(Event::Notification);
+        assert!(chat.asking());
+
+        chat.reported(Event::Stop);
+        assert!(
+            !chat.asking(),
+            "the turn ended, so nothing is asked any more"
+        );
+    }
+
+    #[test]
+    fn a_notification_after_the_turn_ended_is_a_nudge_and_not_a_question() {
+        // Claude Code nudges a chat left idle after its turn with a `Notification` of its own.
+        // The turn is over and nothing is being asked: the chat is only waiting.
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        chat.reported(Event::Stop);
+
+        chat.reported(Event::Notification);
+
+        assert!(!chat.asking());
+        assert!(chat.needs_you());
+    }
+
+    #[test]
+    fn a_question_is_answered_by_the_next_prompt_a_new_session_or_the_program_ending() {
+        for ends in [
+            |chat: &mut Chat| {
+                chat.reported(Event::UserPromptSubmit);
+            },
+            |chat: &mut Chat| {
+                chat.reported(Event::SessionStart);
+            },
+            |chat: &mut Chat| {
+                chat.exited(Some(0));
+            },
+        ] {
+            let mut chat = Chat::new();
+            chat.reported(Event::UserPromptSubmit);
+            chat.reported(Event::Notification);
+
+            ends(&mut chat);
+
+            assert!(!chat.asking());
+        }
+    }
+
+    #[test]
+    fn a_chat_counts_the_prompts_that_started_its_turns() {
+        let mut chat = Chat::new();
+        assert_eq!(chat.turns(), 0);
+
+        chat.reported(Event::SessionStart);
+        chat.reported(Event::UserPromptSubmit);
+        chat.reported(Event::Stop);
+        chat.reported(Event::UserPromptSubmit);
+
+        assert_eq!(chat.turns(), 2);
+    }
+
+    #[test]
+    fn a_question_is_not_a_second_move_of_a_chat_already_waiting() {
+        // The flag is not in what a reader is shown: a `Stop` after a question moves nothing
+        // on the board, so the window is not told twice and no second notification fires.
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        chat.reported(Event::Notification);
+
+        assert!(!chat.reported(Event::Stop));
+        assert!(!chat.asking());
+    }
+
+    #[test]
+    fn the_board_says_whether_a_chat_is_asking_and_how_many_turns_it_has_had() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(7, Event::Notification, Some(A)));
+
+        assert!(board.asking(7));
+        assert_eq!(board.turns(7), 1);
+        assert!(!board.asking(9), "a chat the board does not have");
+        assert_eq!(board.turns(9), 0);
+    }
+
+    #[test]
+    fn a_nested_harness_s_prompt_is_not_a_turn_of_the_chat_it_runs_in() {
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::SessionStart, Some(A)));
+
+        board.reported(&from_pid(7, Event::UserPromptSubmit, Some(NESTED), 9999));
+
+        assert_eq!(board.turns(7), 0);
     }
 
     // ----- when a chat last moved (ADR 0039) -----

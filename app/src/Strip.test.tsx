@@ -205,8 +205,8 @@ const closers = () => within(strip()).queryAllByRole("button", { name: /^End cha
 async function endChat(closer: HTMLElement): Promise<void> {
   const name = closer.getAttribute("aria-label") ?? "";
   await userEvent.click(closer);
-  const asking = await screen.findByRole("alertdialog");
-  await userEvent.click(within(asking).getByRole("button", { name }));
+  const asking = await screen.findByRole("alertdialog", { name: `${name}?` });
+  await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
 }
 
 describe("the chat strip when it holds more than it has room for", () => {

@@ -96,6 +96,7 @@ import { usePin } from "./Updates";
 import { StatusLine, runningIn, type Alerts } from "./StatusLine";
 import {
   byLastActivity,
+  closeChat,
   closeFocusedPane,
   closeTab,
   focusPane,
@@ -135,8 +136,9 @@ import {
   type Tabs,
   type ViewRef,
 } from "./tabs";
-import { ChatMark, type Asking } from "./NeedsYou";
-import { EndingChat } from "./EndingChat";
+import { ChatMark, WRAPPING_UP, WrappingUp, type Asking } from "./NeedsYou";
+import { EndingChat, type SmartAsk } from "./EndingChat";
+import { saidWhenItEnds, useSmartClosing } from "./smartClose";
 import { Panels } from "./Panels";
 import { NewVault } from "./NewVault";
 import { OpenVault, useVaults } from "./Vaults";
@@ -147,7 +149,13 @@ import { closeOnDelete, onAMac, renameOnF2 } from "./tabKeys";
 import { opensAShell } from "./shellKey";
 import { TabRename } from "./TabRename";
 import { EmptyState } from "./EmptyState";
-import type { ExtensionCommand, ExtensionView, PanelView, RowAction } from "./bindings";
+import type {
+  ExtensionCommand,
+  ExtensionView,
+  PanelView,
+  RowAction,
+  SmartClosing,
+} from "./bindings";
 import { AskFirst, runExtensionAction } from "./ExtensionAction";
 import { extensionsChanged, useExtensionsOn } from "./extensionsOn";
 import { projectThemeChanged } from "./projectTheme";
@@ -2116,6 +2124,42 @@ export function PlaneView({
   );
 
   /**
+   * **A smart close that has ended** (ADR 0064). The core closed the chat when its record
+   * landed, so the window takes its pane away — `closeChat`, and never `close_session`, which
+   * would end it a second time. Given up, or ended on its own: the tab is back to normal and the
+   * window says why, in one sentence. Cancelled: the tab going back to normal says it all.
+   */
+  const smartCloseEnded = useCallback(
+    (step: SmartClosing) => {
+      if (step.phase === "closed") {
+        change((tabs) => closeChat(tabs, step.session, filedIn, isPinned));
+        return;
+      }
+      const tab = now.current.order.find((id) =>
+        panesOf(now.current, id).some((one) => one.session === step.session),
+      );
+      const name = tab === undefined ? `chat ${step.session}` : now.current.byId[tab].name;
+      const said = saidWhenItEnds(step.phase, name);
+      if (said !== undefined)
+        setReport({ from: `smartclose:${step.session}`, refused: true, words: said });
+    },
+    [change, filedIn, isPinned],
+  );
+  /** The chats wrapping up: their tabs, their explorer rows and their menus say so. */
+  const wrapping = useSmartClosing(plane, smartCloseEnded);
+
+  /** Cancels a chat's smart close: its tab's menu row, or the palette's. */
+  const cancelSmartClose = useCallback(
+    async (session: number): Promise<Ran> => {
+      const said = await commands
+        .cancelSmartClose(plane, session)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      return said.status === "error" ? { ok: false, refused: said.error } : { ok: true };
+    },
+    [plane],
+  );
+
+  /**
    * Opens a chat tab's name for editing on the strip (charter-app#254) — what the tab's menu,
    * the palette's row, a double-click on the tab and `F2` on it all run, through the one
    * catalogue row. **The tab comes forward first**, because the strip always draws the tab in
@@ -2233,6 +2277,7 @@ export function PlaneView({
       removeWorkspace,
       showChat,
       ignoreNeedsYou,
+      cancelSmartClose,
       // The verb still names a persona — that is what the catalogue row is about — and the
       // window turns it into the row it opens. `charter/personas` is charter's own panel's
       // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
@@ -2268,6 +2313,7 @@ export function PlaneView({
     [
       beginRename,
       bringToFront,
+      cancelSmartClose,
       close,
       closePane,
       curate,
@@ -2437,6 +2483,7 @@ export function PlaneView({
             views,
             commands: extensionCommands,
             curations,
+            wrappingUp: [...wrapping],
           }),
     [
       clones,
@@ -2465,6 +2512,7 @@ export function PlaneView({
       extensionCommands,
       worktree,
       liveNames,
+      wrapping,
     ],
   );
 
@@ -2506,7 +2554,13 @@ export function PlaneView({
    * Held here and not in the dialog, because the dialog is drawn only while there is one:
    * a component that is not mounted cannot be holding the question it is about to ask.
    */
-  const [endingChat, setEndingChat] = useState<Offer>();
+  const [endingChat, setEndingChat] = useState<{
+    offer: Offer;
+    /** The one chat the close is about, where it is about one — what Smart close would close. */
+    session?: number;
+    /** Whether that chat is offered Smart close (ADR 0064), or none where charter cannot say. */
+    smart?: SmartAsk;
+  }>();
 
   /**
    * What every surface does with a row: ask first where a chat is about to end, then carry
@@ -2528,12 +2582,46 @@ export function PlaneView({
   const run = useCallback(
     async (offer: Offer): Promise<Ran> => {
       if (offer.available && endsAChat(offer.does)) {
-        setEndingChat(offer);
+        const ending = chatsEndedBy(offer.does, now.current);
+        if (ending.length !== 1) {
+          setEndingChat({
+            offer,
+            smart:
+              ending.length > 1
+                ? { available: false, why: MORE_THAN_ONE_CHAT, close_first: false }
+                : undefined,
+          });
+          return { ok: true };
+        }
+        const session = ending[0];
+        // The core's answer, asked now: whether the chat can write a record depends on what it
+        // is doing this moment, and the command that starts a smart close asks the same thing.
+        const asked = await commands
+          .smartCloseOffer(plane, session)
+          .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+        const smart =
+          asked.status === "ok" && asked.data !== null && typeof asked.data === "object"
+            ? asked.data
+            : undefined;
+        setEndingChat({ offer, session, smart });
         return { ok: true };
       }
       return carryOut(offer);
     },
-    [carryOut, setEndingChat],
+    [carryOut, plane, setEndingChat],
+  );
+
+  /** Smart close pressed: the core sends the chat its prompt, now or when its turn ends, and the
+   *  tab wears its wrapping-up look from the step it tells (`useSmartClosing`). */
+  const beginSmartClose = useCallback(
+    async (session: number) => {
+      const began = await commands
+        .smartClose(plane, session)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (began.status === "error")
+        setReport({ from: `smartclose:${session}`, refused: true, words: began.error });
+    },
+    [plane],
   );
 
   const press = useCallback(
@@ -2883,6 +2971,10 @@ export function PlaneView({
                           ref={sortable.setNodeRef}
                           style={style}
                           data-dragging={sortable.isDragging || undefined}
+                          // A chat being smart-closed wears the closing look (ADR 0064).
+                          data-wrapping-up={
+                            panesOf(tabs, id).some((one) => wrapping.has(one.session)) || undefined
+                          }
                         >
                           {renaming === id ? (
                             // The name, open for editing in the tab's place (charter-app#254). Not
@@ -2903,7 +2995,11 @@ export function PlaneView({
                                 aria-selected={id === tabs.inFront}
                                 aria-describedby={sortable.attributes["aria-describedby"]}
                                 // Where a handed-off chat came from, by its parent's name (charter-app#258).
-                                title={handedFrom[chatOf(tabs, id) ?? -1]}
+                                title={
+                                  panesOf(tabs, id).some((one) => wrapping.has(one.session))
+                                    ? WRAPPING_UP
+                                    : handedFrom[chatOf(tabs, id) ?? -1]
+                                }
                                 // F2 renames here rather than opening the palette (`RENAMES_ON_F2`), on a
                                 // tab that has a rename row — a chat's, and never a view's.
                                 {...(by(`tab.rename:${id}`) ? { [RENAMES_ON_F2]: "" } : {})}
@@ -2935,6 +3031,7 @@ export function PlaneView({
                                   states={states}
                                   updates={planeUpdates}
                                   shells={shells}
+                                  wrapping={wrapping}
                                   pin={
                                     <Pin
                                       held={isPinned(id)}
@@ -2978,6 +3075,7 @@ export function PlaneView({
                   states={states}
                   updates={planeUpdates}
                   shells={shells}
+                  wrapping={wrapping}
                 />
               ),
             }))}
@@ -3097,6 +3195,7 @@ export function PlaneView({
               spot={spot}
               onPick={pickSpot}
               onShowChat={showChat}
+              wrapping={wrapping}
               offers={found}
               onPress={press}
             />
@@ -3348,11 +3447,17 @@ export function PlaneView({
           (the operator: *"closing session should ask confirmation"*). */}
       {endingChat && (
         <EndingChat
-          offer={endingChat}
+          offer={endingChat.offer}
+          smart={endingChat.smart}
           onEnd={() => {
-            const ending = endingChat;
+            const ending = endingChat.offer;
             setEndingChat(undefined);
             void carryOut(ending);
+          }}
+          onSmartClose={() => {
+            const session = endingChat.session;
+            setEndingChat(undefined);
+            if (session !== undefined) void beginSmartClose(session);
           }}
           onCancel={() => setEndingChat(undefined)}
         />
@@ -3543,6 +3648,22 @@ function alreadyShows(tabs: Tabs, session: number): boolean {
 function endsAChat(does: Offer["does"]): boolean {
   return (does.verb === "closeTab" || does.verb === "closePane") && does.ends;
 }
+
+/**
+ * The chats a close row would end: a tab's every chat, or the focused pane's one. Smart close
+ * is offered only where this is exactly one (ADR 0064) — a record is one chat's.
+ */
+function chatsEndedBy(does: Offer["does"], tabs: Tabs): number[] {
+  if (does.verb === "closeTab") return panesOf(tabs, does.tab).map((one) => one.session);
+  if (does.verb !== "closePane" || tabs.inFront === undefined) return [];
+  const tab = tabs.byId[tabs.inFront];
+  const going = panesOf(tabs, tab.id).find((one) => one.pane === tab.focused);
+  return going === undefined ? [] : [going.session];
+}
+
+/** Why Smart close is not offered on a tab holding more than one chat. */
+const MORE_THAN_ONE_CHAT =
+  "This tab holds more than one chat, and a session record is one chat's. Smart close each from its own pane.";
 
 /**
  * Whether a row is a close that says it ends nothing — a pane or a tab showing only a view.
@@ -3962,10 +4083,13 @@ function TabMarks({
   updates,
   shells,
   pin,
+  wrapping,
 }: {
   tabs: Tabs;
   id: number;
   states: ChatStates;
+  /** The chats wrapping up — being smart-closed (ADR 0064). */
+  wrapping: ReadonlySet<number>;
   /** The chats the plane's instructions changed under, by session (charter#369). */
   updates: PlaneUpdates;
   /** The chats that are shell tabs, whose tab wears a terminal's mark (SI-5). */
@@ -3998,6 +4122,7 @@ function TabMarks({
           stays separate from what it is DOING — a tab whose text changed every time a turn
           began would be unreadable, and untestable. */}
       <ChatMark state={markOf(states, chat ?? -1, chat !== undefined && shells.has(chat))} />
+      <WrappingUp held={panesOf(tabs, id).some((one) => wrapping.has(one.session))} />
     </>
   );
 }

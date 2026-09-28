@@ -202,8 +202,8 @@ const arrangement = () => ({
  * belongs to the chat under test rather than whichever button happens to be second.
  */
 async function answerTheAsk(name: string) {
-  const asking = await screen.findByRole("alertdialog");
-  await userEvent.click(within(asking).getByRole("button", { name }));
+  const asking = await screen.findByRole("alertdialog", { name: `${name}?` });
+  await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
 }
 
 describe("the palette reaching what the window can do", () => {

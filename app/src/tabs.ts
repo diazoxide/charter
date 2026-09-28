@@ -692,6 +692,30 @@ export function closeFocusedPane(
 }
 
 /**
+ * Takes chat `session`'s pane away, wherever it is — **the window catching up with a chat the core
+ * has already closed**: a smart close whose record landed (ADR 0064). What shared its split takes
+ * its place; when it was its tab's only pane, the tab closes by `closeTab`'s rule. A session no
+ * tab shows changes nothing.
+ */
+export function closeChat(
+  tabs: Tabs,
+  session: number,
+  filedIn: FiledIn,
+  pinned: Pinned = nothingPinned,
+): Tabs {
+  const found = tabs.order
+    .flatMap((id) => panesOf(tabs, id).map((one) => ({ id, ...one })))
+    .find((one) => one.session === session);
+  if (found === undefined) return tabs;
+  const { id, pane } = found;
+  const tab = tabs.byId[id];
+  const left = without(tab.layout, pane);
+  if (!left) return closeTab(tabs, id, filedIn, pinned);
+  const focused = tab.focused === pane ? panes(left)[0].pane : tab.focused;
+  return { ...tabs, byId: { ...tabs.byId, [id]: { ...tab, layout: left, focused } } };
+}
+
+/**
  * The panes of a tab **that show a chat**, left to right and top to bottom.
  *
  * Every caller of this is asking about chats — which to end when the tab closes, which one a

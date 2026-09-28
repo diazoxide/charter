@@ -183,6 +183,9 @@ export type Does =
   /** Drops a chat's request for the operator until it asks again (charter-app#248). The chat
    *  itself is untouched; the core holds the ignore, so the window's queue is told, not kept. */
   | { verb: "ignoreNeedsYou"; session: number }
+  /** Cancels a chat's smart close (ADR 0064): nothing is sent to it and nothing is closed — the
+   *  chat stays open and running, and a record it writes afterwards closes nothing. */
+  | { verb: "cancelSmartClose"; session: number }
   /** Opens a view in a tab of its own, or brings forward the tab already showing it.
    *
    *  **One verb for charter's views and an extension's** — the persona view is
@@ -465,6 +468,8 @@ export type Now = {
    * pick theirs out by id ([`curateRows`]).
    */
   curations?: Curations;
+  /** The chats being smart-closed (ADR 0064): each one's tab offers to cancel it. */
+  wrappingUp?: readonly number[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -495,6 +500,8 @@ export type Doing = {
   showChat: (session: number) => void;
   /** Answers a `Ran`, because it is a command the core can refuse — a project closed meanwhile. */
   ignoreNeedsYou: (session: number) => Promise<Ran>;
+  /** Answers a `Ran`, because the core can refuse it — a project closed meanwhile. */
+  cancelSmartClose: (session: number) => Promise<Ran>;
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
@@ -960,6 +967,25 @@ export function catalogue(now: Now): Offer[] {
     if (chatOf(now.tabs, tab) === undefined) continue;
     const name = now.tabs.byId[tab].name;
     offers.push(can(`tab.rename:${tab}`, `Rename chat ${name}…`, { verb: "renameTab", tab }, name));
+  }
+
+  // **A tab wrapping up offers to stop** (ADR 0064): the chat was asked to write its record and
+  // close. Cancelling ends nothing, so it is above the line, and first on the tab's menu.
+  for (const tab of now.tabs.order) {
+    const session = panesOf(now.tabs, tab).find((one) =>
+      (now.wrappingUp ?? []).includes(one.session),
+    )?.session;
+    if (session === undefined) continue;
+    const name = now.tabs.byId[tab].name;
+    offers.push({
+      ...can(
+        smartCloseCancelId(tab),
+        `Cancel smart close of ${name}`,
+        { verb: "cancelSmartClose", session },
+        name,
+      ),
+      note: "The chat stays open and running.",
+    });
   }
 
   // The workspaces of this project, which is the axis the tmux frame had and the port lost
@@ -1564,6 +1590,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "ignoreNeedsYou":
       return doing.ignoreNeedsYou(does.session);
+    case "cancelSmartClose":
+      return doing.cancelSmartClose(does.session);
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
@@ -1687,6 +1715,11 @@ export function needsYouRows(
       ),
     ];
   });
+}
+
+/** The catalogue's id for a wrapping-up tab's Cancel smart close row (ADR 0064). */
+export function smartCloseCancelId(tab: number): string {
+  return `tab.smartclose.cancel:${tab}`;
 }
 
 /** The catalogue's id for a queued chat's Go row, for a surface drawing that row. */
@@ -1912,7 +1945,12 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
   switch (what.on) {
     case "chat":
       return {
-        above: [`tab.select:${what.tab}`, `tab.rename:${what.tab}`, `tab.pin:${what.tab}`],
+        above: [
+          smartCloseCancelId(what.tab),
+          `tab.select:${what.tab}`,
+          `tab.rename:${what.tab}`,
+          `tab.pin:${what.tab}`,
+        ],
         below: [`tab.close:${what.tab}`],
       };
     case "workspace":

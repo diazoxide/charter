@@ -32,11 +32,14 @@ import { ENDS_IT, type Offer } from "./actions";
  *   interaction itself.
  * - **Escape answers, with the non-destructive answer** — the primitive's own `Cancel`.
  *
- * And one that is this dialog's alone: **Cancel is focused, and it is first.** The destructive
- * answer is never the one a stray Return finds, which matters most on the one dialog that
- * appears without being asked for.
+ * And one that is this dialog's alone: **Cancel is first, and the focus starts on the answer the
+ * operator ruled the default** (ADR 0064). Since Smart close there are three answers — Cancel,
+ * Close, Smart close — and the focus goes to Smart close on a chat with turns behind it, to
+ * Close on one that has had at most one turn (little to record), and to Cancel wherever
+ * charter cannot say (`firstAnswer`). Before Smart close, Cancel was always focused; a stray
+ * Return on a chat charter knows nothing about still cancels.
  *
- * **Two answers, in that order, and both carrying `tabIndex={0}`.** Radix's `FocusScope`
+ * **Every answer carries `tabIndex={0}`.** Radix's `FocusScope`
  * intercepts Tab only at the EDGES of the scope: on the first tabbable it acts on Shift+Tab and
  * moves the focus to the last itself, on the last it acts on Tab and moves to the first, and in
  * between it does nothing and the engine decides. **The engine here is WebKit on both platforms
@@ -45,13 +48,11 @@ import { ENDS_IT, type Offer } from "./actions";
  * fix and is the engine's own rule rather than a workaround
  * (`HTMLFormControlElement::isKeyboardFocusable`; `docs/ui-primitives.md` cites the change).
  *
- * Until charter-app#186 this dialog was whole for a narrower reason: these two are the only
- * tabbables and the confirm is the second, so Cancel IS the first edge and the confirm IS the
- * last, and Shift+Tab from Cancel was Radix's own `focus()` call rather than the engine's tab
- * sequence. That is a property of the *number of buttons*, and it made "the keyboard works
- * here" something a third control could take away in silence. It does not any more. The order
- * still matters and `App.test.tsx` still pins it — Cancel first, so a Return pressed by reflex
- * cancels — but the order is now about which answer a reflex finds and not about reachability.
+ * Until charter-app#186 this dialog was whole for a narrower reason: it had two tabbables and
+ * the confirm was the second, so Cancel WAS the first edge and the confirm the last, and
+ * Shift+Tab from Cancel was Radix's own `focus()` call rather than the engine's tab sequence.
+ * That was a property of the *number of buttons*, and the third one Smart close added is why it
+ * had to stop being one. `App.test.tsx` and `SmartClose.test.tsx` pin the order and the focus.
  *
  * **What the above is NOT is the reason a scenario cannot press these buttons**, and an earlier
  * version of this comment said it was. Measured in charter-app#176 with a keydown trace in the
@@ -63,18 +64,27 @@ import { ENDS_IT, type Offer } from "./actions";
  */
 export function EndingChat({
   offer,
+  smart,
   onEnd,
+  onSmartClose,
   onCancel,
 }: {
   /** The catalogue row waiting on an answer — `tab.close:<id>` or `pane.close`. Its title is
    *  what the dialog is about, so there is no second wording of what is being ended. */
   offer: Offer;
+  /** Whether the chat is offered **Smart close** (ADR 0064), as the core answered — or none,
+   *  when charter could not say, which offers Close only. */
+  smart?: SmartAsk;
   onEnd: () => void;
+  onSmartClose: () => void;
   onCancel: () => void;
 }) {
   // Focused by the dialog itself rather than by `autoFocus`: see `StartChat` for why.
   const cancel = useRef<HTMLButtonElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
+  const smartClose = useRef<HTMLButtonElement>(null);
   const handBack = useFocusBack();
+  const first = firstAnswer(smart);
   return (
     <Alert.Root
       open
@@ -91,25 +101,30 @@ export function EndingChat({
           // interaction itself, because an alert dialog is a question that must be answered.
           // The four `Dialog`s in `docs/ui-primitives.md` write the same rule out by hand
           // because `Dialog` would otherwise close on a click outside; this one cannot.
-          // **The focus is put on Cancel here although the primitive already does it** —
-          // measured: taking this out leaves every test green, because `AlertDialogContent`
-          // focuses its `Cancel` itself. It stays because it is the one property a stray
-          // Return depends on, and a property that matters is spelled rather than inherited.
+          // **The focus is put on the default answer here** (`firstAnswer`): Smart close for a
+          // chat with turns behind it, Close for one with at most one (the operator's ruling,
+          // ADR 0064), and Cancel wherever charter cannot say — so a stray Return never ends a
+          // chat charter knows nothing about.
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            cancel.current?.focus();
+            const focus = { cancel, close, smart: smartClose }[first];
+            focus.current?.focus();
           }}
           onCloseAutoFocus={handBack}
         >
           <Alert.Title>{offer.title}?</Alert.Title>
           {/* The catalogue's own sentence, not a second one written here. It is the same
               string the `×`'s tooltip has carried since charter-app#130. */}
-          <Alert.Description className="honest mid-turn">{ENDS_IT}</Alert.Description>
-          {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). This
-              dialog was already whole, because its two answers ARE the two edges Radix's
-              focus scope handles — but that made a property of the keyboard depend on the
-              number of buttons, and the attribute is what makes Tab move between them the way
-              it does in every other window on the machine. */}
+          <Alert.Description className="honest mid-turn">
+            {ENDS_IT} {smart?.available ? SMART_CLOSE_SAYS : null}
+          </Alert.Description>
+          {smart?.why && (
+            <p className="honest" id="smart-close-why">
+              {smart.why}
+            </p>
+          )}
+          {/* `tabIndex={0}` on each, per `docs/ui-primitives.md` (charter-app#186). Cancel
+              first and Smart close last, at the edge where a primary answer sits. */}
           <div className="answer">
             <Alert.Cancel asChild>
               <button ref={cancel} tabIndex={0}>
@@ -117,8 +132,20 @@ export function EndingChat({
               </button>
             </Alert.Cancel>
             <Alert.Action asChild>
-              <button className="ends-it" tabIndex={0} onClick={onEnd}>
-                {offer.title}
+              <button ref={close} className="ends-it" tabIndex={0} onClick={onEnd}>
+                Close
+              </button>
+            </Alert.Action>
+            <Alert.Action asChild>
+              <button
+                ref={smartClose}
+                className="smart-close"
+                tabIndex={0}
+                disabled={!smart?.available}
+                aria-describedby={smart?.why ? "smart-close-why" : undefined}
+                onClick={onSmartClose}
+              >
+                Smart close
               </button>
             </Alert.Action>
           </div>
@@ -126,6 +153,26 @@ export function EndingChat({
       </Alert.Portal>
     </Alert.Root>
   );
+}
+
+/** What **Smart close** does, said beside Close's cost when it is offered. */
+export const SMART_CLOSE_SAYS =
+  "Smart close first asks the chat to write its session record, and closes it once the record is saved.";
+
+/** Whether a chat is offered Smart close, as the dialog draws it: the core's answer
+ *  (`smart_close_offer`), or the window's own reason where the close is about more than one chat. */
+export type SmartAsk = {
+  available: boolean;
+  why: string | null;
+  /** Close is the default: the chat has had at most one turn. */
+  close_first: boolean;
+};
+
+/** The answer the dialog's focus starts on (ADR 0064). */
+export function firstAnswer(smart: SmartAsk | undefined): "smart" | "close" | "cancel" {
+  if (smart === undefined) return "cancel";
+  if (smart.close_first) return "close";
+  return smart.available ? "smart" : "cancel";
 }
 
 /**

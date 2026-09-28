@@ -96,8 +96,8 @@ async function splitInto(which: "Split right" | "Split down") {
  */
 async function endChat(name: string) {
   await userEvent.click(screen.getByRole("button", { name }));
-  const asking = await screen.findByRole("alertdialog");
-  await userEvent.click(within(asking).getByRole("button", { name }));
+  const asking = await screen.findByRole("alertdialog", { name: `${name}?` });
+  await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
 }
 
 /**
@@ -362,7 +362,7 @@ describe("App", () => {
 
     await userEvent.click(paneDoing(2).getByRole("button", { name: "End this pane's chat" }));
     const asking = await screen.findByRole("alertdialog");
-    await userEvent.click(within(asking).getByRole("button", { name: "End this pane's chat" }));
+    await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
 
     expect(panes()).toEqual(["session 1"]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
@@ -382,7 +382,7 @@ describe("App", () => {
 
     await userEvent.click(paneDoing(1).getByRole("button", { name: "End this pane's chat" }));
     const asking = await screen.findByRole("alertdialog");
-    await userEvent.click(within(asking).getByRole("button", { name: "End this pane's chat" }));
+    await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
 
     expect(panes()).toEqual(["session 2"]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
@@ -424,7 +424,7 @@ describe("App", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("asks with two answers, Cancel focused and the confirm at the other edge", async () => {
+  it("asks with three answers, Cancel focused where charter cannot say, and Close a Shift+Tab away", async () => {
     // **Two answers in this order, pinned for what it decides now rather than for what it used
     // to decide.**
     //
@@ -449,10 +449,12 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "End chat steward 1" }));
     const asking = await screen.findByRole("alertdialog");
 
-    // Read off the DOM rather than asked for by name: "the only two, in this order" is the
-    // claim, and `getByRole` for each would pass with a third between them.
+    // Read off the DOM rather than asked for by name: "these three, in this order" is the
+    // claim, and `getByRole` for each would pass with a fourth between them. Smart close is
+    // last (ADR 0064); this core says nothing about it, so it cannot be pressed.
     const answers = within(asking).getAllByRole("button");
-    expect(answers.map((answer) => answer.textContent)).toEqual(["Cancel", "End chat steward 1"]);
+    expect(answers.map((answer) => answer.textContent)).toEqual(["Cancel", "Close", "Smart close"]);
+    expect(answers[2]).toBeDisabled();
     // Cancel first, so a Return pressed by reflex cancels. The dialog itself is not in the
     // sequence — Radix gives the content `tabIndex={-1}`.
     expect(answers[0]).toHaveFocus();
@@ -481,9 +483,10 @@ describe("App", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "End chat steward 1" }));
     const asking = await screen.findByRole("alertdialog");
-    // To the confirm and no further, by the key Radix handles at the scope's first edge.
+    // To Close and no further, by the key Radix handles at the scope's first edge: Smart close,
+    // the last answer, cannot be pressed on a chat this core says nothing about.
     await userEvent.tab({ shift: true });
-    expect(within(asking).getByRole("button", { name: "End chat steward 1" })).toHaveFocus();
+    expect(within(asking).getByRole("button", { name: "Close" })).toHaveFocus();
 
     await userEvent.keyboard("{Enter}");
 

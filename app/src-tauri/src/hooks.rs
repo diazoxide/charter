@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::hookwire::{
-    Answer, Ask, Listener, NOTHING_ANSWERS, Reading, Report, StartedByHand,
+    Answer, Ask, Listener, NOTHING_ANSWERS, Reading, Report, SessionSaved, StartedByHand,
 };
 use charter_core::session::Exit;
 use charter_core::state::{Board, State};
@@ -130,7 +130,18 @@ pub struct Hooks {
     /// the fact, for `answering`'s reason. The chats' record listens, so the conversation a
     /// relaunch resumes is the one the chat is in now (Q10).
     following: Arc<Mutex<Option<Following>>>,
+    /// Told EVERY report on this socket once the board has had it, whether it moved the board or
+    /// not — a slot filled after the fact, for `answering`'s reason. A smart close queued for a
+    /// turn's end waits on it (`crate::smartclose`): the `Stop` that ends a turn in which the
+    /// chat asked a question moves nothing a reader sees, and is still the end of the turn.
+    all_reports: Arc<Mutex<Option<Heard>>>,
+    /// Told each session record a chat's `charter session record` says it saved (ADR 0064) — a
+    /// slot filled after the fact, for `answering`'s reason.
+    saved: Arc<Mutex<Option<SavedHeard>>>,
 }
+
+/// What is told a session record was saved.
+pub type SavedHeard = Arc<dyn Fn(SessionSaved) + Send + Sync + 'static>;
 
 /// What is told each report the board took.
 pub type Heard = Arc<dyn Fn(&Report) + Send + Sync + 'static>;
@@ -254,6 +265,8 @@ impl Hooks {
             answering: Arc::new(Mutex::new(None)),
             heard: Arc::new(Mutex::new(None)),
             following: Arc::new(Mutex::new(None)),
+            all_reports: Arc::new(Mutex::new(None)),
+            saved: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -274,12 +287,15 @@ impl Hooks {
         let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
         let heard: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
         let following: Arc<Mutex<Option<Following>>> = Arc::new(Mutex::new(None));
-        let reading = listener.each_answering_and_noticing(
+        let all_reports: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
+        let saved: Arc<Mutex<Option<SavedHeard>>> = Arc::new(Mutex::new(None));
+        let reading = listener.each_answering_noticing_and_saving(
             {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
                 let heard = Arc::clone(&heard);
                 let following = Arc::clone(&following);
+                let all_reports = Arc::clone(&all_reports);
                 Box::new(move |report| {
                     let applied = apply(&board, &plane, &report);
                     // Before the window is told, so the record already names the conversation
@@ -305,6 +321,13 @@ impl Hooks {
                         if let Some(listener) = listener {
                             listener(&report);
                         }
+                    }
+                    let listener = all_reports
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone();
+                    if let Some(listener) = listener {
+                        listener(&report);
                     }
                 })
             },
@@ -333,6 +356,20 @@ impl Hooks {
                     }
                 })
             },
+            {
+                let saved = Arc::clone(&saved);
+                Box::new(move |record| {
+                    let listener = saved.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                    match listener {
+                        Some(listener) => listener(record),
+                        None => eprintln!(
+                            "charter: chat {} saved a session record before this project could \
+                             hear it, so nothing was closed",
+                            record.chat
+                        ),
+                    }
+                })
+            },
         );
         Ok(Self {
             plane,
@@ -342,6 +379,8 @@ impl Hooks {
             answering,
             heard,
             following,
+            all_reports,
+            saved,
         })
     }
 
@@ -379,6 +418,20 @@ impl Hooks {
     /// Who is told each report the board takes from now on.
     pub fn when_heard(&self, heard: Heard) {
         *self.heard.lock().unwrap_or_else(PoisonError::into_inner) = Some(heard);
+    }
+
+    /// Who is told every report on this socket from now on, after the board has had it, whether
+    /// or not it moved anything.
+    pub fn when_reported(&self, heard: Heard) {
+        *self
+            .all_reports
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(heard);
+    }
+
+    /// Who is told, from now on, each session record a chat says it saved (ADR 0064).
+    pub fn when_saved(&self, saved: SavedHeard) {
+        *self.saved.lock().unwrap_or_else(PoisonError::into_inner) = Some(saved);
     }
 
     /// Who is told, from now on, each time a chat's own harness moves it onto another

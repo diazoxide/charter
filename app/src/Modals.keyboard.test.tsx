@@ -553,11 +553,14 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
                 does: { verb: "closeTab", tab: 1, ends: true },
                 note: ENDS_IT,
               }}
+              smart={{ available: true, why: null, close_first: false }}
               onEnd={() => {}}
+              onSmartClose={() => {}}
               onCancel={() => {}}
             />,
           ),
-        ['button "Cancel"', 'button "End chat steward 1"'],
+        // From the default the operator ruled (ADR 0064): Smart close, on a chat with turns.
+        ['button "Smart close"', 'button "Cancel"', 'button "Close"'],
       ],
       [
         "the question a relaunch asks",
