@@ -2401,10 +2401,17 @@ fn todo(
                 voice::info(&format!("  List the real ones: {see}"));
                 return 1;
             }
-            let Some(path) = charter_core::memstore::resolve(root, &dir, slug) else {
-                voice::err(&format!("no todo '{slug}' in workspace '{name}'."));
-                voice::info(&format!("  List the real ones: {see}"));
-                return 1;
+            let path = match charter_core::memstore::resolve(root, &dir, slug) {
+                Ok(path) => path,
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        voice::err(&format!("no todo '{slug}' in workspace '{name}'."));
+                    } else {
+                        voice::err(&e.to_string());
+                    }
+                    voice::info(&format!("  List the real ones: {see}"));
+                    return 1;
+                }
             };
             let stem = path
                 .file_stem()

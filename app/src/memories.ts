@@ -20,9 +20,11 @@ import type { ViewRef } from "./tabs";
 /** The view a memory is opened as. */
 export const MEMORY_VIEW = "memory";
 
-/** The slug of a memory not written yet — a new memory's tab (ADR 0065 Q9). No slug the core
- *  mints can be it: a slug starts with a letter or a digit. */
-export const DRAFT = "+";
+/** The slug of a memory not written yet — a new memory's tab (ADR 0065 Q9). **A slug the core
+ *  refuses** (`memstore::slug_ok`: `\\` is never part of one), so no memory file can be it — `+`,
+ *  which it was, is a filename, and a hand-made `+.md` opened as a new memory's editor (SI-9d).
+ *  The core spells the same thing (`memories::DRAFT`). */
+export const DRAFT = "\\";
 
 /** The longest title a memory takes (`memstore::TITLE_MAX`). */
 export const TITLE_MAX = 72;

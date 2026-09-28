@@ -1038,9 +1038,15 @@ excepted), and for a secret-shaped value, named by its kind.
   `charter/workspace.py:1802` formatted with the workspace name, and a trailing `\n`
   guaranteed (`charter/memstore.py:97`). Entries are **appended** as
   `- [{title}]({filename})\n` (`charter/memstore.py:144`), in `"a"` mode — no rewrite, so
-  the order is the order memories were written. A deletion filters the lines containing
-  `({filename})` and rewrites the file joined with `\n` plus one trailing `\n`
-  (`charter/memstore.py:489`). Index links are recognised by
+  the order is the order memories were written. **charter-app escapes `\`, `[` and `]` in the
+  title** (`\\`, `\[`, `\]`; SI-9d), so a title that holds `](b.md)` is not read as the end of
+  its own line's link; the Python charter wrote the title as it was, and both shapes are read. A
+  deletion filters the lines containing `({filename})` and rewrites the file joined with `\n`
+  plus one trailing `\n` (`charter/memstore.py:489`); **charter-app filters, of the lines
+  starting `- [`, only those whose leading element links `{filename}`** — the link that closes
+  the `- [..]` the line starts with, brackets the title balances and escaped characters not
+  counting — so a line whose title mentions another memory's file survives that memory's
+  deletion. A line of any other shape is filtered as charter filters it. Index links are recognised by
   `\(([A-Za-z0-9][\w.-]*\.md)\)` (`charter/memstore.py:214`).
   A legacy `notes.md` is grandfathered into the index once, as
   `- [Task memo (legacy)](notes.md)` (`charter/workspace.py:1824`).
@@ -1087,9 +1093,16 @@ and an archived one is where `memstore.archive` would have put it (ADR 0065).
   `TITLE_MAX = 72`, an empty one is the text's first line (as `write` derives one), and a title
   holding a line break is refused. An empty text is refused, as `write` refuses it. The file is
   replaced whole (`rewrite::replace`), under the store's mode rules.
-- **The index line is retitled, not moved.** Every line of `MEMORY.md` holding `]({filename})`
-  has everything up to and including that link replaced by `- [{title}]({filename})`; anything
-  after the link stays, and the line keeps its place. No line is added for a memory the index
+- **A memory is named exactly.** Edit, archive and unarchive act on the file whose name is the
+  slug given (with `.md`), and on no other: `deploy` never reaches `prod-deploy.md` (SI-9d). The
+  command line's verbs first turn a typed slug into that name by the lookup `ws todo done` uses
+  — an exact name, else the one file whose name ends `-<slug>.md` — and **refuse a slug more
+  than one file ends in**, naming them; `forget` and `ws todo done|forget` refuse it too, where
+  charter took the first in sorted order. `MEMORY` is the index and is refused as a slug.
+- **The index line is retitled, not moved.** Every line of `MEMORY.md` whose leading
+  `- [..](..)` element links `{filename}` (the rule a deletion reads it by, above) has that
+  element replaced by `- [{title}]({filename})`, the title escaped; anything after the link
+  stays, and the line keeps its place. No line is added for a memory the index
   never listed. The rewrite is the same whole-file replacement as a deletion's.
 - **An edit is checked against the file as it was read.** The caller hands back the file's whole
   text as it read it; when the file on disk differs, the edit is refused as **stale** and nothing

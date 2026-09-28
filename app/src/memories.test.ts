@@ -40,8 +40,12 @@ describe("a memory's key", () => {
   });
 
   it("gives a new memory a tab of its own per store, which no slug can be", () => {
-    expect(draftView({ kind: "shared" })).toEqual({ from: null, view: "memory", key: "shared/+" });
-    expect(DRAFT).not.toMatch(/^[A-Za-z0-9]/);
+    // The literal `memories::tests::a_new_memorys_tab_is_keyed_by_a_slug_no_memory_can_have`
+    // spells too: `\\` is a character the core refuses in every slug (`memstore::slug_ok`).
+    expect(draftView({ kind: "shared" })).toEqual({ from: null, view: "memory", key: "shared/\\" });
+    expect(memoryRefOf("shared/\\")?.slug).toBe(DRAFT);
+    // A memory made by hand as `+.md` is a memory, not a new one's tab.
+    expect(memoryRefOf("shared/+")?.slug).not.toBe(DRAFT);
     expect(isMemory(memoryView({ scope: { kind: "shared" }, slug: "x" }))).toBe(true);
     expect(isMemory({ from: "ext", view: "memory", key: "shared/x" })).toBe(false);
   });

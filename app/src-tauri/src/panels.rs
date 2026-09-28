@@ -942,10 +942,14 @@ fn memory_rows_of(
             })),
             // **Its own tab** (SI-9b, ADR 0065): the catalogue row named for the store and the
             // slug, the name `memories::view_key` gives every memory's tab.
-            runs: Some(format!(
-                "memory.open:{}",
-                crate::memories::view_key(scope, &memory.slug)
-            )),
+            // Only for a slug the core acts on (SI-9d): any other opens a tab every operation
+            // refuses, and one of them is the key a new memory's tab is (`memories::DRAFT`).
+            runs: charter_core::memstore::slug_ok(&memory.slug).then(|| {
+                format!(
+                    "memory.open:{}",
+                    crate::memories::view_key(scope, &memory.slug)
+                )
+            }),
             actions: Vec::new(),
         })
         .collect()
@@ -1573,6 +1577,61 @@ mod tests {
             rows[0].runs.as_deref(),
             Some("memory.open:shared/the-plane-is-the-unit-of-work")
         );
+    }
+
+    /// The rows the shared store's list draws, as the window receives them.
+    fn shared_rows(root: &Path) -> Vec<PanelRow> {
+        shared_memory_view(root)
+            .expect("the shared store reads")
+            .iter()
+            .find_map(|block| match block {
+                panel::Block::List { rows, .. } => Some(rows.iter().map(PanelRow::from).collect()),
+                _ => None,
+            })
+            .expect("a list")
+    }
+
+    #[test]
+    fn a_memory_file_made_by_hand_never_opens_as_a_new_memorys_tab() {
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+        let shared = root.join("personas/_shared/memory");
+        std::fs::create_dir_all(&shared).expect("a shared store");
+        std::fs::write(shared.join("+.md"), "# Plus\n\nBy hand.\n").expect("a memory by hand");
+
+        let rows = shared_rows(&root);
+
+        let draft = format!(
+            "memory.open:{}",
+            crate::memories::view_key(
+                &crate::memories::MemoryScope::Shared,
+                crate::memories::DRAFT
+            )
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].runs.as_deref(), Some("memory.open:shared/+"));
+        assert_ne!(rows[0].runs.as_deref(), Some(draft.as_str()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_memory_file_whose_name_no_operation_takes_is_listed_and_opens_nothing() {
+        // `\` is a legal filename on a Unix plane and a slug the core refuses everywhere: its
+        // row is drawn, so the file is not hidden, and runs nothing, so no row can ever carry
+        // the key a new memory's tab is (`memories::DRAFT`).
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+        let shared = root.join("personas/_shared/memory");
+        std::fs::create_dir_all(&shared).expect("a shared store");
+        std::fs::write(
+            shared.join(format!("{}.md", crate::memories::DRAFT)),
+            "# Backslash\n\nBy hand.\n",
+        )
+        .expect("a file named for the draft slug");
+
+        let rows = shared_rows(&root);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "Backslash");
+        assert_eq!(rows[0].runs, None);
     }
 
     #[test]

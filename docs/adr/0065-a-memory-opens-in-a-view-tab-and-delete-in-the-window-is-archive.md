@@ -132,6 +132,9 @@ name.
   shows its heading twice, and an edit of one does not write it twice.
 - **An index line after its link keeps what follows the link** on a retitle. A line a hand wrote
   as `- [Old](x.md) — see also y` becomes `- [New](x.md) — see also y`.
+- **A retitle in place can leave two index lines for one file after a merge.** `MEMORY.md` merges
+  with `merge=union`, so a retitle on one side and the untouched line on the other both survive;
+  `optimize` is what reconciles them.
 - **Nothing in the Python charter reads an edit or an unarchive differently**: the files are
   shapes it already writes and reads, so the recorded behaviour (ADR 0046) moves nowhere.
 
@@ -158,7 +161,9 @@ What building the tab settled, inside the rulings above rather than beside them:
 - **A memory is addressed as a store and a slug**, `workspace/<ws>/<slug>`, `persona/<name>/<slug>`
   or `shared/<slug>`: the tab's view key and the catalogue rows' suffix
   (`memory.open|edit|delete:<key>`), spelled by `memories::view_key` in the core and
-  `memories.memoryKey` in the window. A new memory's tab is the slug `+`, which no slug can be.
+  `memories.memoryKey` in the window. A new memory's tab is the slug `\`, which no slug can be:
+  the core refuses it (`memstore::slug_ok`), and a file whose name it refuses is listed with a row
+  that opens nothing. It was `+` until SI-9d, which a hand-made `+.md` is.
 - **An edit in progress outlives its tab being out of sight**: only the tab in front has panes
   on screen, so the draft is kept outside it, for as long as the window runs.
 - **Undo is offered for eight seconds**, in a line where the window says its other news, and
@@ -179,3 +184,22 @@ What building the tab settled, inside the rulings above rather than beside them:
   `+` buttons are that row. The side region keeps its page of twelve rows, where a tab's list
   has twenty.
 
+
+## As reviewed (SI-9d)
+
+An adversarial review of SI-9a/b/c found these, each reproduced by a test before its fix:
+
+- **The four operations take the exact name.** `open`, `edit`, `archive_one` and `unarchive`
+  had used the short-slug lookup, which falls back to any file ending `-<slug>.md`: a tab whose
+  memory was archived elsewhere read, saved over and archived `prod-deploy.md` as `deploy`, and
+  `archive-memory p foo` run twice archived `foo`, then `old-foo`. The command line's verbs now
+  make a typed slug exact first (`memstore::typed_name`), and every short-slug lookup refuses a
+  slug more than one file ends in.
+- **Index titles are escaped, and a retitle or a drop reads only the line's leading link.**
+- **`MEMORY` is not a slug.** `archive-memory p MEMORY` moved the index away.
+- **Remember takes the store's lock**, as the edit it races does: an append between a retitle's
+  read and its replace went with the old file, 120 lines of 400 in a stress run. `forget` takes
+  it too.
+- **`memstore::archive` answers `Some` only for a move**, so `optimize` reports no collapse it
+  did not make.
+- **An archive that had to number the file prints its Undo with `--as <slug>`.**

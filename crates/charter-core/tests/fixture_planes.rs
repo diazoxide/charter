@@ -667,10 +667,11 @@ fn an_unparseable_manifest_belongs_to_the_operator_not_to_nobody() {
 // Rules that a mutation survived, because nothing was asking about them.
 
 #[test]
-fn closing_a_todo_resolves_the_first_match_in_sorted_order() {
+fn closing_a_todo_by_a_slug_two_todos_share_closes_neither() {
     charter_core::unsteered!();
     // `resolve` decides WHICH todo `ws todo done <slug>` closes. Two todos a second apart
-    // share a bare slug, and charter takes the first in sorted order — the older one.
+    // share a bare slug. charter took the first in sorted order — the older one — which closed
+    // a todo nobody named; SI-9d refuses the slug, names both, and each closes by its full name.
     let (_tmp, plane) = temp_plane();
     let ws = plane.workspace("alpha").unwrap();
     let early: chrono::NaiveDateTime = "2026-03-02T09:14:00".parse().unwrap();
@@ -678,14 +679,25 @@ fn closing_a_todo_resolves_the_first_match_in_sorted_order() {
     ws.add_todo("Write the migration", early).unwrap();
     ws.add_todo("Write the migration", later).unwrap();
 
-    ws.close_todo("write-the-migration", later).unwrap();
+    let refused = ws.close_todo("write-the-migration", later).unwrap_err();
 
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::InvalidInput,
+        "{refused}"
+    );
+    assert!(
+        refused
+            .to_string()
+            .contains("20260302-091400-write-the-migration"),
+        "{refused}"
+    );
+    assert_eq!(ws.todos().unwrap().len(), 2, "neither was closed");
+    ws.close_todo("20260302-091400-write-the-migration", later)
+        .unwrap();
     let left = ws.todos().unwrap();
     assert_eq!(left.len(), 1);
-    assert_eq!(
-        left[0].slug, "20260302-091500-write-the-migration",
-        "the OLDER one was closed; the first hit in sorted order wins"
-    );
+    assert_eq!(left[0].slug, "20260302-091500-write-the-migration");
 }
 
 #[test]
@@ -702,10 +714,10 @@ fn a_bare_slug_matches_at_a_dash_and_nowhere_else() {
     ws.add_todo("the migration", pinned()).unwrap();
     let dir = ws.dir().join("todos");
 
-    assert!(charter_core::memstore::resolve(plane.root(), &dir, "migration").is_some());
-    assert!(charter_core::memstore::resolve(plane.root(), &dir, "the-migration").is_some());
-    assert!(charter_core::memstore::resolve(plane.root(), &dir, "gration").is_none());
-    assert!(charter_core::memstore::resolve(plane.root(), &dir, "e-migration").is_none());
+    assert!(charter_core::memstore::resolve(plane.root(), &dir, "migration").is_ok());
+    assert!(charter_core::memstore::resolve(plane.root(), &dir, "the-migration").is_ok());
+    assert!(charter_core::memstore::resolve(plane.root(), &dir, "gration").is_err());
+    assert!(charter_core::memstore::resolve(plane.root(), &dir, "e-migration").is_err());
 }
 
 #[test]
