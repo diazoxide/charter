@@ -32,13 +32,14 @@ import {
 } from "./bindings";
 import { MemoryTab } from "./MemoryTab";
 import { Menued } from "./Menus";
-import { DRAFT, MEMORY_VIEW, isMemory, memoryRefOf } from "./memories";
+import { DRAFT, MEMORY_VIEW, SHARED_MEMORY_VIEW, isMemory, memoryRefOf } from "./memories";
+import { HeadingOffer } from "./PanelSection";
 import { SavingView } from "./SavingView";
 import { SessionRecordTab } from "./SessionRecordTab";
 import { SESSION_VIEW } from "./sessions";
 import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
-import { catalogued, memoryOffers, toKeep, type Catalogued, type Offer } from "./actions";
+import { listedMemoryOffers, memoryKeyRun, toKeep, type Offer } from "./actions";
 import { factsChanged } from "./extensionFacts";
 
 /** What `workspaceSettingsView` names a workspace's settings view (charter-app#280). */
@@ -181,6 +182,7 @@ const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   changes: GitPullRequest,
   [SESSION_VIEW]: History,
   [MEMORY_VIEW]: Brain,
+  [SHARED_MEMORY_VIEW.view]: Brain,
   [WORKSPACE_SETTINGS]: Settings2,
   preferences: SlidersHorizontal,
 };
@@ -254,9 +256,16 @@ export function ViewPane({
   // `persona.md` handed to the operator's editor and the persona deleted, a vault deleted. The
   // catalogue's rows, so the heading, the palette and a row's menu cannot disagree, and each
   // destructive one asks in its own dialog before anything goes.
-  const own = (view.from === null ? (OWN_ROWS[view.view]?.(view.key) ?? []) : []).map((id) => (
-    <OfferButton key={id} offer={offerFor?.(id)} onPress={onPress} />
-  ));
+  //
+  // A memory list's `+` (SI-9c, ADR 0065 Q9) is one of these rows too, drawn as the glyph the
+  // right column's section headings draw it as.
+  const own = (view.from === null ? (OWN_ROWS[view.view]?.(view.key) ?? []) : []).map((id) =>
+    id.startsWith("memory.new:") ? (
+      onPress && <HeadingOffer key={id} offer={offerFor?.(id)} onPress={onPress} />
+    ) : (
+      <OfferButton key={id} offer={offerFor?.(id)} onPress={onPress} />
+    ),
+  );
   // **A vault is charter's own view, and the one a panel answer cannot draw**: a table the
   // operator writes to (charter-app#235). Same tab, same path, same record — its own drawing.
   // Keyed by the vault, so a pane that comes to show another vault starts from "opening".
@@ -384,7 +393,14 @@ export function ViewPane({
 
 /** The catalogue rows a charter view's heading offers, by view, for the thing it shows. */
 const OWN_ROWS: Record<string, (key: string) => string[]> = {
-  persona: (key) => [`persona.edit:${key}`, `persona.remove:${key}`],
+  persona: (key) => [
+    `persona.edit:${key}`,
+    `persona.remove:${key}`,
+    // The persona's memory list's `+` (SI-9c).
+    `memory.new:persona/${key}`,
+  ],
+  // The shared store's own list (ADR 0065 Q6): its `+`.
+  [SHARED_MEMORY_VIEW.view]: () => ["memory.new:shared"],
   vault: (key) => [`vault.remove:${key}`],
   [SESSION_VIEW]: (key) => [`session.resume:${key}`],
   // A memory's Edit and Delete (ADR 0065 Q2) — a new memory's tab has neither yet.
@@ -624,23 +640,9 @@ function AnsweredBlocks({
   onPress?: (offer: Offer) => void;
 }) {
   const [open, setOpen] = useState<string>();
-  // **A memory row's own rows** (SI-9b): Open, Edit and Delete for each memory this view lists,
-  // named for its store and slug and titled with its row's words. The catalogue has no list of
-  // every memory in the plane, and needs none: the list that draws the row supplies its rows.
-  const memories = useMemo<Catalogued>(
-    () =>
-      catalogued(
-        blocks.flatMap((block) =>
-          block.kind !== "list"
-            ? []
-            : block.rows.flatMap((row) => {
-                const ref = memoryRefOf(memoryKeyRun(row) ?? "");
-                return ref === undefined ? [] : memoryOffers(ref, row.text);
-              }),
-        ),
-      ),
-    [blocks],
-  );
+  // **A memory row's own rows** (SI-9b): Open, Edit and Delete for each memory this view lists
+  // (`actions.listedMemoryOffers`, which a workspace's Memory section uses too).
+  const memories = useMemo(() => listedMemoryOffers(blocks), [blocks]);
   const lookUp = (id: string) => memories.get(id) ?? offerFor?.(id);
   return (
     <>
@@ -682,7 +684,7 @@ function AnsweredBlocks({
               onPress === undefined
                 ? undefined
                 : (row, item) => {
-                    const memory = memoryKeyRun(row);
+                    const memory = memoryKeyRun(row.runs);
                     return memory === undefined ? (
                       item
                     ) : (
@@ -705,12 +707,6 @@ function AnsweredBlocks({
       )}
     </>
   );
-}
-
-/** The memory a row opens — its key, out of the row's `memory.open:<key>` — or `undefined`. */
-function memoryKeyRun(row: PanelRow): string | undefined {
-  const prefix = "memory.open:";
-  return row.runs?.startsWith(prefix) ? row.runs.slice(prefix.length) : undefined;
 }
 
 /** A facts block, as the wire carries it. */

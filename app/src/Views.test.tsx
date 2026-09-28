@@ -589,3 +589,90 @@ describe("a persona's tab heading (SI-3)", () => {
     expect(screen.queryByRole("button", { name: /persona\.md/ })).toBeNull();
   });
 });
+
+describe("the + on a memory list's heading (SI-9c, ADR 0065 Q9)", () => {
+  const offers = catalogued(
+    catalogue({
+      tabs: noTabs(),
+      workspaces: [],
+      plane: PLANE,
+      personas: ["steward"],
+      needsYou: [],
+      nameOf: String,
+    }),
+  );
+  const heading = (name: RegExp) => {
+    const head = screen.getByRole("heading", { name }).closest("header");
+    if (head === null) throw new Error("the view has no heading");
+    return head;
+  };
+
+  it("makes a memory for the persona whose tab it is", async () => {
+    core(() => PERSONA);
+    const pressed: Offer[] = [];
+    draw(STEWARD, { offerFor: (id) => offers.get(id), onPress: (offer) => pressed.push(offer) });
+
+    await userEvent.click(
+      within(heading(/steward/)).getByRole("button", { name: "New memory for steward…" }),
+    );
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      { verb: "newMemory", scope: { kind: "persona", name: "steward" } },
+    ]);
+  });
+
+  it("makes a shared memory from the shared list's tab, which lists the shared store", async () => {
+    const { opened } = core(() => ({
+      kind: "answered",
+      blocks: [
+        {
+          kind: "list",
+          rows: [
+            {
+              key: "the-plane-is-the-unit-of-work",
+              text: "The plane is the unit of work",
+              note: "2026-09-20 10:00",
+              mark: "note",
+              tone: "plain",
+              detail: { kind: "text", text: "Yes." },
+              runs: "memory.open:shared/the-plane-is-the-unit-of-work",
+              actions: [],
+            },
+          ],
+          empty: { headline: "Nothing shared yet", body: null, offer: null },
+        },
+      ],
+      took_ms: 1,
+      overreach: null,
+    }));
+    const pressed: Offer[] = [];
+    draw(
+      { from: null, view: "shared-memory", key: "" },
+      {
+        title: "Shared memory",
+        offerFor: (id) => offers.get(id),
+        onPress: (offer) => pressed.push(offer),
+      },
+    );
+
+    // Asked of the core as charter's own view.
+    await waitFor(() => expect(opened).toHaveLength(1));
+    expect(opened[0]).toMatchObject({ from: null, view: "shared-memory", key: "" });
+    await userEvent.click(
+      await screen.findByRole("button", { name: /The plane is the unit of work/ }),
+    );
+    await userEvent.click(
+      within(heading(/Shared memory/)).getByRole("button", { name: "New shared memory…" }),
+    );
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      {
+        verb: "openMemory",
+        ref: { scope: { kind: "shared" }, slug: "the-plane-is-the-unit-of-work" },
+        title: "The plane is the unit of work",
+        keep: false,
+      },
+      { verb: "newMemory", scope: { kind: "shared" } },
+    ]);
+  });
+});

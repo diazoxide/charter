@@ -163,3 +163,19 @@ What building the tab settled, inside the rulings above rather than beside them:
   on screen, so the draft is kept outside it, for as long as the window runs.
 - **Undo is offered for eight seconds**, in a line where the window says its other news, and
   puts the memory back under its own slug even when archiving had to number it.
+
+## As built (SI-9c)
+
+- **The workspace's Memory section is a panel of charter's own at order 15**, between Todos
+  (10) and Personas (20), produced by `panels::of` beside the todos, so it is read again on
+  exactly the trigger they are (Q10). The shared store's list is the built-in view
+  `shared-memory`, and the Personas panel's "shared" row — keyed `_shared`, which no persona
+  can be called — runs `memory.shared`. It is left off a plane with no persona and nothing
+  shared, so that panel can still say it has no personas.
+- **Every memory list draws its rows through one function each side**: `panels::memory_rows_of`
+  in the core, `actions.listedMemoryOffers` in the window.
+- **Create is the catalogue row `memory.new:<store>`** (`workspace/<ws>`, `persona/<name>` or
+  `shared`), offered for the focused workspace, each persona and the shared store; the three
+  `+` buttons are that row. The side region keeps its page of twelve rows, where a tab's list
+  has twenty.
+

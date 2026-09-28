@@ -458,6 +458,16 @@ fn built_in(
                 why: format!("This plane has no persona called {key} any more."),
             },
         }),
+        // The shared store's own list (ADR 0065 Q6), opened from the Personas panel's "shared"
+        // row. It has no key: a plane has one shared store.
+        "shared-memory" => Ok(ViewAnswer::Answered {
+            blocks: crate::panels::shared_memory_view(root)?
+                .iter()
+                .map(PanelBlock::from)
+                .collect(),
+            took_ms: millis(began.elapsed()),
+            overreach: None,
+        }),
         // A workspace's cross-repo changes (#470), keyed by the workspace. This is the one
         // built-in view that asks a forge, and it is asked only here: when its tab is opened and
         // when its Refresh is pressed, never on a workspace switch.
@@ -732,6 +742,56 @@ mod tests {
             panic!("the memories are not a list: {blocks:?}");
         };
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn the_shared_memory_view_lists_the_store_every_persona_reads() {
+        // ADR 0065 Q6: the "shared" row in Personas opens this, charter's own view, answered
+        // in the vocabulary a persona's tab is — and its rows open `shared/<slug>` tabs.
+        let plane = tempfile::tempdir().expect("a plane");
+        let shared = plane.path().join("personas/_shared/memory");
+        std::fs::create_dir_all(&shared).expect("a shared store");
+        std::fs::write(
+            shared.join("the-plane-is-the-unit-of-work.md"),
+            "# The plane is the unit of work\n\n_2026-09-20 10:00 · durable_\n\nYes.\n",
+        )
+        .expect("a memory");
+
+        let ViewAnswer::Answered { blocks, .. } = built_in(
+            plane.path(),
+            &plane.path().join(".charter"),
+            "shared-memory",
+            "",
+        )
+        .expect("an answer") else {
+            panic!("the shared memory view was not answered");
+        };
+
+        let Some(PanelBlock::List { rows, .. }) = blocks.last() else {
+            panic!("the memories are not a list: {blocks:?}");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].runs.as_deref(),
+            Some("memory.open:shared/the-plane-is-the-unit-of-work")
+        );
+    }
+
+    #[test]
+    fn a_plane_with_no_shared_store_answers_an_empty_shared_list_and_not_gone() {
+        let plane = tempfile::tempdir().expect("a plane");
+
+        let ViewAnswer::Answered { blocks, .. } = built_in(
+            plane.path(),
+            &plane.path().join(".charter"),
+            "shared-memory",
+            "",
+        )
+        .expect("an answer") else {
+            panic!("an empty shared store is a list with nothing in it");
+        };
+
+        assert!(matches!(blocks.last(), Some(PanelBlock::List { rows, .. }) if rows.is_empty()));
     }
 
     /// The persona view's `Vault` fact for `name`, asked with `state` as the state directory.

@@ -303,6 +303,7 @@ describe("the right-hand region", () => {
     // existing at all proves.
     expect(whose).toEqual([
       ["panel-todos", "charter"],
+      ["panel-memory", "charter"],
       ["panel-personas", "charter"],
       ["panel-sessions", "charter"],
     ]);

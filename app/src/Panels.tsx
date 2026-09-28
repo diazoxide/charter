@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   ChartColumn,
   Circle,
@@ -18,7 +18,7 @@ import { HeadingOffer, PanelSection } from "./PanelSection";
 import { Vaults, type VaultsSaid } from "./Vaults";
 import { Chart, Facts } from "./Views";
 import { commands, type ExtensionView, type PanelView } from "./bindings";
-import type { Catalogued, Offer } from "./actions";
+import { listedMemoryOffers, memoryKeyRun, toKeep, type Catalogued, type Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
@@ -260,6 +260,10 @@ function Contributed({
   const open = shownRow?.startsWith(`${panel.key}/`)
     ? shownRow.slice(panel.key.length + 1)
     : undefined;
+  // **A memory row's own rows** (SI-9c): Open, Edit and Delete for each memory this panel
+  // lists, by the one function a persona's tab makes them with.
+  const memories = useMemo(() => listedMemoryOffers(panel.blocks), [panel.blocks]);
+  const lookUp = (id: string) => memories.get(id) ?? offers.get(id);
 
   return (
     <PanelSection
@@ -282,6 +286,13 @@ function Contributed({
               place this file says what a panel is about. */}
           {panel.key === PERSONAS && (
             <HeadingOffer offer={offers.get("persona.create")} onPress={onPress} />
+          )}
+          {/* A new memory in the focused workspace's journal (SI-9c, ADR 0065 Q9). */}
+          {panel.key === MEMORY && (
+            <HeadingOffer
+              offer={offers.get(`memory.new:workspace/${workspace}`)}
+              onPress={onPress}
+            />
           )}
         </>
       }
@@ -315,12 +326,14 @@ function Contributed({
             testid={`list-${named(panel)}`}
             open={open}
             onOpen={(key) => onShowRow(key === undefined ? undefined : `${panel.key}/${key}`)}
-            onRun={(id) => {
+            onRun={(id, kept) => {
               // **The catalogue's row or nothing.** A row cannot invent a verb, and an id the
               // catalogue has stopped offering runs nothing rather than something else — which
-              // is `Doer`'s rule for the bar's buttons, applied to a panel.
-              const offer = offers.get(id);
-              if (offer) onPress(offer);
+              // is `Doer`'s rule for the bar's buttons, applied to a panel. A double-click keeps
+              // what a single click previews (`actions.toKeep`): this list stays on screen, so
+              // a second click can land on it (ADR 0065, as built in SI-9b).
+              const offer = lookUp(id);
+              if (offer) onPress(kept ? toKeep(offer) : offer);
             }}
             wrap={(row, item) =>
               panel.key === TODOS ? (
@@ -345,7 +358,18 @@ function Contributed({
                 >
                   {item}
                 </Menued>
-              ) : panel.key === PERSONAS ? (
+              ) : panel.key === MEMORY ? (
+                /* Open, Edit | Delete (ADR 0065 Q12): this memory's rows, from the lookup
+                   above rather than the catalogue. */
+                <Menued
+                  key={row.key}
+                  on={{ on: "memory", key: memoryKeyRun(row.runs) ?? "" }}
+                  offers={memories}
+                  onPress={onPress}
+                >
+                  {item}
+                </Menued>
+              ) : panel.key === PERSONAS && row.key !== SHARED_ROW ? (
                 /* Right-click is the third reader of the catalogue (`Menus.tsx`), and on a
                    persona it has exactly one honest row: what the plane says this persona is.
                    `asChild`, so the list gains no element. */
@@ -372,6 +396,11 @@ function Contributed({
 const TODOS = "charter/todos";
 const PERSONAS = "charter/personas";
 const SESSIONS = "charter/sessions";
+const MEMORY = "charter/memory";
+
+/** The Personas panel's row for the shared store (`panels::SHARED_ROW`): not a persona, so it
+ *  gets no persona's menu. */
+const SHARED_ROW = "_shared";
 
 /**
  * The Todos panel's box: **a todo typed here goes to the focused workspace, and the box says

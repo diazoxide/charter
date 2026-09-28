@@ -467,6 +467,10 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
         &personas,
         persona.as_deref(),
     );
+    contributed.push(PanelView::from(&memory_panel(workspace, ws.memories())));
+    // One sort over all of them, so the Memory section lands between Todos and Personas by
+    // its `order` and not by where it was pushed.
+    contributed.sort_by_key(|panel| panel.order);
     contributed.push(PanelView::from(&sessions_panel(&place, &records)));
     Ok(Panels {
         workspace: workspace.to_string(),
@@ -702,36 +706,40 @@ fn charters_own(
         about: None,
     });
 
+    let mut rows: Vec<panel::Row> = personas
+        .iter()
+        .map(|name| panel::Row {
+            key: name.clone(),
+            text: name.clone(),
+            // **The word stays a word, and now it carries a count.** The region's
+            // scenario spec asks the panel whether it says `default`, and a screen
+            // reader gets the sentence a sighted reader does; the star the tone draws
+            // is decoration on top of it.
+            //
+            // The count is `personas::memory_count`, which is a `read_dir` and no file
+            // opens — once per persona on the path that has 100 ms to draw. Reading
+            // them is the persona's view (`persona_view`), when a reader opens it.
+            note: Some(note_for(root, name, Some(name.as_str()) == default)),
+            mark: panel::Mark::Persona,
+            tone: if Some(name.as_str()) == default {
+                panel::Tone::Default
+            } else {
+                panel::Tone::Plain
+            },
+            // **No card: the row opens the persona's view tab** (the operator's ruling of
+            // 2026-09-23, *"Its own tab"*). `persona.show:<name>` is the catalogue row the
+            // palette and a context menu run too, so the three are one verb.
+            detail: None,
+            runs: Some(format!("persona.show:{name}")),
+            actions: Vec::new(),
+        })
+        .collect();
+    if let Some(shared) = shared_row(root, personas) {
+        rows.push(shared);
+    }
     panels.push(panel::Panel {
         blocks: vec![panel::Block::List {
-            rows: personas
-                .iter()
-                .map(|name| panel::Row {
-                    key: name.clone(),
-                    text: name.clone(),
-                    // **The word stays a word, and now it carries a count.** The region's
-                    // scenario spec asks the panel whether it says `default`, and a screen
-                    // reader gets the sentence a sighted reader does; the star the tone draws
-                    // is decoration on top of it.
-                    //
-                    // The count is `personas::memory_count`, which is a `read_dir` and no file
-                    // opens — once per persona on the path that has 100 ms to draw. Reading
-                    // them is the persona's view (`persona_view`), when a reader opens it.
-                    note: Some(note_for(root, name, Some(name.as_str()) == default)),
-                    mark: panel::Mark::Persona,
-                    tone: if Some(name.as_str()) == default {
-                        panel::Tone::Default
-                    } else {
-                        panel::Tone::Plain
-                    },
-                    // **No card: the row opens the persona's view tab** (the operator's ruling of
-                    // 2026-09-23, *"Its own tab"*). `persona.show:<name>` is the catalogue row the
-                    // palette and a context menu run too, so the three are one verb.
-                    detail: None,
-                    runs: Some(format!("persona.show:{name}")),
-                    actions: Vec::new(),
-                })
-                .collect(),
+            rows,
             empty: panel::Empty {
                 headline: "No personas on this plane".into(),
                 body: Some("A persona arrives as a directory: personas/<name>/persona.md.".into()),
@@ -773,6 +781,124 @@ fn note_for(root: &Path, persona: &str, is_default: bool) -> String {
     }
 }
 
+/// The Personas panel's row key for the shared store: `_shared`, which no persona can be
+/// called (`personas::valid_name`), so it never collides with a persona's row.
+pub(crate) const SHARED_ROW: &str = charter_core::personas::SHARED;
+
+/// **The "shared" row at the foot of the Personas panel** (ADR 0065 Q6): `shared · N memories`,
+/// opening the shared store's own list (`memory.shared`, [`shared_memory_view`]).
+///
+/// `_shared` is not a persona, so this is a row and never a card, and it is not in
+/// `Panels::personas` — the list the palette's persona rows are made from. The count is
+/// `memory_count`'s `read_dir`, as a persona row's is. A plane with no persona and nothing
+/// shared has no row, so its panel still says it has no personas.
+fn shared_row(root: &Path, personas: &[String]) -> Option<panel::Row> {
+    let held = charter_core::personas::memory_count(root, charter_core::personas::SHARED);
+    if personas.is_empty() && held == 0 {
+        return None;
+    }
+    Some(panel::Row {
+        key: SHARED_ROW.to_owned(),
+        text: "shared".to_owned(),
+        note: Some(format!(
+            "{held} {}",
+            if held == 1 { "memory" } else { "memories" }
+        )),
+        mark: panel::Mark::Note,
+        tone: panel::Tone::Plain,
+        detail: None,
+        runs: Some("memory.shared".to_owned()),
+        actions: Vec::new(),
+    })
+}
+
+/// **The focused workspace's Memory section, directly under Todos** (ADR 0065 Q5): its journal,
+/// newest first, in the rows a persona's tab lists its memories in ([`memory_rows_of`]).
+///
+/// Order 15, between Todos (10) and Personas (20). Read on every workspace focus and every
+/// reread, which is the trigger the Todos panel refreshes on (Q10). A journal charter will not
+/// read is said, never drawn as an empty list — `todos`' rule for the same question.
+fn memory_panel(
+    workspace: &str,
+    read: std::io::Result<Vec<charter_core::workspaces::Entry>>,
+) -> panel::Panel {
+    let mut blocks = Vec::new();
+    let mut entries = match read {
+        Ok(entries) => entries,
+        Err(why) => {
+            blocks.push(panel::Block::Note {
+                text: why.to_string(),
+                tone: panel::Tone::Trouble,
+            });
+            Vec::new()
+        }
+    };
+    // The journal's filenames begin with their stamp, so the store's order is oldest first.
+    entries.reverse();
+    blocks.push(panel::Block::List {
+        rows: memory_rows_of(
+            &crate::memories::MemoryScope::Workspace {
+                name: workspace.to_owned(),
+            },
+            &entries,
+        ),
+        empty: panel::Empty {
+            headline: "Nothing remembered yet".into(),
+            body: Some("The + above, or `charter workspace remember`, records one.".into()),
+            offer: None,
+        },
+    });
+    panel::Panel {
+        id: "memory".into(),
+        title: "Memory".into(),
+        order: 15,
+        mark: panel::Mark::Note,
+        blocks,
+        from: panel::By::Charter,
+        about: None,
+    }
+}
+
+/// **The shared store's own list** (ADR 0065 Q6): the view the Personas panel's "shared" row
+/// opens, in the vocabulary a persona's tab answers in — what it is, how many, and the
+/// memories as rows opening `shared/<slug>` tabs. A plane with no shared store has an empty one.
+pub(crate) fn shared_memory_view(root: &Path) -> Result<Vec<panel::Block>, String> {
+    let store = Plane::open(root)
+        .persona(charter_core::personas::SHARED)
+        .map_err(|why| why.to_string())?;
+    let mut blocks = vec![panel::Block::Note {
+        text: "What every persona on this plane reads, whoever is asked.".into(),
+        tone: panel::Tone::Default,
+    }];
+    match store.memories() {
+        Err(why) => blocks.push(panel::Block::Note {
+            text: why.to_string(),
+            tone: panel::Tone::Trouble,
+        }),
+        Ok(entries) => {
+            let held = entries.len();
+            blocks.push(panel::Block::Note {
+                text: format!(
+                    "It holds {held} {}.",
+                    if held == 1 { "memory" } else { "memories" }
+                ),
+                tone: panel::Tone::Plain,
+            });
+            blocks.push(panel::Block::List {
+                rows: memory_rows_of(&crate::memories::MemoryScope::Shared, &entries),
+                empty: panel::Empty {
+                    headline: "Nothing shared yet".into(),
+                    body: Some(
+                        "The + above, or `charter persona remember --shared`, records one.".into(),
+                    ),
+                    offer: None,
+                },
+            });
+        }
+    }
+    Ok(blocks)
+}
+
 /// One persona's memories, as rows of the same vocabulary a panel is drawn from.
 ///
 /// **Rows, and that is the point rather than a convenience.** The window's list primitive
@@ -782,7 +908,21 @@ fn note_for(root: &Path, persona: &str, is_default: bool) -> String {
 /// ([`persona_view`]) and never on a workspace focus: `workspace_panels` carries the *count*,
 /// which is a `read_dir`, and this reads every memory file.
 fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
-    Ok(charter_core::personas::memories(root, persona)?
+    Ok(memory_rows_of(
+        &crate::memories::MemoryScope::Persona {
+            name: persona.to_owned(),
+        },
+        &charter_core::personas::memories(root, persona)?,
+    ))
+}
+
+/// **Every memory list's rows, whichever store** — a persona's tab, a workspace's Memory
+/// section, the shared list: one function, so the three cannot drift apart in style or verb.
+fn memory_rows_of(
+    scope: &crate::memories::MemoryScope,
+    entries: &[charter_core::workspaces::Entry],
+) -> Vec<panel::Row> {
+    entries
         .iter()
         .map(|memory| panel::Row {
             key: memory.slug.clone(),
@@ -804,16 +944,11 @@ fn memory_rows(root: &Path, persona: &str) -> Result<Vec<panel::Row>, String> {
             // slug, the name `memories::view_key` gives every memory's tab.
             runs: Some(format!(
                 "memory.open:{}",
-                crate::memories::view_key(
-                    &crate::memories::MemoryScope::Persona {
-                        name: persona.to_owned()
-                    },
-                    &memory.slug
-                )
+                crate::memories::view_key(scope, &memory.slug)
             )),
             actions: Vec::new(),
         })
-        .collect())
+        .collect()
 }
 
 /// **The persona view: charter's own view, in the vocabulary a stranger's view answers in.**
@@ -1174,7 +1309,12 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            ["charter/todos", "charter/personas", "charter/sessions"]
+            [
+                "charter/todos",
+                "charter/memory",
+                "charter/personas",
+                "charter/sessions"
+            ]
         );
         assert!(
             drawn.contributed.iter().all(|panel| panel.from.is_none()),
@@ -1213,9 +1353,16 @@ mod tests {
 
         let drawn = of(&root, "alpha").expect("the panels draw");
 
-        let rows = list_of(&drawn.contributed[1]);
+        let rows = list_of(panel_called(&drawn, "charter/personas"));
         let notes: Vec<Option<&str>> = rows.iter().map(|row| row.note.as_deref()).collect();
-        assert_eq!(notes, [Some("0 memories"), Some("default · 1 memory")]);
+        assert_eq!(
+            notes,
+            [
+                Some("0 memories"),
+                Some("default · 1 memory"),
+                Some("0 memories")
+            ]
+        );
         assert_eq!(rows[1].tone, "default");
         assert_eq!(rows[1].runs.as_deref(), Some("persona.show:steward"));
     }
@@ -1233,7 +1380,10 @@ mod tests {
         for row in list_of(&drawn.contributed[0]) {
             assert_eq!(row.runs, None, "a todo row grew a verb nobody asked for");
         }
-        for row in list_of(&drawn.contributed[1]) {
+        for row in list_of(panel_called(&drawn, "charter/personas")) {
+            if row.key == SHARED_ROW {
+                continue;
+            }
             assert!(
                 row.runs
                     .as_deref()
@@ -1270,6 +1420,158 @@ mod tests {
             Some(PanelDetail::Text {
                 text: "File the issue.".into()
             })
+        );
+    }
+
+    /// The panel `key` names, among what `of` drew.
+    fn panel_called<'a>(drawn: &'a Panels, key: &str) -> &'a PanelView {
+        drawn
+            .contributed
+            .iter()
+            .find(|panel| panel.key == key)
+            .unwrap_or_else(|| panic!("no {key} panel"))
+    }
+
+    /// Writes a journal entry into `alpha`'s memory, as `charter ws remember` would.
+    fn journal(root: &Path, file: &str, title: &str, body: &str) {
+        let dir = root.join("workspaces/alpha/memory");
+        std::fs::create_dir_all(&dir).expect("a journal");
+        std::fs::write(
+            dir.join(file),
+            format!("# {title}\n\n_2026-03-02 09:12 · note_\n\n{body}\n"),
+        )
+        .expect("a memory");
+    }
+
+    #[test]
+    fn the_focused_workspaces_memory_is_a_panel_between_todos_and_personas_newest_first() {
+        // ADR 0065 Q5: directly under Todos, the focused workspace's, newest first — the
+        // journal's filename stamp orders it oldest first, so the panel turns it round.
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+        journal(
+            &root,
+            "20260302-091200-the-api-returns-418.md",
+            "The API returns 418",
+            "On Mondays.",
+        );
+        journal(
+            &root,
+            "20260302-091500-closed-todo-write-it.md",
+            "Closed todo: write it",
+            "Done.",
+        );
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let memory = panel_called(&drawn, "charter/memory");
+        assert_eq!(memory.title, "Memory");
+        let orders = |key: &str| panel_called(&drawn, key).order;
+        assert!(
+            orders("charter/todos") < memory.order && memory.order < orders("charter/personas")
+        );
+        let rows = list_of(memory);
+        let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+        assert_eq!(texts, ["Closed todo: write it", "The API returns 418"]);
+        // The rows a persona's tab lists, in the same style: opening the memory's own tab by
+        // its store and slug, with the body along for the search.
+        assert_eq!(
+            rows[1].runs.as_deref(),
+            Some("memory.open:workspace/alpha/20260302-091200-the-api-returns-418")
+        );
+        assert_eq!(rows[1].mark, "note");
+        assert_eq!(
+            rows[1].detail,
+            Some(PanelDetail::Text {
+                text: "On Mondays.".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_workspace_with_no_journal_says_nothing_is_remembered_rather_than_drawing_nothing() {
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let memory = panel_called(&drawn, "charter/memory");
+        assert!(list_of(memory).is_empty());
+        let empty = memory
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                PanelBlock::List { empty, .. } => Some(empty.headline.clone()),
+                _ => None,
+            })
+            .expect("a list");
+        assert_eq!(empty, "Nothing remembered yet");
+    }
+
+    #[test]
+    fn the_personas_panel_ends_with_one_shared_row_that_is_not_a_persona() {
+        // ADR 0065 Q6: "shared · N memories", opening the shared store's own list. `_shared`
+        // is not a persona, so the plane's persona list — what the palette's persona rows
+        // are made from — still does not name it.
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+        let shared = root.join("personas/_shared/memory");
+        std::fs::create_dir_all(&shared).expect("a shared store");
+        std::fs::write(
+            shared.join("the-plane-is-the-unit-of-work.md"),
+            "# The plane is the unit of work\n\n_2026-09-20 10:00 · durable_\n\nYes.\n",
+        )
+        .expect("a shared memory");
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let rows = list_of(panel_called(&drawn, "charter/personas"));
+        let last = rows.last().expect("rows");
+        assert_eq!(last.key, SHARED_ROW);
+        assert_eq!(last.text, "shared");
+        assert_eq!(last.note.as_deref(), Some("1 memory"));
+        assert_eq!(last.runs.as_deref(), Some("memory.shared"));
+        assert_eq!(
+            rows.iter().filter(|row| row.key == SHARED_ROW).count(),
+            1,
+            "{rows:?}"
+        );
+        assert!(!drawn.personas.iter().any(|name| name.starts_with('_')));
+    }
+
+    #[test]
+    fn a_plane_with_no_personas_and_nothing_shared_keeps_its_empty_personas_panel() {
+        // The row would otherwise hide "No personas on this plane" behind a store that holds
+        // nothing either.
+        let (_plane, root) = plane_with_a_clone();
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        assert!(list_of(panel_called(&drawn, "charter/personas")).is_empty());
+    }
+
+    #[test]
+    fn the_shared_store_lists_as_memory_rows_keyed_by_the_shared_scope() {
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+        let shared = root.join("personas/_shared/memory");
+        std::fs::create_dir_all(&shared).expect("a shared store");
+        std::fs::write(
+            shared.join("the-plane-is-the-unit-of-work.md"),
+            "# The plane is the unit of work\n\n_2026-09-20 10:00 · durable_\n\nYes.\n",
+        )
+        .expect("a shared memory");
+
+        let blocks = shared_memory_view(&root).expect("the shared store reads");
+
+        let rows: Vec<PanelRow> = blocks
+            .iter()
+            .find_map(|block| match block {
+                panel::Block::List { rows, .. } => Some(rows.iter().map(PanelRow::from).collect()),
+                _ => None,
+            })
+            .expect("a list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "The plane is the unit of work");
+        assert_eq!(
+            rows[0].runs.as_deref(),
+            Some("memory.open:shared/the-plane-is-the-unit-of-work")
         );
     }
 

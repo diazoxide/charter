@@ -1092,6 +1092,11 @@ describe("carrying out a row", () => {
         "openView:charter/persona/steward,steward",
         "openView:charter/vault/ops,ops",
         "openView:charter/changes/alpha,Changes · alpha",
+        // SI-9c: a new memory in each store the window lists, and the shared list.
+        `newMemory:${JSON.stringify({ kind: "workspace", name: "alpha" })}`,
+        `newMemory:${JSON.stringify({ kind: "persona", name: "steward" })}`,
+        `newMemory:${JSON.stringify({ kind: "shared" })}`,
+        "openView:charter/shared-memory/,Shared memory",
         "pickVault",
         "createVault",
         // SI-3: a vault, a persona and a todo are made and deleted from the window too.
@@ -1364,7 +1369,7 @@ describe("the palette at fifty chats", () => {
     // and within that group the catalogue's own order stands. Every row here is a verb.
     const rows = narrow("re", loaded());
 
-    const verbs = rows.slice(0, 10).map((row) => row.title);
+    const verbs = rows.slice(0, 11).map((row) => row.title);
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",
@@ -1372,6 +1377,8 @@ describe("the palette at fifty chats", () => {
       // charter's word (charter-app#283); both join the rows that make things.
       "Preferences…",
       "New persona…",
+      // `shared` has `re` in it, and `memory.shared` is charter's word (SI-9c).
+      "Open shared memory",
       "New vault…",
       // **Both of the chat in front's rows, then the pieces'.** `aboutWhatIsInFront` is the
       // second rule inside this group (charter-app#174): a row with no name in its id acts on
@@ -1448,9 +1455,9 @@ describe("the palette at fifty chats", () => {
       // The numbers themselves, so "unchanged" cannot be satisfied by both being bad.
       // Three further down than #174 left it under `re` and `r`: `New vault…` (charter-app#235),
       // `Preferences…` (charter-app#283) and `New persona…` (SI-3) are rows that make/land
-      // near the creates.
-      expect(at("re", loaded())).toBe(7);
-      expect(at("r", loaded())).toBe(10);
+      // near the creates. One more since SI-9c: `Open shared memory` (`shared` has `re`).
+      expect(at("re", loaded())).toBe(8);
+      expect(at("r", loaded())).toBe(11);
       expect(at("rem", loaded())).toBe(1);
     });
 
@@ -1543,8 +1550,10 @@ describe("the palette at fifty chats", () => {
     //
     // 453 since SI-3 (436 before it): New persona…, and an edit and a delete row for each of the 8 personas.
     // 460 since SI-5: a shell tab's row, and one per workspace.
+    // 471 since SI-9c: a new memory in the focused workspace, in each of the 8 personas and in
+    // the shared store, and the shared list's own row.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(460);
+    expect(offers).toHaveLength(471);
   });
 
   /**
@@ -1868,5 +1877,55 @@ describe("a memory's rows (SI-9b, ADR 0065)", () => {
 
     expect(hands.calls).toEqual([`keepTab:${previewing.order[0]}`]);
     expect(ids(catalogue(now({ tabs: kept })))).not.toContain(`tab.keep:${kept.order[0]}`);
+  });
+});
+
+describe("making a memory, and the shared list (SI-9c, ADR 0065 Q6, Q9)", () => {
+  it("offers a new memory in the focused workspace, in each persona and in the shared store", async () => {
+    const hands = doing();
+    const offers = catalogue(
+      now({ plane: "/p", workspaces: ["alpha"], focused: "alpha", personas: ["steward"] }),
+    );
+
+    await run(offers, "memory.new:workspace/alpha", hands);
+    await run(offers, "memory.new:persona/steward", hands);
+    await run(offers, "memory.new:shared", hands);
+
+    expect(hands.calls).toEqual([
+      `newMemory:${JSON.stringify({ kind: "workspace", name: "alpha" })}`,
+      `newMemory:${JSON.stringify({ kind: "persona", name: "steward" })}`,
+      `newMemory:${JSON.stringify({ kind: "shared" })}`,
+    ]);
+    // The palette finds them by what they make and where.
+    expect(by(offers, "memory.new:workspace/alpha")?.title).toBe("New memory in alpha…");
+    expect(by(offers, "memory.new:persona/steward")?.title).toBe("New memory for steward…");
+    expect(by(offers, "memory.new:shared")?.title).toBe("New shared memory…");
+  });
+
+  it("offers no workspace's new memory with the plane root or nothing focused", () => {
+    // The plane root has no journal (SI-1), so there is nowhere for one to go.
+    for (const focused of [undefined, OUTSIDE]) {
+      const offers = catalogue(now({ plane: "/p", focused }));
+      expect(ids(offers).filter((id) => id.startsWith("memory.new:workspace/"))).toEqual([]);
+    }
+  });
+
+  it("opens the shared list in a tab of its own, from the Personas panel's shared row", async () => {
+    const hands = doing();
+    const offers = catalogue(now({ plane: "/p" }));
+
+    await run(offers, "memory.shared", hands);
+
+    expect(by(offers, "memory.shared")?.does).toEqual({
+      verb: "openView",
+      view: { from: null, view: "shared-memory", key: "" },
+      title: "Shared memory",
+    });
+  });
+
+  it("offers neither with no plane to keep a memory in", () => {
+    const offers = catalogue(now({ personas: ["steward"] }));
+
+    expect(ids(offers).filter((id) => id.startsWith("memory."))).toEqual([]);
   });
 });
