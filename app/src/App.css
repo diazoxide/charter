@@ -2147,14 +2147,16 @@ h2.sidebar-title .node-icon {
 
 /* **A chat in the background** (SI-8f): its tab shrinks to a chip — the chat's icon and the
    breathing diamond — at the strip's left edge while the chat writes its record, so closing it
-   feels like putting it away. It takes only its own width: it holds no name to share room with.
-   `fits.ts` still counts it as a whole tab, which can only ever leave a little room unused. */
+   feels like putting it away. It holds no name to share room with, so it is not a share: it is
+   exactly `--chip` wide, the width `fits.ts` counts it at (`LEAST_CHIP`), handed to the strip
+   by `PlaneView` as `--least` is, so the arithmetic and this rule cannot disagree. */
 .tabs .tab.chip {
-  flex: none;
-  min-width: 0;
+  flex: 0 0 var(--chip);
+  min-width: var(--chip);
+  max-width: var(--chip);
 }
 .tabs .tab.chip [role="tab"] {
-  padding-inline: 0.5rem;
+  padding-inline: 0;
 }
 .tabs .tab.chip .wrapping-up {
   margin-inline-start: 0;

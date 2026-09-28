@@ -3,9 +3,10 @@
  * by being told, as `chatState.ts` is.
  *
  * The core holds the truth (`smartclose.rs`): it sends the prompt, hears the record, closes the
- * chat, gives up after five minutes or hears the chat end. The window is told each step on
- * `smart-close` and draws the tab wrapping up while the step says so. A step that ends it is
- * handed to `onEnd`, which is where the window closes the tab or says why it did not.
+ * chat, gives up after five minutes, hears the chat end, or finds the prompt could not be sent.
+ * The window is told each step on `smart-close` and draws the tab wrapping up while the step
+ * says so. A step that ends it is handed to `onEnd`, which is where the window closes the tab or
+ * says why it did not.
  */
 import { useEffect, useRef, useState } from "react";
 import { listen } from "./here";
@@ -22,6 +23,8 @@ export function saidWhenItEnds(phase: Phase, name: string): string | undefined {
   if (phase === "no_record")
     return `No session record arrived from ${name} within five minutes, so it was left open.`;
   if (phase === "ended") return `${name} ended before it wrote its session record.`;
+  if (phase === "not_sent")
+    return `Smart close could not send ${name} its prompt, so it was left open.`;
   return undefined;
 }
 
@@ -34,6 +37,7 @@ export function stoppedWhy(phase: Phase): string | undefined {
   if (phase === "no_record")
     return "smart close stopped — no session record arrived in five minutes";
   if (phase === "ended") return "smart close stopped — it ended before it wrote its record";
+  if (phase === "not_sent") return "smart close stopped — its prompt could not be sent";
   return undefined;
 }
 

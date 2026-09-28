@@ -4755,6 +4755,52 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_queued_prompt_that_cannot_be_written_ends_the_smart_close_and_says_so() {
+        use charter_core::state::Event::{Stop, UserPromptSubmit};
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let (planes, told) = planes_telling_smart_closes();
+        let held = planes.held(&planes.open(&root)).expect("it is held");
+        let (session, _) = a_smart_closable_chat(&held, dir.path(), "unwritable-stand-in");
+        has_had_two_turns(&held, session);
+        reported(&held, session, &[UserPromptSubmit]);
+        assert_eq!(
+            crate::smartclose::begin(&held, session).expect("smart close begins"),
+            crate::smartclose::Phase::Queued
+        );
+        // The turn's end, on the board only: the plane's own listener would write the prompt,
+        // and this test is the write that fails.
+        let stop = charter_core::hookwire::Report {
+            chat: session,
+            event: Stop,
+            conversation: charter_core::hookwire::Conversation::Unknown,
+            pid: None,
+            detail: charter_core::state::Detail::default(),
+        };
+        held.hooks().board().reported(&stop);
+
+        crate::smartclose::reported_sending(&held, &stop, |_, _| {
+            Err("the pty took nothing".to_owned())
+        });
+
+        assert_eq!(held.closing().phase(session), None);
+        assert_eq!(
+            phases(&told, session),
+            [
+                crate::smartclose::Phase::Queued,
+                crate::smartclose::Phase::NotSent
+            ],
+            "the window was not told the smart close ended"
+        );
+        assert!(
+            is_open(&held, session),
+            "a prompt never sent closed the chat"
+        );
+        held.close_chat(session).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn closing_a_chat_while_it_wraps_up_lets_its_smart_close_go_quietly() {
         let dir = tempfile::tempdir().expect("a directory");
         let root = a_plane(&dir.path().join("plane"));

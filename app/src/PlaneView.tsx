@@ -187,7 +187,7 @@ import {
   useChatStates,
   type ChatStates,
 } from "./chatState";
-import { fitting, LEAST, LEAST_ROOT, leastAt, useRoom } from "./fits";
+import { fitting, LEAST, LEAST_CHIP, LEAST_ROOT, leastAt, useRoom } from "./fits";
 import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
 import { useTextSizes } from "./textSize";
@@ -867,8 +867,8 @@ export function PlaneView({
    * **A smart close that has ended** (ADR 0064). The core closed the chat when its record
    * landed, so the window takes its pane away — `closeChat`, and never `close_session`, which
    * would end it a second time — and says so quietly, with the record a click away (SI-8f).
-   * Given up, or ended on its own: the tab comes back where it was and the window says why, in
-   * one sentence and in the needs-you list. Cancelled: the tab coming back says it all.
+   * Given up, ended on its own, or its queued prompt could not be sent: the tab comes back where
+   * it was and the window says why, in one sentence and in the needs-you list. Cancelled: the tab coming back says it all.
    */
   /** {@link isBackground} as of the last render, for the step handler below, which the set it
    *  reads is made from and so cannot take it as a dependency. */
@@ -1083,6 +1083,9 @@ export function PlaneView({
   // taken off the room before the workspaces share what is left, so the arithmetic and the
   // stylesheet agree about it as they do about `--least`.
   const rootWidth = leastAt(LEAST_ROOT, windowText);
+  // A chip is exactly this wide (`.tab.chip`), and the chat strip fits by it: a chip holding a
+  // tab's floor would hide a tab the strip has room for.
+  const chipWidth = leastAt(LEAST_CHIP, windowText);
   const workspacesShown = useMemo(() => {
     const { shown } = fitting(
       onWorkspaceStrip.filter((name) => name !== OUTSIDE),
@@ -1226,8 +1229,8 @@ export function PlaneView({
     [measured],
   );
   const { shown, hidden } = useMemo(
-    () => fitting(onStrip, tabs.inFront, room, chatLeast),
-    [onStrip, room, tabs.inFront, chatLeast],
+    () => fitting(onStrip, tabs.inFront, room, chatLeast, { is: isBackground, width: chipWidth }),
+    [onStrip, room, tabs.inFront, chatLeast, isBackground, chipWidth],
   );
 
   /**
@@ -3161,7 +3164,7 @@ export function PlaneView({
                 role="tablist"
                 aria-label="Tabs"
                 ref={strip}
-                style={{ "--least": `${chatLeast}px` } as CSSProperties}
+                style={{ "--least": `${chatLeast}px`, "--chip": `${chipWidth}px` } as CSSProperties}
               >
                 {shown.map((id) => (
                   <SortableTab key={id} id={String(id)} fixed={isBackground(id)}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capacity, fitting, LEAST, LEAST_TUNED_AT, leastAt } from "./fits";
+import { capacity, fitting, LEAST, LEAST_CHIP, LEAST_TUNED_AT, leastAt } from "./fits";
 
 /**
  * The arithmetic that decides what a strip draws.
@@ -87,6 +87,35 @@ describe("what a strip draws", () => {
     const { shown, hidden } = fitting(many, 50, 8 * LEAST.chat, LEAST.chat);
     expect(shown).toHaveLength(8);
     expect([...shown, ...hidden].sort((one: number, other: number) => one - other)).toEqual(many);
+  });
+});
+
+describe("a strip holding chips (SI-8f)", () => {
+  // Two chats wrapping up, at the strip's left edge where `tabs.tabsIn` puts them, and four
+  // tabs after them.
+  const strip = ["x", "y", "a", "b", "c", "d"];
+  const chips = { is: (one: string) => one === "x" || one === "y", width: LEAST_CHIP };
+
+  it("shows as many tabs as the room allows, each chip at its own width", () => {
+    const room = 2 * LEAST_CHIP + 3 * LEAST.chat;
+    expect(fitting(strip, "a", room, LEAST.chat, chips)).toEqual({
+      shown: ["x", "y", "a", "b", "c"],
+      hidden: ["d"],
+    });
+  });
+
+  it("never overfills: a pixel less is a tab fewer", () => {
+    const room = 2 * LEAST_CHIP + 3 * LEAST.chat - 1;
+    expect(fitting(strip, "a", room, LEAST.chat, chips).shown).toEqual(["x", "y", "a", "b"]);
+  });
+
+  it("gives the selected tab the room of as many chips as it needs", () => {
+    // Room for the two chips and no tab: the selected tab is drawn, and a tab is wider than a
+    // chip, so both chips make way for it.
+    expect(fitting(strip, "c", 2 * LEAST_CHIP, LEAST.chat, chips)).toEqual({
+      shown: ["c"],
+      hidden: ["x", "y", "a", "b", "d"],
+    });
   });
 });
 

@@ -82,6 +82,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A Smart close whose prompt cannot be sent no longer wraps up forever.** When a running chat's
+  turn ended and its queued prompt could not be written to it, the tab stayed a "wrapping up"
+  chip for good. The smart close now ends there like any other that stops without a record: the
+  tab comes back to its place, the window says so in a sentence, and the needs-you list names
+  why (ADR 0064).
+- **A strip holding wrapping-up chips shows every tab it has room for.** The chat strip counted
+  each chip as a whole tab, so it could hide a tab behind show-more that fitted. A chip now has
+  one fixed width, and the strip fits by it.
 - **A Codex chat's tab closes after Smart close writes its record.** Codex's default sandbox
   keeps `charter session record` from reaching the app, so the command now leaves the news
   beside the chat and the chat's own `Stop` hook, which runs outside the sandbox, passes it on
