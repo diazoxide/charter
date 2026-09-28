@@ -338,7 +338,8 @@ describe("view tabs", function () {
 
       // Create: the heading's +, a new memory's tab in edit mode, and Save.
       await $(`${SECTION} button[aria-label="New memory in alpha…"]`).click();
-      const editor = await $('form[aria-label="Editing workspace/alpha/+"]');
+      // A new memory's tab is keyed by the slug `\` (`memories.DRAFT`), escaped in the selector.
+      const editor = await $('form[aria-label="Editing workspace/alpha/\\\\"]');
       await editor.waitForDisplayed({ timeout: 20_000 });
       await (await editor.$("input")).setValue(TITLE);
       await (await editor.$("textarea")).setValue(BODY);
