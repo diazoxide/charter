@@ -264,9 +264,10 @@ describe("the command palette", () => {
     const asking = await $('[role="alertdialog"]');
     await asking.waitForDisplayed({ timeout: 20_000 });
     const keysSeen = await watchKeys();
-    // Radix puts the focus on `Cancel` — the non-destructive answer, deliberately — so a
-    // Return pressed by reflex cancels rather than ends.
-    expect(await whereTheKeyboardIs()).toContain("Cancel");
+    // The focus starts on the default the operator ruled (ADR 0064): this chat has had at most
+    // one turn, so there is little to record and **Close** is the default. What this spec
+    // proves is that the keyboard is inside the question at all, and that Escape answers it.
+    expect(await whereTheKeyboardIs()).toContain("Close");
 
     await browser.keys(["Escape"]);
 
