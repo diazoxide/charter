@@ -11,8 +11,75 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-28
+
+0.4.1 is a chat that ends well and a memory you can look after from the window. Closing a chat
+offers **Smart close**: the chat writes a session record of what it did and what is left, goes
+into the background as a chip while it does, and its tab closes once the record is saved. Each
+workspace, and the plane root, lists its records in a **Sessions** panel, and **Resume** brings
+one back as a new chat on its conversation, harness, profile and directory, with the record in
+its briefing. A memory opens in a tab of its own, rendered as Markdown, to be edited in place or
+deleted with an Undo, and the right column lists a workspace's memory and the shared memory,
+with a `+` for a new one. Beyond the window: `charter session record|list|show`, command-line
+verbs that edit, archive and unarchive a memory, and Codex and opencode chats that come back to
+their own conversation at a relaunch.
+
 ### Added
 
+- **Smart close.** Closing a chat now asks **Cancel**, **Close** or **Smart close**. Smart close
+  sends the chat one line asking charter's `smart-close` skill to write its session record — at
+  once to a chat that is waiting, at the end of its turn to one that is running — and the tab
+  closes only when `charter session record` says the record is saved. Meanwhile the chat goes
+  into the background: its tab shrinks to a chip — the chat's icon and a breathing amber mark,
+  its name in the tooltip — at the left edge of the chat strip, before the pinned tabs, and the
+  chat that was beside it comes to the front, as Close would bring it. Click the chip to watch
+  the chat work; it stays a chip until it is done, and it cannot be dragged. The chip's menu
+  offers **Cancel smart close**, and typing into the chat cancels it too, except to answer a
+  question the chat asks on the way. When the record is saved the chip goes, and a quiet notice
+  says **Session saved — <title>** with **Open record**. If no record arrives within five
+  minutes, the chat ends first, or its prompt could not be sent or Smart close could not start,
+  the tab comes back where it was, the window says so in a sentence, and the title bar's ✋ list
+  names the chat and why. In a Claude Code chat the app starts, `charter session record` runs
+  without asking permission — that command and no other, and only as a command of its own: your
+  own and the project's permission rules all still apply beside it. Codex runs it without asking
+  in its default sandbox, which keeps the command from reaching the app, so the command leaves
+  the news beside the chat and the chat's own `Stop` hook, which runs outside the sandbox, passes
+  it on at the end of the same turn — only for that chat and conversation, and only within the
+  five minutes the app waits (#517). Smart close is not offered on a shell tab, a chat never
+  prompted, a chat charter has heard nothing from, or one asking you something — answer it
+  first. **Close** is the default for a chat that has had at most one turn (ADR 0064, ADR 0039).
+- **Session records.** `charter session record --title "…"`, with the record on standard input,
+  files a summary of a chat's session — Goal, Done, Decisions, Open, How to resume — in its
+  workspace's `sessions/` (the plane's own `sessions/` at the plane root), keeps
+  `sessions/index.md` newest first and a `## Sessions` line in `workspace.md` pointing at it,
+  and tells the app the chat's record is saved. Which chat, persona, harness, harness profile,
+  directory, conversation and pieces a record is about is charter's to say, never the model's.
+  `charter session list` and `charter session show` read them back, a chat's briefing names the
+  last one, and charter's new `smart-close` skill writes one. A new workspace's `workspace.md`
+  has a `## Sessions` section (ADR 0064).
+- **Old sessions come back from the window.** Each workspace has a **Sessions** panel — and the
+  plane root's tab one of the plane's own — listing its session records newest first, with
+  when, persona and harness, and `↻ resumable` on a record that holds a conversation. A row
+  opens the record as a read-only tab. **Resume**, on a row's menu and on the record's tab,
+  starts a new chat in the record's place, on its harness profile and in its directory — in a
+  piece, for a record written from one — given its conversation back (`claude --resume`,
+  `codex resume`, `opencode -s`, as a relaunch does) and as its persona where the plane still
+  has it, with the record quoted in its briefing. Where the profile or the directory is gone, or
+  the record is older than them, Resume uses the project's default profile or the workspace's
+  directory and says so. Where the conversation cannot be given — the record holds none, names
+  no harness a profile here runs, or the harness can no longer find it — the chat starts fresh
+  with the record in its briefing, and says why. The palette has **Open session record: …** and
+  **Resume session: …** for the place in front.
+- **A memory opens in a tab of its own, and can be edited and deleted from the window.** A
+  memory row opens the memory as a preview tab — in italics, and replaced by the next memory you
+  click, as VS Code's preview is; a double-click on the tab, or starting an edit, keeps it. The
+  tab says which store the memory is in, when it was written and which file it is, and renders
+  its body as Markdown. **Edit** turns the same tab into a title field and the raw body; a save
+  over a change made on disk since you opened it is refused, with **Reload** and **Overwrite**.
+  **Delete** moves the memory to its store's archive and closes its tab, with an **Undo** for a
+  few seconds. A row's menu offers Open, Edit and Delete, and a list's search now matches a
+  memory's body too, with the matching words shown under the row. Each acts on the file it
+  names and no other: `deploy` never reaches `prod-deploy.md` (ADR 0065).
 - **A workspace's memory, and the shared memory, in the window — and a new memory from a `+`.**
   The right column has a **Memory** section directly under Todos: the focused workspace's
   memories, newest first, with the same search and the same Open, Edit and Delete as a
@@ -21,90 +88,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it opens them as a list in a tab of its own. A `+` on the Memory section, on a persona's tab
   and on the shared list opens a new memory in edit mode, and Save lists it where it was made.
   The palette offers the same: New memory in, for or shared, and Open shared memory (ADR 0065).
-- **A memory opens in a tab of its own, and can be edited and deleted from the window.** A
-  memory row on a persona's tab opens the memory as a preview tab — in italics, and replaced by
-  the next memory you click, as VS Code's preview is; a double-click on the tab, or starting an
-  edit, keeps it. The tab says which store the memory is in, when it was written and which file
-  it is, and renders its body as Markdown. **Edit** turns the same tab into a title field and
-  the raw body; a save over a change made on disk since you opened it is refused, with
-  **Reload** and **Overwrite**. **Delete** moves the memory to its store's archive and closes
-  its tab, with an **Undo** for a few seconds. A row's menu offers Open, Edit and Delete, and a
-  list's search now matches a memory's body too, with the matching words shown under the row.
-  On the command line, `charter workspace edit|archive|unarchive` and `charter persona
-  edit-memory|archive-memory|unarchive-memory [--shared]` do the same (ADR 0065).
-- **Session records, the core of Smart close.** `charter session record --title "…"`, with the
-  record on standard input, files a summary of a chat's session — Goal, Done, Decisions, Open,
-  How to resume — in its workspace's `sessions/` (the plane's own `sessions/` at the plane
-  root), keeps `sessions/index.md` newest first and a `## Sessions` line in `workspace.md`
-  pointing at it, and tells the app the chat's record is saved. Which chat, persona, harness,
-  conversation and pieces a record is about is charter's to say, never the model's. `charter
-  session list` and `charter session show` read them back, and a chat's briefing names the
-  last one. charter's new `smart-close` skill writes one. The window's Smart close, which
-  sends that skill to a chat and closes its tab when the record is saved, is next (ADR 0064).
-- **Smart close.** Closing a chat now asks **Cancel**, **Close** or **Smart close**. Smart close
-  sends the chat one line asking charter's `smart-close` skill to write its session record — at
-  once to a chat that is waiting, at the end of its turn to one that is running — and the tab
-  closes only when `charter session record` says the record is saved. While it wraps up the tab
-  and its explorer row wear an amber mark that breathes, the tab's tooltip says so, and its menu
-  offers **Cancel smart close**; typing into the chat cancels it too, except to answer a question
-  the chat asks on the way. With no record in five minutes, or if the chat ends first, the tab
-  goes back to normal and the window says so in a sentence. Smart close is not offered on a shell
-  tab, a chat never prompted, a chat charter has heard nothing from, or one asking you something
-  — answer it first. **Close** is the default for a chat that has had at most one turn (ADR 0064).
-- **Old sessions come back from the window.** Each workspace has a **Sessions** panel — and the
-  plane root's tab one of the plane's own — listing its session records newest first, with
-  when, persona and harness, and `↻ resumable` on a record that holds a conversation. A row
-  opens the record as a read-only tab. **Resume**, on a row's menu and on the record's tab,
-  starts a new chat in the record's place, on its harness, given its conversation back
-  (`claude --resume`, `codex resume`, `opencode -s`, as a relaunch does) and as its persona where
-  the plane still has it, with the record quoted in its briefing. Where the conversation cannot
-  be given — the record holds none, names no harness a profile here runs, or the harness can no
-  longer find it — the chat starts fresh with the record in its briefing, and says why. The
-  palette has **Open session record: …** and **Resume session: …** for the place in front.
-
-- **Smart close puts the chat into the background.** Its tab shrinks to a chip — the chat's
-  icon and the breathing amber mark, its name in the tooltip — at the left edge of the chat
-  strip, before the pinned tabs, and the chat that was beside it comes to the front, as Close
-  would bring it. Click the chip to watch the chat work; it stays a chip until it is done, and
-  it cannot be dragged. When the record is saved the chip goes, and a quiet notice says
-  **Session saved — <title>** with **Open record**. If no record arrives, the chat ends first or
-  Smart close could not start, the tab comes back where it was, and the title bar's ✋ list
-  names the chat and why (ADR 0064, ADR 0039).
+- **Edit, archive and unarchive a memory from the command line.** `charter workspace
+  edit|archive|unarchive` and `charter persona edit-memory|archive-memory|unarchive-memory
+  [--shared]` do what the window does. Edit takes `--title`, and the body as an argument or as
+  `-` to read standard input; a slug is the memory's exact name, or the one file whose name
+  ends `-<slug>.md`; and an archive that had to number its file prints an Undo that restores
+  the original name with `--as` (ADR 0065).
 
 ### Changed
 
-- **Smart close never stops to ask permission for its own command in a Claude Code chat.** A
-  chat the app starts may run `charter session record` without asking — that command and no
-  other, and only as a command of its own: your own and the project's permission rules all
-  still apply beside it. Codex needs nothing to run it — in its default sandbox the command runs
-  without asking.
-- **A session record names the harness profile and the directory its chat ran in**, and
-  **Resume** starts the new chat on that profile and in that directory where they still exist
-  — in a piece, for a record written from one. Where either is gone, or the record is older than
-  them, Resume uses the project's default profile or the workspace's directory and says so.
+- **A short slug that more than one file ends in is refused, and the refusal names them.**
+  `charter persona forget` and `charter ws todo done|forget` took the first in sorted order.
+  `MEMORY`, the index, is refused as a slug, on a case-insensitive filesystem too.
 - **A LIVE workspace publishes its session records** with its memory and todos: the managed
   `.gitignore` block un-ignores `sessions/`, and `charter reinit` brings an older block up to
-  date. A new workspace's `workspace.md` has a `## Sessions` section.
-- **The plane root's session records stay on this machine**: `charter init` writes, and
+  date. **The plane root's session records stay on this machine**: `charter init` writes, and
   `charter reinit` adds, `/sessions/` to the plane's `.gitignore`.
 
 ### Fixed
 
-- **A Smart close whose prompt cannot be sent no longer wraps up forever.** When a running chat's
-  turn ended and its queued prompt could not be written to it, the tab stayed a "wrapping up"
-  chip for good. The smart close now ends there like any other that stops without a record: the
-  tab comes back to its place, the window says so in a sentence, and the needs-you list names
-  why (ADR 0064).
-- **A strip holding wrapping-up chips shows every tab it has room for.** The chat strip counted
-  each chip as a whole tab, so it could hide a tab behind show-more that fitted. A chip now has
-  one fixed width, and the strip fits by it.
-- **A Codex chat's tab closes after Smart close writes its record.** Codex's default sandbox
-  keeps `charter session record` from reaching the app, so the command now leaves the news
-  beside the chat and the chat's own `Stop` hook, which runs outside the sandbox, passes it on
-  at the end of the same turn — only for that chat and conversation, and only within the five
-  minutes the app waits (#517, ADR 0064).
-- **A session record's tab always offers Resume.** The button came from the palette's rows for
-  the place in front, so a record's tab showed none while another place was focused.
 - **Codex and opencode chats come back to their conversation at a relaunch, and a Claude Code
   chat comes back to the one it was in after `/clear`.** A chat's conversation was recorded
   only when it started, which only Claude Code has, so every Codex and opencode chat came back
@@ -112,6 +114,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   away. The id the chat's own harness reports through its hook is now written into
   `.charter/app/reopen.json` as it arrives. A harness started inside the chat's shell still
   moves nothing (ADR 0024).
+- **Forgetting a memory leaves every other memory's index line alone.** A line of `MEMORY.md`
+  whose title mentioned the forgotten memory's file was dropped with it. Only the line whose
+  own link names the file goes now, and a title's `\`, `[` and `]` are escaped in the index so
+  a title can never read as the end of its own link.
 
 ## [0.4.0] - 2026-09-27
 
@@ -1321,7 +1327,8 @@ and every settings group that it would have changed says so.
 - No program charter starts can hold a chat's terminal open after the chat ends.
   ([#105](https://github.com/diazoxide/charter/pull/105))
 
-[Unreleased]: https://github.com/diazoxide/charter/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/diazoxide/charter/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/diazoxide/charter/releases/tag/v0.4.1
 [0.4.0]: https://github.com/diazoxide/charter/releases/tag/v0.4.0
 [0.3.0]: https://github.com/diazoxide/charter/releases/tag/v0.3.0
 [0.2.0]: https://github.com/diazoxide/charter/compare/v0.1.1...v0.2.0
