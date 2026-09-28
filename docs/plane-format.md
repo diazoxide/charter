@@ -1047,7 +1047,15 @@ excepted), and for a secret-shaped value, named by its kind.
   the `- [..]` the line starts with, brackets the title balances and escaped characters not
   counting — so a line whose title mentions another memory's file survives that memory's
   deletion. A line of any other shape is filtered as charter filters it. Index links are recognised by
-  `\(([A-Za-z0-9][\w.-]*\.md)\)` (`charter/memstore.py:214`).
+  `\(([A-Za-z0-9][\w.-]*\.md)\)` (`charter/memstore.py:214`), every match anywhere in the file;
+  **charter-app reads a line that starts `- [` by the same leading link a deletion reads it by,
+  and nothing else in it** (SI-9e), so a title that mentions `(b.md)` does not list `b.md` — the
+  line of a memory unarchived beside it is appended, and `optimize` counts it as unindexed until
+  it is. A line of any other shape, or whose leading element never closes, is read by charter's
+  pattern. Every charter-app append to the index — `write`, `unarchive` and `optimize --apply`'s
+  repair — runs under the store directory's `rewrite::Lock`, which an edit's retitle and a
+  deletion also hold (SI-9d, SI-9e): an append between a rewrite's read and its replace went
+  with the old file.
   A legacy `notes.md` is grandfathered into the index once, as
   `- [Task memo (legacy)](notes.md)` (`charter/workspace.py:1824`).
 
@@ -1889,7 +1897,9 @@ with `", "` (`:907`-`:908`).
   - Entry line: `- [{title}]({filename})\n`, appended in `"a"` mode, chronological by write
     order (`charter/memstore.py:143`-`:144`). No sorting, no dedupe.
   - Readers match `- [` prefix (`charter/hooks.py:6851`) and the link regex
-    `\(([A-Za-z0-9][\w.-]*\.md)\)` (`charter/memstore.py:214`).
+    `\(([A-Za-z0-9][\w.-]*\.md)\)` (`charter/memstore.py:214`). **In charter-app** a line
+    starting `- [` lists only the file its leading element links, the rule the workspace index
+    above records (SI-9e).
   - `MEMORY.md` is excluded from the memory-file glob by name
     (`charter/memstore.py:208`).
   - Deletion rewrites the file as the surviving lines joined with `\n` plus one trailing

@@ -224,8 +224,9 @@ fn under_state(root: &std::path::Path, path: &std::path::Path) -> bool {
 /// Append one `- [title](file)` line ([`index_line`]). Order is write order: charter never
 /// sorts this file.
 ///
-/// Takes no lock itself: [`write()`] and [`unarchive`] call it holding the store's
-/// [`crate::rewrite::Lock`], which a second `Lock::on` in the same process would wait for.
+/// Takes no lock itself: [`write()`], [`unarchive`] and `curate::apply_safe` call it holding
+/// the store's [`crate::rewrite::Lock`], which a second `Lock::on` in the same process would
+/// wait for.
 pub fn index_append(
     root: &std::path::Path,
     index: &std::path::Path,
@@ -1127,6 +1128,12 @@ pub fn duplicates(entries: &[Found], threshold: f64) -> Vec<(f64, usize, usize)>
 /// read the index, which makes every file read as unindexed: true, since nothing charter
 /// is willing to read indexes them.
 ///
+/// **A line is read as a retitle and a drop read it** (SI-9e): a line starting `- [` lists the
+/// file its leading element links ([`leading_link`]) and nothing else in it, so a title that
+/// mentions `(b.md)` does not list `b.md` — which had [`unarchive`] skip `b`'s line and left it
+/// unindexed. That link is still read by charter's pattern ([`index_links`]), and so is the
+/// whole of a line of any other shape.
+///
 /// Asked with the WRITE rule (`index_refusal`), as charter asks it: an absent index is no
 /// defect — a fresh persona has none — while a dangling link out of the plane is absent
 /// and hostile at once.
@@ -1142,7 +1149,14 @@ pub fn listed(root: &std::path::Path, dir: &std::path::Path) -> std::collections
     let Some(text) = read_text(&index) else {
         return out;
     };
-    out.extend(index_links(&text));
+    for line in crate::mdsection::split_lines(&text) {
+        match leading_link(line) {
+            // The link still has to be one charter's pattern reads as a memory's file: a hand's
+            // `- [docs](https://…)` lists nothing, as it never did.
+            Some((_, file)) => out.extend(index_links(&format!("({file})"))),
+            None => out.extend(index_links(line)),
+        }
+    }
     out
 }
 
