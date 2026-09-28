@@ -67,7 +67,7 @@ fn a_body_with_the_five_sections_in_order_is_a_record() {
 fn a_body_missing_a_section_is_refused_naming_it() {
     let body = BODY.replace("## Open\n\nNothing.\n\n", "");
     let refused = check("Ship it", &body).unwrap_err();
-    assert!(refused.contains("Open"), "{refused}");
+    assert!(refused.contains("Open"));
 }
 
 #[test]
@@ -81,14 +81,14 @@ fn a_body_with_its_sections_out_of_order_is_refused() {
 fn a_body_with_a_section_of_its_own_is_refused() {
     let body = format!("{BODY}\n## Notes\n\nx\n");
     let refused = check("Ship it", &body).unwrap_err();
-    assert!(refused.contains("Notes"), "{refused}");
+    assert!(refused.contains("Notes"));
 }
 
 #[test]
 fn an_empty_section_is_refused() {
     let body = BODY.replace("Nothing.", "");
     let refused = check("Ship it", &body).unwrap_err();
-    assert!(refused.contains("Open"), "{refused}");
+    assert!(refused.contains("Open"));
 }
 
 #[test]
@@ -123,14 +123,14 @@ fn a_control_character_in_the_body_is_refused() {
 fn a_body_over_the_size_cap_is_refused() {
     let body = BODY.replace("Nothing.", &"x".repeat(MOST_BODY_BYTES));
     let refused = check("Ship it", &body).unwrap_err();
-    assert!(refused.contains("bytes"), "{refused}");
+    assert!(refused.contains("bytes"));
 }
 
 #[test]
 fn a_record_that_looks_like_it_holds_a_credential_is_refused_by_kind_never_by_value() {
     let body = BODY.replace("Nothing.", "password: hunter2hunter2");
     let refused = check("Ship it", &body).unwrap_err();
-    assert!(!refused.contains("hunter2"), "{refused}");
+    assert!(!refused.contains("hunter2"));
 }
 
 // ---- where a record goes, and what it says --------------------------------------------------
