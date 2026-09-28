@@ -484,3 +484,9 @@ something would need"*, and the answer is not the `runs` grant it described:
   manifest's row that says `actions` is refused by name.
 - The buttons sit beside the row's words, never inside the row's own button. Opening the row's
   card and acting on it are two different controls.
+
+## Later: a memory row's popover is superseded
+
+**ADR 0065 (2026-09-28) supersedes the popover for memory rows.** A memory opens in a view tab
+of its own — read rendered, edited in place — and the row's popover and truncation title go.
+Every other row keeps the popover this record describes.

@@ -730,6 +730,38 @@ enum WorkspaceCommand {
         #[command(flatten)]
         common: Common,
     },
+    /// Rewrite one workspace memory in place: same filename, same stamp, index line
+    /// retitled. What is not given is kept.
+    Edit {
+        /// Memory slug or filename (see `charter workspace recall`).
+        slug: String,
+        /// The new body; `-` reads it from standard input (default: keep the body).
+        #[arg(required_unless_present = "title")]
+        text: Option<String>,
+        /// The new title (default: keep the title).
+        #[arg(long)]
+        title: Option<String>,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Move one workspace memory into memory/archive/ and drop its index line (undo:
+    /// unarchive).
+    Archive {
+        /// Memory slug or filename (see `charter workspace recall`).
+        slug: String,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Move an archived workspace memory back into the journal and re-index it.
+    Unarchive {
+        /// The memory's slug or filename in memory/archive/.
+        slug: String,
+        /// Restore it under this filename instead (for one archiving had to number).
+        #[arg(long = "as", value_name = "SLUG")]
+        restore_as: Option<String>,
+        #[command(flatten)]
+        common: Common,
+    },
     /// Curate a workspace's memory: collapse exact duplicates and repair the index with
     /// --apply; propose the rest.
     Optimize {
@@ -2254,6 +2286,40 @@ fn run(command: Command) -> Result<u8, String> {
                 &here.plane,
                 &here.active_workspace(common.workspace.as_deref())?,
                 &slug,
+            );
+        }
+        Command::Workspace(WorkspaceCommand::Edit {
+            slug,
+            text,
+            title,
+            common,
+        }) => {
+            let text = memory::body_arg(text)?;
+            return memory::workspace_edit(
+                &here.plane,
+                &here.active_workspace(common.workspace.as_deref())?,
+                &slug,
+                title.as_deref(),
+                text.as_deref(),
+            );
+        }
+        Command::Workspace(WorkspaceCommand::Archive { slug, common }) => {
+            return memory::workspace_archive(
+                &here.plane,
+                &here.active_workspace(common.workspace.as_deref())?,
+                &slug,
+            );
+        }
+        Command::Workspace(WorkspaceCommand::Unarchive {
+            slug,
+            restore_as,
+            common,
+        }) => {
+            return memory::workspace_unarchive(
+                &here.plane,
+                &here.active_workspace(common.workspace.as_deref())?,
+                &slug,
+                restore_as.as_deref(),
             );
         }
         Command::Workspace(WorkspaceCommand::Optimize {

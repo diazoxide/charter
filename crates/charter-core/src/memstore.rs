@@ -459,6 +459,19 @@ pub fn forget(root: &std::path::Path, dir: &std::path::Path, ident: &str) -> std
 /// is not there, a store that resolves out of the plane, and an index that is not a plain,
 /// contained, bounded file — pointed at a credential store, a rewrite destroys it outright.
 fn drop_index_line(root: &std::path::Path, dir: &std::path::Path, filename: &str) {
+    rewrite_index_lines(root, dir, filename, None);
+}
+
+/// Rewrite the index lines that link `filename`: dropped when `title` is `None`, retitled in
+/// place when it is `Some` — `- [{title}]({filename})` up to and including the link, whatever
+/// followed the link kept (ADR 0065). The one truncating writer of an index, so a retitle
+/// declines exactly what a deletion declines, and for the same reasons.
+fn rewrite_index_lines(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    filename: &str,
+    title: Option<&str>,
+) {
     let index = dir.join(INDEX);
     if !index.exists() || gate(root, dir).is_err() || !readable_file(root, &index) {
         return;
@@ -467,10 +480,31 @@ fn drop_index_line(root: &std::path::Path, dir: &std::path::Path, filename: &str
         return;
     };
     let needle = format!("({filename})");
-    let kept: Vec<&str> = crate::mdsection::split_lines(&text)
-        .into_iter()
-        .filter(|line| !line.contains(&needle))
-        .collect();
+    let link = format!("]({filename})");
+    let retitled: Vec<String>;
+    let kept: Vec<&str> = match title {
+        None => crate::mdsection::split_lines(&text)
+            .into_iter()
+            .filter(|line| !line.contains(&needle))
+            .collect(),
+        Some(title) => {
+            retitled = crate::mdsection::split_lines(&text)
+                .into_iter()
+                .map(|line| match line.find(&link) {
+                    Some(at) => format!("- [{title}]{}", &line[at + 1..]),
+                    None => line.to_string(),
+                })
+                .collect();
+            if retitled
+                .iter()
+                .zip(crate::mdsection::split_lines(&text))
+                .all(|(new, old)| new == old)
+            {
+                return;
+            }
+            retitled.iter().map(String::as_str).collect()
+        }
+    };
     let body = if kept.is_empty() {
         String::new()
     } else {
@@ -1026,28 +1060,58 @@ pub fn index_drift(
 /// reversible retire that keeps the file. The path it landed at, or `None` when nothing
 /// was archived.
 ///
-/// `archive` is the fifth fixed name in the store: `rename` follows a link on the
-/// destination DIRECTORY exactly as `open` follows one on a file, so a committed
-/// `archive -> elsewhere` would turn a retire into a move out of the plane. Refused by
-/// doing nothing, like every other "nothing was archived", rather than raised out of a
-/// half-finished batch.
-///
-/// A name that is taken gets `-2`, then `-2-3`, then `-2-3-4`: charter numbers the stem
-/// of the name it just tried, not the original, and the files it leaves are named that way.
+/// [`archive_one`] answered as an `Option`, so `optimize`'s collapse and the window's Delete
+/// move a file by one rule (ADR 0065).
 pub fn archive(
     root: &std::path::Path,
     dir: &std::path::Path,
     ident: &str,
 ) -> Option<std::path::PathBuf> {
-    let file = resolve(root, dir, ident)?;
-    let dest_dir = dir.join("archive");
-    gate(root, &dest_dir).ok()?;
-    std::fs::create_dir_all(&dest_dir).ok()?;
-    let name = file.file_name()?.to_string_lossy().into_owned();
+    archive_one(root, dir, ident).ok()
+}
+
+/// The directory a store's retired memories are moved into.
+pub const ARCHIVE: &str = "archive";
+
+/// Move one memory into `<dir>/archive/` and drop its index line; the path it is at now.
+///
+/// `archive` is the fifth fixed name in the store: `rename` follows a link on the
+/// destination DIRECTORY exactly as `open` follows one on a file, so a committed
+/// `archive -> elsewhere` would turn a retire into a move out of the plane. It is gated
+/// before anything is made or moved.
+///
+/// A name that is taken gets `-2`, then `-2-3`, then `-2-3-4`: charter numbers the stem
+/// of the name it just tried, not the original, and the files it leaves are named that way.
+///
+/// **Safe to repeat.** A memory that is not in the store and IS in `archive/` under that name
+/// has already been archived, and that is where it is: `Ok`, nothing moved. `NotFound` only
+/// when it is in neither, and `InvalidInput` for a slug that is not one path segment.
+pub fn archive_one(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    ident: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    one_segment(ident)?;
+    let dest_dir = dir.join(ARCHIVE);
+    let _held = crate::rewrite::Lock::on(dir);
+    let Some(file) = resolve(root, dir, ident) else {
+        return resolve(root, &dest_dir, ident).ok_or_else(|| no_such(ident));
+    };
+    gate(root, &dest_dir)?;
+    std::fs::create_dir_all(&dest_dir)?;
+    let name = file
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     let mut dest = dest_dir.join(&name);
     let mut n = 2;
     while dest.exists() {
-        let stem = dest.file_stem()?.to_string_lossy().into_owned();
+        let stem = dest
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let suffix = dest
             .extension()
             .map(|e| format!(".{}", e.to_string_lossy()))
@@ -1055,10 +1119,267 @@ pub fn archive(
         dest = dest_dir.join(format!("{stem}-{n}{suffix}"));
         n += 1;
     }
-    gate(root, &file).ok()?;
-    std::fs::rename(&file, &dest).ok()?;
+    gate(root, &file)?;
+    gate(root, &dest)?;
+    std::fs::rename(&file, &dest)?;
     drop_index_line(root, dir, &name);
-    Some(dest)
+    Ok(dest)
+}
+
+/// Move one memory from `<dir>/archive/` back into the store and append its index line; the
+/// path it is at now.
+///
+/// `ident` names the file in `archive/`, by its full name or its slug. It is restored under
+/// its own name, or under `restore_as` — how an undo puts back a memory [`archive_one`] had to
+/// number. The index line is `- [{title}]({filename})`, the title read as every reader reads
+/// one ([`title_in`]), and it is appended only when the index does not already list the file.
+///
+/// **Safe to repeat**, and never over anything. A name the store already holds while the
+/// archived file is still there is refused with `AlreadyExists` and nothing moves; a memory
+/// that is back in the store and no longer in `archive/` has already been restored: `Ok`.
+/// `NotFound` when it is in neither.
+pub fn unarchive(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    ident: &str,
+    restore_as: Option<&str>,
+) -> std::io::Result<std::path::PathBuf> {
+    one_segment(ident)?;
+    if let Some(name) = restore_as {
+        one_segment(name)?;
+    }
+    let src_dir = dir.join(ARCHIVE);
+    let _held = crate::rewrite::Lock::on(dir);
+    let Some(file) = resolve(root, &src_dir, ident) else {
+        let back = match restore_as {
+            Some(name) => resolve_direct(root, dir, name),
+            None => resolve(root, dir, ident),
+        };
+        return back.ok_or_else(|| no_such(ident));
+    };
+    let name = match restore_as {
+        Some(name) => md_name(name),
+        None => file
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+    };
+    let dest = dir.join(&name);
+    // `exists` is false for a dangling link, and `rename` would replace one; it is gated
+    // below, and a live file of that name is the operator's and is never replaced.
+    if std::fs::symlink_metadata(&dest).is_ok() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "the store already holds {name}, so {} stays archived",
+                file.file_name().unwrap_or_default().to_string_lossy()
+            ),
+        ));
+    }
+    let index = dir.join(INDEX);
+    gate(root, &file)?;
+    gate(root, &dest)?;
+    gate(root, &index)?;
+    let title = read_text(&file)
+        .map(|text| title_in(&dest, &text))
+        .unwrap_or_else(|| {
+            dest.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+    std::fs::rename(&file, &dest)?;
+    if !listed(root, dir).contains(&name) {
+        index_append(root, &index, &name, &title)?;
+    }
+    Ok(dest)
+}
+
+/// What an edit is checked against (ADR 0065).
+#[derive(Debug, Clone, Copy)]
+pub enum Base<'a> {
+    /// The memory file's whole text as the caller read it. A file that differs on disk now is
+    /// refused as [`EditRefused::Stale`].
+    Read(&'a str),
+    /// Write whatever the file holds now — the window's Overwrite, after a stale refusal.
+    Overwrite,
+}
+
+/// Why an edit wrote nothing.
+#[derive(Debug)]
+pub enum EditRefused {
+    /// The file changed on disk since the caller read it. Nothing was written; the window
+    /// offers Reload or Overwrite.
+    Stale,
+    /// Anything else: `NotFound` for a slug the store does not hold, `InvalidInput` for a slug
+    /// that is a path, an empty body or a title with a line break, and whatever the gate or
+    /// the filesystem said.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for EditRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stale => {
+                f.write_str("the memory changed on disk since it was read, so nothing was saved")
+            }
+            Self::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for EditRefused {}
+
+impl From<std::io::Error> for EditRefused {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+/// One line of a memory file's top: its index into the file's lines, and the line.
+pub(crate) type TopLine<'a> = Option<(usize, &'a str)>;
+
+/// Where a stored memory's heading and stamp lines are — the one reading of a memory file's
+/// top that the reader (`workspaces::parse_entry`) and [`edit`] share.
+///
+/// The heading is the first `# ` line anywhere, as charter reads a title. The stamp is taken
+/// from where the store writes it and nowhere else: the first line that is not blank after the
+/// heading (after the start of the file when there is none), and only when that line has a
+/// stamp's shape ([`is_stamp_line`]); it is given stripped.
+pub(crate) fn top_lines<'a>(lines: &[&'a str]) -> (TopLine<'a>, TopLine<'a>) {
+    let heading = lines
+        .iter()
+        .enumerate()
+        .find(|(_, line)| line.starts_with("# "))
+        .map(|(i, line)| (i, *line));
+    let after_heading = heading.map_or(0, |(i, _)| i + 1);
+    let stamp = lines
+        .iter()
+        .enumerate()
+        .skip(after_heading)
+        .find(|(_, line)| !py_strip(line).is_empty())
+        .map(|(i, line)| (i, py_strip(line)))
+        .filter(|(_, line)| is_stamp_line(line));
+    (heading, stamp)
+}
+
+/// One memory file's path and whole text, exactly as it is on disk — the text an edit is
+/// later checked against ([`Base::Read`]).
+pub fn open(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    ident: &str,
+) -> std::io::Result<(std::path::PathBuf, String)> {
+    one_segment(ident)?;
+    let file = resolve(root, dir, ident).ok_or_else(|| no_such(ident))?;
+    let text = std::fs::read_to_string(&file)?;
+    Ok((file, text))
+}
+
+/// Rewrite one memory in place with a new title and text; the path, which does not change.
+///
+/// ADR 0065 and `docs/plane-format.md` → *Editing and archiving a memory*: the filename is
+/// kept (the slug was minted from the first title and is how every command names it), the
+/// stamp line the file had is kept verbatim, the title is stripped and capped at
+/// [`TITLE_MAX`] (empty: the text's first line, as [`write`] derives one), and every index
+/// line linking the file is retitled where it stands.
+///
+/// Checked against `base` and written under the store's [`crate::rewrite::Lock`], so nothing
+/// that also takes it lands between "unchanged since it was read" and the rename.
+pub fn edit(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    ident: &str,
+    title: &str,
+    text: &str,
+    base: Base,
+) -> Result<std::path::PathBuf, EditRefused> {
+    one_segment(ident)?;
+    let text = py_strip(text);
+    if text.is_empty() {
+        // `write`'s refusal, for `write`'s reason: an empty body is how a failed substitution
+        // arrives, and a secret must never reach a memory file.
+        return Err(invalid("empty memory").into());
+    }
+    if title.contains(['\n', '\r']) {
+        return Err(invalid("a memory's title is one line").into());
+    }
+    let title: String = py_strip(title).chars().take(TITLE_MAX).collect();
+    let title = if title.is_empty() {
+        title_of(text)
+    } else {
+        title
+    };
+    gate(root, dir)?;
+    let _held = crate::rewrite::Lock::on(dir);
+    let file = resolve(root, dir, ident).ok_or_else(|| no_such(ident))?;
+    let now = std::fs::read_to_string(&file)?;
+    if let Base::Read(read) = base
+        && read != now
+    {
+        return Err(EditRefused::Stale);
+    }
+    let lines = crate::mdsection::split_lines(&now);
+    let body = match top_lines(&lines).1 {
+        Some((_, stamp)) => format!("# {title}\n\n{stamp}\n\n{text}\n"),
+        None => format!("# {title}\n\n{text}\n"),
+    };
+    gate(root, &file)?;
+    gate(root, &dir.join(INDEX))?;
+    let mode = if under_state(root, dir) {
+        crate::rewrite::Mode::Private
+    } else {
+        crate::rewrite::Mode::Kept
+    };
+    crate::rewrite::replace(dir, &file, body.as_bytes(), mode)?;
+    rewrite_index_lines(
+        root,
+        dir,
+        &file.file_name().unwrap_or_default().to_string_lossy(),
+        Some(&title),
+    );
+    Ok(file)
+}
+
+/// Refuse a slug that is not one path segment — `forget`'s check, with any `.md` taken off:
+/// `../../victim.md` is a legal FILENAME and not a legal slug (#339).
+fn one_segment(ident: &str) -> std::io::Result<()> {
+    if crate::contain::segment_ok(ident.strip_suffix(".md").unwrap_or(ident)) {
+        Ok(())
+    } else {
+        Err(invalid(&format!("'{ident}' is not the slug of one memory")))
+    }
+}
+
+/// `ident` as a filename: `x` and `x.md` both name `x.md`.
+fn md_name(ident: &str) -> String {
+    if ident.ends_with(".md") {
+        ident.to_string()
+    } else {
+        format!("{ident}.md")
+    }
+}
+
+/// The file in `dir` named exactly `ident` (with `.md` added), when the listing would read it.
+fn resolve_direct(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    ident: &str,
+) -> Option<std::path::PathBuf> {
+    let path = dir.join(md_name(ident));
+    readable_file(root, &path).then_some(path)
+}
+
+fn no_such(ident: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("no such memory: {ident}"),
+    )
+}
+
+fn invalid(why: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, why.to_string())
 }
 
 #[cfg(test)]
