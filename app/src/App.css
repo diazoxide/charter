@@ -2122,6 +2122,33 @@ h2.sidebar-title .node-icon {
   border-radius: 2px;
 }
 
+/* **A chat wrapping up** — being smart-closed (ADR 0064): it writes its session record and
+   goes. Its name goes muted and its tab gains an amber underline and a mark that breathes
+   (`.breathing`, in MOTION below), so it reads as leaving rather than as working. The mark is
+   a diamond, not a dot, so it is told from a state without colour; standing still (reduced
+   motion) it is simply the mark at full weight. */
+.wrapping-up {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-inline-start: 0.4rem;
+  background: var(--state-waiting);
+  rotate: 45deg;
+  vertical-align: middle;
+  flex: none;
+}
+.tabs .tab[data-wrapping-up] {
+  box-shadow: inset 0 -2px 0 var(--state-waiting);
+}
+.tabs .tab[data-wrapping-up] .tab-name,
+.chat[data-wrapping-up] .session {
+  color: var(--text-muted);
+}
+.answer .smart-close:not(:disabled) {
+  border-color: var(--accent-base);
+  color: var(--accent-base);
+}
+
 /* **The needs-you queue, in the title bar** (charter-app#249): a hand and a count, and the list
    it drops. It was the Attention panel's; that region is one project's and the queue is every
    project's. Minimal, as the bar is: no border of its own, and the colour is the count's alone. */

@@ -40,6 +40,29 @@ export function ChatMark({ state }: { state: State | undefined }) {
   return state === undefined ? null : <ChatState state={state} />;
 }
 
+/** What a wrapping-up chat's tab and explorer row say about it, as their tooltip. */
+export const WRAPPING_UP =
+  "Wrapping up: writing its session record, then it closes. Typing into it, or Cancel smart close on its menu, stops this.";
+
+/**
+ * **A chat wrapping up** — being smart-closed (ADR 0064): a mark that breathes, as a queued
+ * pipeline's does, because the chat is doing its last turn and will go. `charter-breathe` reads
+ * its timing from the motion tokens, so under reduced motion it stands still at full weight.
+ * The word is its accessible name, never only the colour.
+ */
+export function WrappingUp({ held }: { held: boolean }) {
+  if (!held) return null;
+  return (
+    <span
+      className="wrapping-up breathing"
+      data-mark="wrapping-up"
+      role="img"
+      aria-label="wrapping up"
+      title={WRAPPING_UP}
+    />
+  );
+}
+
 /**
  * **A needs-you item's Ignore** (charter-app#248): the catalogue's `needs.ignore:<session>` row
  * drawn as the `✕` a pointer wants, so its accessible name is the row's words — "Ignore ide.3

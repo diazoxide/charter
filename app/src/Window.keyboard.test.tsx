@@ -505,7 +505,7 @@ describe("Delete on a focused tab", () => {
 
     await userEvent.keyboard("{Delete}");
     const asking = await screen.findByRole("alertdialog");
-    await userEvent.click(within(asking).getByRole("button", { name: /End/ }));
+    await userEvent.click(within(asking).getByRole("button", { name: "Close" }));
 
     await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(2));
     expect(asked).toContain("close_session");

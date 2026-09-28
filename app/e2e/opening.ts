@@ -86,7 +86,8 @@ export async function pressAndStart(name: string): Promise<void> {
 }
 
 /**
- * Ending a chat, as the operator does it since the pane controls landed: press, then answer.
+ * Ending a chat, as the operator does it since the pane controls landed: press, then answer
+ * **Close** — the dialog's answer that ends it (ADR 0064 added Smart close beside it).
  *
  * **Nothing ends a chat without asking** — the operator's *"closing session should ask
  * confirmation"*, and it is asked in one place (`PlaneView`'s `run`), so a tab's `×`, a
@@ -97,10 +98,12 @@ export async function pressAndStart(name: string): Promise<void> {
  * It is `role="alertdialog"` rather than `dialog`: Radix's `AlertDialog`, which is the
  * primitive for a question the operator did not go looking for.
  */
-export async function answerTheAsk(name: string): Promise<void> {
+export async function answerTheAsk(ending: string): Promise<void> {
   const asking = await $('[role="alertdialog"]');
   await asking.waitForDisplayed({ timeout: 20_000 });
-  const answer = await asking.$(`button=${name}`);
+  // The question is about the row that was pressed; its title says which.
+  await expect(asking).toHaveText(expect.stringContaining(ending));
+  const answer = await asking.$("button=Close");
   await answer.waitForClickable({ timeout: 20_000 });
   await answer.click();
   await expect(asking).not.toBeDisplayed();

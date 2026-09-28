@@ -182,6 +182,13 @@ role exists for. Two consequences worth knowing before the next one:
   whichever surface pressed it — so a tab's `×`, a pane's `×` and the palette's rows all ask.
   A confirmation on one surface and not another is the second answer the catalogue exists to
   not have.
+- **Three answers since Smart close (ADR 0064): Cancel, Close, Smart close, in that order.**
+  Cancel is the primitive's `Cancel`; Close and Smart close are both its `Action`, so either
+  closes the dialog. **The focus goes to the default the operator ruled, not always to Cancel**:
+  Smart close for a chat with turns behind it, Close for one with at most one, and Cancel
+  wherever charter cannot say. Smart close that is not offered is `disabled`, with the core's
+  sentence beside it (`aria-describedby`); Radix's focus scope skips a disabled button, so
+  Shift+Tab from Cancel reaches Close. Escape still answers Cancel.
 
 And the **persona card** (`@radix-ui/react-popover`, `app/src/Panels.tsx`): what a row in the
 right-hand region's persona list opens. It is the first popover in the window, and it was picked

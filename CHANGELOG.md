@@ -22,6 +22,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session list` and `charter session show` read them back, and a chat's briefing names the
   last one. charter's new `smart-close` skill writes one. The window's Smart close, which
   sends that skill to a chat and closes its tab when the record is saved, is next (ADR 0064).
+- **Smart close.** Closing a chat now asks **Cancel**, **Close** or **Smart close**. Smart close
+  sends the chat one line asking charter's `smart-close` skill to write its session record — at
+  once to a chat that is waiting, at the end of its turn to one that is running — and the tab
+  closes only when `charter session record` says the record is saved. While it wraps up the tab
+  and its explorer row wear an amber mark that breathes, the tab's tooltip says so, and its menu
+  offers **Cancel smart close**; typing into the chat cancels it too, except to answer a question
+  the chat asks on the way. With no record in five minutes, or if the chat ends first, the tab
+  goes back to normal and the window says so in a sentence. Smart close is not offered on a shell
+  tab, a chat never prompted, a chat charter has heard nothing from, or one asking you something
+  — answer it first. **Close** is the default for a chat that has had at most one turn (ADR 0064).
 
 ### Changed
 
