@@ -79,8 +79,14 @@ pub fn forget(root: &Path, ask: &Forget, say: Sink) -> (u8, bool) {
             (1, false)
         }
         // A slug is one file in the store; `../<elsewhere>` is a path, and the store's resolver
-        // is never handed one.
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+        // is never handed one. Any other refusal — a slug two files' names end in, the index —
+        // is the core's sentence, below.
+        Err(e)
+            if e.kind() == std::io::ErrorKind::InvalidInput
+                && !crate::contain::segment_ok(
+                    ask.slug.strip_suffix(".md").unwrap_or(ask.slug),
+                ) =>
+        {
             say(Say::Fail(format!(
                 "'{}' is not the slug of one memory — name a file in {}/, not a path.",
                 crate::shown::short(ask.slug),
@@ -181,12 +187,16 @@ pub fn edit_memory(
     let Some(persona) = ask.persona(root, say) else {
         return (1, false);
     };
-    let opened = match persona.open_memory(ask.slug) {
+    let exact = match persona.typed_memory(ask.slug, memstore::Typed::Stored) {
+        Ok(exact) => exact,
+        Err(e) => return ask.failed(&e, say),
+    };
+    let opened = match persona.open_memory(&exact) {
         Ok(opened) => opened,
         Err(e) => return ask.failed(&e, say),
     };
     let (title, text) = opened.revised(title, text);
-    match persona.edit_memory(ask.slug, &title, &text, memstore::Base::Read(&opened.text)) {
+    match persona.edit_memory(&exact, &title, &text, memstore::Base::Read(&opened.text)) {
         Ok(path) => {
             say(Say::Done(format!(
                 "Edited '{}' in {} → {}",
@@ -210,15 +220,19 @@ pub fn archive_memory(root: &Path, ask: &Memory, say: Sink) -> (u8, bool) {
     let Some(persona) = ask.persona(root, say) else {
         return (1, false);
     };
-    match persona.archive_memory(ask.slug) {
+    let exact = match persona.typed_memory(ask.slug, memstore::Typed::Archiving) {
+        Ok(exact) => exact,
+        Err(e) => return ask.failed(&e, say),
+    };
+    match persona.archive_memory(&exact) {
         Ok(path) => {
-            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
             say(Say::Done(format!(
-                "Archived '{}' from {} → {}. Undo: `charter persona unarchive-memory {} {stem}{}`",
+                "Archived '{}' from {} → {}. Undo: `charter persona unarchive-memory {} {}{}`",
                 ask.slug,
                 ask.place(),
                 super::rel(root, &path),
                 ask.name,
+                memstore::undo_args(&exact, &path),
                 ask.flag()
             )));
             (0, true)
@@ -238,7 +252,11 @@ pub fn unarchive_memory(
     let Some(persona) = ask.persona(root, say) else {
         return (1, false);
     };
-    match persona.unarchive_memory(ask.slug, restore_as) {
+    let exact = match persona.typed_memory(ask.slug, memstore::Typed::Restoring) {
+        Ok(exact) => exact,
+        Err(e) => return ask.failed(&e, say),
+    };
+    match persona.unarchive_memory(&exact, restore_as) {
         Ok(path) => {
             say(Say::Done(format!(
                 "Restored '{}' to {} → {}",

@@ -56,6 +56,16 @@ pub(crate) fn view_key(scope: &MemoryScope, slug: &str) -> String {
     }
 }
 
+/// The slug of a new memory's tab, not written yet: `memories.DRAFT` in the window, which
+/// spells the same thing (SI-9d).
+///
+/// **A slug the core refuses** (`memstore::slug_ok`), so it is not a memory any store can hold:
+/// `+`, which it was, is a filename, and a hand-made `+.md` opened as a new memory's editor. A
+/// file whose own name the core refuses — `\.md` on a Unix plane — is listed with a row that
+/// runs nothing ([`crate::panels`]), so no row carries this key either.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const DRAFT: &str = "\\";
+
 /// One memory, as its tab draws it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct MemoryView {
@@ -430,6 +440,15 @@ mod tests {
     }
 
     #[test]
+    fn a_new_memorys_tab_is_keyed_by_a_slug_no_memory_can_have() {
+        // The literal `memories.test.ts` spells too.
+        assert_eq!(view_key(&MemoryScope::Shared, DRAFT), "shared/\\");
+        let dir = plane();
+        // Refused as a slug, not merely absent: no file the store holds can be it.
+        assert!(read(dir.path(), &MemoryScope::Shared, DRAFT).is_err());
+    }
+
+    #[test]
     fn a_memory_made_in_the_window_is_the_file_remember_writes_and_reads_back() {
         let dir = plane();
 
@@ -700,6 +719,107 @@ mod tests {
             .unwrap()
             .count();
         assert_eq!(listed, 0);
+    }
+
+    /// `deploy` and `prod-deploy` in the shared store, and `deploy` archived by something else —
+    /// a chat, or another window — while its tab stays open (SI-9d).
+    fn deploy_archived_beside_prod_deploy(dir: &tempfile::TempDir) -> (MemoryView, String) {
+        let deploy = create(dir.path(), &MemoryScope::Shared, "Deploy", "ours", at()).unwrap();
+        let prod = create(
+            dir.path(),
+            &MemoryScope::Shared,
+            "Prod deploy",
+            "theirs",
+            at(),
+        )
+        .unwrap();
+        assert_eq!(prod.slug, "prod-deploy");
+        archive(dir.path(), &MemoryScope::Shared, &deploy.slug).unwrap();
+        (deploy, prod.text)
+    }
+
+    #[test]
+    fn a_tab_whose_memory_was_archived_reads_as_gone_and_not_as_the_memory_its_name_ends_with() {
+        let dir = plane();
+        let (deploy, _) = deploy_archived_beside_prod_deploy(&dir);
+
+        assert_eq!(
+            read(dir.path(), &MemoryScope::Shared, &deploy.slug).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_save_in_a_tab_whose_memory_was_archived_writes_no_other_memory() {
+        let dir = plane();
+        let (deploy, prod) = deploy_archived_beside_prod_deploy(&dir);
+        let prod_file = dir.path().join("personas/_shared/memory/prod-deploy.md");
+
+        let saved = edit(
+            dir.path(),
+            &MemoryScope::Shared,
+            &deploy.slug,
+            "Deploy v2",
+            "mine",
+            &deploy.text,
+            false,
+        );
+        let overwritten = edit(
+            dir.path(),
+            &MemoryScope::Shared,
+            &deploy.slug,
+            "Deploy v2",
+            "mine",
+            "",
+            true,
+        );
+
+        assert!(
+            !matches!(saved, Ok(MemoryEdited::Saved { .. })),
+            "{saved:?}"
+        );
+        assert!(overwritten.is_err(), "{overwritten:?}");
+        assert_eq!(std::fs::read_to_string(prod_file).unwrap(), prod);
+    }
+
+    #[test]
+    fn delete_and_undo_in_a_tab_whose_memory_was_archived_move_no_other_memory() {
+        let dir = plane();
+        let (deploy, prod) = deploy_archived_beside_prod_deploy(&dir);
+        let store = dir.path().join("personas/_shared/memory");
+
+        let gone = archive(dir.path(), &MemoryScope::Shared, &deploy.slug).unwrap();
+        assert_eq!(
+            gone.archived, "deploy",
+            "already archived, under its own name"
+        );
+        let back = unarchive(
+            dir.path(),
+            &MemoryScope::Shared,
+            &gone.archived,
+            Some(&gone.slug),
+        )
+        .unwrap();
+
+        assert_eq!(back.slug, "deploy");
+        assert_eq!(back.body, "ours");
+        assert_eq!(
+            std::fs::read_to_string(store.join("prod-deploy.md")).unwrap(),
+            prod
+        );
+    }
+
+    #[test]
+    fn the_index_is_not_a_memory_the_window_can_open_or_delete() {
+        let dir = plane();
+        create(dir.path(), &steward(), "A", "a", at()).unwrap();
+        let index = dir.path().join("personas/steward/memory/MEMORY.md");
+        let before = std::fs::read_to_string(&index).unwrap();
+
+        assert!(read(dir.path(), &steward(), "MEMORY").is_err());
+        assert!(archive(dir.path(), &steward(), "MEMORY").is_err());
+        assert!(edit(dir.path(), &steward(), "MEMORY", "t", "b", "", true).is_err());
+        assert_eq!(std::fs::read_to_string(&index).unwrap(), before);
     }
 
     #[test]

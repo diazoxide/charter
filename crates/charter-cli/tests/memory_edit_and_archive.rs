@@ -430,3 +430,207 @@ fn persona_archive_memory_of_a_slug_that_is_a_path_is_refused() {
     );
     assert!(root(&tmp).join("personas/devops/persona.md").is_file());
 }
+
+// --- SI-9d: a verb acts on the memory it was named and no other -----------------------------
+
+/// A memory `name.md` in devops's store, indexed, as `remember` writes one.
+fn devops_memory(tmp: &tempfile::TempDir, name: &str, title: &str) {
+    let dir = root(tmp).join("personas/devops/memory");
+    std::fs::write(
+        dir.join(format!("{name}.md")),
+        format!("# {title}\n\n_2026-03-02 09:14 · persistent_\n\n{title}.\n"),
+    )
+    .unwrap();
+    let mut index = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("MEMORY.md"))
+        .unwrap();
+    writeln!(index, "- [{title}]({name}.md)").unwrap();
+}
+
+#[test]
+fn persona_archive_memory_twice_archives_the_memory_once_and_no_other() {
+    let tmp = daily();
+    devops_memory(&tmp, "foo", "Foo");
+    devops_memory(&tmp, "old-foo", "Old foo");
+
+    for _ in 0..2 {
+        let out = charter(&tmp, &["persona", "archive-memory", "devops", "foo"]);
+        assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    }
+
+    assert!(
+        root(&tmp)
+            .join("personas/devops/memory/old-foo.md")
+            .is_file()
+    );
+    assert!(
+        !root(&tmp)
+            .join("personas/devops/memory/archive/old-foo.md")
+            .exists()
+    );
+    assert!(read(&tmp, "personas/devops/memory/MEMORY.md").contains("(old-foo.md)"));
+}
+
+#[test]
+fn persona_archive_memory_of_the_index_is_refused_and_moves_nothing() {
+    let tmp = daily();
+    let before = read(&tmp, "personas/devops/memory/MEMORY.md");
+
+    for slug in ["MEMORY", "MEMORY.md"] {
+        let out = charter(&tmp, &["persona", "archive-memory", "devops", slug]);
+        assert_eq!(out.status.code(), Some(1), "{slug}: {}", said(&out));
+    }
+
+    assert_eq!(read(&tmp, "personas/devops/memory/MEMORY.md"), before);
+    assert!(!root(&tmp).join("personas/devops/memory/archive").exists());
+}
+
+#[test]
+fn a_numbered_archive_says_the_undo_that_restores_it_under_its_own_name() {
+    let tmp = daily();
+    devops_memory(&tmp, "foo", "Foo");
+    let out = charter(&tmp, &["persona", "archive-memory", "devops", "foo"]);
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    assert!(
+        said(&out).contains("unarchive-memory devops foo`"),
+        "an archive under its own name needs no --as: {}",
+        said(&out)
+    );
+    devops_memory(&tmp, "foo", "Foo again");
+
+    let out = charter(&tmp, &["persona", "archive-memory", "devops", "foo"]);
+
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    assert!(
+        said(&out).contains("unarchive-memory devops foo-2 --as foo`"),
+        "{}",
+        said(&out)
+    );
+    // And the Undo it says works.
+    let undo = charter(
+        &tmp,
+        &[
+            "persona",
+            "unarchive-memory",
+            "devops",
+            "foo-2",
+            "--as",
+            "foo",
+        ],
+    );
+    assert_eq!(undo.status.code(), Some(0), "{}", said(&undo));
+    assert!(read(&tmp, "personas/devops/memory/foo.md").contains("Foo again"));
+}
+
+#[test]
+fn a_numbered_workspace_archive_says_the_undo_that_restores_it_under_its_own_name() {
+    let tmp = daily();
+    let stem = "20260302-091200-the-api-returns-418-on-mondays";
+    let archive = root(&tmp).join("workspaces/alpha/memory/archive");
+    std::fs::create_dir_all(&archive).unwrap();
+    std::fs::write(archive.join(format!("{stem}.md")), "# An older one\n").unwrap();
+
+    let out = charter(
+        &tmp,
+        &[
+            "workspace",
+            "archive",
+            "the-api-returns-418-on-mondays",
+            "-w",
+            "alpha",
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", said(&out));
+    assert!(
+        said(&out).contains(&format!("unarchive {stem}-2 --as {stem} -w alpha`")),
+        "{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn a_short_slug_two_journal_entries_end_in_is_refused_and_moves_neither() {
+    let tmp = daily();
+    let dir = root(&tmp).join("workspaces/alpha/memory");
+    std::fs::write(
+        dir.join("20260303-091200-the-api-returns-418-on-mondays.md"),
+        "# Again\n\n_2026-03-03 09:12 · persistent_\n\nAgain.\n",
+    )
+    .unwrap();
+
+    let out = charter(
+        &tmp,
+        &[
+            "workspace",
+            "archive",
+            "the-api-returns-418-on-mondays",
+            "-w",
+            "alpha",
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    assert!(said(&out).contains("20260303-091200"), "{}", said(&out));
+    assert!(root(&tmp).join(API).is_file());
+    assert!(!dir.join("archive").exists());
+}
+
+#[test]
+fn ws_todo_done_of_a_slug_two_todos_end_in_closes_neither_and_journals_nothing() {
+    let tmp = daily();
+    let todos = root(&tmp).join("workspaces/alpha/todos");
+    std::fs::write(
+        todos.join("20260303-091400-review-the-rollout-plan.md"),
+        "# Review the rollout plan again\n\n_2026-03-03 09:14 · persistent_\n\nAgain.\n",
+    )
+    .unwrap();
+    let journal = read(&tmp, ALPHA_INDEX);
+
+    let out = charter(
+        &tmp,
+        &[
+            "ws",
+            "todo",
+            "done",
+            "review-the-rollout-plan",
+            "-w",
+            "alpha",
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    assert!(
+        todos
+            .join("20260302-091400-review-the-rollout-plan.md")
+            .is_file()
+            && todos
+                .join("20260303-091400-review-the-rollout-plan.md")
+                .is_file()
+    );
+    assert_eq!(read(&tmp, ALPHA_INDEX), journal, "nothing was journalled");
+}
+
+#[test]
+fn workspace_forget_of_a_slug_two_entries_end_in_names_both_and_deletes_neither() {
+    let tmp = daily();
+    let again = "workspaces/alpha/memory/20260303-091200-the-api-returns-418-on-mondays.md";
+    std::fs::write(root(&tmp).join(again), "# Again\n").unwrap();
+
+    let out = charter(
+        &tmp,
+        &[
+            "workspace",
+            "forget",
+            "the-api-returns-418-on-mondays",
+            "-w",
+            "alpha",
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    assert!(said(&out).contains("more than one"), "{}", said(&out));
+    assert!(!said(&out).contains("not a path"), "{}", said(&out));
+    assert!(root(&tmp).join(API).is_file() && root(&tmp).join(again).is_file());
+}

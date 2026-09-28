@@ -1,5 +1,5 @@
 import type { MemoryScope, RowAction } from "./bindings";
-import { memoryKey, memoryView, type MemoryRef } from "./memories";
+import { DRAFT, memoryKey, memoryView, type MemoryRef } from "./memories";
 import { describe, expect, it, vi } from "vitest";
 import {
   aim,
@@ -1857,7 +1857,7 @@ describe("a memory's rows (SI-9b, ADR 0065)", () => {
   it("are not offered for a new memory's tab, which has nothing yet to edit or delete", () => {
     const tabs = openView(
       noTabs(),
-      memoryView({ scope: { kind: "shared" }, slug: "+" }),
+      memoryView({ scope: { kind: "shared" }, slug: DRAFT }),
       "New memory",
       "alpha",
     );

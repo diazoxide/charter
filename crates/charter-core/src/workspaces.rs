@@ -416,8 +416,12 @@ impl Workspace {
     pub fn close_todo(&self, slug: &str, stamp: chrono::NaiveDateTime) -> io::Result<()> {
         self.writable(&self.dir.join("todos"))?;
         let dir = self.dir.join("todos");
-        let path = memstore::resolve(&self.plane_root, &dir, slug).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, format!("no such todo: {slug}"))
+        let path = memstore::resolve(&self.plane_root, &dir, slug).map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                io::Error::new(io::ErrorKind::NotFound, format!("no such todo: {slug}"))
+            } else {
+                e
+            }
         })?;
         let stem = path
             .file_stem()
@@ -597,6 +601,16 @@ impl Workspace {
         let dir = self.dir.join("memory");
         self.readable(&dir)?;
         read_store(&self.plane_root, &dir)
+    }
+
+    /// The exact name a slug typed on the command line names, for the verb `typed`
+    /// ([`memstore::typed_name`]): the slug itself when nothing matches, so the exact operation
+    /// it is handed to answers for it (SI-9d).
+    pub fn typed_memory(&self, slug: &str, typed: memstore::Typed) -> io::Result<String> {
+        match memstore::typed_name(&self.plane_root, &self.dir.join("memory"), slug, typed) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(slug.to_owned()),
+            answered => answered,
+        }
     }
 
     /// One journal entry, to read or to edit ([`Opened`]).

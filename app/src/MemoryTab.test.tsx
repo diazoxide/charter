@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { MemoryTab } from "./MemoryTab";
-import { forgetDrafts, memoryKey, wantEdit, type MemoryRef } from "./memories";
+import { DRAFT, forgetDrafts, memoryKey, wantEdit, type MemoryRef } from "./memories";
 import type { MemoryEdited, MemoryView } from "./bindings";
 
 afterEach(() => {
@@ -261,7 +261,7 @@ describe("a save the file changed under", () => {
 });
 
 describe("a new memory's tab", () => {
-  const DRAFT_AT: MemoryRef = { scope: { kind: "shared" }, slug: "+" };
+  const DRAFT_AT: MemoryRef = { scope: { kind: "shared" }, slug: DRAFT };
 
   it("opens in the editor, reads nothing, and writes through create", async () => {
     const made = memory({ scope: { kind: "shared" }, place: "shared", slug: "freeze" });

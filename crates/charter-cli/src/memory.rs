@@ -768,7 +768,10 @@ pub fn workspace_forget(plane: &Plane, name: &str, slug: &str) -> Result<Code, S
         // A slug is one file in the store. `../<elsewhere>` is a path, and the store's own
         // resolver is never handed one: this is where M1.1's round 3 found a slug deleting
         // a file outside the plane.
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+        Err(e)
+            if e.kind() == std::io::ErrorKind::InvalidInput
+                && !charter_core::contain::segment_ok(slug.strip_suffix(".md").unwrap_or(slug)) =>
+        {
             voice::err(&format!(
                 "'{}' is not the slug of one memory — name a file in \
                  workspaces/{name}/memory/, not a path.",
@@ -776,6 +779,7 @@ pub fn workspace_forget(plane: &Plane, name: &str, slug: &str) -> Result<Code, S
             ));
             Ok(1)
         }
+        // A slug the ends of two entries' names share, or the index: the core's sentence names it.
         Err(e) => {
             voice::err(&e.to_string());
             Ok(1)
@@ -841,12 +845,16 @@ pub fn workspace_edit(
     text: Option<&str>,
 ) -> Result<Code, String> {
     let ws = plane.workspace(name).map_err(|e| e.to_string())?;
-    let opened = match ws.open_memory(slug) {
+    let exact = match ws.typed_memory(slug, memstore::Typed::Stored) {
+        Ok(exact) => exact,
+        Err(e) => return workspace_refusal(name, slug, &e),
+    };
+    let opened = match ws.open_memory(&exact) {
         Ok(opened) => opened,
         Err(e) => return workspace_refusal(name, slug, &e),
     };
     let (title, text) = opened.revised(title, text);
-    match ws.edit_memory(slug, &title, &text, memstore::Base::Read(&opened.text)) {
+    match ws.edit_memory(&exact, &title, &text, memstore::Base::Read(&opened.text)) {
         Ok(path) => {
             voice::ok(&format!(
                 "Edited '{slug}' in workspace '{name}' → {}",
@@ -867,13 +875,17 @@ pub fn workspace_edit(
 /// the window's Delete, and reversible (ADR 0065).
 pub fn workspace_archive(plane: &Plane, name: &str, slug: &str) -> Result<Code, String> {
     let ws = plane.workspace(name).map_err(|e| e.to_string())?;
-    match ws.archive_memory(slug) {
+    let exact = match ws.typed_memory(slug, memstore::Typed::Archiving) {
+        Ok(exact) => exact,
+        Err(e) => return workspace_refusal(name, slug, &e),
+    };
+    match ws.archive_memory(&exact) {
         Ok(path) => {
-            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
             voice::ok(&format!(
                 "Archived '{slug}' from workspace '{name}' → {}. Undo: `charter workspace \
-                 unarchive {stem} -w {name}`",
-                voice::rel(plane.root(), &path)
+                 unarchive {} -w {name}`",
+                voice::rel(plane.root(), &path),
+                memstore::undo_args(&exact, &path)
             ));
             reactive(plane);
             Ok(0)
@@ -891,7 +903,11 @@ pub fn workspace_unarchive(
     restore_as: Option<&str>,
 ) -> Result<Code, String> {
     let ws = plane.workspace(name).map_err(|e| e.to_string())?;
-    match ws.unarchive_memory(slug, restore_as) {
+    let exact = match ws.typed_memory(slug, memstore::Typed::Restoring) {
+        Ok(exact) => exact,
+        Err(e) => return workspace_refusal(name, slug, &e),
+    };
+    match ws.unarchive_memory(&exact, restore_as) {
         Ok(path) => {
             voice::ok(&format!(
                 "Restored '{slug}' to workspace '{name}' → {}",
