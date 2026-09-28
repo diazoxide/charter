@@ -682,6 +682,17 @@ impl Planes {
                 }
             })
         });
+        // The conversation a chat's own harness moves it onto — the first one Codex or
+        // opencode names, a Claude Code `/clear` — is the one the record resumes it by (Q10).
+        // Weak for the handoff's reason.
+        held.hooks().when_it_follows({
+            let held = Arc::downgrade(&held);
+            Arc::new(move |session, id| {
+                if let Some(held) = held.upgrade() {
+                    held.chats().follow_conversation(session, id);
+                }
+            })
+        });
         // Auto-save of a workspace's repos waits for its chats' turns, which only the plane
         // knows. Weak for the handoff's reason: the plane holds the worker.
         if let Some(worker) = held
@@ -4656,5 +4667,179 @@ mod tests {
             "a closed chat is not marked"
         );
         planes.close(&plane).expect("it closes");
+    }
+
+    /// A plane whose record is the app's to write, as it is once a launch has put it back —
+    /// and nothing else in it.
+    fn a_plane_writing_its_record(dir: &Path) -> (Planes, PathBuf, Arc<Held>) {
+        let root = a_plane(&dir.join("plane"));
+        let planes = planes();
+        let plane = planes.open(&root);
+        let held = planes.held(&plane).expect("it is held");
+        held.reopen(STARTING, Ok(reopen::Record::default()), Choice::ReopenAll);
+        (planes, root, held)
+    }
+
+    /// A chat on a stand-in called `harness` that says nothing and waits, so the chat stays
+    /// open while a test reports on its behalf.
+    fn a_chat_on_a_stand_in(held: &Held, dir: &Path, harness: &str) -> u32 {
+        let program = stand_in::program(dir, harness, "#!/bin/sh\nsleep 600\n");
+        held.chats()
+            .start(
+                &one_chat_on(&program.display().to_string()).chats[0],
+                STARTING,
+            )
+            .expect("the chat starts")
+    }
+
+    /// A report of `event` from chat `session`'s harness naming `conversation`, over the
+    /// plane's real socket.
+    fn a_report_naming(
+        held: &Held,
+        session: u32,
+        event: charter_core::state::Event,
+        conversation: charter_core::hookwire::Conversation,
+        pid: Option<u32>,
+    ) {
+        charter_core::hookwire::send(
+            held.hooks().socket().expect("the plane is listening"),
+            &charter_core::hookwire::Report {
+                chat: session,
+                event,
+                conversation,
+                pid,
+                detail: charter_core::state::Detail::default(),
+            },
+        )
+        .expect("the hook reaches the plane");
+    }
+
+    fn named(id: &str) -> charter_core::hookwire::Conversation {
+        charter_core::hookwire::Conversation::Named(id.to_owned())
+    }
+
+    /// The conversation the record on disk would resume the plane's one chat by.
+    fn recorded_resume(root: &Path) -> Option<String> {
+        reopen::read_or_refusal(root)
+            .ok()?
+            .chats
+            .first()?
+            .resume
+            .as_ref()
+            .map(|id| id.as_str().to_owned())
+    }
+
+    /// The words the next launch would start the recorded chat with.
+    fn relaunched_with(root: &Path) -> Vec<String> {
+        reopen::read_or_refusal(root)
+            .expect("the record reads")
+            .chats[0]
+            .launch()
+            .args
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_codex_chat_s_conversation_reported_by_its_hook_is_recorded_and_resumed_at_relaunch() {
+        // Q10: codex names its id only through a hook, inside its first turn, and nothing wrote
+        // it back — so every codex chat came back fresh (`NoConversationRecorded`).
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, held) = a_plane_writing_its_record(dir.path());
+        let session = a_chat_on_a_stand_in(&held, dir.path(), "codex");
+        assert_eq!(recorded_resume(&root), None, "codex chooses its own id");
+
+        let id = "019a0000-aaaa-7bbb-8ccc-dddddddddddd";
+        a_report_naming(
+            &held,
+            session,
+            charter_core::state::Event::UserPromptSubmit,
+            named(id),
+            None,
+        );
+
+        assert!(
+            becomes(|| recorded_resume(&root).as_deref() == Some(id)),
+            "the record still says {:?}",
+            recorded_resume(&root)
+        );
+        assert_eq!(
+            relaunched_with(&root),
+            vec!["resume".to_owned(), id.to_owned()]
+        );
+        held.close_chat(session).expect("it closes");
+        planes.close(&held.id).expect("it closes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_opencode_chat_s_conversation_reported_by_its_plugin_is_recorded_and_resumed_at_relaunch()
+    {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, held) = a_plane_writing_its_record(dir.path());
+        let session = a_chat_on_a_stand_in(&held, dir.path(), "opencode");
+
+        let id = "ses_3a1b2c3d4e5fGhIjKlMnOp";
+        a_report_naming(
+            &held,
+            session,
+            charter_core::state::Event::UserPromptSubmit,
+            named(id),
+            None,
+        );
+
+        assert!(
+            becomes(|| recorded_resume(&root).as_deref() == Some(id)),
+            "the record still says {:?}",
+            recorded_resume(&root)
+        );
+        assert_eq!(relaunched_with(&root), vec!["-s".to_owned(), id.to_owned()]);
+        held.close_chat(session).expect("it closes");
+        planes.close(&held.id).expect("it closes");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_claude_chat_that_was_cleared_is_recorded_under_its_new_conversation() {
+        // `/clear` (C6) is a new conversation from the same process. The board followed it and
+        // the record kept the old id, so a relaunch resumed the conversation the operator had
+        // cleared away.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (planes, root, held) = a_plane_writing_its_record(dir.path());
+        let session = a_chat_on_a_stand_in(&held, dir.path(), "claude");
+        let started = recorded_resume(&root).expect("charter chose claude's id");
+        a_report_naming(
+            &held,
+            session,
+            charter_core::state::Event::SessionStart,
+            named(&started),
+            Some(4242),
+        );
+        // Adopted before the next report is sent: each report is its own connection, and one
+        // naming another id before adoption is, rightly, not this chat's.
+        assert!(
+            becomes(|| held.hooks().board().state(session) != charter_core::state::State::Unknown),
+            "the chat's own start was never taken"
+        );
+
+        let cleared = "22222222-3333-4444-8555-666666666666";
+        a_report_naming(
+            &held,
+            session,
+            charter_core::state::Event::SessionStart,
+            named(cleared),
+            Some(4242),
+        );
+
+        assert!(
+            becomes(|| recorded_resume(&root).as_deref() == Some(cleared)),
+            "the record still says {:?}",
+            recorded_resume(&root)
+        );
+        assert_eq!(
+            relaunched_with(&root)[..2],
+            ["--resume".to_owned(), cleared.to_owned()]
+        );
+        held.close_chat(session).expect("it closes");
+        planes.close(&held.id).expect("it closes");
     }
 }

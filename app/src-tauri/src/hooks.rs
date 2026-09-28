@@ -126,10 +126,18 @@ pub struct Hooks {
     /// chats, which are built after the socket. A curation chat's typed prompt waits on it
     /// (`crate::curation::Typed`).
     heard: Arc<Mutex<Option<Heard>>>,
+    /// Told each time the board moves a chat onto another conversation — a slot filled after
+    /// the fact, for `answering`'s reason. The chats' record listens, so the conversation a
+    /// relaunch resumes is the one the chat is in now (Q10).
+    following: Arc<Mutex<Option<Following>>>,
 }
 
 /// What is told each report the board took.
 pub type Heard = Arc<dyn Fn(&Report) + Send + Sync + 'static>;
+
+/// What is told that chat `session` is now in conversation `id`: the id its own harness
+/// reported, that the board adopted or followed.
+pub type Following = Arc<dyn Fn(u32, &str) + Send + Sync + 'static>;
 
 /// What answers an ask, told which connection it came on.
 pub type Answering = Arc<dyn Fn(u64, Ask) -> Answer + Send + Sync + 'static>;
@@ -245,6 +253,7 @@ impl Hooks {
             socket: None,
             answering: Arc::new(Mutex::new(None)),
             heard: Arc::new(Mutex::new(None)),
+            following: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -264,13 +273,29 @@ impl Hooks {
         let board = Arc::new(Mutex::new(Board::new()));
         let answering: Arc<Mutex<Option<Answering>>> = Arc::new(Mutex::new(None));
         let heard: Arc<Mutex<Option<Heard>>> = Arc::new(Mutex::new(None));
+        let following: Arc<Mutex<Option<Following>>> = Arc::new(Mutex::new(None));
         let reading = listener.each_answering_and_noticing(
             {
                 let board = Arc::clone(&board);
                 let plane = plane.clone();
                 let heard = Arc::clone(&heard);
+                let following = Arc::clone(&following);
                 Box::new(move |report| {
-                    if let Some(what) = apply(&board, &plane, &report) {
+                    let applied = apply(&board, &plane, &report);
+                    // Before the window is told, so the record already names the conversation
+                    // by the time anything the move prompts could ask for it. Whether or not a
+                    // reader sees a difference: after `/clear` the chat may be in the state it
+                    // was in, under a conversation it was not.
+                    if let Some(id) = applied.followed {
+                        let listener = following
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .clone();
+                        if let Some(listener) = listener {
+                            listener(report.chat, &id);
+                        }
+                    }
+                    if let Some(what) = applied.moved {
                         moved(what);
                         // Only a report that moved the board: one for a chat it does not have,
                         // or one ADR 0024's rules refused, is heard by nobody. A chat's first
@@ -316,6 +341,7 @@ impl Hooks {
             socket: Some(socket),
             answering,
             heard,
+            following,
         })
     }
 
@@ -353,6 +379,23 @@ impl Hooks {
     /// Who is told each report the board takes from now on.
     pub fn when_heard(&self, heard: Heard) {
         *self.heard.lock().unwrap_or_else(PoisonError::into_inner) = Some(heard);
+    }
+
+    /// Who is told, from now on, each time a chat's own harness moves it onto another
+    /// conversation.
+    ///
+    /// **Only what the board took.** It is told the conversation [`Board::conversation`]
+    /// answers after a report, and only when that changed — so a report ADR 0024's rules
+    /// refused (a nested harness's, [`Conversation::Contradicted`], a
+    /// [`Conversation::Foreign`] after adoption) is told to nobody, because it moved nothing.
+    ///
+    /// [`Conversation::Contradicted`]: charter_core::hookwire::Conversation::Contradicted
+    /// [`Conversation::Foreign`]: charter_core::hookwire::Conversation::Foreign
+    pub fn when_it_follows(&self, following: Following) {
+        *self
+            .following
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(following);
     }
 
     /// A chat `session` handed work to, shown as `from`, has reported back to it
@@ -456,17 +499,39 @@ fn sequence() -> u32 {
     was.saturating_add(1)
 }
 
-/// Applies one report, answering with what a reader would now see differently.
+/// What one report did.
+struct Applied {
+    /// What a reader would now see differently, or nothing when no reader would.
+    moved: Option<Moved>,
+    /// The conversation the chat is in now, where the report moved it onto one: the first id
+    /// a Codex or opencode chat names, or the one a Claude Code chat's own process moved to on
+    /// `/clear` (C6). Nothing for a report that left the chat where it was.
+    followed: Option<String>,
+}
+
+/// Applies one report, answering with what a reader would now see differently and which
+/// conversation, if a new one, the chat is now in.
 ///
 /// The answer is built under the SAME hold as the change. Reports arrive on a thread each, so
 /// dropping the lock in between let two of them interleave — mutate, mutate, read, read — and
 /// the window could then be sent the older of the two snapshots last and keep it until the
 /// next event. A review found it.
-fn apply(board: &Mutex<Board>, plane: &PlaneId, report: &Report) -> Option<Moved> {
+///
+/// **Which conversation is the board's answer, read before and after**, and not the report's:
+/// [`Board::reported`] is the one place that decides whether a report is the chat's own
+/// harness speaking (ADR 0024), and a second reading of the report here would be a second
+/// answer to that question.
+fn apply(board: &Mutex<Board>, plane: &PlaneId, report: &Report) -> Applied {
     let mut guard = held_board(board);
-    guard
+    let was = guard.conversation(report.chat).map(str::to_owned);
+    let moved = guard
         .reported(report)
-        .then(|| seen_by(&guard, plane, report.chat))
+        .then(|| seen_by(&guard, plane, report.chat));
+    let now = guard.conversation(report.chat);
+    let followed = now
+        .filter(|now| was.as_deref() != Some(*now))
+        .map(str::to_owned);
+    Applied { moved, followed }
 }
 
 /// The board, whether or not a thread panicked while holding it.
@@ -510,7 +575,11 @@ mod tests {
         let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
         let hooks = Hooks::deaf(plane);
         hooks.board().opened(session, None, None);
-        assert!(apply(&hooks.board, &hooks.plane, &stop(session)).is_some());
+        assert!(
+            apply(&hooks.board, &hooks.plane, &stop(session))
+                .moved
+                .is_some()
+        );
         hooks
     }
 
@@ -530,9 +599,11 @@ mod tests {
         // that read it, after the board is let go, so it can reach the window AFTER a close
         // that came later. The number is what lets the window tell which is newer.
         let hooks = asking(7);
-        let late = apply(&hooks.board, &hooks.plane, &stop(7));
+        let late = apply(&hooks.board, &hooks.plane, &stop(7)).moved;
         hooks.board().ignored(7);
-        let report = apply(&hooks.board, &hooks.plane, &stop(7)).expect("a new request");
+        let report = apply(&hooks.board, &hooks.plane, &stop(7))
+            .moved
+            .expect("a new request");
 
         let close = hooks.closed(7);
 
@@ -691,5 +762,116 @@ mod tests {
         );
 
         assert_eq!(told, None);
+    }
+
+    use charter_core::harness::Harness;
+    use charter_core::hookwire::Conversation;
+
+    /// A board holding chat 7 running `harness`, under `conversation` where charter chose one.
+    fn running(harness: Harness, conversation: Option<&str>) -> Hooks {
+        let plane: PlaneId = serde_json::from_str("\"/plane\"").expect("a plane id");
+        let hooks = Hooks::deaf(plane);
+        hooks
+            .board()
+            .opened(7, Some(harness), conversation.map(str::to_owned));
+        hooks
+    }
+
+    /// The conversation chat 7 moved onto when `conversation` was reported from `pid`, if any.
+    fn followed_after(
+        hooks: &Hooks,
+        conversation: Conversation,
+        pid: Option<u32>,
+    ) -> Option<String> {
+        let report = Report {
+            chat: 7,
+            event: charter_core::state::Event::UserPromptSubmit,
+            conversation,
+            pid,
+            detail: charter_core::state::Detail::default(),
+        };
+        apply(&hooks.board, &hooks.plane, &report).followed
+    }
+
+    fn named(id: &str) -> Conversation {
+        Conversation::Named(id.to_owned())
+    }
+
+    #[test]
+    fn a_codex_chat_follows_the_first_conversation_its_harness_names_and_no_other() {
+        let hooks = running(Harness::Codex, None);
+
+        assert_eq!(
+            followed_after(&hooks, named("aaa"), None).as_deref(),
+            Some("aaa")
+        );
+        assert_eq!(
+            followed_after(&hooks, named("aaa"), None),
+            None,
+            "no rewrite"
+        );
+        assert_eq!(
+            followed_after(&hooks, named("bbb"), None),
+            None,
+            "a later id from a pid-less harness is a nested run, never followed"
+        );
+    }
+
+    #[test]
+    fn an_opencode_chat_follows_the_first_conversation_its_plugin_names() {
+        let hooks = running(Harness::Opencode, None);
+
+        assert_eq!(
+            followed_after(&hooks, named("ses_abc"), None).as_deref(),
+            Some("ses_abc")
+        );
+    }
+
+    #[test]
+    fn a_report_that_is_not_the_chat_s_own_harness_moves_no_conversation() {
+        // ADR 0024 C5: a harness nested in the chat's shell must not be able to rewrite what
+        // the chat resumes at the next launch.
+        let codex = running(Harness::Codex, None);
+        assert_eq!(
+            followed_after(&codex, Conversation::Contradicted, None),
+            None
+        );
+        assert_eq!(
+            followed_after(&codex, named("ccc"), Some(99)),
+            None,
+            "a claude inside a codex chat"
+        );
+        assert_eq!(
+            followed_after(&codex, named("aaa"), None).as_deref(),
+            Some("aaa")
+        );
+        assert_eq!(followed_after(&codex, Conversation::Foreign, None), None);
+
+        let claude = running(Harness::ClaudeCode, Some("chosen"));
+        assert_eq!(followed_after(&claude, named("chosen"), Some(10)), None);
+        assert_eq!(
+            followed_after(&claude, named("nested"), Some(11)),
+            None,
+            "a claude started inside a claude chat"
+        );
+        assert_eq!(
+            followed_after(&claude, Conversation::Contradicted, Some(10)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_claude_chat_follows_its_own_process_onto_the_conversation_a_clear_starts() {
+        let hooks = running(Harness::ClaudeCode, Some("chosen"));
+        assert_eq!(
+            followed_after(&hooks, named("chosen"), Some(10)),
+            None,
+            "the id charter chose is already recorded; adopting it rewrites nothing"
+        );
+
+        assert_eq!(
+            followed_after(&hooks, named("cleared"), Some(10)).as_deref(),
+            Some("cleared")
+        );
     }
 }

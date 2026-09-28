@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::Size;
-use charter_core::harness::Harness;
+use charter_core::harness::{Harness, SessionId};
 use charter_core::reopen::{Chat, Record, Reopened, View};
 
 use charter_core::harness::StateHooks;
@@ -571,6 +571,34 @@ impl Chats {
             return;
         }
         from.report = owed;
+        drop(open);
+        self.write_it_down();
+    }
+
+    /// Chat `session`'s own harness has put it in conversation `id` — the first one a Codex
+    /// or opencode chat names, or the one a Claude Code chat moved to on `/clear` (C6) — so
+    /// that is the conversation the record resumes it by from now on (Q10).
+    ///
+    /// **The board has already judged it.** This is told only what `Board::reported` adopted
+    /// or followed (`Hooks::when_it_follows`), so a nested harness's report never gets here.
+    ///
+    /// Written down only when the record would change, for [`Self::pin`]'s reason. Nothing for
+    /// a chat that runs no harness: a shell tab is resumed by nothing, whatever ran in it.
+    ///
+    /// **A report that arrives before the chat is remembered here is not kept**, which no
+    /// harness charter starts can produce: Claude Code's first report names the id charter
+    /// chose, which moves nothing, and Codex and opencode name theirs inside the first turn,
+    /// long after the start returned.
+    pub fn follow_conversation(&self, session: u32, id: &str) {
+        let Ok(id) = SessionId::new(id) else { return };
+        let mut open = lock(&self.open);
+        let Some(one) = open.get_mut(&session) else {
+            return;
+        };
+        if one.harness.is_none() || one.chat.resume.as_ref() == Some(&id) {
+            return;
+        }
+        one.chat.resume = Some(id);
         drop(open);
         self.write_it_down();
     }
@@ -2250,6 +2278,63 @@ mod tests {
 
         assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), after_one);
         let _ = chats.close(session);
+    }
+
+    // ----- the conversation a chat is in now (Q10) -----
+
+    #[test]
+    fn a_conversation_the_chat_s_harness_moved_to_is_the_one_the_record_resumes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        chats.follow_conversation(session, ID);
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(last.chats[0].resume, Some(SessionId::new(ID).unwrap()));
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn following_the_conversation_the_record_already_has_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", Some(ID)), SIZE)
+            .unwrap();
+        let before = lock(&wrote).len();
+
+        chats.follow_conversation(session, ID);
+
+        assert_eq!(lock(&wrote).len(), before);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_shell_tab_is_resumed_by_no_conversation_whatever_ran_in_it() {
+        // A shell tab resumes nothing (`Fresh::NoResumeForThisProgram`), so an id in its record
+        // would be a write that means nothing.
+        let (chats, wrote) = recorded();
+        let session = chats.start(&chat("/bin/sh", "shell", None), SIZE).unwrap();
+        let before = lock(&wrote).len();
+
+        chats.follow_conversation(session, ID);
+
+        assert_eq!(lock(&wrote).len(), before);
+        assert_eq!(chats.record().chats[0].resume, None);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_conversation_for_a_chat_that_is_not_open_invents_nothing() {
+        let (chats, wrote) = recorded();
+
+        chats.follow_conversation(7, ID);
+
+        assert!(lock(&wrote).is_empty());
+        assert_eq!(chats.record(), Record::default());
     }
 
     // ----- the name the operator gave a chat (charter-app#254) -----
