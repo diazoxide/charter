@@ -465,12 +465,7 @@ impl Workspace {
         )?;
         // A legacy `notes.md` is grandfathered into the index, so a pre-v2 workspace's memo
         // stays discoverable (`workspace.scaffold_memory`).
-        if dir.join("notes.md").exists()
-            && memstore::readable_file(&self.plane_root, &index)
-            && !memstore::read_text(&index).is_some_and(|t| t.contains("(notes.md)"))
-        {
-            memstore::index_append(&self.plane_root, &index, "notes.md", "Task memo (legacy)")?;
-        }
+        self.index_legacy_memo(&dir, &index)?;
         memstore::write(
             &self.plane_root,
             &dir,
@@ -529,13 +524,30 @@ impl Workspace {
             &dir,
             &WS_MEMORY_HEADER.replace("{name}", &self.name),
         )?;
-        if dir.join("notes.md").exists()
-            && memstore::readable_file(&self.plane_root, &index)
-            && !memstore::read_text(&index).is_some_and(|t| t.contains("(notes.md)"))
-        {
-            memstore::index_append(&self.plane_root, &index, "notes.md", "Task memo (legacy)")?;
-        }
+        self.index_legacy_memo(&dir, &index)?;
         Ok(index)
+    }
+
+    /// Append `- [Task memo (legacy)](notes.md)` to the journal's index when the workspace has a
+    /// pre-v2 `notes.md` the index does not list yet — [`Self::remember_titled`] and
+    /// [`Self::scaffold_memory`] both, so the two cannot disagree on when.
+    ///
+    /// By the rules every index append keeps (SI-9f). Whether it is listed is
+    /// [`memstore::listed`]'s answer, which reads a `- [` line by its leading link: charter's
+    /// `(notes.md)` anywhere in the text took a title mentioning it for the memo's own line.
+    /// And the read and the append are held under the store's [`crate::rewrite::Lock`], as
+    /// `write`'s are, so an edit's retitle cannot put back an index read before the append.
+    /// Released before returning: `memstore::write`, which [`Self::remember_titled`] calls
+    /// next, takes the same lock, and a second `Lock::on` in one process waits for the first.
+    fn index_legacy_memo(&self, dir: &Path, index: &Path) -> io::Result<()> {
+        let _held = crate::rewrite::Lock::on(dir);
+        if dir.join("notes.md").exists()
+            && memstore::readable_file(&self.plane_root, index)
+            && !memstore::listed(&self.plane_root, dir).contains("notes.md")
+        {
+            memstore::index_append(&self.plane_root, index, "notes.md", "Task memo (legacy)")?;
+        }
+        Ok(())
     }
 
     /// Create the workspace's manifest if it has none. Never touches one that is there.

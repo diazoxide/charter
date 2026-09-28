@@ -246,11 +246,15 @@ pub fn stopped(tree: &Path) -> Option<Stopped> {
 pub fn unmerged(tree: &Path) -> Vec<String> {
     crate::worktree::git::run(
         tree,
-        // `--no-optional-locks`: the title bar asks this every ten seconds, and a `diff` that
-        // refreshed the index would take `index.lock` from under a save's `git add -A`.
+        // `diff-files`, the plumbing, never porcelain `diff`: the title bar asks this every ten
+        // seconds, and `diff` refreshes the index — taking `index.lock` from under a save's
+        // `git add -A` — whenever a tracked file's stat data no longer matches it, which
+        // `--no-optional-locks` does not stop (measured on git 2.50: it holds back `status`'s
+        // refresh and not `diff`'s). `diff-files` compares against the index as it is and
+        // writes nothing, and lists an unmerged path the same way.
         &[
             "--no-optional-locks",
-            "diff",
+            "diff-files",
             "--name-only",
             "--diff-filter=U",
             "-z",

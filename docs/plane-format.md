@@ -1052,12 +1052,15 @@ excepted), and for a secret-shaped value, named by its kind.
   and nothing else in it** (SI-9e), so a title that mentions `(b.md)` does not list `b.md` — the
   line of a memory unarchived beside it is appended, and `optimize` counts it as unindexed until
   it is. A line of any other shape, or whose leading element never closes, is read by charter's
-  pattern. Every charter-app append to the index — `write`, `unarchive` and `optimize --apply`'s
-  repair — runs under the store directory's `rewrite::Lock`, which an edit's retitle and a
-  deletion also hold (SI-9d, SI-9e): an append between a rewrite's read and its replace went
-  with the old file.
+  pattern. Every charter-app append to the index — `write`, `unarchive`, `optimize --apply`'s
+  repair and the legacy `notes.md` line below — runs under the store directory's
+  `rewrite::Lock`, which an edit's retitle and a deletion also hold (SI-9d, SI-9e, SI-9f): an
+  append between a rewrite's read and its replace went with the old file.
   A legacy `notes.md` is grandfathered into the index once, as
-  `- [Task memo (legacy)](notes.md)` (`charter/workspace.py:1824`).
+  `- [Task memo (legacy)](notes.md)` (`charter/workspace.py:1824`). Charter appends it when the
+  index text holds no `(notes.md)` anywhere; **charter-app appends it when the index does not
+  list `notes.md` by the reading above** (SI-9f), so a title that mentions `(notes.md)` no
+  longer stands in for the memo's own line.
 
 #### `workspaces/<ws>/memory/<YYYYMMDD-HHMMSS>-<slug>.md`
 

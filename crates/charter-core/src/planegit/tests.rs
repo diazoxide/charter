@@ -2292,7 +2292,17 @@ fn reading_where_unsaved_work_sits_never_writes_the_index_a_save_needs() {
         .set_modified(old)
         .unwrap();
     // A tracked file whose stat data no longer matches the index: a refresh would rewrite it.
-    std::fs::write(fixture.root.join("README.md"), "one\n").unwrap();
+    // Its mtime is set, not left to the write: git compares whole seconds, so a rewrite in the
+    // second the fixture committed in matched, and this test only saw a refresh when the
+    // commit and the rewrite straddled a second — about one run in twenty under load.
+    let readme = fixture.root.join("README.md");
+    std::fs::write(&readme, "one\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&readme)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
     let before = std::fs::metadata(&index).unwrap().modified().unwrap();
 
     let _ = standing(&fixture.root);
