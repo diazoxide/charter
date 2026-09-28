@@ -10,10 +10,13 @@ use std::path::{Path, PathBuf};
 
 use crate::{manifest, mdsection, memstore};
 
-/// `workspace.md`'s template, with `{name}` and `{vision}` to fill. Taken from
+/// `workspace.md`'s template, with `{name}`, `{vision}` and `{sessions}` to fill. Taken from
 /// `charter/workspace.py:_CHARTER_TEMPLATE` verbatim — the file is committed and
-/// hand-edited, so a byte that differs is a diff in the operator's repository.
-const CHARTER_TEMPLATE: &str = "# {name}\n\n> **Living charter** for this workspace — its north star and shared context.\n> Keep it current as the work evolves (edit this file, or `charter workspace vision \"…\"`).\n> It's committed + shared for LIVE workspaces, and a fork inherits it — so anyone\n> can pick up the task with full context. Never put secrets here (vault only).\n\n## Vision\n\n{vision}\n\n## Context & decisions\n\n<!-- Key facts, constraints, and design/architecture decisions found while working —\n     the durable \"why\", not a chronological log. Grow this as you learn. -->\n\n_Nothing yet._\n\n## Glossary\n\n<!-- Task/domain vocabulary so a teammate or a fork isn't lost: `term` — definition. -->\n\n_Nothing yet._\n\n## Log\n\nChronological \"what was done\" lives in the task memo — `memory/notes.md`\n(append with `charter workspace note \"…\"`).\n";
+/// hand-edited, so a byte that differs is a diff in the operator's repository — with one
+/// declared difference: the `## Sessions` section before `## Log` (SI-8, ADR 0064), whose one
+/// line charter keeps pointing at the workspace's session records
+/// ([`crate::sessionrecord::point`]).
+const CHARTER_TEMPLATE: &str = "# {name}\n\n> **Living charter** for this workspace — its north star and shared context.\n> Keep it current as the work evolves (edit this file, or `charter workspace vision \"…\"`).\n> It's committed + shared for LIVE workspaces, and a fork inherits it — so anyone\n> can pick up the task with full context. Never put secrets here (vault only).\n\n## Vision\n\n{vision}\n\n## Context & decisions\n\n<!-- Key facts, constraints, and design/architecture decisions found while working —\n     the durable \"why\", not a chronological log. Grow this as you learn. -->\n\n_Nothing yet._\n\n## Glossary\n\n<!-- Task/domain vocabulary so a teammate or a fork isn't lost: `term` — definition. -->\n\n_Nothing yet._\n\n## Sessions\n\n{sessions}\n\n## Log\n\nChronological \"what was done\" lives in the task memo — `memory/notes.md`\n(append with `charter workspace note \"…\"`).\n";
 
 /// The vision body charter writes when no vision is set, and reads back as "unset".
 pub const VISION_PLACEHOLDER: &str = "_Not set yet — describe the goal: what are we building or fixing, and why? Set it with `charter workspace vision \"…\"` (or edit this file)._";
@@ -315,7 +318,8 @@ impl Workspace {
         std::fs::create_dir_all(&self.dir)?;
         let body = CHARTER_TEMPLATE
             .replace("{name}", &self.name)
-            .replace("{vision}", VISION_PLACEHOLDER);
+            .replace("{vision}", VISION_PLACEHOLDER)
+            .replace("{sessions}", crate::sessionrecord::NONE_YET);
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)

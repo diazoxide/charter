@@ -84,6 +84,7 @@ row), and the status of that field where it differs from its file's.
   - [`workspaces/<ws>/memory/` — the task journal](#workspaceswsmemory--the-task-journal)
   - [`workspaces/<ws>/todos/`](#workspaceswstodos)
   - [`workspaces/<ws>/refs/README.md` (and whatever else the operator drops in `refs/`)](#workspaceswsrefsreadmemd-and-whatever-else-the-operator-drops-in-refs)
+  - [`workspaces/<ws>/sessions/` and `sessions/` — session records](#workspaceswssessions-and-sessions--session-records)
   - [`workspaces/<ws>/changes/<slug>.json` — a cross-repo change](#workspaceswschangesslugjson--a-cross-repo-change)
   - [`workspaces/<ws>/changes/log/<host>.jsonl` — the landing log](#workspaceswschangesloghostjsonl--the-landing-log)
   - [`workspaces/<ws>/pieces/<host>.jsonl` — the piece claim log](#workspaceswspieceshostjsonl--the-piece-claim-log)
@@ -578,6 +579,10 @@ key refuses.
   - `/.claude/settings.local.json` (`charter/commands.py:1100`, constant at
     `charter/commands.py:1771`)
   - `/charter.local.toml` (`charter/commands.py:1104`, constant at `charter/commands.py:1803`)
+  - `/sessions/` — **charter-app only** (ADR 0064): the plane root's session records stay on
+    this machine. In the baseline under its own comment, added by `init` when missing, and by
+    `reinit` under ``added by `charter reinit` — the plane root's session records stay on this
+    machine``. Deleting the line shares them.
   - `__pycache__/`, `*.py[cod]`, `.venv/`, `.DS_Store` (`charter/commands.py:1107`–`:1112`)
   - Presence detection is **whole-line, stripped**, except `.charter/` which is a substring
     test on the body (`charter/commands.py:1136`) — both quirks are deliberate and recorded.
@@ -878,7 +883,15 @@ Two rules hold for the whole area and are not repeated per file:
   - Created only when absent, with `config.create_for` (`charter/workspace.py:4360`); a
     file that exists is never overwritten, only its `## Vision` body replaced.
   - Template: `# <name>`, a 4-line block quote, then `## Vision`, `## Context & decisions`,
-    `## Glossary`, `## Log` (`charter/workspace.py:4295`–`4323`). The unset vision body is
+    `## Glossary`, `## Log` (`charter/workspace.py:4295`–`4323`). **charter-app adds
+    `## Sessions` before `## Log`** (ADR 0064), whose body is
+    `_No session records yet — a chat's Smart close writes one, and charter keeps this line
+    pointing at them._` until the first record.
+  - `## Sessions` is **charter's one line**, rewritten through the section replacement below
+    every time a record is written (`sessionrecord::point`): `<N> session record(s) — the
+    latest is [<title>](sessions/<file>) (<YYYY-MM-DD HH:MM>); all of them, newest first, in
+    [sessions/index.md](sessions/index.md).` A file without the section gets it appended. The
+    other sections are the operator's and the smart-close skill's. The unset vision body is
     the placeholder at `charter/workspace.py:4290` (`_Not set yet — …`).
   - Section replacement: `_replace_md_section` (`charter/workspace.py:4326`) keeps the
     `## <header>` line, replaces everything to the next line starting `"## "` or EOF with
@@ -1097,6 +1110,76 @@ excepted), and for a secret-shaped value, named by its kind.
 - **Encoding details:** body is
   `f"# {name} — task references\n\nDrop docs, links, and snippets for this task here (local, gitignored).\n"`
   (`charter/workspace.py:1864`).
+
+### `workspaces/<ws>/sessions/` and `sessions/` — session records
+
+- **Format:** a directory of Markdown files, one per **session record**, plus `index.md`.
+- **Status:** stable — **charter-app only** (SI-8, ADR 0064); the Python charter never wrote
+  one. Written when a chat closes through Smart close, and read by the next chat's briefing.
+- **Where:** `workspaces/<ws>/sessions/` for a chat in a workspace; `sessions/` at the plane
+  root for a chat at the plane root, which is in no workspace. Not `.charter/sessions/`, which
+  holds per-chat pointers (below) and has nothing to do with these.
+- **Written by:** `charter session record` alone (`sessionrecord::record`), with the body on
+  standard input. The app never writes one.
+- **Read by:** `charter session list|show`, the session-start briefing (one line naming the
+  place's newest record), and the smart-close skill's successors.
+- **Git:** a workspace's follow the workspace — un-ignored by the LIVE block's `sessions` pair,
+  kept on disk for a LOCAL one. The plane root's are ignored by `/sessions/` in the plane's
+  `.gitignore`: kept on this machine, because the plane root has no LIVE switch (ADR 0064).
+- **A record**, `<YYYYMMDD-HHMMSS>-<slug>.md`: the local time it was written, and
+  `memstore::slug` of its title; a name already taken gets `-2`, `-3`, …. Chosen under an
+  advisory lock on the directory and written whole (temp file and rename). The file is:
+
+  ```text
+  ---
+  title: <title>
+  date: <YYYY-MM-DD HH:MM:SS>
+  chat: <the app's number for the chat | unknown>
+  chat-name: <the name its tab shows | unknown>
+  persona: <name | none>
+  harness: <claude | codex | opencode | unknown>
+  conversation: <the harness's conversation id | unknown>
+  workspace: <ws | plane root>
+  piece: <repo>/<piece> @ <branch | (detached)>      (zero or more lines)
+  ---
+
+  # <title>
+
+  ## Goal
+  …
+  ## Done
+  …
+  ## Decisions
+  …
+  ## Open
+  …
+  ## How to resume
+  …
+  ```
+
+  The frontmatter is line-based (`personas::frontmatter`), every key always written, and is
+  charter's alone: the model gives only the title and the body. `conversation` is
+  `sessionrecord::conversation_of` — the app's `reopen.json` `resume` for that chat. `piece`
+  lines are the piece the command ran in and each `--piece`, with the branch `git worktree
+  list` reports; a `--piece` git does not report is refused. The body is exactly the five
+  `## ` sections above, in that order, each non-empty, with nothing before the first (a heading
+  inside a code fence is text); at most 32 KiB; no control or invisible formatting character
+  but a line feed or a tab; and no credential shape `charter save` would refuse a memory for.
+  The title is one line of at most 120 characters. `sessionrecord::check` is the one judgment.
+- **`index.md`**, rebuilt from the records every time one is written, so a hand edit lasts
+  until the next record:
+
+  ```text
+  # Sessions — workspace `<ws>`            (or: # Sessions — plane root)
+
+  One file per session record, newest first. charter rebuilds this index from the records each time one is written (`charter session record`), so an edit here does not last.
+
+  - <YYYY-MM-DD HH:MM> · [<title, [ and ] escaped>](<file>)
+  ```
+
+  Newest first, by file name. A file whose name is not a record's, a link that leaves the
+  plane's data directories (a workspace's) or any link below the plane root (the plane
+  root's), and a file over the plane's 1 MiB bound are not records and are not listed.
 
 ### `workspaces/<ws>/changes/<slug>.json` — a cross-repo change
 
@@ -1439,13 +1522,16 @@ excepted), and for a secret-shaped value, named by its kind.
   - Markers, verbatim:
     `# >>> charter live workspaces (managed by \`charter workspace live\`) >>>` and
     `# <<< charter live workspaces <<<` (`charter/workspace.py:1338`–`1339`).
-  - Nine lines per LIVE workspace, workspaces sorted by name
+  - Eleven lines per LIVE workspace, workspaces sorted by name
     (`charter/workspace.py:1396`–`1401`):
     `!/workspaces/<n>/workspace.json`, `!/workspaces/<n>/workspace.md`,
     `!/workspaces/<n>/memory`, `!/workspaces/<n>/memory/**`,
     `!/workspaces/<n>/todos`, `!/workspaces/<n>/todos/**`,
+    `!/workspaces/<n>/sessions`, `!/workspaces/<n>/sessions/**`,
     `!/workspaces/<n>/changes`, `!/workspaces/<n>/changes/**`,
-    `/workspaces/<n>/changes/log/`.
+    `/workspaces/<n>/changes/log/`. The `sessions` pair is charter-app's (ADR 0064): a
+    workspace's session records follow it, LIVE or LOCAL. A block written before it is brought
+    up to date by `reinit`, as any older block is.
   - Lines are joined with `\n` and the block has no trailing newline of its own; the rewrite
     is `re.sub(BEGIN .*? END, block, flags=DOTALL)` (`charter/workspace.py:1412`). A first
     write is inserted directly after the literal line `!/workspaces/.gitkeep\n`
@@ -1460,7 +1546,7 @@ excepted), and for a secret-shaped value, named by its kind.
     (`charter/workspace.py:1360`).
   - What a LIVE workspace actually stages is `_ws_meta_paths`
     (`charter/commands_workspace.py:1094`, list built at `charter/commands_workspace.py:1116`): `workspace.json`, `workspace.md`, `memory`,
-    `todos` (each only if it exists) and `changes` only when `change.has_records`
+    `todos`, `sessions` (charter-app; each only if it exists) and `changes` only when `change.has_records`
     (`charter/commands_workspace.py:1119`). The two lists must agree and only a test holds
     them together.
   - **In charter-app, going LOCAL also untracks** what the block had published
@@ -2751,7 +2837,8 @@ Measured after `init` + `guard ask 'terraform apply *'`:
   (`charter reinit`, `/charter.local.toml`), both through `util.append_gitignore`
   (`charter/util.py:472`).
 - **Lines charter owns:** `/workspaces/*/*`, `!/workspaces/.gitkeep`, `/.charter/`,
-  `/.claude/settings.local.json`, `/charter.local.toml`, plus the Python/OS block in the
+  `/.claude/settings.local.json`, `/charter.local.toml`, `/sessions/` (charter-app, ADR 0064),
+  plus the Python/OS block in the
   baseline. Presence is tested per line (whole-line, except `.charter/` which is a substring
   test) — `charter/commands.py:1133`-`1141`. Never removed or reordered.
   (The managed live-workspace block `# >>> charter live workspaces …` is

@@ -45,6 +45,7 @@ mod memory;
 mod piece;
 mod report;
 mod secret;
+mod session;
 mod shellguard;
 mod statusline;
 mod voice;
@@ -113,6 +114,12 @@ enum Command {
     /// prompt typed and never sent.
     #[command(subcommand)]
     Curation(curation::CurationCommand),
+
+    /// Session records: what a chat leaves behind when it closes through Smart close — a
+    /// summary of its session in its workspace's sessions/ (or the plane's, at the plane
+    /// root), never the transcript.
+    #[command(subcommand)]
+    Session(session::SessionCommand),
 
     /// Harness profiles: which program a chat runs, and with what environment.
     #[command(subcommand)]
@@ -2205,6 +2212,7 @@ fn run(command: Command) -> Result<u8, String> {
         Command::Worktree(command) => return piece::run(&here, command),
         Command::Change(command) => return change::run(&here, command),
         Command::Curation(command) => return curation::run(here.plane.root(), command),
+        Command::Session(command) => return session::run(&here, command),
         Command::Workspace(WorkspaceCommand::Remember {
             text,
             title,
