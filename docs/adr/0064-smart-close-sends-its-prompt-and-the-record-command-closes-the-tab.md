@@ -133,6 +133,32 @@ command that writes the record is the command that closes the tab.
 - **Asking.** Closing a chat asks **Smart close** (primary), **Close** or **Cancel**. **Close**
   is the default when the chat has had at most one turn, where there is little to record.
 
+## Getting a session back (SI-8d, added 2026-09-28)
+
+The operator's ruling (Q9): *the user can always get old sessions back.*
+
+- **A Sessions panel** per workspace, and one on the plane root's tab for the plane's own, lists
+  `sessionrecord::list` newest first: the title, when, persona and harness, and `↻ resumable`
+  where the record holds a conversation. A row opens the record as a read-only view tab
+  (`{ view: "session", key: <plane-relative path> }`), rendered Markdown with no HTML.
+- **A record is named by its plane-relative path**, and `sessionrecord::locate` is the one
+  reading of it — the CLI's `session show`, the app's commands and the briefing all go through
+  it, and it refuses every other spelling rather than normalising one.
+- **Resume starts a NEW chat**, never the one that wrote the record: in the record's place, on
+  a profile of its harness (the project's default first, then a declared one, then the
+  built-in, because the record does not name the profile), with `Start::resume` set to its
+  conversation so `start::ready` builds the harness's own resume words — the relaunch's builder,
+  not a second one — and as its persona where the plane still has it. `Start::resuming` puts the
+  record's path in `$CHARTER_RESUMING_RECORD`, and the briefing quotes the record from it, every
+  line behind `> ` under a sentence saying it is data, up to 8,000 characters, in place of the
+  last-session line.
+- **When the conversation cannot be given, the chat is fresh and says why**: no id in the
+  record, no harness in it, no profile here that runs it. A harness that cannot find the
+  conversation cannot be asked in advance; it says so by its program failing **before it
+  reported anything** — a state the board holds from hooks and the exit status, never from
+  output. The window then closes that chat and asks again with `after_failure`, which starts the
+  same record fresh, once, and says the harness could not bring the conversation back.
+
 ## What this costs
 
 - **A record costs a turn.** Smart close spends one more turn of the model on the way out.
@@ -154,3 +180,7 @@ command that writes the record is the command that closes the tab.
 - **Charter folding the record into `workspace.md`.** Deciding what is durable is judgment. The
   skill does it; charter keeps one pointer line.
 - **Committing plane-root records by default.** Above.
+- **Reading the harness's "no conversation found" to fall back.** Output decides nothing (spec
+  decision 3). The failed exit before any report is the signal, and its cost is said: a resumed
+  chat whose program fails for another reason before its first report is also started again
+  fresh, once.

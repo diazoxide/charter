@@ -91,6 +91,7 @@ pub mod secrets;
 pub mod secretshape;
 pub mod session;
 pub mod sessionrecord;
+pub mod sessionresume;
 pub mod settings;
 pub mod shellguard;
 pub mod shellseg;

@@ -26,6 +26,7 @@ const PANELS: PanelsModel = {
   todos_refused: null,
   personas: ["steward"],
   persona: "steward",
+  sessions: [],
   contributed: [],
 };
 

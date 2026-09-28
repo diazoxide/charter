@@ -330,6 +330,7 @@ fn open(held: &Arc<Held>, spec: &str, action: &str, size: Size) -> Result<Curati
             // The picker's footer box is one operator choice for one chat, and nobody made it
             // for this one — a handoff's rule.
             show_footer: false,
+            resuming: None,
         },
         &root,
     )?;

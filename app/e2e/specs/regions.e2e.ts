@@ -304,6 +304,7 @@ describe("the right-hand region", () => {
     expect(whose).toEqual([
       ["panel-todos", "charter"],
       ["panel-personas", "charter"],
+      ["panel-sessions", "charter"],
     ]);
   });
 

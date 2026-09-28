@@ -370,6 +370,7 @@ fn open_it(held: &Held, plane: &PlaneId, open: &OpenChat, size: Size) -> Result<
             // The picker's footer box is one operator choice for one chat, and nobody made it
             // for this one.
             show_footer: false,
+            resuming: None,
         },
         root,
     )
@@ -554,6 +555,7 @@ mod tests {
                 cwd: Some(root.to_path_buf()),
                 resume: None,
                 show_footer: false,
+                resuming: None,
             },
             root,
         )

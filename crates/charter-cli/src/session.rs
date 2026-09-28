@@ -79,11 +79,15 @@ pub fn run(here: &Here, command: SessionCommand) -> Result<Code, String> {
             Ok(0)
         }
         SessionCommand::Show { file, workspace } => {
-            let (place, name) = match named(&file) {
-                Some((place, name)) => (place, name),
-                None => (here.place(workspace.as_deref()), file.clone()),
+            // A bare file name is in this chat's place; a path is read by the one reading of a
+            // record's path there is (`sessionrecord::locate`), which the app's Sessions panel
+            // and the briefing use too.
+            let shown = if file.contains('/') || file.contains('\\') {
+                sessionrecord::open(here.plane.root(), &file).map(|opened| opened.text)
+            } else {
+                sessionrecord::show(here.plane.root(), &here.place(workspace.as_deref()), &file)
             };
-            match sessionrecord::show(here.plane.root(), &place, &name) {
+            match shown {
                 Ok(text) => {
                     print!("{text}");
                     Ok(0)
@@ -94,21 +98,6 @@ pub fn run(here: &Here, command: SessionCommand) -> Result<Code, String> {
                 }
             }
         }
-    }
-}
-
-/// The place and file a plane-relative record path names: `sessions/<file>` or
-/// `workspaces/<ws>/sessions/<file>`. `None` for a bare name, which is in the chat's place.
-fn named(file: &str) -> Option<(Place, String)> {
-    let parts: Vec<&str> = file.split('/').collect();
-    match parts.as_slice() {
-        [sessionrecord::DIR, name] => Some((Place::PlaneRoot, (*name).to_owned())),
-        ["workspaces", ws, sessionrecord::DIR, name] => {
-            Some((Place::Workspace((*ws).to_owned()), (*name).to_owned()))
-        }
-        [_] => None,
-        // Anything else names no record; handed on whole, it is refused by name.
-        _ => Some((Place::PlaneRoot, file.to_owned())),
     }
 }
 

@@ -35,6 +35,7 @@ import type {
   SubjectCurations,
 } from "./bindings";
 import { MAIN } from "./here";
+import { sessionTitle, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
 import { onAMac } from "./tabKeys";
 import {
@@ -195,6 +196,10 @@ export type Does =
    *  here rather than only a click on the panel because a menu is a third reader of this list
    *  (`Menus.tsx`) and the persona rows had nothing in it to read (charter-app#174). */
   | { verb: "openView"; view: ViewRef; title: string }
+  /** Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its
+   *  harness, given its conversation where it can be, and told the record in its briefing. It
+   *  starts a chat, so it answers a `Ran` — the core can refuse. */
+  | { verb: "resumeSession"; path: string }
   /** Runs an extension's action on nothing in particular — a palette command's (charter-app#341).
    *
    *  **It runs nothing by itself when the action asks first**: the window asks, and the core
@@ -404,6 +409,11 @@ export type Now = {
    */
   todos?: readonly { slug: string; title: string }[];
   /**
+   * The session records of the place in front — the focused workspace's, or the plane root's
+   * when it is focused (SI-8d) — newest first, one open and one resume row each.
+   */
+  sessions?: readonly { path: string; title: string; resumable: boolean }[];
+  /**
    * The views approved extensions offer this window (`extension_views`), one row each. The
    * palette is how a keyboard reaches them; the personas panel's heading is how a pointer does.
    */
@@ -505,6 +515,8 @@ export type Doing = {
   /** Opens a view's tab, or brings forward the one showing it. It reads and changes nothing
    *  by itself, so it answers no `Ran`. */
   openView: (view: ViewRef, title: string) => void;
+  /** Resumes a session from its record at `path`, in a tab of its own. */
+  resumeSession: (path: string) => Promise<Ran>;
   /** Runs an extension's action — asking first when it says to, and always when it deletes. It
    *  answers a `Ran`: the core can refuse, and what it saw change outside the extension's
    *  declared paths is a sentence the operator is owed. */
@@ -1226,6 +1238,34 @@ export function catalogue(now: Now): Offer[] {
       });
     }
   }
+  // **The session records of the place in front, two rows each** (SI-8d): open one as a view
+  // tab, and resume it as a new chat. Only the place in front's, because the Sessions panel the
+  // rows stand beside is about that place — a workspace, or the plane root.
+  for (const record of now.sessions ?? []) {
+    offers.push(
+      can(
+        `session.open:${record.path}`,
+        `Open session record: ${record.title}`,
+        {
+          verb: "openView",
+          view: sessionView(record.path),
+          title: sessionTitle(record.title),
+        },
+        record.title,
+      ),
+      {
+        ...can(
+          `session.resume:${record.path}`,
+          `Resume session: ${record.title}`,
+          { verb: "resumeSession", path: record.path },
+          record.title,
+        ),
+        note: record.resumable
+          ? "A new chat, given its conversation back, with the record in its briefing."
+          : "A new chat with the record in its briefing — the record holds no conversation to give back.",
+      },
+    );
+  }
   // **The focused workspace's clones, two rows each** (charter-app#174). A clone is where a
   // chat can start, one level up from a piece, and that is the whole of what this window can
   // do to one: open a tab there, or pick it as where every new chat starts. The first is the
@@ -1595,6 +1635,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "openView":
       doing.openView(does.view, does.title);
       return DID;
+    case "resumeSession":
+      return doing.resumeSession(does.path);
     case "runAction":
       return doing.runAction(does.extension, does.action, does.name);
     case "pickVault":
@@ -1917,6 +1959,8 @@ export type MenuOn =
   /** One of the focused workspace's open todos, by slug — the Todos panel's rows (SI-3). The
    *  workspace is the focused one on the one surface that draws them. */
   | { on: "todo"; slug: string }
+  /** One session record, by its plane-relative path — the Sessions panel's rows (SI-8d). */
+  | { on: "session"; path: string }
   /** One clone of the focused workspace, by name — the explorer's clone heading and the bottom
    *  bar's repo row. The path is the catalogue's, so the menu does not carry it. */
   | { on: "clone"; repo: string }
@@ -2017,6 +2061,8 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       };
     case "todo":
       return { above: [`todo.done:${what.slug}`], below: [`todo.forget:${what.slug}`] };
+    case "session":
+      return { above: [`session.open:${what.path}`, `session.resume:${what.path}`], below: [] };
     case "clone":
       // Where a chat can start, and nothing else: a clone is the operator's own checkout, and
       // nothing in this window writes to one (charter-app#174).

@@ -99,6 +99,7 @@ impl Plane {
             // The default every chat starts under, so the tests below describe the app as
             // it ships (ADR 0029).
             show_footer: false,
+            resuming: None,
         }
     }
 }

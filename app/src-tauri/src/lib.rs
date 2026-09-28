@@ -597,6 +597,87 @@ fn workspace_panels(
     panels::of(planes.held(&plane)?.root(), &workspace)
 }
 
+/// The plane root's panels (SI-1, SI-8d): its session records, as the Sessions panel draws them.
+/// A command of its own because the plane root is not a workspace, and `workspace_panels` asks
+/// for one by name.
+#[tauri::command]
+#[specta::specta]
+fn plane_root_panels(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<panels::PlaneRootPanels, String> {
+    Ok(panels::plane_root(planes.held(&plane)?.root()))
+}
+
+/// One session record, for its view tab (SI-8d): its facts and its text, read by its
+/// plane-relative path through `sessionrecord::locate`, which refuses every other path. `null`
+/// is a record that is not there any more.
+#[tauri::command]
+#[specta::specta]
+fn session_record(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    path: String,
+) -> Result<Option<panels::SessionRecordView>, String> {
+    panels::session_record(planes.held(&plane)?.root(), &path)
+}
+
+/// Resumes a session from its record (SI-8d): a NEW chat in the record's place, on its harness,
+/// given its conversation where it can be, and told the record in its briefing
+/// (`charter_core::sessionresume`). The answer is the chat as the window draws it, whose
+/// `resumed` or `fresh` says which happened.
+///
+/// `after_failure` is the window saying the chat it resumed this record into ended before its
+/// harness reported a session — the harness could not bring the conversation back — so the same
+/// record starts fresh this time, and says so.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+fn resume_session(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    path: String,
+    name: String,
+    after_failure: bool,
+    columns: u16,
+    rows: u16,
+) -> Result<OpenChat, String> {
+    let held = planes.held(&plane)?;
+    let resumed = charter_core::sessionresume::ready(held.root(), &path, &name, after_failure)?;
+    let chat = Chat {
+        program: resumed.ready.program.clone(),
+        args: Vec::new(),
+        cwd: resumed.ready.cwd.clone(),
+        name,
+        resume: resumed.ready.session.clone(),
+        active: false,
+        profile: resumed.start.profile.clone(),
+        persona: resumed.start.persona.clone(),
+        show_footer: false,
+        pinned: false,
+        number: None,
+        label: None,
+        from: None,
+        renamed_from: None,
+    };
+    let session = held
+        .chats()
+        .start_ready(&chat, &resumed.ready, Size { columns, rows })?;
+    let open = held
+        .chats()
+        .open_now()
+        .into_iter()
+        .find(|open| open.session == session)
+        .ok_or_else(|| format!("chat {session} ended as it started"))?;
+    let mut drawn = OpenChat::from(open);
+    // Which happened, in the words the window's note says after "came back as a new chat:".
+    if let Some(why) = &resumed.fresh {
+        drawn.resumed = None;
+        drawn.fresh = Some(why.said());
+    }
+    Ok(drawn)
+}
+
 /// What git says about each of the focused workspace's clones, and what the forge cache
 /// last recorded for the branch each is on.
 ///
@@ -844,6 +925,7 @@ fn start_chat(
         cwd: cwd.as_deref().map(PathBuf::from),
         resume: None,
         show_footer,
+        resuming: None,
     };
     let ready = charter_core::start::ready(&start, root)?;
     let chat = Chat {

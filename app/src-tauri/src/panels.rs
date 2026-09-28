@@ -20,9 +20,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use charter_core::active::Place;
 use charter_core::cistate::{self, Reading};
 use charter_core::panel;
 use charter_core::repos::{self, Head};
+use charter_core::sessionrecord;
 use charter_core::workspaces::Plane;
 
 // ---------------------------------------------------------------------------------------
@@ -317,6 +319,9 @@ pub(crate) struct Panels {
     /// The plane's personas, and the one a chat started here would adopt.
     personas: Vec<String>,
     persona: Option<String>,
+    /// The workspace's session records, newest first (SI-8d) — facts for the palette's
+    /// `session.open` and `session.resume` rows, beside the Sessions panel that draws them.
+    sessions: Vec<SessionRecordRow>,
     /// **The same facts again, as contributions** — charter's own two panels, in the shape a
     /// stranger's extension contributes one in (`charter_core::panel`).
     ///
@@ -453,13 +458,16 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
     };
     let personas = plane.personas().map_err(|why| why.to_string())?;
     let persona = plane.default_persona();
-    let contributed = charters_own(
+    let place = Place::Workspace(workspace.to_owned());
+    let records = sessionrecord::list(root, &place);
+    let mut contributed = charters_own(
         root,
         read.as_deref().unwrap_or(&[]),
         todos_refused.as_deref(),
         &personas,
         persona.as_deref(),
     );
+    contributed.push(PanelView::from(&sessions_panel(&place, &records)));
     Ok(Panels {
         workspace: workspace.to_string(),
         repos: here,
@@ -470,8 +478,149 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
         todos_refused,
         personas,
         persona,
+        sessions: records.iter().map(SessionRecordRow::from).collect(),
         contributed,
     })
+}
+
+// ---------------------------------------------------------------------------------------
+// Session records (SI-8d): the Sessions panel, per workspace and for the plane root
+// ---------------------------------------------------------------------------------------
+
+/// One session record, as the palette and the Sessions panel name it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SessionRecordRow {
+    /// Its plane-relative path — what it is opened and resumed by (`sessionrecord::locate`).
+    pub path: String,
+    pub title: String,
+    /// `YYYY-MM-DD HH:MM`, from its file name.
+    pub when: String,
+    pub persona: Option<String>,
+    pub harness: Option<String>,
+    /// Whether it holds a conversation id, so Resume can give its harness the conversation.
+    pub resumable: bool,
+}
+
+impl From<&sessionrecord::Listed> for SessionRecordRow {
+    fn from(it: &sessionrecord::Listed) -> Self {
+        Self {
+            path: it.shown.clone(),
+            title: it.title.clone(),
+            when: it.when.clone(),
+            persona: it.persona.clone(),
+            harness: it.harness.clone(),
+            resumable: it.conversation.is_some(),
+        }
+    }
+}
+
+/// The key the Sessions panel has (`charter/sessions`).
+const SESSIONS: &str = "sessions";
+
+/// **The Sessions panel**: a place's session records, newest first — charter's own panel, in the
+/// vocabulary a stranger's arrives in, like the Todos and the Personas.
+///
+/// Each row is the record's title, and its note says when, as whom and on what, and — `↻
+/// resumable` — whether it holds a conversation its harness can be given back. The row runs
+/// `session.open:<path>`, the catalogue row that opens the record as a view tab; its menu adds
+/// `session.resume:<path>`. Both are catalogue rows, so the palette, the menu and the row are one
+/// verb each.
+pub(crate) fn sessions_panel(place: &Place, records: &[sessionrecord::Listed]) -> panel::Panel {
+    panel::Panel {
+        id: SESSIONS.into(),
+        title: "Sessions".into(),
+        // After the todos and the personas: what was done here is looked up, not worked on.
+        order: 30,
+        mark: panel::Mark::Note,
+        blocks: vec![panel::Block::List {
+            rows: records
+                .iter()
+                .map(|record| panel::Row {
+                    key: record.shown.clone(),
+                    text: record.title.clone(),
+                    note: Some(session_note(record)),
+                    mark: panel::Mark::Note,
+                    tone: panel::Tone::Plain,
+                    detail: None,
+                    runs: Some(format!("session.open:{}", record.shown)),
+                    actions: Vec::new(),
+                })
+                .collect(),
+            empty: panel::Empty {
+                headline: "No session records yet".into(),
+                body: Some(match place {
+                    Place::PlaneRoot => "A chat at the plane root writes one when it closes \
+                                         through Smart close."
+                        .into(),
+                    Place::Workspace(_) => "A chat in this workspace writes one when it closes \
+                                            through Smart close."
+                        .into(),
+                }),
+                offer: None,
+            },
+        }],
+        from: panel::By::Charter,
+        about: None,
+    }
+}
+
+/// What a session row's note says: when, as whom, on what, and whether it can be resumed.
+fn session_note(record: &sessionrecord::Listed) -> String {
+    let mut said = vec![record.when.clone()];
+    said.extend(record.persona.clone());
+    said.extend(record.harness.clone());
+    if record.conversation.is_some() {
+        said.push("↻ resumable".to_owned());
+    }
+    said.join(" · ")
+}
+
+/// What the right region draws for the plane root (SI-1): not a workspace's panels — it has no
+/// todos or memory — but its own session records.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct PlaneRootPanels {
+    sessions: Vec<SessionRecordRow>,
+    contributed: Vec<PanelView>,
+}
+
+/// The plane root's panels: its Sessions, from the one function the workspaces' come from.
+pub(crate) fn plane_root(root: &Path) -> PlaneRootPanels {
+    let place = Place::PlaneRoot;
+    let records = sessionrecord::list(root, &place);
+    PlaneRootPanels {
+        sessions: records.iter().map(SessionRecordRow::from).collect(),
+        contributed: vec![PanelView::from(&sessions_panel(&place, &records))],
+    }
+}
+
+/// One session record opened as a view tab: its facts and its text, for the window to render
+/// as Markdown (SI-8d).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct SessionRecordView {
+    pub row: SessionRecordRow,
+    /// `plane root`, or the workspace's name.
+    pub place: String,
+    /// The record after charter's frontmatter: its `# title` and its five sections.
+    pub body: String,
+}
+
+/// The record at `path`, or charter's sentence saying why not. `Ok(None)` is a record that is
+/// not there any more — a tab put back at a launch can name one — which the window draws as a
+/// view whose source has gone, not as a failure.
+pub(crate) fn session_record(root: &Path, path: &str) -> Result<Option<SessionRecordView>, String> {
+    let (place, file) = sessionrecord::locate(path)?;
+    let Some(dir) = sessionrecord::dir(root, &place) else {
+        return Err(format!("no workspace '{}'", place.word()));
+    };
+    if dir.join(&file).symlink_metadata().is_err() {
+        return Ok(None);
+    }
+    let opened = sessionrecord::open(root, path)?;
+    Ok(Some(SessionRecordView {
+        row: SessionRecordRow::from(&opened.listed),
+        place: opened.place.word().to_owned(),
+        body: opened.body().to_owned(),
+    }))
 }
 
 /// charter's own two panels, built through the seam a stranger's extension contributes through.
@@ -1011,7 +1160,10 @@ mod tests {
             .iter()
             .map(|panel| panel.key.as_str())
             .collect();
-        assert_eq!(keys, ["charter/todos", "charter/personas"]);
+        assert_eq!(
+            keys,
+            ["charter/todos", "charter/personas", "charter/sessions"]
+        );
         assert!(
             drawn.contributed.iter().all(|panel| panel.from.is_none()),
             "charter's own panels named an extension as their contributor"
@@ -1215,5 +1367,145 @@ mod tests {
         let drawn = states_of(&root, "alpha", None).expect("the panel draws");
 
         assert_eq!(drawn.repos.len(), 1);
+    }
+
+    // ---- the Sessions panel (SI-8d) ------------------------------------------------------
+
+    /// A record of `place`'s, written through the one writer, at 2026-09-28 `h`:00:00.
+    fn a_record(
+        root: &Path,
+        place: Place,
+        title: &str,
+        h: u32,
+        conversation: Option<&str>,
+    ) -> String {
+        sessionrecord::record(
+            root,
+            &sessionrecord::New {
+                title,
+                body: "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\no\n\n\
+                       ## How to resume\n\nr\n",
+                facts: &sessionrecord::Facts {
+                    place,
+                    at: chrono::NaiveDate::from_ymd_opt(2026, 9, 28)
+                        .and_then(|d| d.and_hms_opt(h, 0, 0))
+                        .expect("a time"),
+                    chat: Some(sessionrecord::ChatFacts {
+                        number: 3,
+                        name: None,
+                        harness: Some("claude".to_owned()),
+                        conversation: conversation.map(str::to_owned),
+                    }),
+                    persona: Some("steward".to_owned()),
+                    pieces: Vec::new(),
+                },
+            },
+        )
+        .expect("a record")
+        .shown
+    }
+
+    #[test]
+    fn a_workspaces_sessions_panel_lists_its_records_newest_first_and_marks_the_resumable() {
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+        let alpha = || Place::Workspace("alpha".to_owned());
+        a_record(&root, alpha(), "Older", 9, None);
+        let newer = a_record(
+            &root,
+            alpha(),
+            "Newer",
+            10,
+            Some("0f6c2a1e-aaaa-4bbb-8ccc-1234"),
+        );
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let panel = drawn
+            .contributed
+            .iter()
+            .find(|panel| panel.key == "charter/sessions")
+            .expect("a Sessions panel");
+        let rows = list_of(panel);
+        let titles: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+        assert_eq!(titles, ["Newer", "Older"]);
+        assert_eq!(
+            rows[0].note.as_deref(),
+            Some("2026-09-28 10:00 · steward · claude · ↻ resumable")
+        );
+        assert_eq!(
+            rows[1].note.as_deref(),
+            Some("2026-09-28 09:00 · steward · claude")
+        );
+        assert_eq!(rows[0].runs, Some(format!("session.open:{newer}")));
+        let facts: Vec<(&str, bool)> = drawn
+            .sessions
+            .iter()
+            .map(|row| (row.title.as_str(), row.resumable))
+            .collect();
+        assert_eq!(facts, [("Newer", true), ("Older", false)]);
+    }
+
+    #[test]
+    fn the_plane_root_draws_the_plane_roots_records_and_no_workspaces() {
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+        a_record(&root, Place::PlaneRoot, "Tidy personas", 8, None);
+        a_record(
+            &root,
+            Place::Workspace("alpha".to_owned()),
+            "Alpha work",
+            9,
+            None,
+        );
+
+        let drawn = plane_root(&root);
+
+        let titles: Vec<&str> = drawn
+            .sessions
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Tidy personas"]);
+        assert_eq!(
+            drawn.sessions[0].path,
+            "sessions/20260928-080000-tidy-personas.md"
+        );
+        assert_eq!(drawn.contributed.len(), 1);
+        assert_eq!(drawn.contributed[0].key, "charter/sessions");
+    }
+
+    #[test]
+    fn a_session_record_is_read_for_its_tab_by_its_path_and_a_path_out_is_refused() {
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+        let shown = a_record(
+            &root,
+            Place::Workspace("alpha".to_owned()),
+            "Ship it",
+            9,
+            None,
+        );
+        std::fs::write(root.join("secret.md"), "x").expect("a file outside");
+
+        let view = session_record(&root, &shown)
+            .expect("it reads")
+            .expect("it is there");
+        assert_eq!(view.place, "alpha");
+        assert_eq!(view.row.title, "Ship it");
+        assert!(
+            view.body.starts_with("# Ship it\n"),
+            "the body, without the frontmatter"
+        );
+
+        for path in [
+            "sessions/../secret.md",
+            "workspaces/alpha/workspace.md",
+            "/etc/passwd",
+        ] {
+            assert!(session_record(&root, path).is_err(), "a path out was read");
+        }
+        assert_eq!(
+            session_record(&root, "workspaces/alpha/sessions/20260101-000000-gone.md"),
+            Ok(None),
+            "a record that has gone is gone, not a failure"
+        );
     }
 }

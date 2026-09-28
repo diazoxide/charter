@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   ChartColumn,
   GitPullRequest,
+  History,
   KeyRound,
   LoaderCircle,
   Puzzle,
@@ -28,6 +29,8 @@ import {
   type ViewAnswer,
 } from "./bindings";
 import { SavingView } from "./SavingView";
+import { SessionRecordTab } from "./SessionRecordTab";
+import { SESSION_VIEW } from "./sessions";
 import { PREFERENCES_VIEW, SAVING_VIEW, SETTINGS_VIEW, viewKey, type ViewRef } from "./tabs";
 import { VaultTab } from "./VaultTab";
 import type { Offer } from "./actions";
@@ -171,6 +174,7 @@ const OWN_MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
   settings: Settings2,
   saving: Save,
   changes: GitPullRequest,
+  [SESSION_VIEW]: History,
   [WORKSPACE_SETTINGS]: Settings2,
   preferences: SlidersHorizontal,
 };
@@ -316,6 +320,11 @@ export function ViewPane({
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
              plane, so a pane that comes to show another project's starts from its own read. */
           <SavingView key={plane} plane={plane} workspace={workspace} />
+        ) : isSession(view) ? (
+          /* A session record (SI-8d): read-only Markdown the window renders from the core's
+             `session_record`, keyed by the record so a pane that comes to show another starts
+             from its own read. */
+          <SessionRecordTab key={`${plane}\u0000${view.key}`} plane={plane} path={view.key} />
         ) : isPreferences(view) ? (
           /* The machine's, not the plane's (charter-app#283): the same surface whichever
              project's strip it was opened on. */
@@ -340,6 +349,7 @@ export function ViewPane({
 const OWN_ROWS: Record<string, (key: string) => string[]> = {
   persona: (key) => [`persona.edit:${key}`, `persona.remove:${key}`],
   vault: (key) => [`vault.remove:${key}`],
+  [SESSION_VIEW]: (key) => [`session.resume:${key}`],
 };
 
 /** One catalogue row as a heading's button, in its own words. A row the catalogue does not
@@ -374,6 +384,11 @@ function isWorkspaceSettings(view: ViewRef): boolean {
 /** Whether `view` is the Saving view (charter-app#294). */
 function isSaving(view: ViewRef): boolean {
   return viewKey(view) === viewKey(SAVING_VIEW);
+}
+
+/** Whether `view` is a session record (SI-8d). */
+function isSession(view: ViewRef): boolean {
+  return view.from === null && view.view === SESSION_VIEW;
 }
 
 /** Whether `view` is the Preferences view (charter-app#283). */

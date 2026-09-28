@@ -59,6 +59,7 @@ export function Panels({
   vaults,
   onAddTodo,
   atRoot = false,
+  rootPanels,
 }: {
   /** The focused workspace, whose todos these are. */
   workspace: string | undefined;
@@ -99,6 +100,9 @@ export function Panels({
    * to type into: a todo typed here would have to land in a workspace nobody chose.
    */
   atRoot?: boolean;
+  /** The plane root's own panels — its Sessions (SI-8d) — drawn under the sentence saying what
+   *  the plane root is, while it is focused (`sessions.usePlaneRootPanels`). */
+  rootPanels?: readonly PanelView[];
 }) {
   const { panels, trouble } = state;
 
@@ -121,11 +125,26 @@ export function Panels({
       data-testid="panels"
     >
       {workspace === undefined ? (
-        <p className="empty">
-          {atRoot
-            ? "The plane root is not a workspace: it has no todos or memory of its own. Chats here look after the plane and its workspaces; focus a workspace to see its panels."
-            : "No workspace focused."}
-        </p>
+        <>
+          <p className="empty">
+            {atRoot
+              ? "The plane root is not a workspace: it has no todos or memory of its own. Chats here look after the plane and its workspaces; focus a workspace to see its panels."
+              : "No workspace focused."}
+          </p>
+          {atRoot &&
+            (rootPanels ?? []).map((panel) => (
+              <Contributed
+                key={panel.key}
+                panel={panel}
+                workspace=""
+                offers={offers}
+                onPress={onPress}
+                shownRow={shownRow}
+                onShowRow={onShowRow}
+                views={[]}
+              />
+            ))}
+        </>
       ) : (
         <>
           {trouble && (
@@ -315,6 +334,17 @@ function Contributed({
                 >
                   {item}
                 </Menued>
+              ) : panel.key === SESSIONS ? (
+                /* Open and Resume (SI-8d): the catalogue's rows for this record, whose key is
+                   its plane-relative path. */
+                <Menued
+                  key={row.key}
+                  on={{ on: "session", path: row.key }}
+                  offers={offers}
+                  onPress={onPress}
+                >
+                  {item}
+                </Menued>
               ) : panel.key === PERSONAS ? (
                 /* Right-click is the third reader of the catalogue (`Menus.tsx`), and on a
                    persona it has exactly one honest row: what the plane says this persona is.
@@ -341,6 +371,7 @@ function Contributed({
 /** charter's own panels, by the key `charter_core::panel::Panel::key` gives them. */
 const TODOS = "charter/todos";
 const PERSONAS = "charter/personas";
+const SESSIONS = "charter/sessions";
 
 /**
  * The Todos panel's box: **a todo typed here goes to the focused workspace, and the box says
