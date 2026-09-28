@@ -226,6 +226,7 @@ describe("a chat running on instructions the plane has changed since (charter#36
     profile: null,
     persona: "steward",
     unreported: null,
+    guessed: null,
     pinned: false,
     label: null,
     from: null,

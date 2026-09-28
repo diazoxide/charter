@@ -41,6 +41,7 @@ function chat(session: number, name: string, { inFront = false, pinned = false }
     profile: "claude",
     persona: "steward",
     unreported: null,
+    guessed: null,
     pinned,
   };
 }

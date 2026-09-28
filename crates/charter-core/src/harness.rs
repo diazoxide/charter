@@ -673,8 +673,24 @@ fn claude_code_settings(
     if may_fill_the_footer {
         settings.insert("statusLine".to_owned(), claude_code_status_line(binary));
     }
+    // **The one command that ends a Smart close, pre-allowed, and nothing else** (SI-8e, the
+    // operator's ruling of 2026-09-28): a chat asked to write its record must not stop on a
+    // permission prompt for `charter session record`. One `allow` and no `ask`, `deny` or
+    // mode, because Claude Code merges a session's permission rules with the user's and the
+    // project's rather than replacing them, and its `deny` and `ask` outrank an `allow` — so
+    // the operator's own rules all still stand (measured on 2.1.283 in ADR 0064: a project
+    // `deny` still refused, a user `allow` still allowed, and a compound command that holds the
+    // record command beside another was still asked about).
+    settings.insert(
+        "permissions".to_owned(),
+        serde_json::json!({ "allow": [SMART_CLOSE_ALLOW] }),
+    );
     serde_json::Value::Object(settings).to_string()
 }
+
+/// The permission rule a Claude Code chat the app starts carries: `charter session record`,
+/// with any arguments, runs without asking (SI-8e, ADR 0064).
+pub const SMART_CLOSE_ALLOW: &str = "Bash(charter session record *)";
 
 /// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.
 ///
@@ -1076,6 +1092,40 @@ mod tests {
             panic!("armed per session");
         };
         assert!(args.iter().all(|arg| !arg.contains("plugins")), "{args:?}");
+    }
+
+    #[test]
+    fn a_claude_code_chat_may_run_charter_session_record_without_asking_and_nothing_else() {
+        // SI-8e, the operator's ruling: a Smart close never stops on a permission prompt for
+        // the one command that ends it. Exactly one grant, for exactly that command — no `ask`,
+        // no `deny`, no mode — so every rule of the operator's and the project's still stands
+        // beside it (measured on 2.1.283: `--settings` permissions merge with them, and a
+        // compound command holding it is still asked about).
+        let empty = tempfile::tempdir().expect("a directory");
+        let (args, _) = claude("/bin/charter", empty.path());
+        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("JSON");
+
+        assert_eq!(
+            settings["permissions"],
+            serde_json::json!({"allow": ["Bash(charter session record *)"]})
+        );
+    }
+
+    #[test]
+    fn a_codex_chat_is_handed_no_approval_or_sandbox_setting() {
+        // Codex has no per-session rule for one command: its approval policy and its sandbox
+        // are whole-session switches, and loosening either would be far broader than the one
+        // command Smart close needs (SI-8e, ADR 0064's measurements).
+        let StateHooks::ThisSessionOnly { args, .. } =
+            Harness::Codex.state_hooks(kit("/bin/charter"), None, &BTreeMap::new())
+        else {
+            panic!("armed per session");
+        };
+        for arg in &args {
+            for loosened in ["approval", "sandbox", "network", "rules"] {
+                assert!(!arg.contains(loosened), "a Codex chat is handed {loosened}");
+            }
+        }
     }
 
     #[test]

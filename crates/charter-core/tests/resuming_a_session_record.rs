@@ -52,6 +52,27 @@ impl Plane {
         stand_in::program(self.root(), "harness-stand-in", "#!/bin/sh\nexit 0\n")
     }
 
+    /// Declares `work` (this machine's default) and `other`, both claude, both approved.
+    fn declares_two_claude_profiles(&self) -> &Self {
+        let bin = self.harness();
+        let command = format!("[{:?}]", bin.display().to_string());
+        fs::write(
+            self.root().join(profiles::LOCAL_FILE),
+            format!(
+                "[harness]\ndefault = \"work\"\n\n[harness.work]\nkind = \"claude\"\ncommand = \
+                 {command}\n\n[harness.other]\nkind = \"claude\"\ncommand = {command}\n"
+            ),
+        )
+        .unwrap();
+        let set = profiles::current(self.root());
+        for name in ["work", "other"] {
+            let p = set.get(name).expect("declared");
+            profiletrust::record_launched(self.root(), name, &profiletrust::fingerprint(p))
+                .unwrap();
+        }
+        self
+    }
+
     /// Declares `work` of `kind`, running the stand-in, as this machine's default, approved.
     fn declares(&self, kind: &str) -> &Self {
         let bin = self.harness();
@@ -78,6 +99,18 @@ impl Plane {
         conversation: Option<&str>,
         persona: Option<&str>,
     ) -> String {
+        self.record_on(harness, conversation, persona, None, None)
+    }
+
+    /// [`Self::record`], by a chat the app knew the profile and the directory of.
+    fn record_on(
+        &self,
+        harness: Option<&str>,
+        conversation: Option<&str>,
+        persona: Option<&str>,
+        profile: Option<&str>,
+        cwd: Option<&str>,
+    ) -> String {
         sessionrecord::record(
             self.root(),
             &New {
@@ -93,7 +126,9 @@ impl Plane {
                         number: 3,
                         name: Some("steward 3".to_owned()),
                         harness: harness.map(str::to_owned),
+                        profile: profile.map(str::to_owned),
                         conversation: conversation.map(str::to_owned),
+                        cwd: cwd.map(str::to_owned),
                     }),
                     persona: persona.map(str::to_owned),
                     pieces: Vec::new(),
@@ -308,7 +343,9 @@ fn a_plane_root_record_resumes_at_the_plane_root() {
                     number: 1,
                     name: None,
                     harness: Some("claude".to_owned()),
+                    profile: None,
                     conversation: Some(ID.to_owned()),
+                    cwd: None,
                 }),
                 persona: None,
                 pieces: Vec::new(),
@@ -322,4 +359,231 @@ fn a_plane_root_record_resumes_at_the_plane_root() {
 
     assert_eq!(resumed.ready.cwd.as_deref(), Some(plane.root()));
     assert_eq!(resumed.place, Place::PlaneRoot);
+}
+
+// ---- the record's own profile and directory (SI-8e) ----------------------------------------
+
+#[test]
+fn a_record_resumes_on_the_profile_it_names_where_this_machine_still_has_it() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares_two_claude_profiles();
+    let shown = plane.record_on(Some("claude"), Some(ID), None, Some("other"), None);
+
+    let resumed = sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+
+    assert_eq!(
+        resumed.start.profile.as_deref(),
+        Some("other"),
+        "the record's profile, not the project's default"
+    );
+    assert_eq!(resumed.fresh, None);
+    assert!(
+        !resumed.notes.iter().any(|n| n.contains("profile")),
+        "nothing to say about the profile"
+    );
+}
+
+#[test]
+fn a_record_whose_profile_is_gone_resumes_on_the_guess_and_says_so() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares_two_claude_profiles();
+    let shown = plane.record_on(Some("claude"), Some(ID), None, Some("retired"), None);
+
+    let resumed = sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+
+    assert_eq!(
+        resumed.start.profile.as_deref(),
+        Some("work"),
+        "the default"
+    );
+    assert_eq!(resumed.fresh, None, "the conversation is still given");
+    assert!(
+        resumed
+            .notes
+            .iter()
+            .any(|n| n.contains("retired") && n.contains("work")),
+        "the note names the profile that is gone and the one used"
+    );
+}
+
+#[test]
+fn a_record_that_names_no_profile_resumes_on_the_guess_and_says_so() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares_two_claude_profiles();
+    let shown = plane.record(Some("claude"), Some(ID), None);
+
+    let resumed = sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+
+    assert_eq!(resumed.start.profile.as_deref(), Some("work"));
+    assert!(
+        resumed.notes.iter().any(|n| n.contains("profile")),
+        "the note says the profile was guessed"
+    );
+}
+
+#[test]
+fn a_record_resumes_in_the_directory_it_ran_in_where_that_is_still_in_the_plane() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares("claude");
+    let piece = plane.root().join("workspaces/alpha/charter/si-8e");
+    fs::create_dir_all(&piece).unwrap();
+    let shown = plane.record_on(
+        Some("claude"),
+        Some(ID),
+        None,
+        Some("work"),
+        Some("workspaces/alpha/charter/si-8e"),
+    );
+
+    let resumed = sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+
+    assert_eq!(resumed.ready.cwd.as_deref(), Some(piece.as_path()));
+    assert_eq!(resumed.fresh, None);
+    assert!(resumed.notes.is_empty(), "nothing guessed");
+}
+
+#[test]
+fn a_record_whose_directory_is_gone_resumes_in_its_workspace_and_says_so() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares("claude");
+    let shown = plane.record_on(
+        Some("claude"),
+        Some(ID),
+        None,
+        Some("work"),
+        Some("workspaces/alpha/charter/removed"),
+    );
+
+    let resumed = sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+
+    assert_eq!(
+        resumed.ready.cwd.as_deref(),
+        Some(plane.root().join("workspaces/alpha").as_path())
+    );
+    assert!(
+        resumed.notes.iter().any(|n| n.contains("directory")),
+        "the note says where it started instead"
+    );
+}
+
+#[test]
+fn a_record_that_names_no_directory_resumes_in_its_workspace_and_says_so() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares("claude");
+    let shown = plane.record_on(Some("claude"), Some(ID), None, Some("work"), None);
+
+    let resumed = sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+
+    assert_eq!(
+        resumed.ready.cwd.as_deref(),
+        Some(plane.root().join("workspaces/alpha").as_path())
+    );
+    assert!(resumed.notes.iter().any(|n| n.contains("directory")));
+}
+
+/// A record of alpha's whose `cwd:` a hand edit set to `cwd`.
+fn edited_cwd(plane: &Plane, cwd: &str) -> String {
+    let shown = plane.record_on(
+        Some("claude"),
+        Some(ID),
+        None,
+        Some("work"),
+        Some("workspaces/alpha"),
+    );
+    let path = plane.root().join(&shown);
+    let text = fs::read_to_string(&path)
+        .unwrap()
+        .replace("cwd: workspaces/alpha", &format!("cwd: {cwd}"));
+    fs::write(&path, text).unwrap();
+    shown
+}
+
+#[test]
+fn a_directory_that_walks_out_of_the_plane_is_never_where_a_resume_starts() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares("claude");
+    let workspace = plane.root().join("workspaces/alpha");
+    for cwd in [
+        "../..",
+        "workspaces/alpha/../../..",
+        "/etc",
+        "/",
+        "workspaces/beta",
+        ".",
+    ] {
+        let shown = edited_cwd(&plane, cwd);
+        let resumed =
+            sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+        assert_eq!(
+            resumed.ready.cwd.as_deref(),
+            Some(workspace.as_path()),
+            "a directory outside the record's place was used"
+        );
+        fs::remove_file(plane.root().join(&shown)).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_that_is_a_link_out_of_the_plane_is_never_where_a_resume_starts() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares("claude");
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), plane.root().join("workspaces/alpha/out")).unwrap();
+    let shown = edited_cwd(&plane, "workspaces/alpha/out");
+
+    let resumed = sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+
+    assert_eq!(
+        resumed.ready.cwd.as_deref(),
+        Some(plane.root().join("workspaces/alpha").as_path()),
+        "a link out of the plane was followed"
+    );
+    assert!(resumed.notes.iter().any(|n| n.contains("directory")));
+}
+
+#[test]
+fn a_plane_root_record_resumes_in_the_plane_root_directory_it_names() {
+    charter_core::unsteered!();
+    let plane = Plane::new();
+    plane.declares("claude");
+    let shown = sessionrecord::record(
+        plane.root(),
+        &New {
+            title: "Tidy personas",
+            body: BODY,
+            facts: &Facts {
+                place: Place::PlaneRoot,
+                at: chrono::NaiveDate::from_ymd_opt(2026, 9, 28)
+                    .unwrap()
+                    .and_hms_opt(8, 0, 0)
+                    .unwrap(),
+                chat: Some(ChatFacts {
+                    number: 1,
+                    name: None,
+                    harness: Some("claude".to_owned()),
+                    profile: Some("work".to_owned()),
+                    conversation: Some(ID.to_owned()),
+                    cwd: Some(".".to_owned()),
+                }),
+                persona: None,
+                pieces: Vec::new(),
+            },
+        },
+    )
+    .unwrap()
+    .shown;
+
+    let resumed = sessionresume::ready(plane.root(), &shown, "claude 9", false).expect("it starts");
+
+    assert_eq!(resumed.ready.cwd.as_deref(), Some(plane.root()));
+    assert!(resumed.notes.is_empty(), "nothing guessed");
 }

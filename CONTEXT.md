@@ -125,8 +125,8 @@ _Avoid_: terminal (for the tab), console, plain chat
 A summary a chat writes of its own session when it closes through **Smart close** — its goal,
 what it did, what it decided, what is still open and how to pick it up — filed as one file in
 its workspace's `sessions/` (the plane's own, at the plane root). The chat gives the title and
-the five sections; charter gives everything else (which chat, persona, harness, conversation,
-workspace and pieces), keeps the index and `workspace.md`'s one `## Sessions` line, and names
+the five sections; charter gives everything else (which chat, persona, harness, profile,
+conversation, workspace, directory and pieces), keeps the index and `workspace.md`'s one `## Sessions` line, and names
 the newest in the next chat's briefing (ADR 0064).
 _Avoid_: handoff, log, transcript
 
@@ -139,8 +139,10 @@ its tab says so, and the operator's Cancel smart close or their own typing stops
 _Avoid_: save and close, archive
 
 **Resume** (of a session record):
-Starting a NEW chat from a session record, in the record's place, on its harness, given its
-conversation where the harness can still find it, and with the record quoted in its briefing.
+Starting a NEW chat from a session record, in the record's place — the directory it ran in,
+where that is still in the place — on its harness and the profile it ran on where this machine
+still has it, given its conversation where the harness can still find it, and with the record
+quoted in its briefing. What it had to guess instead, it says.
 Where the conversation cannot be given it is a fresh chat with the record, and it says why. It
 never reopens the chat that wrote the record.
 _Avoid_: reopen, restore (a relaunch reopens the chats that were open)

@@ -439,6 +439,9 @@ struct OpenChat {
     resumed: Option<String>,
     /// Why it is a new chat rather than the one it was, where it is.
     fresh: Option<String>,
+    /// What a Resume from a session record had to guess because the record could not say it —
+    /// its profile, its directory — or none (SI-8e).
+    guessed: Option<String>,
     /// The harness profile it started on, where it started on one.
     profile: Option<String>,
     /// The persona it adopted.
@@ -675,6 +678,8 @@ fn resume_session(
         drawn.resumed = None;
         drawn.fresh = Some(why.said());
     }
+    // And what was guessed on the way, said beside it.
+    drawn.guessed = (!resumed.notes.is_empty()).then(|| resumed.notes.join("; "));
     Ok(drawn)
 }
 
@@ -1278,6 +1283,7 @@ impl From<chats::Open> for OpenChat {
             pinned: open.pinned,
             label: open.label,
             from: open.from.as_ref().map(HandedFromNote::from),
+            guessed: None,
             resumed: match &open.how {
                 Reopened::Resumed(id) => Some(id.to_string()),
                 Reopened::Fresh(_) => None,

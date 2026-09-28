@@ -80,6 +80,7 @@ function chat(session: number, name: string, cwd: string | null): OpenChat {
     profile: null,
     persona: null,
     unreported: null,
+    guessed: null,
     pinned: false,
     label: null,
     from: null,

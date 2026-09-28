@@ -78,6 +78,7 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
     profile: null,
     persona: null,
     unreported: null,
+    guessed: null,
     pinned: false,
     label: null,
     from: null,

@@ -275,3 +275,49 @@ fn list_is_newest_first_and_show_prints_one_record_by_its_file_name() {
     assert!(!escape.status.success());
     assert!(out(&escape).is_empty());
 }
+
+#[test]
+fn the_profile_and_directory_are_the_apps_record_of_the_chat_never_the_commands_words() {
+    let tmp = daily();
+    let root = root(&tmp);
+    let piece = root.join("workspaces/alpha/charter-app/si-8e");
+    std::fs::create_dir_all(&piece).unwrap();
+    let app_record = root.join(charter_core::reopen::IN_PLANE);
+    std::fs::create_dir_all(app_record.parent().unwrap()).unwrap();
+    std::fs::write(
+        &app_record,
+        serde_json::json!({
+            "version": 1, "at": 1, "dealt": 3,
+            "chats": [{
+                "program": "claude", "name": "3", "number": 3, "profile": "work",
+                "cwd": piece.display().to_string(),
+                "resume": "0f6c2a1e-aaaa-4bbb-8ccc-123456789abc"
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // What the chat's own environment claims about a profile is not asked.
+    let ran = record(
+        &tmp,
+        "From a piece",
+        "2026-09-28T15:00:00",
+        &[
+            IN_ALPHA,
+            (CHAT_ENV, "3"),
+            ("CHARTER_PROFILE", "someone-else"),
+        ],
+    );
+
+    assert!(ran.status.success(), "{}", err(&ran));
+    let text = std::fs::read_to_string(
+        root.join("workspaces/alpha/sessions/20260928-150000-from-a-piece.md"),
+    )
+    .expect("the record");
+    assert!(text.contains("\nprofile: work\n"), "the app's profile");
+    assert!(
+        text.contains("\ncwd: workspaces/alpha/charter-app/si-8e\n"),
+        "the chat's directory, plane-relative"
+    );
+}

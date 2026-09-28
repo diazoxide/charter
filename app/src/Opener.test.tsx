@@ -297,6 +297,7 @@ describe("the opener", () => {
             profile: null,
             persona: null,
             unreported: null,
+            guessed: null,
           },
         ];
       if (cmd === "close_plane") return null;
@@ -369,6 +370,7 @@ describe("the opener", () => {
             profile: null,
             persona: null,
             unreported: null,
+            guessed: null,
           },
         ];
       if (cmd === "close_plane") return null;
@@ -409,6 +411,7 @@ describe("the opener", () => {
       profile: null,
       persona: null,
       unreported: null,
+      guessed: null,
     };
     let showing = "/home/dev/one";
     core((cmd) => {

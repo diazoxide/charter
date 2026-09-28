@@ -365,6 +365,15 @@ how it is cited and nothing here is renumbered.
     conversation, or on a harness no profile here runs, starts fresh with the record and says
     why; a harness that can no longer find the conversation says so by its program failing
     before it reported anything, and the same record is then started fresh, once, and says so.
+    **Finishing it** (SI-8e): a record also names the harness **profile** and the directory
+    (**cwd**, plane-relative) the chat ran in, from the app's own record of the chat, and Resume
+    starts on that profile where this machine still has it and in that directory where it is
+    still a directory inside the record's place — otherwise on the old guess and in the place's
+    own directory, and it says which. A Claude Code chat the app starts carries one permission
+    rule, `Bash(charter session record *)` as an `allow`, so a Smart close never stops to ask for
+    the command that ends it; Codex's approval and sandbox are whole-session switches, so it
+    carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
+    in front.
 
 ## Limits (acceptance)
 

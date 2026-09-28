@@ -184,3 +184,93 @@ The operator's ruling (Q9): *the user can always get old sessions back.*
   decision 3). The failed exit before any report is the signal, and its cost is said: a resumed
   chat whose program fails for another reason before its first report is also started again
   fresh, once.
+
+## Finishing Smart close (SI-8e, amended 2026-09-28)
+
+The operator's rulings of 2026-09-28, and what was measured to carry them out.
+
+### The record command is pre-allowed on Claude Code, and on nothing else
+
+A Claude Code chat the app starts carries one permission rule in its session `--settings`:
+`{"permissions": {"allow": ["Bash(charter session record *)"]}}`
+(`harness::SMART_CLOSE_ALLOW`). One `allow`, no `ask`, no `deny`, no mode. It is a session flag,
+not a file: nothing is written into the plane's `.claude/settings.json` or into a workspace layer,
+so the plane's own settings and the recorded fixtures don't change, and the layer's rule that a
+grant never travels sideways (`layer::RESTRICTIVE`) still holds.
+
+**Measured on Claude Code 2.1.283**, the real `claude` in a pseudo-terminal against a stand-in
+Messages server (`ANTHROPIC_BASE_URL`, a dummy token), with a scratch `HOME` and
+`CLAUDE_CONFIG_DIR` and a stand-in `charter` on `PATH`. No real model call, and none of the
+operator's settings read or written. Each measurement is one launch:
+
+| Case | What happened |
+|---|---|
+| The ADR 0064 prompt as one bracketed paste and `\r`, in **one write** | submitted; the stand-in's main request held exactly one user text, *Use charter's smart-close skill to write this session's record and close the chat.* |
+| `--permission-mode default`, **no** allow rule, the skill's heredoc command | asked: *This command requires approval. Do you want to proceed?* (the red run) |
+| the same, **with** the allow rule | ran in about a second, no prompt |
+| a body holding backticks, `$(…)` and `$HOME` inside the quoted heredoc | ran, no prompt |
+| the record command followed by `touch <file>` in one command | asked; the file was not made |
+| a user-level `allow` (`Bash(echo *)`) and a project `deny` (`Bash(rm *)`) beside the session rule | both still in force: `echo` ran, `rm` was refused without a prompt. The session's `permissions` merge with the other sources, they don't replace them |
+
+Claude Code gives `deny` and `ask` precedence over `allow`, so an operator's own `ask` or `deny`
+for this command still wins.
+
+**Codex (0.147.0) needs no rule, and has none to give.** Measured the same way against a
+stand-in Responses server (a scratch `CODEX_HOME`, a trusted directory, the default approval and
+sandbox): the paste and `\r` in one write submitted exactly the prompt, and the heredoc command
+**ran without asking** inside the `workspace-write` sandbox. Codex has no per-command, per-session
+approval. Its approval policy and sandbox are whole-session switches, and its execpolicy
+`.rules` are files in `CODEX_HOME` or the project. So nothing is added (`harness` tests hold
+that). **The same sandbox refused the command's connect to the app's hook socket**
+(`Operation not permitted`), so on Codex the record is written but the tab doesn't close by
+itself: #517, waiting on a ruling.
+
+**opencode is a documented gap.** Its default lets `bash` run without asking. It can be told
+`permission.bash` patterns for one session through `OPENCODE_CONFIG_CONTENT`, but there the more
+specific pattern wins, so `"charter session record *": "allow"` would override an operator's own
+`"charter *": "deny"`: broader than the ruling allows. The other way is a permission hook in the
+shim, which is authority charter arms nowhere (`plugin` tests). Nothing is added. A chat whose
+operator configured opencode to ask will ask.
+
+SI-8c's rule is unchanged: answering a question the chat asks mid-turn doesn't cancel a Smart
+close.
+
+### The record names its profile and its directory, and Resume uses them
+
+`profile:` (the app's `reopen.json` `profile` for the chat, by name) and `cwd:` (its `cwd`,
+plane-relative, `.` for the plane root, `unknown` outside the plane) are charter's frontmatter,
+next to `harness:` and `workspace:`, never the model's. The CLI takes neither as a flag or from
+the chat's environment. Read back, `profile:` is kept only as a profile name, and `cwd:` only
+as plain relative components: no `..`, not absolute, no backslash, nothing undrawable.
+
+`sessionresume::ready` tries the record's profile first when this machine still has it as a
+profile of the record's harness, then the old order (default, declared, built-in). It starts in
+the record's `cwd` when that is still a directory that, with every link followed, is inside the
+record's place (the workspace's directory, or the plane). Anything else starts in the place's
+own directory. Either fallback is one sentence in `Resumed::notes`, and the window shows it
+beside *was resumed* (`OpenChat.guessed`). A record written before these keys reads as
+`unknown` for both, resumes as it did before, and says what it guessed.
+
+**What was measured about the directory, and it corrects the reason given for it.** Claude
+Code 2.1.283's `--resume <id>` found a conversation from a subdirectory of where it was made,
+from its parent, and from an unrelated directory. Wrong directories didn't stop the resume. So
+the `cwd:` is not what makes Claude find the conversation. It is what puts the resumed chat back
+where it was working: in the piece, for a record written from a piece.
+
+### Losing the conversation, measured
+
+| Harness | Launch | Result |
+|---|---|---|
+| Claude Code 2.1.283 | `claude --resume <unknown id> --name "steward 9"` | exit **1** after **0.6 s**, *No conversation found with session ID: …*, no model request, and **no `SessionStart` hook** (the same hook fired at an ordinary launch) |
+| Codex 0.147.0 | `codex resume <unknown id>` | exit **1** after **0.8 s**, *No saved session found with ID …*, no model request (Codex fires `SessionStart` only inside a first turn) |
+
+Both end with a failure before reporting anything, which is exactly what `lostOnResume` reads.
+The window then closes that chat and asks again with `after_failure`, which starts the same record
+fresh, once (the Sessions window tests hold that sequence). A known id resumed on both.
+
+### A record's tab resumes its own record
+
+The Resume button on a record's tab was the catalogue's `session.resume:<path>` row. The
+catalogue offered that row only for the records of the place in front, so a tab showing another
+place's record drew no Resume. Now the catalogue offers the row for every open record tab too,
+one row per record, and the button still is that row.
