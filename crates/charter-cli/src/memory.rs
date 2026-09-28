@@ -251,6 +251,50 @@ pub enum PersonaCommand {
         #[arg(long)]
         ephemeral: bool,
     },
+    /// Rewrite one memory in place: same slug, same stamp, index line retitled. What is not
+    /// given is kept.
+    ///
+    /// The work is [`charter_core::personaverbs::upkeep::edit_memory`].
+    #[command(name = "edit-memory")]
+    EditMemory {
+        name: String,
+        slug: String,
+        /// The new body; `-` reads it from standard input (default: keep the body).
+        #[arg(required_unless_present = "title")]
+        text: Option<String>,
+        /// The new title (default: keep the title).
+        #[arg(long)]
+        title: Option<String>,
+        /// In the cross-persona _shared store.
+        #[arg(long)]
+        shared: bool,
+    },
+    /// Move one memory into memory/archive/ and drop its index line (undo: unarchive-memory).
+    ///
+    /// The work is [`charter_core::personaverbs::upkeep::archive_memory`].
+    #[command(name = "archive-memory")]
+    ArchiveMemory {
+        name: String,
+        slug: String,
+        /// In the cross-persona _shared store.
+        #[arg(long)]
+        shared: bool,
+    },
+    /// Move an archived memory back into the store and re-index it.
+    ///
+    /// The work is [`charter_core::personaverbs::upkeep::unarchive_memory`].
+    #[command(name = "unarchive-memory")]
+    UnarchiveMemory {
+        name: String,
+        /// The memory's name in memory/archive/.
+        slug: String,
+        /// Restore it under this slug instead (for one archiving had to number).
+        #[arg(long = "as", value_name = "SLUG")]
+        restore_as: Option<String>,
+        /// In the cross-persona _shared store.
+        #[arg(long)]
+        shared: bool,
+    },
     /// Report near-duplicate memories (Jaccard overlap) to prune.
     ///
     /// The work is [`charter_core::personaverbs::upkeep::dedupe`].
@@ -739,6 +783,127 @@ pub fn workspace_forget(plane: &Plane, name: &str, slug: &str) -> Result<Code, S
     }
 }
 
+/// A memory body given on the command line: `-` is standard input, read whole.
+///
+/// Refused from a terminal, as `persona curation add` refuses one: a person at a prompt who
+/// typed `-` is waiting for nothing, and an edit that swallowed an empty terminal would be an
+/// empty body.
+pub fn body_arg(text: Option<String>) -> Result<Option<String>, String> {
+    use std::io::{IsTerminal as _, Read as _};
+    if text.as_deref() != Some("-") {
+        return Ok(text);
+    }
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return Err(
+            "`-` reads the body from standard input — pipe it in, or end it with a \
+             here-document"
+                .to_string(),
+        );
+    }
+    let mut body = String::new();
+    stdin
+        .lock()
+        .read_to_string(&mut body)
+        .map_err(|e| format!("could not read the body from standard input: {e}"))?;
+    Ok(Some(body))
+}
+
+/// What a workspace memory operation says when it did nothing, and its exit code — the
+/// sentences `workspace forget` says for the same refusals.
+fn workspace_refusal(name: &str, slug: &str, e: &std::io::Error) -> Result<Code, String> {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => voice::err(&format!(
+            "no memory '{}' in workspace '{name}' (list them: charter workspace recall).",
+            charter_core::shown::short(slug)
+        )),
+        std::io::ErrorKind::InvalidInput
+            if !charter_core::contain::segment_ok(slug.strip_suffix(".md").unwrap_or(slug)) =>
+        {
+            voice::err(&format!(
+                "'{}' is not the slug of one memory — name a file in \
+                 workspaces/{name}/memory/, not a path.",
+                charter_core::shown::short(slug)
+            ))
+        }
+        _ => voice::err(&e.to_string()),
+    }
+    Ok(1)
+}
+
+/// `workspace edit` — rewrite one journal entry in place (ADR 0065): the filename and the stamp
+/// kept, the index line retitled, and whatever was not given kept as the file has it.
+pub fn workspace_edit(
+    plane: &Plane,
+    name: &str,
+    slug: &str,
+    title: Option<&str>,
+    text: Option<&str>,
+) -> Result<Code, String> {
+    let ws = plane.workspace(name).map_err(|e| e.to_string())?;
+    let opened = match ws.open_memory(slug) {
+        Ok(opened) => opened,
+        Err(e) => return workspace_refusal(name, slug, &e),
+    };
+    let (title, text) = opened.revised(title, text);
+    match ws.edit_memory(slug, &title, &text, memstore::Base::Read(&opened.text)) {
+        Ok(path) => {
+            voice::ok(&format!(
+                "Edited '{slug}' in workspace '{name}' → {}",
+                voice::rel(plane.root(), &path)
+            ));
+            reactive(plane);
+            Ok(0)
+        }
+        Err(memstore::EditRefused::Io(e)) => workspace_refusal(name, slug, &e),
+        Err(stale) => {
+            voice::err(&stale.to_string());
+            Ok(1)
+        }
+    }
+}
+
+/// `workspace archive` — move one journal entry into `memory/archive/` and drop its index line:
+/// the window's Delete, and reversible (ADR 0065).
+pub fn workspace_archive(plane: &Plane, name: &str, slug: &str) -> Result<Code, String> {
+    let ws = plane.workspace(name).map_err(|e| e.to_string())?;
+    match ws.archive_memory(slug) {
+        Ok(path) => {
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            voice::ok(&format!(
+                "Archived '{slug}' from workspace '{name}' → {}. Undo: `charter workspace \
+                 unarchive {stem} -w {name}`",
+                voice::rel(plane.root(), &path)
+            ));
+            reactive(plane);
+            Ok(0)
+        }
+        Err(e) => workspace_refusal(name, slug, &e),
+    }
+}
+
+/// `workspace unarchive` — move an archived journal entry back and re-index it: the window's
+/// Undo (ADR 0065).
+pub fn workspace_unarchive(
+    plane: &Plane,
+    name: &str,
+    slug: &str,
+    restore_as: Option<&str>,
+) -> Result<Code, String> {
+    let ws = plane.workspace(name).map_err(|e| e.to_string())?;
+    match ws.unarchive_memory(slug, restore_as) {
+        Ok(path) => {
+            voice::ok(&format!(
+                "Restored '{slug}' to workspace '{name}' → {}",
+                voice::rel(plane.root(), &path)
+            ));
+            reactive(plane);
+            Ok(0)
+        }
+        Err(e) => workspace_refusal(name, slug, &e),
+    }
+}
+
 /// `workspace optimize` — curate one journal, or every one: the safe ops with `--apply`,
 /// the rest as proposals. Read-only unless `--apply`, and a read-only run names what
 /// `--apply` would do.
@@ -1030,6 +1195,69 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
             let mut sink = crate::speak;
             let (code, changed) =
                 charter_core::personaverbs::upkeep::forget(plane.root(), &ask, &mut sink);
+            if changed {
+                reactive(plane);
+            }
+            Ok(code)
+        }
+        PersonaCommand::EditMemory {
+            name,
+            slug,
+            text,
+            title,
+            shared,
+        } => {
+            let text = body_arg(text)?;
+            let ask = charter_core::personaverbs::upkeep::Memory {
+                name: &name,
+                slug: &slug,
+                shared,
+            };
+            let mut sink = crate::speak;
+            let (code, changed) = charter_core::personaverbs::upkeep::edit_memory(
+                plane.root(),
+                &ask,
+                title.as_deref(),
+                text.as_deref(),
+                &mut sink,
+            );
+            if changed {
+                reactive(plane);
+            }
+            Ok(code)
+        }
+        PersonaCommand::ArchiveMemory { name, slug, shared } => {
+            let ask = charter_core::personaverbs::upkeep::Memory {
+                name: &name,
+                slug: &slug,
+                shared,
+            };
+            let mut sink = crate::speak;
+            let (code, changed) =
+                charter_core::personaverbs::upkeep::archive_memory(plane.root(), &ask, &mut sink);
+            if changed {
+                reactive(plane);
+            }
+            Ok(code)
+        }
+        PersonaCommand::UnarchiveMemory {
+            name,
+            slug,
+            restore_as,
+            shared,
+        } => {
+            let ask = charter_core::personaverbs::upkeep::Memory {
+                name: &name,
+                slug: &slug,
+                shared,
+            };
+            let mut sink = crate::speak;
+            let (code, changed) = charter_core::personaverbs::upkeep::unarchive_memory(
+                plane.root(),
+                &ask,
+                restore_as.as_deref(),
+                &mut sink,
+            );
             if changed {
                 reactive(plane);
             }

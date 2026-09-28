@@ -109,6 +109,43 @@ impl Persona {
         )
     }
 
+    /// One memory, to read or to edit ([`crate::workspaces::Opened`]).
+    pub fn open_memory(&self, slug: &str) -> io::Result<crate::workspaces::Opened> {
+        crate::workspaces::open_in(&self.plane_root, &self.dir.join("memory"), slug)
+    }
+
+    /// Rewrite one memory in place: new title and text, same slug, the stamp kept, the index
+    /// line retitled — [`memstore::edit`], checked against `base` (ADR 0065). `_shared`'s
+    /// store is this persona's when the persona is `_shared`.
+    pub fn edit_memory(
+        &self,
+        slug: &str,
+        title: &str,
+        text: &str,
+        base: memstore::Base,
+    ) -> Result<PathBuf, memstore::EditRefused> {
+        let dir = self.dir.join("memory");
+        self.writable(&dir)?;
+        memstore::edit(&self.plane_root, &dir, slug, title, text, base)
+    }
+
+    /// Move one memory into `memory/archive/` and drop its index line — the window's Delete
+    /// ([`memstore::archive_one`]).
+    pub fn archive_memory(&self, slug: &str) -> io::Result<PathBuf> {
+        let dir = self.dir.join("memory");
+        self.writable(&dir)?;
+        memstore::archive_one(&self.plane_root, &dir, slug)
+    }
+
+    /// Move an archived memory back and re-index it, under `restore_as` when given — the
+    /// window's Undo ([`memstore::unarchive`]). No header is scaffolded, as [`Self::remember`]
+    /// scaffolds none.
+    pub fn unarchive_memory(&self, slug: &str, restore_as: Option<&str>) -> io::Result<PathBuf> {
+        let dir = self.dir.join("memory");
+        self.writable(&dir)?;
+        memstore::unarchive(&self.plane_root, &dir, slug, restore_as)
+    }
+
     /// The `role:` line of `persona.md`'s frontmatter, if it has one.
     ///
     /// **Read by [`frontmatter`], the one reader**, and collapsed by [`meta`] exactly as

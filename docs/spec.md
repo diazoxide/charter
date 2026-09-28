@@ -375,6 +375,22 @@ how it is cited and nothing here is renumbered.
     carries none (ADR 0064's measurements). A record's tab resumes that record whichever place is
     in front.
 
+### Memory in the window — added 2026-09-28
+
+33. **A memory opens in a view tab, and the window's Delete is archive.** A memory row opens a
+    preview tab (a single click replaces it; a double-click or an edit pins it) with the title,
+    the store (a persona, `shared` or the workspace), the stamp and the path above the body
+    rendered as Markdown, and Edit and Delete; Edit flips the same tab into a title field and
+    the raw body. It replaces the memory row's popover. Workspace memory is a Memory section
+    under Todos for the focused workspace; shared memory is one row in Personas that opens its
+    own list; each has a `+` that writes through `remember`. **An edit is in place**: the
+    filename and the stamp are kept, the index line retitled, and a save over a file that
+    changed since it was read is refused, offering Reload or Overwrite. **Delete moves the file
+    to `archive/` with an Undo**; a hard delete stays `forget`, on the command line only. The
+    command line has each operation too: `charter workspace edit|archive|unarchive` and
+    `charter persona edit-memory|archive-memory|unarchive-memory [--shared]`. Moving a memory
+    between stores and browsing the archive are later work. **ADR 0065.**
+
 ## Limits (acceptance)
 
 Only what a person would notice. Measured on the operator's machine, in the scenario harness.

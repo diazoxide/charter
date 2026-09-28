@@ -1020,6 +1020,10 @@ excepted), and for a secret-shaped value, named by its kind.
   (`charter/commands_workspace.py:724`); `memstore.archive` (`charter/memstore.py:503`).
   Commands: `workspace remember|note`, `workspace forget`, `ws todo done` (writes a closing
   memory, `charter/commands_workspace.py:1516`), `workspace optimize --apply`, `fork` (copy).
+  **In charter-app, also** `workspace edit <slug>` (`memstore::edit`, an edit in place — see
+  [Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app)) and
+  `workspace archive|unarchive <slug>` (`memstore::archive_one`, `memstore::unarchive`),
+  and the window's memory tab, which calls the same functions (ADR 0065).
 - **Read by:** `memstore.files`/`entries`/`search` (`charter/memstore.py:169`, `289`, `367`),
   `workspace.recall` (`charter/workspace.py:4244`), `recall.py`, `doctor` (index drift),
   `last_active` (`charter/workspace.py:4424`).
@@ -1065,6 +1069,41 @@ excepted), and for a secret-shaped value, named by its kind.
     (`charter/memstore.py:208`).
   - `memory/notes.md` is the pre-v2 single-log memo, still read by
     `workspace.read_notes` (`charter/workspace.py:4271`) and never written any more.
+
+#### Editing and archiving a memory (charter-app)
+
+**charter-app only**; the Python charter has no edit and no unarchive. These are the rules for
+every memory store — a workspace's journal, a persona's `memory/` and `personas/_shared/memory/`
+— and change no file's shape: an edited memory is a file `memstore.write` could have written,
+and an archived one is where `memstore.archive` would have put it (ADR 0065).
+
+- **An edit rewrites one memory file in place.** New title and new text; the **filename does not
+  change** — the slug was minted from the first title and is how every command names the memory,
+  so retitling it renames nothing. The file becomes
+  `# {title}\n\n{stamp line}\n\n{text}\n`, where the stamp line is the one the file already had,
+  **verbatim** (its date and its `kind` both kept: an edit does not re-date a memory); a file
+  written by hand with no stamp line gets none. The title is stripped and capped at
+  `TITLE_MAX = 72`, an empty one is the text's first line (as `write` derives one), and a title
+  holding a line break is refused. An empty text is refused, as `write` refuses it. The file is
+  replaced whole (`rewrite::replace`), under the store's mode rules.
+- **The index line is retitled, not moved.** Every line of `MEMORY.md` holding `]({filename})`
+  has everything up to and including that link replaced by `- [{title}]({filename})`; anything
+  after the link stays, and the line keeps its place. No line is added for a memory the index
+  never listed. The rewrite is the same whole-file replacement as a deletion's.
+- **An edit is checked against the file as it was read.** The caller hands back the file's whole
+  text as it read it; when the file on disk differs, the edit is refused as **stale** and nothing
+  is written, so a window never saves over a change it did not see. An explicit overwrite skips
+  the check. The check and the write happen under the store directory's `rewrite::Lock`.
+- **Archiving moves the file to `<store>/archive/<filename>` and drops its index line**, exactly
+  as `memstore.archive` does (a taken name gets `-2`, `-2-3`, …). Archiving a memory that is
+  already in `archive/` under its own name is not an error and changes nothing.
+- **Unarchiving moves `archive/<name>` back into the store and appends its index line**
+  (`- [{title}]({filename})`, title read as every reader reads one) unless the index already
+  lists it. It is restored under its own name, or under a name the caller gives — how an undo
+  puts back a memory that archiving had to number. A name the store already holds is refused and
+  nothing moves; a memory that is already back, and no longer in `archive/`, is not an error.
+- **Neither is a deletion.** `archive/` is still committed and still out of every listing; a
+  hard delete is `forget`, and only from the CLI.
 
 ### `workspaces/<ws>/todos/`
 
@@ -1810,6 +1849,8 @@ with `", "` (`:907`-`:908`).
     (`charter/memstore.py:208`).
   - Deletion rewrites the file as the surviving lines joined with `\n` plus one trailing
     `\n` (none when empty) — `charter/memstore.py:489`-`:490`.
+  - **In charter-app**, an edit retitles a memory's line in place and an unarchive appends one
+    back ([Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app)).
 
 ---
 
@@ -1820,6 +1861,10 @@ with `", "` (`:907`-`:908`).
   session briefing.
 - **Written by:** `charter/memstore.py:101` (`write`) via `charter/persona.py:2298`
   (`remember`), from `charter persona remember` (`charter/commands_persona.py:1188`).
+  **In charter-app, also rewritten in place** by `charter persona edit-memory <name> <slug>
+  [--shared]` and the window's memory tab (`memstore::edit`), and moved to and from `archive/`
+  by `persona archive-memory|unarchive-memory` — the rules are
+  [Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app).
 - **Read by:** `charter/memstore.py:169`/`:197` (`files`/`read_files` — the one gate),
   `:289` (`entries`), `:367` (`search`), `:408` (`duplicates`), `:429` (`resolve`);
   `charter/persona.py:2330`/`:2356`/`:2411`; `charter/recall.py:204` (`charter recall`);
@@ -1866,8 +1911,12 @@ with `", "` (`:907`-`:908`).
   glob (the glob is flat, so `archive/` is invisible to `files()`).
 - **Written by:** `charter/memstore.py:503` (`archive`) via `charter/curate.py:92`
   (`apply_safe`, exact-duplicate collapse) — reached by `charter persona optimize --apply`.
+  **In charter-app, also** `persona archive-memory` / `workspace archive` and the window's
+  Delete (`memstore::archive_one`), and emptied back into the store by `unarchive-memory` /
+  `workspace unarchive` and the window's Undo (`memstore::unarchive`) —
+  [Editing and archiving a memory](#editing-and-archiving-a-memory-charter-app).
 - **Read by:** nothing in charter (deliberately out of the active set); git history and
-  humans only.
+  humans only. In charter-app, `memstore::unarchive` reads the one file it restores.
 - **Git:** committed.
 - **Encoding details:** `rename` into `<mem_dir>/archive/`, created with `mkdir_for`;
   collision → `<stem>-2.md` (`charter/memstore.py:521`-`:523`); the index line is dropped

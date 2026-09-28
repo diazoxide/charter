@@ -598,6 +598,80 @@ impl Workspace {
         self.readable(&dir)?;
         read_store(&self.plane_root, &dir)
     }
+
+    /// One journal entry, to read or to edit ([`Opened`]).
+    pub fn open_memory(&self, slug: &str) -> io::Result<Opened> {
+        open_in(&self.plane_root, &self.dir.join("memory"), slug)
+    }
+
+    /// Rewrite one journal entry in place: new title and text, same filename, the stamp kept,
+    /// the index line retitled — [`memstore::edit`], checked against `base` (ADR 0065).
+    pub fn edit_memory(
+        &self,
+        slug: &str,
+        title: &str,
+        text: &str,
+        base: memstore::Base,
+    ) -> Result<PathBuf, memstore::EditRefused> {
+        let dir = self.dir.join("memory");
+        self.writable(&dir)?;
+        memstore::edit(&self.plane_root, &dir, slug, title, text, base)
+    }
+
+    /// Move one journal entry into `memory/archive/` and drop its index line — the window's
+    /// Delete ([`memstore::archive_one`]).
+    pub fn archive_memory(&self, slug: &str) -> io::Result<PathBuf> {
+        let dir = self.dir.join("memory");
+        self.writable(&dir)?;
+        memstore::archive_one(&self.plane_root, &dir, slug)
+    }
+
+    /// Move an archived journal entry back and re-index it, under `restore_as` when given —
+    /// the window's Undo ([`memstore::unarchive`]). An index this store never had is created
+    /// with the journal's own header, as [`Self::remember`] creates it.
+    pub fn unarchive_memory(&self, slug: &str, restore_as: Option<&str>) -> io::Result<PathBuf> {
+        let dir = self.dir.join("memory");
+        self.writable(&dir)?;
+        // Only where there is an archive to restore from: a slug in neither place must leave a
+        // workspace with no journal without one.
+        if dir.join(memstore::ARCHIVE).is_dir() {
+            memstore::ensure_index(
+                &self.plane_root,
+                &dir,
+                &WS_MEMORY_HEADER.replace("{name}", &self.name),
+            )?;
+        }
+        memstore::unarchive(&self.plane_root, &dir, slug, restore_as)
+    }
+}
+
+/// One memory as a window opens it to read or edit: where it is, its whole text as it is on
+/// disk — what an edit is checked against ([`memstore::Base::Read`]) — and its parts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opened {
+    pub path: PathBuf,
+    pub text: String,
+    pub entry: Entry,
+}
+
+impl Opened {
+    /// The title and text of an edit that changes only what it was given: `None` keeps the
+    /// title the memory has, or the body under its header lines (ADR 0065).
+    pub fn revised(&self, title: Option<&str>, text: Option<&str>) -> (String, String) {
+        (
+            title.unwrap_or(&self.entry.title).to_string(),
+            text.unwrap_or(&self.entry.body).to_string(),
+        )
+    }
+}
+
+/// Open one memory of the store at `dir` — the one reader `Workspace` and `Persona` share.
+pub(crate) fn open_in(plane_root: &Path, dir: &Path, slug: &str) -> io::Result<Opened> {
+    crate::contain::readable(plane_root, dir).map_err(refusal)?;
+    let (path, text) = memstore::open(plane_root, dir, slug)?;
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let entry = parse_entry(&stem, &text);
+    Ok(Opened { path, text, entry })
 }
 
 /// Every `*.md` directly in a memory store, `MEMORY.md` excepted, sorted by filename.
@@ -644,25 +718,24 @@ pub(crate) fn read_store(plane_root: &Path, dir: &Path) -> io::Result<Vec<Entry>
 /// Python has no reader to agree with here: its store parses a memory's DATE
 /// (`memstore.memory_date`, [`crate::memstore::memory_date`]), which wants a date after the
 /// underscore and never takes a body line's words, and no command prints a stamp string.
+///
+/// **The body starts after the header lines** (ADR 0065): after the stamp, or, in a memory with
+/// no stamp line, after the heading when the heading is the file's first line that is not blank.
+/// Anything above a later heading — a hand's frontmatter — is body, so nothing a person wrote is
+/// dropped from what the window shows and an edit writes back.
 fn parse_entry(slug: &str, text: &str) -> Entry {
     let lines = crate::mdsection::split_lines(text);
-    // The first `# ` line anywhere, and `[2..]` ONCE — a stored title of `# Hello` reads as
-    // `# Hello`, not `Hello`, because charter takes `ln[2:].strip()`.
-    let heading = lines
-        .iter()
-        .enumerate()
-        .find_map(|(i, line)| line.strip_prefix("# ").map(|rest| (i, rest)));
+    let (heading, stamped) = crate::memstore::top_lines(&lines);
+    // `[2..]` ONCE — a stored title of `# Hello` reads as `# Hello`, not `Hello`, because
+    // charter takes `ln[2:].strip()`.
     let title = heading
-        .map(|(_, rest)| crate::memstore::py_strip(rest).to_string())
+        .map(|(_, line)| crate::memstore::py_strip(&line[2..]).to_string())
         .unwrap_or_default();
-    let after_heading = heading.map_or(0, |(i, _)| i + 1);
-    let stamped = lines
-        .iter()
-        .enumerate()
-        .skip(after_heading)
-        .find(|(_, line)| !crate::memstore::py_strip(line).is_empty())
-        .map(|(i, line)| (i, crate::memstore::py_strip(line)))
-        .filter(|(_, line)| crate::memstore::is_stamp_line(line));
+    let heading_leads = heading.filter(|(i, _)| {
+        lines[..*i]
+            .iter()
+            .all(|line| crate::memstore::py_strip(line).is_empty())
+    });
     let (stamp, body_from) = match stamped {
         Some((i, line)) => (
             line.trim_matches('_')
@@ -672,7 +745,7 @@ fn parse_entry(slug: &str, text: &str) -> Entry {
                 .to_string(),
             i + 1,
         ),
-        None => (String::new(), 0),
+        None => (String::new(), heading_leads.map_or(0, |(i, _)| i + 1)),
     };
     let body = lines
         .into_iter()
@@ -803,6 +876,22 @@ mod entry_tests {
             "# late\n\nfirst words\n\n_2026-09-22 10:00 · persistent_\n",
         );
         assert_eq!(entry.stamp, "");
+    }
+
+    #[test]
+    fn a_heading_with_no_stamp_under_it_is_not_part_of_the_body() {
+        // ADR 0065: the window shows the heading in the tab's header, and an edit writes it
+        // once; read as body, it was shown twice and written twice.
+        let entry = parse_entry("hand", "# Hand\n\nwritten by a person\n");
+        assert_eq!(entry.title, "Hand");
+        assert_eq!(entry.body, "written by a person");
+    }
+
+    #[test]
+    fn what_a_hand_wrote_above_a_later_heading_stays_body() {
+        let entry = parse_entry("db", "---\nname: db\n---\n# prod db\n\nnotes\n");
+        assert_eq!(entry.title, "prod db");
+        assert_eq!(entry.body, "---\nname: db\n---\n# prod db\n\nnotes");
     }
 
     #[test]

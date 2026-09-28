@@ -1,7 +1,9 @@
 //! A persona's memory upkeep: `charter persona forget`, `dedupe`, `optimize` and `log` — a
 //! port of `commands_persona.cmd_persona_forget`, `cmd_persona_dedupe`,
 //! `cmd_persona_optimize` and `cmd_persona_log`, on the same store and curation the
-//! workspace verbs use ([`crate::memstore`], [`crate::curate`]).
+//! workspace verbs use ([`crate::memstore`], [`crate::curate`]). And three the Python charter
+//! never had — `edit-memory`, `archive-memory` and `unarchive-memory` (ADR 0065) — which call
+//! the same [`crate::personas::Persona`] methods the window's memory tab calls.
 //!
 //! # What was not ported
 //!
@@ -90,6 +92,163 @@ pub fn forget(root: &Path, ask: &Forget, say: Sink) -> (u8, bool) {
             say(Say::Fail(e.to_string()));
             (1, false)
         }
+    }
+}
+
+/// What `charter persona edit-memory | archive-memory | unarchive-memory` act on: one memory of
+/// a persona's committed store, or of `_shared`'s.
+pub struct Memory<'a> {
+    pub name: &'a str,
+    pub slug: &'a str,
+    /// In the cross-persona `_shared` store rather than the persona's own.
+    pub shared: bool,
+}
+
+impl Memory<'_> {
+    /// The store's owner — the persona, or `_shared`.
+    fn owner(&self) -> &str {
+        if self.shared {
+            crate::personas::SHARED
+        } else {
+            self.name
+        }
+    }
+
+    /// How a sentence names the store.
+    fn place(&self) -> String {
+        if self.shared {
+            "the shared memory".to_string()
+        } else {
+            format!("{}'s memory", self.name)
+        }
+    }
+
+    /// ` --shared` when it is `_shared`'s, for a command a sentence names.
+    fn flag(&self) -> &'static str {
+        if self.shared { " --shared" } else { "" }
+    }
+
+    /// The persona, checked, and the store, or the refusal already said. A slug that is not
+    /// one path segment is refused here, before any store is asked, in the words `forget` uses.
+    fn persona(&self, root: &Path, say: Sink) -> Option<crate::personas::Persona> {
+        if let Some(refused) = crate::personas::name_refusal(root, self.name) {
+            say(Say::Fail(refused));
+            return None;
+        }
+        if !crate::contain::segment_ok(self.slug.strip_suffix(".md").unwrap_or(self.slug)) {
+            say(Say::Fail(format!(
+                "'{}' is not the slug of one memory — name a file in {}/, not a path.",
+                crate::shown::short(self.slug),
+                super::rel(root, &memory_dir(root, self.owner()))
+            )));
+            return None;
+        }
+        match crate::workspaces::Plane::open(root).persona(self.owner()) {
+            Ok(persona) => Some(persona),
+            Err(e) => {
+                say(Say::Fail(e.to_string()));
+                None
+            }
+        }
+    }
+
+    /// Say why a memory operation failed; always exit 1.
+    fn failed(&self, e: &std::io::Error, say: Sink) -> (u8, bool) {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            say(Say::Fail(format!(
+                "no memory '{}' in {} (list them: charter persona recall {})",
+                crate::shown::short(self.slug),
+                self.place(),
+                self.name
+            )));
+        } else {
+            say(Say::Fail(e.to_string()));
+        }
+        (1, false)
+    }
+}
+
+/// `charter persona edit-memory <name> <slug> [--title T] [TEXT] [--shared]`: rewrite one memory
+/// in place — the slug kept, the stamp kept, the index line retitled (ADR 0065). What is not
+/// given is kept as the file has it. The exit code, and whether a committed store changed.
+pub fn edit_memory(
+    root: &Path,
+    ask: &Memory,
+    title: Option<&str>,
+    text: Option<&str>,
+    say: Sink,
+) -> (u8, bool) {
+    let Some(persona) = ask.persona(root, say) else {
+        return (1, false);
+    };
+    let opened = match persona.open_memory(ask.slug) {
+        Ok(opened) => opened,
+        Err(e) => return ask.failed(&e, say),
+    };
+    let (title, text) = opened.revised(title, text);
+    match persona.edit_memory(ask.slug, &title, &text, memstore::Base::Read(&opened.text)) {
+        Ok(path) => {
+            say(Say::Done(format!(
+                "Edited '{}' in {} → {}",
+                ask.slug,
+                ask.place(),
+                super::rel(root, &path)
+            )));
+            (0, true)
+        }
+        Err(memstore::EditRefused::Io(e)) => ask.failed(&e, say),
+        Err(stale) => {
+            say(Say::Fail(stale.to_string()));
+            (1, false)
+        }
+    }
+}
+
+/// `charter persona archive-memory <name> <slug> [--shared]`: move one memory into
+/// `memory/archive/` and drop its index line — the window's Delete (ADR 0065).
+pub fn archive_memory(root: &Path, ask: &Memory, say: Sink) -> (u8, bool) {
+    let Some(persona) = ask.persona(root, say) else {
+        return (1, false);
+    };
+    match persona.archive_memory(ask.slug) {
+        Ok(path) => {
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            say(Say::Done(format!(
+                "Archived '{}' from {} → {}. Undo: `charter persona unarchive-memory {} {stem}{}`",
+                ask.slug,
+                ask.place(),
+                super::rel(root, &path),
+                ask.name,
+                ask.flag()
+            )));
+            (0, true)
+        }
+        Err(e) => ask.failed(&e, say),
+    }
+}
+
+/// `charter persona unarchive-memory <name> <slug> [--as NAME] [--shared]`: move an archived
+/// memory back and re-index it — the window's Undo (ADR 0065).
+pub fn unarchive_memory(
+    root: &Path,
+    ask: &Memory,
+    restore_as: Option<&str>,
+    say: Sink,
+) -> (u8, bool) {
+    let Some(persona) = ask.persona(root, say) else {
+        return (1, false);
+    };
+    match persona.unarchive_memory(ask.slug, restore_as) {
+        Ok(path) => {
+            say(Say::Done(format!(
+                "Restored '{}' to {} → {}",
+                ask.slug,
+                ask.place(),
+                super::rel(root, &path)
+            )));
+            (0, true)
+        }
+        Err(e) => ask.failed(&e, say),
     }
 }
 
