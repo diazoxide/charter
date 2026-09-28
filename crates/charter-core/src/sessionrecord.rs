@@ -59,7 +59,7 @@ pub struct ChatFacts {
     pub name: Option<String>,
     /// The harness it runs, by the word the plane calls it.
     pub harness: Option<String>,
-    /// The harness's id for the conversation ([`conversation_of`]).
+    /// The harness's id for the conversation now ([`crate::reopen::conversation_of`]).
     pub conversation: Option<String>,
 }
 
@@ -629,26 +629,13 @@ pub fn chat_facts(root: &Path, number: u32) -> ChatFacts {
         number,
         name: Some(crate::reopen::shown_name(&chat, harness.as_deref())),
         harness,
-        conversation: conversation_of(root, number),
+        // The one answer to "which conversation is this chat in now" (SI-8a): the app keeps
+        // `resume` current from the chat's own hook reports.
+        conversation: crate::reopen::conversation_of(root, number)
+            .ok()
+            .flatten()
+            .map(|id| id.as_str().to_owned()),
     }
-}
-
-/// The harness's id for chat `number`'s conversation, as the app last recorded it.
-///
-/// **The one seam for "which conversation is this chat in now".** Today it is the `resume` of
-/// the app's record, which is the conversation the chat was started or last resumed under: a
-/// `/clear` in the chat moves the harness to a new one that the record does not yet follow.
-/// SI-8a has the app write the chat's CURRENT id back into `resume` from its hook reports; once
-/// it has, this answers the current one with no change here. Anything that asks which
-/// conversation a chat is in asks this.
-pub fn conversation_of(root: &Path, number: u32) -> Option<String> {
-    crate::reopen::read_or_refusal(root)
-        .ok()?
-        .chats
-        .into_iter()
-        .find(|c| c.number == Some(number))?
-        .resume
-        .map(|id| id.as_str().to_owned())
 }
 
 #[cfg(test)]

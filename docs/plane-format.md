@@ -1159,7 +1159,8 @@ excepted), and for a secret-shaped value, named by its kind.
 
   The frontmatter is line-based (`personas::frontmatter`), every key always written, and is
   charter's alone: the model gives only the title and the body. `conversation` is
-  `sessionrecord::conversation_of` — the app's `reopen.json` `resume` for that chat. `piece`
+  `reopen::conversation_of` — the app's `reopen.json` `resume` for that chat, which the app
+  keeps current from the chat's hook reports. `piece`
   lines are the piece the command ran in and each `--piece`, with the branch `git worktree
   list` reports; a `--piece` git does not report is refused. The body is exactly the five
   `## ` sections above, in that order, each non-empty, with nothing before the first (a heading
@@ -3495,8 +3496,8 @@ down rather than read off the code.
   relaunch's worth of chats: the app starts with none open, which is what a first launch
   does anyway. No second process reads it, which is what would make it stable.
 - **Written by:** `app/src-tauri/src/lib.rs` (charter-app) — whenever what is open changes
-  (a chat started, closed, brought to front, or dragged to another place on its strip), and
-  again on the way out. Not only on the
+  (a chat started, closed, brought to front, dragged to another place on its strip, or moved
+  onto another conversation by its own harness), and again on the way out. Not only on the
   way out: an app that is killed, or crashes, runs no exit handler. **Restart to update**
   (charter-app#251) writes it too, with `relaunch_after_update`, before the restart is asked
   for, so a relaunch that fails loses nothing: the next launch reads the same record.
@@ -3505,7 +3506,10 @@ down rather than read off the code.
   operator has answered it and the record is put back (charter-app#250). **Nothing it names
   starts before that answer.** "Start fresh" rewrites it holding no chat and no view tab, and
   keeps `dealt`; Esc, closing the question, or a window that never answers all mean "Reopen
-  all", and the file is left as it was until then.
+  all", and the file is left as it was until then. Also by `charter_core::reopen::conversation_of`,
+  which answers the conversation one chat is in by its `number` — how a chat asks which
+  conversation it is, keyed by the `$CHARTER_SESSION_ID` the app gave it. That reader ships in
+  the same build as the writer, so the file stays internal.
 - **Git:** gitignored already, by the plane's own `/.charter/` line.
 - **No lock** — one app per plane (Tauri's single-instance plugin), and last writer wins.
 
@@ -3518,7 +3522,7 @@ down rather than read off the code.
 | `chats[].args` | list[str] | default `[]` | its arguments, **without** any charter added — a resume spells those differently from a start, so they are decided again at the reopen |
 | `chats[].cwd` | str | default `""` (absent) | the directory it ran in |
 | `chats[].name` | str | default `""` | what the operator calls the chat; a harness that takes a name is given it again |
-| `chats[].resume` | str | default `""` | the harness session id to resume. Held to `[A-Za-z0-9][A-Za-z0-9_-]{0,127}` — the Python charter's `SESSION_ID_RE` (`charter/frame/state.py:1128`) — on the way in, and a value that is not one reads as empty. It reaches a command line, and one starting with `-` would be a flag the operator never typed. The chat still comes back, as a new one |
+| `chats[].resume` | str | default `""` | the harness session id the chat is in **now**, and so the one a relaunch resumes (Q10): the id charter chose at the start (Claude Code), then whatever the chat's own harness moved it onto as its hook reported it — the first id a Codex or opencode chat names, the new one a Claude Code chat is in after `/clear`. Written the moment the app's board adopts or follows the report; a report the board refuses (a harness nested in the chat's shell, ADR 0024 C5) never reaches it. Empty for a chat whose harness has not named a conversation yet, and for a shell. Held to `[A-Za-z0-9][A-Za-z0-9_-]{0,127}` — the Python charter's `SESSION_ID_RE` (`charter/frame/state.py:1128`) — on the way in, and a value that is not one reads as empty. It reaches a command line, and one starting with `-` would be a flag the operator never typed. The chat still comes back, as a new one |
 | `chats[].active` | bool | default `false` | whether it was the chat in front |
 | `chats[].profile` | str | default `""` (absent) | the harness profile the chat started on, by NAME — never its command or its environment, so an edit to `charter.local.toml` takes effect at the reopen and the account it names never reaches this file (ADR 0022). Held to a name charter would mint; anything else reads as empty |
 | `chats[].persona` | str | default `""` (absent) | the persona the chat adopted, under the same rule |
@@ -3531,8 +3535,9 @@ down rather than read off the code.
 Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
 record cannot disagree with what is about to be started. Only a harness charter has
 measured a resume for is resumed (`crates/charter-core/src/harness.rs`, which carries the
-same values as `charter/harness/`); a Codex chat has no `resume` to record at all, because
-Codex reports its id only through a hook, inside its first turn (ADR 0024).
+same values as `charter/harness/`). A Codex or opencode chat has no `resume` until its first
+turn, because each reports its id only through a hook, inside that turn (ADR 0024, ADR 0058);
+from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencode -s <id>`.
 
 ---
 

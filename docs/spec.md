@@ -137,7 +137,10 @@ When two choices conflict, the higher priority wins.
    mid-turn and then ends every session. On the next launch, when anything was open, the window
    asks once — reopen every session, or start fresh — naming how many chats in which projects,
    and starts nothing before the answer. Reopening resumes each chat through its harness's own
-   resume; Esc or closing the question reopens (charter-app#250).
+   resume, on the conversation it was in when it was last recorded — which its own harness's
+   hook keeps current, so a Codex or opencode chat past its first turn and a Claude Code chat
+   after `/clear` come back where they were (Q10); Esc or closing the question reopens
+   (charter-app#250).
 6. **Harnesses:** Claude Code, Codex and opencode (opencode since charter#371, ADR 0058).
 7. **Remote sessions are not in v1.** Sessions sit behind one interface (spawn, read/write
    bytes, resize, exit) with local PTY as the first implementation, so SSH or devcontainers

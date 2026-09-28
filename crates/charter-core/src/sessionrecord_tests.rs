@@ -431,10 +431,6 @@ fn a_chats_facts_come_from_the_apps_record_of_it_by_number() {
         seen.conversation.as_deref(),
         Some("0f6c2a1e-aaaa-bbbb-cccc-123456789abc")
     );
-    assert_eq!(
-        conversation_of(dir.path(), 7).as_deref(),
-        Some("0f6c2a1e-aaaa-bbbb-cccc-123456789abc")
-    );
 }
 
 #[test]

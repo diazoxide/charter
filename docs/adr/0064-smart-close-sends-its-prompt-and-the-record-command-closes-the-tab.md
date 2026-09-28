@@ -27,21 +27,20 @@ charter's alone, from facts it already holds:
 | Key | From |
 |---|---|
 | `title`, `date` | the command's `--title`; the machine's clock |
-| `chat`, `chat-name` | `$CHARTER_CHAT`; the name the chat's tab shows, from the app's record (`reopen::shown_name`) |
+| `chat`, `chat-name` | `$CHARTER_CHAT`, else `$CHARTER_SESSION_ID` (the same number, set in every app chat); the name the chat's tab shows, from the app's record (`reopen::shown_name`) |
 | `persona` | the persona ladder, as every command reads it; `none` for none |
 | `harness` | the program the app's record says the chat runs |
-| `conversation` | `sessionrecord::conversation_of` — see below |
+| `conversation` | `reopen::conversation_of` — see below |
 | `workspace` | the workspace, or `plane root` |
 | `piece` (one per line) | the piece the command runs in, and each `--piece <repo>/<piece>`, with the branch `git worktree list` reports; a piece git does not report is refused |
 
 A fact charter does not have is written `unknown`, never left out, so every record has every key
 and a reader never has to guess whether a key's absence meant something.
 
-**The conversation id has one seam.** `sessionrecord::conversation_of(root, chat)` answers the
-`resume` of the app's record for that chat — the conversation it was started or last resumed
-under. SI-8a has the app write the chat's *current* id back into `resume` from its hook reports;
-once it lands, the same function answers the current one with no change to this code. Anything
-that asks which conversation a chat is in asks that function.
+**The conversation id is SI-8a's answer.** `reopen::conversation_of(root, number)` is the one
+way to ask which conversation a chat is in now: the app keeps the chat's `resume` in
+`reopen.json` current from its own hook reports (the id a Codex or opencode chat names, the one a
+Claude Code chat moves to on `/clear`). A chat it holds no id for is written `unknown`.
 
 `sessions/index.md` (newest first, one line per record: date, title, link) and `workspace.md`'s
 `## Sessions` line (the count, the latest record, a link to the index) are **rebuilt from the

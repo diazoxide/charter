@@ -141,10 +141,7 @@ fn record(
             return Ok(2);
         }
     };
-    let chat = std::env::var(CHAT_ENV)
-        .ok()
-        .and_then(|n| n.trim().parse::<u32>().ok())
-        .filter(|n| *n > 0);
+    let chat = chat_number();
     let facts = Facts {
         place,
         at: crate::memory::stamp(now)?,
@@ -227,6 +224,16 @@ fn touched(
         add(ws, repo, piece)?;
     }
     Ok(out)
+}
+
+/// The app's number for the chat this runs in: `$CHARTER_CHAT` where hooks report, else
+/// `$CHARTER_SESSION_ID`, which the app sets in every chat it starts to the same number. A value
+/// that is not a number (a session id from outside the app) is no chat.
+fn chat_number() -> Option<u32> {
+    [CHAT_ENV, charter_core::active::SESSION_ID_ENV]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find_map(|n| n.trim().parse::<u32>().ok().filter(|n| *n > 0))
 }
 
 /// Tells the app this chat's record is saved, and says so either way: the record is written

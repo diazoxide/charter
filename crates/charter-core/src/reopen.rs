@@ -53,7 +53,14 @@ pub struct Chat {
     pub cwd: Option<PathBuf>,
     /// What the operator calls this chat, and what a harness that takes a name is given.
     pub name: String,
-    /// The conversation to bring back, where the app knows one.
+    /// The conversation this chat is in NOW, where the app knows one — and so the one a
+    /// relaunch brings back.
+    ///
+    /// **Current, not the one it started under** (Q10): the id charter chose at the start, then
+    /// whatever the chat's own harness moved it onto, as the board adopted or followed it —
+    /// the first id a Codex or opencode chat names through its hook, and the new one a Claude
+    /// Code chat is in after `/clear`. A nested harness's report never reaches it (ADR 0024,
+    /// C5). [`conversation_of`] reads it for a chat by number.
     pub resume: Option<SessionId>,
     /// Whether this was the chat in front.
     pub active: bool,
@@ -382,7 +389,8 @@ pub enum Reopened {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fresh {
     /// Nothing recorded a conversation for it — the app never learnt this harness's session
-    /// id. Codex reports its id only through a hook, inside its first turn.
+    /// id. Codex and opencode report theirs only through a hook, inside the first turn, so a
+    /// chat quit before one comes back like this.
     NoConversationRecorded,
     /// Its program is not a harness charter has measured a resume for — a shell, say.
     NoResumeForThisProgram,
@@ -669,6 +677,27 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
         dealt: highest_dealt(&record),
         ..record
     })
+}
+
+/// The conversation chat `number` is in now, as the app last recorded it in `plane_root` — or
+/// none, where its harness has not named one yet or the record does not hold the chat.
+///
+/// **The one way to ask, from inside a chat, which conversation it is.** A chat knows its own
+/// number: the app sets `$CHARTER_SESSION_ID` (and, where hooks report, `$CHARTER_CHAT`) to it
+/// in every chat's environment, and [`Chat::number`] is that number on disk. The app keeps
+/// [`Chat::resume`] current — the id charter chose at the start, the first one a Codex or
+/// opencode chat names through its hook, the one a Claude Code chat moves to on `/clear` —
+/// and writes it the moment the board takes the report, so this is never behind the chat's
+/// own harness by more than the one write.
+///
+/// Read through [`read_or_refusal`], so a record that is a link, a FIFO or too large is
+/// refused here as it is at a launch, and a record of another version holds no chat.
+pub fn conversation_of(plane_root: &Path, number: u32) -> std::io::Result<Option<SessionId>> {
+    Ok(read_or_refusal(plane_root)?
+        .chats
+        .into_iter()
+        .find(|chat| chat.number == Some(number))
+        .and_then(|chat| chat.resume))
 }
 
 /// The longest name, in characters, an operator can give a chat.
@@ -1260,6 +1289,71 @@ mod tests {
         let launch = chat.launch();
 
         assert_eq!(launch.args, vec!["resume", ID, "--model", "opus"]);
+    }
+
+    #[test]
+    fn opencode_resumes_by_naming_its_session() {
+        let chat = Chat {
+            program: "opencode".to_owned(),
+            args: Vec::new(),
+            ..claude("ide.7", Some("ses_3a1b2c3d4e5f"))
+        };
+
+        let launch = chat.launch();
+
+        assert_eq!(launch.args, vec!["-s", "ses_3a1b2c3d4e5f"]);
+        assert_eq!(
+            launch.how,
+            Reopened::Resumed(SessionId::new("ses_3a1b2c3d4e5f").unwrap())
+        );
+    }
+
+    #[test]
+    fn a_chat_s_current_conversation_is_read_by_the_number_it_answers_to() {
+        // The chat asks by `$CHARTER_SESSION_ID`, which is the number the record keeps.
+        let plane = tempfile::tempdir().unwrap();
+        let other = "99999999-2222-4333-8444-555555555555";
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![
+                    Chat {
+                        number: Some(3),
+                        ..claude("ide.3", Some(other))
+                    },
+                    Chat {
+                        number: Some(7),
+                        ..claude("ide.7", Some(ID))
+                    },
+                    Chat {
+                        number: Some(8),
+                        ..claude("ide.8", None)
+                    },
+                ],
+                ..Default::default()
+            },
+        )
+        .expect("the record is written");
+
+        let conversation = |chat| conversation_of(plane.path(), chat).expect("the record reads");
+
+        assert_eq!(conversation(7), Some(SessionId::new(ID).unwrap()));
+        assert_eq!(
+            conversation(8),
+            None,
+            "a chat whose harness has named none yet"
+        );
+        assert_eq!(conversation(9), None, "a chat the record does not hold");
+    }
+
+    #[test]
+    fn a_chat_in_a_plane_with_no_record_is_in_no_conversation_charter_knows() {
+        let plane = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            conversation_of(plane.path(), 7).expect("no record reads"),
+            None
+        );
     }
 
     #[test]
