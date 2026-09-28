@@ -269,9 +269,8 @@ fn sections(body: &str) -> Result<(), String> {
 pub fn dir(root: &Path, place: &Place) -> Option<PathBuf> {
     match place {
         Place::PlaneRoot => Some(root.join(DIR)),
-        Place::Workspace(ws) => {
-            crate::contain::workspace_name_ok(ws).then(|| root.join("workspaces").join(ws).join(DIR))
-        }
+        Place::Workspace(ws) => crate::contain::workspace_name_ok(ws)
+            .then(|| root.join("workspaces").join(ws).join(DIR)),
     }
 }
 
@@ -383,12 +382,7 @@ pub fn record(root: &Path, new: &New) -> Result<Recorded, Refused> {
             }
             n += 1;
         };
-        crate::rewrite::replace(
-            &dir,
-            &path,
-            text.as_bytes(),
-            crate::rewrite::Mode::Kept,
-        )?;
+        crate::rewrite::replace(&dir, &path, text.as_bytes(), crate::rewrite::Mode::Kept)?;
         path
     };
     let file = path

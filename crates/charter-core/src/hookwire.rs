@@ -563,7 +563,10 @@ pub fn tell_saved(path: &std::path::Path, saved: &SessionSaved) -> io::Result<()
 
 /// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent writing it.
 #[cfg(unix)]
-fn one_line_with_a_deadline(path: &std::path::Path, line: &impl serde::Serialize) -> io::Result<()> {
+fn one_line_with_a_deadline(
+    path: &std::path::Path,
+    line: &impl serde::Serialize,
+) -> io::Result<()> {
     use std::io::Write;
 
     let mut socket = std::os::unix::net::UnixStream::connect(path)?;
@@ -762,8 +765,7 @@ impl Listener {
             std::sync::Arc::from(answer);
         let noticed: std::sync::Arc<dyn Fn(StartedByHand) + Send + Sync> =
             std::sync::Arc::from(noticed);
-        let saved: std::sync::Arc<dyn Fn(SessionSaved) + Send + Sync> =
-            std::sync::Arc::from(saved);
+        let saved: std::sync::Arc<dyn Fn(SessionSaved) + Send + Sync> = std::sync::Arc::from(saved);
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
             for connection in self.socket.incoming() {
@@ -796,9 +798,7 @@ impl Listener {
                 let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
-                    .spawn(move || {
-                        serve(connection, this, &*each, &*answer, &*noticed, &*saved)
-                    });
+                    .spawn(move || serve(connection, this, &*each, &*answer, &*noticed, &*saved));
                 // A thread that will not start costs this one report. Refusing the rest of
                 // the channel over it would cost every report after it too.
                 let _ = started;
@@ -2250,8 +2250,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_saved_reaches_the_app_as_its_own_line_and_never_as_a_report_an_ask_or_a_notice()
-    {
+    fn a_session_saved_reaches_the_app_as_its_own_line_and_never_as_a_report_an_ask_or_a_notice() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join("hooks.sock");
         let listener = Listener::bind(dir.path(), &path).expect("a socket");
@@ -2292,7 +2291,10 @@ mod tests {
             Ok(Line::ByHand(_))
         ));
         let ask = serde_json::to_string(&Ask::Ticket { chat: 4 }).unwrap();
-        assert!(matches!(serde_json::from_str::<Line>(&ask), Ok(Line::Ask(_))));
+        assert!(matches!(
+            serde_json::from_str::<Line>(&ask),
+            Ok(Line::Ask(_))
+        ));
         let line = serde_json::to_string(&saved()).unwrap();
         assert!(matches!(
             serde_json::from_str::<Line>(&line),

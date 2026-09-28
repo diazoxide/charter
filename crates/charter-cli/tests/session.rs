@@ -126,7 +126,10 @@ fn a_record_is_written_indexed_and_pointed_at_and_the_app_is_told_which_chat_sav
     assert!(index.contains("[Ship the record](20260928-140312-ship-the-record.md)"));
     let charter_md =
         std::fs::read_to_string(root(&tmp).join("workspaces/alpha/workspace.md")).unwrap();
-    assert!(charter_md.contains("## Sessions\n\n1 session record — "), "{charter_md}");
+    assert!(
+        charter_md.contains("## Sessions\n\n1 session record — "),
+        "{charter_md}"
+    );
     let saved: SessionSaved = rx.recv_timeout(Duration::from_secs(5)).expect("the line");
     assert_eq!(saved.chat, 3);
     assert_eq!(
@@ -142,7 +145,11 @@ fn with_no_app_to_tell_the_record_is_still_written_and_says_the_tab_will_not_clo
 
     for env in [
         vec![IN_ALPHA],
-        vec![IN_ALPHA, (SOCKET_ENV, gone.to_str().unwrap()), (CHAT_ENV, "3")],
+        vec![
+            IN_ALPHA,
+            (SOCKET_ENV, gone.to_str().unwrap()),
+            (CHAT_ENV, "3"),
+        ],
     ] {
         let now = if env.len() == 1 {
             "2026-09-28T09:00:00"
@@ -259,7 +266,12 @@ fn list_is_newest_first_and_show_prints_one_record_by_its_file_name() {
     assert!(by_path.status.success(), "{}", err(&by_path));
     assert!(out(&by_path).contains("# Newer\n"), "{}", out(&by_path));
 
-    let escape = charter(&tmp, &["session", "show", "../workspace.md"], &[IN_ALPHA], "");
+    let escape = charter(
+        &tmp,
+        &["session", "show", "../workspace.md"],
+        &[IN_ALPHA],
+        "",
+    );
     assert!(!escape.status.success());
     assert!(out(&escape).is_empty());
 }

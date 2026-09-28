@@ -2571,7 +2571,9 @@ mod tests {
     #[test]
     fn a_fresh_plane_keeps_the_plane_roots_session_records_on_this_machine() {
         assert!(
-            GITIGNORE_BASELINE.lines().any(|line| line == PLANE_SESSIONS_IGNORE),
+            GITIGNORE_BASELINE
+                .lines()
+                .any(|line| line == PLANE_SESSIONS_IGNORE),
             "{GITIGNORE_BASELINE}"
         );
         assert_eq!(PLANE_SESSIONS_IGNORE, "/sessions/");

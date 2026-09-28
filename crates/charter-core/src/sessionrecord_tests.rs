@@ -99,10 +99,7 @@ fn text_before_the_first_section_is_refused() {
 
 #[test]
 fn a_heading_inside_a_code_fence_is_text_and_not_a_section() {
-    let body = BODY.replace(
-        "Nothing.",
-        "Nothing.\n\n```md\n## Not a section\n```",
-    );
+    let body = BODY.replace("Nothing.", "Nothing.\n\n```md\n## Not a section\n```");
     assert_eq!(check("Ship it", &body), Ok(()));
 }
 
@@ -141,7 +138,13 @@ fn a_record_that_looks_like_it_holds_a_credential_is_refused_by_kind_never_by_va
 #[test]
 fn a_workspace_record_is_one_file_under_its_sessions_directory_named_by_time_and_title() {
     let dir = plane(&["alpha"]);
-    let done = write(dir.path(), "Ship the record", BODY, &facts(alpha(), at(14, 3, 12))).unwrap();
+    let done = write(
+        dir.path(),
+        "Ship the record",
+        BODY,
+        &facts(alpha(), at(14, 3, 12)),
+    )
+    .unwrap();
     assert_eq!(
         done.path,
         dir.path()
@@ -211,7 +214,10 @@ fn a_workspace_this_plane_does_not_have_is_refused_and_nothing_is_written() {
         BODY,
         &facts(Place::Workspace("ghost".to_owned()), at(1, 1, 1)),
     );
-    assert!(matches!(refused, Err(Refused::NoWorkspace(_))), "{refused:?}");
+    assert!(
+        matches!(refused, Err(Refused::NoWorkspace(_))),
+        "{refused:?}"
+    );
     assert!(!dir.path().join("workspaces/ghost").exists());
 }
 
@@ -227,7 +233,12 @@ fn two_records_in_the_same_second_with_the_same_title_are_two_files() {
 #[test]
 fn a_shape_refusal_writes_nothing() {
     let dir = plane(&["alpha"]);
-    let refused = write(dir.path(), "Ship", "## Goal\n\nx\n", &facts(alpha(), at(1, 1, 1)));
+    let refused = write(
+        dir.path(),
+        "Ship",
+        "## Goal\n\nx\n",
+        &facts(alpha(), at(1, 1, 1)),
+    );
     assert!(matches!(refused, Err(Refused::Shape(_))), "{refused:?}");
     assert!(!dir.path().join("workspaces/alpha/sessions").exists());
 }
@@ -274,7 +285,13 @@ fn the_index_is_rebuilt_from_the_records_so_a_hand_edit_to_it_does_not_survive()
 #[test]
 fn a_title_with_brackets_does_not_break_its_index_link() {
     let dir = plane(&["alpha"]);
-    write(dir.path(), "Fix [the] bug", BODY, &facts(alpha(), at(9, 0, 0))).unwrap();
+    write(
+        dir.path(),
+        "Fix [the] bug",
+        BODY,
+        &facts(alpha(), at(9, 0, 0)),
+    )
+    .unwrap();
     let index =
         std::fs::read_to_string(dir.path().join("workspaces/alpha/sessions/index.md")).unwrap();
     assert!(
@@ -290,8 +307,7 @@ fn workspace_md_points_at_the_index_with_the_count_and_the_latest_record() {
     let dir = plane(&["alpha"]);
     write(dir.path(), "First", BODY, &facts(alpha(), at(9, 0, 0))).unwrap();
     write(dir.path(), "Second", BODY, &facts(alpha(), at(10, 0, 0))).unwrap();
-    let text =
-        std::fs::read_to_string(dir.path().join("workspaces/alpha/workspace.md")).unwrap();
+    let text = std::fs::read_to_string(dir.path().join("workspaces/alpha/workspace.md")).unwrap();
     let body = crate::mdsection::section_body(&text, "Sessions");
     assert_eq!(
         body,
@@ -329,7 +345,10 @@ fn a_workspace_md_written_before_sessions_existed_gains_the_section() {
     std::fs::write(&path, "# alpha\n\n## Vision\n\nShip.\n").unwrap();
     write(dir.path(), "First", BODY, &facts(alpha(), at(9, 0, 0))).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.starts_with("# alpha\n\n## Vision\n\nShip.\n"), "{text}");
+    assert!(
+        text.starts_with("# alpha\n\n## Vision\n\nShip.\n"),
+        "{text}"
+    );
     assert!(
         crate::mdsection::section_body(&text, "Sessions").starts_with("1 session record —"),
         "{text}"
@@ -339,8 +358,7 @@ fn a_workspace_md_written_before_sessions_existed_gains_the_section() {
 #[test]
 fn a_fresh_workspace_md_has_a_sessions_section_saying_there_are_none_yet() {
     let dir = plane(&["alpha"]);
-    let text =
-        std::fs::read_to_string(dir.path().join("workspaces/alpha/workspace.md")).unwrap();
+    let text = std::fs::read_to_string(dir.path().join("workspaces/alpha/workspace.md")).unwrap();
     assert!(
         crate::mdsection::section_body(&text, "Sessions").starts_with("_No session records yet"),
         "{text}"
@@ -357,8 +375,14 @@ fn the_latest_is_the_newest_record_of_that_place_and_none_where_there_are_none()
     write(dir.path(), "New", BODY, &facts(alpha(), at(10, 0, 0))).unwrap();
     let newest = latest(dir.path(), &alpha()).unwrap();
     assert_eq!(newest.title, "New");
-    assert_eq!(newest.shown, "workspaces/alpha/sessions/20260928-100000-new.md");
-    assert_eq!(latest(dir.path(), &Place::Workspace("beta".to_owned())), None);
+    assert_eq!(
+        newest.shown,
+        "workspaces/alpha/sessions/20260928-100000-new.md"
+    );
+    assert_eq!(
+        latest(dir.path(), &Place::Workspace("beta".to_owned())),
+        None
+    );
     assert_eq!(latest(dir.path(), &Place::PlaneRoot), None);
 }
 

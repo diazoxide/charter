@@ -930,7 +930,12 @@ fn recorded(root: &Path, place: active::Place, title: &str, hms: (u32, u32, u32)
 #[test]
 fn a_workspace_chat_is_told_its_workspaces_last_session_record_in_one_quoted_line() {
     let (_d, root) = plane();
-    recorded(&root, active::Place::Workspace("alpha".into()), "Old", (9, 0, 0));
+    recorded(
+        &root,
+        active::Place::Workspace("alpha".into()),
+        "Old",
+        (9, 0, 0),
+    );
     recorded(
         &root,
         active::Place::Workspace("alpha".into()),
@@ -959,17 +964,19 @@ fn a_workspace_chat_is_told_its_workspaces_last_session_record_in_one_quoted_lin
 #[test]
 fn a_chat_is_not_told_another_places_last_session() {
     let (_d, root) = plane();
-    recorded(&root, active::Place::Workspace("beta".into()), "Beta work", (9, 0, 0));
+    recorded(
+        &root,
+        active::Place::Workspace("beta".into()),
+        "Beta work",
+        (9, 0, 0),
+    );
     recorded(&root, active::Place::PlaneRoot, "Root work", (9, 0, 0));
     let got = told(
         &root,
         &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
         serde_json::json!({}),
     );
-    assert!(
-        !got.iter().any(|p| p.contains("Last session")),
-        "{got:#?}"
-    );
+    assert!(!got.iter().any(|p| p.contains("Last session")), "{got:#?}");
 }
 
 #[test]
@@ -985,9 +992,8 @@ fn a_plane_root_chat_is_told_the_plane_roots_last_session_record() {
         serde_json::json!({}),
     );
     assert!(
-        got.iter().any(|p| p.contains(
-            "Last session: “Tidy personas” — sessions/20260928-080102-tidy-personas.md"
-        )),
+        got.iter().any(|p| p
+            .contains("Last session: “Tidy personas” — sessions/20260928-080102-tidy-personas.md")),
         "{got:#?}"
     );
 }

@@ -308,10 +308,10 @@ pub fn meta_paths(root: &Path, name: &str) -> Vec<String> {
         "todos",
         crate::sessionrecord::DIR,
     ]
-        .into_iter()
-        .filter(|rel| dir.join(rel).exists())
-        .map(|rel| format!("workspaces/{name}/{rel}"))
-        .collect();
+    .into_iter()
+    .filter(|rel| dir.join(rel).exists())
+    .map(|rel| format!("workspaces/{name}/{rel}"))
+    .collect();
     if has_change_records(&dir) {
         out.push(format!("workspaces/{name}/changes"));
     }
