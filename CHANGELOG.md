@@ -11,6 +11,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Codex and opencode chats come back to their conversation at a relaunch, and a Claude Code
+  chat comes back to the one it was in after `/clear`.** A chat's conversation was recorded
+  only when it started, which only Claude Code has, so every Codex and opencode chat came back
+  as a new one, and a cleared Claude Code chat came back to the conversation it had cleared
+  away. The id the chat's own harness reports through its hook is now written into
+  `.charter/app/reopen.json` as it arrives. A harness started inside the chat's shell still
+  moves nothing (ADR 0024).
+
 ## [0.4.0] - 2026-09-27
 
 0.4.0 is the IDE growing up. The plane root is a tab of its own, first on the workspace strip,

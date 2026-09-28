@@ -231,8 +231,9 @@ describe("what the window does with the chats the core already has", () => {
   });
 
   it("says a chat came back as a new one, and why", async () => {
-    // The honest half: a Codex chat has no conversation the app could have recorded, and the
-    // window says that rather than letting it look like the chat it was.
+    // The honest half: a Codex chat quit before its first turn has no conversation the app
+    // could have recorded, and the window says that rather than letting it look like the chat
+    // it was.
     core([
       chat({
         session: 7,
