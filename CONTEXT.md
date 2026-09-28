@@ -121,6 +121,22 @@ shims** stand first on its `PATH`: the harness still starts, after one line sayi
 tab shows a banner offering to open it as a chat instead (ADR 0062).
 _Avoid_: terminal (for the tab), console, plain chat
 
+**Session record**:
+A summary a chat writes of its own session when it closes through **Smart close** — its goal,
+what it did, what it decided, what is still open and how to pick it up — filed as one file in
+its workspace's `sessions/` (the plane's own, at the plane root). The chat gives the title and
+the five sections; charter gives everything else (which chat, persona, harness, conversation,
+workspace and pieces), keeps the index and `workspace.md`'s one `## Sessions` line, and names
+the newest in the next chat's briefing (ADR 0064).
+_Avoid_: handoff, log, transcript
+
+**Smart close**:
+Closing a chat after it has written its session record: the app sends it one line naming
+charter's `smart-close` skill (the operator's click is the consent, the exception to a curation
+action's never-sent prompt), and the tab closes when `charter session record` tells the app the
+record is saved — never on anything the chat printed.
+_Avoid_: save and close, archive
+
 **Plane updated** (of a chat):
 A chat started before the plane's start-time instructions (`CLAUDE.md`, the harness settings
 and sub-agents, a persona's charter) changed on disk. It runs on what it read until it is

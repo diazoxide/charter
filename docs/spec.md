@@ -329,6 +329,25 @@ how it is cited and nothing here is renumbered.
     chat any input of their own; the terminal's answers to the harness's questions are not the
     operator's. **ADR 0061.**
 
+### Session records — added 2026-09-28
+
+32. **Smart close: a chat writes its session record, then closes.** A session record is a
+    summary a chat writes of its own session, never the transcript: one Markdown file in
+    `workspaces/<ws>/sessions/`, or the plane's own `sessions/` for a chat at the plane root,
+    whose body is exactly Goal, Done, Decisions, Open and How to resume, and whose frontmatter
+    is charter's alone — the chat, its persona, harness and conversation, the place, and the
+    pieces git reports. `charter session record` is the only writer: it holds the record to
+    that shape, writes it whole, rebuilds `sessions/index.md` (newest first) and
+    `workspace.md`'s one `## Sessions` line, and tells the app over the hook socket which chat
+    saved which record (`SessionSaved`, a fourth kind of line that is never a report or an
+    ask). A workspace's records follow it LIVE or LOCAL; the plane root's stay on this machine.
+    The next chat's briefing names the place's newest record in one line, its title quoted as
+    data. **Smart close sends its prompt** — the operator's click is the consent, the one
+    exception to decision 31 — and the tab closes only when the record is saved, never on
+    anything the chat printed; with no record in about five minutes the tab goes back to normal
+    and stays open. `charter session list|show` read them back, and charter's `smart-close`
+    skill is the procedure. **ADR 0064.**
+
 ## Limits (acceptance)
 
 Only what a person would notice. Measured on the operator's machine, in the scenario harness.

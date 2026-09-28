@@ -900,3 +900,100 @@ fn a_session_in_the_plane_that_chose_a_workspace_is_in_it() {
         "{got:?}"
     );
 }
+
+// ---- the last session record (SI-8, ADR 0064) -----------------------------------------------
+
+/// A session record written through the one writer, as `charter session record` writes it.
+fn recorded(root: &Path, place: active::Place, title: &str, hms: (u32, u32, u32)) {
+    let when = chrono::NaiveDate::from_ymd_opt(2026, 9, 28)
+        .unwrap()
+        .and_hms_opt(hms.0, hms.1, hms.2)
+        .unwrap();
+    crate::sessionrecord::record(
+        root,
+        &crate::sessionrecord::New {
+            title,
+            body: "## Goal\n\ng\n\n## Done\n\nd\n\n## Decisions\n\nx\n\n## Open\n\no\n\n## How \
+                   to resume\n\nr\n",
+            facts: &crate::sessionrecord::Facts {
+                place,
+                at: when,
+                chat: None,
+                persona: None,
+                pieces: Vec::new(),
+            },
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_workspace_chat_is_told_its_workspaces_last_session_record_in_one_quoted_line() {
+    let (_d, root) = plane();
+    recorded(
+        &root,
+        active::Place::Workspace("alpha".into()),
+        "Old",
+        (9, 0, 0),
+    );
+    recorded(
+        &root,
+        active::Place::Workspace("alpha".into()),
+        "Ship the widget",
+        (10, 0, 0),
+    );
+    let got = told(
+        &root,
+        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        serde_json::json!({}),
+    );
+    let last: Vec<&String> = got.iter().filter(|p| p.contains("Last session")).collect();
+    assert_eq!(last.len(), 1, "{got:#?}");
+    assert!(!last[0].contains('\n'), "one line: {}", last[0]);
+    assert!(
+        last[0].contains(
+            "Last session: “Ship the widget” — \
+             workspaces/alpha/sessions/20260928-100000-ship-the-widget.md"
+        ),
+        "{}",
+        last[0]
+    );
+    assert!(last[0].contains("data"), "{}", last[0]);
+}
+
+#[test]
+fn a_chat_is_not_told_another_places_last_session() {
+    let (_d, root) = plane();
+    recorded(
+        &root,
+        active::Place::Workspace("beta".into()),
+        "Beta work",
+        (9, 0, 0),
+    );
+    recorded(&root, active::Place::PlaneRoot, "Root work", (9, 0, 0));
+    let got = told(
+        &root,
+        &[("CHARTER_SESSION_ID", "s1"), ("CHARTER_WORKSPACE", "alpha")],
+        serde_json::json!({}),
+    );
+    assert!(!got.iter().any(|p| p.contains("Last session")), "{got:#?}");
+}
+
+#[test]
+fn a_plane_root_chat_is_told_the_plane_roots_last_session_record() {
+    let (_d, root) = plane();
+    recorded(&root, active::Place::PlaneRoot, "Tidy personas", (8, 1, 2));
+    let got = told(
+        &root,
+        &[
+            ("CHARTER_SESSION_ID", "s1"),
+            ("CHARTER_PLANE_ROOT_SESSION", "1"),
+        ],
+        serde_json::json!({}),
+    );
+    assert!(
+        got.iter().any(|p| p
+            .contains("Last session: “Tidy personas” — sessions/20260928-080102-tidy-personas.md")),
+        "{got:#?}"
+    );
+}

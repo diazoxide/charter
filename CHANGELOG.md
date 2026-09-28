@@ -11,6 +11,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Session records, the core of Smart close.** `charter session record --title "…"`, with the
+  record on standard input, files a summary of a chat's session — Goal, Done, Decisions, Open,
+  How to resume — in its workspace's `sessions/` (the plane's own `sessions/` at the plane
+  root), keeps `sessions/index.md` newest first and a `## Sessions` line in `workspace.md`
+  pointing at it, and tells the app the chat's record is saved. Which chat, persona, harness,
+  conversation and pieces a record is about is charter's to say, never the model's. `charter
+  session list` and `charter session show` read them back, and a chat's briefing names the
+  last one. charter's new `smart-close` skill writes one. The window's Smart close, which
+  sends that skill to a chat and closes its tab when the record is saved, is next (ADR 0064).
+
+### Changed
+
+- **A LIVE workspace publishes its session records** with its memory and todos: the managed
+  `.gitignore` block un-ignores `sessions/`, and `charter reinit` brings an older block up to
+  date. A new workspace's `workspace.md` has a `## Sessions` section.
+- **The plane root's session records stay on this machine**: `charter init` writes, and
+  `charter reinit` adds, `/sessions/` to the plane's `.gitignore`.
+
 ### Fixed
 
 - **Codex and opencode chats come back to their conversation at a relaunch, and a Claude Code

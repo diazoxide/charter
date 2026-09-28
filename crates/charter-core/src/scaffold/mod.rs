@@ -152,6 +152,10 @@ pub const GITIGNORE_BASELINE: &str = "\
 # command runs on a click, and a merged edit would run it on every machine.
 /charter.local.toml
 
+# Session records of chats at the plane root (a chat's Smart close writes them). This
+# machine's own, like a LOCAL workspace's; delete this line to share them with the plane.
+/sessions/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -163,6 +167,11 @@ __pycache__/
 
 const LOCAL_SETTINGS_IGNORE: &str = "/.claude/settings.local.json";
 const LOCAL_PROFILES_IGNORE: &str = "/charter.local.toml";
+
+/// The plane root's session records (ADR 0064), kept on this machine. A workspace's follow the
+/// workspace, LOCAL until it is made LIVE; the plane root has no such switch, so its records
+/// take the side that publishes nothing by itself. Un-ignoring the line shares them.
+pub const PLANE_SESSIONS_IGNORE: &str = "/sessions/";
 
 /// A path that resolves somewhere charter will not write: `(the path as named, where it lands)`.
 type Escape = (String, String);
@@ -455,6 +464,20 @@ pub fn reinit(place: &Place) -> Outcome {
             Ok(written) if !written.is_empty() => run
                 .created
                 .push(format!(".gitignore ({LOCAL_PROFILES_IGNORE})")),
+            Ok(_) => {}
+            Err(e) => {
+                run.err(format!("could not read or write {} ({e})", path.display()));
+                run.failed = true;
+            }
+        }
+        match append_gitignore(
+            &path,
+            &[PLANE_SESSIONS_IGNORE],
+            "added by `charter reinit` — the plane root's session records stay on this machine",
+        ) {
+            Ok(written) if !written.is_empty() => run
+                .created
+                .push(format!(".gitignore ({PLANE_SESSIONS_IGNORE})")),
             Ok(_) => {}
             Err(e) => {
                 run.err(format!("could not read or write {} ({e})", path.display()));
@@ -810,6 +833,9 @@ fn ensure_gitignore(path: &Path) -> Result<bool, String> {
     }
     if !lines.contains(&LOCAL_PROFILES_IGNORE) {
         missing.push(LOCAL_PROFILES_IGNORE);
+    }
+    if !lines.contains(&PLANE_SESSIONS_IGNORE) {
+        missing.push(PLANE_SESSIONS_IGNORE);
     }
     if missing.is_empty() {
         return Ok(false);
@@ -2348,7 +2374,7 @@ mod tests {
         let outcome = reinit(&at(&root, true));
 
         let mut added = "personas/, inventory/, workspaces/, .gitignore (/charter.local.toml), \
-                         .gitattributes (merge rules), .claude/settings.json (env), \
+                         .gitignore (/sessions/), .gitattributes (merge rules), .claude/settings.json (env), \
                          .claude/settings.json (ask: charter report --yes), opencode.json (ask: \
                          charter report --yes)"
             .to_owned();
@@ -2379,7 +2405,8 @@ mod tests {
         let outcome = reinit(&at(&root, true));
 
         let mut created =
-            "workspaces/, .gitignore (/charter.local.toml), .gitattributes (merge rules), \
+            "workspaces/, .gitignore (/charter.local.toml), .gitignore (/sessions/), \
+             .gitattributes (merge rules), \
              .claude/settings.json (env), .claude/settings.json (ask: charter report --yes), \
              opencode.json (ask: charter report --yes)"
                 .to_owned();
@@ -2490,7 +2517,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join(".gitignore");
         let body = "build/\n!/workspaces/.gitkeep\nkeep/.charter/out\n\
-                    /.claude/settings.local.json\n/charter.local.toml\n";
+                    /.claude/settings.local.json\n/charter.local.toml\n/sessions/\n";
         std::fs::write(&path, body).expect("a .gitignore");
 
         assert_eq!(ensure_gitignore(&path), Ok(false));
@@ -2514,7 +2541,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).expect("read"),
             "node_modules/\n!/workspaces/.gitkeep\n/.charter/\n\n# added by `charter \
-             init`\n/.claude/settings.local.json\n/charter.local.toml\n"
+             init`\n/.claude/settings.local.json\n/charter.local.toml\n/sessions/\n"
         );
     }
 
@@ -2526,7 +2553,8 @@ mod tests {
         let path = dir.path().join(".gitignore");
         std::fs::write(
             &path,
-            "# no .charter/ here, please\n/.claude/settings.local.json\n/charter.local.toml\n",
+            "# no .charter/ here, please\n/.claude/settings.local.json\n/charter.local.toml\n\
+             /sessions/\n",
         )
         .expect("a .gitignore");
 
@@ -2534,7 +2562,62 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).expect("read"),
             "# no .charter/ here, please\n/.claude/settings.local.json\n/charter.local.toml\n\
-             \n# added by `charter init`\n/workspaces/*/*\n!/workspaces/.gitkeep\n"
+             /sessions/\n\n# added by `charter init`\n/workspaces/*/*\n!/workspaces/.gitkeep\n"
+        );
+    }
+
+    /// A plane-root chat's session records stay on this machine, the way a LOCAL workspace's
+    /// do (ADR 0064): a fresh plane ignores them.
+    #[test]
+    fn a_fresh_plane_keeps_the_plane_roots_session_records_on_this_machine() {
+        assert!(
+            GITIGNORE_BASELINE
+                .lines()
+                .any(|line| line == PLANE_SESSIONS_IGNORE),
+            "{GITIGNORE_BASELINE}"
+        );
+        assert_eq!(PLANE_SESSIONS_IGNORE, "/sessions/");
+    }
+
+    /// And a plane made before them gains the line from `init` run again.
+    #[test]
+    fn a_gitignore_missing_the_plane_roots_session_records_gets_that_line_appended() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join(".gitignore");
+        let body = "!/workspaces/.gitkeep\n/.charter/\n/.claude/settings.local.json\n\
+                    /charter.local.toml\n";
+        std::fs::write(&path, body).expect("a .gitignore");
+
+        assert_eq!(ensure_gitignore(&path), Ok(true));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            format!("{body}\n# added by `charter init`\n/sessions/\n")
+        );
+    }
+
+    /// ...and from `reinit`, under a header of its own that says why.
+    #[test]
+    fn reinit_keeps_the_plane_roots_session_records_on_this_machine() {
+        let (_dir, root) = empty_plane();
+        init(&at(&root, false), &plain());
+        let old = GITIGNORE_BASELINE.replace(&format!("{PLANE_SESSIONS_IGNORE}\n"), "");
+        std::fs::write(root.join(".gitignore"), &old).expect("an old .gitignore");
+
+        let outcome = reinit(&at(&root, true));
+
+        assert_eq!(outcome.code, 0);
+        assert!(
+            matches!(&outcome.said[0], Say::Ok(text) if text.contains(".gitignore (/sessions/)")),
+            "{:?}",
+            outcome.said
+        );
+        let text = std::fs::read_to_string(root.join(".gitignore")).expect("a .gitignore");
+        assert!(
+            text.ends_with(
+                "\n\n# added by `charter reinit` — the plane root's session records stay on \
+                 this machine\n/sessions/\n"
+            ),
+            "{text}"
         );
     }
 

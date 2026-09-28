@@ -181,6 +181,27 @@ fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves
         PathBuf::from(".gitattributes"),
         Node::File(MERGE_RULES.as_bytes().to_vec()),
     );
+    // And the plane root's session records kept on this machine (ADR 0064): one more
+    // block in the baseline `.gitignore`, after the harness profiles' line.
+    let Some(Node::File(python)) = want.get(Path::new(".gitignore")) else {
+        panic!("the fixture has a .gitignore");
+    };
+    let text = String::from_utf8(python.clone()).expect("UTF-8");
+    let profiles = "/charter.local.toml\n";
+    assert!(text.contains(profiles), "{text}");
+    want.insert(
+        PathBuf::from(".gitignore"),
+        Node::File(
+            text.replacen(
+                profiles,
+                "/charter.local.toml\n\n# Session records of chats at the plane root (a chat's \
+                 Smart close writes them). This\n# machine's own, like a LOCAL workspace's; \
+                 delete this line to share them with the plane.\n/sessions/\n",
+                1,
+            )
+            .into_bytes(),
+        ),
+    );
     // And the file the baseline `.gitignore` un-ignores, which the Python charter never
     // created (#355): without it an empty `workspaces/` cannot be committed.
     want.insert(PathBuf::from("workspaces/.gitkeep"), Node::File(Vec::new()));
@@ -263,7 +284,7 @@ fn a_file_already_at_every_path_init_writes_is_left_byte_for_byte() {
     scene.write(
         ".gitignore",
         "dist/\n/workspaces/*/*\n!/workspaces/.gitkeep\n/.charter/\n\
-         /.claude/settings.local.json\n/charter.local.toml\n",
+         /.claude/settings.local.json\n/charter.local.toml\n/sessions/\n",
     );
     scene.write(
         ".claude/settings.json",

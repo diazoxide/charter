@@ -22,6 +22,7 @@ fn every_bundled_skill_is_read_with_its_name_description_and_file() {
         "add-curation-action",
         "handoff",
         "secrets",
+        "smart-close",
     ] {
         assert!(names.contains(&name), "{name} is missing from {names:?}");
     }

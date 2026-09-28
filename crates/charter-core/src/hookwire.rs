@@ -470,6 +470,9 @@ enum Line {
     /// Last, so it can never shadow the two above: it requires `started_by_hand`, which
     /// neither carries, and a report or an ask never reads as one.
     ByHand(StartedByHand),
+    /// After every other kind, for the same reason: it requires `session_saved`, which none of
+    /// them carries, so no line an older `charter` writes ever reads as one.
+    Saved(SessionSaved),
 }
 
 /// A harness the operator started by hand, in a shell tab's own shell (SI-5).
@@ -498,6 +501,29 @@ pub struct StartedByHand {
 /// What hears a [`StartedByHand`].
 pub type Noticed = Box<dyn Fn(StartedByHand) + Send + Sync + 'static>;
 
+/// A chat wrote its session record: the end of a Smart close (SI-8, ADR 0064).
+///
+/// **Neither a report nor an ask, and it moves no chat.** `charter session record` sends it
+/// once the record, the index and the workspace's pointer are on disk, so the app hears that
+/// the one thing a Smart close waits for is done — from the command that did it, never from
+/// reading what the harness printed. What the app does with it is the app's: close the tab it
+/// was closing, or nothing, for a chat it was not closing. A line from a chat charter did not
+/// ask to close therefore closes nothing.
+///
+/// Anything that can write the socket can send one, which is the account that can already
+/// move a chat's state; the most it buys is the close of a tab the operator already asked to
+/// close.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionSaved {
+    /// The app's number for the chat that wrote it, from [`CHAT_ENV`].
+    pub chat: u32,
+    /// The record, as a path the app can open: absolute.
+    pub session_saved: std::path::PathBuf,
+}
+
+/// What hears a [`SessionSaved`].
+pub type Saved = Box<dyn Fn(SessionSaved) + Send + Sync + 'static>;
+
 /// Sends one report to the socket at `path`. Answers whether the app took it.
 ///
 /// One connection is one report, written and closed. Nothing is waited for: the app has the
@@ -523,17 +549,35 @@ pub fn send(path: &std::path::Path, report: &Report) -> io::Result<()> {
 /// or not this got through.
 #[cfg(unix)]
 pub fn tell(path: &std::path::Path, notice: &StartedByHand) -> io::Result<()> {
+    one_line_with_a_deadline(path, notice)
+}
+
+/// Tells the app at `path` a chat's session record is saved. Answers whether the app took it.
+///
+/// [`tell`]'s shape and deadline: the record is on disk whether or not the app hears this, and
+/// the command that sends it must not hang on an app that stopped reading.
+#[cfg(unix)]
+pub fn tell_saved(path: &std::path::Path, saved: &SessionSaved) -> io::Result<()> {
+    one_line_with_a_deadline(path, saved)
+}
+
+/// One connection, one line, closed, and at most [`A_NOTICE_TAKES_AT_MOST`] spent writing it.
+#[cfg(unix)]
+fn one_line_with_a_deadline(
+    path: &std::path::Path,
+    line: &impl serde::Serialize,
+) -> io::Result<()> {
     use std::io::Write;
 
     let mut socket = std::os::unix::net::UnixStream::connect(path)?;
     socket.set_write_timeout(Some(A_NOTICE_TAKES_AT_MOST))?;
-    let mut line = serde_json::to_vec(notice).map_err(io::Error::other)?;
-    line.push(b'\n');
-    socket.write_all(&line)?;
+    let mut bytes = serde_json::to_vec(line).map_err(io::Error::other)?;
+    bytes.push(b'\n');
+    socket.write_all(&bytes)?;
     socket.flush()
 }
 
-/// How long [`tell`] may spend writing its line: a line is under 4 KiB and the app reads it on
+/// How long [`tell`] and [`tell_saved`] may spend writing their line: a line is under 4 KiB and the app reads it on
 /// a thread of its own, so this is only a bound on an app that has stopped reading.
 #[cfg(unix)]
 const A_NOTICE_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_millis(250);
@@ -598,7 +642,7 @@ impl Asking {
 #[cfg(not(unix))]
 mod off_unix;
 #[cfg(not(unix))]
-pub use off_unix::{Asking, Listener, Reading, send, tell};
+pub use off_unix::{Asking, Listener, Reading, send, tell, tell_saved};
 
 /// What the app answers an ask with, told which connection it came on.
 ///
@@ -693,11 +737,25 @@ impl Listener {
     }
 
     /// [`Listener::each_answering`], and every [`StartedByHand`] handed to `noticed`.
+    ///
+    /// A [`SessionSaved`] is heard and dropped: an app that does not close a chat on one has
+    /// nothing to do with it.
     pub fn each_answering_and_noticing(
         self,
         each: Box<dyn Fn(Report) + Send + Sync + 'static>,
         answer: Answerer,
         noticed: Noticed,
+    ) -> Reading {
+        self.each_answering_noticing_and_saving(each, answer, noticed, Box::new(|_| {}))
+    }
+
+    /// [`Listener::each_answering_and_noticing`], and every [`SessionSaved`] handed to `saved`.
+    pub fn each_answering_noticing_and_saving(
+        self,
+        each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+        answer: Answerer,
+        noticed: Noticed,
+        saved: Saved,
     ) -> Reading {
         let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let path = self.path.clone();
@@ -707,6 +765,7 @@ impl Listener {
             std::sync::Arc::from(answer);
         let noticed: std::sync::Arc<dyn Fn(StartedByHand) + Send + Sync> =
             std::sync::Arc::from(noticed);
+        let saved: std::sync::Arc<dyn Fn(SessionSaved) + Send + Sync> = std::sync::Arc::from(saved);
         let reading = std::thread::spawn(move || {
             let mut dealt: u64 = 0;
             for connection in self.socket.incoming() {
@@ -734,11 +793,12 @@ impl Listener {
                 let each = std::sync::Arc::clone(&each);
                 let answer = std::sync::Arc::clone(&answer);
                 let noticed = std::sync::Arc::clone(&noticed);
+                let saved = std::sync::Arc::clone(&saved);
                 dealt += 1;
                 let this = dealt;
                 let started = std::thread::Builder::new()
                     .name("charter-hook-report".into())
-                    .spawn(move || serve(connection, this, &*each, &*answer, &*noticed));
+                    .spawn(move || serve(connection, this, &*each, &*answer, &*noticed, &*saved));
                 // A thread that will not start costs this one report. Refusing the rest of
                 // the channel over it would cost every report after it too.
                 let _ = started;
@@ -842,6 +902,7 @@ fn serve(
     each: &(dyn Fn(Report) + Send + Sync),
     answer: &(dyn Fn(u64, Ask) -> Answer + Send + Sync),
     noticed: &(dyn Fn(StartedByHand) + Send + Sync),
+    saved: &(dyn Fn(SessionSaved) + Send + Sync),
 ) {
     use std::io::{BufRead, Read, Write};
 
@@ -873,6 +934,7 @@ fn serve(
                 }
             }
             Ok(Line::ByHand(notice)) => noticed(notice),
+            Ok(Line::Saved(record)) => saved(record),
             // A line that is neither is the end of this connection, never of the channel.
             Err(_) => return,
         }
@@ -2172,6 +2234,110 @@ mod tests {
         let started = std::time::Instant::now();
 
         assert!(tell(&dir.path().join("gone.sock"), &by_hand()).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+    // ------------------------------------------------------------------------------------
+    // a session record saved: a Smart close's end (SI-8, ADR 0064)
+    // ------------------------------------------------------------------------------------
+
+    fn saved() -> SessionSaved {
+        SessionSaved {
+            chat: 4,
+            session_saved: std::path::PathBuf::from(
+                "/plane/workspaces/alpha/sessions/20260928-140312-ship-it.md",
+            ),
+        }
+    }
+
+    #[test]
+    fn a_session_saved_reaches_the_app_as_its_own_line_and_never_as_a_report_an_ask_or_a_notice() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let _reading = listener.each_answering_noticing_and_saving(
+            Box::new(|_| panic!("a session saved is not a report")),
+            Box::new(|_, _| panic!("a session saved is not an ask")),
+            Box::new(|_| panic!("a session saved is not a harness started by hand")),
+            Box::new(move |saved| tx.lock().unwrap().send(saved).unwrap()),
+        );
+
+        tell_saved(&path, &saved()).expect("the app took it");
+
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(saved())
+        );
+    }
+
+    #[test]
+    fn no_other_line_is_ever_read_as_a_session_saved() {
+        let report = serde_json::to_string(&Report {
+            chat: 4,
+            event: Event::Stop,
+            conversation: Conversation::Unknown,
+            pid: None,
+            detail: Detail::default(),
+        })
+        .unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Line>(&report),
+            Ok(Line::Report(_))
+        ));
+        let notice = serde_json::to_string(&by_hand()).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Line>(&notice),
+            Ok(Line::ByHand(_))
+        ));
+        let ask = serde_json::to_string(&Ask::Ticket { chat: 4 }).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Line>(&ask),
+            Ok(Line::Ask(_))
+        ));
+        let line = serde_json::to_string(&saved()).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Line>(&line),
+            Ok(Line::Saved(_))
+        ));
+    }
+
+    #[test]
+    fn an_app_that_hears_no_session_saved_still_takes_every_other_line() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let path = dir.path().join("hooks.sock");
+        let listener = Listener::bind(dir.path(), &path).expect("a socket");
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        // What the app calls today: no listener for a saved record at all.
+        let _reading = listener.each_answering_and_noticing(
+            Box::new(move |report| tx.lock().unwrap().send(report.chat).unwrap()),
+            Box::new(|_, _| panic!("no ask was sent")),
+            Box::new(|_| panic!("no harness was started by hand")),
+        );
+
+        tell_saved(&path, &saved()).expect("the app took it");
+        send(
+            &path,
+            &Report {
+                chat: 9,
+                event: Event::Stop,
+                conversation: Conversation::Unknown,
+                pid: None,
+                detail: Detail::default(),
+            },
+        )
+        .expect("the app took it");
+
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(9));
+    }
+
+    #[test]
+    fn telling_a_session_saved_where_no_app_is_listening_fails_at_once() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let started = std::time::Instant::now();
+
+        assert!(tell_saved(&dir.path().join("gone.sock"), &saved()).is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }

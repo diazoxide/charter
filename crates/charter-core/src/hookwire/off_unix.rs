@@ -7,7 +7,7 @@
 
 use std::io;
 
-use super::{Answer, Answerer, Ask, Noticed, Report, StartedByHand};
+use super::{Answer, Answerer, Ask, Noticed, Report, Saved, SessionSaved, StartedByHand};
 
 /// [`Asking`]'s counterpart where there is no unix socket: it refuses, so a handoff there
 /// prints the command to run in a terminal, as it always has.
@@ -36,6 +36,12 @@ pub fn send(_path: &std::path::Path, _report: &Report) -> io::Result<()> {
 /// [`send`]'s refusal, for a harness started by hand: a shell tab here has no shims, so
 /// nothing calls this, and it says why all the same.
 pub fn tell(_path: &std::path::Path, _notice: &StartedByHand) -> io::Result<()> {
+    Err(no_channel())
+}
+
+/// [`send`]'s refusal, for a saved session record: the record is written all the same, and
+/// `charter session record` says the tab will not close by itself.
+pub fn tell_saved(_path: &std::path::Path, _saved: &SessionSaved) -> io::Result<()> {
     Err(no_channel())
 }
 
@@ -88,6 +94,17 @@ impl Listener {
         _each: Box<dyn Fn(Report) + Send + Sync + 'static>,
         _answer: Answerer,
         _noticed: Noticed,
+    ) -> Reading {
+        match self {}
+    }
+
+    /// Unreachable, for the same reason.
+    pub fn each_answering_noticing_and_saving(
+        self,
+        _each: Box<dyn Fn(Report) + Send + Sync + 'static>,
+        _answer: Answerer,
+        _noticed: Noticed,
+        _saved: Saved,
     ) -> Reading {
         match self {}
     }

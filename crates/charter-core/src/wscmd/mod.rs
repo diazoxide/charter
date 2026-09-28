@@ -130,6 +130,9 @@ fn live_line(line: &str) -> Option<String> {
 /// Each path is listed **twice** — the directory and its contents — because un-ignoring
 /// `…/memory` alone re-includes the directory entry and none of the files inside it.
 ///
+/// `sessions` is the workspace's session records (ADR 0064): they follow the workspace, LIVE
+/// or LOCAL, like its memory and todos.
+///
 /// `changes` needs the pair **and a third line that re-ignores `changes/log`**, and that
 /// asymmetry is the design of the store rather than an exception to it: a change record holds
 /// intent, which is what a teammate needs and git cannot derive, while
@@ -149,6 +152,8 @@ pub fn live_block<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
             format!("!/workspaces/{n}/memory/**"),
             format!("!/workspaces/{n}/todos"),
             format!("!/workspaces/{n}/todos/**"),
+            format!("!/workspaces/{n}/sessions"),
+            format!("!/workspaces/{n}/sessions/**"),
             format!("!/workspaces/{n}/changes"),
             format!("!/workspaces/{n}/changes/**"),
             format!("/workspaces/{n}/changes/log/"),
@@ -296,11 +301,17 @@ pub fn rename_live(root: &Path, old: &str, new: &str) -> io::Result<bool> {
 /// is exactly the shape that fails the whole call.
 pub fn meta_paths(root: &Path, name: &str) -> Vec<String> {
     let dir = root.join("workspaces").join(name);
-    let mut out: Vec<String> = ["workspace.json", "workspace.md", "memory", "todos"]
-        .into_iter()
-        .filter(|rel| dir.join(rel).exists())
-        .map(|rel| format!("workspaces/{name}/{rel}"))
-        .collect();
+    let mut out: Vec<String> = [
+        "workspace.json",
+        "workspace.md",
+        "memory",
+        "todos",
+        crate::sessionrecord::DIR,
+    ]
+    .into_iter()
+    .filter(|rel| dir.join(rel).exists())
+    .map(|rel| format!("workspaces/{name}/{rel}"))
+    .collect();
     if has_change_records(&dir) {
         out.push(format!("workspaces/{name}/changes"));
     }
@@ -575,6 +586,27 @@ mod tests {
         assert!(
             block.contains("!/workspaces/beta/changes/**\n/workspaces/beta/changes/log/"),
             "the log is re-ignored, and only after its parent is re-included"
+        );
+    }
+
+    #[test]
+    fn the_block_publishes_a_live_workspaces_session_records_with_it() {
+        let block = live_block(["beta"]);
+        assert!(
+            block.contains("!/workspaces/beta/sessions\n!/workspaces/beta/sessions/**\n"),
+            "{block}"
+        );
+    }
+
+    #[test]
+    fn a_live_workspaces_session_records_are_among_its_shareable_paths() {
+        let dir = plane();
+        let ws = dir.path().join("workspaces").join("beta");
+        std::fs::create_dir_all(ws.join("sessions")).unwrap();
+        std::fs::write(ws.join("sessions").join("index.md"), "").unwrap();
+        assert_eq!(
+            meta_paths(dir.path(), "beta"),
+            vec!["workspaces/beta/sessions".to_string()]
         );
     }
 
