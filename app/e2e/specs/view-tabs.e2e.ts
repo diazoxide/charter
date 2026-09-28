@@ -1,4 +1,11 @@
-import { readFileSync, realpathSync, renameSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { copyFixturePlane } from "../harness.js";
@@ -277,6 +284,92 @@ describe("view tabs", function () {
       expect(
         readFileSync(join(plane, "personas", "devops", "memory", "MEMORY.md"), "utf8"),
       ).toContain("(cluster-prod-1-lives-in-eu-west-1.md)");
+    });
+  });
+
+  describe("a workspace's Memory section (SI-9c, ADR 0065 Q5, Q9)", () => {
+    const TITLE = "Deploys freeze on Fridays";
+    const BODY = "Nothing ships after Thursday noon.";
+    const SECTION = '[data-testid="panel-memory"]';
+
+    /** The journal's file for the memory this describe makes, or `undefined` before it is. */
+    const made = (plane: string): string | undefined => {
+      const dir = join(plane, "workspaces", "alpha", "memory");
+      const file = readdirSync(dir).find((name) => name.endsWith("-deploys-freeze-on-fridays.md"));
+      return file === undefined ? undefined : join(dir, file);
+    };
+
+    /** Focuses alpha from the workspace strip, by the tab's own name. */
+    async function onAlpha(): Promise<void> {
+      await browser.waitUntil(
+        async () =>
+          (await $$('[role="tablist"][aria-label="Workspaces"] .workspace-name').getElements())
+            .length >= 2,
+        { timeout: 30_000, timeoutMsg: "the workspace strip was never drawn" },
+      );
+      for (const tab of await $$(
+        '[role="tablist"][aria-label="Workspaces"] [role="tab"]:not(.plane-root)',
+      ).getElements()) {
+        if ((await tab.$(".workspace-name").getText()) === "alpha") {
+          await tab.click();
+          return;
+        }
+      }
+      throw new Error("no alpha on the workspace strip");
+    }
+
+    /** Waits until the Memory section's text does, or does not, include `words`. */
+    async function untilTheSection(words: string, listed = true): Promise<void> {
+      await browser.waitUntil(async () => (await $(SECTION).getText()).includes(words) === listed, {
+        timeout: 20_000,
+        interval: 250,
+        timeoutMsg: `the Memory section ${listed ? "never listed" : "still lists"} ${words}`,
+      });
+    }
+
+    after(async () => {
+      if ((await tabNames()).includes(TITLE)) await closeTheTab(TITLE);
+    });
+
+    it("lists the focused workspace's journal, makes a memory from its +, opens and deletes it", async () => {
+      const plane = (await ask<string[]>("open_planes"))[0];
+      await onAlpha();
+      await untilTheSection("The API returns 418 on Mondays");
+
+      // Create: the heading's +, a new memory's tab in edit mode, and Save.
+      await $(`${SECTION} button[aria-label="New memory in alpha…"]`).click();
+      const editor = await $('form[aria-label="Editing workspace/alpha/+"]');
+      await editor.waitForDisplayed({ timeout: 20_000 });
+      await (await editor.$("input")).setValue(TITLE);
+      await (await editor.$("textarea")).setValue(BODY);
+      await (await editor.$("button=Save")).click();
+
+      await untilTheSection(TITLE);
+      const file = made(plane);
+      expect(file).toBeDefined();
+      expect(readFileSync(file ?? "", "utf8")).toContain(BODY);
+
+      // Open: the row brings the memory's tab forward, read off the plane.
+      await (await $(SECTION).$(`button*=${TITLE}`)).click();
+      const body = await $('[data-testid="memory-body"]');
+      await body.waitForExist({ timeout: 20_000 });
+      await browser.waitUntil(async () => (await body.getText()).includes(BODY), {
+        timeout: 20_000,
+        timeoutMsg: "the memory's tab never showed its body",
+      });
+      expect(await inFront()).toBe(TITLE);
+
+      // Delete, and Undo.
+      await $(`button*=Delete memory: ${TITLE}`).click();
+      const undo = await $('[data-testid="memory-undo"]');
+      await undo.waitForExist({ timeout: 20_000 });
+      await untilTheSection(TITLE, false);
+      expect(made(plane)).toBeUndefined();
+
+      await (await undo.$("button=Undo")).click();
+
+      await untilTheSection(TITLE);
+      expect(made(plane)).toBe(file);
     });
   });
 

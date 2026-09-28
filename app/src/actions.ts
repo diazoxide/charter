@@ -32,11 +32,21 @@ import type {
   ExtensionCommand,
   ExtensionView,
   MemoryScope,
+  PanelBlock,
   RowAction,
   SubjectCurations,
 } from "./bindings";
 import { MAIN } from "./here";
-import { DRAFT, MEMORY_VIEW, memoryKey, memoryRefOf, type MemoryRef } from "./memories";
+import {
+  DRAFT,
+  MEMORY_VIEW,
+  SHARED_MEMORY_TITLE,
+  SHARED_MEMORY_VIEW,
+  memoryKey,
+  memoryRefOf,
+  scopeKey,
+  type MemoryRef,
+} from "./memories";
 import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
 import { shellKeySaid } from "./shellKey";
 import { onAMac } from "./tabKeys";
@@ -1231,6 +1241,51 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // **A new memory, in each store the window lists** (SI-9c, ADR 0065 Q9): the focused
+  // workspace's journal, each persona's, and the shared store. The `+` on each memory list's
+  // heading is this row, so the heading and the palette cannot disagree. Every one needs a
+  // plane; a workspace's needs a workspace focused — the plane root has no journal (SI-1).
+  // And the shared store's own list, which the Personas panel's "shared" row opens (Q6).
+  if (now.plane !== undefined) {
+    const made = (scope: MemoryScope, title: string, note: string): Offer => ({
+      ...can(`memory.new:${scopeKey(scope)}`, title, { verb: "newMemory", scope }),
+      note,
+    });
+    if (now.focused !== undefined && now.focused !== OUTSIDE) {
+      offers.push(
+        made(
+          { kind: "workspace", name: now.focused },
+          `New memory in ${now.focused}…`,
+          `Recorded in ${now.focused}'s journal, as \`charter workspace remember\` records one.`,
+        ),
+      );
+    }
+    for (const persona of now.personas ?? []) {
+      offers.push(
+        made(
+          { kind: "persona", name: persona },
+          `New memory for ${persona}…`,
+          `Kept in personas/${persona}/memory/, as \`charter persona remember\` keeps one.`,
+        ),
+      );
+    }
+    offers.push(
+      made(
+        { kind: "shared" },
+        "New shared memory…",
+        "Kept in personas/_shared/memory/, which every persona reads.",
+      ),
+      {
+        ...can("memory.shared", "Open shared memory", {
+          verb: "openView",
+          view: SHARED_MEMORY_VIEW,
+          title: SHARED_MEMORY_TITLE,
+        }),
+        note: "What every persona on this plane reads, in a tab of its own.",
+      },
+    );
+  }
+
   // **Curation actions (ADR 0061)**: one row per action a workspace, a persona or the plane is
   // offered, named `Curate <subject>: <label>`, and one row that cannot run per action the core
   // left out — never dropped silently. Above the line: an action opens a chat and types a
@@ -1926,6 +1981,31 @@ export function memoryOffers(ref: MemoryRef, title: string): Offer[] {
       note: "Moves it to the store's archive. Undo puts it back.",
     },
   ];
+}
+
+/** The memory a row opens — its key, out of the row's `memory.open:<key>` — or `undefined`. */
+export function memoryKeyRun(runs: string | null | undefined): string | undefined {
+  const prefix = "memory.open:";
+  return runs?.startsWith(prefix) ? runs.slice(prefix.length) : undefined;
+}
+
+/**
+ * **A memory list's own rows** (SI-9b, SI-9c): Open, Edit and Delete for each memory row in
+ * `blocks`, named for its store and slug and titled with its row's words. The catalogue has no
+ * list of every memory in the plane, and needs none: the list that draws the row supplies its
+ * rows — a persona's tab, the shared list, a workspace's Memory section, all through this.
+ */
+export function listedMemoryOffers(blocks: readonly PanelBlock[]): Catalogued {
+  return catalogued(
+    blocks.flatMap((block) =>
+      block.kind !== "list"
+        ? []
+        : block.rows.flatMap((row) => {
+            const ref = memoryRefOf(memoryKeyRun(row.runs) ?? "");
+            return ref === undefined ? [] : memoryOffers(ref, row.text);
+          }),
+    ),
+  );
 }
 
 /**

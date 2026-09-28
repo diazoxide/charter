@@ -11,9 +11,10 @@ import type { ViewRef } from "./tabs";
  * row's menu are one verb (`actions.memoryOffers`). A single click previews it in the strip's
  * preview tab (`tabs.openPreview`); a double-click, or starting an edit, keeps it.
  *
- * **SI-9c opens these too, and needs nothing else from here**: a workspace's Memory section and
- * the shared list carry `memory.open:<key>` on their rows (the core spells the key,
- * `memories::view_key`), and a `+` opens {@link draftView} with `doing.newMemory`.
+ * **SI-9c opens these too**: a workspace's Memory section and the shared list carry
+ * `memory.open:<key>` on their rows (the core spells the key, `memories::view_key`), and each
+ * list's `+` is the catalogue row `memory.new:<`{@link scopeKey}`>`, which opens
+ * {@link draftView} with `doing.newMemory`.
  */
 
 /** The view a memory is opened as. */
@@ -44,6 +45,21 @@ export function memoryKey({ scope, slug }: MemoryRef): string {
       return `shared/${slug}`;
   }
 }
+
+/**
+ * What a store is named by in a catalogue row: `workspace/<ws>`, `persona/<name>` or `shared` —
+ * a memory's key without its slug. `memory.new:<this>` makes one there (SI-9c, ADR 0065 Q9).
+ */
+export function scopeKey(scope: MemoryScope): string {
+  return scope.kind === "shared" ? "shared" : `${scope.kind}/${scope.name}`;
+}
+
+/** The view the Personas panel's "shared" row opens: the shared store's own list (ADR 0065
+ *  Q6), charter's built-in `shared-memory` view. A plane has one shared store, so no key. */
+export const SHARED_MEMORY_VIEW: ViewRef = { from: null, view: "shared-memory", key: "" };
+
+/** What the shared list's tab is called. */
+export const SHARED_MEMORY_TITLE = "Shared memory";
 
 /** The memory a key names, or `undefined` for one that names none. */
 export function memoryRefOf(key: string): MemoryRef | undefined {

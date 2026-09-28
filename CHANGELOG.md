@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A workspace's memory, and the shared memory, in the window — and a new memory from a `+`.**
+  The right column has a **Memory** section directly under Todos: the focused workspace's
+  memories, newest first, with the same search and the same Open, Edit and Delete as a
+  persona's memories. It is not shown at the plane root, which keeps no memory of its own. The
+  Personas section ends with a **shared** row saying how many memories every persona shares;
+  it opens them as a list in a tab of its own. A `+` on the Memory section, on a persona's tab
+  and on the shared list opens a new memory in edit mode, and Save lists it where it was made.
+  The palette offers the same: New memory in, for or shared, and Open shared memory (ADR 0065).
 - **A memory opens in a tab of its own, and can be edited and deleted from the window.** A
   memory row on a persona's tab opens the memory as a preview tab — in italics, and replaced by
   the next memory you click, as VS Code's preview is; a double-click on the tab, or starting an

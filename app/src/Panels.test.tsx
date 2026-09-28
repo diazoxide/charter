@@ -726,3 +726,154 @@ describe("a vault row's menu", () => {
     expect(pressed.map((offer) => offer.does)).toEqual([{ verb: "removeVault", vault: "ops" }]);
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// The workspace's Memory section, and the shared row (SI-9c, ADR 0065 Q5, Q6, Q9)
+// ---------------------------------------------------------------------------------------
+
+const MEMORY_SLUG = "20260302-091200-the-api-returns-418-on-mondays";
+
+/** The Memory section as `panels.rs`'s `memory_panel` builds it for `alpha`. */
+function memoryPanel(rows: PanelRow[]): PanelView {
+  return {
+    key: "charter/memory",
+    title: "Memory",
+    order: 15,
+    mark: "note",
+    from: null,
+    about: null,
+    blocks: [
+      {
+        kind: "list",
+        rows,
+        empty: { headline: "Nothing remembered yet", body: null, offer: null },
+      },
+    ],
+  };
+}
+
+const MEMORY_ROW = row(MEMORY_SLUG, "The API returns 418 on Mondays", {
+  mark: "note",
+  note: "2026-03-02 09:12",
+  detail: { kind: "text", text: "Every Monday, from the gateway." },
+  runs: `memory.open:workspace/alpha/${MEMORY_SLUG}`,
+});
+
+/** The shared row `panels.rs`'s `shared_row` puts at the foot of the Personas panel. */
+const SHARED_ROW = row("_shared", "shared", {
+  mark: "note",
+  note: "1 memory",
+  runs: "memory.shared",
+});
+
+function withMemory(): WorkspaceState {
+  const personas = personasPanel(["devops", "steward"], "steward");
+  const list = personas.blocks[0];
+  if (list.kind === "list") list.rows.push(SHARED_ROW);
+  return state({
+    panels: {
+      ...PANELS,
+      contributed: [todosPanel([TODO]), memoryPanel([MEMORY_ROW]), personas],
+    },
+  });
+}
+
+describe("the workspace's Memory section", () => {
+  it("is drawn directly under Todos, with the focused workspace's memories", () => {
+    draw({ state: withMemory(), offers: crudOffers() });
+
+    const sections = [...screen.getByTestId("panels").querySelectorAll("section[data-testid]")].map(
+      (one) => one.getAttribute("data-testid"),
+    );
+    expect(sections.slice(0, 3)).toEqual(["panel-todos", "panel-memory", "panel-personas"]);
+    expect(
+      within(screen.getByTestId("panel-memory")).getByText("The API returns 418 on Mondays"),
+    ).toBeInTheDocument();
+  });
+
+  it("is not drawn at the plane root, which has no journal, and the root says so", () => {
+    draw({ workspace: undefined, state: withMemory() });
+
+    expect(screen.queryByTestId("panel-memory")).toBeNull();
+    expect(screen.queryByText("The API returns 418 on Mondays")).toBeNull();
+  });
+
+  it("previews a memory in its tab on a click, and keeps it on a double-click", async () => {
+    const pressed: Offer[] = [];
+    draw({ state: withMemory(), offers: crudOffers(), onPress: (offer) => pressed.push(offer) });
+    const memory = within(screen.getByTestId("panel-memory")).getByRole("button", {
+      name: /The API returns 418/,
+    });
+
+    await userEvent.click(memory);
+    await userEvent.dblClick(memory);
+
+    const ref = { scope: { kind: "workspace", name: "alpha" }, slug: MEMORY_SLUG };
+    const title = "The API returns 418 on Mondays";
+    expect(pressed[0].id).toBe(`memory.open:workspace/alpha/${MEMORY_SLUG}`);
+    expect(pressed[0].does).toEqual({ verb: "openMemory", ref, title, keep: false });
+    expect(pressed.at(-1)?.does).toEqual({ verb: "openMemory", ref, title, keep: true });
+    // A row that runs opens no card.
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("has Open and Edit above the line and Delete below it on a row's menu", async () => {
+    const pressed: Offer[] = [];
+    draw({ state: withMemory(), offers: crudOffers(), onPress: (offer) => pressed.push(offer) });
+
+    rightClickRow("panel-memory", "The API returns 418");
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual([
+      "Open memory: The API returns 418 on Mondays",
+      "Edit memory: The API returns 418 on Mondays",
+      "Delete memory: The API returns 418 on Mondays",
+    ]);
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Delete memory: The API returns 418 on Mondays" }),
+    );
+    expect(pressed.map((offer) => offer.does.verb)).toEqual(["archiveMemory"]);
+  });
+
+  it("makes a memory in the focused workspace from the + on its heading", async () => {
+    const pressed: Offer[] = [];
+    draw({ state: withMemory(), offers: crudOffers(), onPress: (offer) => pressed.push(offer) });
+
+    await userEvent.click(
+      within(screen.getByTestId("panel-memory")).getByRole("button", {
+        name: "New memory in alpha…",
+      }),
+    );
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      { verb: "newMemory", scope: { kind: "workspace", name: "alpha" } },
+    ]);
+  });
+});
+
+describe("the shared row in Personas", () => {
+  it("says how much is shared and opens the shared list, not a persona", async () => {
+    const pressed: Offer[] = [];
+    draw({ state: withMemory(), offers: crudOffers(), onPress: (offer) => pressed.push(offer) });
+
+    const shared = within(screen.getByTestId("panel-personas")).getByRole("button", {
+      name: /^shared/,
+    });
+    expect(shared).toHaveTextContent("1 memory");
+    await userEvent.click(shared);
+
+    expect(pressed.map((offer) => offer.id)).toEqual(["memory.shared"]);
+  });
+
+  it("has no persona's menu, because the shared store is not a persona", async () => {
+    draw({ state: withMemory(), offers: crudOffers() });
+
+    rightClickRow("panel-personas", "^shared");
+
+    await expect(vi.waitFor(() => screen.getByRole("menu"), { timeout: 200 })).rejects.toThrow();
+  });
+});
