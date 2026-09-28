@@ -11,6 +11,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A memory another memory's title mentions comes back to the index when it is unarchived.** A
+  title holding `(b.md)` counted as listing `b.md`, so unarchiving `b` added no index line for
+  it. The index now lists only the file each line links, as editing and deleting read it. And
+  `optimize --apply`'s index repair can no longer lose a line to an edit saved at the same
+  moment (ADR 0065).
+
 ## [0.4.1] - 2026-09-28
 
 0.4.1 is a chat that ends well and a memory you can look after from the window. Closing a chat

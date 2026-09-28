@@ -203,3 +203,16 @@ An adversarial review of SI-9a/b/c found these, each reproduced by a test before
 - **`memstore::archive` answers `Some` only for a move**, so `optimize` reports no collapse it
   did not make.
 - **An archive that had to number the file prints its Undo with `--as <slug>`.**
+
+## As reviewed (SI-9e)
+
+Two loose ends SI-9d left, each reproduced by a test before its fix:
+
+- **`optimize --apply`'s index repair takes the store's lock**, from reading what the index lacks
+  to its last append, as remember does since SI-9d. In a stress run beside an edit's retitles,
+  about one repair in four had to relink a line the retitle had dropped.
+- **Which files the index lists is read by the leading link**, the rule a retitle and a drop use.
+  `listed` had kept charter's pattern over the whole file, so a title that mentioned `(b.md)`
+  listed `b.md`, and unarchiving `b` appended no line for it. A line of another shape is still
+  read by charter's pattern, and so is the leading link itself, so `- [docs](https://…)` lists
+  nothing.
